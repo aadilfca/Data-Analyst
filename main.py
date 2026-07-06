@@ -2,14 +2,19 @@
 # 🏢 SYSTEM ANALYST APP - MAIN BACKEND
 # ==============================================
 
-from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-import sqlite3
 import json
-from typing import List
+import os
+import sqlite3
 from datetime import datetime
+from io import BytesIO
+from typing import List
+
+import openpyxl
+import pandas as pd
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
@@ -334,6 +339,92 @@ def get_verification_stats():
         "approved": approved,
         "rejected": 0
     }
+
+
+# ==============================================
+# SECTION: FILE IMPORT & EXPORT
+# ==============================================
+
+
+@app.post("/api/import-excel")
+async def import_excel(file: UploadFile = File(...)):
+    """Import an Excel file and store its metadata."""
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        raise HTTPException(status_code=400, detail="Only .xlsx and .xls files are supported")
+    
+    try:
+        # Read the uploaded file into a pandas DataFrame to validate it
+        contents = await file.read()
+        df = pd.read_excel(BytesIO(contents))
+        
+        # Save file to disk
+        upload_dir = "uploads"
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, file.filename)
+        
+        # Reset cursor and save
+        with open(file_path, "wb") as f:
+            f.write(contents)
+        
+        # Record in database
+        file_id = execute_write("""
+            INSERT INTO uploaded_files (file_name, file_path, file_type, record_count, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (file.filename, file_path, 'excel', len(df), 'Pending'))
+        
+        log_audit("Analyst", "Upload", "Import", f"Uploaded file: {file.filename} ({len(df)} rows)")
+        
+        return {
+            "message": f"File '{file.filename}' uploaded successfully ({len(df)} rows)",
+            "file_id": file_id,
+            "record_count": len(df)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to import file: {str(e)}")
+
+
+@app.get("/api/download-template")
+def download_template():
+    """Download an Excel template with columns based on selected template or defaults."""
+    try:
+        # Try to get the first active template's columns
+        templates = execute_query("""
+            SELECT columns FROM column_templates WHERE is_active = 1
+            ORDER BY id ASC LIMIT 1
+        """)
+        
+        if templates:
+            columns = json.loads(templates[0]['columns'])
+        else:
+            columns = ["Date", "Description", "Amount", "Reference"]
+        
+        # Create an Excel file in memory
+        output = BytesIO()
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Template"
+        
+        # Write header row with styling
+        for col_idx, col_name in enumerate(columns, 1):
+            cell = ws.cell(row=1, column=col_idx, value=col_name)
+            cell.font = openpyxl.styles.Font(bold=True, color="FFFFFF")
+            cell.fill = openpyxl.styles.PatternFill(start_color="1A1A2E", end_color="1A1A2E", fill_type="solid")
+            cell.alignment = openpyxl.styles.Alignment(horizontal="center")
+        
+        # Adjust column widths
+        for col_idx in range(1, len(columns) + 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 20
+        
+        wb.save(output)
+        output.seek(0)
+        
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=import_template.xlsx"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate template: {str(e)}")
 
 
 # ==============================================

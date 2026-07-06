@@ -1,6 +1,6 @@
 @echo off
-title Inventory App Server
-echo Starting Inventory App...
+title System Analyst App Server
+echo Starting System Analyst App Server...
 
 :: Check if virtual environment exists
 if not exist venv\Scripts\activate (

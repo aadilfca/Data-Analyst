@@ -64,7 +64,7 @@ templateDropdown.addEventListener('change', function() {
 });
 
 // ---------- LOAD ON PAGE OPEN ----------
-window.onload = function() {
+document.addEventListener('DOMContentLoaded', function() {
     loadTemplates();
     console.log('📋 Template Manager loaded');
-};
+});
