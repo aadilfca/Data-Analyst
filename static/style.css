@@ -505,3 +505,82 @@ body {
 .template-dropdown option {
     padding: 8px;
 }
+
+/* ---------- POPUP STYLES ---------- */
+#popupWindow table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+#popupWindow table th,
+#popupWindow table td {
+    padding: 8px 10px;
+    text-align: left;
+}
+
+#popupWindow input[type="text"],
+#popupWindow select {
+    padding: 6px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+    width: 100%;
+}
+
+#popupWindow input[type="text"]:focus,
+#popupWindow select:focus {
+    border-color: #4CAF50;
+    outline: none;
+}
+
+.column-name-input {
+    width: 95% !important;
+}
+
+.type-select {
+    width: 100% !important;
+}
+
+.delete-btn {
+    color: #e74c3c;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.delete-btn:hover {
+    color: #c0392b;
+}
+
+.add-column-btn {
+    padding: 8px 20px;
+    cursor: pointer;
+    background: #3498db;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.add-column-btn:hover {
+    background: #2980b9;
+}
+
+.date-hint {
+    font-size: 11px;
+    color: #7f8c8d;
+    margin-left: 5px;
+    font-weight: normal;
+}
+
+.confirmation-text {
+    font-size: 13px;
+    padding: 8px 12px;
+    background: #e8f5e9;
+    border-radius: 4px;
+    color: #2e7d32;
+    margin-top: 5px;
+    display: none;
+}
