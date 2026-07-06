@@ -448,3 +448,248 @@ def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=5000)
+
+# ==============================================
+# SECTION: MASTER COLUMNS MANAGEMENT
+# ==============================================
+
+@app.get("/api/columns")
+def get_columns():
+    """Get all active master columns."""
+    return execute_query("""
+        SELECT id, column_name, data_type, category, is_active
+        FROM master_columns
+        WHERE is_active = 1
+        ORDER BY category, column_name
+    """)
+
+
+@app.get("/api/columns/all")
+def get_all_columns():
+    """Get all columns (including inactive)."""
+    return execute_query("""
+        SELECT id, column_name, data_type, category, is_active
+        FROM master_columns
+        ORDER BY category, column_name
+    """)
+
+
+@app.post("/api/columns")
+def create_column(column_name: str, data_type: str, category: str = "General"):
+    """Add a new master column."""
+    existing = execute_query(
+        "SELECT id FROM master_columns WHERE column_name = ?",
+        (column_name,)
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="Column name already exists")
+    
+    column_id = execute_write("""
+        INSERT INTO master_columns (column_name, data_type, category)
+        VALUES (?, ?, ?)
+    """, (column_name, data_type, category))
+    
+    log_audit("Admin", "Create", "Columns", f"Added column: {column_name}")
+    
+    return {
+        "message": f"Column '{column_name}' created successfully",
+        "column_id": column_id
+    }
+
+
+@app.put("/api/columns/{column_id}")
+def update_column(column_id: int, column_name: str, data_type: str, category: str, is_active: bool = 1):
+    """Update an existing column."""
+    existing = execute_query(
+        "SELECT id FROM master_columns WHERE id = ?",
+        (column_id,)
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Column not found")
+    
+    execute_write("""
+        UPDATE master_columns
+        SET column_name = ?, data_type = ?, category = ?, is_active = ?
+        WHERE id = ?
+    """, (column_name, data_type, category, is_active, column_id))
+    
+    log_audit("Admin", "Update", "Columns", f"Updated column: {column_name}")
+    
+    return {"message": f"Column '{column_name}' updated successfully"}
+
+
+@app.delete("/api/columns/{column_id}")
+def delete_column(column_id: int):
+    """Soft delete a column."""
+    existing = execute_query(
+        "SELECT column_name FROM master_columns WHERE id = ? AND is_active = 1",
+        (column_id,)
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Column not found")
+    
+    execute_write(
+        "UPDATE master_columns SET is_active = 0 WHERE id = ?",
+        (column_id,)
+    )
+    
+    log_audit("Admin", "Delete", "Columns", f"Deleted column: {existing[0]['column_name']}")
+    
+    return {"message": "Column deleted successfully"}
+
+
+@app.get("/api/columns/categories")
+def get_categories():
+    """Get all unique categories."""
+    return execute_query("""
+        SELECT DISTINCT category
+        FROM master_columns
+        WHERE is_active = 1
+        ORDER BY category
+    """)
+
+
+# ==============================================
+# SECTION: TEMPLATES MANAGEMENT
+# ==============================================
+
+@app.get("/api/templates")
+def get_templates():
+    """Get all templates with their selected columns."""
+    templates = execute_query("""
+        SELECT id, template_name, selected_columns, created_by, created_date, is_active
+        FROM templates
+        WHERE is_active = 1
+        ORDER BY template_name
+    """)
+    
+    # Parse JSON for each template
+    import json
+    for t in templates:
+        t['selected_columns'] = json.loads(t['selected_columns'])
+    
+    return templates
+
+
+@app.get("/api/templates/{template_id}")
+def get_template(template_id: int):
+    """Get a specific template by ID."""
+    import json
+    result = execute_query(
+        "SELECT * FROM templates WHERE id = ? AND is_active = 1",
+        (template_id,)
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    result[0]['selected_columns'] = json.loads(result[0]['selected_columns'])
+    return result[0]
+
+
+@app.post("/api/templates")
+def create_template(template_name: str, selected_columns: List[int], created_by: str = "Admin"):
+    """Create a new template."""
+    import json
+    
+    # Check if template name exists
+    existing = execute_query(
+        "SELECT id FROM templates WHERE template_name = ?",
+        (template_name,)
+    )
+    if existing:
+        raise HTTPException(status_code=400, detail="Template name already exists")
+    
+    # Validate: at least one column selected
+    if not selected_columns or len(selected_columns) < 1:
+        raise HTTPException(status_code=400, detail="Select at least one column")
+    
+    columns_json = json.dumps(selected_columns)
+    template_id = execute_write("""
+        INSERT INTO templates (template_name, selected_columns, created_by)
+        VALUES (?, ?, ?)
+    """, (template_name, columns_json, created_by))
+    
+    log_audit(created_by, "Create", "Templates", f"Created template: {template_name}")
+    
+    return {
+        "message": f"Template '{template_name}' created successfully",
+        "template_id": template_id
+    }
+
+
+@app.put("/api/templates/{template_id}")
+def update_template(template_id: int, template_name: str, selected_columns: List[int]):
+    """Update an existing template."""
+    import json
+    
+    existing = execute_query(
+        "SELECT id FROM templates WHERE id = ?",
+        (template_id,)
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    duplicate = execute_query(
+        "SELECT id FROM templates WHERE template_name = ? AND id != ?",
+        (template_name, template_id)
+    )
+    if duplicate:
+        raise HTTPException(status_code=400, detail="Template name already exists")
+    
+    columns_json = json.dumps(selected_columns)
+    execute_write("""
+        UPDATE templates
+        SET template_name = ?, selected_columns = ?
+        WHERE id = ?
+    """, (template_name, columns_json, template_id))
+    
+    log_audit("Admin", "Update", "Templates", f"Updated template: {template_name}")
+    
+    return {"message": f"Template '{template_name}' updated successfully"}
+
+
+@app.delete("/api/templates/{template_id}")
+def delete_template(template_id: int):
+    """Soft delete a template."""
+    existing = execute_query(
+        "SELECT template_name FROM templates WHERE id = ? AND is_active = 1",
+        (template_id,)
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    execute_write(
+        "UPDATE templates SET is_active = 0 WHERE id = ?",
+        (template_id,)
+    )
+    
+    log_audit("Admin", "Delete", "Templates", f"Deleted template: {existing[0]['template_name']}")
+    
+    return {"message": "Template deleted successfully"}
+
+
+@app.get("/api/templates/{template_id}/columns")
+def get_template_columns(template_id: int):
+    """Get the column details for a template."""
+    import json
+    result = execute_query(
+        "SELECT selected_columns FROM templates WHERE id = ? AND is_active = 1",
+        (template_id,)
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    column_ids = json.loads(result[0]['selected_columns'])
+    
+    # Get column details
+    if not column_ids:
+        return []
+    
+    placeholders = ','.join('?' * len(column_ids))
+    columns = execute_query(f"""
+        SELECT id, column_name, data_type, category
+        FROM master_columns
+        WHERE id IN ({placeholders}) AND is_active = 1
+    """, column_ids)
+    
+    return columns
