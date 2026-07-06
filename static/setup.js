@@ -45,3 +45,10 @@ window.onload = function() {
     loadSetupStats();
     console.log('🔧 Setup Module loaded successfully!');
 };
+
+// Reload stats when page becomes visible again (e.g., after navigating back from columns/templates)
+window.addEventListener('pageshow', function(event) {
+    // If the page is being loaded from cache, reload stats anyway
+    loadSetupStats();
+    console.log('🔄 Setup stats refreshed on pageshow');
+});
