@@ -17,16 +17,27 @@ async function loadTemplates() {
         
         templateDropdown.innerHTML = '';
         
+        // ---------- ADD PLACEHOLDER (disabled, selected by default) ----------
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = '-- Select Template --';
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        templateDropdown.appendChild(placeholder);
+        
+        // ---------- ADD "Add New" OPTION ----------
         const addOption = document.createElement('option');
         addOption.value = 'new';
         addOption.textContent = '➕ Add New';
         templateDropdown.appendChild(addOption);
         
+        // ---------- ADD SEPARATOR ----------
         const separator = document.createElement('option');
         separator.disabled = true;
         separator.textContent = '────────────────';
         templateDropdown.appendChild(separator);
         
+        // ---------- ADD EXISTING TEMPLATES ----------
         templates.forEach(template => {
             const option = document.createElement('option');
             option.value = template.id;
@@ -44,12 +55,22 @@ async function loadTemplates() {
 
 // ---------- HANDLE TEMPLATE SELECTION ----------
 templateDropdown.addEventListener('change', function() {
-    if (this.value === 'new') {
+    const selectedValue = this.value;
+    
+    if (selectedValue === 'new') {
+        // User selected "Add New" → open popup
         openPopup();
-        this.value = this.options[1]?.value || '';
+        // Reset dropdown to placeholder so they can select "Add New" again later
+        this.value = '';
         return;
     }
     
+    if (selectedValue === '') {
+        // Placeholder selected (do nothing)
+        return;
+    }
+    
+    // User selected an existing template
     const selectedOption = this.options[this.selectedIndex];
     const templateName = selectedOption.textContent;
     const columns = JSON.parse(selectedOption.dataset.columns || '[]');
