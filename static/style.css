@@ -1,0 +1,238 @@
+/* ---------- RESET & BASE ---------- */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+    background: #f0f2f5;
+    color: #1a1a2e;
+}
+
+/* ---------- NAVBAR ---------- */
+.navbar {
+    background: #1a1a2e;
+    color: white;
+    padding: 0 30px;
+    height: 70px;
+    display: flex;
+    align-items: center;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.nav-container {
+    width: 100%;
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.nav-brand {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.nav-brand span {
+    color: #4fc3f7;
+}
+
+.nav-user {
+    font-size: 14px;
+    color: #b0bec5;
+}
+
+/* ---------- MAIN CONTAINER ---------- */
+.main-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 30px;
+}
+
+/* ---------- DASHBOARD HEADER ---------- */
+.dashboard-header {
+    margin-bottom: 35px;
+}
+
+.dashboard-header h1 {
+    font-size: 32px;
+    color: #1a1a2e;
+    font-weight: 700;
+}
+
+.dashboard-header p {
+    color: #64748b;
+    font-size: 16px;
+    margin-top: 5px;
+}
+
+/* ---------- MODULE GRID ---------- */
+.module-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 25px;
+    margin-bottom: 40px;
+}
+
+.module-card {
+    background: white;
+    border-radius: 16px;
+    padding: 30px 20px 25px;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    border: 2px solid transparent;
+    position: relative;
+}
+
+.module-card:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 12px 30px rgba(0,0,0,0.12);
+    border-color: #4fc3f7;
+}
+
+.module-card:active {
+    transform: scale(0.97);
+}
+
+.module-icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+    display: block;
+}
+
+.module-card h3 {
+    font-size: 18px;
+    color: #1a1a2e;
+    margin-bottom: 6px;
+}
+
+.module-card p {
+    font-size: 13px;
+    color: #94a3b8;
+    margin-bottom: 12px;
+}
+
+.module-status {
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #e8f5e9;
+    color: #2e7d32;
+}
+
+.module-status.coming {
+    background: #fff3e0;
+    color: #e65100;
+}
+
+.module-status.inactive {
+    background: #fce4ec;
+    color: #c62828;
+}
+
+/* ---------- QUICK STATS ---------- */
+.quick-stats {
+    background: white;
+    border-radius: 16px;
+    padding: 25px 30px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+.quick-stats h2 {
+    font-size: 18px;
+    color: #1a1a2e;
+    margin-bottom: 18px;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 20px;
+}
+
+.stat-card {
+    padding: 15px;
+    background: #f8fafc;
+    border-radius: 10px;
+    text-align: center;
+}
+
+.stat-label {
+    display: block;
+    font-size: 13px;
+    color: #94a3b8;
+    margin-bottom: 4px;
+}
+
+.stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: #1a1a2e;
+}
+
+.stat-value.status-online {
+    color: #22c55e;
+    font-size: 18px;
+}
+
+/* ---------- RESPONSIVE ---------- */
+@media (max-width: 768px) {
+    .navbar {
+        padding: 0 15px;
+    }
+    .nav-brand {
+        font-size: 18px;
+    }
+    .main-container {
+        padding: 15px;
+    }
+    .module-grid {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 15px;
+    }
+    .module-card {
+        padding: 20px 15px;
+    }
+    .module-icon {
+        font-size: 36px;
+    }
+    .dashboard-header h1 {
+        font-size: 24px;
+    }
+    .stats-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 480px) {
+    .module-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+    }
+    .module-card {
+        padding: 15px 10px;
+    }
+    .module-icon {
+        font-size: 28px;
+    }
+    .module-card h3 {
+        font-size: 14px;
+    }
+    .module-card p {
+        font-size: 11px;
+    }
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+}

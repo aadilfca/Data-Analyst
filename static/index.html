@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Analyst Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">🏢 System Analyst</div>
+            <div class="nav-user">
+                <span>👤 Welcome, Analyst</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <!-- Dashboard Header -->
+        <header class="dashboard-header">
+            <h1>📊 Dashboard</h1>
+            <p>Select a module to begin your analysis</p>
+        </header>
+
+        <!-- Module Buttons Grid -->
+        <div class="module-grid">
+            <!-- Module 1: Items -->
+            <div class="module-card" onclick="window.location.href='/static/items.html'">
+                <div class="module-icon">📦</div>
+                <h3>Items</h3>
+                <p>Manage inventory items</p>
+                <span class="module-status">Ready</span>
+            </div>
+
+            <!-- Module 2: Reports -->
+            <div class="module-card" onclick="alert('Reports module coming soon!')">
+                <div class="module-icon">📊</div>
+                <h3>Reports</h3>
+                <p>Generate analysis reports</p>
+                <span class="module-status coming">Coming Soon</span>
+            </div>
+
+            <!-- Module 3: Analysis -->
+            <div class="module-card" onclick="alert('Analysis module coming soon!')">
+                <div class="module-icon">🔍</div>
+                <h3>Analysis</h3>
+                <p>Deep dive analytics</p>
+                <span class="module-status coming">Coming Soon</span>
+            </div>
+
+            <!-- Module 4: Settings -->
+            <div class="module-card" onclick="alert('Settings module coming soon!')">
+                <div class="module-icon">⚙️</div>
+                <h3>Settings</h3>
+                <p>Configure system preferences</p>
+                <span class="module-status coming">Coming Soon</span>
+            </div>
+
+            <!-- Module 5: Users -->
+            <div class="module-card" onclick="alert('Users module coming soon!')">
+                <div class="module-icon">👥</div>
+                <h3>Users</h3>
+                <p>Manage user access</p>
+                <span class="module-status coming">Coming Soon</span>
+            </div>
+
+            <!-- Module 6: Audit Log -->
+            <div class="module-card" onclick="alert('Audit Log module coming soon!')">
+                <div class="module-icon">📋</div>
+                <h3>Audit Log</h3>
+                <p>View system activity</p>
+                <span class="module-status coming">Coming Soon</span>
+            </div>
+        </div>
+
+        <!-- Quick Stats Section -->
+        <section class="quick-stats">
+            <h2>📈 Quick Overview</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Total Items</span>
+                    <span class="stat-value" id="totalItems">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Modules Active</span>
+                    <span class="stat-value" id="activeModules">1</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">System Status</span>
+                    <span class="stat-value status-online">🟢 Online</span>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+
+</html>

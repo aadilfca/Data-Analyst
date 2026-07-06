@@ -1,0 +1,11 @@
+{
+    "files.exclude": {
+        "venv": true,
+        "__pycache__": true,
+        ".vscode": true,
+        "requirements.txt": true,
+        "run.bat": true,
+        "test.db": true,
+        "*.pyc": true
+    }
+}
