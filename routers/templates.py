@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
-from database import execute_query, execute_write, log_audit
+from fastapi import APIRouter, HTTPException, Body
+from database import execute_query, execute_write, log_audit, get_raw_conn
 import json
 from typing import List
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -106,3 +107,61 @@ def get_template_columns(template_id: int):
     placeholders = ','.join('?' * len(column_ids))
     columns = execute_query(f"SELECT id, column_name, data_type, category FROM master_columns WHERE id IN ({placeholders}) AND is_active = 1", column_ids)
     return columns
+# ---------- BACKUP / RESTORE ----------
+
+class BackupData(BaseModel):
+    columns: list
+    templates: list
+
+@router.get("/api/backup/export")
+def export_backup():
+    """
+    Export all master columns and templates as JSON.
+    """
+    columns = execute_query("SELECT * FROM master_columns ORDER BY id")
+    templates = execute_query("SELECT * FROM templates ORDER BY id")
+    # Parse selected_columns JSON for templates
+    for t in templates:
+        t['selected_columns'] = json.loads(t['selected_columns'])
+    return {"columns": columns, "templates": templates}
+
+@router.post("/api/backup/import")
+def import_backup(data: BackupData = Body(...)):
+    """
+    Import (overwrite) all master columns and templates from provided JSON.
+    Uses a transaction to ensure atomicity.
+    """
+    conn = get_raw_conn()
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        # Turn off foreign key checks to allow reinsertion with matching IDs
+        conn.execute("PRAGMA foreign_keys = OFF")
+
+        # Delete existing data (hard delete)
+        conn.execute("DELETE FROM templates")
+        conn.execute("DELETE FROM master_columns")
+
+        # Insert columns
+        for col in data.columns:
+            conn.execute(
+                "INSERT INTO master_columns (id, column_name, data_type, category, is_active) VALUES (?, ?, ?, ?, ?)",
+                (col['id'], col['column_name'], col['data_type'], col.get('category', 'General'), col.get('is_active', 1))
+            )
+
+        # Insert templates
+        for tpl in data.templates:
+            selected_json = json.dumps(tpl['selected_columns'])
+            conn.execute(
+                "INSERT INTO templates (id, template_name, selected_columns, created_by, created_date, is_active) VALUES (?, ?, ?, ?, ?, ?)",
+                (tpl['id'], tpl['template_name'], selected_json, tpl.get('created_by', 'Admin'), tpl.get('created_date'), tpl.get('is_active', 1))
+            )
+
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
+        log_audit("Admin", "Import", "Backup", "Imported backup data")
+        return {"message": f"Successfully imported {len(data.columns)} columns and {len(data.templates)} templates."}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(500, f"Import failed: {str(e)}")
+    finally:
+        conn.close()

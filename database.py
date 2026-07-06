@@ -21,6 +21,14 @@ def execute_write(query, params=None):
     last_id = cursor.lastrowid
     conn.close()
     return last_id
+def get_raw_conn():
+    """
+    Returns a raw SQLite connection with row_factory set to sqlite3.Row.
+    Used for manual transaction management (e.g., backup import).
+    """
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def log_audit(user, action, module, details=""):
     try:
