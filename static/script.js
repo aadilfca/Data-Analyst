@@ -1,24 +1,38 @@
+// ==============================================
+// 📊 DASHBOARD LOGIC
+// ==============================================
+
 // ---------- LOAD DASHBOARD STATS ----------
 async function loadDashboardStats() {
     try {
-        // Try to fetch items count from the test endpoint
-        const res = await fetch('/api/test');
+        const res = await fetch('/api/dashboard/stats');
         if (res.ok) {
-            const data = await res.json();
-            document.getElementById('totalItems').textContent = '0'; // Default for now
-            document.getElementById('activeModules').textContent = '2';
-            console.log('✅ Server connected:', data.status);
+            const stats = await res.json();
+            document.getElementById('totalUploads').textContent = stats.total_uploads || 0;
+            document.getElementById('pendingVerifications').textContent = stats.pending_verifications || 0;
+            console.log('✅ Dashboard stats loaded:', stats);
+        } else {
+            // Fallback: try test endpoint
+            const testRes = await fetch('/api/test');
+            if (testRes.ok) {
+                document.getElementById('totalUploads').textContent = '0';
+                document.getElementById('pendingVerifications').textContent = '0';
+                console.log('✅ Server connected but no stats available');
+            } else {
+                document.getElementById('totalUploads').textContent = '⚠️';
+                document.getElementById('pendingVerifications').textContent = '⚠️';
+            }
         }
     } catch (error) {
-        console.log('⚠️ Server not connected:', error.message);
-        document.getElementById('totalItems').textContent = '⚠️';
+        console.log('⚠️ Error loading stats:', error.message);
+        document.getElementById('totalUploads').textContent = '⚠️';
+        document.getElementById('pendingVerifications').textContent = '⚠️';
     }
 }
 
 // ---------- ADD CLICK FEEDBACK TO MODULE CARDS ----------
 document.querySelectorAll('.module-card').forEach(card => {
     card.addEventListener('click', function() {
-        // Visual feedback
         this.style.transform = 'scale(0.95)';
         setTimeout(() => {
             this.style.transform = '';
@@ -32,9 +46,8 @@ window.onload = function() {
     console.log('🏢 System Analyst Dashboard loaded successfully!');
 };
 
-// ---------- KEYBOARD SHORTCUTS (Optional) ----------
+// ---------- KEYBOARD SHORTCUTS ----------
 document.addEventListener('keydown', function(e) {
-    // Press 'R' to refresh stats
     if (e.key === 'r' || e.key === 'R') {
         loadDashboardStats();
         console.log('🔄 Stats refreshed');

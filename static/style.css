@@ -40,10 +40,6 @@ body {
     letter-spacing: 1px;
 }
 
-.nav-brand span {
-    color: #4fc3f7;
-}
-
 .nav-user {
     font-size: 14px;
     color: #b0bec5;
@@ -66,6 +62,13 @@ body {
     color: #1a1a2e;
     font-weight: 700;
 }
+
+.dashboard-header p {
+    color: #64748b;
+    font-size: 16px;
+    margin-top: 5px;
+}
+
 /* ---------- MODULE PAGE HEADER ---------- */
 .module-header {
     margin-bottom: 35px;
@@ -94,12 +97,6 @@ body {
     color: #64748b;
     font-size: 16px;
     margin-top: 4px;
-}
-
-.dashboard-header p {
-    color: #64748b;
-    font-size: 16px;
-    margin-top: 5px;
 }
 
 /* ---------- MODULE GRID ---------- */
@@ -215,56 +212,6 @@ body {
     font-size: 18px;
 }
 
-/* ---------- RESPONSIVE ---------- */
-@media (max-width: 768px) {
-    .navbar {
-        padding: 0 15px;
-    }
-    .nav-brand {
-        font-size: 18px;
-    }
-    .main-container {
-        padding: 15px;
-    }
-    .module-grid {
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-        gap: 15px;
-    }
-    .module-card {
-        padding: 20px 15px;
-    }
-    .module-icon {
-        font-size: 36px;
-    }
-    .dashboard-header h1 {
-        font-size: 24px;
-    }
-    .stats-grid {
-        grid-template-columns: 1fr 1fr;
-    }
-}
-
-@media (max-width: 480px) {
-    .module-grid {
-        grid-template-columns: 1fr 1fr;
-        gap: 12px;
-    }
-    .module-card {
-        padding: 15px 10px;
-    }
-    .module-icon {
-        font-size: 28px;
-    }
-    .module-card h3 {
-        font-size: 14px;
-    }
-    .module-card p {
-        font-size: 11px;
-    }
-    .stats-grid {
-        grid-template-columns: 1fr;
-    }
-}
 /* ---------- UPLOAD PAGE STYLES ---------- */
 .upload-page {
     max-width: 800px;
@@ -454,4 +401,58 @@ body {
 .upload-status.loading {
     background: #fef3c7;
     color: #92400e;
+}
+
+/* ---------- RESPONSIVE ---------- */
+@media (max-width: 768px) {
+    .navbar {
+        padding: 0 15px;
+    }
+    .nav-brand {
+        font-size: 18px;
+    }
+    .main-container {
+        padding: 15px;
+    }
+    .module-grid {
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 15px;
+    }
+    .module-card {
+        padding: 20px 15px;
+    }
+    .module-icon {
+        font-size: 36px;
+    }
+    .dashboard-header h1 {
+        font-size: 24px;
+    }
+    .stats-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+    .upload-box {
+        padding: 20px;
+    }
+}
+
+@media (max-width: 480px) {
+    .module-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+    }
+    .module-card {
+        padding: 15px 10px;
+    }
+    .module-icon {
+        font-size: 28px;
+    }
+    .module-card h3 {
+        font-size: 14px;
+    }
+    .module-card p {
+        font-size: 11px;
+    }
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
 }
