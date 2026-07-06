@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Client Data</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">🏢 System Analyst</div>
+            <div class="nav-user">
+                <span>👤 Welcome, Analyst</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <div class="upload-page">
+            <div class="upload-header">
+                <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
+                <h1>📤 Upload Client Data</h1>
+                <p>Upload Excel files to import client data into the system</p>
+            </div>
+
+            <div class="upload-box">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📂</div>
+                    <h3>Drag & Drop or Click to Upload</h3>
+                    <p>Supported formats: .xlsx, .xls</p>
+                    <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
+                    <button class="upload-btn" id="uploadBtn">Choose File</button>
+                </div>
+
+                <div id="fileInfo" style="display:none;" class="file-info">
+                    <span id="fileName"></span>
+                    <span id="fileSize"></span>
+                    <button class="clear-btn" id="clearBtn">✕</button>
+                </div>
+
+                <div class="upload-actions">
+                    <button class="btn-upload" id="submitBtn" disabled>Upload to Server</button>
+                    <button class="btn-template" id="templateBtn">📥 Download Template</button>
+                </div>
+
+                <div id="uploadStatus" class="upload-status"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/upload.js"></script>
+</body>
+
+</html>
