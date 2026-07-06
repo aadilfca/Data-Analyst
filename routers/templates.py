@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Body
 from database import execute_query, execute_write, log_audit, get_raw_conn
 import json
 from typing import List
-from pydantic import BaseModel
+from pydantic import BaseModel  # <-- Added this line
 
 router = APIRouter()
 
@@ -15,23 +15,41 @@ def get_columns():
 def get_all_columns():
     return execute_query("SELECT id, column_name, data_type, category, is_active FROM master_columns ORDER BY category, column_name")
 
+# Define the data structures for incoming JSON
+class ColumnCreate(BaseModel):
+    column_name: str
+    data_type: str
+    category: str = "General"
+
+class ColumnUpdate(BaseModel):
+    column_name: str
+    data_type: str
+    category: str = "General"
+    is_active: bool = 1
+
 @router.post("/api/columns")
-def create_column(column_name: str, data_type: str, category: str = "General"):
-    existing = execute_query("SELECT id FROM master_columns WHERE column_name = ?", (column_name,))
+def create_column(column: ColumnCreate):
+    existing = execute_query("SELECT id FROM master_columns WHERE column_name = ?", (column.column_name,))
     if existing:
         raise HTTPException(400, "Column name already exists")
-    col_id = execute_write("INSERT INTO master_columns (column_name, data_type, category) VALUES (?, ?, ?)", (column_name, data_type, category))
-    log_audit("Admin", "Create", "Columns", f"Added column: {column_name}")
-    return {"message": f"Column '{column_name}' created successfully", "column_id": col_id}
+    col_id = execute_write(
+        "INSERT INTO master_columns (column_name, data_type, category) VALUES (?, ?, ?)",
+        (column.column_name, column.data_type, column.category)
+    )
+    log_audit("Admin", "Create", "Columns", f"Added column: {column.column_name}")
+    return {"message": f"Column '{column.column_name}' created successfully", "column_id": col_id}
 
 @router.put("/api/columns/{column_id}")
-def update_column(column_id: int, column_name: str, data_type: str, category: str, is_active: bool = 1):
+def update_column(column_id: int, column: ColumnUpdate):
     existing = execute_query("SELECT id FROM master_columns WHERE id = ?", (column_id,))
     if not existing:
         raise HTTPException(404, "Column not found")
-    execute_write("UPDATE master_columns SET column_name=?, data_type=?, category=?, is_active=? WHERE id=?", (column_name, data_type, category, is_active, column_id))
-    log_audit("Admin", "Update", "Columns", f"Updated column: {column_name}")
-    return {"message": f"Column '{column_name}' updated successfully"}
+    execute_write(
+        "UPDATE master_columns SET column_name=?, data_type=?, category=?, is_active=? WHERE id=?",
+        (column.column_name, column.data_type, column.category, column.is_active, column_id)
+    )
+    log_audit("Admin", "Update", "Columns", f"Updated column: {column.column_name}")
+    return {"message": f"Column '{column.column_name}' updated successfully"}
 
 @router.delete("/api/columns/{column_id}")
 def delete_column(column_id: int):

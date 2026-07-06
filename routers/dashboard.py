@@ -6,7 +6,7 @@ router = APIRouter()
 
 @router.get("/")
 def root():
-    return {"message": "System Analyst Dashboard", "version": "1.0.0", ...}
+    return {"message": "System Analyst Dashboard", "version": "1.0.0"}
 
 @router.get("/api/test")
 def test():
