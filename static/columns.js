@@ -1,5 +1,5 @@
 // ==============================================
-// 📋 MANAGE COLUMNS LOGIC
+// 📋 MANAGE COLUMNS LOGIC (clean)
 // ==============================================
 
 const API_BASE = 'http://localhost:5000';
@@ -25,16 +25,66 @@ const modalStatus = document.getElementById('modalStatus');
 
 let editingId = null; // null = add mode, number = edit mode
 
+// ---------- SORTING STATE ----------
+let sortColumn = 'id';
+let sortAscending = true;
+window.columnData = [];
+
+// ---------- SORTING FUNCTIONS ----------
+function sortColumns(columns, column, ascending) {
+    const sorted = [...columns];
+    sorted.sort((a, b) => {
+        let valA = a[column];
+        let valB = b[column];
+        if (valA == null) valA = '';
+        if (valB == null) valB = '';
+        if (column === 'id' || column === 'is_active') {
+            return ascending ? valA - valB : valB - valA;
+        }
+        if (typeof valA === 'string') valA = valA.toLowerCase();
+        if (typeof valB === 'string') valB = valB.toLowerCase();
+        return ascending ? valA < valB ? -1 : (valA > valB ? 1 : 0) : valA > valB ? -1 : (valA < valB ? 1 : 0);
+    });
+    return sorted;
+}
+
+function updateSortArrows(column, ascending) {
+    document.querySelectorAll('.sortable .sort-arrow').forEach(span => span.textContent = '');
+    const header = document.querySelector(`.sortable[data-sort="${column}"]`);
+    if (header) {
+        const arrowSpan = header.querySelector('.sort-arrow');
+        if (arrowSpan) arrowSpan.textContent = ascending ? ' ▲' : ' ▼';
+    }
+}
+
+function setupSorting() {
+    document.querySelectorAll('.sortable').forEach(header => {
+        header.addEventListener('click', function() {
+            const column = this.dataset.sort;
+            if (sortColumn === column) {
+                sortAscending = !sortAscending;
+            } else {
+                sortColumn = column;
+                sortAscending = true;
+            }
+            const sorted = sortColumns(window.columnData || [], sortColumn, sortAscending);
+            renderColumns(sorted);
+            updateSortArrows(sortColumn, sortAscending);
+        });
+    });
+}
+
 // ---------- LOAD COLUMNS ----------
 async function loadColumns() {
     try {
         const res = await fetch(API_BASE + '/api/columns/all');
         if (!res.ok) throw new Error('Failed to fetch columns');
         const columns = await res.json();
-        renderColumns(columns);
-        // Update total count
+        window.columnData = columns;
+        const sorted = sortColumns(columns, sortColumn, sortAscending);
+        renderColumns(sorted);
+        updateSortArrows(sortColumn, sortAscending);
         totalCountSpan.textContent = columns.length;
-        // Also reload categories for dropdown
         loadCategoryDropdown();
     } catch (error) {
         showStatus('❌ Error loading columns: ' + error.message, 'error');
@@ -57,28 +107,23 @@ function renderColumns(columns) {
         const tr = document.createElement('tr');
         tr.style.borderBottom = '1px solid #e2e8f0';
 
-        // ID
         const tdId = document.createElement('td');
         tdId.textContent = col.id;
         tdId.style.padding = '10px 16px';
 
-        // Name
         const tdName = document.createElement('td');
         tdName.textContent = col.column_name;
         tdName.style.padding = '10px 16px';
         tdName.style.fontWeight = '500';
 
-        // Data Type
         const tdType = document.createElement('td');
         tdType.textContent = col.data_type;
         tdType.style.padding = '10px 16px';
 
-        // Category
         const tdCategory = document.createElement('td');
         tdCategory.textContent = col.category || '—';
         tdCategory.style.padding = '10px 16px';
 
-        // Active
         const tdActive = document.createElement('td');
         tdActive.style.padding = '10px 16px';
         tdActive.style.textAlign = 'center';
@@ -87,12 +132,10 @@ function renderColumns(columns) {
         activeSpan.style.fontSize = '16px';
         tdActive.appendChild(activeSpan);
 
-        // Actions
         const tdActions = document.createElement('td');
         tdActions.style.padding = '10px 16px';
         tdActions.style.textAlign = 'center';
 
-        // Edit button
         const editBtn = document.createElement('button');
         editBtn.textContent = '✏️';
         editBtn.style.background = 'none';
@@ -102,7 +145,6 @@ function renderColumns(columns) {
         editBtn.title = 'Edit column';
         editBtn.addEventListener('click', () => openEditModal(col));
 
-        // Delete button
         const delBtn = document.createElement('button');
         delBtn.textContent = '🗑️';
         delBtn.style.background = 'none';
@@ -132,7 +174,6 @@ async function loadCategoryDropdown() {
         const res = await fetch(API_BASE + '/api/columns/categories');
         if (!res.ok) throw new Error('Failed to fetch categories');
         const categories = await res.json();
-        // Keep the first option as placeholder
         categoryDropdown.innerHTML = '<option value="">-- Select existing --</option>';
         categories.forEach(cat => {
             const opt = document.createElement('option');
@@ -140,30 +181,34 @@ async function loadCategoryDropdown() {
             opt.textContent = cat.category;
             categoryDropdown.appendChild(opt);
         });
-        // When dropdown changes, fill the text input
         categoryDropdown.onchange = function() {
-            if (this.value) {
-                colCategory.value = this.value;
-            }
+            if (this.value) colCategory.value = this.value;
         };
     } catch (error) {
         console.log('⚠️ Could not load categories:', error.message);
     }
 }
 
-// ---------- SHOW STATUS MESSAGE ----------
+// ---------- STATUS MESSAGES ----------
 function showStatus(message, type) {
     statusDiv.textContent = message;
     statusDiv.className = 'upload-status ' + type;
     statusDiv.style.display = 'block';
-    // Auto-hide after 5 seconds
     clearTimeout(window.statusTimeout);
     window.statusTimeout = setTimeout(() => {
         statusDiv.style.display = 'none';
     }, 5000);
 }
 
-// ---------- MODAL OPEN / CLOSE ----------
+function showModalStatus(message, type) {
+    modalStatus.textContent = message;
+    modalStatus.style.display = 'block';
+    modalStatus.style.background = type === 'error' ? '#ffebee' : '#e8f5e9';
+    modalStatus.style.color = type === 'error' ? '#c62828' : '#2e7d32';
+    modalStatus.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
+}
+
+// ---------- MODAL CONTROL ----------
 function openModal(title, columnData = null) {
     modalTitle.textContent = title;
     modalOverlay.style.display = 'block';
@@ -172,16 +217,13 @@ function openModal(title, columnData = null) {
     document.body.style.overflow = 'hidden';
 
     if (columnData) {
-        // Edit mode
         editingId = columnData.id;
         colName.value = columnData.column_name;
         colType.value = columnData.data_type;
         colCategory.value = columnData.category || '';
-        // Set dropdown to match
         categoryDropdown.value = columnData.category || '';
         editId.value = columnData.id;
     } else {
-        // Add mode
         editingId = null;
         colName.value = '';
         colType.value = 'Text';
@@ -199,21 +241,13 @@ function closeModal() {
     modalStatus.style.display = 'none';
 }
 
-// ---------- OPEN ADD MODAL ----------
-document.getElementById('addColumnBtn').addEventListener('click', () => {
-    openModal('Add New Column');
-});
-
-// ---------- OPEN EDIT MODAL ----------
-function openEditModal(column) {
-    openModal('Edit Column', column);
-}
-
-// ---------- CANCEL / CLOSE ----------
+document.getElementById('addColumnBtn').addEventListener('click', () => openModal('Add New Column'));
 cancelBtn.addEventListener('click', closeModal);
 modalOverlay.addEventListener('click', closeModal);
 
-// ---------- FORM SUBMIT (SAVE) ----------
+function openEditModal(column) { openModal('Edit Column', column); }
+
+// ---------- FORM SUBMIT ----------
 document.getElementById('columnForm').addEventListener('submit', async function(e) {
     e.preventDefault();
 
@@ -238,8 +272,7 @@ document.getElementById('columnForm').addEventListener('submit', async function(
         if (editingId) {
             url += '/' + editingId;
             method = 'PUT';
-            // For PUT, we also need is_active (default 1) - we can include it
-            payload.is_active = 1; // we always set active when editing
+            payload.is_active = 1;
         }
 
         const res = await fetch(url, {
@@ -255,11 +288,9 @@ document.getElementById('columnForm').addEventListener('submit', async function(
         }
 
         showModalStatus('✅ ' + result.message, 'success');
-        // Close modal after success and reload table
         setTimeout(() => {
             closeModal();
             loadColumns();
-            // Also reload categories
             loadCategoryDropdown();
             showStatus('✅ Column saved successfully!', 'success');
         }, 800);
@@ -269,128 +300,29 @@ document.getElementById('columnForm').addEventListener('submit', async function(
     }
 });
 
-// ---------- SHOW STATUS INSIDE MODAL ----------
-function showModalStatus(message, type) {
-    modalStatus.textContent = message;
-    modalStatus.style.display = 'block';
-    modalStatus.style.background = type === 'error' ? '#ffebee' : '#e8f5e9';
-    modalStatus.style.color = type === 'error' ? '#c62828' : '#2e7d32';
-    modalStatus.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
-}
-
 // ---------- CONFIRM DELETE ----------
 async function confirmDelete(id, name) {
-    if (!confirm(`Are you sure you want to delete column "${name}"? This will soft-delete it (it will become inactive).`)) {
+    if (!confirm(`Are you sure you want to delete column "${name}"? This will soft-delete it.`)) {
         return;
     }
 
     try {
-        const res = await fetch(API_BASE + '/api/columns/' + id, {
-            method: 'DELETE'
-        });
+        const res = await fetch(API_BASE + '/api/columns/' + id, { method: 'DELETE' });
         const result = await res.json();
         if (!res.ok) {
             throw new Error(result.message || result.detail || 'Failed to delete column');
         }
         showStatus('✅ ' + result.message, 'success');
-        loadColumns(); // refresh table
-        loadCategoryDropdown(); // refresh categories
+        loadColumns();
+        loadCategoryDropdown();
     } catch (error) {
         showStatus('❌ Error deleting column: ' + error.message, 'error');
     }
 }
 
-// ---------- INITIAL LOAD ----------
-// ---------- SORTING LOGIC ----------
-let sortColumn = 'id';          // default sort column
-let sortAscending = true;      // default ascending
-
-function sortColumns(columns, column, ascending) {
-    const sorted = [...columns];  // copy array
-    sorted.sort((a, b) => {
-        let valA = a[column];
-        let valB = b[column];
-        // Handle null/undefined values
-        if (valA == null) valA = '';
-        if (valB == null) valB = '';
-        // For numeric sorting (if applicable)
-        if (column === 'id' || column === 'is_active') {
-            return ascending ? valA - valB : valB - valA;
-        }
-        // For strings (case-insensitive)
-        if (typeof valA === 'string') valA = valA.toLowerCase();
-        if (typeof valB === 'string') valB = valB.toLowerCase();
-        if (ascending) {
-            return valA < valB ? -1 : (valA > valB ? 1 : 0);
-        } else {
-            return valA > valB ? -1 : (valA < valB ? 1 : 0);
-        }
-    });
-    return sorted;
-}
-
-// ---------- UPDATE SORT ARROWS ----------
-function updateSortArrows(column, ascending) {
-    document.querySelectorAll('.sortable .sort-arrow').forEach(span => {
-        span.textContent = '';  // clear all arrows
-    });
-    // Find the header that has data-sort matching the column
-    const header = document.querySelector(`.sortable[data-sort="${column}"]`);
-    if (header) {
-        const arrowSpan = header.querySelector('.sort-arrow');
-        if (arrowSpan) {
-            arrowSpan.textContent = ascending ? ' ▲' : ' ▼';
-        }
-    }
-}
-
-// ---------- HANDLE HEADER CLICK ----------
-function setupSorting() {
-    document.querySelectorAll('.sortable').forEach(header => {
-        header.addEventListener('click', function() {
-            const column = this.dataset.sort;
-            // If same column, toggle direction; else sort ascending on new column
-            if (sortColumn === column) {
-                sortAscending = !sortAscending;
-            } else {
-                sortColumn = column;
-                sortAscending = true;
-            }
-            // Re-sort and re-render the table
-            const sortedData = sortColumns(window.columnData || [], sortColumn, sortAscending);
-            renderColumns(sortedData);
-            updateSortArrows(sortColumn, sortAscending);
-        });
-    });
-}
-
-// ---------- MODIFY loadColumns TO STORE DATA AND APPLY SORT ----------
-window.columnData = [];  // global variable to store raw data
-
-// Replace the existing loadColumns function (keep the same name)
-async function loadColumns() {
-    try {
-        const res = await fetch(API_BASE + '/api/columns/all');
-        if (!res.ok) throw new Error('Failed to fetch columns');
-        const columns = await res.json();
-        window.columnData = columns;  // store raw data
-        // Sort by current sort column/direction and render
-        const sorted = sortColumns(columns, sortColumn, sortAscending);
-        renderColumns(sorted);
-        updateSortArrows(sortColumn, sortAscending);
-        totalCountSpan.textContent = columns.length;
-        loadCategoryDropdown();
-    } catch (error) {
-        showStatus('❌ Error loading columns: ' + error.message, 'error');
-        columnsBody.innerHTML = '';
-        noColumnsMsg.style.display = 'block';
-        totalCountSpan.textContent = '0';
-    }
-}
-
-// ---------- ON PAGE LOAD ----------
+// ---------- INIT ----------
 window.onload = function() {
     loadColumns();
-    setupSorting();  // attach click listeners
-    console.log('📋 Columns Manager loaded (with sorting)');
+    setupSorting();
+    console.log('📋 Columns Manager loaded');
 };
