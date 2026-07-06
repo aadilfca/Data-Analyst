@@ -6,7 +6,7 @@ async function loadDashboardStats() {
         if (res.ok) {
             const data = await res.json();
             document.getElementById('totalItems').textContent = '0'; // Default for now
-            document.getElementById('activeModules').textContent = '1';
+            document.getElementById('activeModules').textContent = '2';
             console.log('✅ Server connected:', data.status);
         }
     } catch (error) {
