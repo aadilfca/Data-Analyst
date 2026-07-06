@@ -301,7 +301,96 @@ async function confirmDelete(id, name) {
 }
 
 // ---------- INITIAL LOAD ----------
+// ---------- SORTING LOGIC ----------
+let sortColumn = 'id';          // default sort column
+let sortAscending = true;      // default ascending
+
+function sortColumns(columns, column, ascending) {
+    const sorted = [...columns];  // copy array
+    sorted.sort((a, b) => {
+        let valA = a[column];
+        let valB = b[column];
+        // Handle null/undefined values
+        if (valA == null) valA = '';
+        if (valB == null) valB = '';
+        // For numeric sorting (if applicable)
+        if (column === 'id' || column === 'is_active') {
+            return ascending ? valA - valB : valB - valA;
+        }
+        // For strings (case-insensitive)
+        if (typeof valA === 'string') valA = valA.toLowerCase();
+        if (typeof valB === 'string') valB = valB.toLowerCase();
+        if (ascending) {
+            return valA < valB ? -1 : (valA > valB ? 1 : 0);
+        } else {
+            return valA > valB ? -1 : (valA < valB ? 1 : 0);
+        }
+    });
+    return sorted;
+}
+
+// ---------- UPDATE SORT ARROWS ----------
+function updateSortArrows(column, ascending) {
+    document.querySelectorAll('.sortable .sort-arrow').forEach(span => {
+        span.textContent = '';  // clear all arrows
+    });
+    // Find the header that has data-sort matching the column
+    const header = document.querySelector(`.sortable[data-sort="${column}"]`);
+    if (header) {
+        const arrowSpan = header.querySelector('.sort-arrow');
+        if (arrowSpan) {
+            arrowSpan.textContent = ascending ? ' ▲' : ' ▼';
+        }
+    }
+}
+
+// ---------- HANDLE HEADER CLICK ----------
+function setupSorting() {
+    document.querySelectorAll('.sortable').forEach(header => {
+        header.addEventListener('click', function() {
+            const column = this.dataset.sort;
+            // If same column, toggle direction; else sort ascending on new column
+            if (sortColumn === column) {
+                sortAscending = !sortAscending;
+            } else {
+                sortColumn = column;
+                sortAscending = true;
+            }
+            // Re-sort and re-render the table
+            const sortedData = sortColumns(window.columnData || [], sortColumn, sortAscending);
+            renderColumns(sortedData);
+            updateSortArrows(sortColumn, sortAscending);
+        });
+    });
+}
+
+// ---------- MODIFY loadColumns TO STORE DATA AND APPLY SORT ----------
+window.columnData = [];  // global variable to store raw data
+
+// Replace the existing loadColumns function (keep the same name)
+async function loadColumns() {
+    try {
+        const res = await fetch(API_BASE + '/api/columns/all');
+        if (!res.ok) throw new Error('Failed to fetch columns');
+        const columns = await res.json();
+        window.columnData = columns;  // store raw data
+        // Sort by current sort column/direction and render
+        const sorted = sortColumns(columns, sortColumn, sortAscending);
+        renderColumns(sorted);
+        updateSortArrows(sortColumn, sortAscending);
+        totalCountSpan.textContent = columns.length;
+        loadCategoryDropdown();
+    } catch (error) {
+        showStatus('❌ Error loading columns: ' + error.message, 'error');
+        columnsBody.innerHTML = '';
+        noColumnsMsg.style.display = 'block';
+        totalCountSpan.textContent = '0';
+    }
+}
+
+// ---------- ON PAGE LOAD ----------
 window.onload = function() {
     loadColumns();
-    console.log('📋 Columns Manager loaded');
+    setupSorting();  // attach click listeners
+    console.log('📋 Columns Manager loaded (with sorting)');
 };
