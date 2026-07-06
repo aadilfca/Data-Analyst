@@ -66,6 +66,35 @@ body {
     color: #1a1a2e;
     font-weight: 700;
 }
+/* ---------- MODULE PAGE HEADER ---------- */
+.module-header {
+    margin-bottom: 35px;
+}
+
+.module-header .back-link {
+    display: inline-block;
+    margin-bottom: 10px;
+    color: #3b82f6;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.module-header .back-link:hover {
+    text-decoration: underline;
+}
+
+.module-header h1 {
+    font-size: 28px;
+    color: #1a1a2e;
+    font-weight: 700;
+}
+
+.module-header p {
+    color: #64748b;
+    font-size: 16px;
+    margin-top: 4px;
+}
 
 .dashboard-header p {
     color: #64748b;

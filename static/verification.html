@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verification Module</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">🏢 System Analyst</div>
+            <div class="nav-user">
+                <span>👤 Welcome, Analyst</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <!-- Module Header -->
+        <header class="module-header">
+            <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
+            <h1>✅ Verification Module</h1>
+            <p>Select a verification type to begin</p>
+        </header>
+
+        <!-- Verification Module Buttons Grid -->
+        <div class="module-grid">
+            <!-- Cash Verification -->
+            <div class="module-card" onclick="window.location.href='/static/cash-verification.html'">
+                <div class="module-icon">💰</div>
+                <h3>Cash Verification</h3>
+                <p>Verify cash transactions and balances</p>
+                <span class="module-status">Ready</span>
+            </div>
+
+            <!-- Bank Verification -->
+            <div class="module-card" onclick="alert('Bank Verification coming soon!')">
+                <div class="module-icon">🏦</div>
+                <h3>Bank Verification</h3>
+                <p>Verify bank transactions and reconciliations</p>
+                <span class="module-status coming">Coming Soon</span>
+            </div>
+
+            <!-- Journal Verification -->
+            <div class="module-card" onclick="alert('Journal Verification coming soon!')">
+                <div class="module-icon">📓</div>
+                <h3>Journal Verification</h3>
+                <p>Verify journal entries and adjustments</p>
+                <span class="module-status coming">Coming Soon</span>
+            </div>
+        </div>
+
+        <!-- Quick Stats Section -->
+        <section class="quick-stats">
+            <h2>📈 Verification Overview</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Pending Verifications</span>
+                    <span class="stat-value" id="pendingCount">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Verified Today</span>
+                    <span class="stat-value" id="verifiedToday">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Total Verified</span>
+                    <span class="stat-value" id="totalVerified">0</span>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="/static/verification.js"></script>
+</body>
+
+</html>
