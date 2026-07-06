@@ -1,5 +1,5 @@
 // ==============================================
-// 📄 MANAGE TEMPLATES LOGIC
+// 📄 MANAGE TEMPLATES LOGIC (using utilities)
 // ==============================================
 
 const API_BASE = 'http://localhost:5000';
@@ -68,18 +68,6 @@ function renderTemplates(templates) {
         // Columns (comma-separated names)
         const tdCols = document.createElement('td');
         tdCols.style.padding = '10px 16px';
-        // tpl.selected_columns is an array of column IDs - we need to fetch column names?
-        // The API returns selected_columns as array of IDs. We need to map to names.
-        // But we can also get column names from the backend? The current API returns only IDs.
-        // We'll fetch columns and map, or we can show IDs for now.
-        // Better: we have the list of all columns; we can map IDs to names.
-        // Since we have allColumns global, we can use it if loaded. But we might not have it.
-        // Instead, we can call a separate endpoint to get column names for these IDs:
-        // /api/templates/{id}/columns returns full column objects.
-        // To avoid extra requests, we can map using the global allColumns if available.
-        // Since we load columns in the modal, we might not have them here.
-        // Let's use a placeholder and improve later.
-        // For now, we'll show the IDs as a fallback.
         const colIds = tpl.selected_columns || [];
         let colNames = [];
         if (allColumns && allColumns.length > 0) {
@@ -98,14 +86,10 @@ function renderTemplates(templates) {
         tdBy.textContent = tpl.created_by || 'Admin';
         tdBy.style.padding = '10px 16px';
 
-        // Created Date (format DD/MM/YYYY)
+        // Created Date (using global formatDate)
         const tdDate = document.createElement('td');
         tdDate.style.padding = '10px 16px';
-        if (tpl.created_date) {
-            tdDate.textContent = formatDate(tpl.created_date);
-        } else {
-            tdDate.textContent = '—';
-        }
+        tdDate.textContent = window.formatDate(tpl.created_date);
 
         // Active
         const tdActive = document.createElement('td');
@@ -156,22 +140,6 @@ function renderTemplates(templates) {
     });
 }
 
-// ---------- DATE FORMATTING UTILITY ----------
-function formatDate(dateString) {
-    if (!dateString) return '—';
-    try {
-        const date = new Date(dateString);
-        if (isNaN(date.getTime())) return dateString; // fallback
-        // Format as DD/MM/YYYY
-        const day = String(date.getDate()).padStart(2, '0');
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const year = date.getFullYear();
-        return day + '/' + month + '/' + year;
-    } catch (e) {
-        return dateString;
-    }
-}
-
 // ---------- LOAD ACTIVE COLUMNS FOR CHECKBOXES ----------
 async function loadColumnsForCheckboxes() {
     try {
@@ -184,75 +152,6 @@ async function loadColumnsForCheckboxes() {
         console.log('⚠️ Error loading columns:', error.message);
         return [];
     }
-}
-
-// ---------- RENDER CHECKBOXES GROUPED BY CATEGORY ----------
-function renderCheckboxes(columns, selectedIds = []) {
-    columnCheckboxes.innerHTML = '';
-    if (!columns || columns.length === 0) {
-        noColumnsModalMsg.style.display = 'block';
-        return;
-    }
-    noColumnsModalMsg.style.display = 'none';
-
-    // Group by category
-    const groups = {};
-    columns.forEach(col => {
-        const cat = col.category || 'General';
-        if (!groups[cat]) groups[cat] = [];
-        groups[cat].push(col);
-    });
-
-    // Sort categories alphabetically
-    const sortedCategories = Object.keys(groups).sort();
-
-    sortedCategories.forEach(cat => {
-        const groupDiv = document.createElement('div');
-        groupDiv.style.marginBottom = '8px';
-        groupDiv.style.borderBottom = '1px solid #e2e8f0';
-        groupDiv.style.paddingBottom = '6px';
-
-        const catLabel = document.createElement('div');
-        catLabel.textContent = cat;
-        catLabel.style.fontWeight = '600';
-        catLabel.style.fontSize = '13px';
-        catLabel.style.color = '#475569';
-        catLabel.style.marginBottom = '4px';
-        groupDiv.appendChild(catLabel);
-
-        const checkboxContainer = document.createElement('div');
-        checkboxContainer.style.display = 'flex';
-        checkboxContainer.style.flexWrap = 'wrap';
-        checkboxContainer.style.gap = '10px';
-
-        groups[cat].forEach(col => {
-            const label = document.createElement('label');
-            label.style.display = 'flex';
-            label.style.alignItems = 'center';
-            label.style.gap = '5px';
-            label.style.fontSize = '14px';
-            label.style.cursor = 'pointer';
-
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.value = col.id;
-            cb.checked = selectedIds.includes(col.id);
-            cb.style.width = '16px';
-            cb.style.height = '16px';
-            cb.style.cursor = 'pointer';
-
-            const span = document.createElement('span');
-            span.textContent = col.column_name;
-            span.style.color = '#1a1a2e';
-
-            label.appendChild(cb);
-            label.appendChild(span);
-            checkboxContainer.appendChild(label);
-        });
-
-        groupDiv.appendChild(checkboxContainer);
-        columnCheckboxes.appendChild(groupDiv);
-    });
 }
 
 // ---------- SHOW STATUS MESSAGE ----------
@@ -282,15 +181,14 @@ async function openModal(title, templateData = null) {
         editingId = templateData.id;
         templateName.value = templateData.template_name;
         editId.value = templateData.id;
-        // Pre-select checkboxes based on selected_columns array
-        const selectedIds = templateData.selected_columns || [];
-        renderCheckboxes(columns, selectedIds);
+        // Use global renderColumnCheckboxes
+        window.renderColumnCheckboxes(columnCheckboxes, columns, templateData.selected_columns || []);
     } else {
         // Add mode
         editingId = null;
         templateName.value = '';
         editId.value = '';
-        renderCheckboxes(columns, []);
+        window.renderColumnCheckboxes(columnCheckboxes, columns, []);
     }
 }
 
@@ -345,7 +243,6 @@ document.getElementById('templateForm').addEventListener('submit', async functio
         if (editingId) {
             url += '/' + editingId;
             method = 'PUT';
-            // PUT expects same payload
         }
 
         const res = await fetch(url, {
@@ -396,7 +293,7 @@ async function confirmDelete(id, name) {
             throw new Error(result.message || result.detail || 'Failed to delete template');
         }
         showStatus('✅ ' + result.message, 'success');
-        loadTemplates(); // refresh table
+        loadTemplates();
     } catch (error) {
         showStatus('❌ Error deleting template: ' + error.message, 'error');
     }
@@ -405,5 +302,5 @@ async function confirmDelete(id, name) {
 // ---------- INITIAL LOAD ----------
 window.onload = function() {
     loadTemplates();
-    console.log('📄 Templates Manager loaded');
+    console.log('📄 Templates Manager loaded (using utils)');
 };
