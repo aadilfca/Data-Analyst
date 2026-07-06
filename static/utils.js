@@ -27,10 +27,15 @@ function formatDate(dateString) {
  * @param {Array} columns - Array of column objects (must have id, column_name, category).
  * @param {Array} selectedIds - Array of column IDs to be pre-checked.
  */
+/**
+ * Render a list of columns as checkboxes with drag handles and category grouping.
+ * @param {HTMLElement} container - The DOM element where checkboxes will be appended.
+ * @param {Array} columns - Array of column objects (must have id, column_name, category).
+ * @param {Array} selectedIds - Array of column IDs to be pre-checked.
+ */
 function renderColumnCheckboxes(container, columns, selectedIds = []) {
     container.innerHTML = '';
     if (!columns || columns.length === 0) {
-        // Show a message inside the container
         const msg = document.createElement('div');
         msg.textContent = 'No active master columns available. Please add columns first.';
         msg.style.color = '#94a3b8';
@@ -48,59 +53,107 @@ function renderColumnCheckboxes(container, columns, selectedIds = []) {
         groups[cat].push(col);
     });
 
-    // Sort categories alphabetically
     const sortedCategories = Object.keys(groups).sort();
-
+    // Build items in category order
+    const items = [];
     sortedCategories.forEach(cat => {
-        const groupDiv = document.createElement('div');
-        groupDiv.className = 'checkbox-group';
-        groupDiv.style.marginBottom = '8px';
-        groupDiv.style.borderBottom = '1px solid #e2e8f0';
-        groupDiv.style.paddingBottom = '6px';
-
-        const catLabel = document.createElement('div');
-        catLabel.className = 'checkbox-group-label';
-        catLabel.textContent = cat;
-        catLabel.style.fontWeight = '600';
-        catLabel.style.fontSize = '13px';
-        catLabel.style.color = '#475569';
-        catLabel.style.marginBottom = '4px';
-        groupDiv.appendChild(catLabel);
-
-        const checkboxContainer = document.createElement('div');
-        checkboxContainer.className = 'checkbox-items';
-        checkboxContainer.style.display = 'flex';
-        checkboxContainer.style.flexWrap = 'wrap';
-        checkboxContainer.style.gap = '10px';
-
         groups[cat].forEach(col => {
-            const label = document.createElement('label');
-            label.style.display = 'flex';
-            label.style.alignItems = 'center';
-            label.style.gap = '5px';
-            label.style.fontSize = '14px';
-            label.style.cursor = 'pointer';
-
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.value = col.id;
-            cb.checked = selectedIds.includes(col.id);
-            cb.style.width = '16px';
-            cb.style.height = '16px';
-            cb.style.cursor = 'pointer';
-
-            const span = document.createElement('span');
-            span.textContent = col.column_name;
-            span.style.color = '#1a1a2e';
-
-            label.appendChild(cb);
-            label.appendChild(span);
-            checkboxContainer.appendChild(label);
+            items.push({
+                id: col.id,
+                name: col.column_name,
+                category: cat,
+                checked: selectedIds.includes(col.id)
+            });
         });
-
-        groupDiv.appendChild(checkboxContainer);
-        container.appendChild(groupDiv);
     });
+
+    // Render each item with a drag handle
+    items.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'checkbox-item';
+        div.dataset.id = item.id;
+        div.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 0; border-bottom:1px solid #f0f2f5;';
+
+        // Drag handle (☰)
+        const handle = document.createElement('span');
+        handle.className = 'drag-handle';
+        handle.textContent = '☰';
+        handle.style.cssText = 'cursor:grab; color:#94a3b8; user-select:none; font-size:16px; padding:0 4px;';
+        div.appendChild(handle);
+
+        // Label with checkbox
+        const label = document.createElement('label');
+        label.style.cssText = 'display:flex; align-items:center; gap:5px; font-size:14px; cursor:pointer; flex:1;';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = item.id;
+        cb.checked = item.checked;
+        cb.style.cssText = 'width:16px; height:16px; cursor:pointer;';
+        label.appendChild(cb);
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = `${item.id}. ${item.name}`;
+        nameSpan.style.color = '#1a1a2e';
+        label.appendChild(nameSpan);
+
+        const catSpan = document.createElement('span');
+        catSpan.textContent = item.category;
+        catSpan.style.cssText = 'color:#94a3b8; font-size:11px; margin-left:auto;';
+        label.appendChild(catSpan);
+
+        div.appendChild(label);
+        container.appendChild(div);
+    });
+
+    // Update order count
+    updateOrderCount(container);
+
+    // Add change listeners to checkboxes
+    container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.addEventListener('change', function() {
+            updateOrderCount(container);
+        });
+    });
+
+    // Initialize Sortable for drag-and-drop if available
+    if (typeof Sortable !== 'undefined') {
+        new Sortable(container, {
+            handle: '.drag-handle',
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            dragClass: 'sortable-drag',
+            onEnd: function() {
+                updateOrderCount(container);
+            }
+        });
+    } else {
+        console.warn('⚠️ SortableJS not loaded; drag-and-drop disabled.');
+    }
+}
+
+/**
+ * Update the order count display.
+ */
+function updateOrderCount(container) {
+    const checked = container.querySelectorAll('input[type="checkbox"]:checked').length;
+    const orderSpan = document.getElementById('orderCount');
+    if (orderSpan) {
+        orderSpan.textContent = checked;
+    }
+}
+
+function updateOrderCount(container) {
+    const checked = container.querySelectorAll('input[type="checkbox"]:checked').length;
+    const orderSpan = document.getElementById('orderCount');
+    if (orderSpan) {
+        orderSpan.textContent = checked;
+    }
+    // Also update the order status visibility
+    const statusDiv = document.getElementById('orderStatus');
+    if (statusDiv) {
+        statusDiv.style.display = checked > 0 ? 'block' : 'block';
+    }
 }
 
 // Expose functions globally (for use in non-module scripts)

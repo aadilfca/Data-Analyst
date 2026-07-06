@@ -80,30 +80,58 @@ def get_template(template_id: int):
     result[0]['selected_columns'] = json.loads(result[0]['selected_columns'])
     return result[0]
 
+# ---------- TEMPLATES (with Pydantic models) ----------
+
+class TemplateCreate(BaseModel):
+    template_name: str
+    selected_columns: List[int]
+    created_by: str = "Admin"
+
+class TemplateUpdate(BaseModel):
+    template_name: str
+    selected_columns: List[int]
+
+# ---------- TEMPLATES (with Pydantic models for JSON) ----------
+
+class TemplateCreate(BaseModel):
+    template_name: str
+    selected_columns: List[int]
+    created_by: str = "Admin"
+
+class TemplateUpdate(BaseModel):
+    template_name: str
+    selected_columns: List[int]
+
 @router.post("/api/templates")
-def create_template(template_name: str, selected_columns: List[int], created_by: str = "Admin"):
-    existing = execute_query("SELECT id FROM templates WHERE template_name = ?", (template_name,))
+def create_template(template: TemplateCreate):
+    existing = execute_query("SELECT id FROM templates WHERE template_name = ?", (template.template_name,))
     if existing:
         raise HTTPException(400, "Template name already exists")
-    if not selected_columns:
+    if not template.selected_columns:
         raise HTTPException(400, "Select at least one column")
-    columns_json = json.dumps(selected_columns)
-    template_id = execute_write("INSERT INTO templates (template_name, selected_columns, created_by) VALUES (?, ?, ?)", (template_name, columns_json, created_by))
-    log_audit(created_by, "Create", "Templates", f"Created template: {template_name}")
-    return {"message": f"Template '{template_name}' created successfully", "template_id": template_id}
+    columns_json = json.dumps(template.selected_columns)
+    template_id = execute_write(
+        "INSERT INTO templates (template_name, selected_columns, created_by) VALUES (?, ?, ?)",
+        (template.template_name, columns_json, template.created_by)
+    )
+    log_audit(template.created_by, "Create", "Templates", f"Created template: {template.template_name}")
+    return {"message": f"Template '{template.template_name}' created successfully", "template_id": template_id}
 
 @router.put("/api/templates/{template_id}")
-def update_template(template_id: int, template_name: str, selected_columns: List[int]):
+def update_template(template_id: int, template: TemplateUpdate):
     existing = execute_query("SELECT id FROM templates WHERE id = ?", (template_id,))
     if not existing:
         raise HTTPException(404, "Template not found")
-    duplicate = execute_query("SELECT id FROM templates WHERE template_name = ? AND id != ?", (template_name, template_id))
+    duplicate = execute_query("SELECT id FROM templates WHERE template_name = ? AND id != ?", (template.template_name, template_id))
     if duplicate:
         raise HTTPException(400, "Template name already exists")
-    columns_json = json.dumps(selected_columns)
-    execute_write("UPDATE templates SET template_name = ?, selected_columns = ? WHERE id = ?", (template_name, columns_json, template_id))
-    log_audit("Admin", "Update", "Templates", f"Updated template: {template_name}")
-    return {"message": f"Template '{template_name}' updated successfully"}
+    columns_json = json.dumps(template.selected_columns)
+    execute_write(
+        "UPDATE templates SET template_name = ?, selected_columns = ? WHERE id = ?",
+        (template.template_name, columns_json, template_id)
+    )
+    log_audit("Admin", "Update", "Templates", f"Updated template: {template.template_name}")
+    return {"message": f"Template '{template.template_name}' updated successfully"}
 
 @router.delete("/api/templates/{template_id}")
 def delete_template(template_id: int):

@@ -65,21 +65,21 @@ function renderTemplates(templates) {
         tdName.style.padding = '10px 16px';
         tdName.style.fontWeight = '500';
 
-        // Columns (comma-separated names)
+        // Columns (display as "ID. Column Name")
         const tdCols = document.createElement('td');
         tdCols.style.padding = '10px 16px';
         const colIds = tpl.selected_columns || [];
-        let colNames = [];
+        let colDisplay = [];
         if (allColumns && allColumns.length > 0) {
-            colNames = colIds.map(id => {
+            colDisplay = colIds.map(id => {
                 const col = allColumns.find(c => c.id === id);
-                return col ? col.column_name : 'ID:' + id;
+                return col ? `${col.id}. ${col.column_name}` : `ID: ${id}`;
             });
         } else {
-            colNames = colIds.map(id => '#' + id);
+            colDisplay = colIds.map(id => `#${id}`);
         }
-        tdCols.textContent = colNames.join(', ') || '—';
-        tdCols.title = colNames.join(', ') || 'No columns';
+        tdCols.textContent = colDisplay.join(', ') || '—';
+        tdCols.title = colDisplay.join(', ') || 'No columns';
 
         // Created By
         const tdBy = document.createElement('td');
@@ -105,6 +105,16 @@ function renderTemplates(templates) {
         tdActions.style.padding = '10px 16px';
         tdActions.style.textAlign = 'center';
 
+        // Preview (Eye) button - defined ONCE
+        const previewBtn = document.createElement('button');
+        previewBtn.textContent = '👁️';
+        previewBtn.style.background = 'none';
+        previewBtn.style.border = 'none';
+        previewBtn.style.cursor = 'pointer';
+        previewBtn.style.fontSize = '18px';
+        previewBtn.title = 'Preview template as table';
+        previewBtn.addEventListener('click', () => openPreviewModal(tpl));
+
         // Edit button
         const editBtn = document.createElement('button');
         editBtn.textContent = '✏️';
@@ -112,6 +122,7 @@ function renderTemplates(templates) {
         editBtn.style.border = 'none';
         editBtn.style.cursor = 'pointer';
         editBtn.style.fontSize = '18px';
+        editBtn.style.marginLeft = '8px';
         editBtn.title = 'Edit template';
         editBtn.addEventListener('click', () => openEditModal(tpl));
 
@@ -126,6 +137,7 @@ function renderTemplates(templates) {
         delBtn.title = 'Delete template (soft)';
         delBtn.addEventListener('click', () => confirmDelete(tpl.id, tpl.template_name));
 
+        tdActions.appendChild(previewBtn);
         tdActions.appendChild(editBtn);
         tdActions.appendChild(delBtn);
 
@@ -297,6 +309,95 @@ async function confirmDelete(id, name) {
     } catch (error) {
         showStatus('❌ Error deleting template: ' + error.message, 'error');
     }
+}
+
+// ==============================================
+// PREVIEW TEMPLATE AS TABLE (single version)
+// ==============================================
+
+function openPreviewModal(tpl) {
+    // Get column details from selected IDs
+    const colIds = tpl.selected_columns || [];
+    let columnData = [];
+    if (allColumns && allColumns.length > 0) {
+        columnData = colIds.map(id => {
+            const col = allColumns.find(c => c.id === id);
+            return col ? { id: col.id, name: col.column_name, type: col.data_type } : null;
+        }).filter(Boolean);
+    }
+
+    if (columnData.length === 0) {
+        alert('No columns found in this template.');
+        return;
+    }
+
+    // Build the preview table
+    const previewContent = `
+        <div style="margin-bottom:15px;">
+            <h3 style="margin:0 0 5px 0;">📋 ${tpl.template_name}</h3>
+            <p style="color:#64748b; font-size:13px; margin:0;">
+                Created by: ${tpl.created_by || 'Admin'} 
+                | Date: ${window.formatDate(tpl.created_date)}
+                | Total Columns: ${columnData.length}
+            </p>
+        </div>
+        <div style="overflow-x:auto; border:1px solid #e2e8f0; border-radius:8px;">
+            <table style="width:100%; border-collapse:collapse; font-size:14px;">
+                <thead style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
+                    <tr>
+                        <th style="padding:10px 16px; text-align:left; font-weight:600; min-width:60px;">#</th>
+                        <th style="padding:10px 16px; text-align:left; font-weight:600;">Column ID</th>
+                        <th style="padding:10px 16px; text-align:left; font-weight:600;">Column Name</th>
+                        <th style="padding:10px 16px; text-align:left; font-weight:600;">Data Type</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${columnData.map((col, index) => `
+                        <tr style="border-bottom:1px solid #e2e8f0;">
+                            <td style="padding:8px 16px; color:#94a3b8; text-align:center;">${index + 1}</td>
+                            <td style="padding:8px 16px; color:#64748b; text-align:center;">${col.id}</td>
+                            <td style="padding:8px 16px; font-weight:500;">${col.name}</td>
+                            <td style="padding:8px 16px; color:#475569;">${col.type}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+        <div style="margin-top:10px; color:#94a3b8; font-size:12px;">
+            Total: ${columnData.length} column${columnData.length > 1 ? 's' : ''}
+        </div>
+    `;
+
+    // Create modal elements
+    const overlay = document.createElement('div');
+    overlay.id = 'previewOverlay';
+    overlay.style.cssText = 'display:block; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:999;';
+
+    const modal = document.createElement('div');
+    modal.id = 'previewModal';
+    modal.style.cssText = 'display:block; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:30px; z-index:1000; min-width:500px; max-width:700px; max-height:80vh; overflow-y:auto; border-radius:8px; box-shadow:0 10px 40px rgba(0,0,0,0.3);';
+    modal.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h2 style="margin:0;">👁️ Template Preview</h2>
+            <button id="closePreviewBtn" style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">×</button>
+        </div>
+        ${previewContent}
+        <div style="margin-top:20px; display:flex; justify-content:flex-end; border-top:1px solid #eee; padding-top:15px;">
+            <button id="closePreviewBtn2" style="padding:8px 20px; cursor:pointer; background:#3b82f6; color:white; border:none; border-radius:4px;">Close</button>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+    document.body.appendChild(modal);
+
+    // Close handlers
+    function closePreview() {
+        if (document.body.contains(overlay)) document.body.removeChild(overlay);
+        if (document.body.contains(modal)) document.body.removeChild(modal);
+    }
+    document.getElementById('closePreviewBtn').addEventListener('click', closePreview);
+    document.getElementById('closePreviewBtn2').addEventListener('click', closePreview);
+    overlay.addEventListener('click', closePreview);
 }
 
 // ---------- INITIAL LOAD ----------

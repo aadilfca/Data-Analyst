@@ -73,13 +73,19 @@
         style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:30px; z-index:1000; min-width:500px; max-width:700px; max-height:80vh; overflow-y:auto; border-radius:8px; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
         <h2 id="modalTitle">Create New Template</h2>
         <form id="templateForm">
+            <!-- Template Name -->
             <div style="margin-bottom:15px;">
                 <label><strong>Template Name *</strong></label>
                 <input type="text" id="templateName" placeholder="e.g., Sales Invoice" required
                     style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px; margin-top:4px;">
             </div>
+
+            <!-- Column Selection -->
             <div style="margin-bottom:15px;">
                 <label><strong>Select Columns * (at least one)</strong></label>
+                <div style="display:flex; gap:8px; margin-top:4px; align-items:center;">
+                    <small style="color:#94a3b8;">☰ Drag the handle to reorder selected columns</small>
+                </div>
                 <div
                     style="margin-top:6px; max-height:300px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px; padding:10px; background:#fafafa;">
                     <div id="columnCheckboxes">
@@ -90,8 +96,11 @@
                         No active master columns available. Please add columns first.
                     </div>
                 </div>
-                <small style="color:#94a3b8;">Select the columns you want to include in this template.</small>
+                <div id="orderStatus" style="font-size:13px; color:#475569; margin-top:6px;">
+                    Order: <span id="orderCount">0</span> columns selected
+                </div>
             </div>
+
             <input type="hidden" id="editTemplateId" value="">
             <div
                 style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px; border-top:1px solid #eee; padding-top:15px;">
@@ -105,6 +114,8 @@
         <div id="modalStatus" style="margin-top:10px; padding:8px; display:none; border-radius:4px;"></div>
     </div>
 
+    <!-- Include SortableJS for drag-and-drop (single) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
     <script src="/static/utils.js"></script>
     <script src="/static/templates.js"></script>
 </body>
