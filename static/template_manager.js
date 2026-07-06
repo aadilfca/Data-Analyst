@@ -238,7 +238,140 @@ document.addEventListener('DOMContentLoaded', function() {
         overlay.addEventListener('click', closePopup);
     }
 });
+// ---------- IMPORT FROM EXCEL ----------
+function importFromExcel(event) {
+    const file = event.target.files[0];
+    if (!file) return;
 
+    // Validate file type
+    const validTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
+    if (!validTypes.includes(file.type) && !file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
+        alert('⚠️ Please select a valid Excel file (.xlsx or .xls)');
+        event.target.value = '';
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+
+            if (!jsonData || jsonData.length === 0) {
+                alert('⚠️ The Excel file is empty.');
+                return;
+            }
+
+            // Get first column from each row
+            let importedCount = 0;
+            jsonData.forEach(row => {
+                if (row.length > 0 && row[0]) {
+                    const colName = String(row[0]).trim();
+                    if (colName) {
+                        // Add column with default type "Text"
+                        addColumnRowWithName(colName, 'Text');
+                        importedCount++;
+                    }
+                }
+            });
+
+            if (importedCount === 0) {
+                alert('⚠️ No column names found in the first column.');
+            } else {
+                showStatus('✅ Imported ' + importedCount + ' columns from Excel!', 'success');
+                setTimeout(() => {
+                    document.getElementById('statusMessage').style.display = 'none';
+                }, 3000);
+            }
+
+        } catch (error) {
+            alert('❌ Error reading Excel file: ' + error.message);
+        }
+    };
+    reader.readAsArrayBuffer(file);
+
+    // Reset file input
+    event.target.value = '';
+}
+
+// ---------- ADD COLUMN ROW WITH SPECIFIC NAME AND TYPE ----------
+function addColumnRowWithName(columnName, columnType) {
+    rowCounter++;
+    const tbody = document.getElementById('columnsBody');
+    const tr = document.createElement('tr');
+    tr.id = 'row_' + rowCounter;
+
+    // Sr No
+    const tdSr = document.createElement('td');
+    tdSr.textContent = rowCounter;
+    tdSr.style.textAlign = 'center';
+
+    // Column Name (pre-filled)
+    const tdName = document.createElement('td');
+    const inputName = document.createElement('input');
+    inputName.type = 'text';
+    inputName.placeholder = 'Enter column name';
+    inputName.className = 'column-name-input';
+    inputName.id = 'colName_' + rowCounter;
+    inputName.value = columnName;  // Pre-fill with imported name
+    tdName.appendChild(inputName);
+
+    // Type (pre-selected)
+    const tdType = document.createElement('td');
+    const selectType = document.createElement('select');
+    selectType.className = 'type-select';
+    selectType.id = 'colType_' + rowCounter;
+    
+    const optText = document.createElement('option');
+    optText.value = 'Text';
+    optText.textContent = 'Text';
+    selectType.appendChild(optText);
+    
+    const optNumeric = document.createElement('option');
+    optNumeric.value = 'Numeric';
+    optNumeric.textContent = 'Numeric';
+    selectType.appendChild(optNumeric);
+    
+    const optDate = document.createElement('option');
+    optDate.value = 'Date';
+    optDate.textContent = 'Date [DD/MM/YYYY]';
+    selectType.appendChild(optDate);
+    
+    // Set the selected type
+    if (columnType === 'Numeric') {
+        selectType.value = 'Numeric';
+    } else if (columnType === 'Date') {
+        selectType.value = 'Date';
+    } else {
+        selectType.value = 'Text';
+    }
+    
+    tdType.appendChild(selectType);
+
+    // Action (Delete button)
+    const tdAction = document.createElement('td');
+    tdAction.style.textAlign = 'center';
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '✕';
+    delBtn.className = 'delete-btn';
+    delBtn.onclick = function() {
+        if (document.querySelectorAll('#columnsBody tr').length > 1) {
+            tr.remove();
+            renumberRows();
+        } else {
+            alert('You must have at least one column.');
+        }
+    };
+    tdAction.appendChild(delBtn);
+
+    tr.appendChild(tdSr);
+    tr.appendChild(tdName);
+    tr.appendChild(tdType);
+    tr.appendChild(tdAction);
+    tbody.appendChild(tr);
+}
 // ---------- LOAD ON PAGE OPEN ----------
 window.onload = function() {
     loadTemplates();
