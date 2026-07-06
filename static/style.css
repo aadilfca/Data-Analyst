@@ -455,3 +455,53 @@ body {
     background: #fef3c7;
     color: #92400e;
 }
+/* ---------- UPLOAD HEADER WITH DROPDOWN ---------- */
+.upload-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.template-dropdown-container {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 180px;
+    margin-top: 30px;
+}
+
+.template-dropdown-container label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.template-dropdown {
+    padding: 10px 14px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    background: white;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 180px;
+}
+
+.template-dropdown:hover {
+    border-color: #94a3b8;
+}
+
+.template-dropdown:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.template-dropdown option {
+    padding: 8px;
+}

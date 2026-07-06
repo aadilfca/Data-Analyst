@@ -23,9 +23,20 @@
     <div class="main-container">
         <div class="upload-page">
             <div class="upload-header">
-                <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
-                <h1>📤 Upload Client Data</h1>
-                <p>Upload Excel files to import client data into the system</p>
+                <div class="upload-header-row">
+                    <div>
+                        <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
+                        <h1>📤 Upload Client Data</h1>
+                        <p>Upload Excel files to import client data into the system</p>
+                    </div>
+                    <div class="template-dropdown-container">
+                        <label for="templateDropdown">📋 Set Columns</label>
+                        <select id="templateDropdown" class="template-dropdown">
+                            <option value="new">➕ Add New</option>
+                            <!-- Templates will be loaded here -->
+                        </select>
+                    </div>
+                </div>
             </div>
 
             <div class="upload-box">
@@ -53,6 +64,7 @@
         </div>
     </div>
 
+    <script src="/static/template_manager.js"></script>
     <script src="/static/upload.js"></script>
 </body>
 
