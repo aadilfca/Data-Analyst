@@ -1,52 +1,18 @@
-from fastapi import APIRouter, File, UploadFile, HTTPException, Body
-from fastapi.responses import StreamingResponse
-import os, json, openpyxl, pandas as pd
-from io import BytesIO
-from database import execute_query, execute_write, log_audit, get_raw_conn
-from typing import List, Optional, Dict, Any
+# Add this model at the top of the file (after other imports)
 from pydantic import BaseModel
-from datetime import datetime
 
-router = APIRouter()
-
-# ---------- DATA MODELS ----------
-class ColumnMapping(BaseModel):
-    template_column_id: int
-    template_column_name: str
-    excel_column_name: Optional[str] = None
-    matched: bool = False
-    mapping_status: str = "unmatched"
-
-class ImportRequest(BaseModel):
-    template_id: int
+class AutoMapRequest(BaseModel):
     file_id: int
-    mappings: List[ColumnMapping]
-    mode: str = "create"
-    unique_column_id: Optional[int] = None
-    skip_validation: bool = False
+    template_id: int
+    sheet_name: str = "Sheet1"
 
-# ---------- EXISTING UPLOAD ENDPOINT ----------
-@router.post("/api/import-excel")
-async def import_excel(file: UploadFile = File(...)):
-    if not file.filename.endswith(('.xlsx', '.xls')):
-        raise HTTPException(400, "Only .xlsx and .xls files are supported")
-    contents = await file.read()
-    df = pd.read_excel(BytesIO(contents))
-    upload_dir = "uploads"
-    os.makedirs(upload_dir, exist_ok=True)
-    file_path = os.path.join(upload_dir, file.filename)
-    with open(file_path, "wb") as f:
-        f.write(contents)
-    file_id = execute_write(
-        "INSERT INTO uploaded_files (file_name, file_path, file_type, record_count, status) VALUES (?, ?, ?, ?, ?)",
-        (file.filename, file_path, 'excel', len(df), 'Pending')
-    )
-    log_audit("Analyst", "Upload", "Import", f"Uploaded file: {file.filename} ({len(df)} rows)")
-    return {"message": f"File '{file.filename}' uploaded successfully ({len(df)} rows)", "file_id": file_id, "record_count": len(df)}
-
-# ---------- NEW ENDPOINT: AUTO-MAP ----------
+# Then replace the endpoint function:
 @router.post("/api/upload/auto-map")
-def auto_map_headers(file_id: int, template_id: int):
+def auto_map_headers(request: AutoMapRequest):
+    file_id = request.file_id
+    template_id = request.template_id
+    sheet_name = request.sheet_name
+
     # Fetch template columns
     template_cols = execute_query(
         """
@@ -61,18 +27,21 @@ def auto_map_headers(file_id: int, template_id: int):
     if not template_cols:
         raise HTTPException(400, "Template has no columns")
 
-    # Fetch uploaded file path
     file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (file_id,))
     if not file_info:
         raise HTTPException(404, "File not found")
 
     try:
-        df = pd.read_excel(file_info[0]['file_path'])
+        df = pd.read_excel(file_info[0]['file_path'], sheet_name=sheet_name)
         excel_headers = df.columns.tolist()
     except Exception as e:
-        raise HTTPException(400, f"Error reading Excel file: {str(e)}")
+        # Fallback to first sheet if the specified sheet doesn't exist
+        try:
+            df = pd.read_excel(file_info[0]['file_path'])
+            excel_headers = df.columns.tolist()
+        except Exception as e2:
+            raise HTTPException(400, f"Error reading Excel file: {str(e2)}")
 
-    # Simple auto‑mapping: lower‑case, remove spaces, partial match
     mappings = []
     used = set()
     for t_col in template_cols:
@@ -93,7 +62,6 @@ def auto_map_headers(file_id: int, template_id: int):
                     best_score = score
                     best_match = h
         if best_match is None and len(excel_headers) > len(template_cols):
-            # fallback by position
             pos = template_cols.index(t_col)
             if pos < len(excel_headers) and excel_headers[pos] not in used:
                 best_match = excel_headers[pos]
@@ -119,188 +87,3 @@ def auto_map_headers(file_id: int, template_id: int):
         "auto_mapped_count": len([m for m in mappings if m['is_matched']]),
         "total_columns": len(mappings)
     }
-
-# ---------- NEW ENDPOINT: VALIDATE & IMPORT ----------
-@router.post("/api/upload/import")
-def validate_and_import(request: ImportRequest):
-    # Validate template & file
-    template = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
-    if not template:
-        raise HTTPException(404, "Template not found")
-    file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
-    if not file_info:
-        raise HTTPException(404, "File not found")
-
-    # Get template columns with data types
-    template_cols = execute_query(
-        """
-        SELECT m.id, m.column_name, m.data_type
-        FROM template_column_mappings p
-        JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = ? AND m.is_active = 1
-        ORDER BY p.sort_order ASC
-        """,
-        (request.template_id,)
-    )
-    if not template_cols:
-        raise HTTPException(400, "Template has no columns")
-
-    # Build mapping dict
-    mapping_dict = {m.template_column_id: m for m in request.mappings}
-
-    # Read Excel
-    try:
-        df = pd.read_excel(file_info[0]['file_path'])
-        # Keep only mapped columns
-        mapped_excel_cols = [m.excel_column_name for m in request.mappings if m.excel_column_name]
-        df = df[[col for col in mapped_excel_cols if col in df.columns]]
-    except Exception as e:
-        raise HTTPException(400, f"Error reading Excel: {str(e)}")
-
-    # Validate each row
-    rows = df.to_dict('records')
-    validation_errors = []
-    for row_idx, row in enumerate(rows, start=2):
-        row_errors = []
-        for t_col in template_cols:
-            mapping = mapping_dict.get(t_col['id'])
-            if not mapping or not mapping.excel_column_name:
-                continue
-            excel_col = mapping.excel_column_name
-            if excel_col not in row:
-                continue
-            value = row[excel_col]
-            # Required check (we'll treat all as required for simplicity)
-            if pd.isna(value):
-                row_errors.append({
-                    "column": t_col['column_name'],
-                    "excel_column": excel_col,
-                    "error_type": "required",
-                    "message": f"Required field '{t_col['column_name']}' is empty"
-                })
-            else:
-                # Data type validation
-                if t_col['data_type'] == "Numeric":
-                    try:
-                        float(value)
-                    except:
-                        row_errors.append({
-                            "column": t_col['column_name'],
-                            "excel_column": excel_col,
-                            "error_type": "data_type",
-                            "message": f"Expected Numeric but got '{value}'"
-                        })
-                elif t_col['data_type'] == "Date":
-                    try:
-                        if isinstance(value, str):
-                            datetime.strptime(value, "%d/%m/%Y")
-                    except:
-                        row_errors.append({
-                            "column": t_col['column_name'],
-                            "excel_column": excel_col,
-                            "error_type": "data_type",
-                            "message": f"Expected Date (DD/MM/YYYY) but got '{value}'"
-                        })
-        if row_errors:
-            validation_errors.append({"row_number": row_idx, "errors": row_errors})
-
-    if validation_errors:
-        return {
-            "status": "validation_failed",
-            "errors": validation_errors,
-            "total_rows": len(rows),
-            "error_count": len(validation_errors)
-        }
-
-    # Simulate import (just update status)
-    execute_write("UPDATE uploaded_files SET status = 'Imported' WHERE id = ?", (request.file_id,))
-    log_audit("Analyst", "Import", "Upload", f"Imported {len(rows)} records from file ID {request.file_id}")
-    return {
-        "status": "success",
-        "message": f"Successfully imported {len(rows)} records",
-        "total_rows": len(rows),
-        "imported_count": len(rows),
-        "validation_errors": []
-    }
-
-# ---------- NEW ENDPOINT: DOWNLOAD TEMPLATE ----------
-@router.get("/api/upload/download-template/{template_id}")
-def download_template(template_id: int):
-    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (template_id,))
-    if not template:
-        raise HTTPException(404, "Template not found")
-    columns = execute_query(
-        """
-        SELECT m.column_name, m.data_type
-        FROM template_column_mappings p
-        JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = ? AND m.is_active = 1
-        ORDER BY p.sort_order ASC
-        """,
-        (template_id,)
-    )
-    if not columns:
-        raise HTTPException(400, "Template has no columns")
-
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        header_row = [col['column_name'] for col in columns]
-        sample_row = []
-        for col in columns:
-            if col['data_type'] == "Numeric":
-                sample_row.append(1000)
-            elif col['data_type'] == "Date":
-                sample_row.append("01/01/2025")
-            else:
-                sample_row.append("Sample")
-        df = pd.DataFrame([sample_row], columns=header_row)
-        df.to_excel(writer, index=False, sheet_name='Template')
-
-        # Add instructions sheet
-        workbook = writer.book
-        instructions = workbook.create_sheet("Instructions")
-        instructions.append(["📋 Template Instructions"])
-        instructions.append([""])
-        instructions.append(["1. This template contains the columns required for import."])
-        instructions.append(["2. The column headers match the template defined in the system."])
-        instructions.append(["3. The sample row shows the expected data format for each column."])
-        instructions.append(["4. Required columns must be filled."])
-        instructions.append([""])
-        instructions.append(["📌 Data Type Guidelines:"])
-        instructions.append(["- Text: Any alphanumeric value"])
-        instructions.append(["- Numeric: Numbers only (e.g., 1000, 25.50)"])
-        instructions.append(["- Date: Format DD/MM/YYYY (e.g., 25/12/2025)"])
-        instructions.append([""])
-        instructions.append(["⚠️ Important:"])
-        instructions.append(["- Do not change the column headers."])
-        instructions.append(["- Delete the sample row before adding your data."])
-        instructions.append(["- Save the file as .xlsx before uploading."])
-
-        # Auto‑size columns
-        for sheet in workbook.sheetnames:
-            ws = workbook[sheet]
-            for col in ws.columns:
-                max_len = 0
-                col_letter = col[0].column_letter
-                for cell in col:
-                    try:
-                        if len(str(cell.value)) > max_len:
-                            max_len = len(str(cell.value))
-                    except:
-                        pass
-                ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
-
-    output.seek(0)
-    return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename=template_{template[0]['template_name']}.xlsx"}
-    )
-
-# ---------- NEW ENDPOINT: GET FILE DETAILS ----------
-@router.get("/api/upload/file/{file_id}")
-def get_file_details(file_id: int):
-    file_info = execute_query("SELECT * FROM uploaded_files WHERE id = ?", (file_id,))
-    if not file_info:
-        raise HTTPException(404, "File not found")
-    return file_info[0]
