@@ -21,6 +21,7 @@ def execute_write(query, params=None):
     last_id = cursor.lastrowid
     conn.close()
     return last_id
+
 def get_raw_conn():
     """
     Returns a raw SQLite connection with row_factory set to sqlite3.Row.
@@ -42,7 +43,11 @@ def log_audit(user, action, module, details=""):
 def init_db():
     conn = get_db()
     
-    # Master Columns table (unchanged)
+    # Drop old tables to ensure clean schema (safe for development)
+    conn.execute("DROP TABLE IF EXISTS templates")
+    conn.execute("DROP TABLE IF EXISTS template_column_mappings")
+    
+    # Master Columns table
     conn.execute('''
         CREATE TABLE IF NOT EXISTS master_columns (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +58,7 @@ def init_db():
         )
     ''')
     
-    # Templates table (removed selected_columns)
+    # Templates table (without selected_columns)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,7 +69,7 @@ def init_db():
         )
     ''')
     
-    # Pivot table: template → column mappings with sort order
+    # Pivot table for template-column mappings
     conn.execute('''
         CREATE TABLE IF NOT EXISTS template_column_mappings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,7 +121,7 @@ def init_db():
         )
     ''')
     
-    # Insert default master columns if empty
+    # Insert default columns if master_columns is empty
     existing = conn.execute("SELECT COUNT(*) FROM master_columns").fetchone()[0]
     if existing == 0:
         default_columns = [
