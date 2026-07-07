@@ -35,6 +35,10 @@ let selectedColumns = []; // Array of {id, name, type}
 
 // ---------- LOAD TEMPLATES ----------
 async function loadTemplates() {
+    // First ensure master columns are loaded
+    if (allMasterColumns.length === 0) {
+        await loadMasterColumns();
+    }
     try {
         const res = await fetch(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to fetch templates');
@@ -71,12 +75,13 @@ function renderTemplates(templates) {
         tdName.style.padding = '10px 16px';
         tdName.style.fontWeight = '500';
 
+                // Columns (display as "Master ID. Column Name")
         const tdCols = document.createElement('td');
         tdCols.style.padding = '10px 16px';
         const cols = tpl.columns || [];
-        let colDisplay = cols.map((col, idx) => `${idx+1}. ${col.column_name}`).join(', ');
-        tdCols.textContent = colDisplay || '—';
-        tdCols.title = colDisplay || 'No columns';
+        let colDisplayWithId = cols.map((col, idx) => `${idx+1}. ${col.column_name} (ID: ${col.id})`).join(', ');
+        tdCols.textContent = colDisplayWithId || '—';
+        tdCols.title = colDisplayWithId || 'No columns';
 
         const tdBy = document.createElement('td');
         tdBy.textContent = tpl.created_by || 'Admin';
@@ -508,21 +513,236 @@ async function confirmDelete(id, name) {
 }
 
 // ==============================================
-// PREVIEW MODAL (unchanged – for completeness)
+// PREVIEW TEMPLATE AS TABLE (FIXED)
 // ==============================================
 
 function openPreviewModal(tpl) {
-    fetch(API_BASE + '/api/templates/' + tpl.id + '/columns')
-        .then(res => {
-            if (!res.ok) throw new Error('Failed to load template columns');
-            return res.json();
+    console.log('👁️ Preview modal opened for:', tpl);
+    
+    // Get column details from selected IDs
+    const colIds = tpl.selected_columns || [];
+    console.log('Column IDs:', colIds);
+    
+    let columnData = [];
+    
+    // Try to get column details from allMasterColumns if available
+    if (window.allMasterColumns && window.allMasterColumns.length > 0) {
+        columnData = colIds.map(id => {
+            const col = window.allMasterColumns.find(c => c.id === id);
+            return col ? { id: col.id, name: col.column_name, type: col.data_type } : { id: id, name: 'Unknown', type: '—' };
+        });
+    } else {
+        // Fallback: fetch directly from API
+        console.log('📡 Fetching column details from API...');
+        fetch(API_BASE + '/api/templates/' + tpl.id + '/columns')
+            .then(res => {
+                if (!res.ok) throw new Error('Failed to fetch columns');
+                return res.json();
+            })
+            .then(columns => {
+                renderPreviewModal(tpl, columns);
+            })
+            .catch(err => {
+                alert('Error loading columns: ' + err.message);
+            });
+        return; // Exit early, the fetch will handle rendering
+    }
+
+    if (columnData.length === 0) {
+        alert('No columns found in this template.');
+        return;
+    }
+
+    // Render the preview modal with the data
+    renderPreviewModal(tpl, columnData);
+}
+
+// ---------- RENDER PREVIEW MODAL ----------
+function renderPreviewModal(tpl, columnData) {
+    // Build the preview modal with professional design
+    const overlay = document.createElement('div');
+    overlay.id = 'previewOverlay';
+    overlay.style.cssText = 'display:block; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:999;';
+
+    const modal = document.createElement('div');
+    modal.id = 'previewModal';
+    modal.style.cssText = 'display:block; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:30px; z-index:1000; min-width:650px; max-width:800px; max-height:80vh; overflow-y:auto; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,0.3);';
+
+    // Build table rows
+    let tableRows = columnData.map((col, index) => `
+        <tr style="border-bottom:1px solid #e2e8f0; transition:background 0.2s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+            <td style="padding:10px 16px; text-align:center; color:#94a3b8; font-size:14px;">
+                <span class="drag-handle" style="cursor:grab; color:#94a3b8; font-size:16px; user-select:none; display:inline-block;">☰</span>
+                <span style="margin-left:8px; font-weight:600; color:#1a1a2e;">${index + 1}</span>
+            </td>
+            <td style="padding:10px 16px; text-align:center; font-weight:500; color:#64748b;">${col.id}</td>
+            <td style="padding:10px 16px; font-weight:500; color:#1a1a2e;">${col.name}</td>
+            <td style="padding:10px 16px; text-align:center;">
+                <span style="display:inline-block; padding:2px 12px; border-radius:12px; font-size:12px; font-weight:600; background:#f1f5f9; color:#475569;">
+                    ${col.type}
+                </span>
+            </td>
+            <td style="padding:10px 16px; text-align:center;">
+                <button class="remove-column-btn" data-column-id="${col.id}" style="background:none; border:none; color:#dc2626; cursor:pointer; font-size:18px; padding:4px 8px; border-radius:4px; transition:background 0.2s;" onmouseover="this.style.background='#fee2e2'" onmouseout="this.style.background=''">✕</button>
+            </td>
+        </tr>
+    `).join('');
+
+    modal.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:15px; border-bottom:2px solid #f0f2f5;">
+            <div>
+                <h2 style="margin:0; font-size:22px; color:#1a1a2e;">📋 ${tpl.template_name}</h2>
+                <p style="margin:4px 0 0 0; color:#64748b; font-size:14px;">
+                    Created by: ${tpl.created_by || 'Admin'} 
+                    | Date: ${window.formatDate(tpl.created_date)}
+                    | <span id="previewCount">${columnData.length}</span> columns
+                </p>
+            </div>
+            <button id="closePreviewBtn" style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8; padding:4px 8px; border-radius:4px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background=''">×</button>
+        </div>
+        
+        <div style="background:#f8fafc; border-radius:8px; padding:4px 12px; margin-bottom:15px; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:14px;">💡</span>
+            <span style="font-size:13px; color:#475569;">Drag <strong>☰</strong> to reorder. Click <strong>✕</strong> to remove a column.</span>
+        </div>
+        
+        <div style="overflow-x:auto; border:1px solid #e2e8f0; border-radius:8px;">
+            <table style="width:100%; border-collapse:collapse; font-size:14px;">
+                <thead style="background:#f1f5f9; border-bottom:2px solid #e2e8f0;">
+                    <tr>
+                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569; min-width:100px;">#</th>
+                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569; min-width:80px;">Column ID</th>
+                        <th style="padding:12px 16px; text-align:left; font-weight:600; color:#475569;">Column Name</th>
+                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569; min-width:100px;">Data Type</th>
+                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569; min-width:60px;">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="previewList">
+                    ${tableRows}
+                </tbody>
+            </table>
+        </div>
+        
+        <div style="margin-top:20px; display:flex; justify-content:space-between; align-items:center; padding-top:15px; border-top:1px solid #e2e8f0;">
+            <span style="color:#94a3b8; font-size:13px;">Total: <strong id="previewCountBottom">${columnData.length}</strong> column${columnData.length > 1 ? 's' : ''}</span>
+            <div style="display:flex; gap:10px;">
+                <button id="saveOrderBtn" style="padding:8px 24px; cursor:pointer; background:#8b5cf6; color:white; border:none; border-radius:8px; font-size:14px; font-weight:500; transition:background 0.2s;" onmouseover="this.style.background='#7c3aed'" onmouseout="this.style.background='#8b5cf6'">💾 Save Order</button>
+            </div>
+        </div>
+        <div id="previewStatus" style="margin-top:10px; padding:8px; border-radius:4px; display:none;"></div>
+    `;
+
+    document.body.appendChild(overlay);
+    document.body.appendChild(modal);
+
+    // Close handler
+    function closePreview() {
+        if (document.body.contains(overlay)) document.body.removeChild(overlay);
+        if (document.body.contains(modal)) document.body.removeChild(modal);
+    }
+    document.getElementById('closePreviewBtn').addEventListener('click', closePreview);
+    overlay.addEventListener('click', closePreview);
+
+    const listContainer = document.getElementById('previewList');
+
+    // Initialize SortableJS for drag-and-drop
+    if (typeof Sortable !== 'undefined') {
+        new Sortable(listContainer, {
+            handle: '.drag-handle',
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            dragClass: 'sortable-drag',
+            onEnd: function() {
+                // Update serial numbers and counts
+                const rows = listContainer.querySelectorAll('tr');
+                rows.forEach((row, idx) => {
+                    const numSpan = row.querySelector('td:first-child span:nth-child(2)');
+                    if (numSpan) numSpan.textContent = idx + 1;
+                });
+                const count = rows.length;
+                document.getElementById('previewCount').textContent = count;
+                document.getElementById('previewCountBottom').textContent = count;
+            }
+        });
+    } else {
+        console.warn('⚠️ SortableJS not loaded');
+    }
+
+    // Remove column button
+    listContainer.querySelectorAll('.remove-column-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const row = this.closest('tr');
+            const columnId = this.dataset.columnId;
+            const templateId = tpl.id;
+            if (!confirm(`Remove "${row.querySelector('td:nth-child(3)').textContent}" from this template?`)) return;
+            
+            fetch(API_BASE + '/api/templates/' + templateId + '/columns/' + columnId, {
+                method: 'DELETE'
+            })
+            .then(res => res.json())
+            .then(result => {
+                if (result.message) {
+                    row.remove();
+                    // Update serial numbers
+                    const rows = listContainer.querySelectorAll('tr');
+                    rows.forEach((r, idx) => {
+                        const numSpan = r.querySelector('td:first-child span:nth-child(2)');
+                        if (numSpan) numSpan.textContent = idx + 1;
+                    });
+                    const count = rows.length;
+                    document.getElementById('previewCount').textContent = count;
+                    document.getElementById('previewCountBottom').textContent = count;
+                    showPreviewStatus('✅ ' + result.message, 'success');
+                    loadTemplates(); // Refresh the main table
+                }
+            })
+            .catch(err => {
+                showPreviewStatus('❌ Error: ' + err.message, 'error');
+            });
+        });
+    });
+
+    // Save order button
+    document.getElementById('saveOrderBtn').addEventListener('click', function() {
+        const rows = listContainer.querySelectorAll('tr');
+        const columnIds = Array.from(rows).map(row => {
+            const idCell = row.querySelector('td:nth-child(2)');
+            return idCell ? parseInt(idCell.textContent) : null;
+        }).filter(id => id !== null);
+        
+        if (columnIds.length === 0) {
+            showPreviewStatus('⚠️ Cannot save empty order.', 'error');
+            return;
+        }
+        
+        fetch(API_BASE + '/api/templates/' + tpl.id + '/reorder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(columnIds)
         })
-        .then(columns => {
-            renderPreviewModal(tpl, columns);
+        .then(res => res.json())
+        .then(result => {
+            if (result.message) {
+                showPreviewStatus('✅ ' + result.message, 'success');
+                loadTemplates(); // Refresh the main table
+            }
         })
         .catch(err => {
-            alert('Error loading template columns: ' + err.message);
+            showPreviewStatus('❌ Error: ' + err.message, 'error');
         });
+    });
+
+    function showPreviewStatus(msg, type) {
+        const statusDiv = document.getElementById('previewStatus');
+        statusDiv.textContent = msg;
+        statusDiv.style.display = 'block';
+        statusDiv.style.background = type === 'error' ? '#fee2e2' : '#dcfce7';
+        statusDiv.style.color = type === 'error' ? '#991b1b' : '#166534';
+        statusDiv.style.border = '1px solid ' + (type === 'error' ? '#fecaca' : '#bbf7d0');
+        statusDiv.style.padding = '10px';
+        statusDiv.style.borderRadius = '8px';
+        setTimeout(() => { statusDiv.style.display = 'none'; }, 4000);
+    }
 }
 
 function renderPreviewModal(tpl, columns) {
