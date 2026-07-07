@@ -1,6 +1,9 @@
 import sqlite3
 
+import os
 DB_NAME = "test.db"
+# Print absolute path for verification
+print(f"📁 Database path: {os.path.abspath(DB_NAME)}")
 
 def get_db():
     conn = sqlite3.connect(DB_NAME)

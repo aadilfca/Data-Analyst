@@ -2,7 +2,7 @@
 // 📋 MANAGE COLUMNS LOGIC - FINAL VERSION
 // ==============================================
 
-const API_BASE = 'http://localhost:5000';
+// API_BASE is defined globally in client_context.js
 
 // DOM References
 const columnsBody = document.getElementById('columnsBody');

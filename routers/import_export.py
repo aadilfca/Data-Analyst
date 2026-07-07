@@ -21,6 +21,7 @@ class ColumnMapping(BaseModel):
 class ImportRequest(BaseModel):
     template_id: int
     file_id: int
+    client_id: int
     mappings: List[ColumnMapping]
     mode: str = "create"
     unique_column_id: Optional[int] = None
@@ -31,7 +32,58 @@ class AutoMapRequest(BaseModel):
     file_id: int
     template_id: int
     sheet_name: str = "Sheet1"
+class AutoMapRequest(BaseModel):
+    file_id: int
+    template_id: int
+    sheet_name: str = "Sheet1"
 
+# ---------- HELPER: Extract numeric & date columns from row data ----------
+def extract_columns_from_row(row_data: dict, template_cols: list) -> tuple:
+    """
+    Extracts the first numeric and first date value from a row based on template column types.
+    Returns (amount, date_str) where amount is float or None, date_str is ISO date or None.
+    """
+    amount = None
+    date_str = None
+    for col in template_cols:
+        col_name = col['column_name']
+        value = row_data.get(col_name)
+        if value is None or value == '':
+            continue
+        if col['data_type'] == 'Numeric':
+            try:
+                amount = float(value)
+                break  # take first numeric
+            except:
+                pass
+        elif col['data_type'] == 'Date':
+            try:
+                # Try to parse various date formats
+                from datetime import datetime
+                if isinstance(value, datetime):
+                    date_str = value.strftime('%Y-%m-%d')
+                elif isinstance(value, str):
+                    # Try common formats
+                    for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y'):
+                        try:
+                            dt = datetime.strptime(value, fmt)
+                            date_str = dt.strftime('%Y-%m-%d')
+                            break
+                        except:
+                            continue
+                elif isinstance(value, (int, float)):
+                    # Excel serial date?
+                    try:
+                        from datetime import datetime, timedelta
+                        # Excel serial date starts from 1900-01-01 (but with bug for 1900)
+                        dt = datetime(1899, 12, 30) + timedelta(days=value)
+                        date_str = dt.strftime('%Y-%m-%d')
+                    except:
+                        pass
+                break  # take first date
+            except:
+                pass
+    return amount, date_str
 # ---------- EXISTING UPLOAD ENDPOINT ----------
 @router.post("/api/import-excel")
 async def import_excel(file: UploadFile = File(...)):
@@ -136,13 +188,20 @@ def auto_map_headers(request: AutoMapRequest):
 # ---------- VALIDATE & IMPORT ----------
 @router.post("/api/upload/import")
 def validate_and_import(request: ImportRequest):
-    template = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    # Validate template and file
+    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
     file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
     if not file_info:
         raise HTTPException(404, "File not found")
+    
+    # Validate client exists
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
 
+    # Get template columns with their types
     template_cols = execute_query(
         """
         SELECT m.id, m.column_name, m.data_type
@@ -158,14 +217,18 @@ def validate_and_import(request: ImportRequest):
 
     mapping_dict = {m.template_column_id: m for m in request.mappings}
 
+    # Read Excel data
     try:
         df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
+        # Keep only columns that are mapped
         mapped_excel_cols = [m.excel_column_name for m in request.mappings if m.excel_column_name]
         df = df[[col for col in mapped_excel_cols if col in df.columns]]
     except Exception as e:
         raise HTTPException(400, f"Error reading Excel: {str(e)}")
 
     rows = df.to_dict('records')
+    
+    # --- Validation ---
     validation_errors = []
     for row_idx, row in enumerate(rows, start=2):
         row_errors = []
@@ -217,13 +280,65 @@ def validate_and_import(request: ImportRequest):
             "error_count": len(validation_errors)
         }
 
-    execute_write("UPDATE uploaded_files SET status = 'Imported' WHERE id = ?", (request.file_id,))
-    log_audit("Analyst", "Import", "Upload", f"Imported {len(rows)} records from file ID {request.file_id}")
+    # --- Store data in client_data ---
+    # Update the uploaded_files status and set client_id
+    execute_write(
+        "UPDATE uploaded_files SET status = 'Imported', client_id = ? WHERE id = ?",
+        (request.client_id, request.file_id)
+    )
+    
+    # Prepare column name list for JSON key mapping
+    # We need to know which excel column corresponds to which template column name
+    col_mapping = {}
+    for t_col in template_cols:
+        mapping = mapping_dict.get(t_col['id'])
+        if mapping and mapping.excel_column_name:
+            col_mapping[t_col['column_name']] = mapping.excel_column_name
+
+    # Insert each row into client_data
+    inserted_count = 0
+    for row in rows:
+        # Build JSON row_data using template column names as keys and values from excel
+        row_data = {}
+        for t_col_name, excel_col in col_mapping.items():
+            if excel_col in row:
+                value = row[excel_col]
+                # Handle NaN
+                if pd.isna(value):
+                    value = None
+                # Convert date objects to string
+                if isinstance(value, datetime):
+                    value = value.strftime('%d/%m/%Y')
+                row_data[t_col_name] = value
+        
+        # Extract amount and date for indexing
+        amount, date_str = extract_columns_from_row(row_data, template_cols)
+        
+        # Insert into client_data
+        execute_write(
+            """
+            INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                request.client_id,
+                request.template_id,
+                request.file_id,
+                json.dumps(row_data),
+                amount,
+                date_str,
+                "Analyst"
+            )
+        )
+        inserted_count += 1
+
+    log_audit("Analyst", "Import", "Upload", f"Imported {inserted_count} records for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
+    
     return {
         "status": "success",
-        "message": f"Successfully imported {len(rows)} records",
+        "message": f"Successfully imported {inserted_count} records into data bank",
         "total_rows": len(rows),
-        "imported_count": len(rows),
+        "imported_count": inserted_count,
         "validation_errors": []
     }
 

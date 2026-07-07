@@ -2,7 +2,7 @@
 // 🏢 MANAGE CLIENTS LOGIC
 // ==============================================
 
-const API_BASE = 'http://localhost:5000';
+// API_BASE is defined globally in client_context.js
 
 // DOM References
 const clientsBody = document.getElementById('clientsBody');

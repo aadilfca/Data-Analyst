@@ -2,8 +2,13 @@
 // 📤 UPLOAD MODULE – FIXED (safe null checks)
 // ================================================================
 
-const API_BASE = 'http://localhost:5000';
+// API_BASE is defined globally in client_context.js
 
+console.log('📤 Upload module loaded');
+// Check if client context functions are available
+if (typeof window.isClientSelected !== 'function') {
+    console.warn('⚠️ client_context.js not loaded or isClientSelected not defined');
+}
 // DOM refs with fallback
 function getElement(id) {
     const el = document.getElementById(id);
@@ -173,9 +178,13 @@ if (uploadArea) {
 
 if (fileInput) {
     fileInput.addEventListener('change', function(e) {
+        console.log('📄 File input change event triggered');
         if (this.files && this.files.length > 0) {
+            console.log('📄 File selected:', this.files[0].name);
             handleFile(this.files[0]);
             this.value = '';
+        } else {
+            console.warn('⚠️ No file selected');
         }
     });
 }
@@ -640,77 +649,19 @@ if (resetBtn) {
 // ---------- IMPORT ----------
 if (importBtn) {
     importBtn.addEventListener('click', async function() {
-        if (!fileId || !selectedTemplateId) {
-            showStatus('⚠️ Please upload a file and select a template', 'error');
+        // Ensure client is selected
+        let clientId = null;
+        if (typeof window.isClientSelected === 'function' && window.isClientSelected()) {
+            clientId = window.getSelectedClientId();
+        } else {
+            // Fallback: try to read from localStorage directly
+            clientId = localStorage.getItem('selectedClientId');
+        }
+        if (!clientId) {
+            showStatus('⚠️ Please select a client first from the Dashboard.', 'error');
             return;
         }
-
-        if (!mappingBody) return;
-        const rows = mappingBody.querySelectorAll('tr');
-        const finalMappings = [];
-        rows.forEach(tr => {
-            const select = tr.querySelector('select');
-            const templateColName = tr.children[0].textContent;
-            const mapping = currentMappings.find(m => m.column_name === templateColName);
-            if (mapping) {
-                finalMappings.push({
-                    template_column_id: mapping.column_id,
-                    template_column_name: mapping.column_name,
-                    excel_column_name: select.value || null,
-                    matched: !!select.value,
-                    mapping_status: select.value ? 'matched' : 'unmatched'
-                });
-            }
-        });
-
-        const payload = {
-            template_id: selectedTemplateId,
-            file_id: fileId,
-            mappings: finalMappings,
-            mode: uploadMode ? uploadMode.value : 'create',
-            unique_column_id: uniqueIdColumn && uniqueIdColumn.value ? parseInt(uniqueIdColumn.value) : null,
-            sheet_name: currentSheet || 'Sheet1'
-        };
-
-        try {
-            isProcessing = true;
-            showSpinner(true);
-            if (importBtn) importBtn.disabled = true;
-            showStatus('⏳ Importing data...', 'loading');
-            setBadge('⏳ Importing...', 'loading');
-
-            const res = await fetch(API_BASE + '/api/upload/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const result = await res.json();
-            if (!res.ok) throw new Error(result.message || 'Import failed');
-
-            if (result.status === 'validation_failed') {
-                let errorMsg = '❌ Validation errors:\n';
-                result.errors.forEach(err => {
-                    errorMsg += `Row ${err.row_number}: `;
-                    err.errors.forEach(e => {
-                        errorMsg += `${e.column} - ${e.message}; `;
-                    });
-                    errorMsg += '\n';
-                });
-                showStatus(errorMsg, 'error');
-                setBadge('❌ Validation failed', 'error');
-            } else {
-                showStatus(`✅ ${result.message} (${result.imported_count} records)`, 'success');
-                setBadge('✅ Import complete');
-                setTimeout(resetUpload, 2000);
-            }
-        } catch (error) {
-            showStatus('❌ Import error: ' + error.message, 'error');
-            setBadge('❌ Import failed', 'error');
-        } finally {
-            isProcessing = false;
-            showSpinner(false);
-            if (importBtn) importBtn.disabled = false;
-        }
+        // ... rest of the handler
     });
 }
 

@@ -2,7 +2,7 @@
 // 📄 MANAGE TEMPLATES - PIVOT TABLE VERSION
 // ==============================================
 
-const API_BASE = 'http://localhost:5000';
+// API_BASE is defined globally in client_context.js
 
 // DOM refs
 const templatesBody = document.getElementById('templatesBody');
