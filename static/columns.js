@@ -319,11 +319,42 @@ async function confirmDelete(id, name) {
         showStatus('❌ Error deleting column: ' + error.message, 'error');
     }
 }
-
+// ---------- FILTER COLUMNS ----------
+function filterColumns(searchTerm) {
+    if (!window.columnData) return;
+    
+    let filtered = window.columnData;
+    if (searchTerm) {
+        filtered = window.columnData.filter(col => {
+            const name = (col.column_name || '').toLowerCase();
+            const type = (col.data_type || '').toLowerCase();
+            const category = (col.category || '').toLowerCase();
+            return name.includes(searchTerm) || type.includes(searchTerm) || category.includes(searchTerm);
+        });
+    }
+    
+    // Apply current sort to filtered data
+    const sorted = sortColumns(filtered, sortColumn, sortAscending);
+    renderColumns(sorted);
+    updateSortArrows(sortColumn, sortAscending);
+    
+    // Update total count display to show filtered count
+    totalCountSpan.textContent = filtered.length;
+}
 // ---------- INIT ----------
 window.onload = function() {
     loadColumns();
     setupSorting();
+    
+    // Search input handler
+    const searchInput = document.getElementById('columnSearchInput');
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            const term = this.value.trim().toLowerCase();
+            filterColumns(term);
+        });
+    }
+    
     console.log('📋 Columns Manager loaded');
 };
 // ---------- ESC KEY TO CLOSE COLUMN MODAL ----------
