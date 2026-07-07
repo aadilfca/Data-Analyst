@@ -1,16 +1,15 @@
 // ==============================================
-// 📄 MANAGE TEMPLATES LOGIC (Redesigned Popup)
+// 📄 MANAGE TEMPLATES - PIVOT TABLE VERSION
 // ==============================================
 
 const API_BASE = 'http://localhost:5000';
 
-// DOM References
+// DOM refs
 const templatesBody = document.getElementById('templatesBody');
 const noTemplatesMsg = document.getElementById('noTemplatesMessage');
 const totalCountSpan = document.getElementById('totalCount');
 const statusDiv = document.getElementById('templateStatus');
 
-// Modal elements
 const modalOverlay = document.getElementById('templateModalOverlay');
 const modal = document.getElementById('templateModal');
 const modalTitle = document.getElementById('modalTitle');
@@ -26,19 +25,15 @@ const selectedCountBadge = document.getElementById('selectedCountBadge');
 const editId = document.getElementById('editTemplateId');
 const cancelBtn = document.getElementById('cancelTemplateBtn');
 const closeModalBtn = document.getElementById('closeModalBtn');
-const saveBtn = document.getElementById('saveTemplateBtn');
 const modalStatus = document.getElementById('modalStatus');
 
 let editingId = null;
 let allMasterColumns = [];
-let selectedColumns = []; // Array of {id, name, type}
+window.allMasterColumns = [];
+let selectedColumns = [];
 
 // ---------- LOAD TEMPLATES ----------
 async function loadTemplates() {
-    // First ensure master columns are loaded
-    if (allMasterColumns.length === 0) {
-        await loadMasterColumns();
-    }
     try {
         const res = await fetch(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to fetch templates');
@@ -66,31 +61,39 @@ function renderTemplates(templates) {
         const tr = document.createElement('tr');
         tr.style.borderBottom = '1px solid #e2e8f0';
 
+        // ID
         const tdId = document.createElement('td');
         tdId.textContent = tpl.id;
         tdId.style.padding = '10px 16px';
 
+        // Name
         const tdName = document.createElement('td');
         tdName.textContent = tpl.template_name;
         tdName.style.padding = '10px 16px';
         tdName.style.fontWeight = '500';
 
-                // Columns (display as "Master ID. Column Name")
+        // Columns – now using tpl.columns (from pivot table)
         const tdCols = document.createElement('td');
         tdCols.style.padding = '10px 16px';
         const cols = tpl.columns || [];
-        let colDisplayWithId = cols.map((col, idx) => `${idx+1}. ${col.column_name} (ID: ${col.id})`).join(', ');
-        tdCols.textContent = colDisplayWithId || '—';
-        tdCols.title = colDisplayWithId || 'No columns';
+        let colDisplay = [];
+        if (cols.length > 0) {
+            colDisplay = cols.map((col, idx) => `${idx+1}. ${col.column_name} (ID: ${col.id})`);
+        }
+        tdCols.textContent = colDisplay.join(', ') || '—';
+        tdCols.title = colDisplay.join(', ') || 'No columns';
 
+        // Created By
         const tdBy = document.createElement('td');
         tdBy.textContent = tpl.created_by || 'Admin';
         tdBy.style.padding = '10px 16px';
 
+        // Created Date
         const tdDate = document.createElement('td');
         tdDate.style.padding = '10px 16px';
         tdDate.textContent = window.formatDate(tpl.created_date);
 
+        // Active
         const tdActive = document.createElement('td');
         tdActive.style.padding = '10px 16px';
         tdActive.style.textAlign = 'center';
@@ -99,19 +102,22 @@ function renderTemplates(templates) {
         activeSpan.style.fontSize = '16px';
         tdActive.appendChild(activeSpan);
 
+        // Actions
         const tdActions = document.createElement('td');
         tdActions.style.padding = '10px 16px';
         tdActions.style.textAlign = 'center';
 
+        // Preview (Eye)
         const previewBtn = document.createElement('button');
         previewBtn.textContent = '👁️';
         previewBtn.style.background = 'none';
         previewBtn.style.border = 'none';
         previewBtn.style.cursor = 'pointer';
         previewBtn.style.fontSize = '18px';
-        previewBtn.title = 'Preview and edit columns';
+        previewBtn.title = 'Preview template';
         previewBtn.addEventListener('click', () => openPreviewModal(tpl));
 
+        // Edit
         const editBtn = document.createElement('button');
         editBtn.textContent = '✏️';
         editBtn.style.background = 'none';
@@ -122,6 +128,7 @@ function renderTemplates(templates) {
         editBtn.title = 'Edit template';
         editBtn.addEventListener('click', () => openEditModal(tpl));
 
+        // Delete
         const delBtn = document.createElement('button');
         delBtn.textContent = '🗑️';
         delBtn.style.background = 'none';
@@ -129,7 +136,7 @@ function renderTemplates(templates) {
         delBtn.style.cursor = 'pointer';
         delBtn.style.fontSize = '18px';
         delBtn.style.marginLeft = '8px';
-        delBtn.title = 'Delete template (soft)';
+        delBtn.title = 'Delete template';
         delBtn.addEventListener('click', () => confirmDelete(tpl.id, tpl.template_name));
 
         tdActions.appendChild(previewBtn);
@@ -154,6 +161,7 @@ async function loadMasterColumns() {
         if (!res.ok) throw new Error('Failed to fetch columns');
         const columns = await res.json();
         allMasterColumns = columns;
+        window.allMasterColumns = columns;
         return columns;
     } catch (error) {
         console.log('⚠️ Error loading columns:', error.message);
@@ -161,26 +169,22 @@ async function loadMasterColumns() {
     }
 }
 
-// ---------- STATUS MESSAGES ----------
-function showStatus(message, type) {
-    statusDiv.textContent = message;
+// ---------- STATUS HELPERS ----------
+function showStatus(msg, type) {
+    statusDiv.textContent = msg;
     statusDiv.className = 'upload-status ' + type;
     statusDiv.style.display = 'block';
     clearTimeout(window.statusTimeout);
-    window.statusTimeout = setTimeout(() => {
-        statusDiv.style.display = 'none';
-    }, 5000);
+    window.statusTimeout = setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
 }
 
-function showModalStatus(message, type) {
-    modalStatus.textContent = message;
+function showModalStatus(msg, type) {
+    modalStatus.textContent = msg;
     modalStatus.style.display = 'block';
     modalStatus.style.background = type === 'error' ? '#ffebee' : '#e8f5e9';
     modalStatus.style.color = type === 'error' ? '#c62828' : '#2e7d32';
     modalStatus.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
-    setTimeout(() => {
-        modalStatus.style.display = 'none';
-    }, 4000);
+    setTimeout(() => { modalStatus.style.display = 'none'; }, 4000);
 }
 
 // ---------- RENDER SEARCH RESULTS ----------
@@ -190,9 +194,7 @@ function renderSearchResults(query) {
     searchResults.style.display = 'none';
     noSearchResults.style.display = 'none';
 
-    if (!trimmed) {
-        return;
-    }
+    if (!trimmed) return;
 
     const filtered = allMasterColumns.filter(col =>
         col.column_name.toLowerCase().includes(trimmed) ||
@@ -219,7 +221,6 @@ function renderSearchResults(query) {
         if (isSelected) {
             actionBtn.textContent = '✅ Selected';
             actionBtn.style.cssText = 'background:#e8f5e9; color:#2e7d32; border:1px solid #a5d6a7; padding:4px 14px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; display:flex; align-items:center; gap:4px;';
-            // Add tiny cross to deselect
             const cross = document.createElement('span');
             cross.textContent = '✕';
             cross.style.cssText = 'margin-left:6px; font-size:14px; color:#c62828; cursor:pointer;';
@@ -230,7 +231,7 @@ function renderSearchResults(query) {
             actionBtn.appendChild(cross);
         } else {
             actionBtn.textContent = 'Select';
-            actionBtn.style.cssText = 'background:#3b82f6; color:white; border:none; padding:4px 14px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:500; transition:background 0.2s;';
+            actionBtn.style.cssText = 'background:#3b82f6; color:white; border:none; padding:4px 14px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:500;';
         }
 
         actionBtn.addEventListener('click', function(e) {
@@ -248,7 +249,7 @@ function renderSearchResults(query) {
     });
 }
 
-// ---------- ADD TO SELECTED ----------
+// ---------- ADD / REMOVE SELECTED ----------
 function addToSelected(col) {
     if (selectedColumns.some(c => c.id === col.id)) return;
     selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type });
@@ -257,7 +258,6 @@ function addToSelected(col) {
     updateSelectedCount();
 }
 
-// ---------- REMOVE FROM SELECTED ----------
 function removeFromSelected(colId) {
     selectedColumns = selectedColumns.filter(c => c.id !== colId);
     renderSelectedColumns();
@@ -265,7 +265,6 @@ function removeFromSelected(colId) {
     updateSelectedCount();
 }
 
-// ---------- RENDER SELECTED COLUMNS ----------
 function renderSelectedColumns() {
     selectedColumnsList.innerHTML = '';
     if (selectedColumns.length === 0) {
@@ -280,46 +279,36 @@ function renderSelectedColumns() {
         div.dataset.id = col.id;
         div.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 10px; border-bottom:1px solid #f0f2f5; background:white; border-radius:6px; margin-bottom:4px;';
 
-        // Drag handle
         const handle = document.createElement('span');
         handle.textContent = '☰';
         handle.style.cssText = 'cursor:grab; color:#94a3b8; font-size:16px; user-select:none; padding:0 4px;';
         div.appendChild(handle);
 
-        // Serial number
         const num = document.createElement('span');
         num.textContent = index + 1;
         num.style.cssText = 'font-weight:600; color:#64748b; min-width:24px; font-size:13px;';
         div.appendChild(num);
 
-        // Name
         const nameSpan = document.createElement('span');
         nameSpan.textContent = col.name;
         nameSpan.style.cssText = 'flex:1; font-size:14px; font-weight:500; color:#1a1a2e;';
         div.appendChild(nameSpan);
 
-        // Remove button
         const removeBtn = document.createElement('button');
         removeBtn.textContent = '✕';
         removeBtn.style.cssText = 'background:none; border:none; color:#dc2626; cursor:pointer; font-size:16px; padding:0 6px;';
-        removeBtn.title = 'Remove from selection';
-        removeBtn.addEventListener('click', function() {
-            removeFromSelected(col.id);
-        });
+        removeBtn.addEventListener('click', function() { removeFromSelected(col.id); });
         div.appendChild(removeBtn);
 
         selectedColumnsList.appendChild(div);
     });
 
-    // Initialize Sortable if available
     if (typeof Sortable !== 'undefined' && selectedColumns.length > 1) {
         new Sortable(selectedColumnsList, {
             handle: '.selected-item span:first-child',
             animation: 150,
             ghostClass: 'sortable-ghost',
-            dragClass: 'sortable-drag',
             onEnd: function() {
-                // Rebuild selectedColumns array from DOM order
                 const items = selectedColumnsList.querySelectorAll('.selected-item');
                 const newOrder = [];
                 items.forEach(item => {
@@ -328,18 +317,14 @@ function renderSelectedColumns() {
                     if (col) newOrder.push(col);
                 });
                 selectedColumns = newOrder;
-                // Update serial numbers
                 const nums = selectedColumnsList.querySelectorAll('.selected-item span:nth-child(2)');
-                nums.forEach((num, idx) => {
-                    num.textContent = idx + 1;
-                });
+                nums.forEach((num, idx) => { num.textContent = idx + 1; });
                 updateSelectedCount();
             }
         });
     }
 }
 
-// ---------- UPDATE SELECTED COUNT ----------
 function updateSelectedCount() {
     const count = selectedColumns.length;
     selectedCountBadge.textContent = count + ' selected';
@@ -349,7 +334,6 @@ function updateSelectedCount() {
 
 // ---------- MODAL OPEN / CLOSE ----------
 async function openModal(title, templateData = null) {
-    // Reset state
     selectedColumns = [];
     searchInput.value = '';
     searchResults.style.display = 'none';
@@ -361,7 +345,6 @@ async function openModal(title, templateData = null) {
     modal.style.display = 'block';
     document.body.style.overflow = 'hidden';
 
-    // Load master columns
     const columns = await loadMasterColumns();
     if (columns.length === 0) {
         noColumnsMsg.style.display = 'block';
@@ -376,7 +359,7 @@ async function openModal(title, templateData = null) {
         editingId = templateData.id;
         templateName.value = templateData.template_name;
         editId.value = templateData.id;
-        // Pre-select columns from template
+        // Use templateData.columns (pivot table) instead of selected_columns
         const cols = templateData.columns || [];
         cols.forEach(col => {
             selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type });
@@ -403,7 +386,7 @@ function closeModal() {
     noSearchResults.style.display = 'none';
 }
 
-// ---------- SEARCH INPUT HANDLING ----------
+// ---------- SEARCH INPUT ----------
 searchInput.addEventListener('input', function() {
     const val = this.value;
     if (val.trim()) {
@@ -424,10 +407,8 @@ clearSearchBtn.addEventListener('click', function() {
     noSearchResults.style.display = 'none';
 });
 
-// ---------- MODAL CONTROL ----------
-document.getElementById('addTemplateBtn').addEventListener('click', () => {
-    openModal('Create New Template');
-});
+// ---------- MODAL CONTROLS ----------
+document.getElementById('addTemplateBtn').addEventListener('click', () => openModal('Create New Template'));
 
 function openEditModal(template) {
     openModal('Edit Template', template);
@@ -437,7 +418,7 @@ cancelBtn.addEventListener('click', closeModal);
 closeModalBtn.addEventListener('click', closeModal);
 modalOverlay.addEventListener('click', closeModal);
 
-// ---------- FORM SUBMIT (SAVE) ----------
+// ---------- FORM SUBMIT ----------
 document.getElementById('templateForm').addEventListener('submit', async function(e) {
     e.preventDefault();
 
@@ -446,7 +427,6 @@ document.getElementById('templateForm').addEventListener('submit', async functio
         showModalStatus('⚠️ Template name is required.', 'error');
         return;
     }
-
     if (selectedColumns.length === 0) {
         showModalStatus('⚠️ Please select at least one column.', 'error');
         return;
@@ -457,10 +437,7 @@ document.getElementById('templateForm').addEventListener('submit', async functio
     try {
         let url = API_BASE + '/api/templates';
         let method = 'POST';
-        const payload = {
-            template_name: name,
-            selected_columns: selectedIds
-        };
+        const payload = { template_name: name, selected_columns: selectedIds };
 
         if (editingId) {
             url += '/' + editingId;
@@ -496,15 +473,10 @@ async function confirmDelete(id, name) {
     if (!confirm(`Are you sure you want to delete template "${name}"? This will soft-delete it.`)) {
         return;
     }
-
     try {
-        const res = await fetch(API_BASE + '/api/templates/' + id, {
-            method: 'DELETE'
-        });
+        const res = await fetch(API_BASE + '/api/templates/' + id, { method: 'DELETE' });
         const result = await res.json();
-        if (!res.ok) {
-            throw new Error(result.message || result.detail || 'Failed to delete template');
-        }
+        if (!res.ok) throw new Error(result.message || result.detail || 'Failed to delete template');
         showStatus('✅ ' + result.message, 'success');
         loadTemplates();
     } catch (error) {
@@ -513,39 +485,19 @@ async function confirmDelete(id, name) {
 }
 
 // ==============================================
-// PREVIEW TEMPLATE AS TABLE (FIXED)
+// PREVIEW MODAL (Eye Icon) - PIVOT TABLE VERSION
 // ==============================================
 
 function openPreviewModal(tpl) {
-    console.log('👁️ Preview modal opened for:', tpl);
-    
-    // Get column details from selected IDs
-    const colIds = tpl.selected_columns || [];
-    console.log('Column IDs:', colIds);
-    
+    // Use tpl.columns (from pivot table) instead of selected_columns
+    const cols = tpl.columns || [];
     let columnData = [];
-    
-    // Try to get column details from allMasterColumns if available
-    if (window.allMasterColumns && window.allMasterColumns.length > 0) {
-        columnData = colIds.map(id => {
-            const col = window.allMasterColumns.find(c => c.id === id);
-            return col ? { id: col.id, name: col.column_name, type: col.data_type } : { id: id, name: 'Unknown', type: '—' };
-        });
-    } else {
-        // Fallback: fetch directly from API
-        console.log('📡 Fetching column details from API...');
-        fetch(API_BASE + '/api/templates/' + tpl.id + '/columns')
-            .then(res => {
-                if (!res.ok) throw new Error('Failed to fetch columns');
-                return res.json();
-            })
-            .then(columns => {
-                renderPreviewModal(tpl, columns);
-            })
-            .catch(err => {
-                alert('Error loading columns: ' + err.message);
-            });
-        return; // Exit early, the fetch will handle rendering
+    if (cols.length > 0) {
+        columnData = cols.map(col => ({
+            id: col.id,
+            name: col.column_name,
+            type: col.data_type
+        }));
     }
 
     if (columnData.length === 0) {
@@ -553,13 +505,7 @@ function openPreviewModal(tpl) {
         return;
     }
 
-    // Render the preview modal with the data
-    renderPreviewModal(tpl, columnData);
-}
-
-// ---------- RENDER PREVIEW MODAL ----------
-function renderPreviewModal(tpl, columnData) {
-    // Build the preview modal with professional design
+    // Build modal
     const overlay = document.createElement('div');
     overlay.id = 'previewOverlay';
     overlay.style.cssText = 'display:block; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:999;';
@@ -568,216 +514,37 @@ function renderPreviewModal(tpl, columnData) {
     modal.id = 'previewModal';
     modal.style.cssText = 'display:block; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:30px; z-index:1000; min-width:650px; max-width:800px; max-height:80vh; overflow-y:auto; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,0.3);';
 
-    // Build table rows
-    let tableRows = columnData.map((col, index) => `
-        <tr style="border-bottom:1px solid #e2e8f0; transition:background 0.2s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
-            <td style="padding:10px 16px; text-align:center; color:#94a3b8; font-size:14px;">
-                <span class="drag-handle" style="cursor:grab; color:#94a3b8; font-size:16px; user-select:none; display:inline-block;">☰</span>
-                <span style="margin-left:8px; font-weight:600; color:#1a1a2e;">${index + 1}</span>
-            </td>
-            <td style="padding:10px 16px; text-align:center; font-weight:500; color:#64748b;">${col.id}</td>
-            <td style="padding:10px 16px; font-weight:500; color:#1a1a2e;">${col.name}</td>
-            <td style="padding:10px 16px; text-align:center;">
-                <span style="display:inline-block; padding:2px 12px; border-radius:12px; font-size:12px; font-weight:600; background:#f1f5f9; color:#475569;">
-                    ${col.type}
-                </span>
-            </td>
-            <td style="padding:10px 16px; text-align:center;">
-                <button class="remove-column-btn" data-column-id="${col.id}" style="background:none; border:none; color:#dc2626; cursor:pointer; font-size:18px; padding:4px 8px; border-radius:4px; transition:background 0.2s;" onmouseover="this.style.background='#fee2e2'" onmouseout="this.style.background=''">✕</button>
-            </td>
+    let tableRows = columnData.map((col, idx) => `
+        <tr style="border-bottom:1px solid #e2e8f0;">
+            <td style="padding:10px 16px; text-align:center; color:#94a3b8;">${idx + 1}</td>
+            <td style="padding:10px 16px; text-align:center; color:#64748b;">${col.id}</td>
+            <td style="padding:10px 16px; font-weight:500;">${col.name}</td>
+            <td style="padding:10px 16px; text-align:center;"><span style="display:inline-block; padding:2px 12px; border-radius:12px; font-size:12px; font-weight:600; background:#f1f5f9; color:#475569;">${col.type}</span></td>
         </tr>
     `).join('');
 
     modal.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:15px; border-bottom:2px solid #f0f2f5;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; border-bottom:2px solid #f0f2f5; padding-bottom:15px;">
             <div>
                 <h2 style="margin:0; font-size:22px; color:#1a1a2e;">📋 ${tpl.template_name}</h2>
-                <p style="margin:4px 0 0 0; color:#64748b; font-size:14px;">
-                    Created by: ${tpl.created_by || 'Admin'} 
-                    | Date: ${window.formatDate(tpl.created_date)}
-                    | <span id="previewCount">${columnData.length}</span> columns
-                </p>
+                <p style="margin:4px 0 0 0; color:#64748b; font-size:14px;">Created by: ${tpl.created_by || 'Admin'} | Date: ${window.formatDate(tpl.created_date)} | <strong>${columnData.length}</strong> columns</p>
             </div>
-            <button id="closePreviewBtn" style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8; padding:4px 8px; border-radius:4px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background=''">×</button>
+            <button id="closePreviewBtn" style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">×</button>
         </div>
-        
-        <div style="background:#f8fafc; border-radius:8px; padding:4px 12px; margin-bottom:15px; display:flex; align-items:center; gap:8px;">
-            <span style="font-size:14px;">💡</span>
-            <span style="font-size:13px; color:#475569;">Drag <strong>☰</strong> to reorder. Click <strong>✕</strong> to remove a column.</span>
-        </div>
-        
         <div style="overflow-x:auto; border:1px solid #e2e8f0; border-radius:8px;">
             <table style="width:100%; border-collapse:collapse; font-size:14px;">
                 <thead style="background:#f1f5f9; border-bottom:2px solid #e2e8f0;">
                     <tr>
-                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569; min-width:100px;">#</th>
-                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569; min-width:80px;">Column ID</th>
+                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569;">#</th>
+                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569;">Column ID</th>
                         <th style="padding:12px 16px; text-align:left; font-weight:600; color:#475569;">Column Name</th>
-                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569; min-width:100px;">Data Type</th>
-                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569; min-width:60px;">Action</th>
+                        <th style="padding:12px 16px; text-align:center; font-weight:600; color:#475569;">Data Type</th>
                     </tr>
                 </thead>
-                <tbody id="previewList">
-                    ${tableRows}
-                </tbody>
+                <tbody>${tableRows}</tbody>
             </table>
         </div>
-        
-        <div style="margin-top:20px; display:flex; justify-content:space-between; align-items:center; padding-top:15px; border-top:1px solid #e2e8f0;">
-            <span style="color:#94a3b8; font-size:13px;">Total: <strong id="previewCountBottom">${columnData.length}</strong> column${columnData.length > 1 ? 's' : ''}</span>
-            <div style="display:flex; gap:10px;">
-                <button id="saveOrderBtn" style="padding:8px 24px; cursor:pointer; background:#8b5cf6; color:white; border:none; border-radius:8px; font-size:14px; font-weight:500; transition:background 0.2s;" onmouseover="this.style.background='#7c3aed'" onmouseout="this.style.background='#8b5cf6'">💾 Save Order</button>
-            </div>
-        </div>
-        <div id="previewStatus" style="margin-top:10px; padding:8px; border-radius:4px; display:none;"></div>
-    `;
-
-    document.body.appendChild(overlay);
-    document.body.appendChild(modal);
-
-    // Close handler
-    function closePreview() {
-        if (document.body.contains(overlay)) document.body.removeChild(overlay);
-        if (document.body.contains(modal)) document.body.removeChild(modal);
-    }
-    document.getElementById('closePreviewBtn').addEventListener('click', closePreview);
-    overlay.addEventListener('click', closePreview);
-
-    const listContainer = document.getElementById('previewList');
-
-    // Initialize SortableJS for drag-and-drop
-    if (typeof Sortable !== 'undefined') {
-        new Sortable(listContainer, {
-            handle: '.drag-handle',
-            animation: 150,
-            ghostClass: 'sortable-ghost',
-            dragClass: 'sortable-drag',
-            onEnd: function() {
-                // Update serial numbers and counts
-                const rows = listContainer.querySelectorAll('tr');
-                rows.forEach((row, idx) => {
-                    const numSpan = row.querySelector('td:first-child span:nth-child(2)');
-                    if (numSpan) numSpan.textContent = idx + 1;
-                });
-                const count = rows.length;
-                document.getElementById('previewCount').textContent = count;
-                document.getElementById('previewCountBottom').textContent = count;
-            }
-        });
-    } else {
-        console.warn('⚠️ SortableJS not loaded');
-    }
-
-    // Remove column button
-    listContainer.querySelectorAll('.remove-column-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const row = this.closest('tr');
-            const columnId = this.dataset.columnId;
-            const templateId = tpl.id;
-            if (!confirm(`Remove "${row.querySelector('td:nth-child(3)').textContent}" from this template?`)) return;
-            
-            fetch(API_BASE + '/api/templates/' + templateId + '/columns/' + columnId, {
-                method: 'DELETE'
-            })
-            .then(res => res.json())
-            .then(result => {
-                if (result.message) {
-                    row.remove();
-                    // Update serial numbers
-                    const rows = listContainer.querySelectorAll('tr');
-                    rows.forEach((r, idx) => {
-                        const numSpan = r.querySelector('td:first-child span:nth-child(2)');
-                        if (numSpan) numSpan.textContent = idx + 1;
-                    });
-                    const count = rows.length;
-                    document.getElementById('previewCount').textContent = count;
-                    document.getElementById('previewCountBottom').textContent = count;
-                    showPreviewStatus('✅ ' + result.message, 'success');
-                    loadTemplates(); // Refresh the main table
-                }
-            })
-            .catch(err => {
-                showPreviewStatus('❌ Error: ' + err.message, 'error');
-            });
-        });
-    });
-
-    // Save order button
-    document.getElementById('saveOrderBtn').addEventListener('click', function() {
-        const rows = listContainer.querySelectorAll('tr');
-        const columnIds = Array.from(rows).map(row => {
-            const idCell = row.querySelector('td:nth-child(2)');
-            return idCell ? parseInt(idCell.textContent) : null;
-        }).filter(id => id !== null);
-        
-        if (columnIds.length === 0) {
-            showPreviewStatus('⚠️ Cannot save empty order.', 'error');
-            return;
-        }
-        
-        fetch(API_BASE + '/api/templates/' + tpl.id + '/reorder', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(columnIds)
-        })
-        .then(res => res.json())
-        .then(result => {
-            if (result.message) {
-                showPreviewStatus('✅ ' + result.message, 'success');
-                loadTemplates(); // Refresh the main table
-            }
-        })
-        .catch(err => {
-            showPreviewStatus('❌ Error: ' + err.message, 'error');
-        });
-    });
-
-    function showPreviewStatus(msg, type) {
-        const statusDiv = document.getElementById('previewStatus');
-        statusDiv.textContent = msg;
-        statusDiv.style.display = 'block';
-        statusDiv.style.background = type === 'error' ? '#fee2e2' : '#dcfce7';
-        statusDiv.style.color = type === 'error' ? '#991b1b' : '#166534';
-        statusDiv.style.border = '1px solid ' + (type === 'error' ? '#fecaca' : '#bbf7d0');
-        statusDiv.style.padding = '10px';
-        statusDiv.style.borderRadius = '8px';
-        setTimeout(() => { statusDiv.style.display = 'none'; }, 4000);
-    }
-}
-
-function renderPreviewModal(tpl, columns) {
-    const overlay = document.createElement('div');
-    overlay.id = 'previewOverlay';
-    overlay.style.cssText = 'display:block; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:999;';
-
-    const modal = document.createElement('div');
-    modal.id = 'previewModal';
-    modal.style.cssText = 'display:block; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:30px; z-index:1000; min-width:600px; max-width:800px; max-height:80vh; overflow-y:auto; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,0.3);';
-
-    let listHtml = columns.map((col, index) => `
-        <div class="preview-row" data-column-id="${col.column_id}" data-mapping-id="${col.mapping_id}" style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #f0f2f5;">
-            <span class="drag-handle" style="cursor:grab; color:#94a3b8; font-size:18px; user-select:none;">☰</span>
-            <span style="font-weight:600; min-width:30px;">${index + 1}</span>
-            <span style="flex:1;">${col.column_name}</span>
-            <span style="color:#64748b; font-size:13px;">Master ID: ${col.column_id}</span>
-            <button class="remove-column-btn" style="background:none; border:none; color:#dc2626; cursor:pointer; font-size:18px; padding:0 6px;" title="Remove column from template">✕</button>
-        </div>
-    `).join('');
-
-    modal.innerHTML = `
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-            <h2 style="margin:0;">👁️ Edit Template: ${tpl.template_name}</h2>
-            <button id="closePreviewBtn" style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">×</button>
-        </div>
-        <p style="color:#64748b; margin-bottom:15px;">Drag ☰ to reorder. Click ✕ to remove a column. Changes are auto-saved.</p>
-        <div id="previewList" style="max-height:300px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px; padding:10px;">
-            ${listHtml}
-        </div>
-        <div style="margin-top:15px; display:flex; justify-content:space-between; align-items:center;">
-            <span id="previewCount" style="color:#94a3b8; font-size:14px;">${columns.length} columns</span>
-            <button id="saveOrderBtn" style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:500;">Save Order</button>
-        </div>
-        <div id="previewStatus" style="margin-top:10px; padding:8px; border-radius:4px; display:none;"></div>
+        <div style="margin-top:15px; text-align:right; color:#94a3b8; font-size:13px;">Total: ${columnData.length} column${columnData.length > 1 ? 's' : ''}</div>
     `;
 
     document.body.appendChild(overlay);
@@ -789,95 +556,9 @@ function renderPreviewModal(tpl, columns) {
     }
     document.getElementById('closePreviewBtn').addEventListener('click', closePreview);
     overlay.addEventListener('click', closePreview);
-
-    const listContainer = document.getElementById('previewList');
-    if (typeof Sortable !== 'undefined') {
-        new Sortable(listContainer, {
-            handle: '.drag-handle',
-            animation: 150,
-            ghostClass: 'sortable-ghost',
-            onEnd: function() {
-                updatePreviewSerialNumbers(listContainer);
-                updatePreviewCount(listContainer);
-            }
-        });
-    }
-
-    listContainer.querySelectorAll('.remove-column-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const row = this.closest('.preview-row');
-            const columnId = row.dataset.columnId;
-            const templateId = tpl.id;
-            if (!confirm('Remove this column from the template?')) return;
-            fetch(API_BASE + '/api/templates/' + templateId + '/columns/' + columnId, {
-                method: 'DELETE'
-            })
-            .then(res => res.json())
-            .then(result => {
-                if (result.message) {
-                    row.remove();
-                    updatePreviewSerialNumbers(listContainer);
-                    updatePreviewCount(listContainer);
-                    showPreviewStatus('✅ Column removed', 'success');
-                    loadTemplates();
-                }
-            })
-            .catch(err => {
-                showPreviewStatus('❌ Error: ' + err.message, 'error');
-            });
-        });
-    });
-
-    document.getElementById('saveOrderBtn').addEventListener('click', function() {
-        const rows = listContainer.querySelectorAll('.preview-row');
-        const columnIds = Array.from(rows).map(row => parseInt(row.dataset.columnId));
-        if (columnIds.length === 0) {
-            showPreviewStatus('⚠️ Cannot save empty order.', 'error');
-            return;
-        }
-        fetch(API_BASE + '/api/templates/' + tpl.id + '/reorder', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(columnIds)
-        })
-        .then(res => res.json())
-        .then(result => {
-            if (result.message) {
-                showPreviewStatus('✅ Order saved successfully', 'success');
-                loadTemplates();
-            }
-        })
-        .catch(err => {
-            showPreviewStatus('❌ Error: ' + err.message, 'error');
-        });
-    });
-
-    function updatePreviewSerialNumbers(container) {
-        const rows = container.querySelectorAll('.preview-row');
-        rows.forEach((row, idx) => {
-            const numSpan = row.querySelector('span:nth-child(2)');
-            if (numSpan) numSpan.textContent = idx + 1;
-        });
-    }
-
-    function updatePreviewCount(container) {
-        const count = container.querySelectorAll('.preview-row').length;
-        const countSpan = document.getElementById('previewCount');
-        if (countSpan) countSpan.textContent = count + ' columns';
-    }
-
-    function showPreviewStatus(msg, type) {
-        const statusDiv = document.getElementById('previewStatus');
-        statusDiv.textContent = msg;
-        statusDiv.style.display = 'block';
-        statusDiv.style.background = type === 'error' ? '#ffebee' : '#e8f5e9';
-        statusDiv.style.color = type === 'error' ? '#c62828' : '#2e7d32';
-        statusDiv.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
-        setTimeout(() => { statusDiv.style.display = 'none'; }, 4000);
-    }
 }
 
-// ---------- ESC KEY HANDLER ----------
+// ---------- ESC KEY ----------
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         const templateModal = document.getElementById('templateModal');
@@ -894,8 +575,8 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
-// ---------- INITIAL LOAD ----------
+// ---------- INIT ----------
 window.onload = function() {
     loadTemplates();
-    console.log('📄 Templates Manager loaded (redesigned)');
+    console.log('📄 Templates Manager loaded (pivot table version)');
 };
