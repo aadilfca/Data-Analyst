@@ -5,161 +5,705 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Upload Client Data</title>
-    <link rel="stylesheet" href="/static/style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        /* ----- override or add upload-specific styles ----- */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+            padding: 24px 28px;
+        }
+
+        .top-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px 24px;
+            background: #f8fafc;
+            padding: 10px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            align-items: center;
+            border: 1px solid #e8edf2;
+        }
+
+        .top-bar .field {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .top-bar label {
+            font-weight: 600;
+            font-size: 12px;
+            color: #1e293b;
+        }
+
+        .top-bar select {
+            padding: 4px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 12px;
+            min-width: 140px;
+            background: white;
+        }
+
+        .top-bar .badge {
+            font-size: 11px;
+            background: #e8f5e9;
+            color: #2e7d32;
+            padding: 2px 10px;
+            border-radius: 10px;
+            margin-left: auto;
+            white-space: nowrap;
+        }
+
+        .top-bar .badge.loading {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .top-bar .badge.error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .upload-area {
+            border: 2px dashed #cbd5e1;
+            border-radius: 8px;
+            padding: 14px 20px;
+            cursor: pointer;
+            transition: border .3s, background .3s;
+            background: #fafcff;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .upload-area:hover {
+            border-color: #3b82f6;
+            background: #f8faff;
+        }
+
+        .upload-area.dragover {
+            border-color: #3b82f6;
+            background: #eff6ff;
+        }
+
+        .upload-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .upload-left .icon {
+            font-size: 28px;
+        }
+
+        .upload-left .info h3 {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .upload-left .info p {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        .file-detail {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #f1f5f9;
+            padding: 4px 12px;
+            border-radius: 6px;
+        }
+
+        .file-detail .name {
+            font-weight: 500;
+            font-size: 13px;
+        }
+
+        .file-detail .size {
+            color: #94a3b8;
+            font-size: 11px;
+        }
+
+        .file-detail .clear {
+            background: none;
+            border: none;
+            color: #dc2626;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+
+        .file-detail .clear:hover {
+            color: #b91c1c;
+        }
+
+        .main-grid {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .panel {
+            flex: 1 1 0;
+            background: #fff;
+            border-radius: 8px;
+            border: 1px solid #e8edf2;
+            overflow: hidden;
+            min-width: 280px;
+        }
+
+        .panel-header {
+            background: #f8fafc;
+            padding: 6px 12px;
+            font-weight: 600;
+            font-size: 12px;
+            border-bottom: 1px solid #e8edf2;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-header .count {
+            font-size: 11px;
+            font-weight: 400;
+            color: #64748b;
+        }
+
+        .mapping-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            table-layout: auto;
+        }
+
+        .mapping-table th {
+            background: #f8fafc;
+            padding: 3px 6px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            border-bottom: 2px solid #e8edf2;
+            color: #475569;
+            white-space: nowrap;
+        }
+
+        .mapping-table td {
+            padding: 3px 6px;
+            border-bottom: 1px solid #f0f2f5;
+            vertical-align: middle;
+            font-size: 12px;
+        }
+
+        .mapping-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .mapping-table tr:hover td {
+            background: #f8fafc;
+        }
+
+        .mapping-table select {
+            padding: 2px 4px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 11px;
+            width: 100%;
+            max-width: 120px;
+            background: white;
+        }
+
+        .mapping-table select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+        }
+
+        .mapping-table .type-badge {
+            display: inline-block;
+            padding: 0 6px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 600;
+            background: #f1f5f9;
+            color: #475569;
+        }
+
+        .mapping-table .type-badge.numeric {
+            background: #fef9e7;
+            color: #92400e;
+        }
+
+        .mapping-table .type-badge.date {
+            background: #e0f2fe;
+            color: #0369a1;
+        }
+
+        .mapping-table th:nth-child(1),
+        .mapping-table td:nth-child(1) {
+            width: 1%;
+            white-space: nowrap;
+        }
+
+        .mapping-table th:nth-child(2),
+        .mapping-table td:nth-child(2) {
+            width: 1%;
+            white-space: nowrap;
+        }
+
+        .mapping-table th:nth-child(3),
+        .mapping-table td:nth-child(3) {
+            width: 1%;
+            white-space: nowrap;
+        }
+
+        .mapping-table th:nth-child(4),
+        .mapping-table td:nth-child(4) {
+            width: 1%;
+            white-space: nowrap;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            vertical-align: middle;
+        }
+
+        .status-dot.green {
+            background: #22c55e;
+        }
+
+        .status-dot.yellow {
+            background: #eab308;
+        }
+
+        .status-dot.red {
+            background: #dc2626;
+        }
+
+        .status-text {
+            font-size: 11px;
+            margin-left: 3px;
+        }
+
+        .status-text.green {
+            color: #16a34a;
+        }
+
+        .status-text.yellow {
+            color: #ca8a04;
+        }
+
+        .status-text.red {
+            color: #dc2626;
+        }
+
+        .preview-wrapper {
+            overflow-x: auto;
+            padding: 0;
+        }
+
+        .preview-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            font-family: 'Segoe UI', 'Calibri', sans-serif;
+            table-layout: auto;
+            min-width: 100%;
+        }
+
+        .preview-table th {
+            background: #f1f5f9;
+            padding: 3px 8px;
+            text-align: left;
+            font-weight: 600;
+            border: 1px solid #d0d5dd;
+            font-size: 10px;
+            text-transform: uppercase;
+            color: #1e293b;
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+
+        .preview-table td {
+            padding: 2px 8px;
+            border: 1px solid #d0d5dd;
+            font-size: 12px;
+            white-space: nowrap;
+            background: white;
+        }
+
+        .preview-table tr:nth-child(even) td {
+            background: #fafcff;
+        }
+
+        .preview-table tr:hover td {
+            background: #f1f5f9;
+        }
+
+        .mode-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px 24px;
+            padding: 8px 14px;
+            background: #f8fafc;
+            border-radius: 6px;
+            margin-bottom: 14px;
+            align-items: center;
+            border: 1px solid #e8edf2;
+        }
+
+        .mode-bar .field {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .mode-bar label {
+            font-weight: 600;
+            font-size: 12px;
+            color: #1e293b;
+        }
+
+        .mode-bar select {
+            padding: 3px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 12px;
+            background: white;
+        }
+
+        .mode-bar .hint {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-left: auto;
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .actions button {
+            padding: 7px 18px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background .2s;
+        }
+
+        .actions button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: #22c55e;
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #16a34a;
+        }
+
+        .btn-secondary {
+            background: #8b5cf6;
+            color: white;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #7c3aed;
+        }
+
+        .btn-neutral {
+            background: #e2e8f0;
+            color: #1a1a2e;
+        }
+
+        .btn-neutral:hover:not(:disabled) {
+            background: #cbd5e1;
+        }
+
+        .status-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 20px;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            align-items: center;
+            border: 1px solid #e8edf2;
+        }
+
+        .status-bar.success {
+            background: #dcfce7;
+            border-color: #bbf7d0;
+            color: #166534;
+        }
+
+        .status-bar.info {
+            background: #eff6ff;
+            border-color: #bfdbfe;
+            color: #1e40af;
+        }
+
+        .status-bar.error {
+            background: #fee2e2;
+            border-color: #fecaca;
+            color: #991b1b;
+        }
+
+        .status-bar.loading {
+            background: #fef3c7;
+            border-color: #fde68a;
+            color: #92400e;
+        }
+
+        .status-bar .spacer {
+            margin-left: auto;
+        }
+
+        .status-bar .icon {
+            font-size: 16px;
+        }
+
+        .footer-meta {
+            margin-top: 10px;
+            font-size: 11px;
+            color: #94a3b8;
+            display: flex;
+            justify-content: flex-end;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #e2e8f0;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin .6s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        @media (max-width:768px) {
+            .container {
+                padding: 16px;
+            }
+
+            .top-bar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .top-bar .badge {
+                margin-left: 0;
+                text-align: center;
+            }
+
+            .file-detail {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .mode-bar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .mode-bar .hint {
+                margin-left: 0;
+            }
+
+            .actions {
+                justify-content: center;
+            }
+
+            .status-bar {
+                flex-direction: column;
+                align-items: center;
+                text-align: center;
+            }
+
+            .status-bar .spacer {
+                margin-left: 0;
+            }
+
+            .footer-meta {
+                flex-direction: column;
+                align-items: center;
+                text-align: center;
+            }
+
+            .main-grid {
+                flex-direction: column;
+            }
+        }
+    </style>
 </head>
 
 <body>
-    <nav class="navbar">
-        <div class="nav-container">
-            <div class="nav-brand">🏢 System Analyst</div>
-            <div class="nav-user"><span>👤 Welcome, Analyst</span></div>
-        </div>
-    </nav>
 
-    <div class="main-container">
-        <div class="upload-page">
-            <div class="upload-header">
-                <div>
-                    <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
-                    <h1 style="font-size:28px; margin:0;">📤 Upload Client Data</h1>
-                    <p style="color:#64748b; margin-top:5px;">Upload Excel files and map columns using pre-defined
-                        templates</p>
+    <div class="container">
+
+        <!-- HEADER -->
+        <div class="header"
+            style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; flex-wrap:wrap;">
+            <div>
+                <a href="/static/index.html" class="back-link"
+                    style="color:#3b82f6; text-decoration:none; font-weight:600; font-size:13px;">← Back to
+                    Dashboard</a>
+                <h1 style="font-size:22px; font-weight:700; margin:4px 0 2px;">📤 Upload Client Data</h1>
+                <div style="color:#64748b; font-size:13px;">Upload Excel files and map columns using pre‑defined
+                    templates</div>
+            </div>
+            <div style="font-size:13px; color:#64748b;">👤 Analyst</div>
+        </div>
+
+        <!-- TOP BAR -->
+        <div class="top-bar" id="topBar">
+            <div class="field">
+                <label>📋 Template</label>
+                <select id="templateDropdown">
+                    <option value="">-- Select Template --</option>
+                </select>
+            </div>
+            <div class="field" id="sheetField" style="display:none;">
+                <label>📄 Sheet</label>
+                <select id="sheetSelector">
+                    <option value="">-- Select Sheet --</option>
+                </select>
+            </div>
+            <span class="badge" id="statusBadge">⏳ Select a template</span>
+        </div>
+
+        <!-- UPLOAD AREA -->
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-left">
+                <span class="icon">📂</span>
+                <div class="info">
+                    <h3>Drag & Drop or Click to Upload</h3>
+                    <p>Supported formats: .xlsx, .xls</p>
+                </div>
+            </div>
+            <div class="file-detail" id="fileInfo" style="display:none;">
+                <span class="name" id="fileName">file.xlsx</span>
+                <span class="size" id="fileSize">0 KB</span>
+                <button class="clear" id="clearBtn" title="Remove file">✕</button>
+            </div>
+            <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
+        </div>
+
+        <!-- MAIN GRID -->
+        <div class="main-grid">
+
+            <!-- MAPPING PANEL -->
+            <div class="panel" id="mappingPanel" style="display:none; flex:0 1 35%;">
+                <div class="panel-header">
+                    <span>🔗 Column Mapping</span>
+                    <span class="count" id="mappingCount">0 / 0 matched</span>
+                </div>
+                <div style="padding:0; overflow-x:auto;">
+                    <table class="mapping-table" id="mappingTable">
+                        <thead>
+                            <tr>
+                                <th>Template</th>
+                                <th>Excel Column</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mappingBody"></tbody>
+                    </table>
                 </div>
             </div>
 
-            <!-- Two-Panel Layout -->
-            <div style="display:flex; gap:25px; flex-wrap:wrap; margin-top:20px;">
-
-                <!-- LEFT PANEL -->
-                <div
-                    style="flex:1; min-width:280px; background:white; border-radius:16px; padding:20px; box-shadow:0 2px 12px rgba(0,0,0,0.08);">
-                    <h3 style="margin:0 0 15px 0; font-size:16px; color:#1a1a2e;">📋 Select Template</h3>
-                    <select id="templateDropdown" class="template-dropdown"
-                        style="width:100%; padding:10px; border-radius:8px;">
-                        <option value="">-- Select Template --</option>
-                    </select>
-
-                    <!-- Template Columns -->
-                    <div id="templateColumnsPanel" style="margin-top:20px; display:none;">
-                        <hr style="border:none; border-top:1px solid #e2e8f0; margin:15px 0;">
-                        <h4 style="font-size:14px; color:#475569; margin:0 0 8px 0;">📌 Template Columns</h4>
-                        <div id="columnList" style="max-height:200px; overflow-y:auto; padding:5px 0;"></div>
-                        <div style="font-size:12px; color:#94a3b8; margin-top:8px;">
-                            Total: <span id="totalColumnsCount">0</span> columns
-                        </div>
-                    </div>
-
-                    <!-- Sheet Selector (appears after file upload) -->
-                    <div id="sheetSelectorContainer" style="display:none; margin-top:15px;">
-                        <hr style="border:none; border-top:1px solid #e2e8f0; margin:10px 0;">
-                        <label
-                            style="font-weight:600; font-size:13px; color:#475569; display:block; margin-bottom:4px;">📄
-                            Select Sheet</label>
-                        <select id="sheetSelector" class="template-dropdown"
-                            style="width:100%; padding:8px; border-radius:6px;">
-                            <option value="">-- Select Sheet --</option>
-                        </select>
-                        <small style="color:#94a3b8; font-size:12px;">Choose the sheet containing your data.</small>
-                    </div>
+            <!-- PREVIEW PANEL -->
+            <div class="panel" id="previewPanel" style="display:none; flex:1 1 65%;">
+                <div class="panel-header">
+                    <span>📊 Excel Preview</span>
+                    <span class="count" id="previewCount">0 rows · 0 columns</span>
                 </div>
-
-                <!-- RIGHT PANEL -->
-                <div
-                    style="flex:2; min-width:350px; background:white; border-radius:16px; padding:20px; box-shadow:0 2px 12px rgba(0,0,0,0.08);">
-                    <h3 style="margin:0 0 15px 0; font-size:16px; color:#1a1a2e;">📄 File Upload & Mapping</h3>
-
-                    <!-- Upload Area -->
-                    <div id="uploadArea" class="upload-area"
-                        style="border:2px dashed #cbd5e1; border-radius:12px; padding:30px; text-align:center; cursor:pointer; transition:border 0.3s;">
-                        <div class="upload-icon" style="font-size:48px; display:block; margin-bottom:8px;">📂</div>
-                        <h3 style="color:#1a1a2e; margin-bottom:4px;">Drag & Drop or Click to Upload</h3>
-                        <p style="color:#94a3b8; font-size:14px;">Supported formats: .xlsx, .xls</p>
-                        <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
-                        <button id="uploadBtn" class="upload-btn" style="margin-top:10px;">Choose File</button>
-                    </div>
-
-                    <!-- File Info -->
-                    <div id="fileInfo"
-                        style="display:none; margin:15px 0; padding:10px 15px; background:#f8fafc; border-radius:8px; display:flex; align-items:center; gap:10px;">
-                        <span id="fileName" style="font-weight:500;">file.xlsx</span>
-                        <span id="fileSize" style="color:#94a3b8; font-size:12px;">0 KB</span>
-                        <button id="clearBtn"
-                            style="margin-left:auto; background:none; border:none; color:#dc2626; cursor:pointer; font-size:18px;">✕</button>
-                    </div>
-
-                    <!-- Upload Mode & Unique ID -->
-                    <div id="modePanel"
-                        style="display:none; margin-top:15px; padding:15px; background:#f8fafc; border-radius:8px;">
-                        <div style="display:flex; gap:20px; flex-wrap:wrap; align-items:center;">
-                            <div>
-                                <label style="font-weight:600; font-size:14px; margin-right:10px;">Mode:</label>
-                                <select id="uploadMode"
-                                    style="padding:6px 12px; border:1px solid #ccc; border-radius:6px;">
-                                    <option value="create">Create New</option>
-                                    <option value="update">Update Existing</option>
-                                </select>
-                            </div>
-                            <div id="uniqueIdContainer" style="display:none;">
-                                <label style="font-weight:600; font-size:14px; margin-right:10px;">Unique ID
-                                    Column:</label>
-                                <select id="uniqueIdColumn"
-                                    style="padding:6px 12px; border:1px solid #ccc; border-radius:6px;">
-                                    <option value="">-- Select --</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Mapping Table -->
-                    <div id="mappingPanel" style="display:none; margin-top:15px;">
-                        <h4 style="font-size:14px; color:#475569; margin:0 0 10px 0;">🔗 Column Mapping</h4>
-                        <div style="overflow-x:auto; border:1px solid #e2e8f0; border-radius:8px;">
-                            <table style="width:100%; border-collapse:collapse; font-size:13px;">
-                                <thead style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
-                                    <tr>
-                                        <th style="padding:8px 10px; text-align:left;">Template Column</th>
-                                        <th style="padding:8px 10px; text-align:left;">Excel Column</th>
-                                        <th style="padding:8px 10px; text-align:center;">Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="mappingBody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <!-- Data Preview -->
-                    <div id="previewPanel" style="display:none; margin-top:15px;">
-                        <h4 style="font-size:14px; color:#475569; margin:0 0 10px 0;">📊 Data Preview (first 5 rows)
-                        </h4>
-                        <div style="overflow-x:auto; border:1px solid #e2e8f0; border-radius:8px;">
-                            <table style="width:100%; border-collapse:collapse; font-size:13px;">
-                                <thead id="previewHeader" style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
-                                </thead>
-                                <tbody id="previewBody"></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <!-- Action Buttons -->
-                    <div style="margin-top:20px; display:flex; gap:12px; flex-wrap:wrap;">
-                        <button id="downloadTemplateBtn" class="btn-template"
-                            style="background:#8b5cf6; padding:10px 20px;">📥 Download Template</button>
-                        <button id="importBtn" class="btn-upload" disabled
-                            style="background:#22c55e; padding:10px 25px;">🚀 Upload to Server</button>
-                        <button id="resetBtn" class="btn-upload"
-                            style="background:#e2e8f0; color:#1a1a2e; padding:10px 20px;">🔄 Reset</button>
-                    </div>
-
-                    <!-- Status Messages -->
-                    <div id="uploadStatus" class="upload-status" style="margin-top:15px; display:none;"></div>
+                <div class="preview-wrapper">
+                    <table class="preview-table" id="previewTable">
+                        <thead id="previewHeader"></thead>
+                        <tbody id="previewBody"></tbody>
+                    </table>
                 </div>
             </div>
         </div>
+
+        <!-- MODE BAR -->
+        <div class="mode-bar" id="modeBar" style="display:none;">
+            <div class="field">
+                <label>Mode</label>
+                <select id="uploadMode">
+                    <option value="create">Create New</option>
+                    <option value="update">Update Existing</option>
+                </select>
+            </div>
+            <div class="field" id="uniqueIdField" style="display:none;">
+                <label>Unique ID</label>
+                <select id="uniqueIdColumn">
+                    <option value="">— None —</option>
+                </select>
+            </div>
+            <span class="hint">💡 For "Update", select the unique identifier column</span>
+        </div>
+
+        <!-- ACTIONS -->
+        <div class="actions">
+            <button class="btn-secondary" id="downloadBtn">📥 Download Template</button>
+            <button class="btn-primary" id="importBtn" disabled>🚀 Upload to Server</button>
+            <button class="btn-neutral" id="resetBtn">🔄 Reset</button>
+        </div>
+
+        <!-- STATUS BAR -->
+        <div class="status-bar info" id="statusBar">
+            <span class="icon">ℹ️</span>
+            <span id="statusMessage">Select a template and upload an Excel file to begin.</span>
+            <span class="spacer" id="statusExtra"></span>
+        </div>
+
+        <!-- FOOTER -->
+        <div class="footer-meta" id="footerMeta" style="display:none;">
+            <span id="footerFile">📄 </span>
+            <span id="footerRows">📊 </span>
+            <span id="footerDate">📁 </span>
+        </div>
+
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
-    <script src="/static/utils.js"></script>
     <script src="/static/upload.js"></script>
 </body>
 

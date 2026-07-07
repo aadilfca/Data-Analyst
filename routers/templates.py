@@ -167,6 +167,8 @@ def delete_template(template_id: int):
 
 # ---------- NEW ENDPOINTS FOR UPLOAD & PREVIEW ----------
 
+# ---------- NEW ENDPOINTS FOR UPLOAD & PREVIEW ----------
+
 @router.get("/api/templates/{template_id}/upload-columns")
 def get_template_upload_columns(template_id: int):
     """Return the columns of a template with sort_order (for upload preview)."""

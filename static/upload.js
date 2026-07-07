@@ -1,18 +1,17 @@
-// ==============================================
-// 📤 UPLOAD MODULE - COMPLETE LOGIC
-// ==============================================
+// ================================================================
+// 📤 UPLOAD MODULE – COMPLETE LOGIC
+// ================================================================
 
 const API_BASE = 'http://localhost:5000';
 
-// DOM Elements
+// DOM refs
 const templateDropdown = document.getElementById('templateDropdown');
-const columnListDiv = document.getElementById('columnList');
-const totalColumnsSpan = document.getElementById('totalColumnsCount');
-const templateColumnsPanel = document.getElementById('templateColumnsPanel');
+const sheetSelector = document.getElementById('sheetSelector');
+const sheetField = document.getElementById('sheetField');
+const statusBadge = document.getElementById('statusBadge');
 
 const uploadArea = document.getElementById('uploadArea');
 const fileInput = document.getElementById('fileInput');
-const uploadBtn = document.getElementById('uploadBtn');
 const fileInfo = document.getElementById('fileInfo');
 const fileName = document.getElementById('fileName');
 const fileSize = document.getElementById('fileSize');
@@ -20,23 +19,30 @@ const clearBtn = document.getElementById('clearBtn');
 
 const mappingPanel = document.getElementById('mappingPanel');
 const mappingBody = document.getElementById('mappingBody');
+const mappingCount = document.getElementById('mappingCount');
 
 const previewPanel = document.getElementById('previewPanel');
 const previewHeader = document.getElementById('previewHeader');
 const previewBody = document.getElementById('previewBody');
+const previewCount = document.getElementById('previewCount');
 
-const downloadTemplateBtn = document.getElementById('downloadTemplateBtn');
+const modeBar = document.getElementById('modeBar');
+const uploadMode = document.getElementById('uploadMode');
+const uniqueIdField = document.getElementById('uniqueIdField');
+const uniqueIdColumn = document.getElementById('uniqueIdColumn');
+
+const downloadBtn = document.getElementById('downloadBtn');
 const importBtn = document.getElementById('importBtn');
 const resetBtn = document.getElementById('resetBtn');
-const uploadStatus = document.getElementById('uploadStatus');
 
-const uploadMode = document.getElementById('uploadMode');
-const uniqueIdContainer = document.getElementById('uniqueIdContainer');
-const uniqueIdColumn = document.getElementById('uniqueIdColumn');
-const modePanel = document.getElementById('modePanel');
+const statusBar = document.getElementById('statusBar');
+const statusMessage = document.getElementById('statusMessage');
+const statusExtra = document.getElementById('statusExtra');
 
-const sheetSelector = document.getElementById('sheetSelector');
-const sheetSelectorContainer = document.getElementById('sheetSelectorContainer');
+const footerMeta = document.getElementById('footerMeta');
+const footerFile = document.getElementById('footerFile');
+const footerRows = document.getElementById('footerRows');
+const footerDate = document.getElementById('footerDate');
 
 // State
 let selectedTemplateId = null;
@@ -44,11 +50,45 @@ let selectedFile = null;
 let fileId = null;
 let currentMappings = [];
 let excelHeaders = [];
-let excelData = [];
 let templateColumns = [];
 let sheetNames = [];
 let currentSheet = null;
 let workbookData = null;
+let isProcessing = false;
+
+// Helpers
+function showStatus(msg, type = 'info', extra = '') {
+    statusMessage.textContent = msg;
+    statusExtra.textContent = extra;
+    statusBar.className = 'status-bar ' + type;
+    statusBar.style.display = 'flex';
+}
+
+function setBadge(text, type = '') {
+    statusBadge.textContent = text;
+    statusBadge.className = 'badge' + (type ? ' ' + type : '');
+}
+
+function showSpinner(show) {
+    if (show) {
+        importBtn.innerHTML = '<span class="spinner"></span> Processing...';
+        importBtn.disabled = true;
+    } else {
+        importBtn.innerHTML = '🚀 Upload to Server';
+        importBtn.disabled = false;
+    }
+}
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function formatDate(d) {
+    const date = new Date(d);
+    return date.toLocaleDateString('en-GB') + ' ' + date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
 
 // ---------- LOAD TEMPLATES ----------
 async function loadTemplates() {
@@ -63,9 +103,11 @@ async function loadTemplates() {
             opt.textContent = tpl.template_name;
             templateDropdown.appendChild(opt);
         });
+        setBadge('✅ ' + templates.length + ' templates loaded');
     } catch (error) {
         console.error('Error loading templates:', error);
-        showStatus('❌ Failed to load templates', 'error');
+        setBadge('❌ Failed to load templates', 'error');
+        showStatus('❌ Failed to load templates: ' + error.message, 'error');
     }
 }
 
@@ -73,62 +115,44 @@ async function loadTemplates() {
 templateDropdown.addEventListener('change', async function() {
     const id = this.value;
     if (!id) {
-        templateColumnsPanel.style.display = 'none';
-        sheetSelectorContainer.style.display = 'none';
         selectedTemplateId = null;
-        resetUpload();
+        mappingPanel.style.display = 'none';
+        previewPanel.style.display = 'none';
+        modeBar.style.display = 'none';
+        sheetField.style.display = 'none';
+        importBtn.disabled = true;
+        setBadge('⏳ Select a template');
+        showStatus('Select a template and upload an Excel file to begin.', 'info');
         return;
     }
     selectedTemplateId = parseInt(id);
+    setBadge('⏳ Loading template...', 'loading');
+
     try {
         const res = await fetch(API_BASE + `/api/templates/${id}/upload-columns`);
         if (!res.ok) throw new Error('Failed to fetch template columns');
         const data = await res.json();
         templateColumns = data.columns;
-        renderTemplateColumns(data.columns);
-        templateColumnsPanel.style.display = 'block';
-        downloadTemplateBtn.dataset.templateId = id;
-        downloadTemplateBtn.disabled = false;
+        downloadBtn.dataset.templateId = id;
+        downloadBtn.disabled = false;
+        setBadge('✅ Template loaded: ' + data.total_columns + ' columns');
+
         if (fileId && currentSheet) {
-            await autoMapColumns(fileId);
+            await autoMapColumns();
+        } else if (fileId && !currentSheet) {
+            showStatus('✅ Template loaded. Please select a sheet.', 'info');
+        } else {
+            showStatus('✅ Template loaded. Upload an Excel file to begin mapping.', 'success');
         }
     } catch (error) {
         console.error('Error loading template columns:', error);
-        showStatus('❌ Failed to load template columns', 'error');
+        setBadge('❌ Failed to load columns', 'error');
+        showStatus('❌ Failed to load template columns: ' + error.message, 'error');
     }
 });
 
-// ---------- RENDER TEMPLATE COLUMNS ----------
-function renderTemplateColumns(columns) {
-    columnListDiv.innerHTML = '';
-    if (!columns || columns.length === 0) {
-        columnListDiv.innerHTML = '<div style="color:#94a3b8; padding:10px;">No columns in this template.</div>';
-        totalColumnsSpan.textContent = '0';
-        return;
-    }
-    columns.forEach((col, idx) => {
-        const div = document.createElement('div');
-        div.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #f0f2f5;';
-        const numSpan = document.createElement('span');
-        numSpan.textContent = idx + 1;
-        numSpan.style.cssText = 'font-weight:600; color:#64748b; min-width:24px;';
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = col.column_name;
-        nameSpan.style.cssText = 'flex:1; font-size:14px;';
-        const typeSpan = document.createElement('span');
-        typeSpan.textContent = `(${col.data_type})`;
-        typeSpan.style.cssText = 'color:#94a3b8; font-size:12px;';
-        div.appendChild(numSpan);
-        div.appendChild(nameSpan);
-        div.appendChild(typeSpan);
-        columnListDiv.appendChild(div);
-    });
-    totalColumnsSpan.textContent = columns.length;
-}
-
 // ---------- FILE UPLOAD ----------
 uploadArea.addEventListener('click', () => fileInput.click());
-uploadBtn.addEventListener('click', () => fileInput.click());
 
 uploadArea.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -148,7 +172,7 @@ uploadArea.addEventListener('drop', (e) => {
 fileInput.addEventListener('change', function(e) {
     if (this.files && this.files.length > 0) {
         handleFile(this.files[0]);
-        this.value = ''; // allow re-selection
+        this.value = '';
     }
 });
 
@@ -161,11 +185,12 @@ async function handleFile(file) {
 
     selectedFile = file;
     fileName.textContent = file.name;
-    fileSize.textContent = (file.size / 1024).toFixed(1) + ' KB';
+    fileSize.textContent = formatFileSize(file.size);
     fileInfo.style.display = 'flex';
     uploadArea.style.display = 'none';
+    footerMeta.style.display = 'flex';
+    footerFile.textContent = '📄 ' + file.name;
 
-    // Read the file to get sheet names
     const reader = new FileReader();
     reader.onload = function(e) {
         try {
@@ -179,18 +204,12 @@ async function handleFile(file) {
                 return;
             }
 
-            // Populate sheet selector
             populateSheetSelector(sheetNames);
-
-            // Auto-select first sheet
             currentSheet = sheetNames[0];
             sheetSelector.value = currentSheet;
+            sheetField.style.display = 'block';
 
-            // Upload file to server
             uploadFileToServer(file);
-
-            // Show sheet selector in left panel
-            sheetSelectorContainer.style.display = 'block';
 
             showStatus('📄 File loaded. Sheet "' + currentSheet + '" selected.', 'info');
         } catch (err) {
@@ -200,7 +219,7 @@ async function handleFile(file) {
     reader.readAsArrayBuffer(file);
 }
 
-// ---------- POPULATE SHEET SELECTOR ----------
+// ---------- SHEET SELECTOR ----------
 function populateSheetSelector(sheets) {
     sheetSelector.innerHTML = '<option value="">-- Select Sheet --</option>';
     sheets.forEach(name => {
@@ -209,14 +228,13 @@ function populateSheetSelector(sheets) {
         opt.textContent = name;
         sheetSelector.appendChild(opt);
     });
-    sheetSelectorContainer.style.display = 'block';
+    sheetField.style.display = 'block';
 }
 
-// ---------- SHEET SELECTION CHANGE ----------
 sheetSelector.addEventListener('change', function() {
     currentSheet = this.value;
     if (currentSheet && selectedTemplateId && fileId) {
-        autoMapColumns(fileId);
+        autoMapColumns();
         showStatus('📄 Sheet changed to "' + currentSheet + '". Re‑mapping...', 'info');
     } else if (currentSheet && selectedTemplateId && !fileId) {
         if (selectedFile) {
@@ -225,7 +243,7 @@ sheetSelector.addEventListener('change', function() {
     }
 });
 
-// ---------- UPLOAD FILE TO SERVER ----------
+// ---------- UPLOAD TO SERVER ----------
 async function uploadFileToServer(file) {
     const formData = new FormData();
     formData.append('file', file);
@@ -237,10 +255,13 @@ async function uploadFileToServer(file) {
         const result = await res.json();
         if (!res.ok) throw new Error(result.message || 'Upload failed');
         fileId = result.file_id;
-        showStatus(`✅ File uploaded: ${result.record_count} rows`, 'success');
+        footerRows.textContent = '📊 ' + result.record_count + ' rows';
+        footerDate.textContent = '📁 Uploaded: ' + formatDate(new Date());
+
+        showStatus('✅ File uploaded: ' + result.record_count + ' rows', 'success');
 
         if (selectedTemplateId && currentSheet) {
-            await autoMapColumns(fileId);
+            await autoMapColumns();
         } else if (selectedTemplateId && !currentSheet) {
             showStatus('✅ File uploaded. Please select a sheet.', 'info');
         } else {
@@ -259,33 +280,38 @@ function resetUpload() {
     selectedFile = null;
     fileId = null;
     fileInfo.style.display = 'none';
-    uploadArea.style.display = 'block';
+    uploadArea.style.display = 'flex';
     fileInput.value = '';
     mappingPanel.style.display = 'none';
     previewPanel.style.display = 'none';
-    modePanel.style.display = 'none';
-    sheetSelectorContainer.style.display = 'none';
+    modeBar.style.display = 'none';
+    sheetField.style.display = 'none';
     sheetSelector.innerHTML = '';
     currentSheet = null;
     sheetNames = [];
     workbookData = null;
+    footerMeta.style.display = 'none';
     importBtn.disabled = true;
     currentMappings = [];
     excelHeaders = [];
-    excelData = [];
     templateColumns = [];
-    showStatus('', '');
+    showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
+    setBadge('⏳ Select a template');
+    mappingBody.innerHTML = '';
+    previewHeader.innerHTML = '';
+    previewBody.innerHTML = '';
 }
 
 // ---------- AUTO-MAP ----------
-async function autoMapColumns(fileId) {
-    if (!selectedTemplateId || !currentSheet) {
-        showStatus('⚠️ Please select a template and a sheet.', 'error');
+async function autoMapColumns() {
+    if (!selectedTemplateId || !currentSheet || !fileId) {
+        showStatus('⚠️ Please select a template, a sheet, and upload a file.', 'error');
         return;
     }
 
     try {
         showStatus('⏳ Auto‑mapping columns...', 'loading');
+        setBadge('⏳ Mapping...', 'loading');
 
         const res = await fetch(API_BASE + '/api/upload/auto-map', {
             method: 'POST',
@@ -308,78 +334,40 @@ async function autoMapColumns(fileId) {
 
         renderMapping(data.mappings);
         renderPreviewFromData();
-
-        modePanel.style.display = 'block';
-        importBtn.disabled = false;
         populateUniqueIdDropdown();
 
-        showStatus(`✅ Auto‑mapped ${data.auto_mapped_count}/${data.total_columns} columns`, 'success');
+        modeBar.style.display = 'flex';
+        mappingPanel.style.display = 'block';
+        previewPanel.style.display = 'block';
+        importBtn.disabled = false;
+
+        const matched = data.mappings.filter(m => m.is_matched).length;
+        mappingCount.textContent = matched + ' / ' + data.total_columns + ' matched';
+        setBadge('✅ ' + matched + '/' + data.total_columns + ' matched');
+        showStatus('✅ Auto‑mapped ' + matched + '/' + data.total_columns + ' columns', 'success');
+
     } catch (error) {
         console.error('Auto-map error:', error);
+        setBadge('❌ Mapping failed', 'error');
         showStatus('❌ Auto‑mapping failed: ' + error.message, 'error');
     }
-}
-
-// ---------- RENDER PREVIEW FROM WORKBOOK DATA ----------
-function renderPreviewFromData() {
-    if (!workbookData) return;
-    try {
-        const workbook = XLSX.read(workbookData, { type: 'array' });
-        const sheetName = currentSheet || workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-        const headers = jsonData[0] || [];
-        const rows = jsonData.slice(1, 6);
-        renderPreviewTable(headers, rows);
-    } catch (error) {
-        console.error('Preview error:', error);
-    }
-}
-
-// ---------- RENDER PREVIEW TABLE ----------
-function renderPreviewTable(headers, rows) {
-    previewPanel.style.display = 'block';
-    previewHeader.innerHTML = '';
-    headers.forEach(h => {
-        const th = document.createElement('th');
-        th.textContent = h || '—';
-        th.style.padding = '6px 10px';
-        th.style.textAlign = 'left';
-        th.style.borderBottom = '1px solid #e2e8f0';
-        previewHeader.appendChild(th);
-    });
-    previewBody.innerHTML = '';
-    rows.forEach(row => {
-        const tr = document.createElement('tr');
-        row.forEach(cell => {
-            const td = document.createElement('td');
-            td.textContent = cell !== undefined ? cell : '';
-            td.style.padding = '6px 10px';
-            td.style.borderBottom = '1px solid #f0f2f5';
-            tr.appendChild(td);
-        });
-        previewBody.appendChild(tr);
-    });
 }
 
 // ---------- RENDER MAPPING TABLE ----------
 function renderMapping(mappings) {
     mappingBody.innerHTML = '';
-    if (!mappings || mappings.length === 0) {
-        mappingPanel.style.display = 'none';
-        return;
-    }
-    mappingPanel.style.display = 'block';
+    if (!mappings || mappings.length === 0) return;
+
     mappings.forEach(m => {
         const tr = document.createElement('tr');
-        tr.style.borderBottom = '1px solid #f0f2f5';
+
         const td1 = document.createElement('td');
         td1.textContent = m.column_name;
-        td1.style.padding = '8px 10px';
         td1.style.fontWeight = '500';
+        td1.style.whiteSpace = 'nowrap';
+
         const td2 = document.createElement('td');
         const select = document.createElement('select');
-        select.style.cssText = 'padding:4px 8px; border:1px solid #ccc; border-radius:4px; width:100%;';
         const noOpt = document.createElement('option');
         noOpt.value = '';
         noOpt.textContent = '— None —';
@@ -398,26 +386,98 @@ function renderMapping(mappings) {
                 mapping.is_matched = !!this.value;
                 const statusTd = tr.querySelector('td:last-child');
                 if (statusTd) {
-                    statusTd.textContent = mapping.is_matched ? '✅' : '❌';
-                    statusTd.style.color = mapping.is_matched ? '#16a34a' : '#dc2626';
+                    const dot = statusTd.querySelector('.status-dot');
+                    const text = statusTd.querySelector('.status-text');
+                    if (mapping.is_matched) {
+                        dot.className = 'status-dot green';
+                        text.className = 'status-text green';
+                        text.textContent = 'Matched';
+                    } else {
+                        dot.className = 'status-dot red';
+                        text.className = 'status-text red';
+                        text.textContent = 'Not mapped';
+                    }
+                    const matched = currentMappings.filter(mm => mm.is_matched).length;
+                    mappingCount.textContent = matched + ' / ' + currentMappings.length + ' matched';
+                    setBadge('✅ ' + matched + '/' + currentMappings.length + ' matched');
                 }
             }
         });
         td2.appendChild(select);
+
         const td3 = document.createElement('td');
-        td3.textContent = m.is_matched ? '✅' : '❌';
-        td3.style.textAlign = 'center';
-        td3.style.color = m.is_matched ? '#16a34a' : '#dc2626';
+        const badge = document.createElement('span');
+        badge.className = 'type-badge';
+        if (m.data_type === 'Numeric') badge.classList.add('numeric');
+        if (m.data_type === 'Date') badge.classList.add('date');
+        badge.textContent = m.data_type;
+        td3.appendChild(badge);
+
+        const td4 = document.createElement('td');
+        const dot = document.createElement('span');
+        dot.className = 'status-dot';
+        const txt = document.createElement('span');
+        txt.className = 'status-text';
+        if (m.is_matched) {
+            dot.className = 'status-dot green';
+            txt.className = 'status-text green';
+            txt.textContent = 'Matched';
+        } else {
+            dot.className = 'status-dot red';
+            txt.className = 'status-text red';
+            txt.textContent = 'Not mapped';
+        }
+        td4.appendChild(dot);
+        td4.appendChild(txt);
+
         tr.appendChild(td1);
         tr.appendChild(td2);
         tr.appendChild(td3);
+        tr.appendChild(td4);
         mappingBody.appendChild(tr);
     });
 }
 
-// ---------- POPULATE UNIQUE ID DROPDOWN ----------
+// ---------- RENDER PREVIEW ----------
+function renderPreviewFromData() {
+    if (!workbookData) return;
+    try {
+        const workbook = XLSX.read(workbookData, { type: 'array' });
+        const sheetName = currentSheet || workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        const headers = jsonData[0] || [];
+        const rows = jsonData.slice(1, 6);
+
+        previewHeader.innerHTML = '';
+        headers.forEach(h => {
+            const th = document.createElement('th');
+            th.textContent = h || '—';
+            previewHeader.appendChild(th);
+        });
+
+        previewBody.innerHTML = '';
+        rows.forEach(row => {
+            const tr = document.createElement('tr');
+            row.forEach(cell => {
+                const td = document.createElement('td');
+                td.textContent = cell !== undefined ? cell : '';
+                tr.appendChild(td);
+            });
+            previewBody.appendChild(tr);
+        });
+
+        previewCount.textContent = rows.length + ' rows · ' + headers.length + ' columns';
+        previewPanel.style.display = 'block';
+
+    } catch (error) {
+        console.error('Preview error:', error);
+    }
+}
+
+// ---------- UNIQUE ID DROPDOWN ----------
 function populateUniqueIdDropdown() {
-    uniqueIdColumn.innerHTML = '<option value="">-- Select --</option>';
+    uniqueIdColumn.innerHTML = '<option value="">— None —</option>';
     const mappedColumns = currentMappings.filter(m => m.is_matched);
     mappedColumns.forEach(m => {
         const opt = document.createElement('option');
@@ -428,18 +488,13 @@ function populateUniqueIdDropdown() {
     toggleUniqueIdVisibility();
 }
 
-// ---------- TOGGLE UNIQUE ID VISIBILITY ----------
 function toggleUniqueIdVisibility() {
-    if (uploadMode.value === 'update') {
-        uniqueIdContainer.style.display = 'block';
-    } else {
-        uniqueIdContainer.style.display = 'none';
-    }
+    uniqueIdField.style.display = (uploadMode.value === 'update') ? 'block' : 'none';
 }
 uploadMode.addEventListener('change', toggleUniqueIdVisibility);
 
 // ---------- DOWNLOAD TEMPLATE ----------
-downloadTemplateBtn.addEventListener('click', function() {
+downloadBtn.addEventListener('click', function() {
     const templateId = this.dataset.templateId;
     if (!templateId) {
         showStatus('⚠️ Please select a template first', 'error');
@@ -452,9 +507,9 @@ downloadTemplateBtn.addEventListener('click', function() {
 resetBtn.addEventListener('click', function() {
     resetUpload();
     templateDropdown.value = '';
-    templateColumnsPanel.style.display = 'none';
     selectedTemplateId = null;
-    showStatus('🔄 Reset complete', 'success');
+    setBadge('⏳ Select a template');
+    showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
 });
 
 // ---------- IMPORT ----------
@@ -491,8 +546,12 @@ importBtn.addEventListener('click', async function() {
     };
 
     try {
+        isProcessing = true;
+        showSpinner(true);
         importBtn.disabled = true;
-        importBtn.textContent = '⏳ Importing...';
+        showStatus('⏳ Importing data...', 'loading');
+        setBadge('⏳ Importing...', 'loading');
+
         const res = await fetch(API_BASE + '/api/upload/import', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -500,6 +559,7 @@ importBtn.addEventListener('click', async function() {
         });
         const result = await res.json();
         if (!res.ok) throw new Error(result.message || 'Import failed');
+
         if (result.status === 'validation_failed') {
             let errorMsg = '❌ Validation errors:\n';
             result.errors.forEach(err => {
@@ -510,32 +570,25 @@ importBtn.addEventListener('click', async function() {
                 errorMsg += '\n';
             });
             showStatus(errorMsg, 'error');
+            setBadge('❌ Validation failed', 'error');
         } else {
             showStatus(`✅ ${result.message} (${result.imported_count} records)`, 'success');
-            setTimeout(resetUpload, 3000);
+            setBadge('✅ Import complete');
+            setTimeout(resetUpload, 2000);
         }
     } catch (error) {
         showStatus('❌ Import error: ' + error.message, 'error');
+        setBadge('❌ Import failed', 'error');
     } finally {
+        isProcessing = false;
+        showSpinner(false);
         importBtn.disabled = false;
-        importBtn.textContent = '🚀 Upload to Server';
     }
 });
-
-// ---------- STATUS HELPER ----------
-function showStatus(message, type) {
-    uploadStatus.textContent = message;
-    uploadStatus.className = 'upload-status ' + type;
-    uploadStatus.style.display = message ? 'block' : 'none';
-    if (type === 'success' || type === 'error') {
-        setTimeout(() => {
-            uploadStatus.style.display = 'none';
-        }, 6000);
-    }
-}
 
 // ---------- INIT ----------
 window.onload = function() {
     loadTemplates();
     console.log('📤 Upload module loaded');
+    showStatus('Select a template and upload an Excel file to begin.', 'info');
 };
