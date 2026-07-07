@@ -367,6 +367,11 @@ async function saveColumn(keepModalOpen) {
     }
 }
 
+// Prevent accidental form submission (Enter key inside form)
+document.getElementById('columnForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+});
+
 // ---------- BUTTON HANDLERS ----------
 // Save button – close modal after save
 saveBtn.addEventListener('click', function(e) {
