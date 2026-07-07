@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup Module</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">🏢 System Analyst</div>
+            <div class="nav-user">
+                <span>👤 Welcome, Admin</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <header class="module-header">
+            <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
+            <h1>🔧 Setup Module</h1>
+            <p>Configure columns and templates for the system</p>
+        </header>
+
+        <!-- Setup Module Buttons -->
+        <div class="module-grid">
+            <!-- Manage Columns -->
+            <div class="module-card" onclick="window.location.href='/static/columns.html'">
+                <div class="module-icon">📋</div>
+                <h3>Manage Columns</h3>
+                <p>Add, edit, or delete master columns</p>
+                <span class="module-status">Ready</span>
+            </div>
+
+            <!-- Manage Templates -->
+            <div class="module-card" onclick="window.location.href='/static/templates.html'">
+                <div class="module-icon">📄</div>
+                <h3>Manage Templates</h3>
+                <p>Create templates by selecting columns</p>
+                <span class="module-status">Ready</span>
+            </div>
+        </div>
+
+        <!-- Quick Stats -->
+        <section class="quick-stats">
+            <h2>📈 Setup Overview</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Total Columns</span>
+                    <span class="stat-value" id="totalColumns">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Total Templates</span>
+                    <span class="stat-value" id="totalTemplates">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Active Templates</span>
+                    <span class="stat-value" id="activeTemplates">0</span>
+                </div>
+            </div>
+        </section>
+        <!-- Backup / Restore Toolbar -->
+        <section
+            style="background:white; border-radius:16px; padding:20px 25px; box-shadow:0 2px 8px rgba(0,0,0,0.06); margin-top:25px;">
+            <h2 style="font-size:18px; color:#1a1a2e; margin-bottom:10px;">💾 Backup & Restore</h2>
+            <p style="color:#64748b; font-size:14px; margin-bottom:15px;">Export all columns and templates, or import a
+                previously exported JSON file to restore your setup data.</p>
+            <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                <button id="exportBackupBtn" class="btn-upload" style="background:#3b82f6; padding:10px 25px;">📤 Export
+                    Setup Data</button>
+                <button id="importBackupBtn" class="btn-upload" style="background:#f59e0b; padding:10px 25px;">📥 Import
+                    Setup Data</button>
+                <input type="file" id="importFileInput" accept=".json" style="display:none;">
+                <span id="backupStatus" style="font-size:14px; color:#64748b; align-self:center; display:none;"></span>
+            </div>
+        </section>
+    </div>
+
+    <script src="/static/setup.js"></script>
+</body>
+
+</html>

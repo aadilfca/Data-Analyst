@@ -5,9 +5,10 @@ async function loadVerificationStats() {
         const res = await fetch('/api/verification/stats');
         if (res.ok) {
             const stats = await res.json();
+            // Backend returns: { total, pending, approved, rejected }
             document.getElementById('pendingCount').textContent = stats.pending || 0;
-            document.getElementById('verifiedToday').textContent = stats.verified_today || 0;
-            document.getElementById('totalVerified').textContent = stats.total_verified || 0;
+            document.getElementById('verifiedToday').textContent = stats.approved || 0;
+            document.getElementById('totalVerified').textContent = stats.total || 0;
             console.log('✅ Verification stats loaded:', stats);
         } else {
             // Fallback: show 0s
