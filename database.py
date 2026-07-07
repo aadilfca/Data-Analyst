@@ -83,7 +83,7 @@ def init_db():
         )
     ''')
     
-    # Uploaded Files table (unchanged)
+        # Uploaded Files table (unchanged)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS uploaded_files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +92,9 @@ def init_db():
             file_type TEXT,
             record_count INTEGER DEFAULT 0,
             status TEXT DEFAULT 'Pending',
-            upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            client_id INTEGER,
+            FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
         )
     ''')
     
@@ -110,7 +112,7 @@ def init_db():
         )
     ''')
     
-    # Audit Log table (unchanged)
+        # Audit Log table (unchanged)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +124,42 @@ def init_db():
         )
     ''')
     
-    # Insert default columns if master_columns is empty
+        # Clients table – each client represents a separate company/entity
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS clients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_code TEXT UNIQUE NOT NULL,
+            client_name TEXT NOT NULL,
+            industry TEXT,
+            contact_person TEXT,
+            email TEXT,
+            phone TEXT,
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Client Data table – stores imported rows as JSON with indexed extracted columns
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS client_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            template_id INTEGER NOT NULL,
+            upload_id INTEGER NOT NULL,
+            row_data TEXT NOT NULL,               -- JSON object: {"column_name": "value", ...}
+            extract_amount REAL,                   -- extracted from JSON if a numeric column exists
+            extract_date TEXT,                     -- ISO date string (YYYY-MM-DD) if a date column exists
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT DEFAULT 'Analyst',
+            is_deleted INTEGER DEFAULT 0,
+            version INTEGER DEFAULT 1,
+            FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+            FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+            FOREIGN KEY (upload_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
+        )
+    ''')
+    
+        # Insert default columns if master_columns is empty
     existing = conn.execute("SELECT COUNT(*) FROM master_columns").fetchone()[0]
     if existing == 0:
         default_columns = [
@@ -147,6 +184,26 @@ def init_db():
                 (col[0], col[1], col[2])
             )
         print("✅ Inserted default columns")
+    
+    # --- Schema upgrades for existing databases ---
+    # Add client_id column to uploaded_files if missing
+    try:
+        # Check if column already exists
+        cur = conn.execute("PRAGMA table_info(uploaded_files)")
+        columns = [row[1] for row in cur.fetchall()]
+        if 'client_id' not in columns:
+            conn.execute("ALTER TABLE uploaded_files ADD COLUMN client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL")
+            print("✅ Added client_id column to uploaded_files")
+    except Exception as e:
+        print("⚠️ Could not add client_id to uploaded_files:", e)
+    
+    # Create indexes on client_data for performance
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_client ON client_data (client_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_template ON client_data (template_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_upload ON client_data (upload_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_date ON client_data (extract_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_deleted ON client_data (is_deleted)")
+    print("✅ Created indexes on client_data")
     
     conn.commit()
     conn.close()
