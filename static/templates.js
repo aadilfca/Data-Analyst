@@ -1,5 +1,5 @@
 // ==============================================
-// 📄 MANAGE TEMPLATES LOGIC (with pivot table)
+// 📄 MANAGE TEMPLATES LOGIC (Redesigned Popup)
 // ==============================================
 
 const API_BASE = 'http://localhost:5000';
@@ -15,15 +15,23 @@ const modalOverlay = document.getElementById('templateModalOverlay');
 const modal = document.getElementById('templateModal');
 const modalTitle = document.getElementById('modalTitle');
 const templateName = document.getElementById('templateName');
-const columnCheckboxes = document.getElementById('columnCheckboxes');
-const noColumnsModalMsg = document.getElementById('noColumnsMessageModal');
+const searchInput = document.getElementById('columnSearchInput');
+const clearSearchBtn = document.getElementById('clearSearchBtn');
+const searchResults = document.getElementById('searchResults');
+const noColumnsMsg = document.getElementById('noColumnsMessage');
+const noSearchResults = document.getElementById('noSearchResults');
+const selectedColumnsList = document.getElementById('selectedColumnsList');
+const emptySelectedMsg = document.getElementById('emptySelectedMessage');
+const selectedCountBadge = document.getElementById('selectedCountBadge');
 const editId = document.getElementById('editTemplateId');
 const cancelBtn = document.getElementById('cancelTemplateBtn');
+const closeModalBtn = document.getElementById('closeModalBtn');
 const saveBtn = document.getElementById('saveTemplateBtn');
 const modalStatus = document.getElementById('modalStatus');
 
 let editingId = null;
-let allColumns = [];
+let allMasterColumns = [];
+let selectedColumns = []; // Array of {id, name, type}
 
 // ---------- LOAD TEMPLATES ----------
 async function loadTemplates() {
@@ -54,18 +62,15 @@ function renderTemplates(templates) {
         const tr = document.createElement('tr');
         tr.style.borderBottom = '1px solid #e2e8f0';
 
-        // ID
         const tdId = document.createElement('td');
         tdId.textContent = tpl.id;
         tdId.style.padding = '10px 16px';
 
-        // Name
         const tdName = document.createElement('td');
         tdName.textContent = tpl.template_name;
         tdName.style.padding = '10px 16px';
         tdName.style.fontWeight = '500';
 
-        // Columns: display as "1. First Name, 2. Last Name"
         const tdCols = document.createElement('td');
         tdCols.style.padding = '10px 16px';
         const cols = tpl.columns || [];
@@ -73,17 +78,14 @@ function renderTemplates(templates) {
         tdCols.textContent = colDisplay || '—';
         tdCols.title = colDisplay || 'No columns';
 
-        // Created By
         const tdBy = document.createElement('td');
         tdBy.textContent = tpl.created_by || 'Admin';
         tdBy.style.padding = '10px 16px';
 
-        // Created Date
         const tdDate = document.createElement('td');
         tdDate.style.padding = '10px 16px';
         tdDate.textContent = window.formatDate(tpl.created_date);
 
-        // Active
         const tdActive = document.createElement('td');
         tdActive.style.padding = '10px 16px';
         tdActive.style.textAlign = 'center';
@@ -92,12 +94,10 @@ function renderTemplates(templates) {
         activeSpan.style.fontSize = '16px';
         tdActive.appendChild(activeSpan);
 
-        // Actions
         const tdActions = document.createElement('td');
         tdActions.style.padding = '10px 16px';
         tdActions.style.textAlign = 'center';
 
-        // Preview button (Eye)
         const previewBtn = document.createElement('button');
         previewBtn.textContent = '👁️';
         previewBtn.style.background = 'none';
@@ -107,7 +107,6 @@ function renderTemplates(templates) {
         previewBtn.title = 'Preview and edit columns';
         previewBtn.addEventListener('click', () => openPreviewModal(tpl));
 
-        // Edit button
         const editBtn = document.createElement('button');
         editBtn.textContent = '✏️';
         editBtn.style.background = 'none';
@@ -118,7 +117,6 @@ function renderTemplates(templates) {
         editBtn.title = 'Edit template';
         editBtn.addEventListener('click', () => openEditModal(tpl));
 
-        // Delete button
         const delBtn = document.createElement('button');
         delBtn.textContent = '🗑️';
         delBtn.style.background = 'none';
@@ -144,13 +142,13 @@ function renderTemplates(templates) {
     });
 }
 
-// ---------- LOAD ACTIVE COLUMNS FOR CHECKBOXES ----------
-async function loadColumnsForCheckboxes() {
+// ---------- LOAD MASTER COLUMNS ----------
+async function loadMasterColumns() {
     try {
         const res = await fetch(API_BASE + '/api/columns');
         if (!res.ok) throw new Error('Failed to fetch columns');
         const columns = await res.json();
-        allColumns = columns;
+        allMasterColumns = columns;
         return columns;
     } catch (error) {
         console.log('⚠️ Error loading columns:', error.message);
@@ -175,30 +173,217 @@ function showModalStatus(message, type) {
     modalStatus.style.background = type === 'error' ? '#ffebee' : '#e8f5e9';
     modalStatus.style.color = type === 'error' ? '#c62828' : '#2e7d32';
     modalStatus.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
+    setTimeout(() => {
+        modalStatus.style.display = 'none';
+    }, 4000);
+}
+
+// ---------- RENDER SEARCH RESULTS ----------
+function renderSearchResults(query) {
+    const trimmed = query.trim().toLowerCase();
+    searchResults.innerHTML = '';
+    searchResults.style.display = 'none';
+    noSearchResults.style.display = 'none';
+
+    if (!trimmed) {
+        return;
+    }
+
+    const filtered = allMasterColumns.filter(col =>
+        col.column_name.toLowerCase().includes(trimmed) ||
+        (col.category && col.category.toLowerCase().includes(trimmed))
+    );
+
+    if (filtered.length === 0) {
+        noSearchResults.style.display = 'block';
+        return;
+    }
+
+    searchResults.style.display = 'block';
+    filtered.forEach(col => {
+        const isSelected = selectedColumns.some(c => c.id === col.id);
+        const div = document.createElement('div');
+        div.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid #f0f2f5;';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = col.column_name;
+        nameSpan.style.fontSize = '14px';
+        nameSpan.style.fontWeight = '500';
+
+        const actionBtn = document.createElement('button');
+        if (isSelected) {
+            actionBtn.textContent = '✅ Selected';
+            actionBtn.style.cssText = 'background:#e8f5e9; color:#2e7d32; border:1px solid #a5d6a7; padding:4px 14px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; display:flex; align-items:center; gap:4px;';
+            // Add tiny cross to deselect
+            const cross = document.createElement('span');
+            cross.textContent = '✕';
+            cross.style.cssText = 'margin-left:6px; font-size:14px; color:#c62828; cursor:pointer;';
+            cross.addEventListener('click', function(e) {
+                e.stopPropagation();
+                removeFromSelected(col.id);
+            });
+            actionBtn.appendChild(cross);
+        } else {
+            actionBtn.textContent = 'Select';
+            actionBtn.style.cssText = 'background:#3b82f6; color:white; border:none; padding:4px 14px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:500; transition:background 0.2s;';
+        }
+
+        actionBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (selectedColumns.some(c => c.id === col.id)) {
+                removeFromSelected(col.id);
+            } else {
+                addToSelected(col);
+            }
+        });
+
+        div.appendChild(nameSpan);
+        div.appendChild(actionBtn);
+        searchResults.appendChild(div);
+    });
+}
+
+// ---------- ADD TO SELECTED ----------
+function addToSelected(col) {
+    if (selectedColumns.some(c => c.id === col.id)) return;
+    selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type });
+    renderSelectedColumns();
+    renderSearchResults(searchInput.value);
+    updateSelectedCount();
+}
+
+// ---------- REMOVE FROM SELECTED ----------
+function removeFromSelected(colId) {
+    selectedColumns = selectedColumns.filter(c => c.id !== colId);
+    renderSelectedColumns();
+    renderSearchResults(searchInput.value);
+    updateSelectedCount();
+}
+
+// ---------- RENDER SELECTED COLUMNS ----------
+function renderSelectedColumns() {
+    selectedColumnsList.innerHTML = '';
+    if (selectedColumns.length === 0) {
+        emptySelectedMsg.style.display = 'block';
+        return;
+    }
+    emptySelectedMsg.style.display = 'none';
+
+    selectedColumns.forEach((col, index) => {
+        const div = document.createElement('div');
+        div.className = 'selected-item';
+        div.dataset.id = col.id;
+        div.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 10px; border-bottom:1px solid #f0f2f5; background:white; border-radius:6px; margin-bottom:4px;';
+
+        // Drag handle
+        const handle = document.createElement('span');
+        handle.textContent = '☰';
+        handle.style.cssText = 'cursor:grab; color:#94a3b8; font-size:16px; user-select:none; padding:0 4px;';
+        div.appendChild(handle);
+
+        // Serial number
+        const num = document.createElement('span');
+        num.textContent = index + 1;
+        num.style.cssText = 'font-weight:600; color:#64748b; min-width:24px; font-size:13px;';
+        div.appendChild(num);
+
+        // Name
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = col.name;
+        nameSpan.style.cssText = 'flex:1; font-size:14px; font-weight:500; color:#1a1a2e;';
+        div.appendChild(nameSpan);
+
+        // Remove button
+        const removeBtn = document.createElement('button');
+        removeBtn.textContent = '✕';
+        removeBtn.style.cssText = 'background:none; border:none; color:#dc2626; cursor:pointer; font-size:16px; padding:0 6px;';
+        removeBtn.title = 'Remove from selection';
+        removeBtn.addEventListener('click', function() {
+            removeFromSelected(col.id);
+        });
+        div.appendChild(removeBtn);
+
+        selectedColumnsList.appendChild(div);
+    });
+
+    // Initialize Sortable if available
+    if (typeof Sortable !== 'undefined' && selectedColumns.length > 1) {
+        new Sortable(selectedColumnsList, {
+            handle: '.selected-item span:first-child',
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            dragClass: 'sortable-drag',
+            onEnd: function() {
+                // Rebuild selectedColumns array from DOM order
+                const items = selectedColumnsList.querySelectorAll('.selected-item');
+                const newOrder = [];
+                items.forEach(item => {
+                    const id = parseInt(item.dataset.id);
+                    const col = selectedColumns.find(c => c.id === id);
+                    if (col) newOrder.push(col);
+                });
+                selectedColumns = newOrder;
+                // Update serial numbers
+                const nums = selectedColumnsList.querySelectorAll('.selected-item span:nth-child(2)');
+                nums.forEach((num, idx) => {
+                    num.textContent = idx + 1;
+                });
+                updateSelectedCount();
+            }
+        });
+    }
+}
+
+// ---------- UPDATE SELECTED COUNT ----------
+function updateSelectedCount() {
+    const count = selectedColumns.length;
+    selectedCountBadge.textContent = count + ' selected';
+    selectedCountBadge.style.background = count > 0 ? '#e8f5e9' : '#f1f3f4';
+    selectedCountBadge.style.color = count > 0 ? '#2e7d32' : '#94a3b8';
 }
 
 // ---------- MODAL OPEN / CLOSE ----------
 async function openModal(title, templateData = null) {
+    // Reset state
+    selectedColumns = [];
+    searchInput.value = '';
+    searchResults.style.display = 'none';
+    noSearchResults.style.display = 'none';
+    modalStatus.style.display = 'none';
+
     modalTitle.textContent = title;
     modalOverlay.style.display = 'block';
     modal.style.display = 'block';
-    modalStatus.style.display = 'none';
     document.body.style.overflow = 'hidden';
 
-    const columns = await loadColumnsForCheckboxes();
+    // Load master columns
+    const columns = await loadMasterColumns();
+    if (columns.length === 0) {
+        noColumnsMsg.style.display = 'block';
+        searchInput.disabled = true;
+    } else {
+        noColumnsMsg.style.display = 'none';
+        searchInput.disabled = false;
+        searchInput.focus();
+    }
 
     if (templateData) {
         editingId = templateData.id;
         templateName.value = templateData.template_name;
         editId.value = templateData.id;
-        // Pre-select columns based on the template's columns (ordered)
-        const selectedIds = (templateData.columns || []).map(c => c.id);
-        window.renderColumnCheckboxes(columnCheckboxes, columns, selectedIds);
+        // Pre-select columns from template
+        const cols = templateData.columns || [];
+        cols.forEach(col => {
+            selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type });
+        });
+        renderSelectedColumns();
+        updateSelectedCount();
     } else {
         editingId = null;
         templateName.value = '';
         editId.value = '';
-        window.renderColumnCheckboxes(columnCheckboxes, columns, []);
+        renderSelectedColumns();
+        updateSelectedCount();
     }
 }
 
@@ -208,8 +393,33 @@ function closeModal() {
     document.body.style.overflow = '';
     editingId = null;
     modalStatus.style.display = 'none';
+    searchInput.value = '';
+    searchResults.style.display = 'none';
+    noSearchResults.style.display = 'none';
 }
 
+// ---------- SEARCH INPUT HANDLING ----------
+searchInput.addEventListener('input', function() {
+    const val = this.value;
+    if (val.trim()) {
+        clearSearchBtn.style.display = 'block';
+        renderSearchResults(val);
+    } else {
+        clearSearchBtn.style.display = 'none';
+        searchResults.style.display = 'none';
+        noSearchResults.style.display = 'none';
+    }
+});
+
+clearSearchBtn.addEventListener('click', function() {
+    searchInput.value = '';
+    searchInput.focus();
+    this.style.display = 'none';
+    searchResults.style.display = 'none';
+    noSearchResults.style.display = 'none';
+});
+
+// ---------- MODAL CONTROL ----------
 document.getElementById('addTemplateBtn').addEventListener('click', () => {
     openModal('Create New Template');
 });
@@ -219,6 +429,7 @@ function openEditModal(template) {
 }
 
 cancelBtn.addEventListener('click', closeModal);
+closeModalBtn.addEventListener('click', closeModal);
 modalOverlay.addEventListener('click', closeModal);
 
 // ---------- FORM SUBMIT (SAVE) ----------
@@ -231,20 +442,12 @@ document.getElementById('templateForm').addEventListener('submit', async functio
         return;
     }
 
-    // Get selected column IDs in the order they appear in the checkbox list (which is the display order)
-    const checkboxItems = columnCheckboxes.querySelectorAll('.checkbox-item');
-    const selectedIds = [];
-    checkboxItems.forEach(item => {
-        const cb = item.querySelector('input[type="checkbox"]');
-        if (cb && cb.checked) {
-            selectedIds.push(parseInt(cb.value));
-        }
-    });
-
-    if (selectedIds.length === 0) {
+    if (selectedColumns.length === 0) {
         showModalStatus('⚠️ Please select at least one column.', 'error');
         return;
     }
+
+    const selectedIds = selectedColumns.map(c => c.id);
 
     try {
         let url = API_BASE + '/api/templates';
@@ -305,11 +508,10 @@ async function confirmDelete(id, name) {
 }
 
 // ==============================================
-// PREVIEW MODAL (Interactive)
+// PREVIEW MODAL (unchanged – for completeness)
 // ==============================================
 
 function openPreviewModal(tpl) {
-    // Fetch fresh column data for this template
     fetch(API_BASE + '/api/templates/' + tpl.id + '/columns')
         .then(res => {
             if (!res.ok) throw new Error('Failed to load template columns');
@@ -324,16 +526,14 @@ function openPreviewModal(tpl) {
 }
 
 function renderPreviewModal(tpl, columns) {
-    // Build the preview modal with interactive list
     const overlay = document.createElement('div');
     overlay.id = 'previewOverlay';
     overlay.style.cssText = 'display:block; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:999;';
 
     const modal = document.createElement('div');
     modal.id = 'previewModal';
-    modal.style.cssText = 'display:block; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:30px; z-index:1000; min-width:600px; max-width:800px; max-height:80vh; overflow-y:auto; border-radius:8px; box-shadow:0 10px 40px rgba(0,0,0,0.3);';
+    modal.style.cssText = 'display:block; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:30px; z-index:1000; min-width:600px; max-width:800px; max-height:80vh; overflow-y:auto; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,0.3);';
 
-    // Build the list
     let listHtml = columns.map((col, index) => `
         <div class="preview-row" data-column-id="${col.column_id}" data-mapping-id="${col.mapping_id}" style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #f0f2f5;">
             <span class="drag-handle" style="cursor:grab; color:#94a3b8; font-size:18px; user-select:none;">☰</span>
@@ -355,7 +555,7 @@ function renderPreviewModal(tpl, columns) {
         </div>
         <div style="margin-top:15px; display:flex; justify-content:space-between; align-items:center;">
             <span id="previewCount" style="color:#94a3b8; font-size:14px;">${columns.length} columns</span>
-            <button id="saveOrderBtn" style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:4px; cursor:pointer;">Save Order</button>
+            <button id="saveOrderBtn" style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:8px; cursor:pointer; font-weight:500;">Save Order</button>
         </div>
         <div id="previewStatus" style="margin-top:10px; padding:8px; border-radius:4px; display:none;"></div>
     `;
@@ -363,7 +563,6 @@ function renderPreviewModal(tpl, columns) {
     document.body.appendChild(overlay);
     document.body.appendChild(modal);
 
-    // Close functions
     function closePreview() {
         if (document.body.contains(overlay)) document.body.removeChild(overlay);
         if (document.body.contains(modal)) document.body.removeChild(modal);
@@ -371,7 +570,6 @@ function renderPreviewModal(tpl, columns) {
     document.getElementById('closePreviewBtn').addEventListener('click', closePreview);
     overlay.addEventListener('click', closePreview);
 
-    // Initialize SortableJS on the list
     const listContainer = document.getElementById('previewList');
     if (typeof Sortable !== 'undefined') {
         new Sortable(listContainer, {
@@ -379,24 +577,18 @@ function renderPreviewModal(tpl, columns) {
             animation: 150,
             ghostClass: 'sortable-ghost',
             onEnd: function() {
-                // Update serial numbers
                 updatePreviewSerialNumbers(listContainer);
-                // Update count
                 updatePreviewCount(listContainer);
             }
         });
-    } else {
-        console.warn('SortableJS not loaded; drag disabled.');
     }
 
-    // Remove column button: delete mapping and remove row
     listContainer.querySelectorAll('.remove-column-btn').forEach(btn => {
         btn.addEventListener('click', function() {
             const row = this.closest('.preview-row');
             const columnId = row.dataset.columnId;
             const templateId = tpl.id;
             if (!confirm('Remove this column from the template?')) return;
-            // Call API to delete mapping
             fetch(API_BASE + '/api/templates/' + templateId + '/columns/' + columnId, {
                 method: 'DELETE'
             })
@@ -407,7 +599,6 @@ function renderPreviewModal(tpl, columns) {
                     updatePreviewSerialNumbers(listContainer);
                     updatePreviewCount(listContainer);
                     showPreviewStatus('✅ Column removed', 'success');
-                    // Reload templates to update the list view
                     loadTemplates();
                 }
             })
@@ -417,7 +608,6 @@ function renderPreviewModal(tpl, columns) {
         });
     });
 
-    // Save Order button: send current order to server
     document.getElementById('saveOrderBtn').addEventListener('click', function() {
         const rows = listContainer.querySelectorAll('.preview-row');
         const columnIds = Array.from(rows).map(row => parseInt(row.dataset.columnId));
@@ -434,7 +624,6 @@ function renderPreviewModal(tpl, columns) {
         .then(result => {
             if (result.message) {
                 showPreviewStatus('✅ Order saved successfully', 'success');
-                // Reload templates to update the list view
                 loadTemplates();
             }
         })
@@ -443,7 +632,6 @@ function renderPreviewModal(tpl, columns) {
         });
     });
 
-    // Helper: update serial numbers
     function updatePreviewSerialNumbers(container) {
         const rows = container.querySelectorAll('.preview-row');
         rows.forEach((row, idx) => {
@@ -469,21 +657,14 @@ function renderPreviewModal(tpl, columns) {
     }
 }
 
-// ---------- INITIAL LOAD ----------
-window.onload = function() {
-    loadTemplates();
-    console.log('📄 Templates Manager loaded (pivot table)');
-};
-// ---------- ESC KEY TO CLOSE TEMPLATE & PREVIEW MODALS ----------
+// ---------- ESC KEY HANDLER ----------
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-        // Close template modal
         const templateModal = document.getElementById('templateModal');
         if (templateModal && templateModal.style.display === 'block') {
             closeModal();
             return;
         }
-        // Close preview modal
         const previewModal = document.getElementById('previewModal');
         if (previewModal) {
             const closeBtn = document.getElementById('closePreviewBtn');
@@ -492,3 +673,9 @@ document.addEventListener('keydown', function(e) {
         }
     }
 });
+
+// ---------- INITIAL LOAD ----------
+window.onload = function() {
+    loadTemplates();
+    console.log('📄 Templates Manager loaded (redesigned)');
+};
