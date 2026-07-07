@@ -1,48 +1,54 @@
 // ================================================================
-// 📤 UPLOAD MODULE – FINAL, ERROR-FREE
+// 📤 UPLOAD MODULE – FIXED (safe null checks)
 // ================================================================
 
 const API_BASE = 'http://localhost:5000';
 
-// DOM refs
-const templateDropdown = document.getElementById('templateDropdown');
-const sheetSelector = document.getElementById('sheetSelector');
-const sheetField = document.getElementById('sheetField');
-const statusBadge = document.getElementById('statusBadge');
+// DOM refs with fallback
+function getElement(id) {
+    const el = document.getElementById(id);
+    if (!el) console.warn('⚠️ Element not found:', id);
+    return el;
+}
 
-const uploadArea = document.getElementById('uploadArea');
-const fileInput = document.getElementById('fileInput');
-const fileInfo = document.getElementById('fileInfo');
-const fileName = document.getElementById('fileName');
-const fileSize = document.getElementById('fileSize');
-const clearBtn = document.getElementById('clearBtn');
+const templateDropdown = getElement('templateDropdown');
+const sheetSelector = getElement('sheetSelector');
+const sheetField = getElement('sheetField');
+const statusBadge = getElement('statusBadge');
 
-const mappingPanel = document.getElementById('mappingPanel');
-const mappingBody = document.getElementById('mappingBody');
-const mappingCount = document.getElementById('mappingCount');
+const uploadArea = getElement('uploadArea');
+const fileInput = getElement('fileInput');
+const fileInfo = getElement('fileInfo');
+const fileName = getElement('fileName');
+const fileSize = getElement('fileSize');
+const clearBtn = getElement('clearBtn');
 
-const previewPanel = document.getElementById('previewPanel');
-const previewHeader = document.getElementById('previewHeader');
-const previewBody = document.getElementById('previewBody');
-const previewCount = document.getElementById('previewCount');
+const mappingPanel = getElement('mappingPanel');
+const mappingBody = getElement('mappingBody');
+const mappingCount = getElement('mappingCount');
 
-const modeActions = document.getElementById('modeActions');
-const uploadMode = document.getElementById('uploadMode');
-const uniqueIdField = document.getElementById('uniqueIdField');
-const uniqueIdColumn = document.getElementById('uniqueIdColumn');
+const previewPanel = getElement('previewPanel');
+const previewHeader = getElement('previewHeader');
+const previewBody = getElement('previewBody');
+const previewCount = getElement('previewCount');
 
-const downloadBtn = document.getElementById('downloadBtn');
-const importBtn = document.getElementById('importBtn');
-const resetBtn = document.getElementById('resetBtn');
+const modeActions = getElement('modeActions');
+const uploadMode = getElement('uploadMode');
+const uniqueIdField = getElement('uniqueIdField');
+const uniqueIdColumn = getElement('uniqueIdColumn');
 
-const statusBar = document.getElementById('statusBar');
-const statusMessage = document.getElementById('statusMessage');
-const statusExtra = document.getElementById('statusExtra');
+const downloadBtn = getElement('downloadBtn');
+const importBtn = getElement('importBtn');
+const resetBtn = getElement('resetBtn');
 
-const footerMeta = document.getElementById('footerMeta');
-const footerFile = document.getElementById('footerFile');
-const footerRows = document.getElementById('footerRows');
-const footerDate = document.getElementById('footerDate');
+const statusBar = getElement('statusBar');
+const statusMessage = getElement('statusMessage');
+const statusExtra = getElement('statusExtra');
+
+const footerMeta = getElement('footerMeta');
+const footerFile = getElement('footerFile');
+const footerRows = getElement('footerRows');
+const footerDate = getElement('footerDate');
 
 // State
 let selectedTemplateId = null;
@@ -58,18 +64,24 @@ let isProcessing = false;
 
 // Helpers
 function showStatus(msg, type = 'info', extra = '') {
+    if (!statusBar || !statusMessage) {
+        console.log('📢 Status:', msg, type, extra);
+        return;
+    }
     statusMessage.textContent = msg;
-    statusExtra.textContent = extra;
+    if (statusExtra) statusExtra.textContent = extra || '';
     statusBar.className = 'status-bar ' + type;
     statusBar.style.display = 'flex';
 }
 
 function setBadge(text, type = '') {
+    if (!statusBadge) return;
     statusBadge.textContent = text;
     statusBadge.className = 'badge' + (type ? ' ' + type : '');
 }
 
 function showSpinner(show) {
+    if (!importBtn) return;
     if (show) {
         importBtn.innerHTML = '<span class="spinner"></span> Processing...';
         importBtn.disabled = true;
@@ -96,13 +108,15 @@ async function loadTemplates() {
         const res = await fetch(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to load templates');
         const templates = await res.json();
-        templateDropdown.innerHTML = '<option value="">-- Select Template --</option>';
-        templates.forEach(tpl => {
-            const opt = document.createElement('option');
-            opt.value = tpl.id;
-            opt.textContent = tpl.template_name;
-            templateDropdown.appendChild(opt);
-        });
+        if (templateDropdown) {
+            templateDropdown.innerHTML = '<option value="">-- Select Template --</option>';
+            templates.forEach(tpl => {
+                const opt = document.createElement('option');
+                opt.value = tpl.id;
+                opt.textContent = tpl.template_name;
+                templateDropdown.appendChild(opt);
+            });
+        }
         setBadge('✅ ' + templates.length + ' templates loaded');
     } catch (error) {
         console.error('Error loading templates:', error);
@@ -112,69 +126,76 @@ async function loadTemplates() {
 }
 
 // ---------- TEMPLATE SELECTION ----------
-templateDropdown.addEventListener('change', async function() {
-    const id = this.value;
-    if (!id) {
-        selectedTemplateId = null;
-        mappingPanel.style.display = 'none';
-        previewPanel.style.display = 'none';
-        modeActions.style.display = 'none';
-        sheetField.style.display = 'none';
-        importBtn.disabled = true;
-        setBadge('⏳ Select a template');
-        showStatus('Select a template and upload an Excel file to begin.', 'info');
-        return;
-    }
-    selectedTemplateId = parseInt(id);
-    setBadge('⏳ Loading template...', 'loading');
-
-    try {
-        const res = await fetch(API_BASE + `/api/templates/${id}/upload-columns`);
-        if (!res.ok) throw new Error('Failed to fetch template columns');
-        const data = await res.json();
-        templateColumns = data.columns;
-        downloadBtn.dataset.templateId = id;
-        downloadBtn.disabled = false;
-        setBadge('✅ Template loaded: ' + data.total_columns + ' columns');
-
-        if (fileId && currentSheet) {
-            await autoMapColumns();
-        } else if (fileId && !currentSheet) {
-            showStatus('✅ Template loaded. Please select a sheet.', 'info');
-        } else {
-            showStatus('✅ Template loaded. Upload an Excel file to begin mapping.', 'success');
+if (templateDropdown) {
+    templateDropdown.addEventListener('change', async function() {
+        const id = this.value;
+        if (!id) {
+            selectedTemplateId = null;
+            if (mappingPanel) mappingPanel.style.display = 'none';
+            if (previewPanel) previewPanel.style.display = 'none';
+            if (modeActions) modeActions.style.display = 'none';
+            if (sheetField) sheetField.style.display = 'none';
+            if (importBtn) importBtn.disabled = true;
+            setBadge('⏳ Select a template');
+            showStatus('Select a template and upload an Excel file to begin.', 'info');
+            return;
         }
-    } catch (error) {
-        console.error('Error loading template columns:', error);
-        setBadge('❌ Failed to load columns', 'error');
-        showStatus('❌ Failed to load template columns: ' + error.message, 'error');
-    }
-});
+        selectedTemplateId = parseInt(id);
+        setBadge('⏳ Loading template...', 'loading');
+
+        try {
+            const res = await fetch(API_BASE + `/api/templates/${id}/upload-columns`);
+            if (!res.ok) throw new Error('Failed to fetch template columns');
+            const data = await res.json();
+            templateColumns = data.columns;
+            if (downloadBtn) {
+                downloadBtn.dataset.templateId = id;
+                downloadBtn.disabled = false;
+            }
+            setBadge('✅ Template loaded: ' + data.total_columns + ' columns');
+
+            if (fileId && currentSheet) {
+                await autoMapColumns();
+            } else if (fileId && !currentSheet) {
+                showStatus('✅ Template loaded. Please select a sheet.', 'info');
+            } else {
+                showStatus('✅ Template loaded. Upload an Excel file to begin mapping.', 'success');
+            }
+        } catch (error) {
+            console.error('Error loading template columns:', error);
+            setBadge('❌ Failed to load columns', 'error');
+            showStatus('❌ Failed to load template columns: ' + error.message, 'error');
+        }
+    });
+}
 
 // ---------- FILE UPLOAD ----------
-uploadArea.addEventListener('click', () => fileInput.click());
+if (uploadArea) {
+    uploadArea.addEventListener('click', () => fileInput && fileInput.click());
+    uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadArea.classList.add('dragover');
+    });
+    uploadArea.addEventListener('dragleave', () => {
+        uploadArea.classList.remove('dragover');
+    });
+    uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadArea.classList.remove('dragover');
+        if (e.dataTransfer.files.length) {
+            handleFile(e.dataTransfer.files[0]);
+        }
+    });
+}
 
-uploadArea.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    uploadArea.classList.add('dragover');
-});
-uploadArea.addEventListener('dragleave', () => {
-    uploadArea.classList.remove('dragover');
-});
-uploadArea.addEventListener('drop', (e) => {
-    e.preventDefault();
-    uploadArea.classList.remove('dragover');
-    if (e.dataTransfer.files.length) {
-        handleFile(e.dataTransfer.files[0]);
-    }
-});
-
-fileInput.addEventListener('change', function(e) {
-    if (this.files && this.files.length > 0) {
-        handleFile(this.files[0]);
-        this.value = '';
-    }
-});
+if (fileInput) {
+    fileInput.addEventListener('change', function(e) {
+        if (this.files && this.files.length > 0) {
+            handleFile(this.files[0]);
+            this.value = '';
+        }
+    });
+}
 
 async function handleFile(file) {
     const validTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
@@ -184,12 +205,12 @@ async function handleFile(file) {
     }
 
     selectedFile = file;
-    fileName.textContent = file.name;
-    fileSize.textContent = formatFileSize(file.size);
-    fileInfo.style.display = 'flex';
-    uploadArea.style.display = 'none';
-    footerMeta.style.display = 'flex';
-    footerFile.textContent = '📄 ' + file.name;
+    if (fileName) fileName.textContent = file.name;
+    if (fileSize) fileSize.textContent = formatFileSize(file.size);
+    if (fileInfo) fileInfo.style.display = 'flex';
+    if (uploadArea) uploadArea.style.display = 'none';
+    if (footerMeta) footerMeta.style.display = 'flex';
+    if (footerFile) footerFile.textContent = '📄 ' + file.name;
 
     const reader = new FileReader();
     reader.onload = function(e) {
@@ -206,8 +227,8 @@ async function handleFile(file) {
 
             populateSheetSelector(sheetNames);
             currentSheet = sheetNames[0];
-            sheetSelector.value = currentSheet;
-            sheetField.style.display = 'block';
+            if (sheetSelector) sheetSelector.value = currentSheet;
+            if (sheetField) sheetField.style.display = 'block';
 
             uploadFileToServer(file);
 
@@ -221,6 +242,7 @@ async function handleFile(file) {
 
 // ---------- SHEET SELECTOR ----------
 function populateSheetSelector(sheets) {
+    if (!sheetSelector) return;
     sheetSelector.innerHTML = '<option value="">-- Select Sheet --</option>';
     sheets.forEach(name => {
         const opt = document.createElement('option');
@@ -228,20 +250,22 @@ function populateSheetSelector(sheets) {
         opt.textContent = name;
         sheetSelector.appendChild(opt);
     });
-    sheetField.style.display = 'block';
+    if (sheetField) sheetField.style.display = 'block';
 }
 
-sheetSelector.addEventListener('change', function() {
-    currentSheet = this.value;
-    if (currentSheet && selectedTemplateId && fileId) {
-        autoMapColumns();
-        showStatus('📄 Sheet changed to "' + currentSheet + '". Re‑mapping...', 'info');
-    } else if (currentSheet && selectedTemplateId && !fileId) {
-        if (selectedFile) {
-            uploadFileToServer(selectedFile);
+if (sheetSelector) {
+    sheetSelector.addEventListener('change', function() {
+        currentSheet = this.value;
+        if (currentSheet && selectedTemplateId && fileId) {
+            autoMapColumns();
+            showStatus('📄 Sheet changed to "' + currentSheet + '". Re‑mapping...', 'info');
+        } else if (currentSheet && selectedTemplateId && !fileId) {
+            if (selectedFile) {
+                uploadFileToServer(selectedFile);
+            }
         }
-    }
-});
+    });
+}
 
 // ---------- UPLOAD TO SERVER ----------
 async function uploadFileToServer(file) {
@@ -255,8 +279,8 @@ async function uploadFileToServer(file) {
         const result = await res.json();
         if (!res.ok) throw new Error(result.message || 'Upload failed');
         fileId = result.file_id;
-        footerRows.textContent = '📊 ' + result.record_count + ' rows';
-        footerDate.textContent = '📁 Uploaded: ' + formatDate(new Date());
+        if (footerRows) footerRows.textContent = '📊 ' + result.record_count + ' rows';
+        if (footerDate) footerDate.textContent = '📁 Uploaded: ' + formatDate(new Date());
 
         showStatus('✅ File uploaded: ' + result.record_count + ' rows', 'success');
 
@@ -274,32 +298,34 @@ async function uploadFileToServer(file) {
 }
 
 // ---------- CLEAR FILE ----------
-clearBtn.addEventListener('click', resetUpload);
+if (clearBtn) {
+    clearBtn.addEventListener('click', resetUpload);
+}
 
 function resetUpload() {
     selectedFile = null;
     fileId = null;
-    fileInfo.style.display = 'none';
-    uploadArea.style.display = 'flex';
-    fileInput.value = '';
-    mappingPanel.style.display = 'none';
-    previewPanel.style.display = 'none';
-    modeActions.style.display = 'none';
-    sheetField.style.display = 'none';
-    sheetSelector.innerHTML = '';
+    if (fileInfo) fileInfo.style.display = 'none';
+    if (uploadArea) uploadArea.style.display = 'flex';
+    if (fileInput) fileInput.value = '';
+    if (mappingPanel) mappingPanel.style.display = 'none';
+    if (previewPanel) previewPanel.style.display = 'none';
+    if (modeActions) modeActions.style.display = 'none';
+    if (sheetField) sheetField.style.display = 'none';
+    if (sheetSelector) sheetSelector.innerHTML = '';
     currentSheet = null;
     sheetNames = [];
     workbookData = null;
-    footerMeta.style.display = 'none';
-    importBtn.disabled = true;
+    if (footerMeta) footerMeta.style.display = 'none';
+    if (importBtn) importBtn.disabled = true;
     currentMappings = [];
     excelHeaders = [];
     templateColumns = [];
     showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     setBadge('⏳ Select a template');
-    mappingBody.innerHTML = '';
-    previewHeader.innerHTML = '';
-    previewBody.innerHTML = '';
+    if (mappingBody) mappingBody.innerHTML = '';
+    if (previewHeader) previewHeader.innerHTML = '';
+    if (previewBody) previewBody.innerHTML = '';
 }
 
 // ---------- AUTO-MAP ----------
@@ -336,13 +362,13 @@ async function autoMapColumns() {
         renderPreviewFromData();
         populateUniqueIdDropdown();
 
-        modeActions.style.display = 'block';
-        mappingPanel.style.display = 'block';
-        previewPanel.style.display = 'block';
-        importBtn.disabled = false;
+        if (modeActions) modeActions.style.display = 'block';
+        if (mappingPanel) mappingPanel.style.display = 'block';
+        if (previewPanel) previewPanel.style.display = 'flex';
+        if (importBtn) importBtn.disabled = false;
 
         const matched = data.mappings.filter(m => m.is_matched).length;
-        mappingCount.textContent = matched + ' / ' + data.total_columns + ' matched';
+        if (mappingCount) mappingCount.textContent = matched + ' / ' + data.total_columns + ' matched';
         setBadge('✅ ' + matched + '/' + data.total_columns + ' matched');
         showStatus('✅ Auto‑mapped ' + matched + '/' + data.total_columns + ' columns', 'success');
 
@@ -353,25 +379,26 @@ async function autoMapColumns() {
     }
 }
 
-// ---------- RENDER MAPPING TABLE (ERROR-FREE) ----------
+// ---------- RENDER MAPPING TABLE ----------
 function renderMapping(mappings) {
+    if (!mappingBody) return;
     mappingBody.innerHTML = '';
     if (!mappings || mappings.length === 0) {
-        mappingPanel.style.display = 'none';
+        if (mappingPanel) mappingPanel.style.display = 'none';
         return;
     }
 
     mappings.forEach(m => {
         const tr = document.createElement('tr');
 
-        // 1. Template Column
+        // 1. Template
         const td1 = document.createElement('td');
         td1.textContent = m.column_name;
         td1.style.fontWeight = '500';
         td1.style.whiteSpace = 'nowrap';
         tr.appendChild(td1);
 
-        // 2. Excel Column (dropdown)
+        // 2. Excel Column
         const td2 = document.createElement('td');
         const select = document.createElement('select');
         const noOpt = document.createElement('option');
@@ -385,31 +412,26 @@ function renderMapping(mappings) {
             if (h === m.excel_column) opt.selected = true;
             select.appendChild(opt);
         });
-        // Event listener – uses closure on m and tr
         select.addEventListener('change', function() {
             const mapping = currentMappings.find(mm => mm.column_id === m.column_id);
             if (mapping) {
                 mapping.excel_column = this.value || null;
                 mapping.is_matched = !!this.value;
-                // Update status cell (the 4th td)
-                const statusTd = tr.children[3]; // direct access, no querySelector
+                const statusTd = tr.children[3];
                 if (statusTd) {
-                    const dot = statusTd.querySelector('.status-dot');
-                    const text = statusTd.querySelector('.status-text');
-                    if (dot && text) {
+                    const icon = statusTd.querySelector('span');
+                    if (icon) {
                         if (mapping.is_matched) {
-                            dot.className = 'status-dot green';
-                            text.className = 'status-text green';
-                            text.textContent = 'Matched';
+                            icon.textContent = '✅';
+                            icon.style.color = '#16a34a';
                         } else {
-                            dot.className = 'status-dot red';
-                            text.className = 'status-text red';
-                            text.textContent = 'Not mapped';
+                            icon.textContent = '❌';
+                            icon.style.color = '#dc2626';
                         }
-                        const matched = currentMappings.filter(mm => mm.is_matched).length;
-                        mappingCount.textContent = matched + ' / ' + currentMappings.length + ' matched';
-                        setBadge('✅ ' + matched + '/' + currentMappings.length + ' matched');
                     }
+                    const matched = currentMappings.filter(mm => mm.is_matched).length;
+                    if (mappingCount) mappingCount.textContent = matched + ' / ' + currentMappings.length + ' matched';
+                    setBadge('✅ ' + matched + '/' + currentMappings.length + ' matched');
                 }
             }
         });
@@ -426,23 +448,18 @@ function renderMapping(mappings) {
         td3.appendChild(badge);
         tr.appendChild(td3);
 
-        // 4. Status
+        // 4. Status – only icon
         const td4 = document.createElement('td');
-        const dot = document.createElement('span');
-        dot.className = 'status-dot';
-        const txt = document.createElement('span');
-        txt.className = 'status-text';
+        const icon = document.createElement('span');
+        icon.style.fontSize = '16px';
         if (m.is_matched) {
-            dot.className = 'status-dot green';
-            txt.className = 'status-text green';
-            txt.textContent = 'Matched';
+            icon.textContent = '✅';
+            icon.style.color = '#16a34a';
         } else {
-            dot.className = 'status-dot red';
-            txt.className = 'status-text red';
-            txt.textContent = 'Not mapped';
+            icon.textContent = '❌';
+            icon.style.color = '#dc2626';
         }
-        td4.appendChild(dot);
-        td4.appendChild(txt);
+        td4.appendChild(icon);
         tr.appendChild(td4);
 
         mappingBody.appendChild(tr);
@@ -451,14 +468,14 @@ function renderMapping(mappings) {
 
 // ---------- RENDER PREVIEW ----------
 function renderPreviewFromData() {
-    if (!workbookData) return;
+    if (!workbookData || !previewHeader || !previewBody) return;
     try {
         const workbook = XLSX.read(workbookData, { type: 'array' });
         const sheetName = currentSheet || workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
         const headers = jsonData[0] || [];
-        const rows = jsonData.slice(1, 6);
+        const rows = jsonData.slice(1, 21);
 
         previewHeader.innerHTML = '';
         if (headers.length) {
@@ -474,16 +491,43 @@ function renderPreviewFromData() {
         previewBody.innerHTML = '';
         rows.forEach(row => {
             const tr = document.createElement('tr');
-            row.forEach(cell => {
+            row.forEach((cell, idx) => {
                 const td = document.createElement('td');
-                td.textContent = cell !== undefined ? cell : '';
+                let displayValue = cell;
+                const headerName = (headers[idx] || '').toLowerCase();
+                if (typeof cell === 'number' && cell > 30000 && (headerName.includes('date') || headerName.includes('day') || headerName.includes('month'))) {
+                    const date = new Date((cell - 25569) * 86400 * 1000);
+                    if (!isNaN(date)) {
+                        const d = String(date.getDate()).padStart(2, '0');
+                        const m = String(date.getMonth() + 1).padStart(2, '0');
+                        const y = date.getFullYear();
+                        displayValue = d + '/' + m + '/' + y;
+                    }
+                } else if (typeof cell === 'string' && /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(cell)) {
+                    const parts = cell.split('/');
+                    if (parts.length === 3) {
+                        let day, month, year;
+                        if (parseInt(parts[0]) > 12) {
+                            day = parts[0];
+                            month = parts[1];
+                        } else {
+                            month = parts[0];
+                            day = parts[1];
+                        }
+                        year = parts[2];
+                        if (year.length === 2) year = '20' + year;
+                        displayValue = day.padStart(2, '0') + '/' + month.padStart(2, '0') + '/' + year;
+                    }
+                }
+                td.textContent = displayValue !== undefined ? displayValue : '';
                 tr.appendChild(td);
             });
             previewBody.appendChild(tr);
         });
 
-        previewCount.textContent = rows.length + ' rows · ' + headers.length + ' columns';
-        previewPanel.style.display = 'block';
+        const totalRows = jsonData.length - 1;
+        if (previewCount) previewCount.textContent = Math.min(totalRows, 20) + ' rows · ' + headers.length + ' columns';
+        if (previewPanel) previewPanel.style.display = 'flex';
 
     } catch (error) {
         console.error('Preview error:', error);
@@ -492,6 +536,7 @@ function renderPreviewFromData() {
 
 // ---------- UNIQUE ID DROPDOWN ----------
 function populateUniqueIdDropdown() {
+    if (!uniqueIdColumn) return;
     uniqueIdColumn.innerHTML = '<option value="">— None —</option>';
     const mappedColumns = currentMappings.filter(m => m.is_matched);
     mappedColumns.forEach(m => {
@@ -504,102 +549,112 @@ function populateUniqueIdDropdown() {
 }
 
 function toggleUniqueIdVisibility() {
-    uniqueIdField.style.display = (uploadMode.value === 'update') ? 'block' : 'none';
+    if (!uniqueIdField) return;
+    uniqueIdField.style.display = (uploadMode && uploadMode.value === 'update') ? 'block' : 'none';
 }
-uploadMode.addEventListener('change', toggleUniqueIdVisibility);
+if (uploadMode) {
+    uploadMode.addEventListener('change', toggleUniqueIdVisibility);
+}
 
 // ---------- DOWNLOAD TEMPLATE ----------
-downloadBtn.addEventListener('click', function() {
-    const templateId = this.dataset.templateId;
-    if (!templateId) {
-        showStatus('⚠️ Please select a template first', 'error');
-        return;
-    }
-    window.open(API_BASE + `/api/upload/download-template/${templateId}`, '_blank');
-});
+if (downloadBtn) {
+    downloadBtn.addEventListener('click', function() {
+        const templateId = this.dataset.templateId;
+        if (!templateId) {
+            showStatus('⚠️ Please select a template first', 'error');
+            return;
+        }
+        window.open(API_BASE + `/api/upload/download-template/${templateId}`, '_blank');
+    });
+}
 
 // ---------- RESET ----------
-resetBtn.addEventListener('click', function() {
-    resetUpload();
-    templateDropdown.value = '';
-    selectedTemplateId = null;
-    setBadge('⏳ Select a template');
-    showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
-});
+if (resetBtn) {
+    resetBtn.addEventListener('click', function() {
+        resetUpload();
+        if (templateDropdown) templateDropdown.value = '';
+        selectedTemplateId = null;
+        setBadge('⏳ Select a template');
+        showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
+    });
+}
 
 // ---------- IMPORT ----------
-importBtn.addEventListener('click', async function() {
-    if (!fileId || !selectedTemplateId) {
-        showStatus('⚠️ Please upload a file and select a template', 'error');
-        return;
-    }
+if (importBtn) {
+    importBtn.addEventListener('click', async function() {
+        if (!fileId || !selectedTemplateId) {
+            showStatus('⚠️ Please upload a file and select a template', 'error');
+            return;
+        }
 
-    const rows = mappingBody.querySelectorAll('tr');
-    const finalMappings = [];
-    rows.forEach(tr => {
-        const select = tr.querySelector('select');
-        const templateColName = tr.children[0].textContent;
-        const mapping = currentMappings.find(m => m.column_name === templateColName);
-        if (mapping) {
-            finalMappings.push({
-                template_column_id: mapping.column_id,
-                template_column_name: mapping.column_name,
-                excel_column_name: select.value || null,
-                matched: !!select.value,
-                mapping_status: select.value ? 'matched' : 'unmatched'
+        if (!mappingBody) return;
+        const rows = mappingBody.querySelectorAll('tr');
+        const finalMappings = [];
+        rows.forEach(tr => {
+            const select = tr.querySelector('select');
+            const templateColName = tr.children[0].textContent;
+            const mapping = currentMappings.find(m => m.column_name === templateColName);
+            if (mapping) {
+                finalMappings.push({
+                    template_column_id: mapping.column_id,
+                    template_column_name: mapping.column_name,
+                    excel_column_name: select.value || null,
+                    matched: !!select.value,
+                    mapping_status: select.value ? 'matched' : 'unmatched'
+                });
+            }
+        });
+
+        const payload = {
+            template_id: selectedTemplateId,
+            file_id: fileId,
+            mappings: finalMappings,
+            mode: uploadMode ? uploadMode.value : 'create',
+            unique_column_id: uniqueIdColumn && uniqueIdColumn.value ? parseInt(uniqueIdColumn.value) : null,
+            sheet_name: currentSheet || 'Sheet1'
+        };
+
+        try {
+            isProcessing = true;
+            showSpinner(true);
+            if (importBtn) importBtn.disabled = true;
+            showStatus('⏳ Importing data...', 'loading');
+            setBadge('⏳ Importing...', 'loading');
+
+            const res = await fetch(API_BASE + '/api/upload/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
             });
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.message || 'Import failed');
+
+            if (result.status === 'validation_failed') {
+                let errorMsg = '❌ Validation errors:\n';
+                result.errors.forEach(err => {
+                    errorMsg += `Row ${err.row_number}: `;
+                    err.errors.forEach(e => {
+                        errorMsg += `${e.column} - ${e.message}; `;
+                    });
+                    errorMsg += '\n';
+                });
+                showStatus(errorMsg, 'error');
+                setBadge('❌ Validation failed', 'error');
+            } else {
+                showStatus(`✅ ${result.message} (${result.imported_count} records)`, 'success');
+                setBadge('✅ Import complete');
+                setTimeout(resetUpload, 2000);
+            }
+        } catch (error) {
+            showStatus('❌ Import error: ' + error.message, 'error');
+            setBadge('❌ Import failed', 'error');
+        } finally {
+            isProcessing = false;
+            showSpinner(false);
+            if (importBtn) importBtn.disabled = false;
         }
     });
-
-    const payload = {
-        template_id: selectedTemplateId,
-        file_id: fileId,
-        mappings: finalMappings,
-        mode: uploadMode.value,
-        unique_column_id: uniqueIdColumn.value ? parseInt(uniqueIdColumn.value) : null,
-        sheet_name: currentSheet || 'Sheet1'
-    };
-
-    try {
-        isProcessing = true;
-        showSpinner(true);
-        importBtn.disabled = true;
-        showStatus('⏳ Importing data...', 'loading');
-        setBadge('⏳ Importing...', 'loading');
-
-        const res = await fetch(API_BASE + '/api/upload/import', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.message || 'Import failed');
-
-        if (result.status === 'validation_failed') {
-            let errorMsg = '❌ Validation errors:\n';
-            result.errors.forEach(err => {
-                errorMsg += `Row ${err.row_number}: `;
-                err.errors.forEach(e => {
-                    errorMsg += `${e.column} - ${e.message}; `;
-                });
-                errorMsg += '\n';
-            });
-            showStatus(errorMsg, 'error');
-            setBadge('❌ Validation failed', 'error');
-        } else {
-            showStatus(`✅ ${result.message} (${result.imported_count} records)`, 'success');
-            setBadge('✅ Import complete');
-            setTimeout(resetUpload, 2000);
-        }
-    } catch (error) {
-        showStatus('❌ Import error: ' + error.message, 'error');
-        setBadge('❌ Import failed', 'error');
-    } finally {
-        isProcessing = false;
-        showSpinner(false);
-        importBtn.disabled = false;
-    }
-});
+}
 
 // ---------- INIT ----------
 window.onload = function() {
