@@ -45,6 +45,119 @@ body {
     color: #b0bec5;
 }
 
+/* ---------- CLIENT DROPDOWN IN NAVBAR ---------- */
+.nav-client {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 15px;
+}
+
+.nav-client label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+/* ---------- CLIENT CONTROLS (dropdown + badge) ---------- */
+.nav-client {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 15px;
+}
+
+.nav-client label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+/* Dropdown (Dashboard only) */
+.nav-client select {
+    padding: 6px 12px;
+    border: 2px solid #334155;
+    border-radius: 6px;
+    background: #1e293b;
+    color: #f1f5f9;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    min-width: 160px;
+    max-width: 220px;
+    transition: all 0.2s;
+}
+.nav-client select:hover { border-color: #475569; }
+.nav-client select:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+.nav-client select option {
+    background: #1e293b;
+    color: #f1f5f9;
+}
+
+/* Badge (non-Dashboard pages) */
+.client-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #1e293b;
+    padding: 4px 12px 4px 16px;
+    border-radius: 20px;
+    border: 1px solid #334155;
+    font-size: 13px;
+    font-weight: 500;
+    color: #f1f5f9;
+    white-space: nowrap;
+}
+.client-badge.client-none {
+    color: #fbbf24;
+    border-color: #f59e0b;
+}
+.client-badge .client-switch-btn {
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 4px;
+    transition: color 0.2s, transform 0.2s;
+}
+.client-badge .client-switch-btn:hover {
+    color: #f1f5f9;
+    transform: scale(1.15);
+}
+.client-badge .client-switch-btn:active {
+    transform: scale(0.9);
+}
+
+/* ---------- CLIENT SELECTION WARNING (upload page) ---------- */
+.client-warning {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    border-radius: 8px;
+    padding: 10px 16px;
+    margin: 10px 0;
+    color: #92400e;
+    font-size: 14px;
+    font-weight: 500;
+}
+.client-warning .icon { font-size: 20px; }
+.client-warning strong { color: #78350f; }
+
+
+
 /* ---------- MAIN CONTAINER ---------- */
 .main-container {
     max-width: 1400px;

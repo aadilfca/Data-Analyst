@@ -611,6 +611,12 @@
         <!-- TOP BAR -->
         <div class="top-bar">
             <div class="field">
+                <label>🏢 Client</label>
+                <div id="clientControl" style="min-width:160px;">
+                    <!-- Will be rendered by client_context.js -->
+                </div>
+            </div>
+            <div class="field">
                 <label>📋 Template</label>
                 <select id="templateDropdown">
                     <option value="">-- Select --</option>
@@ -622,7 +628,13 @@
                     <option value="">-- Select --</option>
                 </select>
             </div>
-            <span class="badge" id="statusBadge">⏳ Select a template</span>
+            <span class="badge" id="statusBadge">⏳ Select a client and template</span>
+        </div>
+
+        <!-- Client Selection Warning -->
+        <div id="clientSelectionWarning" class="client-warning">
+            <span class="icon">⚠️</span>
+            <span><strong>Please select a client</strong> from the dropdown above before uploading data.</span>
         </div>
 
         <!-- MAIN GRID -->
@@ -733,6 +745,7 @@
 
     </div>
 
+    <script src="/static/client_context.js"></script>
     <script src="/static/upload.js"></script>
 </body>
 
