@@ -8,7 +8,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <link rel="stylesheet" href="/static/style.css">
     <style>
-        /* ----- override or add upload-specific styles ----- */
+        /* Only minimal styles – no table overrides */
         .container {
             max-width: 1400px;
             margin: 0 auto;
@@ -146,216 +146,6 @@
 
         .file-detail .clear:hover {
             color: #b91c1c;
-        }
-
-        .main-grid {
-            display: flex;
-            gap: 16px;
-            margin-bottom: 16px;
-            flex-wrap: wrap;
-        }
-
-        .panel {
-            flex: 1 1 0;
-            background: #fff;
-            border-radius: 8px;
-            border: 1px solid #e8edf2;
-            overflow: hidden;
-            min-width: 280px;
-        }
-
-        .panel-header {
-            background: #f8fafc;
-            padding: 6px 12px;
-            font-weight: 600;
-            font-size: 12px;
-            border-bottom: 1px solid #e8edf2;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .panel-header .count {
-            font-size: 11px;
-            font-weight: 400;
-            color: #64748b;
-        }
-
-        .mapping-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 12px;
-            table-layout: auto;
-        }
-
-        .mapping-table th {
-            background: #f8fafc;
-            padding: 3px 6px;
-            text-align: left;
-            font-weight: 600;
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
-            border-bottom: 2px solid #e8edf2;
-            color: #475569;
-            white-space: nowrap;
-        }
-
-        .mapping-table td {
-            padding: 3px 6px;
-            border-bottom: 1px solid #f0f2f5;
-            vertical-align: middle;
-            font-size: 12px;
-        }
-
-        .mapping-table tr:last-child td {
-            border-bottom: none;
-        }
-
-        .mapping-table tr:hover td {
-            background: #f8fafc;
-        }
-
-        .mapping-table select {
-            padding: 2px 4px;
-            border: 1px solid #d0d5dd;
-            border-radius: 4px;
-            font-size: 11px;
-            width: 100%;
-            max-width: 120px;
-            background: white;
-        }
-
-        .mapping-table select:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-        }
-
-        .mapping-table .type-badge {
-            display: inline-block;
-            padding: 0 6px;
-            border-radius: 6px;
-            font-size: 10px;
-            font-weight: 600;
-            background: #f1f5f9;
-            color: #475569;
-        }
-
-        .mapping-table .type-badge.numeric {
-            background: #fef9e7;
-            color: #92400e;
-        }
-
-        .mapping-table .type-badge.date {
-            background: #e0f2fe;
-            color: #0369a1;
-        }
-
-        .mapping-table th:nth-child(1),
-        .mapping-table td:nth-child(1) {
-            width: 1%;
-            white-space: nowrap;
-        }
-
-        .mapping-table th:nth-child(2),
-        .mapping-table td:nth-child(2) {
-            width: 1%;
-            white-space: nowrap;
-        }
-
-        .mapping-table th:nth-child(3),
-        .mapping-table td:nth-child(3) {
-            width: 1%;
-            white-space: nowrap;
-        }
-
-        .mapping-table th:nth-child(4),
-        .mapping-table td:nth-child(4) {
-            width: 1%;
-            white-space: nowrap;
-        }
-
-        .status-dot {
-            display: inline-block;
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            vertical-align: middle;
-        }
-
-        .status-dot.green {
-            background: #22c55e;
-        }
-
-        .status-dot.yellow {
-            background: #eab308;
-        }
-
-        .status-dot.red {
-            background: #dc2626;
-        }
-
-        .status-text {
-            font-size: 11px;
-            margin-left: 3px;
-        }
-
-        .status-text.green {
-            color: #16a34a;
-        }
-
-        .status-text.yellow {
-            color: #ca8a04;
-        }
-
-        .status-text.red {
-            color: #dc2626;
-        }
-
-        .preview-wrapper {
-            overflow-x: auto;
-            padding: 0;
-        }
-
-        .preview-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 12px;
-            font-family: 'Segoe UI', 'Calibri', sans-serif;
-            table-layout: auto;
-            min-width: 100%;
-        }
-
-        .preview-table th {
-            background: #f1f5f9;
-            padding: 3px 8px;
-            text-align: left;
-            font-weight: 600;
-            border: 1px solid #d0d5dd;
-            font-size: 10px;
-            text-transform: uppercase;
-            color: #1e293b;
-            white-space: nowrap;
-            position: sticky;
-            top: 0;
-            z-index: 2;
-        }
-
-        .preview-table td {
-            padding: 2px 8px;
-            border: 1px solid #d0d5dd;
-            font-size: 12px;
-            white-space: nowrap;
-            background: white;
-        }
-
-        .preview-table tr:nth-child(even) td {
-            background: #fafcff;
-        }
-
-        .preview-table tr:hover td {
-            background: #f1f5f9;
         }
 
         .mode-bar {
@@ -564,10 +354,6 @@
                 align-items: center;
                 text-align: center;
             }
-
-            .main-grid {
-                flex-direction: column;
-            }
         }
     </style>
 </head>
@@ -624,44 +410,53 @@
             <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
         </div>
 
-        <!-- MAIN GRID -->
-        <div class="main-grid">
+        <!-- ========== MAIN GRID – prototype style ========== -->
+        <table width="100%" border="1" cellpadding="8" cellspacing="0"
+            style="border-collapse:collapse; border-color:#d0d5dd; margin-bottom:16px;">
+            <tr valign="top">
+                <!-- LEFT: MAPPING PANEL (38%) -->
+                <td width="38%" style="background:white;">
+                    <div id="mappingPanel" style="display:none;">
+                        <h3 style="margin:0 0 8px 0; font-size:14px;">🔗 Column Mapping</h3>
+                        <div style="overflow-x:auto;">
+                            <table class="mapping-table" border="1" cellpadding="4" cellspacing="0"
+                                style="width:100%; border-collapse:collapse; font-size:12px; border-color:#d0d5dd;">
+                                <thead>
+                                    <tr bgcolor="#f0f0f0">
+                                        <th align="left" width="22%" style="padding:4px 6px;">Template</th>
+                                        <th align="left" width="35%" style="padding:4px 6px;">Excel Column</th>
+                                        <th align="left" width="18%" style="padding:4px 6px;">Type</th>
+                                        <th align="left" width="25%" style="padding:4px 6px;">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="mappingBody"></tbody>
+                            </table>
+                        </div>
+                        <div style="margin-top:6px; font-size:12px; color:#64748b;" id="mappingCount">0 / 0 matched
+                        </div>
+                    </div>
+                </td>
 
-            <!-- MAPPING PANEL -->
-            <div class="panel" id="mappingPanel" style="display:none; flex:0 1 35%;">
-                <div class="panel-header">
-                    <span>🔗 Column Mapping</span>
-                    <span class="count" id="mappingCount">0 / 0 matched</span>
-                </div>
-                <div style="padding:0; overflow-x:auto;">
-                    <table class="mapping-table" id="mappingTable">
-                        <thead>
-                            <tr>
-                                <th>Template</th>
-                                <th>Excel Column</th>
-                                <th>Type</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="mappingBody"></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- PREVIEW PANEL -->
-            <div class="panel" id="previewPanel" style="display:none; flex:1 1 65%;">
-                <div class="panel-header">
-                    <span>📊 Excel Preview</span>
-                    <span class="count" id="previewCount">0 rows · 0 columns</span>
-                </div>
-                <div class="preview-wrapper">
-                    <table class="preview-table" id="previewTable">
-                        <thead id="previewHeader"></thead>
-                        <tbody id="previewBody"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
+                <!-- RIGHT: PREVIEW PANEL (62%) -->
+                <td width="62%" style="background:white;">
+                    <div id="previewPanel" style="display:none;">
+                        <h3 style="margin:0 0 8px 0; font-size:14px;">📊 Excel Preview</h3>
+                        <div style="overflow-x:auto;">
+                            <table class="preview-table" border="1" cellpadding="4" cellspacing="0"
+                                style="width:100%; border-collapse:collapse; font-size:12px; border-color:#d0d5dd;">
+                                <thead id="previewHeader">
+                                    <!-- Headers will be inserted by JavaScript, but we need a bgcolor for the header row -->
+                                    <tr bgcolor="#f0f0f0" id="previewHeaderRow"></tr>
+                                </thead>
+                                <tbody id="previewBody"></tbody>
+                            </table>
+                        </div>
+                        <div style="margin-top:6px; font-size:12px; color:#64748b;" id="previewCount">0 rows · 0 columns
+                        </div>
+                    </div>
+                </td>
+            </tr>
+        </table>
 
         <!-- MODE BAR -->
         <div class="mode-bar" id="modeBar" style="display:none;">
