@@ -1,5 +1,5 @@
 // ================================================================
-// 📤 UPLOAD MODULE – COMPLETE LOGIC
+// 📤 UPLOAD MODULE – FINAL, ERROR-FREE
 // ================================================================
 
 const API_BASE = 'http://localhost:5000';
@@ -26,7 +26,7 @@ const previewHeader = document.getElementById('previewHeader');
 const previewBody = document.getElementById('previewBody');
 const previewCount = document.getElementById('previewCount');
 
-const modeBar = document.getElementById('modeBar');
+const modeActions = document.getElementById('modeActions');
 const uploadMode = document.getElementById('uploadMode');
 const uniqueIdField = document.getElementById('uniqueIdField');
 const uniqueIdColumn = document.getElementById('uniqueIdColumn');
@@ -118,7 +118,7 @@ templateDropdown.addEventListener('change', async function() {
         selectedTemplateId = null;
         mappingPanel.style.display = 'none';
         previewPanel.style.display = 'none';
-        modeBar.style.display = 'none';
+        modeActions.style.display = 'none';
         sheetField.style.display = 'none';
         importBtn.disabled = true;
         setBadge('⏳ Select a template');
@@ -284,7 +284,7 @@ function resetUpload() {
     fileInput.value = '';
     mappingPanel.style.display = 'none';
     previewPanel.style.display = 'none';
-    modeBar.style.display = 'none';
+    modeActions.style.display = 'none';
     sheetField.style.display = 'none';
     sheetSelector.innerHTML = '';
     currentSheet = null;
@@ -336,7 +336,7 @@ async function autoMapColumns() {
         renderPreviewFromData();
         populateUniqueIdDropdown();
 
-        modeBar.style.display = 'flex';
+        modeActions.style.display = 'block';
         mappingPanel.style.display = 'block';
         previewPanel.style.display = 'block';
         importBtn.disabled = false;
@@ -353,19 +353,25 @@ async function autoMapColumns() {
     }
 }
 
-// ---------- RENDER MAPPING TABLE ----------
+// ---------- RENDER MAPPING TABLE (ERROR-FREE) ----------
 function renderMapping(mappings) {
     mappingBody.innerHTML = '';
-    if (!mappings || mappings.length === 0) return;
+    if (!mappings || mappings.length === 0) {
+        mappingPanel.style.display = 'none';
+        return;
+    }
 
     mappings.forEach(m => {
         const tr = document.createElement('tr');
 
+        // 1. Template Column
         const td1 = document.createElement('td');
         td1.textContent = m.column_name;
         td1.style.fontWeight = '500';
         td1.style.whiteSpace = 'nowrap';
+        tr.appendChild(td1);
 
+        // 2. Excel Column (dropdown)
         const td2 = document.createElement('td');
         const select = document.createElement('select');
         const noOpt = document.createElement('option');
@@ -379,32 +385,38 @@ function renderMapping(mappings) {
             if (h === m.excel_column) opt.selected = true;
             select.appendChild(opt);
         });
+        // Event listener – uses closure on m and tr
         select.addEventListener('change', function() {
             const mapping = currentMappings.find(mm => mm.column_id === m.column_id);
             if (mapping) {
                 mapping.excel_column = this.value || null;
                 mapping.is_matched = !!this.value;
-                const statusTd = tr.querySelector('td:last-child');
+                // Update status cell (the 4th td)
+                const statusTd = tr.children[3]; // direct access, no querySelector
                 if (statusTd) {
                     const dot = statusTd.querySelector('.status-dot');
                     const text = statusTd.querySelector('.status-text');
-                    if (mapping.is_matched) {
-                        dot.className = 'status-dot green';
-                        text.className = 'status-text green';
-                        text.textContent = 'Matched';
-                    } else {
-                        dot.className = 'status-dot red';
-                        text.className = 'status-text red';
-                        text.textContent = 'Not mapped';
+                    if (dot && text) {
+                        if (mapping.is_matched) {
+                            dot.className = 'status-dot green';
+                            text.className = 'status-text green';
+                            text.textContent = 'Matched';
+                        } else {
+                            dot.className = 'status-dot red';
+                            text.className = 'status-text red';
+                            text.textContent = 'Not mapped';
+                        }
+                        const matched = currentMappings.filter(mm => mm.is_matched).length;
+                        mappingCount.textContent = matched + ' / ' + currentMappings.length + ' matched';
+                        setBadge('✅ ' + matched + '/' + currentMappings.length + ' matched');
                     }
-                    const matched = currentMappings.filter(mm => mm.is_matched).length;
-                    mappingCount.textContent = matched + ' / ' + currentMappings.length + ' matched';
-                    setBadge('✅ ' + matched + '/' + currentMappings.length + ' matched');
                 }
             }
         });
         td2.appendChild(select);
+        tr.appendChild(td2);
 
+        // 3. Data Type
         const td3 = document.createElement('td');
         const badge = document.createElement('span');
         badge.className = 'type-badge';
@@ -412,7 +424,9 @@ function renderMapping(mappings) {
         if (m.data_type === 'Date') badge.classList.add('date');
         badge.textContent = m.data_type;
         td3.appendChild(badge);
+        tr.appendChild(td3);
 
+        // 4. Status
         const td4 = document.createElement('td');
         const dot = document.createElement('span');
         dot.className = 'status-dot';
@@ -429,11 +443,8 @@ function renderMapping(mappings) {
         }
         td4.appendChild(dot);
         td4.appendChild(txt);
-
-        tr.appendChild(td1);
-        tr.appendChild(td2);
-        tr.appendChild(td3);
         tr.appendChild(td4);
+
         mappingBody.appendChild(tr);
     });
 }
@@ -450,11 +461,15 @@ function renderPreviewFromData() {
         const rows = jsonData.slice(1, 6);
 
         previewHeader.innerHTML = '';
-        headers.forEach(h => {
-            const th = document.createElement('th');
-            th.textContent = h || '—';
-            previewHeader.appendChild(th);
-        });
+        if (headers.length) {
+            const headerRow = document.createElement('tr');
+            headers.forEach(h => {
+                const th = document.createElement('th');
+                th.textContent = h || '—';
+                headerRow.appendChild(th);
+            });
+            previewHeader.appendChild(headerRow);
+        }
 
         previewBody.innerHTML = '';
         rows.forEach(row => {
