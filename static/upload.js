@@ -380,6 +380,7 @@ async function autoMapColumns() {
 }
 
 // ---------- RENDER MAPPING TABLE ----------
+// ---------- RENDER MAPPING TABLE (WITH UNIQUENESS) ----------
 function renderMapping(mappings) {
     if (!mappingBody) return;
     mappingBody.innerHTML = '';
@@ -388,53 +389,118 @@ function renderMapping(mappings) {
         return;
     }
 
-    mappings.forEach(m => {
+    // Build rows
+    mappings.forEach((m, rowIndex) => {
         const tr = document.createElement('tr');
 
-        // 1. Template
+        // 1. Template Column
         const td1 = document.createElement('td');
         td1.textContent = m.column_name;
         td1.style.fontWeight = '500';
         td1.style.whiteSpace = 'nowrap';
         tr.appendChild(td1);
 
-        // 2. Excel Column
+        // 2. Excel Column (dropdown with uniqueness enforcement)
         const td2 = document.createElement('td');
         const select = document.createElement('select');
-        const noOpt = document.createElement('option');
-        noOpt.value = '';
-        noOpt.textContent = '— None —';
-        select.appendChild(noOpt);
-        excelHeaders.forEach(h => {
-            const opt = document.createElement('option');
-            opt.value = h;
-            opt.textContent = h;
-            if (h === m.excel_column) opt.selected = true;
-            select.appendChild(opt);
-        });
-        select.addEventListener('change', function() {
-            const mapping = currentMappings.find(mm => mm.column_id === m.column_id);
-            if (mapping) {
-                mapping.excel_column = this.value || null;
-                mapping.is_matched = !!this.value;
+        select.dataset.rowIndex = rowIndex;
+        select.dataset.columnId = m.column_id;
+
+        // Build options dynamically based on current selections
+        function buildOptions() {
+            // Get currently selected values (except this row's current selection)
+            const selectedValues = currentMappings
+                .filter((_, idx) => idx !== rowIndex)
+                .map(mm => mm.excel_column)
+                .filter(v => v !== null && v !== '');
+
+            // Clear existing options
+            select.innerHTML = '';
+
+            // Add "None" option
+            const noneOpt = document.createElement('option');
+            noneOpt.value = '';
+            noneOpt.textContent = '— None —';
+            select.appendChild(noneOpt);
+
+            // Add Excel headers, but exclude those already selected elsewhere
+            excelHeaders.forEach(h => {
+                if (selectedValues.includes(h)) return; // skip if already taken
+                const opt = document.createElement('option');
+                opt.value = h;
+                opt.textContent = h;
+                // Preselect if this row's current mapping matches this header
+                if (m.excel_column === h) {
+                    opt.selected = true;
+                }
+                select.appendChild(opt);
+            });
+
+            // If the current value is not in the list (e.g., it was taken by another row), reset it
+            if (m.excel_column && ![...select.options].some(o => o.value === m.excel_column)) {
+                // The column was taken by another row – reset this row's mapping
+                m.excel_column = null;
+                m.is_matched = false;
+                // Update the status icon for this row
                 const statusTd = tr.children[3];
                 if (statusTd) {
                     const icon = statusTd.querySelector('span');
                     if (icon) {
-                        if (mapping.is_matched) {
-                            icon.textContent = '✅';
-                            icon.style.color = '#16a34a';
-                        } else {
-                            icon.textContent = '❌';
-                            icon.style.color = '#dc2626';
-                        }
+                        icon.textContent = '❌';
+                        icon.style.color = '#dc2626';
                     }
-                    const matched = currentMappings.filter(mm => mm.is_matched).length;
-                    if (mappingCount) mappingCount.textContent = matched + ' / ' + currentMappings.length + ' matched';
-                    setBadge('✅ ' + matched + '/' + currentMappings.length + ' matched');
+                }
+                // Update count and badge
+                updateCounts();
+            } else {
+                // Ensure the select shows the current value if it's valid
+                if (m.excel_column) {
+                    const opt = select.querySelector(`option[value="${m.excel_column}"]`);
+                    if (opt) opt.selected = true;
                 }
             }
+        }
+
+        buildOptions();
+
+        // Event listener for changes
+        select.addEventListener('change', function() {
+            const newVal = this.value || null;
+            // If selecting a value that is already used by another row, we need to swap
+            // or we can simply update and then rebuild all dropdowns to resolve conflicts.
+            // We'll update the current mapping and then re-render all rows.
+            m.excel_column = newVal;
+            m.is_matched = !!newVal;
+
+            // Update the status icon for this row
+            const statusTd = tr.children[3];
+            if (statusTd) {
+                const icon = statusTd.querySelector('span');
+                if (icon) {
+                    if (m.is_matched) {
+                        icon.textContent = '✅';
+                        icon.style.color = '#16a34a';
+                    } else {
+                        icon.textContent = '❌';
+                        icon.style.color = '#dc2626';
+                    }
+                }
+            }
+
+            // Rebuild all dropdowns to enforce uniqueness
+            // We need to re-render the whole mapping table to reflect the new state
+            // but we don't want to lose the current mappings array.
+            // So we call renderMapping again with the updated mappings.
+            // However, that would cause recursion if we call it directly.
+            // Instead, we use a flag or re-run the render function after a short delay.
+            // Better: rebuild options for all rows without re-creating the table.
+            // But for simplicity, we re-render the entire mapping table.
+            // We'll use requestAnimationFrame to avoid stack issues.
+            requestAnimationFrame(() => {
+                renderMapping(currentMappings);
+            });
         });
+
         td2.appendChild(select);
         tr.appendChild(td2);
 
@@ -464,6 +530,15 @@ function renderMapping(mappings) {
 
         mappingBody.appendChild(tr);
     });
+
+    // Update counts
+    updateCounts();
+
+    function updateCounts() {
+        const matched = currentMappings.filter(m => m.is_matched).length;
+        if (mappingCount) mappingCount.textContent = matched + ' / ' + currentMappings.length + ' matched';
+        setBadge('✅ ' + matched + '/' + currentMappings.length + ' matched');
+    }
 }
 
 // ---------- RENDER PREVIEW ----------
