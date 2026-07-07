@@ -42,7 +42,7 @@ def log_audit(user, action, module, details=""):
 def init_db():
     conn = get_db()
     
-    # Master Columns table
+    # Master Columns table (unchanged)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS master_columns (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,19 +53,31 @@ def init_db():
         )
     ''')
     
-    # Templates table
+    # Templates table (removed selected_columns)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             template_name TEXT NOT NULL UNIQUE,
-            selected_columns TEXT NOT NULL,
             created_by TEXT DEFAULT 'Admin',
             created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             is_active INTEGER DEFAULT 1
         )
     ''')
     
-    # Uploaded Files table
+    # Pivot table: template → column mappings with sort order
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS template_column_mappings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_id INTEGER NOT NULL,
+            column_id INTEGER NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+            FOREIGN KEY (column_id) REFERENCES master_columns(id) ON DELETE CASCADE,
+            UNIQUE(template_id, column_id)
+        )
+    ''')
+    
+    # Uploaded Files table (unchanged)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS uploaded_files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,7 +90,7 @@ def init_db():
         )
     ''')
     
-    # Verifications table
+    # Verifications table (unchanged)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS verifications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +104,7 @@ def init_db():
         )
     ''')
     
-    # Audit Log table
+    # Audit Log table (unchanged)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,7 +116,7 @@ def init_db():
         )
     ''')
     
-    # Insert some default columns if table is empty
+    # Insert default master columns if empty
     existing = conn.execute("SELECT COUNT(*) FROM master_columns").fetchone()[0]
     if existing == 0:
         default_columns = [

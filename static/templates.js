@@ -1,5 +1,5 @@
 // ==============================================
-// 📄 MANAGE TEMPLATES LOGIC (using utilities)
+// 📄 MANAGE TEMPLATES LOGIC (with pivot table)
 // ==============================================
 
 const API_BASE = 'http://localhost:5000';
@@ -22,8 +22,8 @@ const cancelBtn = document.getElementById('cancelTemplateBtn');
 const saveBtn = document.getElementById('saveTemplateBtn');
 const modalStatus = document.getElementById('modalStatus');
 
-let editingId = null; // null = add mode, number = edit mode
-let allColumns = []; // store fetched columns for reuse
+let editingId = null;
+let allColumns = [];
 
 // ---------- LOAD TEMPLATES ----------
 async function loadTemplates() {
@@ -65,28 +65,20 @@ function renderTemplates(templates) {
         tdName.style.padding = '10px 16px';
         tdName.style.fontWeight = '500';
 
-        // Columns (display as "ID. Column Name")
+        // Columns: display as "1. First Name, 2. Last Name"
         const tdCols = document.createElement('td');
         tdCols.style.padding = '10px 16px';
-        const colIds = tpl.selected_columns || [];
-        let colDisplay = [];
-        if (allColumns && allColumns.length > 0) {
-            colDisplay = colIds.map(id => {
-                const col = allColumns.find(c => c.id === id);
-                return col ? `${col.id}. ${col.column_name}` : `ID: ${id}`;
-            });
-        } else {
-            colDisplay = colIds.map(id => `#${id}`);
-        }
-        tdCols.textContent = colDisplay.join(', ') || '—';
-        tdCols.title = colDisplay.join(', ') || 'No columns';
+        const cols = tpl.columns || [];
+        let colDisplay = cols.map((col, idx) => `${idx+1}. ${col.column_name}`).join(', ');
+        tdCols.textContent = colDisplay || '—';
+        tdCols.title = colDisplay || 'No columns';
 
         // Created By
         const tdBy = document.createElement('td');
         tdBy.textContent = tpl.created_by || 'Admin';
         tdBy.style.padding = '10px 16px';
 
-        // Created Date (using global formatDate)
+        // Created Date
         const tdDate = document.createElement('td');
         tdDate.style.padding = '10px 16px';
         tdDate.textContent = window.formatDate(tpl.created_date);
@@ -105,14 +97,14 @@ function renderTemplates(templates) {
         tdActions.style.padding = '10px 16px';
         tdActions.style.textAlign = 'center';
 
-        // Preview (Eye) button - defined ONCE
+        // Preview button (Eye)
         const previewBtn = document.createElement('button');
         previewBtn.textContent = '👁️';
         previewBtn.style.background = 'none';
         previewBtn.style.border = 'none';
         previewBtn.style.cursor = 'pointer';
         previewBtn.style.fontSize = '18px';
-        previewBtn.title = 'Preview template as table';
+        previewBtn.title = 'Preview and edit columns';
         previewBtn.addEventListener('click', () => openPreviewModal(tpl));
 
         // Edit button
@@ -158,7 +150,7 @@ async function loadColumnsForCheckboxes() {
         const res = await fetch(API_BASE + '/api/columns');
         if (!res.ok) throw new Error('Failed to fetch columns');
         const columns = await res.json();
-        allColumns = columns; // store globally
+        allColumns = columns;
         return columns;
     } catch (error) {
         console.log('⚠️ Error loading columns:', error.message);
@@ -166,7 +158,7 @@ async function loadColumnsForCheckboxes() {
     }
 }
 
-// ---------- SHOW STATUS MESSAGE ----------
+// ---------- STATUS MESSAGES ----------
 function showStatus(message, type) {
     statusDiv.textContent = message;
     statusDiv.className = 'upload-status ' + type;
@@ -177,6 +169,14 @@ function showStatus(message, type) {
     }, 5000);
 }
 
+function showModalStatus(message, type) {
+    modalStatus.textContent = message;
+    modalStatus.style.display = 'block';
+    modalStatus.style.background = type === 'error' ? '#ffebee' : '#e8f5e9';
+    modalStatus.style.color = type === 'error' ? '#c62828' : '#2e7d32';
+    modalStatus.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
+}
+
 // ---------- MODAL OPEN / CLOSE ----------
 async function openModal(title, templateData = null) {
     modalTitle.textContent = title;
@@ -185,18 +185,16 @@ async function openModal(title, templateData = null) {
     modalStatus.style.display = 'none';
     document.body.style.overflow = 'hidden';
 
-    // Load columns for checkboxes
     const columns = await loadColumnsForCheckboxes();
 
     if (templateData) {
-        // Edit mode
         editingId = templateData.id;
         templateName.value = templateData.template_name;
         editId.value = templateData.id;
-        // Use global renderColumnCheckboxes
-        window.renderColumnCheckboxes(columnCheckboxes, columns, templateData.selected_columns || []);
+        // Pre-select columns based on the template's columns (ordered)
+        const selectedIds = (templateData.columns || []).map(c => c.id);
+        window.renderColumnCheckboxes(columnCheckboxes, columns, selectedIds);
     } else {
-        // Add mode
         editingId = null;
         templateName.value = '';
         editId.value = '';
@@ -212,17 +210,14 @@ function closeModal() {
     modalStatus.style.display = 'none';
 }
 
-// ---------- OPEN ADD MODAL ----------
 document.getElementById('addTemplateBtn').addEventListener('click', () => {
     openModal('Create New Template');
 });
 
-// ---------- OPEN EDIT MODAL ----------
 function openEditModal(template) {
     openModal('Edit Template', template);
 }
 
-// ---------- CANCEL / CLOSE ----------
 cancelBtn.addEventListener('click', closeModal);
 modalOverlay.addEventListener('click', closeModal);
 
@@ -236,9 +231,16 @@ document.getElementById('templateForm').addEventListener('submit', async functio
         return;
     }
 
-    // Get selected column IDs
-    const checkboxes = columnCheckboxes.querySelectorAll('input[type="checkbox"]:checked');
-    const selectedIds = Array.from(checkboxes).map(cb => parseInt(cb.value));
+    // Get selected column IDs in the order they appear in the checkbox list (which is the display order)
+    const checkboxItems = columnCheckboxes.querySelectorAll('.checkbox-item');
+    const selectedIds = [];
+    checkboxItems.forEach(item => {
+        const cb = item.querySelector('input[type="checkbox"]');
+        if (cb && cb.checked) {
+            selectedIds.push(parseInt(cb.value));
+        }
+    });
+
     if (selectedIds.length === 0) {
         showModalStatus('⚠️ Please select at least one column.', 'error');
         return;
@@ -281,15 +283,6 @@ document.getElementById('templateForm').addEventListener('submit', async functio
     }
 });
 
-// ---------- SHOW STATUS INSIDE MODAL ----------
-function showModalStatus(message, type) {
-    modalStatus.textContent = message;
-    modalStatus.style.display = 'block';
-    modalStatus.style.background = type === 'error' ? '#ffebee' : '#e8f5e9';
-    modalStatus.style.color = type === 'error' ? '#c62828' : '#2e7d32';
-    modalStatus.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
-}
-
 // ---------- CONFIRM DELETE ----------
 async function confirmDelete(id, name) {
     if (!confirm(`Are you sure you want to delete template "${name}"? This will soft-delete it.`)) {
@@ -312,96 +305,172 @@ async function confirmDelete(id, name) {
 }
 
 // ==============================================
-// PREVIEW TEMPLATE AS TABLE (single version)
+// PREVIEW MODAL (Interactive)
 // ==============================================
 
 function openPreviewModal(tpl) {
-    // Get column details from selected IDs
-    const colIds = tpl.selected_columns || [];
-    let columnData = [];
-    if (allColumns && allColumns.length > 0) {
-        columnData = colIds.map(id => {
-            const col = allColumns.find(c => c.id === id);
-            return col ? { id: col.id, name: col.column_name, type: col.data_type } : null;
-        }).filter(Boolean);
-    }
+    // Fetch fresh column data for this template
+    fetch(API_BASE + '/api/templates/' + tpl.id + '/columns')
+        .then(res => {
+            if (!res.ok) throw new Error('Failed to load template columns');
+            return res.json();
+        })
+        .then(columns => {
+            renderPreviewModal(tpl, columns);
+        })
+        .catch(err => {
+            alert('Error loading template columns: ' + err.message);
+        });
+}
 
-    if (columnData.length === 0) {
-        alert('No columns found in this template.');
-        return;
-    }
-
-    // Build the preview table
-    const previewContent = `
-        <div style="margin-bottom:15px;">
-            <h3 style="margin:0 0 5px 0;">📋 ${tpl.template_name}</h3>
-            <p style="color:#64748b; font-size:13px; margin:0;">
-                Created by: ${tpl.created_by || 'Admin'} 
-                | Date: ${window.formatDate(tpl.created_date)}
-                | Total Columns: ${columnData.length}
-            </p>
-        </div>
-        <div style="overflow-x:auto; border:1px solid #e2e8f0; border-radius:8px;">
-            <table style="width:100%; border-collapse:collapse; font-size:14px;">
-                <thead style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
-                    <tr>
-                        <th style="padding:10px 16px; text-align:left; font-weight:600; min-width:60px;">#</th>
-                        <th style="padding:10px 16px; text-align:left; font-weight:600;">Column ID</th>
-                        <th style="padding:10px 16px; text-align:left; font-weight:600;">Column Name</th>
-                        <th style="padding:10px 16px; text-align:left; font-weight:600;">Data Type</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${columnData.map((col, index) => `
-                        <tr style="border-bottom:1px solid #e2e8f0;">
-                            <td style="padding:8px 16px; color:#94a3b8; text-align:center;">${index + 1}</td>
-                            <td style="padding:8px 16px; color:#64748b; text-align:center;">${col.id}</td>
-                            <td style="padding:8px 16px; font-weight:500;">${col.name}</td>
-                            <td style="padding:8px 16px; color:#475569;">${col.type}</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        </div>
-        <div style="margin-top:10px; color:#94a3b8; font-size:12px;">
-            Total: ${columnData.length} column${columnData.length > 1 ? 's' : ''}
-        </div>
-    `;
-
-    // Create modal elements
+function renderPreviewModal(tpl, columns) {
+    // Build the preview modal with interactive list
     const overlay = document.createElement('div');
     overlay.id = 'previewOverlay';
     overlay.style.cssText = 'display:block; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:999;';
 
     const modal = document.createElement('div');
     modal.id = 'previewModal';
-    modal.style.cssText = 'display:block; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:30px; z-index:1000; min-width:500px; max-width:700px; max-height:80vh; overflow-y:auto; border-radius:8px; box-shadow:0 10px 40px rgba(0,0,0,0.3);';
+    modal.style.cssText = 'display:block; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:30px; z-index:1000; min-width:600px; max-width:800px; max-height:80vh; overflow-y:auto; border-radius:8px; box-shadow:0 10px 40px rgba(0,0,0,0.3);';
+
+    // Build the list
+    let listHtml = columns.map((col, index) => `
+        <div class="preview-row" data-column-id="${col.column_id}" data-mapping-id="${col.mapping_id}" style="display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #f0f2f5;">
+            <span class="drag-handle" style="cursor:grab; color:#94a3b8; font-size:18px; user-select:none;">☰</span>
+            <span style="font-weight:600; min-width:30px;">${index + 1}</span>
+            <span style="flex:1;">${col.column_name}</span>
+            <span style="color:#64748b; font-size:13px;">Master ID: ${col.column_id}</span>
+            <button class="remove-column-btn" style="background:none; border:none; color:#dc2626; cursor:pointer; font-size:18px; padding:0 6px;" title="Remove column from template">✕</button>
+        </div>
+    `).join('');
+
     modal.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-            <h2 style="margin:0;">👁️ Template Preview</h2>
+            <h2 style="margin:0;">👁️ Edit Template: ${tpl.template_name}</h2>
             <button id="closePreviewBtn" style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">×</button>
         </div>
-        ${previewContent}
-        <div style="margin-top:20px; display:flex; justify-content:flex-end; border-top:1px solid #eee; padding-top:15px;">
-            <button id="closePreviewBtn2" style="padding:8px 20px; cursor:pointer; background:#3b82f6; color:white; border:none; border-radius:4px;">Close</button>
+        <p style="color:#64748b; margin-bottom:15px;">Drag ☰ to reorder. Click ✕ to remove a column. Changes are auto-saved.</p>
+        <div id="previewList" style="max-height:300px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:8px; padding:10px;">
+            ${listHtml}
         </div>
+        <div style="margin-top:15px; display:flex; justify-content:space-between; align-items:center;">
+            <span id="previewCount" style="color:#94a3b8; font-size:14px;">${columns.length} columns</span>
+            <button id="saveOrderBtn" style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:4px; cursor:pointer;">Save Order</button>
+        </div>
+        <div id="previewStatus" style="margin-top:10px; padding:8px; border-radius:4px; display:none;"></div>
     `;
 
     document.body.appendChild(overlay);
     document.body.appendChild(modal);
 
-    // Close handlers
+    // Close functions
     function closePreview() {
         if (document.body.contains(overlay)) document.body.removeChild(overlay);
         if (document.body.contains(modal)) document.body.removeChild(modal);
     }
     document.getElementById('closePreviewBtn').addEventListener('click', closePreview);
-    document.getElementById('closePreviewBtn2').addEventListener('click', closePreview);
     overlay.addEventListener('click', closePreview);
+
+    // Initialize SortableJS on the list
+    const listContainer = document.getElementById('previewList');
+    if (typeof Sortable !== 'undefined') {
+        new Sortable(listContainer, {
+            handle: '.drag-handle',
+            animation: 150,
+            ghostClass: 'sortable-ghost',
+            onEnd: function() {
+                // Update serial numbers
+                updatePreviewSerialNumbers(listContainer);
+                // Update count
+                updatePreviewCount(listContainer);
+            }
+        });
+    } else {
+        console.warn('SortableJS not loaded; drag disabled.');
+    }
+
+    // Remove column button: delete mapping and remove row
+    listContainer.querySelectorAll('.remove-column-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const row = this.closest('.preview-row');
+            const columnId = row.dataset.columnId;
+            const templateId = tpl.id;
+            if (!confirm('Remove this column from the template?')) return;
+            // Call API to delete mapping
+            fetch(API_BASE + '/api/templates/' + templateId + '/columns/' + columnId, {
+                method: 'DELETE'
+            })
+            .then(res => res.json())
+            .then(result => {
+                if (result.message) {
+                    row.remove();
+                    updatePreviewSerialNumbers(listContainer);
+                    updatePreviewCount(listContainer);
+                    showPreviewStatus('✅ Column removed', 'success');
+                    // Reload templates to update the list view
+                    loadTemplates();
+                }
+            })
+            .catch(err => {
+                showPreviewStatus('❌ Error: ' + err.message, 'error');
+            });
+        });
+    });
+
+    // Save Order button: send current order to server
+    document.getElementById('saveOrderBtn').addEventListener('click', function() {
+        const rows = listContainer.querySelectorAll('.preview-row');
+        const columnIds = Array.from(rows).map(row => parseInt(row.dataset.columnId));
+        if (columnIds.length === 0) {
+            showPreviewStatus('⚠️ Cannot save empty order.', 'error');
+            return;
+        }
+        fetch(API_BASE + '/api/templates/' + tpl.id + '/reorder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(columnIds)
+        })
+        .then(res => res.json())
+        .then(result => {
+            if (result.message) {
+                showPreviewStatus('✅ Order saved successfully', 'success');
+                // Reload templates to update the list view
+                loadTemplates();
+            }
+        })
+        .catch(err => {
+            showPreviewStatus('❌ Error: ' + err.message, 'error');
+        });
+    });
+
+    // Helper: update serial numbers
+    function updatePreviewSerialNumbers(container) {
+        const rows = container.querySelectorAll('.preview-row');
+        rows.forEach((row, idx) => {
+            const numSpan = row.querySelector('span:nth-child(2)');
+            if (numSpan) numSpan.textContent = idx + 1;
+        });
+    }
+
+    function updatePreviewCount(container) {
+        const count = container.querySelectorAll('.preview-row').length;
+        const countSpan = document.getElementById('previewCount');
+        if (countSpan) countSpan.textContent = count + ' columns';
+    }
+
+    function showPreviewStatus(msg, type) {
+        const statusDiv = document.getElementById('previewStatus');
+        statusDiv.textContent = msg;
+        statusDiv.style.display = 'block';
+        statusDiv.style.background = type === 'error' ? '#ffebee' : '#e8f5e9';
+        statusDiv.style.color = type === 'error' ? '#c62828' : '#2e7d32';
+        statusDiv.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
+        setTimeout(() => { statusDiv.style.display = 'none'; }, 4000);
+    }
 }
 
 // ---------- INITIAL LOAD ----------
 window.onload = function() {
     loadTemplates();
-    console.log('📄 Templates Manager loaded (using utils)');
+    console.log('📄 Templates Manager loaded (pivot table)');
 };

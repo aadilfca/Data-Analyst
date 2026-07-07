@@ -22,12 +22,6 @@ function formatDate(dateString) {
 }
 
 /**
- * Render a list of columns as checkboxes grouped by category.
- * @param {HTMLElement} container - The DOM element where checkboxes will be appended.
- * @param {Array} columns - Array of column objects (must have id, column_name, category).
- * @param {Array} selectedIds - Array of column IDs to be pre-checked.
- */
-/**
  * Render a list of columns as checkboxes with drag handles and category grouping.
  * @param {HTMLElement} container - The DOM element where checkboxes will be appended.
  * @param {Array} columns - Array of column objects (must have id, column_name, category).
@@ -143,19 +137,6 @@ function updateOrderCount(container) {
     }
 }
 
-function updateOrderCount(container) {
-    const checked = container.querySelectorAll('input[type="checkbox"]:checked').length;
-    const orderSpan = document.getElementById('orderCount');
-    if (orderSpan) {
-        orderSpan.textContent = checked;
-    }
-    // Also update the order status visibility
-    const statusDiv = document.getElementById('orderStatus');
-    if (statusDiv) {
-        statusDiv.style.display = checked > 0 ? 'block' : 'block';
-    }
-}
-
-// Expose functions globally (for use in non-module scripts)
+// Expose functions globally
 window.formatDate = formatDate;
 window.renderColumnCheckboxes = renderColumnCheckboxes;
