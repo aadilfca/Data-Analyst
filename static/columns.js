@@ -1,5 +1,5 @@
 // ==============================================
-// 📋 MANAGE COLUMNS LOGIC (clean)
+// 📋 MANAGE COLUMNS LOGIC - FINAL VERSION
 // ==============================================
 
 const API_BASE = 'http://localhost:5000';
@@ -10,7 +10,6 @@ const noColumnsMsg = document.getElementById('noColumnsMessage');
 const totalCountSpan = document.getElementById('totalCount');
 const statusDiv = document.getElementById('columnStatus');
 
-// Modal elements
 const modalOverlay = document.getElementById('columnModalOverlay');
 const modal = document.getElementById('columnModal');
 const modalTitle = document.getElementById('modalTitle');
@@ -20,17 +19,20 @@ const colCategory = document.getElementById('colCategory');
 const categoryDropdown = document.getElementById('categoryDropdown');
 const editId = document.getElementById('editColumnId');
 const cancelBtn = document.getElementById('cancelColumnBtn');
-const saveBtn = document.getElementById('saveColumnBtn');
 const modalStatus = document.getElementById('modalStatus');
 
-let editingId = null; // null = add mode, number = edit mode
+// Button references
+const saveBtn = document.getElementById('saveColumnBtn');
+const saveAndNewBtn = document.getElementById('saveAndNewBtn');
+const addColumnBtn = document.getElementById('addColumnBtn');
 
-// ---------- SORTING STATE ----------
+let editingId = null;
+
+// ---------- SORTING ----------
 let sortColumn = 'id';
 let sortAscending = true;
 window.columnData = [];
 
-// ---------- SORTING FUNCTIONS ----------
 function sortColumns(columns, column, ascending) {
     const sorted = [...columns];
     sorted.sort((a, b) => {
@@ -241,23 +243,72 @@ function closeModal() {
     modalStatus.style.display = 'none';
 }
 
-document.getElementById('addColumnBtn').addEventListener('click', () => openModal('Add New Column'));
+addColumnBtn.addEventListener('click', () => openModal('Add New Column'));
 cancelBtn.addEventListener('click', closeModal);
 modalOverlay.addEventListener('click', closeModal);
 
 function openEditModal(column) { openModal('Edit Column', column); }
 
-// ---------- FORM SUBMIT ----------
-document.getElementById('columnForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
+// ---------- CONFIRM DELETE ----------
+async function confirmDelete(id, name) {
+    if (!confirm(`Are you sure you want to delete column "${name}"? This will soft-delete it.`)) {
+        return;
+    }
 
+    try {
+        const res = await fetch(API_BASE + '/api/columns/' + id, { method: 'DELETE' });
+        const result = await res.json();
+        if (!res.ok) {
+            throw new Error(result.message || result.detail || 'Failed to delete column');
+        }
+        showStatus('✅ ' + result.message, 'success');
+        loadColumns();
+        loadCategoryDropdown();
+    } catch (error) {
+        showStatus('❌ Error deleting column: ' + error.message, 'error');
+    }
+}
+
+// ---------- FILTER COLUMNS ----------
+function filterColumns(searchTerm) {
+    if (!window.columnData) return;
+    
+    let filtered = window.columnData;
+    if (searchTerm) {
+        filtered = window.columnData.filter(col => {
+            const name = (col.column_name || '').toLowerCase();
+            const type = (col.data_type || '').toLowerCase();
+            const category = (col.category || '').toLowerCase();
+            return name.includes(searchTerm) || type.includes(searchTerm) || category.includes(searchTerm);
+        });
+    }
+    
+    const sorted = sortColumns(filtered, sortColumn, sortAscending);
+    renderColumns(sorted);
+    updateSortArrows(sortColumn, sortAscending);
+    totalCountSpan.textContent = filtered.length;
+}
+
+// ---------- CLEAR FORM ----------
+function clearForm() {
+    colName.value = '';
+    colType.value = 'Text';
+    colCategory.value = '';
+    categoryDropdown.value = '';
+    editingId = null;
+    editId.value = '';
+    modalStatus.style.display = 'none';
+}
+
+// ---------- SAVE FUNCTION ----------
+async function saveColumn(keepModalOpen) {
     const name = colName.value.trim();
     const type = colType.value;
     const category = colCategory.value.trim();
 
     if (!name) {
         showModalStatus('⚠️ Column name is required.', 'error');
-        return;
+        return false;
     }
 
     const payload = {
@@ -288,81 +339,68 @@ document.getElementById('columnForm').addEventListener('submit', async function(
         }
 
         showModalStatus('✅ ' + result.message, 'success');
-        setTimeout(() => {
-            closeModal();
-            loadColumns();
-            loadCategoryDropdown();
-            showStatus('✅ Column saved successfully!', 'success');
-        }, 800);
+
+        // Reload table
+        await loadColumns();
+        await loadCategoryDropdown();
+
+        if (keepModalOpen) {
+            // Save and New: clear form, keep modal open
+            clearForm();
+            showModalStatus('✅ Saved! Ready for next entry.', 'success');
+            // Force modal to stay open
+            modal.style.display = 'block';
+            modalOverlay.style.display = 'block';
+        } else {
+            // Normal Save: close modal after a short delay
+            setTimeout(() => {
+                closeModal();
+                showStatus('✅ Column saved successfully!', 'success');
+            }, 800);
+        }
+
+        return true;
 
     } catch (error) {
         showModalStatus('❌ Error: ' + error.message, 'error');
+        return false;
+    }
+}
+
+// ---------- BUTTON HANDLERS ----------
+// Save button – close modal after save
+saveBtn.addEventListener('click', function(e) {
+    e.preventDefault();
+    saveColumn(false);
+});
+
+// Save and New button – keep modal open after save
+saveAndNewBtn.addEventListener('click', function(e) {
+    e.preventDefault();
+    saveColumn(true);
+});
+
+// ---------- SEARCH ----------
+const searchInput = document.getElementById('columnSearchInput');
+if (searchInput) {
+    searchInput.addEventListener('input', function() {
+        filterColumns(this.value.trim().toLowerCase());
+    });
+}
+
+// ---------- ESC KEY ----------
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        const modalEl = document.getElementById('columnModal');
+        if (modalEl && modalEl.style.display === 'block') {
+            closeModal();
+        }
     }
 });
 
-// ---------- CONFIRM DELETE ----------
-async function confirmDelete(id, name) {
-    if (!confirm(`Are you sure you want to delete column "${name}"? This will soft-delete it.`)) {
-        return;
-    }
-
-    try {
-        const res = await fetch(API_BASE + '/api/columns/' + id, { method: 'DELETE' });
-        const result = await res.json();
-        if (!res.ok) {
-            throw new Error(result.message || result.detail || 'Failed to delete column');
-        }
-        showStatus('✅ ' + result.message, 'success');
-        loadColumns();
-        loadCategoryDropdown();
-    } catch (error) {
-        showStatus('❌ Error deleting column: ' + error.message, 'error');
-    }
-}
-// ---------- FILTER COLUMNS ----------
-function filterColumns(searchTerm) {
-    if (!window.columnData) return;
-    
-    let filtered = window.columnData;
-    if (searchTerm) {
-        filtered = window.columnData.filter(col => {
-            const name = (col.column_name || '').toLowerCase();
-            const type = (col.data_type || '').toLowerCase();
-            const category = (col.category || '').toLowerCase();
-            return name.includes(searchTerm) || type.includes(searchTerm) || category.includes(searchTerm);
-        });
-    }
-    
-    // Apply current sort to filtered data
-    const sorted = sortColumns(filtered, sortColumn, sortAscending);
-    renderColumns(sorted);
-    updateSortArrows(sortColumn, sortAscending);
-    
-    // Update total count display to show filtered count
-    totalCountSpan.textContent = filtered.length;
-}
 // ---------- INIT ----------
 window.onload = function() {
     loadColumns();
     setupSorting();
-    
-    // Search input handler
-    const searchInput = document.getElementById('columnSearchInput');
-    if (searchInput) {
-        searchInput.addEventListener('input', function() {
-            const term = this.value.trim().toLowerCase();
-            filterColumns(term);
-        });
-    }
-    
     console.log('📋 Columns Manager loaded');
 };
-// ---------- ESC KEY TO CLOSE COLUMN MODAL ----------
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        const modal = document.getElementById('columnModal');
-        if (modal && modal.style.display === 'block') {
-            closeModal();
-        }
-    }
-});

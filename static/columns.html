@@ -34,11 +34,13 @@
             <span id="totalColumnsLabel" style="font-size:14px; color:#64748b; align-self:center;">Total: <strong
                     id="totalCount">0</strong> columns</span>
         </div>
+
         <!-- Search Field -->
         <div style="margin-bottom:20px;">
             <input type="text" id="columnSearchInput" placeholder="Search by Column Name, Type or Category"
                 style="width:100%; padding:10px 14px; border:2px solid #e2e8f0; border-radius:8px; font-size:14px; transition:border-color 0.2s; max-width:500px;">
         </div>
+
         <!-- Columns Table -->
         <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
             <table id="columnsTable" style="width:100%; border-collapse:collapse; font-size:14px;">
@@ -121,7 +123,10 @@
                 style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px; border-top:1px solid #eee; padding-top:15px;">
                 <button type="button" id="cancelColumnBtn"
                     style="padding:8px 20px; cursor:pointer; background:#e0e0e0; border:none; border-radius:4px;">Cancel</button>
-                <button type="submit" id="saveColumnBtn"
+                <button type="button" id="saveAndNewBtn"
+                    style="padding:8px 20px; cursor:pointer; background:#22c55e; color:white; border:none; border-radius:4px; font-weight:500;">Save
+                    and New</button>
+                <button type="button" id="saveColumnBtn"
                     style="padding:8px 20px; cursor:pointer; background:#4CAF50; color:white; border:none; border-radius:4px;">Save</button>
             </div>
         </form>
