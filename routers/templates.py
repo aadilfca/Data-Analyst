@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-# ---------- MASTER COLUMNS (unchanged) ----------
+# ---------- MASTER COLUMNS ----------
 class ColumnCreate(BaseModel):
     column_name: str
     data_type: str
@@ -63,16 +63,16 @@ def delete_column(column_id: int):
 def get_categories():
     return execute_query("SELECT DISTINCT category FROM master_columns WHERE is_active = 1 ORDER BY category")
 
-# ---------- TEMPLATES WITH PIVOT TABLE ----------
+# ---------- TEMPLATES (with PIVOT table) ----------
 
 class TemplateCreate(BaseModel):
     template_name: str
-    selected_columns: List[int]  # ordered list of column IDs
+    selected_columns: List[int]
     created_by: str = "Admin"
 
 class TemplateUpdate(BaseModel):
     template_name: str
-    selected_columns: List[int]  # ordered list
+    selected_columns: List[int]
 
 @router.get("/api/templates")
 def get_templates():
@@ -81,7 +81,6 @@ def get_templates():
         "SELECT id, template_name, created_by, created_date, is_active FROM templates WHERE is_active = 1 ORDER BY template_name"
     )
     for t in templates:
-        # Fetch mapped columns for this template, ordered by sort_order
         mappings = execute_query(
             """
             SELECT m.id, m.column_name, m.data_type, m.category, p.sort_order
@@ -92,7 +91,7 @@ def get_templates():
             """,
             (t['id'],)
         )
-        t['columns'] = mappings  # list of column objects with sort_order
+        t['columns'] = mappings
     return templates
 
 @router.get("/api/templates/{template_id}")
@@ -121,20 +120,18 @@ def create_template(template: TemplateCreate):
         raise HTTPException(400, "Template name already exists")
     if not template.selected_columns:
         raise HTTPException(400, "Select at least one column")
-    
-    # Insert template
+
     template_id = execute_write(
         "INSERT INTO templates (template_name, created_by) VALUES (?, ?)",
         (template.template_name, template.created_by)
     )
-    
-    # Insert mappings with sort_order
+
     for idx, col_id in enumerate(template.selected_columns):
         execute_write(
             "INSERT INTO template_column_mappings (template_id, column_id, sort_order) VALUES (?, ?, ?)",
             (template_id, col_id, idx)
         )
-    
+
     log_audit(template.created_by, "Create", "Templates", f"Created template: {template.template_name}")
     return {"message": f"Template '{template.template_name}' created successfully", "template_id": template_id}
 
@@ -146,18 +143,15 @@ def update_template(template_id: int, template: TemplateUpdate):
     duplicate = execute_query("SELECT id FROM templates WHERE template_name = ? AND id != ?", (template.template_name, template_id))
     if duplicate:
         raise HTTPException(400, "Template name already exists")
-    
-    # Update template name
+
     execute_write("UPDATE templates SET template_name = ? WHERE id = ?", (template.template_name, template_id))
-    
-    # Replace mappings: delete all and insert new ones with given order
     execute_write("DELETE FROM template_column_mappings WHERE template_id = ?", (template_id,))
     for idx, col_id in enumerate(template.selected_columns):
         execute_write(
             "INSERT INTO template_column_mappings (template_id, column_id, sort_order) VALUES (?, ?, ?)",
             (template_id, col_id, idx)
         )
-    
+
     log_audit("Admin", "Update", "Templates", f"Updated template: {template.template_name}")
     return {"message": f"Template '{template.template_name}' updated successfully"}
 
@@ -166,24 +160,22 @@ def delete_template(template_id: int):
     existing = execute_query("SELECT template_name FROM templates WHERE id = ? AND is_active = 1", (template_id,))
     if not existing:
         raise HTTPException(404, "Template not found")
-    # Soft delete template (mappings will be orphaned but we can delete them too)
     execute_write("UPDATE templates SET is_active = 0 WHERE id = ?", (template_id,))
-    # Optionally delete pivot entries (hard delete)
     execute_write("DELETE FROM template_column_mappings WHERE template_id = ?", (template_id,))
     log_audit("Admin", "Delete", "Templates", f"Deleted template: {existing[0]['template_name']}")
     return {"message": "Template deleted successfully"}
 
-# ---------- NEW ENDPOINTS FOR PREVIEW MODAL ----------
+# ---------- NEW ENDPOINTS FOR UPLOAD & PREVIEW ----------
 
-@router.get("/api/templates/{template_id}/columns")
-def get_template_columns(template_id: int):
-    """Return the columns of a template with sort_order (for preview)."""
+@router.get("/api/templates/{template_id}/upload-columns")
+def get_template_upload_columns(template_id: int):
+    """Return the columns of a template with sort_order (for upload preview)."""
     result = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (template_id,))
     if not result:
         raise HTTPException(404, "Template not found")
     mappings = execute_query(
         """
-        SELECT m.id AS column_id, m.column_name, m.data_type, m.category, p.sort_order, p.id AS mapping_id
+        SELECT m.id, m.column_name, m.data_type, m.category, p.sort_order
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = ? AND m.is_active = 1
@@ -191,7 +183,7 @@ def get_template_columns(template_id: int):
         """,
         (template_id,)
     )
-    return mappings
+    return {"template_id": template_id, "columns": mappings, "total_columns": len(mappings)}
 
 @router.post("/api/templates/{template_id}/reorder")
 def reorder_template_columns(template_id: int, column_ids: List[int] = Body(...)):
@@ -199,7 +191,6 @@ def reorder_template_columns(template_id: int, column_ids: List[int] = Body(...)
     existing = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (template_id,))
     if not existing:
         raise HTTPException(404, "Template not found")
-    # Update each mapping's sort_order
     for idx, col_id in enumerate(column_ids):
         execute_write(
             "UPDATE template_column_mappings SET sort_order = ? WHERE template_id = ? AND column_id = ?",
@@ -214,7 +205,6 @@ def remove_template_column(template_id: int, column_id: int):
     existing = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (template_id,))
     if not existing:
         raise HTTPException(404, "Template not found")
-    # Delete the mapping
     deleted = execute_write(
         "DELETE FROM template_column_mappings WHERE template_id = ? AND column_id = ?",
         (template_id, column_id)
@@ -224,11 +214,11 @@ def remove_template_column(template_id: int, column_id: int):
     log_audit("Admin", "RemoveColumn", "Templates", f"Removed column {column_id} from template {template_id}")
     return {"message": "Column removed from template"}
 
-# ---------- BACKUP / RESTORE (updated to handle pivot) ----------
+# ---------- BACKUP / RESTORE ----------
 class BackupData(BaseModel):
     columns: list
     templates: list
-    mappings: list  # new
+    mappings: list
 
 @router.get("/api/backup/export")
 def export_backup():
@@ -243,24 +233,19 @@ def import_backup(data: BackupData = Body(...)):
     try:
         conn.execute("BEGIN TRANSACTION")
         conn.execute("PRAGMA foreign_keys = OFF")
-        # Clear existing data
         conn.execute("DELETE FROM template_column_mappings")
         conn.execute("DELETE FROM templates")
         conn.execute("DELETE FROM master_columns")
-        
-        # Insert columns
         for col in data.columns:
             conn.execute(
                 "INSERT INTO master_columns (id, column_name, data_type, category, is_active) VALUES (?, ?, ?, ?, ?)",
                 (col['id'], col['column_name'], col['data_type'], col.get('category', 'General'), col.get('is_active', 1))
             )
-        # Insert templates
         for tpl in data.templates:
             conn.execute(
                 "INSERT INTO templates (id, template_name, created_by, created_date, is_active) VALUES (?, ?, ?, ?, ?)",
                 (tpl['id'], tpl['template_name'], tpl.get('created_by', 'Admin'), tpl.get('created_date'), tpl.get('is_active', 1))
             )
-        # Insert mappings
         for mp in data.mappings:
             conn.execute(
                 "INSERT INTO template_column_mappings (id, template_id, column_id, sort_order) VALUES (?, ?, ?, ?)",
