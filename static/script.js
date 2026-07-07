@@ -42,3 +42,41 @@ document.addEventListener('keydown', function(e) {
 });
 
 console.log('📊 Dashboard ready. Press "R" to refresh stats.');
+
+// ---------- CLOSE MODALS WITH ESC KEY (Global) ----------
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        // Close Column Modal (if open)
+        const columnModal = document.getElementById('columnModal');
+        if (columnModal && columnModal.style.display === 'block') {
+            const closeBtn = document.getElementById('cancelColumnBtn');
+            if (closeBtn) closeBtn.click();
+            return;
+        }
+        
+        // Close Template Modal (if open)
+        const templateModal = document.getElementById('templateModal');
+        if (templateModal && templateModal.style.display === 'block') {
+            const closeBtn = document.getElementById('cancelTemplateBtn');
+            if (closeBtn) closeBtn.click();
+            return;
+        }
+        
+        // Close Preview Modal (if open – dynamic)
+        const previewModal = document.getElementById('previewModal');
+        if (previewModal) {
+            const closeBtn = document.getElementById('closePreviewBtn');
+            if (closeBtn) closeBtn.click();
+            return;
+        }
+        
+        // Close Upload Popup (if open)
+        const popupWindow = document.getElementById('popupWindow');
+        if (popupWindow && popupWindow.style.display === 'block') {
+            const closeBtn = document.querySelector('#popupWindow button[onclick*="closePopup"]');
+            if (closeBtn) closeBtn.click();
+            return;
+        }
+    }
+});
+console.log('🔑 ESC key handler enabled');

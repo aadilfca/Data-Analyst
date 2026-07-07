@@ -474,3 +474,21 @@ window.onload = function() {
     loadTemplates();
     console.log('📄 Templates Manager loaded (pivot table)');
 };
+// ---------- ESC KEY TO CLOSE TEMPLATE & PREVIEW MODALS ----------
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        // Close template modal
+        const templateModal = document.getElementById('templateModal');
+        if (templateModal && templateModal.style.display === 'block') {
+            closeModal();
+            return;
+        }
+        // Close preview modal
+        const previewModal = document.getElementById('previewModal');
+        if (previewModal) {
+            const closeBtn = document.getElementById('closePreviewBtn');
+            if (closeBtn) closeBtn.click();
+            return;
+        }
+    }
+});

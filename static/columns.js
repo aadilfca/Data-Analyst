@@ -326,3 +326,12 @@ window.onload = function() {
     setupSorting();
     console.log('📋 Columns Manager loaded');
 };
+// ---------- ESC KEY TO CLOSE COLUMN MODAL ----------
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        const modal = document.getElementById('columnModal');
+        if (modal && modal.style.display === 'block') {
+            closeModal();
+        }
+    }
+});
