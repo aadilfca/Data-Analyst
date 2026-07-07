@@ -44,8 +44,9 @@ def init_db():
     conn = get_db()
     
     # Drop old tables to ensure clean schema (safe for development)
-    conn.execute("DROP TABLE IF EXISTS templates")
-    conn.execute("DROP TABLE IF EXISTS template_column_mappings")
+    # Drop table made inactive for production safety. Uncomment during development if needed.
+    # conn.execute("DROP TABLE IF EXISTS templates")
+    # conn.execute("DROP TABLE IF EXISTS template_column_mappings")
     
     # Master Columns table
     conn.execute('''
