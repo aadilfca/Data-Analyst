@@ -213,6 +213,223 @@ def validate_and_import(request: ImportRequest):
 
     mapping_dict = {m.template_column_id: m for m in request.mappings}
 
+    # Build a dict to map template column ID to its name (for unique column lookup)
+    col_id_to_name = {col['id']: col['column_name'] for col in template_cols}
+    
+    # Build column mapping (template column name -> Excel column name)
+    col_mapping = {}
+    for t_col in template_cols:
+        mapping = mapping_dict.get(t_col['id'])
+        if mapping and mapping.excel_column_name:
+            col_mapping[t_col['column_name']] = mapping.excel_column_name
+
+    unique_col_name = None
+    if request.mode == "update":
+        if request.unique_column_id is None:
+            raise HTTPException(400, "Unique ID column is required when mode is 'Update Existing'")
+        unique_col_name = col_id_to_name.get(request.unique_column_id)
+        if not unique_col_name:
+            raise HTTPException(400, "Selected Unique ID column is not part of this template")
+        # Ensure the unique column is mapped to an Excel column
+        if unique_col_name not in col_mapping:
+            raise HTTPException(400, f"Unique column '{unique_col_name}' must be mapped to an Excel column")
+
+    # Read Excel data
+    try:
+        df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
+        # Keep only columns that are mapped
+        mapped_excel_cols = [m.excel_column_name for m in request.mappings if m.excel_column_name]
+        df = df[[col for col in mapped_excel_cols if col in df.columns]]
+    except Exception as e:
+        raise HTTPException(400, f"Error reading Excel: {str(e)}")
+
+    rows = df.to_dict('records')
+    
+    # --- Validation ---
+    validation_errors = []
+    for row_idx, row in enumerate(rows, start=2):
+        row_errors = []
+        for t_col in template_cols:
+            mapping = mapping_dict.get(t_col['id'])
+            if not mapping or not mapping.excel_column_name:
+                continue
+            excel_col = mapping.excel_column_name
+            if excel_col not in row:
+                continue
+            value = row[excel_col]
+            if pd.isna(value):
+                row_errors.append({
+                    "column": t_col['column_name'],
+                    "excel_column": excel_col,
+                    "error_type": "required",
+                    "message": f"Required field '{t_col['column_name']}' is empty"
+                })
+            else:
+                if t_col['data_type'] == "Numeric":
+                    try:
+                        float(value)
+                    except:
+                        row_errors.append({
+                            "column": t_col['column_name'],
+                            "excel_column": excel_col,
+                            "error_type": "data_type",
+                            "message": f"Expected Numeric but got '{value}'"
+                        })
+                elif t_col['data_type'] == "Date":
+                    try:
+                        if isinstance(value, str):
+                            datetime.strptime(value, "%d/%m/%Y")
+                    except:
+                        row_errors.append({
+                            "column": t_col['column_name'],
+                            "excel_column": excel_col,
+                            "error_type": "data_type",
+                            "message": f"Expected Date (DD/MM/YYYY) but got '{value}'"
+                        })
+        if row_errors:
+            validation_errors.append({"row_number": row_idx, "errors": row_errors})
+
+    if validation_errors:
+        return {
+            "status": "validation_failed",
+            "errors": validation_errors,
+            "total_rows": len(rows),
+            "error_count": len(validation_errors)
+        }
+
+    # col_mapping is already defined above; skip redefinition.
+
+    # --- UPSERT LOGIC ---
+    # Update uploaded_files status and set client_id
+    execute_write(
+        "UPDATE uploaded_files SET status = 'Imported', client_id = ? WHERE id = ?",
+        (request.client_id, request.file_id)
+    )
+
+    inserted_count = 0
+    updated_count = 0
+    skipped_count = 0
+
+    for row in rows:
+        # Build JSON row_data (same as before)
+        row_data = {}
+        for t_col_name, excel_col in col_mapping.items():
+            if excel_col in row:
+                value = row[excel_col]
+                if pd.isna(value):
+                    value = None
+                if isinstance(value, datetime):
+                    value = value.strftime('%d/%m/%Y')
+                row_data[t_col_name] = value
+
+        # Extract amount and date for indexing
+        amount, date_str = extract_columns_from_row(row_data, template_cols)
+
+        # Check if mode is update and we have a unique column
+        if request.mode == "update" and unique_col_name:
+            unique_value = row_data.get(unique_col_name)
+            # If unique value is empty, we cannot find an existing row, so we'll insert new
+            if unique_value is None or unique_value == '':
+                # Insert as new
+                execute_write(
+                    """
+                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (request.client_id, request.template_id, request.file_id,
+                     json.dumps(row_data), amount, date_str, "Analyst")
+                )
+                inserted_count += 1
+                continue
+
+            # Query for existing row with same unique value
+            existing = execute_query(
+                """
+                SELECT id, version FROM client_data
+                WHERE client_id = ? AND template_id = ? AND is_deleted = 0
+                AND json_extract(row_data, '$."{}"') = ?
+                """.format(unique_col_name),
+                (request.client_id, request.template_id, str(unique_value))
+            )
+
+            if existing:
+                # Update existing row
+                row_id = existing[0]['id']
+                new_version = (existing[0]['version'] or 1) + 1
+                execute_write(
+                    """
+                    UPDATE client_data
+                    SET row_data = ?, extract_amount = ?, extract_date = ?, version = ?
+                    WHERE id = ?
+                    """,
+                    (json.dumps(row_data), amount, date_str, new_version, row_id)
+                )
+                updated_count += 1
+                # Log the update in audit log (optional)
+                log_audit("Analyst", "Update", "Data", f"Updated row {row_id} for client {request.client_id}, unique {unique_col_name}={unique_value}")
+            else:
+                # Insert new row
+                execute_write(
+                    """
+                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (request.client_id, request.template_id, request.file_id,
+                     json.dumps(row_data), amount, date_str, "Analyst", 1)
+                )
+                inserted_count += 1
+        else:
+            # Mode is "create" (insert always)
+            execute_write(
+                """
+                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (request.client_id, request.template_id, request.file_id,
+                 json.dumps(row_data), amount, date_str, "Analyst", 1)
+            )
+            inserted_count += 1
+
+    log_audit("Analyst", "Import", "Upload",
+              f"Imported {inserted_count} new records, updated {updated_count} records for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
+
+    return {
+        "status": "success",
+        "message": f"Successfully imported: {inserted_count} new, {updated_count} updated",
+        "total_rows": len(rows),
+        "imported_count": inserted_count,
+        "updated_count": updated_count,
+        "validation_errors": []
+    }
+    # Validate template and file
+    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    if not template:
+        raise HTTPException(404, "Template not found")
+    file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
+    if not file_info:
+        raise HTTPException(404, "File not found")
+    
+    # Validate client exists
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    # Get template columns with their types
+    template_cols = execute_query(
+        """
+        SELECT m.id, m.column_name, m.data_type
+        FROM template_column_mappings p
+        JOIN master_columns m ON p.column_id = m.id
+        WHERE p.template_id = ? AND m.is_active = 1
+        ORDER BY p.sort_order ASC
+        """,
+        (request.template_id,)
+    )
+    if not template_cols:
+        raise HTTPException(400, "Template has no columns")
+
+    mapping_dict = {m.template_column_id: m for m in request.mappings}
+
     # Read Excel data
     try:
         df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
