@@ -296,3 +296,77 @@ def restore_dataset(upload_id: int):
     log_audit("Analyst", "Restore", "DataBank", f"Restored dataset upload_id={upload_id} ({len(rows)} rows)")
     
     return {"message": f"Dataset '{upload[0]['file_name']}' restored successfully ({len(rows)} rows)"}
+
+# ==============================================
+# 📊 AVAILABILITY CHECKLIST ENDPOINT
+# ==============================================
+
+@router.get("/api/data/availability")
+def get_availability(
+    client_id: int = Query(..., description="Client ID"),
+    template_id: Optional[int] = Query(None, description="Filter by template ID"),
+    date_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_end: str = Query(..., description="End date (YYYY-MM-DD)")
+):
+    """
+    Get aggregated availability data for templates for a given client and date range.
+    Returns a list of templates with row counts, min/max dates, Sunday count, and status.
+    """
+    # Validate client exists
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+    
+    # Validate date format (basic)
+    try:
+        datetime.fromisoformat(date_start)
+        datetime.fromisoformat(date_end)
+    except ValueError:
+        raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+    
+    if date_start > date_end:
+        raise HTTPException(400, "Start date must be before or equal to end date.")
+    
+    # Base query to get all active templates and left join with client_data
+    # Build dynamically based on template_id filter
+    query = """
+        SELECT 
+            t.id AS template_id,
+            t.template_name,
+            COALESCE(COUNT(cd.id), 0) AS row_count,
+            MIN(cd.extract_date) AS date_min,
+            MAX(cd.extract_date) AS date_max,
+            COALESCE(SUM(CASE WHEN strftime('%w', cd.extract_date) = '0' THEN 1 ELSE 0 END), 0) AS sunday_count
+        FROM templates t
+        LEFT JOIN client_data cd 
+            ON cd.template_id = t.id 
+            AND cd.client_id = ? 
+            AND cd.is_deleted = 0 
+            AND cd.extract_date BETWEEN ? AND ?
+    """
+    params = [client_id, date_start, date_end]
+    
+    if template_id is not None:
+        query += " AND t.id = ?"
+        params.append(template_id)
+    
+    query += " WHERE t.is_active = 1"
+    query += " GROUP BY t.id ORDER BY t.template_name"
+    
+    rows = execute_query(query, params)
+    
+    # Compute status: simple – if row_count > 0 then "complete" else "missing"
+    result = []
+    for row in rows:
+        status = "complete" if row["row_count"] > 0 else "missing"
+        result.append({
+            "template_id": row["template_id"],
+            "template_name": row["template_name"],
+            "row_count": row["row_count"],
+            "date_min": row["date_min"],
+            "date_max": row["date_max"],
+            "sunday_count": row["sunday_count"],
+            "status": status
+        })
+    
+    return result
