@@ -1,5 +1,5 @@
 // ================================================================
-// 📤 UPLOAD MODULE – FULLY FUNCTIONAL
+// 📤 UPLOAD MODULE – FULLY FUNCTIONAL (CLEAN)
 // ================================================================
 
 // API_BASE is defined globally in client_context.js
@@ -27,11 +27,6 @@ const clearBtn = getElement('clearBtn');
 const mappingPanel = getElement('mappingPanel');
 const mappingBody = getElement('mappingBody');
 const mappingCount = getElement('mappingCount');
-
-const previewPanel = getElement('previewPanel');
-const previewHeader = getElement('previewHeader');
-const previewBody = getElement('previewBody');
-const previewCount = getElement('previewCount');
 
 const modeActions = getElement('modeActions');
 const uploadMode = getElement('uploadMode');
@@ -142,7 +137,6 @@ if (templateDropdown) {
         if (!id) {
             selectedTemplateId = null;
             if (mappingPanel) mappingPanel.style.display = 'none';
-            if (previewPanel) previewPanel.style.display = 'none';
             if (modeActions) modeActions.style.display = 'none';
             if (sheetField) sheetField.style.display = 'none';
             if (importBtn) importBtn.disabled = true;
@@ -243,7 +237,9 @@ async function handleFile(file) {
             currentSheet = sheetNames[0];
             if (sheetSelector) sheetSelector.value = currentSheet;
             if (sheetField) sheetField.style.display = 'block';
-
+            // Show preview button
+            const previewBtn = document.getElementById('previewBtn');
+            if (previewBtn) previewBtn.style.display = 'inline-block';
             uploadFileToServer(file);
 
             showStatus('📄 File loaded. Sheet "' + currentSheet + '" selected.', 'info');
@@ -323,7 +319,6 @@ function resetUpload() {
     if (uploadArea) uploadArea.style.display = 'flex';
     if (fileInput) fileInput.value = '';
     if (mappingPanel) mappingPanel.style.display = 'none';
-    if (previewPanel) previewPanel.style.display = 'none';
     if (modeActions) modeActions.style.display = 'none';
     if (sheetField) sheetField.style.display = 'none';
     if (sheetSelector) sheetSelector.innerHTML = '';
@@ -335,11 +330,12 @@ function resetUpload() {
     currentMappings = [];
     excelHeaders = [];
     templateColumns = [];
+    // Hide preview button
+    const previewBtn = document.getElementById('previewBtn');
+    if (previewBtn) previewBtn.style.display = 'none';
     showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     setBadge('⏳ Select a template');
     if (mappingBody) mappingBody.innerHTML = '';
-    if (previewHeader) previewHeader.innerHTML = '';
-    if (previewBody) previewBody.innerHTML = '';
 }
 
 // ---------- AUTO-MAP ----------
@@ -373,12 +369,10 @@ async function autoMapColumns() {
         excelHeaders = data.excel_headers;
 
         renderMapping(data.mappings);
-        renderPreviewFromData();
         populateUniqueIdDropdown();
 
         if (modeActions) modeActions.style.display = 'block';
         if (mappingPanel) mappingPanel.style.display = 'block';
-        if (previewPanel) previewPanel.style.display = 'flex';
         if (importBtn) importBtn.disabled = false;
 
         const matched = data.mappings.filter(m => m.is_matched).length;
@@ -516,74 +510,6 @@ function renderMapping(mappings) {
     }
 }
 
-// ---------- RENDER PREVIEW ----------
-function renderPreviewFromData() {
-    if (!workbookData || !previewHeader || !previewBody) return;
-    try {
-        const workbook = XLSX.read(workbookData, { type: 'array' });
-        const sheetName = currentSheet || workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-        const headers = jsonData[0] || [];
-        const rows = jsonData.slice(1, 21);
-
-        previewHeader.innerHTML = '';
-        if (headers.length) {
-            const headerRow = document.createElement('tr');
-            headers.forEach(h => {
-                const th = document.createElement('th');
-                th.textContent = h || '—';
-                headerRow.appendChild(th);
-            });
-            previewHeader.appendChild(headerRow);
-        }
-
-        previewBody.innerHTML = '';
-        rows.forEach(row => {
-            const tr = document.createElement('tr');
-            row.forEach((cell, idx) => {
-                const td = document.createElement('td');
-                let displayValue = cell;
-                const headerName = (headers[idx] || '').toLowerCase();
-                if (typeof cell === 'number' && cell > 30000 && (headerName.includes('date') || headerName.includes('day') || headerName.includes('month'))) {
-                    const date = new Date((cell - 25569) * 86400 * 1000);
-                    if (!isNaN(date)) {
-                        const d = String(date.getDate()).padStart(2, '0');
-                        const m = String(date.getMonth() + 1).padStart(2, '0');
-                        const y = date.getFullYear();
-                        displayValue = d + '/' + m + '/' + y;
-                    }
-                } else if (typeof cell === 'string' && /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(cell)) {
-                    const parts = cell.split('/');
-                    if (parts.length === 3) {
-                        let day, month, year;
-                        if (parseInt(parts[0]) > 12) {
-                            day = parts[0];
-                            month = parts[1];
-                        } else {
-                            month = parts[0];
-                            day = parts[1];
-                        }
-                        year = parts[2];
-                        if (year.length === 2) year = '20' + year;
-                        displayValue = day.padStart(2, '0') + '/' + month.padStart(2, '0') + '/' + year;
-                    }
-                }
-                td.textContent = displayValue !== undefined ? displayValue : '';
-                tr.appendChild(td);
-            });
-            previewBody.appendChild(tr);
-        });
-
-        const totalRows = jsonData.length - 1;
-        if (previewCount) previewCount.textContent = Math.min(totalRows, 20) + ' rows · ' + headers.length + ' columns';
-        if (previewPanel) previewPanel.style.display = 'flex';
-
-    } catch (error) {
-        console.error('Preview error:', error);
-    }
-}
-
 // ---------- UNIQUE ID DROPDOWN ----------
 function populateUniqueIdDropdown() {
     if (!uniqueIdColumn) return;
@@ -715,6 +641,125 @@ if (importBtn) {
             isProcessing = false;
             showSpinner(false);
             if (importBtn) importBtn.disabled = false;
+        }
+    });
+}
+
+// ---------- PREVIEW FUNCTION ----------
+function showPreview() {
+    const previewSheet = document.getElementById('previewSheet');
+    const mainUploadPage = document.getElementById('mainUploadPage');
+    const previewHead = document.getElementById('previewSheetHead');
+    const previewBody = document.getElementById('previewSheetBody');
+    const previewInfo = document.getElementById('previewInfo');
+
+    if (!workbookData) {
+        showStatus('⚠️ No file loaded to preview.', 'error');
+        return;
+    }
+
+    try {
+        const workbook = XLSX.read(workbookData, { type: 'array' });
+        const sheetName = currentSheet || workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        
+        const headers = jsonData[0] || [];
+        const rows = jsonData.slice(1); // All rows, not limited
+
+        // Build headers
+        previewHead.innerHTML = '';
+        if (headers.length) {
+            const tr = document.createElement('tr');
+            headers.forEach(h => {
+                const th = document.createElement('th');
+                th.textContent = h || '—';
+                tr.appendChild(th);
+            });
+            previewHead.appendChild(tr);
+        }
+
+        // Build body (all rows)
+        previewBody.innerHTML = '';
+        rows.forEach(row => {
+            const tr = document.createElement('tr');
+            row.forEach((cell, idx) => {
+                const td = document.createElement('td');
+                let displayValue = cell;
+                const headerName = (headers[idx] || '').toLowerCase();
+                if (typeof cell === 'number' && cell > 30000 && 
+                    (headerName.includes('date') || headerName.includes('day') || headerName.includes('month'))) {
+                    const date = new Date((cell - 25569) * 86400 * 1000);
+                    if (!isNaN(date)) {
+                        const d = String(date.getDate()).padStart(2, '0');
+                        const m = String(date.getMonth() + 1).padStart(2, '0');
+                        const y = date.getFullYear();
+                        displayValue = d + '/' + m + '/' + y;
+                    }
+                } else if (typeof cell === 'string' && /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(cell)) {
+                    const parts = cell.split('/');
+                    if (parts.length === 3) {
+                        let day, month, year;
+                        if (parseInt(parts[0]) > 12) {
+                            day = parts[0];
+                            month = parts[1];
+                        } else {
+                            month = parts[0];
+                            day = parts[1];
+                        }
+                        year = parts[2];
+                        if (year.length === 2) year = '20' + year;
+                        displayValue = day.padStart(2, '0') + '/' + month.padStart(2, '0') + '/' + year;
+                    }
+                }
+                td.textContent = displayValue !== undefined ? displayValue : '';
+                tr.appendChild(td);
+            });
+            previewBody.appendChild(tr);
+        });
+
+                previewInfo.textContent = `${rows.length} rows · ${headers.length} columns`;
+
+        // Update footer with client and user info
+        const clientName = window.getSelectedClientName ? window.getSelectedClientName() : 'No Client';
+        const clientCode = window.getSelectedClientCode ? window.getSelectedClientCode() : '';
+        const userName = 'Analyst'; // could be dynamic later
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+        document.getElementById('footerClientName').textContent = clientCode ? `${clientName} (${clientCode})` : clientName;
+        document.getElementById('footerUserName').textContent = userName;
+        document.getElementById('footerTimeValue').textContent = timeStr;
+        document.getElementById('footerDateValue').textContent = dateStr;
+
+        // Show preview sheet, hide main page
+        previewSheet.classList.add('active');
+        mainUploadPage.style.display = 'none';
+
+    } catch (error) {
+        showStatus('❌ Error previewing file: ' + error.message, 'error');
+    }
+}
+
+// ---------- CLOSE PREVIEW ----------
+const closePreviewBtn = document.getElementById('closePreviewBtn');
+if (closePreviewBtn) {
+    closePreviewBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        document.getElementById('previewSheet').classList.remove('active');
+        document.getElementById('mainUploadPage').style.display = 'block';
+    });
+}
+
+// ---------- PREVIEW BUTTON ----------
+const previewBtn = document.getElementById('previewBtn');
+if (previewBtn) {
+    previewBtn.addEventListener('click', function() {
+        if (workbookData && currentSheet) {
+            showPreview();
+        } else {
+            showStatus('⚠️ Please upload a file first.', 'error');
         }
     });
 }
