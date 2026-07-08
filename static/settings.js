@@ -2,8 +2,6 @@
 // ⚙️ APP SETTINGS LOGIC
 // ==============================================
 
-const API_BASE = 'http://localhost:5000';
-
 const SETTINGS_DEF = {
     date_format: {
         label: 'Date Format',

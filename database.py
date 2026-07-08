@@ -384,33 +384,6 @@ def init_db():
                 (ec["code"], ec["severity"], ec["category"], ec["user_message"], ec["tech_description"], ec["suggested_action"])
             )
         print("✅ Seeded error codes (" + str(len(error_codes)) + " entries)")
-        # ---------- APP SETTINGS ----------
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS app_settings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            key TEXT UNIQUE NOT NULL,
-            value TEXT NOT NULL,
-            description TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Seed default settings
-    default_settings = [
-        ('date_format', 'DD/MM/YYYY', 'Global date format for display'),
-        ('amount_grouping', '000', 'Amount grouping: 000 (thousands) or Lacs'),
-        ('decimal_precision', '0', 'Default decimal places for amounts (0, 2, 4)'),
-        ('default_date_range', 'Current Month', 'Default date range for dashboards'),
-        ('materiality_threshold', '50000', 'Threshold for flagging high-value items'),
-    ]
-    for key, val, desc in default_settings:
-        cur = conn.execute("SELECT id FROM app_settings WHERE key = ?", (key,))
-        if not cur.fetchone():
-            conn.execute(
-                "INSERT INTO app_settings (key, value, description) VALUES (?, ?, ?)",
-                (key, val, desc)
-            )
-    print("✅ Seeded app settings")
         # Insert default columns if master_columns is empty
     existing = conn.execute("SELECT COUNT(*) FROM master_columns").fetchone()[0]
     if existing == 0:

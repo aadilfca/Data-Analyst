@@ -2,8 +2,6 @@
 // 📦 UTILITY FUNCTIONS (with global settings)
 // ==============================================
 
-const API_BASE = 'http://localhost:5000';
-
 // Cache settings to avoid repeated API calls
 let cachedSettings = null;
 

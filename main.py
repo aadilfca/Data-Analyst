@@ -29,7 +29,6 @@ app.include_router(clients.router)
 app.include_router(data.router)
 app.include_router(error_log.router)
 app.include_router(settings.router)
-app.include_router(settings.router)
 
 # ---------- GLOBAL EXCEPTION HANDLER ----------
 import traceback
@@ -75,7 +74,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     status_code = 500
     
     # If it's an HTTPException, respect its status code and detail
-    if isinstance(exc, fastapi.HTTPException):
+    if isinstance(exc, HTTPException):
         status_code = exc.status_code
         error_message = str(exc.detail)
         module = "HTTP"
@@ -177,7 +176,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     }
     
     # For HTTPException, also include the detail in the response
-    if isinstance(exc, fastapi.HTTPException):
+    if isinstance(exc, HTTPException):
         response_data["error"]["http_detail"] = exc.detail
     
     return JSONResponse(

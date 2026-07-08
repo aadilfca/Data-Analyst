@@ -244,14 +244,16 @@ def export_backup():
             pass
         client_data.append(row_dict)
     
-    print(f"💾 Backup: {len(columns)} columns, {len(templates)} templates, {len(mappings)} mappings, {len(clients)} clients, {len(client_data)} data rows")
+    settings = execute_query("SELECT key, value FROM app_settings")
+    print(f"💾 Backup: {len(columns)} columns, {len(templates)} templates, {len(mappings)} mappings, {len(clients)} clients, {len(client_data)} data rows, {len(settings)} settings")
     
     return {
         "columns": columns,
         "templates": templates,
         "mappings": mappings,
         "clients": clients,
-        "client_data": client_data
+        "client_data": client_data,
+        "settings": settings
     }
 
 @router.post("/api/backup/import")
@@ -269,6 +271,7 @@ def import_backup(data: BackupData = Body(...)):
         conn.execute("DELETE FROM clients")
         conn.execute("DELETE FROM template_column_mappings")
         conn.execute("DELETE FROM templates")
+        conn.execute("DELETE FROM app_settings")
         conn.execute("DELETE FROM master_columns")
         
         # Restore master_columns
@@ -309,6 +312,14 @@ def import_backup(data: BackupData = Body(...)):
                 )
             )
         
+        # Restore app_settings
+        if hasattr(data, 'settings') and data.settings:
+            for setting in data.settings:
+                conn.execute(
+                    "INSERT INTO app_settings (key, value) VALUES (?, ?)",
+                    (setting['key'], setting['value'])
+                )
+        
         # Restore client_data (convert row_data back to JSON string)
         for row in data.client_data:
             row_data_str = json.dumps(row['row_data']) if isinstance(row['row_data'], dict) else row['row_data']
@@ -339,37 +350,6 @@ def import_backup(data: BackupData = Body(...)):
         return {
             "message": f"Successfully imported {len(data.columns)} columns, {len(data.templates)} templates, {len(data.mappings)} mappings, {len(data.clients)} clients, and {len(data.client_data)} data rows."
         }
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(500, f"Import failed: {str(e)}")
-    finally:
-        conn.close()
-    conn = get_raw_conn()
-    try:
-        conn.execute("BEGIN TRANSACTION")
-        conn.execute("PRAGMA foreign_keys = OFF")
-        conn.execute("DELETE FROM template_column_mappings")
-        conn.execute("DELETE FROM templates")
-        conn.execute("DELETE FROM master_columns")
-        for col in data.columns:
-            conn.execute(
-                "INSERT INTO master_columns (id, column_name, data_type, category, is_active) VALUES (?, ?, ?, ?, ?)",
-                (col['id'], col['column_name'], col['data_type'], col.get('category', 'General'), col.get('is_active', 1))
-            )
-        for tpl in data.templates:
-            conn.execute(
-                "INSERT INTO templates (id, template_name, created_by, created_date, is_active) VALUES (?, ?, ?, ?, ?)",
-                (tpl['id'], tpl['template_name'], tpl.get('created_by', 'Admin'), tpl.get('created_date'), tpl.get('is_active', 1))
-            )
-        for mp in data.mappings:
-            conn.execute(
-                "INSERT INTO template_column_mappings (id, template_id, column_id, sort_order) VALUES (?, ?, ?, ?)",
-                (mp['id'], mp['template_id'], mp['column_id'], mp['sort_order'])
-            )
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.commit()
-        log_audit("Admin", "Import", "Backup", "Imported backup data")
-        return {"message": f"Successfully imported {len(data.columns)} columns, {len(data.templates)} templates, and {len(data.mappings)} mappings."}
     except Exception as e:
         conn.rollback()
         raise HTTPException(500, f"Import failed: {str(e)}")
