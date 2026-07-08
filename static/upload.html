@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Upload Client Data</title>
+    <link rel="stylesheet" href="/static/style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         /* ---------- RESET ---------- */
@@ -30,39 +31,39 @@
             box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
         }
 
-        /* ---------- HEADER ---------- */
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+        /* ---------- MODULE HEADER ---------- */
+        .module-header {
             padding: 20px 28px 0 28px;
             margin-bottom: 18px;
-            flex-wrap: wrap;
         }
 
-        .header h1 {
-            font-size: 22px;
-            font-weight: 700;
-            margin: 4px 0 2px;
-        }
-
-        .header .sub {
-            color: #64748b;
-            font-size: 13px;
-        }
-
-        .back-link {
+        .module-header .back-link {
+            display: inline-block;
+            margin-bottom: 8px;
             color: #3b82f6;
             text-decoration: none;
             font-weight: 600;
-            font-size: 13px;
+            font-size: 14px;
         }
 
-        .back-link:hover {
+        .module-header .back-link:hover {
             text-decoration: underline;
         }
 
-        /* ---------- TOP BAR: Template + Sheet in ONE ROW ---------- */
+        .module-header h1 {
+            font-size: 28px;
+            color: #1a1a2e;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .module-header p {
+            color: #64748b;
+            font-size: 16px;
+            margin-top: 4px;
+        }
+
+        /* ---------- TOP BAR ---------- */
         .top-bar {
             display: flex;
             flex-wrap: wrap;
@@ -132,7 +133,6 @@
             border-radius: 10px;
             padding: 20px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-            margin-left: 0;
         }
 
         .right-panel {
@@ -469,6 +469,29 @@
             color: #64748b;
         }
 
+        /* ---------- CLIENT SELECTION WARNING ---------- */
+        .client-warning {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 8px;
+            padding: 10px 16px;
+            margin: 0 28px 16px 28px;
+            color: #92400e;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .client-warning .icon {
+            font-size: 20px;
+        }
+
+        .client-warning strong {
+            color: #78350f;
+        }
+
         /* ---------- STATUS BAR ---------- */
         .status-bar {
             display: flex;
@@ -595,27 +618,35 @@
 </head>
 
 <body>
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">🏢 System Analyst</div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user">
+                <span>👤 Welcome, Analyst</span>
+            </div>
+        </div>
+    </nav>
 
     <div class="container">
+        <!-- MODULE HEADER -->
+        <div class="module-header">
+            <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
+            <h1>📤 Upload Client Data</h1>
+            <p>Upload Excel files and map columns using pre‑defined templates</p>
+        </div>
 
-        <!-- HEADER -->
-        <div class="header">
-            <div>
-                <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
-                <h1>📤 Upload Client Data</h1>
-                <div class="sub">Upload Excel files and map columns using pre‑defined templates</div>
-            </div>
-            <div style="font-size:13px; color:#64748b;">👤 Analyst</div>
+        <!-- Client Selection Warning -->
+        <div id="clientSelectionWarning" class="client-warning">
+            <span class="icon">⚠️</span>
+            <span><strong>Please select a client</strong> from the dropdown above before uploading data.</span>
         </div>
 
         <!-- TOP BAR -->
         <div class="top-bar">
-            <div class="field">
-                <label>🏢 Client</label>
-                <div id="clientControl" style="min-width:160px;">
-                    <!-- Will be rendered by client_context.js -->
-                </div>
-            </div>
             <div class="field">
                 <label>📋 Template</label>
                 <select id="templateDropdown">
@@ -628,13 +659,7 @@
                     <option value="">-- Select --</option>
                 </select>
             </div>
-            <span class="badge" id="statusBadge">⏳ Select a client and template</span>
-        </div>
-
-        <!-- Client Selection Warning -->
-        <div id="clientSelectionWarning" class="client-warning">
-            <span class="icon">⚠️</span>
-            <span><strong>Please select a client</strong> from the dropdown above before uploading data.</span>
+            <span class="badge" id="statusBadge">⏳ Select a template</span>
         </div>
 
         <!-- MAIN GRID -->
