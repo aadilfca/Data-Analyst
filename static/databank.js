@@ -1,5 +1,5 @@
 // ==============================================
-// 📊 CLIENT DATA BANK - AVAILABILITY + PREVIEW
+// 📊 CLIENT DATA BANK - FINAL POLISHED VERSION
 // ==============================================
 
 // API_BASE and STORAGE_KEY are defined in client_context.js
@@ -20,12 +20,15 @@ let previewDateStart = null;
 let previewDateEnd = null;
 let isPreviewOpen = false;
 let isPreviewLoading = false;
+let isAvailabilityLoading = false;
 
 // ---------- DOM REFS ----------
 const filterTemplate = document.getElementById('templateFilter');
 const filterDateStart = document.getElementById('dateStart');
 const filterDateEnd = document.getElementById('dateEnd');
 const checkBtn = document.getElementById('checkAvailabilityBtn');
+const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+const refreshBtn = document.getElementById('refreshBtn');
 const availabilityBody = document.getElementById('availabilityBody');
 const noDataMessage = document.getElementById('noDataMessage');
 const statusDiv = document.getElementById('statusMessage');
@@ -47,7 +50,7 @@ const searchInput = document.getElementById('searchInput');
 const amountMin = document.getElementById('amountMin');
 const amountMax = document.getElementById('amountMax');
 const applyFiltersBtn = document.getElementById('applyFiltersBtn');
-const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+const clearPreviewFiltersBtn = document.getElementById('clearFiltersBtn');
 const prevPageBtn = document.getElementById('prevPageBtn');
 const nextPageBtn = document.getElementById('nextPageBtn');
 const pageInfo = document.getElementById('pageInfo');
@@ -69,6 +72,10 @@ function getSelectedClientId() {
     return localStorage.getItem(STORAGE_KEY) || null;
 }
 
+function getSelectedClientName() {
+    return localStorage.getItem(STORAGE_NAME) || 'Unknown Client';
+}
+
 function formatDateForDisplay(dateStr) {
     if (!dateStr) return '—';
     try {
@@ -82,8 +89,13 @@ function formatDateForDisplay(dateStr) {
 function getDateRangeFromFilter() {
     const start = filterDateStart.value;
     const end = filterDateEnd.value;
-    if (start && end && start <= end) {
-        return { start, end };
+    if (start && end) {
+        if (start <= end) {
+            return { start, end };
+        } else {
+            showStatus('⚠️ Start date must be before or equal to end date.', 'error');
+            return null;
+        }
     }
     return null;
 }
@@ -92,7 +104,7 @@ function isSunday(dateStr) {
     if (!dateStr) return false;
     try {
         const d = new Date(dateStr);
-        return d.getDay() === 0; // 0 = Sunday
+        return d.getDay() === 0;
     } catch {
         return false;
     }
@@ -101,11 +113,13 @@ function isSunday(dateStr) {
 function formatCellValue(value, columnName = '') {
     if (value === undefined || value === null || value === '') return '—';
     if (typeof value === 'number') {
-        // Use global formatAmount if available
         if (window.formatAmount) {
             return window.formatAmount(value);
         }
         return value.toString();
+    }
+    if (typeof value === 'string' && value.length > 100) {
+        return value.substring(0, 100) + '…';
     }
     return value;
 }
@@ -148,11 +162,25 @@ function setDefaultDateRange() {
     filterDateEnd.value = formatDate(lastDay);
 }
 
+// ---------- CLEAR ALL FILTERS (Main Page) ----------
+function clearAllFilters() {
+    filterTemplate.value = '';
+    setDefaultDateRange();
+    showStatus('🔄 Filters cleared. Click "Check Availability" to refresh.', 'info');
+    // Optionally auto-refresh after clearing
+    setTimeout(() => {
+        fetchAvailability();
+    }, 300);
+}
+
 // ---------- FETCH AVAILABILITY DATA ----------
 async function fetchAvailability() {
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ Please select a client from the Dashboard first.', 'error');
+        availabilityBody.innerHTML = '';
+        noDataMessage.style.display = 'block';
+        noDataMessage.innerHTML = '⚠️ No client selected. Please go to the Dashboard and select a client.';
         return;
     }
     
@@ -173,8 +201,10 @@ async function fetchAvailability() {
     }
     
     // Disable button and show loading
+    isAvailabilityLoading = true;
     checkBtn.disabled = true;
     checkBtn.textContent = '⏳ Loading...';
+    refreshBtn.disabled = true;
     showStatus('⏳ Fetching availability data...', 'loading');
     
     try {
@@ -198,17 +228,28 @@ async function fetchAvailability() {
         statsSundayRows.textContent = sundayRows;
         
         renderAvailabilityTable(data);
-        showStatus(`✅ Found ${totalTemplates} template(s) with ${totalRows} total rows.`, 'success');
+        
+        if (totalTemplates === 0) {
+            showStatus('ℹ️ No templates found for the selected criteria.', 'info');
+        } else {
+            showStatus(`✅ Found ${totalTemplates} template(s) with ${totalRows} total rows.`, 'success');
+        }
         
     } catch (error) {
         console.error('Fetch availability error:', error);
         showStatus('❌ Error: ' + error.message, 'error');
         availabilityBody.innerHTML = '';
         noDataMessage.style.display = 'block';
-        noDataMessage.innerHTML = 'Error loading data. Please try again.';
+        noDataMessage.innerHTML = '❌ Error loading data. Please try again.';
+        statsTotalRecords.textContent = '0';
+        statsTotalTemplates.textContent = '0';
+        statsMissingTemplates.textContent = '0';
+        statsSundayRows.textContent = '0';
     } finally {
+        isAvailabilityLoading = false;
         checkBtn.disabled = false;
         checkBtn.textContent = '🔍 Check Availability';
+        refreshBtn.disabled = false;
     }
 }
 
@@ -217,7 +258,7 @@ function renderAvailabilityTable(data) {
     availabilityBody.innerHTML = '';
     if (!data || data.length === 0) {
         noDataMessage.style.display = 'block';
-        noDataMessage.innerHTML = 'No templates found for the selected criteria.';
+        noDataMessage.innerHTML = 'No templates found for the selected criteria. Try adjusting your filters.';
         return;
     }
     noDataMessage.style.display = 'none';
@@ -269,13 +310,16 @@ function renderAvailabilityTable(data) {
         const tdStatus = document.createElement('td');
         tdStatus.style.textAlign = 'center';
         const statusSpan = document.createElement('span');
-        statusSpan.className = `status-badge ${item.status}`;
+        // Compute status: if row_count > 0 then "complete" else "missing"
+        // We could also compute "partial" but the backend currently only returns "complete" or "missing"
+        const status = item.row_count > 0 ? 'complete' : 'missing';
+        statusSpan.className = `status-badge ${status}`;
         const statusMap = {
             'complete': '✅ Complete',
             'missing': '❌ Missing',
             'partial': '⚠️ Partial'
         };
-        statusSpan.textContent = statusMap[item.status] || item.status;
+        statusSpan.textContent = statusMap[status] || status;
         tdStatus.appendChild(statusSpan);
         tr.appendChild(tdStatus);
         
@@ -290,6 +334,7 @@ function renderAvailabilityTable(data) {
             previewBtn.className = 'action-btn preview';
             previewBtn.textContent = '👁️';
             previewBtn.title = 'Preview Data';
+            previewBtn.setAttribute('data-tooltip', 'Preview transactions for this template');
             previewBtn.addEventListener('click', () => {
                 openPreview(item.template_id, item.template_name);
             });
@@ -300,6 +345,7 @@ function renderAvailabilityTable(data) {
             exportBtn.className = 'action-btn export';
             exportBtn.textContent = '📥';
             exportBtn.title = 'Export to Excel';
+            exportBtn.setAttribute('data-tooltip', 'Export all data for this template');
             exportBtn.style.marginLeft = '6px';
             exportBtn.addEventListener('click', () => {
                 exportDataset(item.template_id, item.template_name);
@@ -327,6 +373,13 @@ function openPreview(templateId, templateName) {
         return;
     }
     
+    // Check if client is still selected
+    const clientId = getSelectedClientId();
+    if (!clientId) {
+        showStatus('⚠️ No client selected. Please select a client from the Dashboard.', 'error');
+        return;
+    }
+    
     previewTemplateId = templateId;
     previewTemplateName = templateName;
     previewDateStart = dateRange.start;
@@ -337,11 +390,12 @@ function openPreview(templateId, templateName) {
     
     // Show modal
     previewModal.style.display = 'flex';
-    previewTitle.textContent = `📋 ${templateName} – Preview`;
+    previewTitle.textContent = `📋 ${templateName} – Preview (${getSelectedClientName()})`;
     sundayOnlyCheckbox.checked = false;
     searchInput.value = '';
     amountMin.value = '';
     amountMax.value = '';
+    sundayCountBadge.textContent = 'Sunday rows: 0';
     
     // Fetch data
     fetchPreviewData();
@@ -365,6 +419,7 @@ async function fetchPreviewData() {
         <span class="spinner"></span> Loading data...
     </td></tr>`;
     previewTableHead.innerHTML = '';
+    previewCountInfo.textContent = 'Loading...';
     
     const params = new URLSearchParams({
         client_id: clientId,
@@ -410,12 +465,14 @@ async function fetchPreviewData() {
         
         if (rows.length === 0 && previewTotalRows === 0) {
             previewTableBody.innerHTML = '<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">No data found for the selected criteria.</td></tr>';
+            previewCountInfo.textContent = '0 rows';
         }
         
     } catch (error) {
         console.error('Preview fetch error:', error);
         showStatus('❌ Error loading preview: ' + error.message, 'error');
         previewTableBody.innerHTML = `<tr><td colspan="100" style="text-align:center; padding:40px; color:#dc2626;">Error loading data. Please try again.</td></tr>`;
+        previewCountInfo.textContent = 'Error loading';
     } finally {
         isPreviewLoading = false;
     }
@@ -443,6 +500,9 @@ function renderPreviewRows(rows) {
             th.style.textAlign = 'left';
             th.style.borderBottom = '2px solid #e2e8f0';
             th.style.whiteSpace = 'nowrap';
+            th.style.position = 'sticky';
+            th.style.top = '0';
+            th.style.background = '#f8fafc';
             tr.appendChild(th);
         });
         previewTableHead.appendChild(tr);
@@ -482,12 +542,14 @@ function updatePagination() {
 
 // ---------- APPLY PREVIEW FILTERS ----------
 function applyPreviewFilters() {
+    if (!isPreviewOpen) return;
     currentPage = 1;
     fetchPreviewData();
 }
 
 // ---------- CLEAR PREVIEW FILTERS ----------
 function clearPreviewFilters() {
+    if (!isPreviewOpen) return;
     searchInput.value = '';
     amountMin.value = '';
     amountMax.value = '';
@@ -496,7 +558,7 @@ function clearPreviewFilters() {
     fetchPreviewData();
 }
 
-// ---------- EXPORT DATASET (Full implementation) ----------
+// ---------- EXPORT DATASET ----------
 async function exportDataset(templateId, templateName) {
     const clientId = getSelectedClientId();
     if (!clientId) {
@@ -518,7 +580,7 @@ async function exportDataset(templateId, templateName) {
         let page = 1;
         const limit = 500;
         let totalFetched = 0;
-        const maxRows = 10000; // safety limit
+        const maxRows = 10000;
         
         const params = new URLSearchParams({
             client_id: clientId,
@@ -527,9 +589,6 @@ async function exportDataset(templateId, templateName) {
             date_end: dateRange.end,
             limit: limit
         });
-        
-        // If we have filters from the availability view? We'll use the same date range.
-        // For export, we ignore the preview filters (search, amount, sunday) to export all.
         
         do {
             params.set('page', page);
@@ -590,6 +649,8 @@ async function exportDataset(templateId, templateName) {
 
 // ---------- EVENT LISTENERS (Main) ----------
 checkBtn.addEventListener('click', fetchAvailability);
+clearFiltersBtn.addEventListener('click', clearAllFilters);
+refreshBtn.addEventListener('click', fetchAvailability);
 
 filterDateStart.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchAvailability(); });
 filterDateEnd.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchAvailability(); });
@@ -631,9 +692,15 @@ pageSizeSelect.addEventListener('change', function() {
     }
 });
 
-// Filters
+// Preview filters
 applyFiltersBtn.addEventListener('click', applyPreviewFilters);
-clearFiltersBtn.addEventListener('click', clearPreviewFilters);
+// Modal clear button (using the updated ID from the HTML fix)
+const modalClearBtn = document.getElementById('clearPreviewFiltersBtn');
+if (modalClearBtn) {
+    modalClearBtn.addEventListener('click', clearPreviewFilters);
+}
+
+// The main clear button is already handled.
 
 // Sunday checkbox
 sundayOnlyCheckbox.addEventListener('change', function() {
@@ -665,31 +732,56 @@ document.addEventListener('keydown', (e) => {
         previewModal.style.display = 'none';
         isPreviewOpen = false;
     }
+    // Ctrl+Enter triggers check availability
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        fetchAvailability();
+    }
 });
 
-// ---------- CLIENT CHANGE HOOK ----------
+// ---------- CLIENT CHANGE HOOK (with debounce) ----------
+let clientChangeTimeout;
 window.onClientChange = function(clientId) {
-    if (clientId) {
-        if (filterDateStart.value && filterDateEnd.value) {
-            fetchAvailability();
+    clearTimeout(clientChangeTimeout);
+    clientChangeTimeout = setTimeout(() => {
+        if (clientId) {
+            if (filterDateStart.value && filterDateEnd.value) {
+                fetchAvailability();
+            } else {
+                setDefaultDateRange();
+                fetchAvailability();
+            }
+            // If preview is open, close it
+            if (isPreviewOpen) {
+                previewModal.style.display = 'none';
+                isPreviewOpen = false;
+            }
         }
-    }
+    }, 300);
 };
 
 // ---------- INIT ----------
 window.onload = async function() {
+    // Load utilities first
+    if (typeof initUtils === 'function') {
+        await initUtils();
+    }
+    
     setDefaultDateRange();
     await loadTemplateDropdown();
     
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ Please select a client from the Dashboard first.', 'error');
+        availabilityBody.innerHTML = '';
+        noDataMessage.style.display = 'block';
+        noDataMessage.innerHTML = '⚠️ No client selected. Please go to the Dashboard and select a client.';
         setTimeout(() => {
             window.location.href = '/static/index.html';
-        }, 2000);
+        }, 3000);
         return;
     }
     
     fetchAvailability();
-    console.log('📊 Data Bank with full preview loaded');
+    console.log('📊 Data Bank final polished version loaded');
 };
