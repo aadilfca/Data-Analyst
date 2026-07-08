@@ -181,8 +181,6 @@ def auto_map_headers(request: AutoMapRequest):
         "total_columns": len(mappings)
     }
 
-# ---------- VALIDATE & IMPORT ----------
-@router.post("/api/upload/import")
 # ---------- CHECK DUPLICATES ----------
 @router.post("/api/upload/check-duplicates")
 def check_duplicates(request: ImportRequest):
@@ -424,6 +422,9 @@ def validate_only(request: ImportRequest):
         "errors": validation_errors,
         "valid_rows": len(rows) - len(validation_errors)
     }
+
+# ---------- VALIDATE & IMPORT ----------
+@router.post("/api/upload/import")
 def validate_and_import(request: ImportRequest):
     # Validate template and file
     template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
