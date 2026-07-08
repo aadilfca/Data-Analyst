@@ -227,11 +227,11 @@ async function fetchAvailability() {
         const data = await res.json();
         availabilityData = data;
         
-        // Update stats
-        const totalRows = data.reduce((sum, item) => sum + item.row_count, 0);
+                // Update stats - use total_row_count (unfiltered) for Total Records
+        const totalRows = data.reduce((sum, item) => sum + (item.total_row_count || 0), 0);
         const totalTemplates = data.length;
         const missing = data.filter(item => item.status === 'missing').length;
-        const sundayRows = data.reduce((sum, item) => sum + (item.sunday_count || 0), 0);
+        const sundayRows = data.reduce((sum, item) => sum + (item.filtered_sunday_count || 0), 0);
         
         statsTotalRecords.textContent = totalRows;
         statsTotalTemplates.textContent = totalTemplates;
@@ -269,7 +269,7 @@ function renderAvailabilityTable(data) {
     availabilityBody.innerHTML = '';
     if (!data || data.length === 0) {
         noDataMessage.style.display = 'block';
-        noDataMessage.innerHTML = 'No templates found for the selected criteria. Try adjusting your filters.';
+        noDataMessage.innerHTML = 'No templates found for the selected criteria.';
         return;
     }
     noDataMessage.style.display = 'none';
@@ -290,7 +290,7 @@ function renderAvailabilityTable(data) {
         tdName.style.fontWeight = '500';
         tr.appendChild(tdName);
         
-        // Date Range
+        // Date Range - FULL range (unfiltered)
         const tdDate = document.createElement('td');
         if (item.date_min && item.date_max) {
             tdDate.textContent = `${formatDateForDisplay(item.date_min)} – ${formatDateForDisplay(item.date_max)}`;
@@ -298,32 +298,43 @@ function renderAvailabilityTable(data) {
             tdDate.textContent = '—';
             tdDate.style.color = '#94a3b8';
         }
+        // Add a small note if filtered range is narrower
         tr.appendChild(tdDate);
         
-        // Row Count
-        const tdRows = document.createElement('td');
-        tdRows.textContent = item.row_count;
-        tdRows.style.textAlign = 'center';
-        tdRows.style.fontWeight = '600';
-        tr.appendChild(tdRows);
+        // Total Rows (all data, unfiltered)
+        const tdTotalRows = document.createElement('td');
+        tdTotalRows.textContent = item.total_row_count || 0;
+        tdTotalRows.style.textAlign = 'center';
+        tdTotalRows.style.fontWeight = '600';
+        tdTotalRows.setAttribute('data-tooltip', 'Total rows across all dates for this template');
+        tr.appendChild(tdTotalRows);
         
-        // Sunday Rows
+        // Filtered Rows (matching the selected date range)
+        const tdFilteredRows = document.createElement('td');
+        tdFilteredRows.textContent = item.filtered_row_count || 0;
+        tdFilteredRows.style.textAlign = 'center';
+        tdFilteredRows.style.color = '#3b82f6';
+        tdFilteredRows.style.fontWeight = '500';
+        tdFilteredRows.setAttribute('data-tooltip', 'Rows matching the selected date filter');
+        tr.appendChild(tdFilteredRows);
+        
+        // Sunday Rows (filtered)
         const tdSunday = document.createElement('td');
-        tdSunday.textContent = item.sunday_count || 0;
+        tdSunday.textContent = item.filtered_sunday_count || 0;
         tdSunday.style.textAlign = 'center';
-        if (item.sunday_count > 0) {
+        if (item.filtered_sunday_count > 0) {
             tdSunday.style.color = '#f59e0b';
             tdSunday.style.fontWeight = '600';
         }
+        tdSunday.setAttribute('data-tooltip', 'Sunday rows within the selected date range');
         tr.appendChild(tdSunday);
         
-        // Status
+        // Status (based on total data)
         const tdStatus = document.createElement('td');
         tdStatus.style.textAlign = 'center';
         const statusSpan = document.createElement('span');
-        // Compute status: if row_count > 0 then "complete" else "missing"
-        // We could also compute "partial" but the backend currently only returns "complete" or "missing"
-        const status = item.row_count > 0 ? 'complete' : 'missing';
+        // Use status from API ('complete' if total_row_count > 0, else 'missing')
+        const status = item.status || 'missing';
         statusSpan.className = `status-badge ${status}`;
         const statusMap = {
             'complete': '✅ Complete',
@@ -332,6 +343,11 @@ function renderAvailabilityTable(data) {
         };
         statusSpan.textContent = statusMap[status] || status;
         tdStatus.appendChild(statusSpan);
+        // Add a tooltip showing filtered status
+        if (item.filtered_status === 'missing' && status === 'complete') {
+            statusSpan.style.cursor = 'help';
+            statusSpan.setAttribute('data-tooltip', 'Data exists but outside the selected date range');
+        }
         tr.appendChild(tdStatus);
         
         // Actions
@@ -339,13 +355,13 @@ function renderAvailabilityTable(data) {
         tdActions.style.textAlign = 'center';
         tdActions.style.whiteSpace = 'nowrap';
         
-        if (item.row_count > 0) {
-            // Preview button
+        // Preview button - enabled if there's ANY data (total_row_count > 0)
+        if (item.total_row_count > 0) {
             const previewBtn = document.createElement('button');
             previewBtn.className = 'action-btn preview';
             previewBtn.textContent = '👁️';
             previewBtn.title = 'Preview Data';
-            previewBtn.setAttribute('data-tooltip', 'Preview transactions for this template');
+            previewBtn.setAttribute('data-tooltip', 'Preview data for this template');
             previewBtn.addEventListener('click', () => {
                 openPreview(item.template_id, item.template_name);
             });
@@ -370,6 +386,18 @@ function renderAvailabilityTable(data) {
         tr.appendChild(tdActions);
         availabilityBody.appendChild(tr);
     });
+    
+    // Update stats using the new fields
+    const totalAllRows = data.reduce((sum, item) => sum + (item.total_row_count || 0), 0);
+    const totalFilteredRows = data.reduce((sum, item) => sum + (item.filtered_row_count || 0), 0);
+    const totalTemplates = data.length;
+    const missing = data.filter(item => item.status === 'missing').length;
+    const sundayRows = data.reduce((sum, item) => sum + (item.filtered_sunday_count || 0), 0);
+    
+    statsTotalRecords.textContent = totalAllRows;  // Show total rows, not filtered
+    statsTotalTemplates.textContent = totalTemplates;
+    statsMissingTemplates.textContent = missing;
+    statsSundayRows.textContent = sundayRows;
 }
 
 // ==============================================

@@ -6,10 +6,11 @@ DB_NAME = "test.db"
 print(f"📁 Database path: {os.path.abspath(DB_NAME)}")
 
 def get_db():
-    conn = sqlite3.connect(DB_NAME, timeout=10)  # 10 second timeout
+    conn = sqlite3.connect(DB_NAME, timeout=20)  # Increased timeout
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")  # Enable WAL mode
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout = 10000")  # Wait up to 10 seconds if locked
     return conn
 
 def execute_query(query, params=None, retries=3, delay=0.5):
@@ -38,22 +39,25 @@ def execute_write(query, params=None, retries=5, delay=0.5):
     import time
     last_exception = None
     for attempt in range(retries):
+        conn = None
         try:
             conn = get_db()
             cursor = conn.execute(query, params or ())
             conn.commit()
             last_id = cursor.lastrowid
-            conn.close()
             return last_id
         except sqlite3.OperationalError as e:
             if "database is locked" in str(e) and attempt < retries - 1:
-                time.sleep(delay * (attempt + 1))  # exponential backoff
+                time.sleep(delay * (attempt + 1))
                 last_exception = e
                 continue
             else:
                 raise e
         except Exception as e:
             raise e
+        finally:
+            if conn:
+                conn.close()
     if last_exception:
         raise last_exception
 

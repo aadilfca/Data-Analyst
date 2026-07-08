@@ -432,7 +432,9 @@ def validate_and_import(request: ImportRequest):
     file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
     if not file_info:
         raise HTTPException(404, "File not found")
-    
+        print(f"🔍 Import request: template_id={request.template_id}, file_id={request.file_id}, client_id={request.client_id}")
+    print(f"🔍 Mappings: {request.mappings}")
+    print(f"🔍 File path: {file_info[0]['file_path']}")
     # Validate client exists
     client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
     if not client:
@@ -483,7 +485,8 @@ def validate_and_import(request: ImportRequest):
         df = df[[col for col in mapped_excel_cols if col in df.columns]]
     except Exception as e:
         raise HTTPException(400, f"Error reading Excel: {str(e)}")
-
+    print(f"🔍 DataFrame shape: {df.shape}")  # rows, columns
+    print(f"🔍 DataFrame columns: {df.columns.tolist()}")
     rows = df.to_dict('records')
     
     # --- Validation ---

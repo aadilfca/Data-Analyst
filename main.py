@@ -130,6 +130,19 @@ async def global_exception_handler(request: Request, exc: Exception):
     }
     error_category = category_map.get(exception_name, "Unknown")
     
+        # Safely get input data – skip for file uploads
+    input_data = None
+    if request.method in ["POST", "PUT", "PATCH"]:
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            try:
+                input_data = await request.json()
+            except:
+                pass
+        # For multipart/form-data, we cannot read the body easily, so skip
+    else:
+        input_data = dict(request.query_params) if request.query_params else None
+
     # Log the error
     error_log_id = log_error(
         error_code_id=error_code_id,
@@ -146,9 +159,9 @@ async def global_exception_handler(request: Request, exc: Exception):
         line_number=line_number,
         code_context=code_context,
         stack_trace=stack_trace,
-        input_data=dict(request.query_params) if request.query_params else (await request.json() if request.method in ["POST", "PUT", "PATCH"] else None),
+        input_data=input_data,
         suggested_fix=suggested_fix
-    )
+    )\
     
     # Build user-friendly response
     # Try to fetch the user_message from error_codes

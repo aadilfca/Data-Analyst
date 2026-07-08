@@ -1135,12 +1135,19 @@ if (importBtn) {
     });
 }
 // ---------- PERFORM IMPORT (after validation) ----------
+// ---------- PERFORM IMPORT (after validation) ----------
 async function performImport(payload) {
     try {
         importBtn.disabled = true;
         importBtn.innerHTML = '<span class="spinner"></span> Processing...';
         showStatus('⏳ Importing data...', 'loading');
         setBadge('⏳ Importing...', 'loading');
+
+        // --- FIX: Add skip_validation if validation already passed ---
+        if (validationStatus === 'valid') {
+            payload.skip_validation = true;
+            console.log('🔍 Skipping validation (already passed)');
+        }
 
         // Check for duplicates (if mode is update)
         let proceed = true;
@@ -1152,7 +1159,6 @@ async function performImport(payload) {
             });
             const checkResult = await checkRes.json();
             if (checkRes.ok && checkResult.has_duplicates) {
-                // Show overwrite confirmation
                 proceed = await showOverwriteConfirmation(checkResult.duplicates, checkResult.count);
                 if (!proceed) {
                     showStatus('⛔ Import cancelled by user.', 'info');
@@ -1166,7 +1172,7 @@ async function performImport(payload) {
 
         if (!proceed) return;
 
-                // Perform the actual import
+        // Perform the actual import
         const res = await fetch(API_BASE + '/api/upload/import', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1175,10 +1181,9 @@ async function performImport(payload) {
         const result = await res.json();
         if (!res.ok) throw new Error(result.message || 'Import failed');
 
-        // Update overwrite progress if the modal is open
+        // --- Handle overwrite progress (if modal is open) ---
         const modalRef = window._overwriteModal;
         if (modalRef && !modalRef.isResolved) {
-            // Update progress bar
             const updated = result.updated_count || 0;
             const total = modalRef.total || 1;
             const pct = Math.min(100, Math.round((updated / total) * 100));
@@ -1186,37 +1191,28 @@ async function performImport(payload) {
             modalRef.progressText.textContent = `${updated} of ${total} rows overwritten`;
 
             if (updated >= total) {
-                // All done!
                 modalRef.confirmBtn.innerHTML = 'OK';
                 modalRef.confirmBtn.style.background = '#16a34a';
                 modalRef.confirmBtn.disabled = false;
                 modalRef.progressBar.style.background = '#16a34a';
                 modalRef.progressText.textContent = `✅ ${updated} of ${total} rows overwritten`;
 
-                // Wait for OK click
                 modalRef.confirmBtn.onclick = function() {
                     if (modalRef.overlay && modalRef.overlay.parentNode) {
                         document.body.removeChild(modalRef.overlay);
                     }
                     modalRef.resolve(true);
                     window._overwriteModal = null;
-                    // Show import summary
                     showImportSummary(result);
                 };
             }
-            // Continue – the modal stays open until all rows are processed
-            // The import is already complete, so we should update the button
-            // Actually, since the import is a single API call, all rows are processed at once.
-            // So we can immediately show completion.
         }
 
         if (result.status === 'validation_failed') {
-            // This should not happen if validation passed, but handle it
             showValidationErrors(result);
             showStatus('❌ Import validation errors found.', 'error');
             setBadge('❌ Import failed', 'error');
         } else {
-            // If modal was not open, show summary popup
             if (!modalRef || modalRef.isResolved) {
                 showImportSummary(result);
             }
@@ -1228,11 +1224,9 @@ async function performImport(payload) {
     } finally {
         importBtn.disabled = false;
         importBtn.innerHTML = '🚀 Upload';
-        // Reset validation status after import (whether success or failure)
-        // But we want to keep the button as "Upload" for the next file? We'll reset on file/template change.
     }
 }
-// ---------- PREVIEW FUNCTION ----------
+
 function showPreview() {
     const previewSheet = document.getElementById('previewSheet');
     const mainUploadPage = document.getElementById('mainUploadPage');

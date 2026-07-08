@@ -511,14 +511,20 @@ def get_availability(
 ):
     """
     Get aggregated availability data for templates for a given client and date range.
-    Returns a list of templates with row counts, min/max dates, Sunday count, and status.
+    Returns:
+    - filtered_row_count: rows matching the date filter
+    - total_row_count: ALL rows for this template (unfiltered)
+    - date_min / date_max: FULL date range of all data for this template
+    - sunday_count: Sunday rows matching the filter (for preview context)
+    - status: 'complete' if any data exists (unfiltered), else 'missing'
+    - filtered_status: 'complete' if filtered rows > 0, else 'missing'
     """
     # Validate client exists
     client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
     
-    # Validate date format (basic)
+    # Validate date format
     try:
         datetime.fromisoformat(date_start)
         datetime.fromisoformat(date_end)
@@ -528,16 +534,15 @@ def get_availability(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    # Base query to get all active templates and left join with client_data
-    # Build dynamically based on template_id filter
-    query = """
+    # ------------------------------------------------------------
+    # 1. FIRST QUERY: Filtered data (matching the date range)
+    # ------------------------------------------------------------
+    filtered_query = """
         SELECT 
             t.id AS template_id,
             t.template_name,
-            COALESCE(COUNT(cd.id), 0) AS row_count,
-            MIN(cd.extract_date) AS date_min,
-            MAX(cd.extract_date) AS date_max,
-            COALESCE(SUM(CASE WHEN strftime('%w', cd.extract_date) = '0' THEN 1 ELSE 0 END), 0) AS sunday_count
+            COALESCE(COUNT(cd.id), 0) AS filtered_row_count,
+            COALESCE(SUM(CASE WHEN strftime('%w', cd.extract_date) = '0' THEN 1 ELSE 0 END), 0) AS filtered_sunday_count
         FROM templates t
         LEFT JOIN client_data cd 
             ON cd.template_id = t.id 
@@ -548,26 +553,71 @@ def get_availability(
     params = [client_id, date_start, date_end]
     
     if template_id is not None:
-        query += " AND t.id = ?"
+        filtered_query += " AND t.id = ?"
         params.append(template_id)
     
-    query += " WHERE t.is_active = 1"
-    query += " GROUP BY t.id ORDER BY t.template_name"
+    filtered_query += " WHERE t.is_active = 1"
+    filtered_query += " GROUP BY t.id ORDER BY t.template_name"
     
-    rows = execute_query(query, params)
+    filtered_rows = execute_query(filtered_query, params)
     
-    # Compute status: simple – if row_count > 0 then "complete" else "missing"
+    # ------------------------------------------------------------
+    # 2. SECOND QUERY: Total data (unfiltered, all time)
+    # ------------------------------------------------------------
+    total_query = """
+        SELECT 
+            t.id AS template_id,
+            COALESCE(COUNT(cd.id), 0) AS total_row_count,
+            MIN(cd.extract_date) AS date_min,
+            MAX(cd.extract_date) AS date_max
+        FROM templates t
+        LEFT JOIN client_data cd 
+            ON cd.template_id = t.id 
+            AND cd.client_id = ? 
+            AND cd.is_deleted = 0
+    """
+    total_params = [client_id]
+    
+    if template_id is not None:
+        total_query += " AND t.id = ?"
+        total_params.append(template_id)
+    
+    total_query += " WHERE t.is_active = 1"
+    total_query += " GROUP BY t.id ORDER BY t.template_name"
+    
+    total_rows = execute_query(total_query, total_params)
+    
+    # ------------------------------------------------------------
+    # 3. Merge results
+    # ------------------------------------------------------------
     result = []
-    for row in rows:
-        status = "complete" if row["row_count"] > 0 else "missing"
+    
+    # Create a lookup for filtered data
+    filtered_lookup = {row["template_id"]: row for row in filtered_rows}
+    total_lookup = {row["template_id"]: row for row in total_rows}
+    
+    # Get all template IDs from both queries
+    all_template_ids = set(filtered_lookup.keys()) | set(total_lookup.keys())
+    
+    for tid in all_template_ids:
+        filtered = filtered_lookup.get(tid, {"template_name": "Unknown", "filtered_row_count": 0, "filtered_sunday_count": 0})
+        total = total_lookup.get(tid, {"total_row_count": 0, "date_min": None, "date_max": None})
+        
+        # Determine status: if total_row_count > 0, the template has data (complete)
+        status = "complete" if total["total_row_count"] > 0 else "missing"
+        # Filtered status: if filtered_row_count > 0, the filter matches some data
+        filtered_status = "complete" if filtered["filtered_row_count"] > 0 else "missing"
+        
         result.append({
-            "template_id": row["template_id"],
-            "template_name": row["template_name"],
-            "row_count": row["row_count"],
-            "date_min": row["date_min"],
-            "date_max": row["date_max"],
-            "sunday_count": row["sunday_count"],
-            "status": status
+            "template_id": tid,
+            "template_name": filtered["template_name"] if filtered["template_name"] != "Unknown" else total.get("template_name", f"Template {tid}"),
+            "filtered_row_count": filtered["filtered_row_count"],
+            "total_row_count": total["total_row_count"],
+            "date_min": total["date_min"],           # FULL date range (unfiltered)
+            "date_max": total["date_max"],           # FULL date range (unfiltered)
+            "filtered_sunday_count": filtered["filtered_sunday_count"],
+            "status": status,                        # based on total data
+            "filtered_status": filtered_status       # based on filtered data
         })
     
     return result
