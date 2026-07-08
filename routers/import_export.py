@@ -32,10 +32,6 @@ class AutoMapRequest(BaseModel):
     file_id: int
     template_id: int
     sheet_name: str = "Sheet1"
-class AutoMapRequest(BaseModel):
-    file_id: int
-    template_id: int
-    sheet_name: str = "Sheet1"
 
 # ---------- HELPER: Extract numeric & date columns from row data ----------
 def extract_columns_from_row(row_data: dict, template_cols: list) -> tuple:

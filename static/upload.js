@@ -1,15 +1,11 @@
 // ================================================================
-// 📤 UPLOAD MODULE – FIXED (safe null checks)
+// 📤 UPLOAD MODULE – FULLY FUNCTIONAL
 // ================================================================
 
 // API_BASE is defined globally in client_context.js
-
 console.log('📤 Upload module loaded');
-// Check if client context functions are available
-if (typeof window.isClientSelected !== 'function') {
-    console.warn('⚠️ client_context.js not loaded or isClientSelected not defined');
-}
-// DOM refs with fallback
+
+// ---------- DOM REFS ----------
 function getElement(id) {
     const el = document.getElementById(id);
     if (!el) console.warn('⚠️ Element not found:', id);
@@ -55,7 +51,7 @@ const footerFile = getElement('footerFile');
 const footerRows = getElement('footerRows');
 const footerDate = getElement('footerDate');
 
-// State
+// ---------- STATE ----------
 let selectedTemplateId = null;
 let selectedFile = null;
 let fileId = null;
@@ -67,7 +63,7 @@ let currentSheet = null;
 let workbookData = null;
 let isProcessing = false;
 
-// Helpers
+// ---------- HELPERS ----------
 function showStatus(msg, type = 'info', extra = '') {
     if (!statusBar || !statusMessage) {
         console.log('📢 Status:', msg, type, extra);
@@ -123,6 +119,7 @@ async function loadTemplates() {
             });
         }
         setBadge('✅ ' + templates.length + ' templates loaded');
+        console.log('✅ Templates loaded:', templates.length);
     } catch (error) {
         console.error('Error loading templates:', error);
         setBadge('❌ Failed to load templates', 'error');
@@ -153,7 +150,32 @@ if (templateDropdown) {
             showStatus('Select a template and upload an Excel file to begin.', 'info');
             return;
         }
-        // ... rest of the handler remains the same
+        selectedTemplateId = parseInt(id);
+        setBadge('⏳ Loading template...', 'loading');
+
+        try {
+            const res = await fetch(API_BASE + `/api/templates/${id}/upload-columns`);
+            if (!res.ok) throw new Error('Failed to fetch template columns');
+            const data = await res.json();
+            templateColumns = data.columns;
+            if (downloadBtn) {
+                downloadBtn.dataset.templateId = id;
+                downloadBtn.disabled = false;
+            }
+            setBadge('✅ Template loaded: ' + data.total_columns + ' columns');
+
+            if (fileId && currentSheet) {
+                await autoMapColumns();
+            } else if (fileId && !currentSheet) {
+                showStatus('✅ Template loaded. Please select a sheet.', 'info');
+            } else {
+                showStatus('✅ Template loaded. Upload an Excel file to begin mapping.', 'success');
+            }
+        } catch (error) {
+            console.error('Error loading template columns:', error);
+            setBadge('❌ Failed to load columns', 'error');
+            showStatus('❌ Failed to load template columns: ' + error.message, 'error');
+        }
     });
 }
 
@@ -372,7 +394,6 @@ async function autoMapColumns() {
 }
 
 // ---------- RENDER MAPPING TABLE ----------
-// ---------- RENDER MAPPING TABLE (WITH UNIQUENESS) ----------
 function renderMapping(mappings) {
     if (!mappingBody) return;
     mappingBody.innerHTML = '';
@@ -381,59 +402,43 @@ function renderMapping(mappings) {
         return;
     }
 
-    // Build rows
     mappings.forEach((m, rowIndex) => {
         const tr = document.createElement('tr');
 
-        // 1. Template Column
         const td1 = document.createElement('td');
         td1.textContent = m.column_name;
         td1.style.fontWeight = '500';
         td1.style.whiteSpace = 'nowrap';
         tr.appendChild(td1);
 
-        // 2. Excel Column (dropdown with uniqueness enforcement)
         const td2 = document.createElement('td');
         const select = document.createElement('select');
         select.dataset.rowIndex = rowIndex;
         select.dataset.columnId = m.column_id;
 
-        // Build options dynamically based on current selections
         function buildOptions() {
-            // Get currently selected values (except this row's current selection)
             const selectedValues = currentMappings
                 .filter((_, idx) => idx !== rowIndex)
                 .map(mm => mm.excel_column)
                 .filter(v => v !== null && v !== '');
-
-            // Clear existing options
             select.innerHTML = '';
-
-            // Add "None" option
             const noneOpt = document.createElement('option');
             noneOpt.value = '';
             noneOpt.textContent = '— None —';
             select.appendChild(noneOpt);
-
-            // Add Excel headers, but exclude those already selected elsewhere
             excelHeaders.forEach(h => {
-                if (selectedValues.includes(h)) return; // skip if already taken
+                if (selectedValues.includes(h)) return;
                 const opt = document.createElement('option');
                 opt.value = h;
                 opt.textContent = h;
-                // Preselect if this row's current mapping matches this header
                 if (m.excel_column === h) {
                     opt.selected = true;
                 }
                 select.appendChild(opt);
             });
-
-            // If the current value is not in the list (e.g., it was taken by another row), reset it
             if (m.excel_column && ![...select.options].some(o => o.value === m.excel_column)) {
-                // The column was taken by another row – reset this row's mapping
                 m.excel_column = null;
                 m.is_matched = false;
-                // Update the status icon for this row
                 const statusTd = tr.children[3];
                 if (statusTd) {
                     const icon = statusTd.querySelector('span');
@@ -442,29 +447,20 @@ function renderMapping(mappings) {
                         icon.style.color = '#dc2626';
                     }
                 }
-                // Update count and badge
                 updateCounts();
             } else {
-                // Ensure the select shows the current value if it's valid
                 if (m.excel_column) {
                     const opt = select.querySelector(`option[value="${m.excel_column}"]`);
                     if (opt) opt.selected = true;
                 }
             }
         }
-
         buildOptions();
 
-        // Event listener for changes
         select.addEventListener('change', function() {
             const newVal = this.value || null;
-            // If selecting a value that is already used by another row, we need to swap
-            // or we can simply update and then rebuild all dropdowns to resolve conflicts.
-            // We'll update the current mapping and then re-render all rows.
             m.excel_column = newVal;
             m.is_matched = !!newVal;
-
-            // Update the status icon for this row
             const statusTd = tr.children[3];
             if (statusTd) {
                 const icon = statusTd.querySelector('span');
@@ -478,16 +474,6 @@ function renderMapping(mappings) {
                     }
                 }
             }
-
-            // Rebuild all dropdowns to enforce uniqueness
-            // We need to re-render the whole mapping table to reflect the new state
-            // but we don't want to lose the current mappings array.
-            // So we call renderMapping again with the updated mappings.
-            // However, that would cause recursion if we call it directly.
-            // Instead, we use a flag or re-run the render function after a short delay.
-            // Better: rebuild options for all rows without re-creating the table.
-            // But for simplicity, we re-render the entire mapping table.
-            // We'll use requestAnimationFrame to avoid stack issues.
             requestAnimationFrame(() => {
                 renderMapping(currentMappings);
             });
@@ -496,7 +482,6 @@ function renderMapping(mappings) {
         td2.appendChild(select);
         tr.appendChild(td2);
 
-        // 3. Data Type
         const td3 = document.createElement('td');
         const badge = document.createElement('span');
         badge.className = 'type-badge';
@@ -506,7 +491,6 @@ function renderMapping(mappings) {
         td3.appendChild(badge);
         tr.appendChild(td3);
 
-        // 4. Status – only icon
         const td4 = document.createElement('td');
         const icon = document.createElement('span');
         icon.style.fontSize = '16px';
@@ -523,7 +507,6 @@ function renderMapping(mappings) {
         mappingBody.appendChild(tr);
     });
 
-    // Update counts
     updateCounts();
 
     function updateCounts() {
@@ -646,7 +629,7 @@ if (resetBtn) {
     });
 }
 
-// ---------- IMPORT ----------
+// ---------- IMPORT (UPLOAD TO SERVER) ----------
 if (importBtn) {
     importBtn.addEventListener('click', async function() {
         // Ensure client is selected
@@ -661,13 +644,84 @@ if (importBtn) {
             showStatus('⚠️ Please select a client first from the Dashboard.', 'error');
             return;
         }
-        // ... rest of the handler
+        if (!fileId || !selectedTemplateId) {
+            showStatus('⚠️ Please upload a file and select a template', 'error');
+            return;
+        }
+
+        if (!mappingBody) return;
+        const rows = mappingBody.querySelectorAll('tr');
+        const finalMappings = [];
+        rows.forEach(tr => {
+            const select = tr.querySelector('select');
+            const templateColName = tr.children[0].textContent;
+            const mapping = currentMappings.find(m => m.column_name === templateColName);
+            if (mapping) {
+                finalMappings.push({
+                    template_column_id: mapping.column_id,
+                    template_column_name: mapping.column_name,
+                    excel_column_name: select.value || null,
+                    matched: !!select.value,
+                    mapping_status: select.value ? 'matched' : 'unmatched'
+                });
+            }
+        });
+
+        const payload = {
+            template_id: selectedTemplateId,
+            file_id: fileId,
+            client_id: parseInt(clientId),
+            mappings: finalMappings,
+            mode: uploadMode ? uploadMode.value : 'create',
+            unique_column_id: uniqueIdColumn && uniqueIdColumn.value ? parseInt(uniqueIdColumn.value) : null,
+            sheet_name: currentSheet || 'Sheet1'
+        };
+
+        try {
+            isProcessing = true;
+            showSpinner(true);
+            if (importBtn) importBtn.disabled = true;
+            showStatus('⏳ Importing data...', 'loading');
+            setBadge('⏳ Importing...', 'loading');
+
+            const res = await fetch(API_BASE + '/api/upload/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.message || 'Import failed');
+
+            if (result.status === 'validation_failed') {
+                let errorMsg = '❌ Validation errors:\n';
+                result.errors.forEach(err => {
+                    errorMsg += `Row ${err.row_number}: `;
+                    err.errors.forEach(e => {
+                        errorMsg += `${e.column} - ${e.message}; `;
+                    });
+                    errorMsg += '\n';
+                });
+                showStatus(errorMsg, 'error');
+                setBadge('❌ Validation failed', 'error');
+            } else {
+                showStatus(`✅ ${result.message} (${result.imported_count} records)`, 'success');
+                setBadge('✅ Import complete');
+                setTimeout(resetUpload, 2000);
+            }
+        } catch (error) {
+            showStatus('❌ Import error: ' + error.message, 'error');
+            setBadge('❌ Import failed', 'error');
+        } finally {
+            isProcessing = false;
+            showSpinner(false);
+            if (importBtn) importBtn.disabled = false;
+        }
     });
 }
 
 // ---------- INIT ----------
 window.onload = function() {
     loadTemplates();
-    console.log('📤 Upload module loaded');
+    console.log('📤 Upload module fully loaded');
     showStatus('Select a template and upload an Excel file to begin.', 'info');
 };

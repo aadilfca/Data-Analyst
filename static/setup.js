@@ -2,7 +2,7 @@
 // 🔧 SETUP MODULE LOGIC
 // ==============================================
 
-const API_BASE = 'http://localhost:5000';
+// API_BASE is defined globally in client_context.js
 
 // ---------- LOAD STATS ----------
 async function loadSetupStats() {

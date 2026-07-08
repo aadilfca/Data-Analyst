@@ -1,0 +1,239 @@
+# ==============================================
+# 📊 CLIENT DATA BANK – BACKEND (FIXED)
+# ==============================================
+
+from fastapi import APIRouter, HTTPException, Query
+from database import execute_query, execute_write, log_audit
+from typing import Optional, List
+from pydantic import BaseModel
+from datetime import datetime
+import json
+
+router = APIRouter()
+
+# ---------- MODELS ----------
+class DatasetSummary(BaseModel):
+    upload_id: int
+    template_name: str
+    template_id: int
+    file_name: str
+    upload_date: str
+    record_count: int
+    status: str
+
+class RowData(BaseModel):
+    id: int
+    row_data: dict
+    extract_amount: Optional[float]
+    extract_date: Optional[str]
+    created_at: str
+
+# ---------- HELPER ----------
+def format_datetime(dt_str):
+    try:
+        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        return dt.strftime('%d/%m/%Y %H:%M')
+    except:
+        return dt_str
+
+# ---------- ENDPOINTS ----------
+
+@router.get("/api/data/datasets")
+def get_datasets(client_id: int = Query(..., description="Client ID")):
+    """
+    Get all datasets (uploads) for a given client.
+    Uses both uploaded_files.client_id and client_data.client_id to handle missing client_id in uploaded_files.
+    """
+    print(f"🔍 Data Bank request for client_id={client_id}")
+    # Verify client exists
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client:
+        print(f"❌ Client {client_id} not found")
+        raise HTTPException(404, "Client not found or inactive")
+
+    # Get all uploads that either have client_id matching OR have client_data rows with that client_id
+    uploads = execute_query(
+        """
+        SELECT 
+            u.id AS upload_id,
+            u.file_name,
+            u.upload_date,
+            u.status,
+            u.record_count,
+            COALESCE(t.id, cd.template_id) AS template_id,
+            COALESCE(t.template_name, 'Unknown') AS template_name,
+            COUNT(cd2.id) AS actual_row_count
+        FROM uploaded_files u
+        LEFT JOIN client_data cd ON cd.upload_id = u.id AND cd.is_deleted = 0
+        LEFT JOIN templates t ON t.id = cd.template_id
+        LEFT JOIN client_data cd2 ON cd2.upload_id = u.id AND cd2.is_deleted = 0
+        WHERE (u.client_id = ? OR EXISTS (
+            SELECT 1 FROM client_data cd3 WHERE cd3.upload_id = u.id AND cd3.client_id = ? AND cd3.is_deleted = 0
+        ))
+        GROUP BY u.id
+        ORDER BY u.upload_date DESC
+        """,
+        (client_id, client_id)
+    )
+    print(f"📊 Found {len(uploads)} uploads for client {client_id}")
+
+    result = []
+    for row in uploads:
+        # If template_name is 'Unknown' but we have a template_id, try to fetch name
+        template_name = row["template_name"]
+        if template_name == "Unknown" and row["template_id"]:
+            tpl = execute_query("SELECT template_name FROM templates WHERE id = ?", (row["template_id"],))
+            if tpl:
+                template_name = tpl[0]["template_name"]
+
+        result.append({
+            "upload_id": row["upload_id"],
+            "template_name": template_name,
+            "template_id": row["template_id"],
+            "file_name": row["file_name"],
+            "upload_date": format_datetime(row["upload_date"]),
+            "record_count": row["actual_row_count"] or 0,
+            "status": row["status"]
+        })
+    
+    # Also include uploads that are still pending (no data yet) but have matching client_id
+    pending = execute_query(
+        """
+        SELECT id, file_name, upload_date, status, record_count
+        FROM uploaded_files
+        WHERE client_id = ? AND status = 'Pending'
+        ORDER BY upload_date DESC
+        """,
+        (client_id,)
+    )
+    for row in pending:
+        # Check if already in result
+        if not any(r["upload_id"] == row["id"] for r in result):
+            result.append({
+                "upload_id": row["id"],
+                "template_name": "Pending Import",
+                "template_id": None,
+                "file_name": row["file_name"],
+                "upload_date": format_datetime(row["upload_date"]),
+                "record_count": 0,
+                "status": row["status"]
+            })
+    
+    print(f"📤 Returning {len(result)} datasets")
+    return result
+
+@router.get("/api/data/datasets/{upload_id}/rows")
+def get_dataset_rows(
+    upload_id: int,
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=500)
+):
+    """
+    Get paginated rows for a specific upload.
+    """
+    # Check upload exists
+    upload = execute_query(
+        "SELECT id, client_id, status FROM uploaded_files WHERE id = ?",
+        (upload_id,)
+    )
+    if not upload:
+        raise HTTPException(404, "Upload not found")
+    
+    # Get total count
+    total = execute_query(
+        "SELECT COUNT(*) as count FROM client_data WHERE upload_id = ? AND is_deleted = 0",
+        (upload_id,)
+    )[0]['count']
+    
+    if total == 0:
+        return {
+            "upload_id": upload_id,
+            "total_rows": 0,
+            "page": page,
+            "limit": limit,
+            "rows": []
+        }
+    
+    offset = (page - 1) * limit
+    rows = execute_query(
+        """
+        SELECT id, row_data, extract_amount, extract_date, created_at
+        FROM client_data
+        WHERE upload_id = ? AND is_deleted = 0
+        ORDER BY id
+        LIMIT ? OFFSET ?
+        """,
+        (upload_id, limit, offset)
+    )
+    
+    result_rows = []
+    for r in rows:
+        try:
+            row_dict = json.loads(r["row_data"])
+        except:
+            row_dict = {}
+        result_rows.append({
+            "id": r["id"],
+            "row_data": row_dict,
+            "extract_amount": r["extract_amount"],
+            "extract_date": r["extract_date"],
+            "created_at": format_datetime(r["created_at"])
+        })
+    
+    return {
+        "upload_id": upload_id,
+        "total_rows": total,
+        "page": page,
+        "limit": limit,
+        "rows": result_rows
+    }
+
+@router.delete("/api/data/datasets/{upload_id}")
+def delete_dataset(upload_id: int):
+    """
+    Soft-delete all rows of a dataset (set is_deleted=1) and mark upload as 'Deleted'.
+    """
+    upload = execute_query(
+        "SELECT id, file_name FROM uploaded_files WHERE id = ?",
+        (upload_id,)
+    )
+    if not upload:
+        raise HTTPException(404, "Upload not found")
+    
+    # Soft-delete all rows
+    execute_write(
+        "UPDATE client_data SET is_deleted = 1 WHERE upload_id = ?",
+        (upload_id,)
+    )
+    # Update upload status
+    execute_write(
+        "UPDATE uploaded_files SET status = 'Deleted' WHERE id = ?",
+        (upload_id,)
+    )
+    log_audit("Analyst", "Delete", "DataBank", f"Deleted dataset upload_id={upload_id}")
+    
+    return {"message": f"Dataset '{upload[0]['file_name']}' deleted successfully"}
+
+@router.post("/api/data/datasets/{upload_id}/restore")
+def restore_dataset(upload_id: int):
+    """
+    Restore a soft-deleted dataset.
+    """
+    upload = execute_query(
+        "SELECT id, file_name FROM uploaded_files WHERE id = ? AND status = 'Deleted'",
+        (upload_id,)
+    )
+    if not upload:
+        raise HTTPException(404, "Deleted upload not found")
+    
+    execute_write(
+        "UPDATE client_data SET is_deleted = 0 WHERE upload_id = ?",
+        (upload_id,)
+    )
+    execute_write(
+        "UPDATE uploaded_files SET status = 'Imported' WHERE id = ?",
+        (upload_id,)
+    )
+    log_audit("Analyst", "Restore", "DataBank", f"Restored dataset upload_id={upload_id}")
+    
+    return {"message": f"Dataset '{upload[0]['file_name']}' restored successfully"}

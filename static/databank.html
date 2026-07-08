@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Client Data Bank</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        /* Additional styles for Data Bank */
+        .stats-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px 40px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 16px 24px;
+            margin-bottom: 20px;
+        }
+
+        .stats-bar .stat-item {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            font-size: 14px;
+            color: #475569;
+        }
+
+        .stats-bar .stat-item strong {
+            font-size: 20px;
+            color: #1a1a2e;
+        }
+
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .dataset-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        .dataset-table th {
+            background: #f8fafc;
+            padding: 12px 16px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #e2e8f0;
+            color: #475569;
+        }
+
+        .dataset-table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #f0f2f5;
+        }
+
+        .dataset-table tr:hover td {
+            background: #fafcff;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 2px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.imported {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status-badge.pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-badge.deleted {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .action-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0 4px;
+            transition: color 0.2s;
+        }
+
+        .action-btn.view {
+            color: #3b82f6;
+        }
+
+        .action-btn.view:hover {
+            color: #1d4ed8;
+        }
+
+        .action-btn.delete {
+            color: #dc2626;
+        }
+
+        .action-btn.delete:hover {
+            color: #b91c1c;
+        }
+
+        .action-btn.restore {
+            color: #16a34a;
+        }
+
+        .action-btn.restore:hover {
+            color: #15803d;
+        }
+
+        /* Modal for viewing rows */
+        .preview-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .preview-modal.active {
+            display: flex;
+        }
+
+        .preview-modal .modal-content {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 90%;
+            max-height: 80%;
+            overflow: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            width: 1000px;
+        }
+
+        .preview-modal .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .preview-modal .modal-header h2 {
+            font-size: 20px;
+            margin: 0;
+        }
+
+        .preview-modal .modal-close {
+            background: none;
+            border: none;
+            font-size: 28px;
+            cursor: pointer;
+            color: #94a3b8;
+        }
+
+        .preview-modal .modal-close:hover {
+            color: #1a1a2e;
+        }
+
+        .preview-modal .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 16px;
+            align-items: center;
+        }
+
+        .preview-modal .pagination button {
+            padding: 6px 14px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .preview-modal .pagination button:hover:not(:disabled) {
+            background: #f1f5f9;
+        }
+
+        .preview-modal .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .no-data {
+            padding: 40px;
+            text-align: center;
+            color: #94a3b8;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">🏢 System Analyst</div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user">
+                <span>👤 Welcome, Analyst</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <header class="module-header">
+            <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
+            <h1>📊 Client Data Bank</h1>
+            <p>View and manage all uploaded data sets for the selected client</p>
+        </header>
+
+        <!-- Stats Bar -->
+        <div class="stats-bar" id="statsBar">
+            <div class="stat-item">📦 Total Records: <strong id="totalRecords">0</strong></div>
+            <div class="stat-item">📁 Total Uploads: <strong id="totalUploads">0</strong></div>
+            <div class="stat-item">📅 Last Upload: <strong id="lastUpload">Never</strong></div>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="toolbar">
+            <button id="uploadNewBtn" class="btn-upload" style="background:#3b82f6; padding:10px 25px;">📤 Upload New
+                Data</button>
+            <div style="display:flex; gap:10px; align-items:center;">
+                <label style="font-size:13px; color:#64748b;">Show:</label>
+                <select id="statusFilter" style="padding:6px 12px; border:1px solid #d0d5dd; border-radius:6px;">
+                    <option value="all">All</option>
+                    <option value="Imported">Imported</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Deleted">Deleted</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Datasets Table -->
+        <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+            <table class="dataset-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Template</th>
+                        <th>File Name</th>
+                        <th>Upload Date</th>
+                        <th>Rows</th>
+                        <th>Status</th>
+                        <th style="text-align:center;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="datasetsBody">
+                    <!-- Rows inserted by JavaScript -->
+                </tbody>
+            </table>
+            <div id="noDataMessage" class="no-data" style="display:none;">
+                No data sets found for this client. <button id="goUploadBtn" class="btn-upload"
+                    style="background:#3b82f6; padding:6px 18px; font-size:14px;">Upload Data</button>
+            </div>
+        </div>
+
+        <!-- Status Message -->
+        <div id="statusMessage" class="upload-status" style="margin-top:20px; display:none;"></div>
+    </div>
+
+    <!-- ============================================= -->
+    <!-- PREVIEW MODAL (for viewing rows) -->
+    <!-- ============================================= -->
+    <div id="previewModal" class="preview-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="previewTitle">Dataset Preview</h2>
+                <button class="modal-close" id="closePreviewBtn">&times;</button>
+            </div>
+            <div style="overflow-x:auto; max-height:60vh;">
+                <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                    <thead id="previewTableHead" style="background:#f8fafc; position:sticky; top:0;"></thead>
+                    <tbody id="previewTableBody"></tbody>
+                </table>
+            </div>
+            <div class="pagination" id="previewPagination">
+                <button id="prevPageBtn" disabled>Previous</button>
+                <span id="pageInfo">Page 1 of 1</span>
+                <button id="nextPageBtn" disabled>Next</button>
+            </div>
+            <div style="margin-top:8px; font-size:12px; color:#94a3b8;" id="previewCountInfo">0 rows</div>
+        </div>
+    </div>
+
+    <script src="/static/client_context.js?v=2"></script>
+    <script src="/static/databank.js"></script>
+</body>
+
+</html>
