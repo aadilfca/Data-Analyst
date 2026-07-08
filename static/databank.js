@@ -164,13 +164,24 @@ function setDefaultDateRange() {
 
 // ---------- CLEAR ALL FILTERS (Main Page) ----------
 function clearAllFilters() {
+    // 1. Reset filter fields to empty
     filterTemplate.value = '';
-    setDefaultDateRange();
-    showStatus('🔄 Filters cleared. Click "Check Availability" to refresh.', 'info');
-    // Optionally auto-refresh after clearing
-    setTimeout(() => {
-        fetchAvailability();
-    }, 300);
+    filterDateStart.value = '';
+    filterDateEnd.value = '';
+    
+    // 2. Clear the table and stats
+    availabilityData = [];
+    availabilityBody.innerHTML = '';
+    noDataMessage.style.display = 'block';
+    noDataMessage.innerHTML = 'Filters cleared. Select a new date range and click "Check Availability".';
+    
+    statsTotalRecords.textContent = '0';
+    statsTotalTemplates.textContent = '0';
+    statsMissingTemplates.textContent = '0';
+    statsSundayRows.textContent = '0';
+    
+    // 3. Show status message
+    showStatus('🧹 Filters cleared. Please select a new date range and click "Check Availability".', 'info');
 }
 
 // ---------- FETCH AVAILABILITY DATA ----------
