@@ -1,9 +1,8 @@
 // ==============================================
-// 📊 CLIENT DATA BANK - LOGIC
+// 📊 CLIENT DATA BANK - LOGIC (with Global Formatting)
 // ==============================================
 
 // API_BASE is defined in client_context.js
-
 // STORAGE_KEY is defined globally in client_context.js
 
 let currentDatasets = [];
@@ -12,6 +11,9 @@ let previewUploadId = null;
 let previewPage = 1;
 let previewTotalRows = 0;
 let previewLimit = 50;
+
+// ---------- DECIMAL OVERRIDE PER COLUMN (Spin Buttons) ----------
+let columnDecimals = {}; // { columnName: decimalPlaces }
 
 // DOM refs
 const datasetsBody = document.getElementById('datasetsBody');
@@ -44,12 +46,25 @@ function showStatus(msg, type = 'info') {
     }, 5000);
 }
 
-function formatDate(dtStr) {
-    return dtStr || '—';
-}
-
 function getSelectedClientId() {
     return localStorage.getItem(STORAGE_KEY) || null;
+}
+
+// ---------- FORMATTING HELPERS (using global utils) ----------
+function formatCell(value, columnName = '') {
+    if (value === undefined || value === null || value === '') return '—';
+    if (typeof value === 'number') {
+        // Check if column name suggests amount
+        const amountKeywords = ['amount', 'total', 'debit', 'credit', 'balance', 'price', 'value', 'net', 'tax', 'fee', 'amt'];
+        const isAmount = amountKeywords.some(kw => columnName.toLowerCase().includes(kw));
+        if (isAmount) {
+            // Check if we have a per-column decimal override
+            const dec = columnDecimals[columnName] !== undefined ? columnDecimals[columnName] : null;
+            return window.formatAmount ? window.formatAmount(value, dec) : value.toString();
+        }
+        return value;
+    }
+    return value;
 }
 
 // ---------- LOAD DATASETS ----------
@@ -76,7 +91,6 @@ async function loadDatasets() {
         }
         const data = await res.json();
 
-        // Filter by status if not 'all'
         let filtered = data;
         if (filter !== 'all') {
             filtered = data.filter(d => d.status === filter);
@@ -130,9 +144,9 @@ function renderDatasets(datasets) {
         tdFile.style.color = '#64748b';
         tr.appendChild(tdFile);
 
-        // Upload Date
+        // Upload Date (formatted)
         const tdDate = document.createElement('td');
-        tdDate.textContent = formatDate(ds.upload_date);
+        tdDate.textContent = window.formatDate ? window.formatDate(ds.upload_date) : ds.upload_date || '—';
         tr.appendChild(tdDate);
 
         // Rows
@@ -154,7 +168,6 @@ function renderDatasets(datasets) {
         tdActions.style.textAlign = 'center';
         tdActions.style.whiteSpace = 'nowrap';
 
-                // View button (only if imported and has rows)
         if (ds.status === 'Imported' && ds.record_count > 0) {
             const viewBtn = document.createElement('button');
             viewBtn.className = 'action-btn view';
@@ -163,7 +176,6 @@ function renderDatasets(datasets) {
             viewBtn.addEventListener('click', () => openPreview(ds.upload_id, ds.template_name));
             tdActions.appendChild(viewBtn);
 
-            // Export button
             const exportBtn = document.createElement('button');
             exportBtn.className = 'action-btn export';
             exportBtn.textContent = '📥';
@@ -173,7 +185,6 @@ function renderDatasets(datasets) {
             tdActions.appendChild(exportBtn);
         }
 
-        // Delete / Restore based on status
         if (ds.status === 'Deleted') {
             const restoreBtn = document.createElement('button');
             restoreBtn.className = 'action-btn restore';
@@ -194,7 +205,6 @@ function renderDatasets(datasets) {
         datasetsBody.appendChild(tr);
     });
 
-    // Re-bind the "Upload Data" button inside no-data message if present
     const goUploadBtn = document.getElementById('goUploadBtn');
     if (goUploadBtn) {
         goUploadBtn.addEventListener('click', () => {
@@ -211,14 +221,13 @@ function updateStats(allDatasets) {
     if (allDatasets.length > 0) {
         const dates = allDatasets.map(d => d.upload_date).filter(d => d);
         if (dates.length > 0) {
-            // Sort dates descending (most recent first)
             dates.sort((a, b) => new Date(b) - new Date(a));
-            lastUpload = dates[0] || 'Never';
+            lastUpload = window.formatDate ? window.formatDate(dates[0]) : dates[0];
         }
     }
     totalRecordsSpan.textContent = totalRecords;
     totalUploadsSpan.textContent = totalUploads;
-    lastUploadSpan.textContent = lastUpload;
+    lastUploadSpan.textContent = lastUpload || 'Never';
 }
 
 // ---------- PREVIEW MODAL ----------
@@ -233,7 +242,6 @@ async function openPreview(uploadId, templateName) {
 async function loadPreviewPage() {
     if (!previewUploadId) return;
     try {
-        // Build query string from filter inputs
         const searchVal = document.getElementById('searchInput')?.value || '';
         const amountMin = document.getElementById('amountMin')?.value || '';
         const amountMax = document.getElementById('amountMax')?.value || '';
@@ -287,9 +295,51 @@ function renderPreviewRows(rows) {
             th.style.padding = '8px 12px';
             th.style.textAlign = 'left';
             th.style.borderBottom = '2px solid #e2e8f0';
+            
+            // Check if this is a numeric column (for spin buttons)
+            const isNumeric = rows.some(row => typeof row.row_data[h] === 'number');
+            if (isNumeric) {
+                // Add spin buttons
+                const btnContainer = document.createElement('span');
+                btnContainer.style.marginLeft = '6px';
+                btnContainer.style.display = 'inline-block';
+                
+                const upBtn = document.createElement('button');
+                upBtn.textContent = '▲';
+                upBtn.style.cssText = 'background:none; border:none; cursor:pointer; font-size:10px; color:#64748b; padding:0 2px; display:block;';
+                upBtn.title = 'Increase decimals';
+                upBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const current = columnDecimals[h] !== undefined ? columnDecimals[h] : 0;
+                    columnDecimals[h] = Math.min(current + 1, 4);
+                    loadPreviewPage();
+                });
+                
+                const downBtn = document.createElement('button');
+                downBtn.textContent = '▼';
+                downBtn.style.cssText = 'background:none; border:none; cursor:pointer; font-size:10px; color:#64748b; padding:0 2px; display:block;';
+                downBtn.title = 'Decrease decimals';
+                downBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const current = columnDecimals[h] !== undefined ? columnDecimals[h] : 0;
+                    columnDecimals[h] = Math.max(current - 1, 0);
+                    loadPreviewPage();
+                });
+                
+                btnContainer.appendChild(upBtn);
+                btnContainer.appendChild(downBtn);
+                th.appendChild(btnContainer);
+                
+                // Show current decimal count
+                const decBadge = document.createElement('span');
+                const currentDec = columnDecimals[h] !== undefined ? columnDecimals[h] : 0;
+                decBadge.textContent = ` ${currentDec}`;
+                decBadge.style.cssText = 'font-size:9px; color:#94a3b8; margin-left:2px; font-weight:400;';
+                th.appendChild(decBadge);
+            }
+            
             tr.appendChild(th);
         });
-        // Add a column for extracted amount/date maybe? We can skip for simplicity.
         previewTableHead.appendChild(tr);
     }
 
@@ -300,7 +350,8 @@ function renderPreviewRows(rows) {
             const td = document.createElement('td');
             td.style.padding = '6px 12px';
             td.style.borderBottom = '1px solid #f0f2f5';
-            td.textContent = row.row_data[h] !== undefined ? row.row_data[h] : '';
+            const value = row.row_data[h] !== undefined ? row.row_data[h] : '';
+            td.textContent = formatCell(value, h);
             tr.appendChild(td);
         });
         previewTableBody.appendChild(tr);
@@ -334,26 +385,28 @@ nextPageBtn.addEventListener('click', () => {
 
 closePreviewBtn.addEventListener('click', () => {
     previewModal.classList.remove('active');
+    // Reset column decimals when closing preview
+    columnDecimals = {};
 });
 
-// Close modal on overlay click
 previewModal.addEventListener('click', function(e) {
     if (e.target === this) {
         this.classList.remove('active');
+        columnDecimals = {};
     }
 });
+
 // ---------- FILTER EVENT HANDLERS ----------
 const applyFiltersBtn = document.getElementById('applyFiltersBtn');
 const clearFiltersBtn = document.getElementById('clearFiltersBtn');
 if (applyFiltersBtn) {
     applyFiltersBtn.addEventListener('click', function() {
-        previewPage = 1; // reset to first page
+        previewPage = 1;
         loadPreviewPage();
     });
 }
 if (clearFiltersBtn) {
     clearFiltersBtn.addEventListener('click', function() {
-        // Clear all filter inputs
         const searchInput = document.getElementById('searchInput');
         const amountMin = document.getElementById('amountMin');
         const amountMax = document.getElementById('amountMax');
@@ -368,6 +421,7 @@ if (clearFiltersBtn) {
         loadPreviewPage();
     });
 }
+
 // ---------- DELETE / RESTORE ----------
 async function confirmDelete(uploadId, fileName) {
     if (!confirm(`Are you sure you want to delete dataset "${fileName}"? This action can be undone.`)) return;
@@ -394,15 +448,15 @@ async function confirmRestore(uploadId, fileName) {
         showStatus('❌ Error restoring: ' + error.message, 'error');
     }
 }
+
 // ---------- EXPORT DATASET TO EXCEL ----------
 async function exportDataset(uploadId, templateName) {
     try {
         showStatus('⏳ Preparing export...', 'loading');
-        // Fetch all rows (we'll fetch all pages)
         let allRows = [];
         let page = 1;
         let totalPages = 1;
-        const limit = 500; // fetch in batches
+        const limit = 500;
 
         do {
             const url = `${API_BASE}/api/data/datasets/${uploadId}/rows?page=${page}&limit=${limit}`;
@@ -416,14 +470,13 @@ async function exportDataset(uploadId, templateName) {
             allRows = allRows.concat(rows);
             totalPages = Math.ceil(data.total_rows / limit);
             page++;
-        } while (page <= totalPages && allRows.length < 10000); // safety limit
+        } while (page <= totalPages && allRows.length < 10000);
 
         if (allRows.length === 0) {
             showStatus('⚠️ No data to export.', 'error');
             return;
         }
 
-        // Build Excel data
         const firstRow = allRows[0];
         const headers = firstRow.row_data ? Object.keys(firstRow.row_data) : [];
         const excelData = [headers];
@@ -432,13 +485,11 @@ async function exportDataset(uploadId, templateName) {
             excelData.push(rowData);
         });
 
-        // Create workbook
         const ws = XLSX.utils.aoa_to_sheet(excelData);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Data');
         const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
 
-        // Download
         const blob = new Blob([wbout], { type: 'application/octet-stream' });
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -464,7 +515,6 @@ uploadNewBtn.addEventListener('click', () => {
 });
 
 // ---------- CLIENT CHANGE HOOK ----------
-// When client changes in global context, reload datasets
 window.onClientChange = function(clientId) {
     if (clientId) {
         loadDatasets();
@@ -473,10 +523,8 @@ window.onClientChange = function(clientId) {
 
 // ---------- INIT ----------
 window.onload = function() {
-    // Ensure client is selected
     const clientId = getSelectedClientId();
     if (!clientId) {
-        // Show message and redirect to dashboard after a moment?
         showStatus('⚠️ Please select a client from the Dashboard.', 'error');
         setTimeout(() => {
             window.location.href = '/static/index.html';

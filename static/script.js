@@ -11,7 +11,7 @@ async function loadDashboardStats() {
             document.getElementById('totalUploads').textContent = stats.total_uploads || 0;
             document.getElementById('pendingVerifications').textContent = stats.pending_verifications || 0;
             document.getElementById('totalRecords').textContent = stats.total_records || 0;
-            const lastUpload = stats.last_upload ? new Date(stats.last_upload).toLocaleString() : 'Never';
+                        const lastUpload = stats.last_upload ? formatDate(stats.last_upload) : 'Never';
             // Add a new element for last upload if not exists; we'll add it in index.html.
             // We'll handle it by updating an optional element.
             const lastUploadEl = document.getElementById('lastUploadDate');

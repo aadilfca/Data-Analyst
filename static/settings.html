@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App Settings</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .settings-group {
+            background: white;
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .settings-group h3 {
+            font-size: 16px;
+            color: #1a1a2e;
+            margin-bottom: 12px;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 8px;
+        }
+
+        .setting-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px 20px;
+            padding: 8px 0;
+        }
+
+        .setting-row label {
+            font-weight: 600;
+            font-size: 14px;
+            color: #475569;
+            min-width: 180px;
+        }
+
+        .setting-row select,
+        .setting-row input {
+            padding: 6px 12px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+            min-width: 160px;
+        }
+
+        .setting-row .hint {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        .save-btn {
+            padding: 8px 24px;
+            background: #22c55e;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .save-btn:hover {
+            background: #16a34a;
+        }
+
+        #statusMessage {
+            margin-top: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">🏢 System Analyst</div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user">
+                <span>👤 Welcome, Admin</span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <header class="module-header">
+            <a href="/static/setup.html" class="back-link">← Back to Setup</a>
+            <h1>⚙️ App Settings</h1>
+            <p>Configure global settings for the application</p>
+        </header>
+
+        <div id="settingsContainer">
+            <!-- Settings will be loaded by JavaScript -->
+        </div>
+
+        <div id="statusMessage" class="upload-status" style="display:none;"></div>
+    </div>
+
+    <script src="/static/client_context.js?v=2"></script>
+    <script src="/static/settings.js"></script>
+</body>
+
+</html>

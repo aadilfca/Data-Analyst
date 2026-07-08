@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from database import init_db, log_error, get_error_code_for_exception, execute_query
-from routers import dashboard, verification, import_export, templates, clients, data, error_log
+from routers import dashboard, verification, import_export, templates, clients, data, error_log, settings
 from datetime import datetime
 import traceback
 import sys
@@ -28,6 +28,8 @@ app.include_router(templates.router)
 app.include_router(clients.router)
 app.include_router(data.router)
 app.include_router(error_log.router)
+app.include_router(settings.router)
+app.include_router(settings.router)
 
 # ---------- GLOBAL EXCEPTION HANDLER ----------
 import traceback
