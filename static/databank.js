@@ -82,6 +82,7 @@ async function loadDatasets() {
     currentClientId = clientId;
 
     const filter = statusFilter.value;
+    const searchTerm = document.getElementById('datasetSearchInput')?.value?.toLowerCase() || '';
 
     try {
         const res = await fetch(`${API_BASE}/api/data/datasets?client_id=${clientId}`);
@@ -91,14 +92,23 @@ async function loadDatasets() {
         }
         const data = await res.json();
 
+        // Filter by status if not 'all'
         let filtered = data;
         if (filter !== 'all') {
             filtered = data.filter(d => d.status === filter);
         }
-        currentDatasets = filtered;
 
+        // Filter by search term
+        if (searchTerm) {
+            filtered = filtered.filter(d => 
+                (d.template_name && d.template_name.toLowerCase().includes(searchTerm)) ||
+                (d.file_name && d.file_name.toLowerCase().includes(searchTerm))
+            );
+        }
+
+        currentDatasets = filtered;
         renderDatasets(filtered);
-        updateStats(data);
+        updateStats(data); // stats based on all data, not filtered
     } catch (error) {
         showStatus('❌ Error loading datasets: ' + error.message, 'error');
         datasetsBody.innerHTML = '';
@@ -241,7 +251,14 @@ async function openPreview(uploadId, templateName) {
 
 async function loadPreviewPage() {
     if (!previewUploadId) return;
+    // Show loading state
+    previewTableBody.innerHTML = `<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">
+        <span class="spinner"></span> Loading data...
+    </td></tr>`;
+    previewTableHead.innerHTML = '';
+
     try {
+        // Build query string from filter inputs
         const searchVal = document.getElementById('searchInput')?.value || '';
         const amountMin = document.getElementById('amountMin')?.value || '';
         const amountMax = document.getElementById('amountMax')?.value || '';
@@ -470,11 +487,21 @@ async function exportDataset(uploadId, templateName) {
             allRows = allRows.concat(rows);
             totalPages = Math.ceil(data.total_rows / limit);
             page++;
-        } while (page <= totalPages && allRows.length < 10000);
+                } while (page <= totalPages && allRows.length < 10000); // safety limit
 
         if (allRows.length === 0) {
             showStatus('⚠️ No data to export.', 'error');
             return;
+        }
+
+        // Check if data was truncated
+        if (allRows.length >= 10000) {
+            showStatus('⚠️ Export limited to 10,000 rows. Use filters to export fewer rows.', 'warning');
+        }
+
+        // Check if data was truncated
+        if (allRows.length >= 10000) {
+            showStatus('⚠️ Export limited to 10,000 rows. Use filters to export fewer rows.', 'error');
         }
 
         const firstRow = allRows[0];
@@ -533,4 +560,29 @@ window.onload = function() {
     }
     loadDatasets();
     console.log('📊 Data Bank loaded');
+
+    // Search input listener (debounced)
+    const searchInput = document.getElementById('datasetSearchInput');
+    if (searchInput) {
+        let timeoutId;
+        searchInput.addEventListener('input', function() {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => {
+                loadDatasets();
+            }, 300);
+        });
+    }
+};
+
+    // Search input listener (debounced)
+    const searchInput = document.getElementById('datasetSearchInput');
+    if (searchInput) {
+        let timeoutId;
+        searchInput.addEventListener('input', function() {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => {
+                loadDatasets();
+            }, 300);
+        });
+    }
 };

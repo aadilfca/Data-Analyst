@@ -737,45 +737,32 @@ function showImportSummary(result) {
     const errors = result.validation_errors || [];
     const errorCount = errors.length;
     
-    // Determine status and message
     let statusIcon = '✅';
     let statusColor = '#16a34a';
     let statusText = 'Import Successful';
-    let summaryMessage = '';
-    
     if (errorCount > 0) {
         statusIcon = '⚠️';
         statusColor = '#f59e0b';
         statusText = 'Import with Warnings';
-        summaryMessage = `Imported with ${errorCount} warning(s). Please check the errors below.`;
-    } else if (total === 0) {
-        statusIcon = 'ℹ️';
-        statusColor = '#3b82f6';
-        statusText = 'No Data to Import';
-        summaryMessage = 'The file contained no data rows, or all rows were already up to date.';
-    } else if (inserted === 0 && updated === 0) {
-        statusIcon = 'ℹ️';
-        statusColor = '#3b82f6';
-        statusText = 'No Changes Detected';
-        summaryMessage = 'All rows already exist and no changes were made.';
-    } else {
-        // Build a descriptive message
-        let parts = [];
-        if (inserted > 0) parts.push(`${inserted} new row${inserted > 1 ? 's' : ''} inserted`);
-        if (updated > 0) parts.push(`${updated} existing row${updated > 1 ? 's' : ''} updated`);
-        summaryMessage = parts.join(' and ') + ' successfully.';
     }
     
-    // Use backend message as fallback if available
-    if (!summaryMessage && result.message) {
-        summaryMessage = result.message;
+    // Build descriptive message
+    let detailMessage = '';
+    if (inserted > 0 && updated > 0) {
+        detailMessage = `✅ ${inserted} new row(s) inserted. 🔄 ${updated} existing row(s) overwritten.`;
+    } else if (inserted > 0) {
+        detailMessage = `✅ ${inserted} new row(s) inserted.`;
+    } else if (updated > 0) {
+        detailMessage = `🔄 ${updated} existing row(s) overwritten.`;
+    } else {
+        detailMessage = 'ℹ️ No changes were made.';
     }
     
     modal.innerHTML = `
         <div style="text-align:center; margin-bottom:16px;">
             <div style="font-size:48px;">${statusIcon}</div>
             <h2 style="margin:8px 0 4px; color:#1a1a2e;">${statusText}</h2>
-            <p style="color:#475569; font-size:15px; font-weight:500; margin-top:4px;">${summaryMessage || 'Data import completed.'}</p>
+            <p style="color:#64748b; font-size:14px;">${detailMessage}</p>
         </div>
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin:16px 0;">
             <div style="background:#f8fafc; padding:12px; border-radius:8px; text-align:center;">
