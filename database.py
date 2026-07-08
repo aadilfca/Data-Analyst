@@ -230,12 +230,160 @@ def init_db():
         )
     ''')
     
-    # Create indexes for performance
+      # Create indexes on error_log for performance
     conn.execute("CREATE INDEX IF NOT EXISTS idx_error_log_code ON error_log (error_code)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_error_log_module ON error_log (module)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_error_log_created ON error_log (created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_error_log_resolved ON error_log (is_resolved)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_error_log_category ON error_log (error_category)")
+    
+    # ---------- SEED ERROR CODES ----------
+    # Seed the error_codes table if it's empty
+    existing = conn.execute("SELECT COUNT(*) FROM error_codes").fetchone()[0]
+    if existing == 0:
+        error_codes = [
+            # ---- SYNTAX & IMPORT ERRORS ----
+            {
+                "code": "ERR-SYN-001",
+                "severity": "Error",
+                "category": "Syntax",
+                "user_message": "The system tried to use something that doesn't exist – like a missing function or variable.",
+                "tech_description": "NameError: name '...' is not defined",
+                "suggested_action": "Check the spelling of the function/variable name. Make sure it is imported or defined before use."
+            },
+            {
+                "code": "ERR-SYN-002",
+                "severity": "Error",
+                "category": "Syntax",
+                "user_message": "The system encountered a syntax error – a missing bracket, comma, or a typo in the code.",
+                "tech_description": "SyntaxError: invalid syntax",
+                "suggested_action": "Check the code for missing brackets '()', '{}', '[]', or missing commas. Look at the highlighted line in the error report."
+            },
+            {
+                "code": "ERR-IMP-001",
+                "severity": "Error",
+                "category": "Import",
+                "user_message": "The system could not import a required module or function.",
+                "tech_description": "ImportError: No module named '...'",
+                "suggested_action": "Check if the module is installed (e.g., with `pip install`). If it's a local file, make sure the file name and path are correct."
+            },
+            {
+                "code": "ERR-IMP-002",
+                "severity": "Error",
+                "category": "Import",
+                "user_message": "The system tried to import something that doesn't exist in the module.",
+                "tech_description": "ImportError: cannot import name '...'",
+                "suggested_action": "Check the spelling of the function/class name. Make sure it is exported in the module."
+            },
+            
+            # ---- DATABASE ERRORS ----
+            {
+                "code": "ERR-DB-001",
+                "severity": "Fatal",
+                "category": "Database",
+                "user_message": "The system could not connect to the database. This might be because the database file is missing or corrupted.",
+                "tech_description": "sqlite3.OperationalError: unable to open database file",
+                "suggested_action": "Check that the database file exists in the correct location. Restart the server and try again."
+            },
+            {
+                "code": "ERR-DB-002",
+                "severity": "Error",
+                "category": "Database",
+                "user_message": "A database constraint was violated – e.g., trying to insert a duplicate unique value.",
+                "tech_description": "sqlite3.IntegrityError: UNIQUE constraint failed",
+                "suggested_action": "Check the data you are trying to insert. Make sure no duplicate values exist in unique columns (like Invoice Number)."
+            },
+            {
+                "code": "ERR-DB-003",
+                "severity": "Error",
+                "category": "Database",
+                "user_message": "The database operation failed because the table structure doesn't match the query.",
+                "tech_description": "sqlite3.OperationalError: no such table/column",
+                "suggested_action": "This may happen after upgrading the app. Try restarting the server and check if the database schema is up to date."
+            },
+            
+            # ---- NETWORK & CONNECTION ERRORS ----
+            {
+                "code": "ERR-NET-001",
+                "severity": "Fatal",
+                "category": "Network",
+                "user_message": "The system could not connect to the server or the server is not responding.",
+                "tech_description": "ConnectionError: Failed to connect to server",
+                "suggested_action": "Make sure the server is running. Check your internet connection and firewall settings."
+            },
+            {
+                "code": "ERR-NET-002",
+                "severity": "Error",
+                "category": "Network",
+                "user_message": "The server took too long to respond (timeout).",
+                "tech_description": "TimeoutError: Request timed out",
+                "suggested_action": "Try again later. If this keeps happening, check the server load and network speed."
+            },
+            
+            # ---- VALIDATION & USER INPUT ERRORS ----
+            {
+                "code": "ERR-VAL-001",
+                "severity": "Warning",
+                "category": "Validation",
+                "user_message": "The data you entered is incorrect – e.g., missing required fields, invalid format, or duplicate value.",
+                "tech_description": "ValidationError: Invalid input",
+                "suggested_action": "Check your input data. Make sure all required fields are filled and in the correct format. For duplicates, use a different unique value."
+            },
+            {
+                "code": "ERR-VAL-002",
+                "severity": "Warning",
+                "category": "Validation",
+                "user_message": "The file you uploaded is not supported. Only Excel files (.xlsx, .xls) are allowed.",
+                "tech_description": "HTTPException: Only .xlsx and .xls files are supported",
+                "suggested_action": "Convert your file to .xlsx or .xls format and try again."
+            },
+            {
+                "code": "ERR-VAL-003",
+                "severity": "Warning",
+                "category": "Validation",
+                "user_message": "A required unique column was not selected for update mode. Please select a unique column.",
+                "tech_description": "HTTPException: Unique ID column is required when mode is 'Update Existing'",
+                "suggested_action": "In the upload mapping, select a column (like Invoice Number) as the 'Unique ID'."
+            },
+            
+            # ---- SYSTEM ERRORS ----
+            {
+                "code": "ERR-SYS-001",
+                "severity": "Fatal",
+                "category": "System",
+                "user_message": "A critical system error occurred. This could be due to a bug in the code or a missing file.",
+                "tech_description": "Internal Server Error (500)",
+                "suggested_action": "Restart the server. If the problem persists, contact your developer and provide the error report."
+            },
+            {
+                "code": "ERR-SYS-002",
+                "severity": "Error",
+                "category": "System",
+                "user_message": "The system ran out of memory or resources.",
+                "tech_description": "MemoryError",
+                "suggested_action": "Restart the server. If you are processing large files, try splitting them into smaller chunks."
+            },
+            
+            # ---- UNKNOWN / FALLBACK ----
+            {
+                "code": "ERR-UNK-001",
+                "severity": "Error",
+                "category": "Unknown",
+                "user_message": "An unknown error occurred. We don't yet have specific information about this error.",
+                "tech_description": "Unknown error",
+                "suggested_action": "Please use the 'Report Error' button to send this error to your developer for investigation."
+            }
+        ]
+        
+        for ec in error_codes:
+            conn.execute(
+                """
+                INSERT INTO error_codes (code, severity, category, user_message, tech_description, suggested_action)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (ec["code"], ec["severity"], ec["category"], ec["user_message"], ec["tech_description"], ec["suggested_action"])
+            )
+        print("✅ Seeded error codes (" + str(len(error_codes)) + " entries)")
     
         # Insert default columns if master_columns is empty
     existing = conn.execute("SELECT COUNT(*) FROM master_columns").fetchone()[0]
