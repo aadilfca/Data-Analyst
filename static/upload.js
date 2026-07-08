@@ -685,7 +685,180 @@ if (resetBtn) {
         showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     });
 }
+// ---------- IMPORT SUMMARY POPUP ----------
+function showImportSummary(result) {
+    // Create overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'importSummaryOverlay';
+    overlay.style.cssText = `
+        position: fixed; top:0; left:0; width:100%; height:100%;
+        background: rgba(0,0,0,0.5); z-index:2000;
+        display: flex; justify-content:center; align-items:center;
+    `;
+    
+    // Create modal
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+        background: white; border-radius: 12px; padding: 30px;
+        max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        font-family: 'Segoe UI', sans-serif;
+    `;
+    
+    const total = result.total_rows || 0;
+    const inserted = result.imported_count || 0;
+    const updated = result.updated_count || 0;
+    const errors = result.validation_errors || [];
+    const errorCount = errors.length;
+    
+    let statusIcon = '✅';
+    let statusColor = '#16a34a';
+    let statusText = 'Import Successful';
+    if (errorCount > 0) {
+        statusIcon = '⚠️';
+        statusColor = '#f59e0b';
+        statusText = 'Import with Warnings';
+    }
+    
+    modal.innerHTML = `
+        <div style="text-align:center; margin-bottom:16px;">
+            <div style="font-size:48px;">${statusIcon}</div>
+            <h2 style="margin:8px 0 4px; color:#1a1a2e;">${statusText}</h2>
+            <p style="color:#64748b; font-size:14px;">${result.message || 'Data import completed.'}</p>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin:16px 0;">
+            <div style="background:#f8fafc; padding:12px; border-radius:8px; text-align:center;">
+                <div style="font-size:24px; font-weight:700; color:#3b82f6;">${total}</div>
+                <div style="font-size:12px; color:#64748b;">Total Rows</div>
+            </div>
+            <div style="background:#dcfce7; padding:12px; border-radius:8px; text-align:center;">
+                <div style="font-size:24px; font-weight:700; color:#16a34a;">${inserted}</div>
+                <div style="font-size:12px; color:#64748b;">New Rows</div>
+            </div>
+            <div style="background:#fef3c7; padding:12px; border-radius:8px; text-align:center;">
+                <div style="font-size:24px; font-weight:700; color:#f59e0b;">${updated}</div>
+                <div style="font-size:12px; color:#64748b;">Updated Rows</div>
+            </div>
+        </div>
+        ${errorCount > 0 ? `
+            <div style="background:#fee2e2; padding:12px; border-radius:8px; margin-bottom:12px; max-height:150px; overflow-y:auto;">
+                <div style="font-weight:600; color:#991b1b; margin-bottom:4px;">${errorCount} validation error(s):</div>
+                ${errors.slice(0,5).map(err => `
+                    <div style="font-size:12px; color:#991b1b; padding:2px 0; border-bottom:1px solid #fecaca;">
+                        Row ${err.row_number}: ${err.errors.map(e => `${e.column} - ${e.message}`).join('; ')}
+                    </div>
+                `).join('')}
+                ${errors.length > 5 ? `<div style="font-size:12px; color:#991b1b;">... and ${errors.length - 5} more.</div>` : ''}
+            </div>
+        ` : ''}
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
+            <button id="importSummaryCloseBtn" style="padding:8px 24px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">Close</button>
+        </div>
+    `;
+    
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    
+    // Close on button click
+    overlay.querySelector('#importSummaryCloseBtn').addEventListener('click', function() {
+        document.body.removeChild(overlay);
+        resetUpload();
+    });
+    // Close on overlay click (background)
+    overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) {
+            document.body.removeChild(overlay);
+            resetUpload();
+        }
+    });
+}
 
+// ---------- OVERWRITE CONFIRMATION DIALOG ----------
+function showOverwriteConfirmation(duplicates, count) {
+    return new Promise((resolve) => {
+        // Create overlay
+        const overlay = document.createElement('div');
+        overlay.id = 'overwriteConfirmOverlay';
+        overlay.style.cssText = `
+            position: fixed; top:0; left:0; width:100%; height:100%;
+            background: rgba(0,0,0,0.6); z-index:3000;
+            display: flex; justify-content:center; align-items:center;
+            font-family: 'Segoe UI', sans-serif;
+        `;
+
+        // Build comparison table
+        let tableRows = '';
+        const maxShow = Math.min(duplicates.length, 10);
+        for (let i = 0; i < maxShow; i++) {
+            const dup = duplicates[i];
+            const oldData = dup.old_data || {};
+            const newData = dup.new_data || {};
+            // Get all keys from both objects
+            const allKeys = new Set([...Object.keys(oldData), ...Object.keys(newData)]);
+            const keys = Array.from(allKeys).slice(0, 6); // Limit columns for readability
+
+            tableRows += `<tr style="background:#f8fafc; border-bottom:1px solid #e2e8f0;">
+                <td style="padding:6px 10px; font-weight:600; font-size:13px;">${dup.unique_value}</td>
+                ${keys.map(k => `
+                    <td style="padding:6px 10px; font-size:12px; border-left:1px solid #e2e8f0;">
+                        <span style="color:#dc2626; text-decoration:line-through;">${oldData[k] !== undefined ? oldData[k] : '—'}</span>
+                        <br>
+                        <span style="color:#16a34a;">→ ${newData[k] !== undefined ? newData[k] : '—'}</span>
+                    </td>
+                `).join('')}
+            </tr>`;
+        }
+
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+            background: white; border-radius: 12px; padding: 24px 30px;
+            max-width: 700px; width: 95%; max-height: 85vh; overflow: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        `;
+
+        modal.innerHTML = `
+            <h2 style="margin:0 0 4px; color:#f59e0b;">⚠️ Overwrite Confirmation</h2>
+            <p style="color:#64748b; margin-bottom:12px;">
+                <strong>${count}</strong> row(s) with duplicate unique values will be <strong>overwritten</strong>.
+                This action cannot be undone (but changes are logged in the audit trail).
+            </p>
+            <div style="overflow:auto; max-height:350px; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:12px;">
+                <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                    <thead style="position:sticky; top:0; background:#f1f5f9; z-index:2;">
+                        <tr>
+                            <th style="padding:6px 10px; text-align:left; border-bottom:2px solid #e2e8f0;">Unique ID</th>
+                            <th style="padding:6px 10px; text-align:left; border-bottom:2px solid #e2e8f0; color:#dc2626;">Old → New</th>
+                        </tr>
+                    </thead>
+                    <tbody>${tableRows}</tbody>
+                </table>
+                ${duplicates.length > 10 ? `<div style="padding:8px; text-align:center; color:#94a3b8; font-size:12px;">... and ${duplicates.length - 10} more</div>` : ''}
+            </div>
+            <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <button id="overwriteCancelBtn" style="padding:8px 24px; background:#e2e8f0; color:#1a1a2e; border:none; border-radius:6px; font-weight:600; cursor:pointer;">Cancel</button>
+                <button id="overwriteConfirmBtn" style="padding:8px 24px; background:#f59e0b; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">✅ Confirm Overwrite</button>
+            </div>
+        `;
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        // Handle button clicks
+        document.getElementById('overwriteConfirmBtn').addEventListener('click', function() {
+            document.body.removeChild(overlay);
+            resolve(true);
+        });
+        document.getElementById('overwriteCancelBtn').addEventListener('click', function() {
+            document.body.removeChild(overlay);
+            resolve(false);
+        });
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) {
+                document.body.removeChild(overlay);
+                resolve(false);
+            }
+        });
+    });
+}
 // ---------- IMPORT (UPLOAD TO SERVER) ----------
 if (importBtn) {
     importBtn.addEventListener('click', async function() {
@@ -694,7 +867,6 @@ if (importBtn) {
         if (typeof window.isClientSelected === 'function' && window.isClientSelected()) {
             clientId = window.getSelectedClientId();
         } else {
-            // Fallback: try to read from localStorage directly
             clientId = localStorage.getItem('selectedClientId');
         }
         if (!clientId) {
@@ -734,10 +906,41 @@ if (importBtn) {
             sheet_name: currentSheet || 'Sheet1'
         };
 
+        // --- Check for duplicates first ---
+        try {
+            setBadge('⏳ Checking for duplicates...', 'loading');
+            const checkRes = await fetch(API_BASE + '/api/upload/check-duplicates', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const checkResult = await checkRes.json();
+            if (!checkRes.ok) {
+                throw new Error(checkResult.message || 'Duplicate check failed');
+            }
+
+            // If duplicates exist and mode is 'update', show confirmation dialog
+            if (checkResult.has_duplicates && checkResult.count > 0 && payload.mode === 'update') {
+                const proceed = await showOverwriteConfirmation(checkResult.duplicates, checkResult.count);
+                if (!proceed) {
+                    showStatus('⛔ Import cancelled by user.', 'info');
+                    setBadge('⛔ Cancelled');
+                    isProcessing = false;
+                    showSpinner(false);
+                    importBtn.disabled = false;
+                    return;
+                }
+            }
+        } catch (error) {
+            // If duplicate check fails, proceed with import anyway (fallback)
+            console.warn('Duplicate check failed, proceeding with import:', error);
+        }
+
+        // --- Proceed with import ---
         try {
             isProcessing = true;
             showSpinner(true);
-            if (importBtn) importBtn.disabled = true;
+            importBtn.disabled = true;
             showStatus('⏳ Importing data...', 'loading');
             setBadge('⏳ Importing...', 'loading');
 
@@ -761,9 +964,9 @@ if (importBtn) {
                 showStatus(errorMsg, 'error');
                 setBadge('❌ Validation failed', 'error');
             } else {
-                showStatus(`✅ ${result.message} (${result.imported_count} records)`, 'success');
+                // Show import summary popup
+                showImportSummary(result);
                 setBadge('✅ Import complete');
-                setTimeout(resetUpload, 2000);
             }
         } catch (error) {
             showStatus('❌ Import error: ' + error.message, 'error');
@@ -771,7 +974,7 @@ if (importBtn) {
         } finally {
             isProcessing = false;
             showSpinner(false);
-            if (importBtn) importBtn.disabled = false;
+            importBtn.disabled = false;
         }
     });
 }

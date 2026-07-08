@@ -183,6 +183,111 @@ def auto_map_headers(request: AutoMapRequest):
 
 # ---------- VALIDATE & IMPORT ----------
 @router.post("/api/upload/import")
+# ---------- CHECK DUPLICATES ----------
+@router.post("/api/upload/check-duplicates")
+def check_duplicates(request: ImportRequest):
+    """
+    Check if any rows already exist for the given client, template, and unique column.
+    Returns a list of duplicate records with old and new values for comparison.
+    """
+    # Validate template, file, and client
+    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    if not template:
+        raise HTTPException(404, "Template not found")
+    file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
+    if not file_info:
+        raise HTTPException(404, "File not found")
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    # Get template columns with their types
+    template_cols = execute_query(
+        """
+        SELECT m.id, m.column_name, m.data_type
+        FROM template_column_mappings p
+        JOIN master_columns m ON p.column_id = m.id
+        WHERE p.template_id = ? AND m.is_active = 1
+        ORDER BY p.sort_order ASC
+        """,
+        (request.template_id,)
+    )
+    if not template_cols:
+        raise HTTPException(400, "Template has no columns")
+
+    mapping_dict = {m.template_column_id: m for m in request.mappings}
+
+    # Build column mapping (template column name -> Excel column name)
+    col_mapping = {}
+    for t_col in template_cols:
+        mapping = mapping_dict.get(t_col['id'])
+        if mapping and mapping.excel_column_name:
+            col_mapping[t_col['column_name']] = mapping.excel_column_name
+
+    # Read Excel data
+    try:
+        df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
+        mapped_excel_cols = [m.excel_column_name for m in request.mappings if m.excel_column_name]
+        df = df[[col for col in mapped_excel_cols if col in df.columns]]
+    except Exception as e:
+        raise HTTPException(400, f"Error reading Excel: {str(e)}")
+
+    rows = df.to_dict('records')
+
+    # Build row data for each row
+    row_data_list = []
+    for row in rows:
+        row_data = {}
+        for t_col_name, excel_col in col_mapping.items():
+            if excel_col in row:
+                value = row[excel_col]
+                if pd.isna(value):
+                    value = None
+                if isinstance(value, datetime):
+                    value = value.strftime('%d/%m/%Y')
+                row_data[t_col_name] = value
+        row_data_list.append(row_data)
+
+    # If no unique column selected, return empty (no duplicates to check)
+    if not request.unique_column_id:
+        return {"has_duplicates": False, "duplicates": []}
+
+    # Get the unique column name
+    col_id_to_name = {col['id']: col['column_name'] for col in template_cols}
+    unique_col_name = col_id_to_name.get(request.unique_column_id)
+    if not unique_col_name:
+        return {"has_duplicates": False, "duplicates": []}
+
+    # Check for duplicates
+    duplicates = []
+    for row_data in row_data_list:
+        unique_value = row_data.get(unique_col_name)
+        if unique_value is None or unique_value == '':
+            continue
+
+        existing = execute_query(
+            """
+            SELECT id, row_data, extract_amount, extract_date
+            FROM client_data
+            WHERE client_id = ? AND template_id = ? AND is_deleted = 0
+            AND json_extract(row_data, '$."{}"') = ?
+            """.format(unique_col_name),
+            (request.client_id, request.template_id, str(unique_value))
+        )
+
+        if existing:
+            old_data = json.loads(existing[0]['row_data']) if existing[0]['row_data'] else {}
+            duplicates.append({
+                "unique_value": unique_value,
+                "old_data": old_data,
+                "new_data": row_data
+            })
+
+    return {
+        "has_duplicates": len(duplicates) > 0,
+        "duplicates": duplicates,
+        "count": len(duplicates)
+    }
 def validate_and_import(request: ImportRequest):
     # Validate template and file
     template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
