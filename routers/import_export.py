@@ -355,21 +355,20 @@ def validate_and_import(request: ImportRequest):
             )
 
             if existing:
-                # Update existing row
+                # Overwrite existing row – no version increment, keep only one version
                 row_id = existing[0]['id']
                 old_row_data = json.loads(existing[0]['row_data']) if existing[0]['row_data'] else {}
-                new_version = (existing[0]['version'] or 1) + 1
                 execute_write(
                     """
                     UPDATE client_data
-                    SET row_data = ?, extract_amount = ?, extract_date = ?, version = ?
+                    SET row_data = ?, extract_amount = ?, extract_date = ?
                     WHERE id = ?
                     """,
-                    (json.dumps(row_data), amount, date_str, new_version, row_id)
+                    (json.dumps(row_data), amount, date_str, row_id)
                 )
                 updated_count += 1
-                # Log UPDATE with old and new data
-                log_data_audit(row_id, "Analyst", "UPDATE", old_row_data, row_data)
+                # Log the overwrite (action = 'OVERWRITE' for clarity)
+                log_data_audit(row_id, "Analyst", "OVERWRITE", old_row_data, row_data)
             else:
                 # Insert new row
                 row_id = execute_write(
