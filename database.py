@@ -166,7 +166,7 @@ def init_db():
         )
     ''')
     
-        # Client Data table – stores imported rows as JSON with indexed extracted columns
+            # Client Data table – stores imported rows as JSON with indexed extracted columns
     conn.execute('''
         CREATE TABLE IF NOT EXISTS client_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,19 +186,56 @@ def init_db():
         )
     ''')
     
-    # Data Audit Log table – tracks changes to individual data rows
+    # ---------- ERROR HANDLING TABLES ----------
+    # Error Codes table – pre-defined catalogue of all possible errors
     conn.execute('''
-        CREATE TABLE IF NOT EXISTS data_audit_log (
+        CREATE TABLE IF NOT EXISTS error_codes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_data_id INTEGER NOT NULL,
-            user TEXT NOT NULL,
-            action TEXT NOT NULL,                 -- 'INSERT', 'UPDATE', 'DELETE', 'RESTORE'
-            old_row_data TEXT,                    -- JSON of previous row (for UPDATE/DELETE)
-            new_row_data TEXT,                    -- JSON of new row (for INSERT/UPDATE)
-            changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (client_data_id) REFERENCES client_data(id) ON DELETE CASCADE
+            code TEXT UNIQUE NOT NULL,            -- e.g., "ERR-SYN-001", "ERR-IMP-002"
+            severity TEXT NOT NULL,               -- 'Fatal', 'Error', 'Warning', 'Info'
+            category TEXT NOT NULL,              -- 'Syntax', 'Import', 'Database', 'Network', 'Validation', 'System'
+            user_message TEXT NOT NULL,           -- Plain English: "The system couldn't find a function called..."
+            tech_description TEXT,                -- For developers: "NameError: name 'log_data_audit' is not defined"
+            suggested_action TEXT,                -- Plain English: "Add 'from database import log_data_audit' at the top of the file"
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Error Log table – stores every error occurrence
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS error_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            error_code_id INTEGER,                -- References error_codes.id (if known), else NULL
+            error_code TEXT,                      -- Fallback: the actual error code string
+            user_id TEXT DEFAULT 'System',        -- Who was using the app
+            client_id INTEGER,                    -- Which client context (if any)
+            module TEXT,                          -- e.g., 'Upload', 'DataBank', 'Setup'
+            endpoint TEXT,                        -- e.g., '/api/upload/import'
+            method TEXT,                          -- e.g., 'POST', 'GET'
+            status_code INTEGER,                  -- HTTP status code (500, 400, etc.)
+            error_category TEXT,                  -- 'Syntax', 'Import', 'Database', 'Network', 'Validation', 'System', 'Unknown'
+            error_message TEXT,                   -- The actual error text
+            file_name TEXT,                       -- The Python file where error occurred
+            line_number INTEGER,                  -- Line number in the file
+            code_context TEXT,                    -- 3 lines before and after the error line
+            stack_trace TEXT,                     -- Full traceback (if available)
+            input_data TEXT,                      -- JSON of sanitised input (if any)
+            suggested_fix TEXT,                   -- Plain English suggestion from error_codes
+            is_resolved BOOLEAN DEFAULT 0,
+            resolution_notes TEXT,                -- Admin notes on how it was fixed
+            resolved_by TEXT,
+            resolved_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create indexes for performance
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_error_log_code ON error_log (error_code)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_error_log_module ON error_log (module)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_error_log_created ON error_log (created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_error_log_resolved ON error_log (is_resolved)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_error_log_category ON error_log (error_category)")
     
         # Insert default columns if master_columns is empty
     existing = conn.execute("SELECT COUNT(*) FROM master_columns").fetchone()[0]
@@ -249,3 +286,137 @@ def init_db():
     conn.commit()
     conn.close()
     print("✅ Database tables created/verified")
+    # ---------- ERROR HANDLING HELPER FUNCTIONS ----------
+
+def log_error(
+    error_code_id=None,
+    error_code=None,
+    user_id="System",
+    client_id=None,
+    module=None,
+    endpoint=None,
+    method=None,
+    status_code=500,
+    error_category="Unknown",
+    error_message="",
+    file_name=None,
+    line_number=None,
+    code_context=None,
+    stack_trace=None,
+    input_data=None,
+    suggested_fix=None
+):
+    """
+    Log an error to the error_log table.
+    Returns the ID of the new error log entry.
+    """
+    try:
+        import json
+        # If error_code_id is not provided, try to find it from error_code string
+        if error_code_id is None and error_code:
+            result = execute_query("SELECT id FROM error_codes WHERE code = ?", (error_code,))
+            if result:
+                error_code_id = result[0]['id']
+            else:
+                # Insert as 'Unknown' error code automatically? We'll handle this in the main handler.
+                pass
+        
+        # If error_code is not provided but error_code_id is, fetch it
+        if error_code is None and error_code_id:
+            result = execute_query("SELECT code FROM error_codes WHERE id = ?", (error_code_id,))
+            if result:
+                error_code = result[0]['code']
+        
+        # If suggested_fix is not provided, try to fetch from error_codes
+        if suggested_fix is None and error_code_id:
+            result = execute_query("SELECT suggested_action FROM error_codes WHERE id = ?", (error_code_id,))
+            if result:
+                suggested_fix = result[0]['suggested_action']
+        
+        # Sanitise input_data (remove sensitive info if needed)
+        input_json = None
+        if input_data:
+            try:
+                # Convert dict/list to JSON string
+                input_json = json.dumps(input_data) if isinstance(input_data, (dict, list)) else str(input_data)
+                # Truncate if too long
+                if len(input_json) > 5000:
+                    input_json = input_json[:5000] + "... (truncated)"
+            except:
+                input_json = str(input_data)[:1000]
+        
+        error_id = execute_write(
+            """
+            INSERT INTO error_log (
+                error_code_id, error_code, user_id, client_id, module, endpoint, method,
+                status_code, error_category, error_message, file_name, line_number,
+                code_context, stack_trace, input_data, suggested_fix
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                error_code_id,
+                error_code,
+                user_id,
+                client_id,
+                module,
+                endpoint,
+                method,
+                status_code,
+                error_category,
+                error_message[:1000] if error_message else None,
+                file_name,
+                line_number,
+                code_context[:1000] if code_context else None,
+                stack_trace[:5000] if stack_trace else None,
+                input_json,
+                suggested_fix[:500] if suggested_fix else None
+            )
+        )
+        return error_id
+    except Exception as e:
+        print(f"⚠️ Failed to log error: {e}")
+        return None
+
+def get_error_code_for_exception(exception, error_message=""):
+    """
+    Given an exception and error message, try to find a matching error_code.
+    Returns (error_code_id, error_code_string, suggested_fix).
+    """
+    # Import the exception type name for category detection
+    exception_name = exception.__class__.__name__ if exception else "Unknown"
+    
+    # Map exception types to error categories
+    category_map = {
+        "NameError": "Syntax",
+        "ImportError": "Import",
+        "SyntaxError": "Syntax",
+        "IndentationError": "Syntax",
+        "KeyError": "System",
+        "ValueError": "Validation",
+        "TypeError": "System",
+        "IndexError": "System",
+        "AttributeError": "System",
+        "ConnectionError": "Network",
+        "TimeoutError": "Network",
+        "OSError": "System",
+        "FileNotFoundError": "System",
+        "PermissionError": "System",
+        "IntegrityError": "Database",
+        "OperationalError": "Database",
+        "DatabaseError": "Database",
+    }
+    
+    category = category_map.get(exception_name, "Unknown")
+    
+    # Try to find a matching error code in the registry
+    # First, try exact match on exception_name
+    result = execute_query(
+        "SELECT id, code, suggested_action FROM error_codes WHERE code LIKE ? OR tech_description LIKE ?",
+        (f"%{exception_name}%", f"%{exception_name}%")
+    )
+    
+    if result:
+        return result[0]['id'], result[0]['code'], result[0]['suggested_action']
+    
+    # No match found – return None so a new "unknown" error code can be suggested
+    return None, None, None
