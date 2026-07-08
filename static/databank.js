@@ -1,34 +1,53 @@
 // ==============================================
-// 📊 CLIENT DATA BANK - LOGIC (with Global Formatting)
+// 📊 CLIENT DATA BANK - AVAILABILITY + PREVIEW
 // ==============================================
 
-// API_BASE is defined in client_context.js
-// STORAGE_KEY is defined globally in client_context.js
+// API_BASE and STORAGE_KEY are defined in client_context.js
 
-let currentDatasets = [];
-let currentClientId = null;
-let previewUploadId = null;
-let previewPage = 1;
-let previewTotalRows = 0;
+// ---------- STATE ----------
+let availabilityData = [];
+let selectedTemplateId = null;
+let dateStart = null;
+let dateEnd = null;
+let currentPage = 1;
+let totalPages = 1;
 let previewLimit = 50;
+let previewTotalRows = 0;
+let previewSundayCount = 0;
+let previewTemplateId = null;
+let previewTemplateName = '';
+let previewDateStart = null;
+let previewDateEnd = null;
+let isPreviewOpen = false;
+let isPreviewLoading = false;
 
-// ---------- DECIMAL OVERRIDE PER COLUMN (Spin Buttons) ----------
-let columnDecimals = {}; // { columnName: decimalPlaces }
-
-// DOM refs
-const datasetsBody = document.getElementById('datasetsBody');
+// ---------- DOM REFS ----------
+const filterTemplate = document.getElementById('templateFilter');
+const filterDateStart = document.getElementById('dateStart');
+const filterDateEnd = document.getElementById('dateEnd');
+const checkBtn = document.getElementById('checkAvailabilityBtn');
+const availabilityBody = document.getElementById('availabilityBody');
 const noDataMessage = document.getElementById('noDataMessage');
-const totalRecordsSpan = document.getElementById('totalRecords');
-const totalUploadsSpan = document.getElementById('totalUploads');
-const lastUploadSpan = document.getElementById('lastUpload');
-const statusFilter = document.getElementById('statusFilter');
-const uploadNewBtn = document.getElementById('uploadNewBtn');
 const statusDiv = document.getElementById('statusMessage');
 
+const statsTotalRecords = document.getElementById('totalRecords');
+const statsTotalTemplates = document.getElementById('totalTemplates');
+const statsMissingTemplates = document.getElementById('missingTemplates');
+const statsSundayRows = document.getElementById('totalSundayRows');
+
+// Preview modal elements
 const previewModal = document.getElementById('previewModal');
 const previewTitle = document.getElementById('previewTitle');
 const previewTableHead = document.getElementById('previewTableHead');
 const previewTableBody = document.getElementById('previewTableBody');
+const pageSizeSelect = document.getElementById('pageSizeSelect');
+const sundayOnlyCheckbox = document.getElementById('sundayOnlyCheckbox');
+const sundayCountBadge = document.getElementById('sundayCountBadge');
+const searchInput = document.getElementById('searchInput');
+const amountMin = document.getElementById('amountMin');
+const amountMax = document.getElementById('amountMax');
+const applyFiltersBtn = document.getElementById('applyFiltersBtn');
+const clearFiltersBtn = document.getElementById('clearFiltersBtn');
 const prevPageBtn = document.getElementById('prevPageBtn');
 const nextPageBtn = document.getElementById('nextPageBtn');
 const pageInfo = document.getElementById('pageInfo');
@@ -50,257 +69,368 @@ function getSelectedClientId() {
     return localStorage.getItem(STORAGE_KEY) || null;
 }
 
-// ---------- FORMATTING HELPERS (using global utils) ----------
-function formatCell(value, columnName = '') {
+function formatDateForDisplay(dateStr) {
+    if (!dateStr) return '—';
+    try {
+        const d = new Date(dateStr);
+        return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    } catch {
+        return dateStr;
+    }
+}
+
+function getDateRangeFromFilter() {
+    const start = filterDateStart.value;
+    const end = filterDateEnd.value;
+    if (start && end && start <= end) {
+        return { start, end };
+    }
+    return null;
+}
+
+function isSunday(dateStr) {
+    if (!dateStr) return false;
+    try {
+        const d = new Date(dateStr);
+        return d.getDay() === 0; // 0 = Sunday
+    } catch {
+        return false;
+    }
+}
+
+function formatCellValue(value, columnName = '') {
     if (value === undefined || value === null || value === '') return '—';
     if (typeof value === 'number') {
-        // Check if column name suggests amount
-        const amountKeywords = ['amount', 'total', 'debit', 'credit', 'balance', 'price', 'value', 'net', 'tax', 'fee', 'amt'];
-        const isAmount = amountKeywords.some(kw => columnName.toLowerCase().includes(kw));
-        if (isAmount) {
-            // Check if we have a per-column decimal override
-            const dec = columnDecimals[columnName] !== undefined ? columnDecimals[columnName] : null;
-            return window.formatAmount ? window.formatAmount(value, dec) : value.toString();
+        // Use global formatAmount if available
+        if (window.formatAmount) {
+            return window.formatAmount(value);
         }
-        return value;
+        return value.toString();
     }
     return value;
 }
 
-// ---------- LOAD DATASETS ----------
-async function loadDatasets() {
-    const clientId = getSelectedClientId();
-    if (!clientId) {
-        datasetsBody.innerHTML = '';
-        noDataMessage.style.display = 'block';
-        noDataMessage.innerHTML = '⚠️ Please select a client from the Dashboard first.';
-        totalRecordsSpan.textContent = '0';
-        totalUploadsSpan.textContent = '0';
-        lastUploadSpan.textContent = 'Never';
-        return;
-    }
-    currentClientId = clientId;
-
-    const filter = statusFilter.value;
-    const searchTerm = document.getElementById('datasetSearchInput')?.value?.toLowerCase() || '';
-
+// ---------- LOAD TEMPLATES INTO DROPDOWN ----------
+async function loadTemplateDropdown() {
     try {
-        const res = await fetch(`${API_BASE}/api/data/datasets?client_id=${clientId}`);
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || 'Failed to load datasets');
-        }
-        const data = await res.json();
-
-        // Filter by status if not 'all'
-        let filtered = data;
-        if (filter !== 'all') {
-            filtered = data.filter(d => d.status === filter);
-        }
-
-        // Filter by search term
-        if (searchTerm) {
-            filtered = filtered.filter(d => 
-                (d.template_name && d.template_name.toLowerCase().includes(searchTerm)) ||
-                (d.file_name && d.file_name.toLowerCase().includes(searchTerm))
-            );
-        }
-
-        currentDatasets = filtered;
-        renderDatasets(filtered);
-        updateStats(data); // stats based on all data, not filtered
+        const res = await fetch(API_BASE + '/api/templates');
+        if (!res.ok) throw new Error('Failed to fetch templates');
+        const templates = await res.json();
+        
+        filterTemplate.innerHTML = '<option value="">All Templates</option>';
+        templates.forEach(tpl => {
+            const opt = document.createElement('option');
+            opt.value = tpl.id;
+            opt.textContent = tpl.template_name;
+            filterTemplate.appendChild(opt);
+        });
+        console.log('✅ Template dropdown loaded with ' + templates.length + ' templates');
     } catch (error) {
-        showStatus('❌ Error loading datasets: ' + error.message, 'error');
-        datasetsBody.innerHTML = '';
-        noDataMessage.style.display = 'block';
-        noDataMessage.innerHTML = 'Error loading data. Please try again.';
+        console.error('Error loading templates:', error);
+        filterTemplate.innerHTML = '<option value="">⚠️ Failed to load</option>';
     }
 }
 
-// ---------- RENDER DATASETS ----------
-function renderDatasets(datasets) {
-    datasetsBody.innerHTML = '';
-    if (!datasets || datasets.length === 0) {
+// ---------- SET DEFAULT DATE RANGE (Current Month) ----------
+function setDefaultDateRange() {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    
+    const formatDate = (d) => {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    };
+    
+    filterDateStart.value = formatDate(firstDay);
+    filterDateEnd.value = formatDate(lastDay);
+}
+
+// ---------- FETCH AVAILABILITY DATA ----------
+async function fetchAvailability() {
+    const clientId = getSelectedClientId();
+    if (!clientId) {
+        showStatus('⚠️ Please select a client from the Dashboard first.', 'error');
+        return;
+    }
+    
+    const dateRange = getDateRangeFromFilter();
+    if (!dateRange) {
+        showStatus('⚠️ Please select a valid date range (start ≤ end).', 'error');
+        return;
+    }
+    
+    const templateId = filterTemplate.value || null;
+    const params = new URLSearchParams({
+        client_id: clientId,
+        date_start: dateRange.start,
+        date_end: dateRange.end
+    });
+    if (templateId) {
+        params.append('template_id', templateId);
+    }
+    
+    // Disable button and show loading
+    checkBtn.disabled = true;
+    checkBtn.textContent = '⏳ Loading...';
+    showStatus('⏳ Fetching availability data...', 'loading');
+    
+    try {
+        const res = await fetch(`${API_BASE}/api/data/availability?${params.toString()}`);
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Failed to fetch availability');
+        }
+        const data = await res.json();
+        availabilityData = data;
+        
+        // Update stats
+        const totalRows = data.reduce((sum, item) => sum + item.row_count, 0);
+        const totalTemplates = data.length;
+        const missing = data.filter(item => item.status === 'missing').length;
+        const sundayRows = data.reduce((sum, item) => sum + (item.sunday_count || 0), 0);
+        
+        statsTotalRecords.textContent = totalRows;
+        statsTotalTemplates.textContent = totalTemplates;
+        statsMissingTemplates.textContent = missing;
+        statsSundayRows.textContent = sundayRows;
+        
+        renderAvailabilityTable(data);
+        showStatus(`✅ Found ${totalTemplates} template(s) with ${totalRows} total rows.`, 'success');
+        
+    } catch (error) {
+        console.error('Fetch availability error:', error);
+        showStatus('❌ Error: ' + error.message, 'error');
+        availabilityBody.innerHTML = '';
         noDataMessage.style.display = 'block';
-        noDataMessage.innerHTML = `
-            No data sets found for this client.
-            <button id="goUploadBtn" class="btn-upload" style="background:#3b82f6; padding:6px 18px; font-size:14px; margin-top:10px;">Upload Data</button>
-        `;
-        document.getElementById('goUploadBtn')?.addEventListener('click', () => {
-            window.location.href = '/static/upload.html';
-        });
+        noDataMessage.innerHTML = 'Error loading data. Please try again.';
+    } finally {
+        checkBtn.disabled = false;
+        checkBtn.textContent = '🔍 Check Availability';
+    }
+}
+
+// ---------- RENDER AVAILABILITY TABLE ----------
+function renderAvailabilityTable(data) {
+    availabilityBody.innerHTML = '';
+    if (!data || data.length === 0) {
+        noDataMessage.style.display = 'block';
+        noDataMessage.innerHTML = 'No templates found for the selected criteria.';
         return;
     }
     noDataMessage.style.display = 'none';
-
-    datasets.forEach((ds, index) => {
+    
+    data.forEach((item, index) => {
         const tr = document.createElement('tr');
-
+        
         // # (row number)
         const tdNum = document.createElement('td');
         tdNum.textContent = index + 1;
         tdNum.style.textAlign = 'center';
+        tdNum.style.color = '#94a3b8';
         tr.appendChild(tdNum);
-
+        
         // Template Name
-        const tdTemplate = document.createElement('td');
-        tdTemplate.textContent = ds.template_name || 'Unknown';
-        tdTemplate.style.fontWeight = '500';
-        tr.appendChild(tdTemplate);
-
-        // File Name
-        const tdFile = document.createElement('td');
-        tdFile.textContent = ds.file_name || '—';
-        tdFile.style.color = '#64748b';
-        tr.appendChild(tdFile);
-
-        // Upload Date (formatted)
+        const tdName = document.createElement('td');
+        tdName.textContent = item.template_name;
+        tdName.style.fontWeight = '500';
+        tr.appendChild(tdName);
+        
+        // Date Range
         const tdDate = document.createElement('td');
-        tdDate.textContent = window.formatDate ? window.formatDate(ds.upload_date) : ds.upload_date || '—';
+        if (item.date_min && item.date_max) {
+            tdDate.textContent = `${formatDateForDisplay(item.date_min)} – ${formatDateForDisplay(item.date_max)}`;
+        } else {
+            tdDate.textContent = '—';
+            tdDate.style.color = '#94a3b8';
+        }
         tr.appendChild(tdDate);
-
-        // Rows
+        
+        // Row Count
         const tdRows = document.createElement('td');
-        tdRows.textContent = ds.record_count || 0;
+        tdRows.textContent = item.row_count;
         tdRows.style.textAlign = 'center';
+        tdRows.style.fontWeight = '600';
         tr.appendChild(tdRows);
-
+        
+        // Sunday Rows
+        const tdSunday = document.createElement('td');
+        tdSunday.textContent = item.sunday_count || 0;
+        tdSunday.style.textAlign = 'center';
+        if (item.sunday_count > 0) {
+            tdSunday.style.color = '#f59e0b';
+            tdSunday.style.fontWeight = '600';
+        }
+        tr.appendChild(tdSunday);
+        
         // Status
         const tdStatus = document.createElement('td');
+        tdStatus.style.textAlign = 'center';
         const statusSpan = document.createElement('span');
-        statusSpan.className = `status-badge ${ds.status.toLowerCase()}`;
-        statusSpan.textContent = ds.status || 'Pending';
+        statusSpan.className = `status-badge ${item.status}`;
+        const statusMap = {
+            'complete': '✅ Complete',
+            'missing': '❌ Missing',
+            'partial': '⚠️ Partial'
+        };
+        statusSpan.textContent = statusMap[item.status] || item.status;
         tdStatus.appendChild(statusSpan);
         tr.appendChild(tdStatus);
-
+        
         // Actions
         const tdActions = document.createElement('td');
         tdActions.style.textAlign = 'center';
         tdActions.style.whiteSpace = 'nowrap';
-
-        if (ds.status === 'Imported' && ds.record_count > 0) {
-            const viewBtn = document.createElement('button');
-            viewBtn.className = 'action-btn view';
-            viewBtn.textContent = '👁️';
-            viewBtn.title = 'View Data';
-            viewBtn.addEventListener('click', () => openPreview(ds.upload_id, ds.template_name));
-            tdActions.appendChild(viewBtn);
-
+        
+        if (item.row_count > 0) {
+            // Preview button
+            const previewBtn = document.createElement('button');
+            previewBtn.className = 'action-btn preview';
+            previewBtn.textContent = '👁️';
+            previewBtn.title = 'Preview Data';
+            previewBtn.addEventListener('click', () => {
+                openPreview(item.template_id, item.template_name);
+            });
+            tdActions.appendChild(previewBtn);
+            
+            // Export button
             const exportBtn = document.createElement('button');
             exportBtn.className = 'action-btn export';
             exportBtn.textContent = '📥';
             exportBtn.title = 'Export to Excel';
             exportBtn.style.marginLeft = '6px';
-            exportBtn.addEventListener('click', () => exportDataset(ds.upload_id, ds.template_name));
+            exportBtn.addEventListener('click', () => {
+                exportDataset(item.template_id, item.template_name);
+            });
             tdActions.appendChild(exportBtn);
+        } else {
+            tdActions.textContent = '—';
+            tdActions.style.color = '#94a3b8';
         }
-
-        if (ds.status === 'Deleted') {
-            const restoreBtn = document.createElement('button');
-            restoreBtn.className = 'action-btn restore';
-            restoreBtn.textContent = '↩️';
-            restoreBtn.title = 'Restore Dataset';
-            restoreBtn.addEventListener('click', () => confirmRestore(ds.upload_id, ds.file_name));
-            tdActions.appendChild(restoreBtn);
-        } else if (ds.status !== 'Pending') {
-            const deleteBtn = document.createElement('button');
-            deleteBtn.className = 'action-btn delete';
-            deleteBtn.textContent = '🗑️';
-            deleteBtn.title = 'Delete Dataset';
-            deleteBtn.addEventListener('click', () => confirmDelete(ds.upload_id, ds.file_name));
-            tdActions.appendChild(deleteBtn);
-        }
-
+        
         tr.appendChild(tdActions);
-        datasetsBody.appendChild(tr);
+        availabilityBody.appendChild(tr);
     });
+}
 
-    const goUploadBtn = document.getElementById('goUploadBtn');
-    if (goUploadBtn) {
-        goUploadBtn.addEventListener('click', () => {
-            window.location.href = '/static/upload.html';
-        });
+// ==============================================
+// 📋 PREVIEW MODAL – FULL IMPLEMENTATION
+// ==============================================
+
+// ---------- OPEN PREVIEW ----------
+function openPreview(templateId, templateName) {
+    const dateRange = getDateRangeFromFilter();
+    if (!dateRange) {
+        showStatus('⚠️ Please select a date range.', 'error');
+        return;
     }
+    
+    previewTemplateId = templateId;
+    previewTemplateName = templateName;
+    previewDateStart = dateRange.start;
+    previewDateEnd = dateRange.end;
+    previewLimit = parseInt(pageSizeSelect.value) || 50;
+    currentPage = 1;
+    isPreviewOpen = true;
+    
+    // Show modal
+    previewModal.style.display = 'flex';
+    previewTitle.textContent = `📋 ${templateName} – Preview`;
+    sundayOnlyCheckbox.checked = false;
+    searchInput.value = '';
+    amountMin.value = '';
+    amountMax.value = '';
+    
+    // Fetch data
+    fetchPreviewData();
 }
 
-// ---------- UPDATE STATS ----------
-function updateStats(allDatasets) {
-    const totalRecords = allDatasets.reduce((sum, ds) => sum + (ds.record_count || 0), 0);
-    const totalUploads = allDatasets.length;
-    let lastUpload = 'Never';
-    if (allDatasets.length > 0) {
-        const dates = allDatasets.map(d => d.upload_date).filter(d => d);
-        if (dates.length > 0) {
-            dates.sort((a, b) => new Date(b) - new Date(a));
-            lastUpload = window.formatDate ? window.formatDate(dates[0]) : dates[0];
-        }
+// ---------- FETCH PREVIEW DATA ----------
+async function fetchPreviewData() {
+    const clientId = getSelectedClientId();
+    if (!clientId) {
+        showStatus('⚠️ No client selected.', 'error');
+        return;
     }
-    totalRecordsSpan.textContent = totalRecords;
-    totalUploadsSpan.textContent = totalUploads;
-    lastUploadSpan.textContent = lastUpload || 'Never';
-}
-
-// ---------- PREVIEW MODAL ----------
-async function openPreview(uploadId, templateName) {
-    previewUploadId = uploadId;
-    previewPage = 1;
-    previewTitle.textContent = `📋 ${templateName || 'Dataset'} Preview`;
-    previewModal.classList.add('active');
-    await loadPreviewPage();
-}
-
-async function loadPreviewPage() {
-    if (!previewUploadId) return;
-    // Show loading state
+    
+    if (!previewTemplateId || !previewDateStart || !previewDateEnd) {
+        showStatus('⚠️ Missing preview parameters.', 'error');
+        return;
+    }
+    
+    isPreviewLoading = true;
     previewTableBody.innerHTML = `<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">
         <span class="spinner"></span> Loading data...
     </td></tr>`;
     previewTableHead.innerHTML = '';
-
+    
+    const params = new URLSearchParams({
+        client_id: clientId,
+        template_id: previewTemplateId,
+        date_start: previewDateStart,
+        date_end: previewDateEnd,
+        page: currentPage,
+        limit: previewLimit
+    });
+    
+    // Add filters
+    if (searchInput.value.trim()) {
+        params.append('search', searchInput.value.trim());
+    }
+    if (amountMin.value) {
+        params.append('amount_min', amountMin.value);
+    }
+    if (amountMax.value) {
+        params.append('amount_max', amountMax.value);
+    }
+    if (sundayOnlyCheckbox.checked) {
+        params.append('sunday_only', 'true');
+    }
+    
     try {
-        // Build query string from filter inputs
-        const searchVal = document.getElementById('searchInput')?.value || '';
-        const amountMin = document.getElementById('amountMin')?.value || '';
-        const amountMax = document.getElementById('amountMax')?.value || '';
-        const dateStart = document.getElementById('dateStart')?.value || '';
-        const dateEnd = document.getElementById('dateEnd')?.value || '';
-
-        let url = `${API_BASE}/api/data/datasets/${previewUploadId}/rows?page=${previewPage}&limit=${previewLimit}`;
-        if (searchVal) url += `&search=${encodeURIComponent(searchVal)}`;
-        if (amountMin) url += `&amount_min=${encodeURIComponent(amountMin)}`;
-        if (amountMax) url += `&amount_max=${encodeURIComponent(amountMax)}`;
-        if (dateStart) url += `&date_start=${encodeURIComponent(dateStart)}`;
-        if (dateEnd) url += `&date_end=${encodeURIComponent(dateEnd)}`;
-
-        const res = await fetch(url);
+        const res = await fetch(`${API_BASE}/api/data/preview?${params.toString()}`);
         if (!res.ok) {
             const err = await res.json();
-            throw new Error(err.detail || 'Failed to fetch rows');
+            throw new Error(err.detail || 'Failed to fetch preview');
         }
         const data = await res.json();
+        
         previewTotalRows = data.total_rows;
+        previewSundayCount = data.sunday_count;
         const rows = data.rows || [];
-
+        
+        // Update Sunday badge
+        sundayCountBadge.textContent = `Sunday rows: ${previewSundayCount}`;
+        
+        // Render table
         renderPreviewRows(rows);
         updatePagination();
-
+        
         if (rows.length === 0 && previewTotalRows === 0) {
-            previewTableBody.innerHTML = '<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">No data found.</td></tr>';
+            previewTableBody.innerHTML = '<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">No data found for the selected criteria.</td></tr>';
         }
+        
     } catch (error) {
+        console.error('Preview fetch error:', error);
         showStatus('❌ Error loading preview: ' + error.message, 'error');
-        previewTableBody.innerHTML = '<tr><td colspan="100" style="text-align:center; padding:40px; color:#dc2626;">Error loading data.</td></tr>';
+        previewTableBody.innerHTML = `<tr><td colspan="100" style="text-align:center; padding:40px; color:#dc2626;">Error loading data. Please try again.</td></tr>`;
+    } finally {
+        isPreviewLoading = false;
     }
 }
 
+// ---------- RENDER PREVIEW ROWS ----------
 function renderPreviewRows(rows) {
     if (!rows || rows.length === 0) {
         previewTableBody.innerHTML = '<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">No rows to display.</td></tr>';
         previewTableHead.innerHTML = '';
+        previewCountInfo.textContent = '0 rows';
         return;
     }
-
-    // Build dynamic headers from first row's keys
+    
+    // Build headers from first row
     const firstRow = rows[0].row_data;
     const headers = firstRow ? Object.keys(firstRow) : [];
     previewTableHead.innerHTML = '';
@@ -312,198 +442,122 @@ function renderPreviewRows(rows) {
             th.style.padding = '8px 12px';
             th.style.textAlign = 'left';
             th.style.borderBottom = '2px solid #e2e8f0';
-            
-            // Check if this is a numeric column (for spin buttons)
-            const isNumeric = rows.some(row => typeof row.row_data[h] === 'number');
-            if (isNumeric) {
-                // Add spin buttons
-                const btnContainer = document.createElement('span');
-                btnContainer.style.marginLeft = '6px';
-                btnContainer.style.display = 'inline-block';
-                
-                const upBtn = document.createElement('button');
-                upBtn.textContent = '▲';
-                upBtn.style.cssText = 'background:none; border:none; cursor:pointer; font-size:10px; color:#64748b; padding:0 2px; display:block;';
-                upBtn.title = 'Increase decimals';
-                upBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const current = columnDecimals[h] !== undefined ? columnDecimals[h] : 0;
-                    columnDecimals[h] = Math.min(current + 1, 4);
-                    loadPreviewPage();
-                });
-                
-                const downBtn = document.createElement('button');
-                downBtn.textContent = '▼';
-                downBtn.style.cssText = 'background:none; border:none; cursor:pointer; font-size:10px; color:#64748b; padding:0 2px; display:block;';
-                downBtn.title = 'Decrease decimals';
-                downBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const current = columnDecimals[h] !== undefined ? columnDecimals[h] : 0;
-                    columnDecimals[h] = Math.max(current - 1, 0);
-                    loadPreviewPage();
-                });
-                
-                btnContainer.appendChild(upBtn);
-                btnContainer.appendChild(downBtn);
-                th.appendChild(btnContainer);
-                
-                // Show current decimal count
-                const decBadge = document.createElement('span');
-                const currentDec = columnDecimals[h] !== undefined ? columnDecimals[h] : 0;
-                decBadge.textContent = ` ${currentDec}`;
-                decBadge.style.cssText = 'font-size:9px; color:#94a3b8; margin-left:2px; font-weight:400;';
-                th.appendChild(decBadge);
-            }
-            
+            th.style.whiteSpace = 'nowrap';
             tr.appendChild(th);
         });
         previewTableHead.appendChild(tr);
     }
-
+    
+    // Render body rows
     previewTableBody.innerHTML = '';
     rows.forEach(row => {
         const tr = document.createElement('tr');
+        // Check if this row's extract_date is Sunday
+        const isSun = isSunday(row.extract_date);
+        if (isSun) {
+            tr.className = 'sunday-highlight';
+        }
+        
         headers.forEach(h => {
             const td = document.createElement('td');
             td.style.padding = '6px 12px';
             td.style.borderBottom = '1px solid #f0f2f5';
             const value = row.row_data[h] !== undefined ? row.row_data[h] : '';
-            td.textContent = formatCell(value, h);
+            td.textContent = formatCellValue(value, h);
             tr.appendChild(td);
         });
         previewTableBody.appendChild(tr);
     });
-
+    
     previewCountInfo.textContent = `Showing ${rows.length} of ${previewTotalRows} rows`;
 }
 
+// ---------- UPDATE PAGINATION ----------
 function updatePagination() {
     const totalPages = Math.ceil(previewTotalRows / previewLimit) || 1;
-    pageInfo.textContent = `Page ${previewPage} of ${totalPages}`;
-    prevPageBtn.disabled = previewPage <= 1;
-    nextPageBtn.disabled = previewPage >= totalPages;
+    pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+    prevPageBtn.disabled = currentPage <= 1;
+    nextPageBtn.disabled = currentPage >= totalPages;
 }
 
-// ---------- PREVIEW PAGINATION ----------
-prevPageBtn.addEventListener('click', () => {
-    if (previewPage > 1) {
-        previewPage--;
-        loadPreviewPage();
-    }
-});
-
-nextPageBtn.addEventListener('click', () => {
-    const totalPages = Math.ceil(previewTotalRows / previewLimit);
-    if (previewPage < totalPages) {
-        previewPage++;
-        loadPreviewPage();
-    }
-});
-
-closePreviewBtn.addEventListener('click', () => {
-    previewModal.classList.remove('active');
-    // Reset column decimals when closing preview
-    columnDecimals = {};
-});
-
-previewModal.addEventListener('click', function(e) {
-    if (e.target === this) {
-        this.classList.remove('active');
-        columnDecimals = {};
-    }
-});
-
-// ---------- FILTER EVENT HANDLERS ----------
-const applyFiltersBtn = document.getElementById('applyFiltersBtn');
-const clearFiltersBtn = document.getElementById('clearFiltersBtn');
-if (applyFiltersBtn) {
-    applyFiltersBtn.addEventListener('click', function() {
-        previewPage = 1;
-        loadPreviewPage();
-    });
-}
-if (clearFiltersBtn) {
-    clearFiltersBtn.addEventListener('click', function() {
-        const searchInput = document.getElementById('searchInput');
-        const amountMin = document.getElementById('amountMin');
-        const amountMax = document.getElementById('amountMax');
-        const dateStart = document.getElementById('dateStart');
-        const dateEnd = document.getElementById('dateEnd');
-        if (searchInput) searchInput.value = '';
-        if (amountMin) amountMin.value = '';
-        if (amountMax) amountMax.value = '';
-        if (dateStart) dateStart.value = '';
-        if (dateEnd) dateEnd.value = '';
-        previewPage = 1;
-        loadPreviewPage();
-    });
+// ---------- APPLY PREVIEW FILTERS ----------
+function applyPreviewFilters() {
+    currentPage = 1;
+    fetchPreviewData();
 }
 
-// ---------- DELETE / RESTORE ----------
-async function confirmDelete(uploadId, fileName) {
-    if (!confirm(`Are you sure you want to delete dataset "${fileName}"? This action can be undone.`)) return;
+// ---------- CLEAR PREVIEW FILTERS ----------
+function clearPreviewFilters() {
+    searchInput.value = '';
+    amountMin.value = '';
+    amountMax.value = '';
+    sundayOnlyCheckbox.checked = false;
+    currentPage = 1;
+    fetchPreviewData();
+}
+
+// ---------- EXPORT DATASET (Full implementation) ----------
+async function exportDataset(templateId, templateName) {
+    const clientId = getSelectedClientId();
+    if (!clientId) {
+        showStatus('⚠️ No client selected.', 'error');
+        return;
+    }
+    
+    const dateRange = getDateRangeFromFilter();
+    if (!dateRange) {
+        showStatus('⚠️ Please select a date range.', 'error');
+        return;
+    }
+    
+    showStatus('⏳ Preparing export...', 'loading');
+    
     try {
-        const res = await fetch(`${API_BASE}/api/data/datasets/${uploadId}`, { method: 'DELETE' });
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.message || 'Delete failed');
-        showStatus('✅ ' + result.message, 'success');
-        loadDatasets();
-    } catch (error) {
-        showStatus('❌ Error deleting: ' + error.message, 'error');
-    }
-}
-
-async function confirmRestore(uploadId, fileName) {
-    if (!confirm(`Restore dataset "${fileName}"?`)) return;
-    try {
-        const res = await fetch(`${API_BASE}/api/data/datasets/${uploadId}/restore`, { method: 'POST' });
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.message || 'Restore failed');
-        showStatus('✅ ' + result.message, 'success');
-        loadDatasets();
-    } catch (error) {
-        showStatus('❌ Error restoring: ' + error.message, 'error');
-    }
-}
-
-// ---------- EXPORT DATASET TO EXCEL ----------
-async function exportDataset(uploadId, templateName) {
-    try {
-        showStatus('⏳ Preparing export...', 'loading');
+        // Fetch all rows in batches
         let allRows = [];
         let page = 1;
-        let totalPages = 1;
         const limit = 500;
-
+        let totalFetched = 0;
+        const maxRows = 10000; // safety limit
+        
+        const params = new URLSearchParams({
+            client_id: clientId,
+            template_id: templateId,
+            date_start: dateRange.start,
+            date_end: dateRange.end,
+            limit: limit
+        });
+        
+        // If we have filters from the availability view? We'll use the same date range.
+        // For export, we ignore the preview filters (search, amount, sunday) to export all.
+        
         do {
-            const url = `${API_BASE}/api/data/datasets/${uploadId}/rows?page=${page}&limit=${limit}`;
-            const res = await fetch(url);
+            params.set('page', page);
+            const res = await fetch(`${API_BASE}/api/data/preview?${params.toString()}`);
             if (!res.ok) {
                 const err = await res.json();
-                throw new Error(err.detail || 'Failed to fetch data');
+                throw new Error(err.detail || 'Export failed');
             }
             const data = await res.json();
             const rows = data.rows || [];
+            if (rows.length === 0) break;
+            
             allRows = allRows.concat(rows);
-            totalPages = Math.ceil(data.total_rows / limit);
+            totalFetched += rows.length;
             page++;
-                } while (page <= totalPages && allRows.length < 10000); // safety limit
-
+            
+            if (totalFetched >= maxRows) {
+                showStatus(`⚠️ Export limited to ${maxRows} rows. Use filters to reduce data.`, 'error');
+                break;
+            }
+        } while (true);
+        
         if (allRows.length === 0) {
             showStatus('⚠️ No data to export.', 'error');
             return;
         }
-
-        // Check if data was truncated
-        if (allRows.length >= 10000) {
-            showStatus('⚠️ Export limited to 10,000 rows. Use filters to export fewer rows.', 'warning');
-        }
-
-        // Check if data was truncated
-        if (allRows.length >= 10000) {
-            showStatus('⚠️ Export limited to 10,000 rows. Use filters to export fewer rows.', 'error');
-        }
-
+        
+        // Build Excel data
         const firstRow = allRows[0];
         const headers = firstRow.row_data ? Object.keys(firstRow.row_data) : [];
         const excelData = [headers];
@@ -511,12 +565,13 @@ async function exportDataset(uploadId, templateName) {
             const rowData = headers.map(h => row.row_data[h] !== undefined ? row.row_data[h] : '');
             excelData.push(rowData);
         });
-
+        
+        // Create workbook
         const ws = XLSX.utils.aoa_to_sheet(excelData);
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Data');
         const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-
+        
         const blob = new Blob([wbout], { type: 'application/octet-stream' });
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -526,63 +581,115 @@ async function exportDataset(uploadId, templateName) {
         a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
-
+        
         showStatus(`✅ Exported ${allRows.length} rows to Excel`, 'success');
     } catch (error) {
         showStatus('❌ Export error: ' + error.message, 'error');
     }
 }
 
-// ---------- FILTER CHANGE ----------
-statusFilter.addEventListener('change', loadDatasets);
+// ---------- EVENT LISTENERS (Main) ----------
+checkBtn.addEventListener('click', fetchAvailability);
 
-// ---------- UPLOAD NEW ----------
-uploadNewBtn.addEventListener('click', () => {
-    window.location.href = '/static/upload.html';
+filterDateStart.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchAvailability(); });
+filterDateEnd.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchAvailability(); });
+filterTemplate.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchAvailability(); });
+
+// Preview modal events
+closePreviewBtn.addEventListener('click', () => {
+    previewModal.style.display = 'none';
+    isPreviewOpen = false;
+});
+previewModal.addEventListener('click', (e) => {
+    if (e.target === previewModal) {
+        previewModal.style.display = 'none';
+        isPreviewOpen = false;
+    }
+});
+
+// Pagination
+prevPageBtn.addEventListener('click', () => {
+    if (currentPage > 1) {
+        currentPage--;
+        fetchPreviewData();
+    }
+});
+nextPageBtn.addEventListener('click', () => {
+    const totalPages = Math.ceil(previewTotalRows / previewLimit) || 1;
+    if (currentPage < totalPages) {
+        currentPage++;
+        fetchPreviewData();
+    }
+});
+
+// Page size change
+pageSizeSelect.addEventListener('change', function() {
+    previewLimit = parseInt(this.value) || 50;
+    currentPage = 1;
+    if (isPreviewOpen) {
+        fetchPreviewData();
+    }
+});
+
+// Filters
+applyFiltersBtn.addEventListener('click', applyPreviewFilters);
+clearFiltersBtn.addEventListener('click', clearPreviewFilters);
+
+// Sunday checkbox
+sundayOnlyCheckbox.addEventListener('change', function() {
+    if (isPreviewOpen) {
+        currentPage = 1;
+        fetchPreviewData();
+    }
+});
+
+// Search with debounce
+let searchTimeout;
+searchInput.addEventListener('input', function() {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+        if (isPreviewOpen) {
+            currentPage = 1;
+            fetchPreviewData();
+        }
+    }, 400);
+});
+
+// Amount filters – apply on Enter key
+amountMin.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
+amountMax.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
+
+// ESC key closes preview
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isPreviewOpen) {
+        previewModal.style.display = 'none';
+        isPreviewOpen = false;
+    }
 });
 
 // ---------- CLIENT CHANGE HOOK ----------
 window.onClientChange = function(clientId) {
     if (clientId) {
-        loadDatasets();
+        if (filterDateStart.value && filterDateEnd.value) {
+            fetchAvailability();
+        }
     }
 };
 
 // ---------- INIT ----------
-window.onload = function() {
+window.onload = async function() {
+    setDefaultDateRange();
+    await loadTemplateDropdown();
+    
     const clientId = getSelectedClientId();
     if (!clientId) {
-        showStatus('⚠️ Please select a client from the Dashboard.', 'error');
+        showStatus('⚠️ Please select a client from the Dashboard first.', 'error');
         setTimeout(() => {
             window.location.href = '/static/index.html';
         }, 2000);
         return;
     }
-    loadDatasets();
-    console.log('📊 Data Bank loaded');
-
-    // Search input listener (debounced)
-    const searchInput = document.getElementById('datasetSearchInput');
-    if (searchInput) {
-        let timeoutId;
-        searchInput.addEventListener('input', function() {
-            clearTimeout(timeoutId);
-            timeoutId = setTimeout(() => {
-                loadDatasets();
-            }, 300);
-        });
-    }
-};
-
-    // Search input listener (debounced)
-    const searchInput = document.getElementById('datasetSearchInput');
-    if (searchInput) {
-        let timeoutId;
-        searchInput.addEventListener('input', function() {
-            clearTimeout(timeoutId);
-            timeoutId = setTimeout(() => {
-                loadDatasets();
-            }, 300);
-        });
-    }
+    
+    fetchAvailability();
+    console.log('📊 Data Bank with full preview loaded');
 };

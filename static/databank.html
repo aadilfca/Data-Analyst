@@ -8,7 +8,79 @@
     <link rel="stylesheet" href="/static/style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js?v=2"></script>
     <style>
-        /* Additional styles for Data Bank */
+        /* ===== NEW STYLES FOR DATA BANK ===== */
+        .filter-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px 20px;
+            background: white;
+            padding: 16px 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            margin-bottom: 20px;
+            align-items: flex-end;
+        }
+
+        .filter-bar .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .filter-bar .filter-group label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #475569;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .filter-bar .filter-group input,
+        .filter-bar .filter-group select {
+            padding: 8px 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            min-width: 160px;
+            background: white;
+            transition: border-color 0.2s;
+        }
+
+        .filter-bar .filter-group input:focus,
+        .filter-bar .filter-group select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .filter-bar .filter-group input[type="date"] {
+            min-width: 150px;
+        }
+
+        .filter-bar .btn-check {
+            padding: 8px 28px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
+            height: 40px;
+            align-self: flex-end;
+        }
+
+        .filter-bar .btn-check:hover {
+            background: #2563eb;
+        }
+
+        .filter-bar .btn-check:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Stats bar */
         .stats-bar {
             display: flex;
             flex-wrap: wrap;
@@ -16,7 +88,7 @@
             background: #f8fafc;
             border: 1px solid #e2e8f0;
             border-radius: 10px;
-            padding: 16px 24px;
+            padding: 14px 24px;
             margin-bottom: 20px;
         }
 
@@ -33,21 +105,14 @@
             color: #1a1a2e;
         }
 
-        .toolbar {
-            display: flex;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-
-        .dataset-table {
+        /* Availability table */
+        .availability-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 14px;
         }
 
-        .dataset-table th {
+        .availability-table th {
             background: #f8fafc;
             padding: 12px 16px;
             text-align: left;
@@ -56,153 +121,164 @@
             color: #475569;
         }
 
-        .dataset-table td {
+        .availability-table td {
             padding: 12px 16px;
             border-bottom: 1px solid #f0f2f5;
         }
 
-        .dataset-table tr:hover td {
+        .availability-table tr:hover td {
             background: #fafcff;
         }
 
         .status-badge {
             display: inline-block;
-            padding: 2px 12px;
-            border-radius: 12px;
+            padding: 4px 14px;
+            border-radius: 20px;
             font-size: 12px;
             font-weight: 600;
         }
 
-        .status-badge.imported {
+        .status-badge.complete {
             background: #dcfce7;
             color: #166534;
         }
 
-        .status-badge.pending {
-            background: #fef3c7;
-            color: #92400e;
-        }
-
-        .status-badge.deleted {
+        .status-badge.missing {
             background: #fee2e2;
             color: #991b1b;
+        }
+
+        .status-badge.partial {
+            background: #fef3c7;
+            color: #92400e;
         }
 
         .action-btn {
             background: none;
             border: none;
             cursor: pointer;
-            font-size: 16px;
-            padding: 0 4px;
-            transition: color 0.2s;
+            font-size: 18px;
+            padding: 0 6px;
+            transition: opacity 0.2s;
         }
 
-        .action-btn.view {
+        .action-btn:hover {
+            opacity: 0.7;
+        }
+
+        .action-btn.preview {
             color: #3b82f6;
         }
 
-        .action-btn.view:hover {
-            color: #1d4ed8;
-        }
-
-        .action-btn.delete {
-            color: #dc2626;
-        }
-
-        .action-btn.delete:hover {
-            color: #b91c1c;
-        }
-
-        .action-btn.restore {
+        .action-btn.export {
             color: #16a34a;
-        }
-
-        .action-btn.restore:hover {
-            color: #15803d;
-        }
-
-        /* Modal for viewing rows */
-        .preview-modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .preview-modal.active {
-            display: flex;
-        }
-
-        .preview-modal .modal-content {
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            max-width: 90%;
-            max-height: 80%;
-            overflow: auto;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            width: 1000px;
-        }
-
-        .preview-modal .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-        }
-
-        .preview-modal .modal-header h2 {
-            font-size: 20px;
-            margin: 0;
-        }
-
-        .preview-modal .modal-close {
-            background: none;
-            border: none;
-            font-size: 28px;
-            cursor: pointer;
-            color: #94a3b8;
-        }
-
-        .preview-modal .modal-close:hover {
-            color: #1a1a2e;
-        }
-
-        .preview-modal .pagination {
-            display: flex;
-            justify-content: center;
-            gap: 12px;
-            margin-top: 16px;
-            align-items: center;
-        }
-
-        .preview-modal .pagination button {
-            padding: 6px 14px;
-            border: 1px solid #d0d5dd;
-            border-radius: 6px;
-            background: white;
-            cursor: pointer;
-        }
-
-        .preview-modal .pagination button:hover:not(:disabled) {
-            background: #f1f5f9;
-        }
-
-        .preview-modal .pagination button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
         }
 
         .no-data {
             padding: 40px;
             text-align: center;
             color: #94a3b8;
+        }
+
+        /* Preview Modal enhancements */
+        .preview-modal .page-size-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .preview-modal .page-size-selector label {
+            font-size: 13px;
+            color: #64748b;
+            font-weight: 500;
+        }
+
+        .preview-modal .page-size-selector select {
+            padding: 4px 8px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 13px;
+            background: white;
+        }
+
+        .sunday-highlight {
+            background-color: #fef3c7 !important;
+        }
+
+        .sunday-badge {
+            display: inline-block;
+            background: #f59e0b;
+            color: white;
+            font-size: 10px;
+            padding: 1px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+            margin-left: 4px;
+        }
+
+        .preview-modal .sunday-filter-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+            margin-bottom: 12px;
+        }
+
+        .preview-modal .sunday-filter-row label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            color: #475569;
+        }
+
+        .preview-modal .sunday-filter-row input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+
+        .preview-modal .sunday-filter-row .sunday-count-badge {
+            background: #fef3c7;
+            padding: 2px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #92400e;
+        }
+
+        /* Responsive tweaks */
+        @media (max-width: 768px) {
+            .filter-bar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .filter-bar .filter-group input,
+            .filter-bar .filter-group select {
+                min-width: 100%;
+            }
+
+            .filter-bar .btn-check {
+                align-self: stretch;
+            }
+
+            .stats-bar {
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .availability-table {
+                font-size: 12px;
+            }
+
+            .availability-table th,
+            .availability-table td {
+                padding: 8px 10px;
+            }
         }
     </style>
 </head>
@@ -226,72 +302,98 @@
         <header class="module-header">
             <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
             <h1>📊 Client Data Bank</h1>
-            <p>View and manage all uploaded data sets for the selected client</p>
+            <p>Check data availability and preview aggregated transactions for the selected client</p>
         </header>
 
-        <!-- Stats Bar -->
-        <div class="stats-bar" id="statsBar">
-            <div class="stat-item">📦 Total Records: <strong id="totalRecords">0</strong></div>
-            <div class="stat-item">📁 Total Uploads: <strong id="totalUploads">0</strong></div>
-            <div class="stat-item">📅 Last Upload: <strong id="lastUpload">Never</strong></div>
-        </div>
-
-        <!-- Toolbar -->
-        <div class="toolbar">
-            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                <button id="uploadNewBtn" class="btn-upload" style="background:#3b82f6; padding:10px 25px;">📤 Upload
-                    New Data</button>
-                <input type="text" id="datasetSearchInput" placeholder="🔍 Search by Template or File Name..."
-                    style="padding:6px 12px; border:1px solid #d0d5dd; border-radius:6px; font-size:13px; min-width:200px;">
-            </div>
-            <div style="display:flex; gap:10px; align-items:center;">
-                <label style="font-size:13px; color:#64748b;">Show:</label>
-                <select id="statusFilter" style="padding:6px 12px; border:1px solid #d0d5dd; border-radius:6px;">
-                    <option value="all">All</option>
-                    <option value="Imported">Imported</option>
-                    <option value="Pending">Pending</option>
-                    <option value="Deleted">Deleted</option>
+        <!-- ===== FILTER BAR ===== -->
+        <div class="filter-bar" id="filterBar">
+            <div class="filter-group">
+                <label for="templateFilter">📋 Template</label>
+                <select id="templateFilter">
+                    <option value="">All Templates</option>
                 </select>
             </div>
+            <div class="filter-group">
+                <label for="dateStart">📅 Date From</label>
+                <input type="date" id="dateStart">
+            </div>
+            <div class="filter-group">
+                <label for="dateEnd">📅 Date To</label>
+                <input type="date" id="dateEnd">
+            </div>
+            <button class="btn-check" id="checkAvailabilityBtn">🔍 Check Availability</button>
         </div>
 
-        <!-- Datasets Table -->
+        <!-- ===== STATS BAR ===== -->
+        <div class="stats-bar" id="statsBar">
+            <div class="stat-item">📦 Total Records: <strong id="totalRecords">0</strong></div>
+            <div class="stat-item">📁 Templates Available: <strong id="totalTemplates">0</strong></div>
+            <div class="stat-item">⚠️ Missing Templates: <strong id="missingTemplates">0</strong></div>
+            <div class="stat-item">📅 Sunday Rows: <strong id="totalSundayRows">0</strong></div>
+        </div>
+
+        <!-- ===== AVAILABILITY TABLE ===== -->
         <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
-            <table class="dataset-table">
+            <table class="availability-table">
                 <thead>
                     <tr>
                         <th>#</th>
                         <th>Template</th>
-                        <th>File Name</th>
-                        <th>Upload Date</th>
-                        <th>Rows</th>
-                        <th>Status</th>
+                        <th>Date Range</th>
+                        <th style="text-align:center;">Rows</th>
+                        <th style="text-align:center;">Sunday Rows</th>
+                        <th style="text-align:center;">Status</th>
                         <th style="text-align:center;">Actions</th>
                     </tr>
                 </thead>
-                <tbody id="datasetsBody">
+                <tbody id="availabilityBody">
                     <!-- Rows inserted by JavaScript -->
                 </tbody>
             </table>
             <div id="noDataMessage" class="no-data" style="display:none;">
-                No data sets found for this client. <button id="goUploadBtn" class="btn-upload"
-                    style="background:#3b82f6; padding:6px 18px; font-size:14px;">Upload Data</button>
+                No data found for the selected criteria. Please adjust filters and try again.
             </div>
         </div>
 
-        <!-- Status Message -->
+        <!-- ===== STATUS MESSAGE ===== -->
         <div id="statusMessage" class="upload-status" style="margin-top:20px; display:none;"></div>
     </div>
 
     <!-- ============================================= -->
-    <!-- PREVIEW MODAL (for viewing rows) -->
+    <!-- PREVIEW MODAL (Enhanced)                     -->
     <!-- ============================================= -->
-    <div id="previewModal" class="preview-modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 id="previewTitle">Dataset Preview</h2>
-                <button class="modal-close" id="closePreviewBtn">&times;</button>
+    <div id="previewModal" class="preview-modal"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+        <div class="modal-content"
+            style="background:white; border-radius:12px; padding:24px; max-width:95%; max-height:90%; overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3); width:1200px;">
+            <!-- Modal Header -->
+            <div class="modal-header"
+                style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:8px;">
+                <h2 id="previewTitle" style="margin:0; font-size:20px;">Dataset Preview</h2>
+                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                    <!-- Page Size Selector -->
+                    <div class="page-size-selector">
+                        <label for="pageSizeSelect">Rows per page:</label>
+                        <select id="pageSizeSelect">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <button class="modal-close" id="closePreviewBtn"
+                        style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+                </div>
             </div>
+
+            <!-- Sunday Filter Row -->
+            <div class="sunday-filter-row">
+                <label>
+                    <input type="checkbox" id="sundayOnlyCheckbox">
+                    🟡 Show only Sunday rows
+                </label>
+                <span class="sunday-count-badge" id="sundayCountBadge">Sunday rows: 0</span>
+            </div>
+
             <!-- Search/Filter Toolbar -->
             <div
                 style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; padding:8px 0; border-bottom:1px solid #e2e8f0;">
@@ -305,36 +407,37 @@
                     <input type="number" id="amountMax" placeholder="Max"
                         style="width:70px; padding:4px 8px; border:1px solid #d0d5dd; border-radius:4px; font-size:12px;">
                 </div>
-                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                    <label style="font-size:12px; color:#64748b;">Date:</label>
-                    <input type="date" id="dateStart"
-                        style="padding:4px 8px; border:1px solid #d0d5dd; border-radius:4px; font-size:12px;">
-                    <span style="color:#94a3b8;">to</span>
-                    <input type="date" id="dateEnd"
-                        style="padding:4px 8px; border:1px solid #d0d5dd; border-radius:4px; font-size:12px;">
-                </div>
                 <button id="applyFiltersBtn"
                     style="padding:4px 16px; background:#3b82f6; color:white; border:none; border-radius:6px; cursor:pointer; font-size:13px;">Apply</button>
                 <button id="clearFiltersBtn"
                     style="padding:4px 16px; background:#e2e8f0; color:#1a1a2e; border:none; border-radius:6px; cursor:pointer; font-size:13px;">Clear</button>
             </div>
-            <div style="overflow-x:auto; max-height:60vh;">
+
+            <!-- Table Area -->
+            <div style="overflow-x:auto; max-height:55vh;">
                 <table style="width:100%; border-collapse:collapse; font-size:13px;">
-                    <thead id="previewTableHead" style="background:#f8fafc; position:sticky; top:0;"></thead>
+                    <thead id="previewTableHead" style="background:#f8fafc; position:sticky; top:0; z-index:2;"></thead>
                     <tbody id="previewTableBody"></tbody>
                 </table>
             </div>
-            <div class="pagination" id="previewPagination">
-                <button id="prevPageBtn" disabled>Previous</button>
-                <span id="pageInfo">Page 1 of 1</span>
-                <button id="nextPageBtn" disabled>Next</button>
+
+            <!-- Pagination + Footer -->
+            <div class="pagination"
+                style="display:flex; justify-content:space-between; align-items:center; margin-top:16px; flex-wrap:wrap; gap:8px;">
+                <div style="display:flex; gap:12px; align-items:center;">
+                    <button id="prevPageBtn" disabled
+                        style="padding:4px 16px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;">Previous</button>
+                    <span id="pageInfo">Page 1 of 1</span>
+                    <button id="nextPageBtn" disabled
+                        style="padding:4px 16px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;">Next</button>
+                </div>
+                <div id="previewCountInfo" style="font-size:13px; color:#64748b;">0 rows</div>
             </div>
-            <div style="margin-top:8px; font-size:12px; color:#94a3b8;" id="previewCountInfo">0 rows</div>
         </div>
     </div>
 
     <script src="/static/client_context.js?v=2"></script>
-    <script src="/static/databank.js"></script>
+    <script src="/static/databank.js?v=2"></script>
 </body>
 
 </html>
