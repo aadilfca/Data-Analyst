@@ -737,20 +737,45 @@ function showImportSummary(result) {
     const errors = result.validation_errors || [];
     const errorCount = errors.length;
     
+    // Determine status and message
     let statusIcon = '✅';
     let statusColor = '#16a34a';
     let statusText = 'Import Successful';
+    let summaryMessage = '';
+    
     if (errorCount > 0) {
         statusIcon = '⚠️';
         statusColor = '#f59e0b';
         statusText = 'Import with Warnings';
+        summaryMessage = `Imported with ${errorCount} warning(s). Please check the errors below.`;
+    } else if (total === 0) {
+        statusIcon = 'ℹ️';
+        statusColor = '#3b82f6';
+        statusText = 'No Data to Import';
+        summaryMessage = 'The file contained no data rows, or all rows were already up to date.';
+    } else if (inserted === 0 && updated === 0) {
+        statusIcon = 'ℹ️';
+        statusColor = '#3b82f6';
+        statusText = 'No Changes Detected';
+        summaryMessage = 'All rows already exist and no changes were made.';
+    } else {
+        // Build a descriptive message
+        let parts = [];
+        if (inserted > 0) parts.push(`${inserted} new row${inserted > 1 ? 's' : ''} inserted`);
+        if (updated > 0) parts.push(`${updated} existing row${updated > 1 ? 's' : ''} updated`);
+        summaryMessage = parts.join(' and ') + ' successfully.';
+    }
+    
+    // Use backend message as fallback if available
+    if (!summaryMessage && result.message) {
+        summaryMessage = result.message;
     }
     
     modal.innerHTML = `
         <div style="text-align:center; margin-bottom:16px;">
             <div style="font-size:48px;">${statusIcon}</div>
             <h2 style="margin:8px 0 4px; color:#1a1a2e;">${statusText}</h2>
-            <p style="color:#64748b; font-size:14px;">${result.message || 'Data import completed.'}</p>
+            <p style="color:#475569; font-size:15px; font-weight:500; margin-top:4px;">${summaryMessage || 'Data import completed.'}</p>
         </div>
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin:16px 0;">
             <div style="background:#f8fafc; padding:12px; border-radius:8px; text-align:center;">
@@ -861,7 +886,7 @@ function showValidationErrors(result) {
         }
     });
 }
-// ---------- OVERWRITE CONFIRMATION DIALOG ----------
+// ---------- OVERWRITE CONFIRMATION DIALOG (Enhanced) ----------
 function showOverwriteConfirmation(duplicates, count) {
     return new Promise((resolve) => {
         // Create overlay
@@ -874,74 +899,142 @@ function showOverwriteConfirmation(duplicates, count) {
             font-family: 'Segoe UI', sans-serif;
         `;
 
-        // Build comparison table
+        // Determine all columns from the first duplicate
+        let allColumns = [];
+        if (duplicates.length > 0 && duplicates[0].columns) {
+            allColumns = duplicates[0].columns;
+        } else if (duplicates.length > 0 && duplicates[0].old_data) {
+            allColumns = Object.keys(duplicates[0].old_data);
+        }
+
+        // Build full table
         let tableRows = '';
-        const maxShow = Math.min(duplicates.length, 10);
+        const maxShow = Math.min(duplicates.length, 50); // Show up to 50 rows
         for (let i = 0; i < maxShow; i++) {
             const dup = duplicates[i];
             const oldData = dup.old_data || {};
             const newData = dup.new_data || {};
-            // Get all keys from both objects
-            const allKeys = new Set([...Object.keys(oldData), ...Object.keys(newData)]);
-            const keys = Array.from(allKeys).slice(0, 6); // Limit columns for readability
 
-            tableRows += `<tr style="background:#f8fafc; border-bottom:1px solid #e2e8f0;">
-                <td style="padding:6px 10px; font-weight:600; font-size:13px;">${dup.unique_value}</td>
-                ${keys.map(k => `
-                    <td style="padding:6px 10px; font-size:12px; border-left:1px solid #e2e8f0;">
-                        <span style="color:#dc2626; text-decoration:line-through;">${oldData[k] !== undefined ? oldData[k] : '—'}</span>
-                        <br>
-                        <span style="color:#16a34a;">→ ${newData[k] !== undefined ? newData[k] : '—'}</span>
-                    </td>
-                `).join('')}
-            </tr>`;
+            // Row header with unique value and row number
+            let rowHtml = `<tr style="border-bottom:1px solid #e2e8f0; background:${i % 2 === 0 ? '#fafcff' : '#ffffff'};">
+                <td style="padding:6px 10px; font-weight:600; font-size:12px; position:sticky; left:0; background:${i % 2 === 0 ? '#fafcff' : '#ffffff'}; z-index:1;">#${i+1}<br><span style="font-weight:400; color:#64748b;">${dup.unique_value}</span></td>`;
+
+            // For each column, show old → new
+            allColumns.forEach(col => {
+                const oldVal = oldData[col] !== undefined && oldData[col] !== null ? oldData[col] : '—';
+                const newVal = newData[col] !== undefined && newData[col] !== null ? newData[col] : '—';
+                const isChanged = String(oldVal) !== String(newVal);
+                rowHtml += `<td style="padding:4px 8px; font-size:12px; border-left:1px solid #f0f2f5; min-width:80px;">
+                    <div style="color:#dc2626; font-size:11px; ${isChanged ? '' : 'opacity:0.5;'}">${oldVal}</div>
+                    <div style="color:#16a34a; font-size:11px; ${isChanged ? 'font-weight:500;' : 'opacity:0.5;'}">${isChanged ? '→ ' : '= '}${newVal}</div>
+                </td>`;
+            });
+
+            rowHtml += `</tr>`;
+            tableRows += rowHtml;
         }
 
         const modal = document.createElement('div');
         modal.style.cssText = `
-            background: white; border-radius: 12px; padding: 24px 30px;
-            max-width: 700px; width: 95%; max-height: 85vh; overflow: auto;
+            background: white; border-radius: 12px; padding: 20px 24px;
+            max-width: 95vw; width: 95%; max-height: 90vh; overflow: auto;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            font-family: 'Segoe UI', sans-serif;
         `;
 
+        // Create the modal content with progress bar area
         modal.innerHTML = `
-            <h2 style="margin:0 0 4px; color:#f59e0b;">⚠️ Overwrite Confirmation</h2>
-            <p style="color:#64748b; margin-bottom:12px;">
-                <strong>${count}</strong> row(s) with duplicate unique values will be <strong>overwritten</strong>.
-                This action cannot be undone (but changes are logged in the audit trail).
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <h2 style="margin:0; color:#f59e0b; font-size:20px;">⚠️ Overwrite Confirmation</h2>
+                <span style="font-size:13px; color:#64748b;">${count} duplicate row(s)</span>
+            </div>
+            <p style="color:#64748b; margin-bottom:12px; font-size:14px;">
+                The following <strong>${count}</strong> row(s) will be <strong>overwritten</strong> with new data.
+                Changes are logged in the audit trail.
             </p>
-            <div style="overflow:auto; max-height:350px; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:12px;">
-                <table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <div style="overflow:auto; max-height:45vh; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:12px;">
+                <table style="width:100%; border-collapse:collapse; font-size:12px; min-width:${Math.max(400, allColumns.length * 80)}px;">
                     <thead style="position:sticky; top:0; background:#f1f5f9; z-index:2;">
                         <tr>
-                            <th style="padding:6px 10px; text-align:left; border-bottom:2px solid #e2e8f0;">Unique ID</th>
-                            <th style="padding:6px 10px; text-align:left; border-bottom:2px solid #e2e8f0; color:#dc2626;">Old → New</th>
+                            <th style="padding:6px 10px; text-align:left; border-bottom:2px solid #e2e8f0; position:sticky; left:0; background:#f1f5f9; z-index:3; min-width:80px;">Row / ID</th>
+                            ${allColumns.map(col => `<th style="padding:6px 10px; text-align:left; border-bottom:2px solid #e2e8f0; white-space:nowrap; font-size:11px;">${col}</th>`).join('')}
                         </tr>
                     </thead>
                     <tbody>${tableRows}</tbody>
                 </table>
-                ${duplicates.length > 10 ? `<div style="padding:8px; text-align:center; color:#94a3b8; font-size:12px;">... and ${duplicates.length - 10} more</div>` : ''}
+                ${duplicates.length > 50 ? `<div style="padding:8px; text-align:center; color:#94a3b8; font-size:12px;">... and ${duplicates.length - 50} more</div>` : ''}
             </div>
-            <div style="display:flex; gap:10px; justify-content:flex-end;">
+
+            <!-- Progress Bar Area (hidden initially) -->
+            <div id="overwriteProgressArea" style="display:none; margin:8px 0 12px 0;">
+                <div style="background:#f1f5f9; border-radius:4px; height:6px; overflow:hidden;">
+                    <div id="overwriteProgressBar" style="background:#f59e0b; height:6px; width:0%; transition:width 0.3s ease;"></div>
+                </div>
+                <div id="overwriteProgressText" style="font-size:13px; color:#64748b; margin-top:4px;">0 of ${count} rows overwritten</div>
+            </div>
+
+            <!-- Button Row -->
+            <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px; border-top:1px solid #e2e8f0; padding-top:12px;">
                 <button id="overwriteCancelBtn" style="padding:8px 24px; background:#e2e8f0; color:#1a1a2e; border:none; border-radius:6px; font-weight:600; cursor:pointer;">Cancel</button>
-                <button id="overwriteConfirmBtn" style="padding:8px 24px; background:#f59e0b; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">✅ Confirm Overwrite</button>
+                <button id="overwriteConfirmBtn" style="padding:8px 24px; background:#f59e0b; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; min-width:140px;">
+                    ✅ Overwrite ${count} Rows
+                </button>
             </div>
         `;
 
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
 
-        // Handle button clicks
-        document.getElementById('overwriteConfirmBtn').addEventListener('click', function() {
-            document.body.removeChild(overlay);
-            resolve(true);
-        });
+        let isResolved = false;
+
+        // ---------- CANCEL ----------
         document.getElementById('overwriteCancelBtn').addEventListener('click', function() {
+            if (isResolved) return;
+            isResolved = true;
             document.body.removeChild(overlay);
             resolve(false);
         });
+
+        // ---------- CONFIRM (with progress) ----------
+        document.getElementById('overwriteConfirmBtn').addEventListener('click', function() {
+            if (isResolved) return;
+
+            const confirmBtn = this;
+            const progressArea = document.getElementById('overwriteProgressArea');
+            const progressBar = document.getElementById('overwriteProgressBar');
+            const progressText = document.getElementById('overwriteProgressText');
+
+            // Show progress area
+            progressArea.style.display = 'block';
+            confirmBtn.disabled = true;
+            confirmBtn.innerHTML = '<span class="spinner"></span> Overwriting...';
+            confirmBtn.style.background = '#94a3b8';
+
+            // Simulate progress (will be updated by the calling function)
+            // We'll resolve after the import is done, but we keep the modal open
+            // The progress will be updated from the import function
+
+            // Store reference to the modal elements for the import function
+            window._overwriteModal = {
+                overlay: overlay,
+                confirmBtn: confirmBtn,
+                progressBar: progressBar,
+                progressText: progressText,
+                progressArea: progressArea,
+                total: count,
+                resolve: resolve,
+                isResolved: isResolved
+            };
+
+            // Resolve with true – the import will handle the rest
+            isResolved = true;
+            resolve(true);
+        });
+
+        // Close on overlay click
         overlay.addEventListener('click', function(e) {
-            if (e.target === overlay) {
+            if (e.target === overlay && !isResolved) {
+                isResolved = true;
                 document.body.removeChild(overlay);
                 resolve(false);
             }
@@ -1086,7 +1179,7 @@ async function performImport(payload) {
 
         if (!proceed) return;
 
-        // Perform the actual import
+                // Perform the actual import
         const res = await fetch(API_BASE + '/api/upload/import', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1095,16 +1188,52 @@ async function performImport(payload) {
         const result = await res.json();
         if (!res.ok) throw new Error(result.message || 'Import failed');
 
+        // Update overwrite progress if the modal is open
+        const modalRef = window._overwriteModal;
+        if (modalRef && !modalRef.isResolved) {
+            // Update progress bar
+            const updated = result.updated_count || 0;
+            const total = modalRef.total || 1;
+            const pct = Math.min(100, Math.round((updated / total) * 100));
+            modalRef.progressBar.style.width = pct + '%';
+            modalRef.progressText.textContent = `${updated} of ${total} rows overwritten`;
+
+            if (updated >= total) {
+                // All done!
+                modalRef.confirmBtn.innerHTML = 'OK';
+                modalRef.confirmBtn.style.background = '#16a34a';
+                modalRef.confirmBtn.disabled = false;
+                modalRef.progressBar.style.background = '#16a34a';
+                modalRef.progressText.textContent = `✅ ${updated} of ${total} rows overwritten`;
+
+                // Wait for OK click
+                modalRef.confirmBtn.onclick = function() {
+                    if (modalRef.overlay && modalRef.overlay.parentNode) {
+                        document.body.removeChild(modalRef.overlay);
+                    }
+                    modalRef.resolve(true);
+                    window._overwriteModal = null;
+                    // Show import summary
+                    showImportSummary(result);
+                };
+            }
+            // Continue – the modal stays open until all rows are processed
+            // The import is already complete, so we should update the button
+            // Actually, since the import is a single API call, all rows are processed at once.
+            // So we can immediately show completion.
+        }
+
         if (result.status === 'validation_failed') {
             // This should not happen if validation passed, but handle it
             showValidationErrors(result);
             showStatus('❌ Import validation errors found.', 'error');
             setBadge('❌ Import failed', 'error');
         } else {
-            // Show import summary popup
-            showImportSummary(result);
+            // If modal was not open, show summary popup
+            if (!modalRef || modalRef.isResolved) {
+                showImportSummary(result);
+            }
             setBadge('✅ Import complete');
-            // Reset validation state after successful import (will be reset after popup closes)
         }
     } catch (error) {
         showStatus('❌ Import error: ' + error.message, 'error');

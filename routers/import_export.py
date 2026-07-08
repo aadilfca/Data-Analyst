@@ -265,22 +265,26 @@ def check_duplicates(request: ImportRequest):
         if unique_value is None or unique_value == '':
             continue
 
+                # Case‑insensitive matching – compare lowercased values
         existing = execute_query(
             """
             SELECT id, row_data, extract_amount, extract_date
             FROM client_data
             WHERE client_id = ? AND template_id = ? AND is_deleted = 0
-            AND json_extract(row_data, '$."{}"') = ?
+            AND LOWER(json_extract(row_data, '$."{}"')) = LOWER(?)
             """.format(unique_col_name),
             (request.client_id, request.template_id, str(unique_value))
         )
 
         if existing:
             old_data = json.loads(existing[0]['row_data']) if existing[0]['row_data'] else {}
+            # Get the column names from the template
+            col_names = [col['column_name'] for col in template_cols]
             duplicates.append({
                 "unique_value": unique_value,
                 "old_data": old_data,
-                "new_data": row_data
+                "new_data": row_data,
+                "columns": col_names  # <-- ADD THIS: all column names for the frontend
             })
 
     return {
