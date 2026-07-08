@@ -524,13 +524,99 @@ function renderMapping(mappings) {
         mappingBody.appendChild(tr);
     });
 
-    updateCounts();
+     updateCounts();
 
     function updateCounts() {
         const matched = currentMappings.filter(m => m.is_matched).length;
         if (mappingCount) mappingCount.textContent = matched + ' / ' + currentMappings.length + ' matched';
         setBadge('✅ ' + matched + '/' + currentMappings.length + ' matched');
     }
+
+    // Update mini preview
+    renderMiniPreview();
+}
+
+// ---------- MINI PREVIEW ----------
+function getFirstDataRow() {
+    if (!workbookData) return [];
+    try {
+        const workbook = XLSX.read(workbookData, { type: 'array' });
+        const sheetName = currentSheet || workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        // Row 0 = headers, row 1 = first data row (row 2 in Excel)
+        if (jsonData.length < 2) return [];
+        return jsonData[1] || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function renderMiniPreview() {
+    const tbody = document.getElementById('miniPreviewBody');
+    const container = document.getElementById('miniPreviewContainer');
+    if (!tbody || !container) return;
+
+    // If no mapping or no data, hide container
+    if (!currentMappings || currentMappings.length === 0 || !workbookData) {
+        container.style.display = 'none';
+        return;
+    }
+
+    const firstDataRow = getFirstDataRow();
+    if (!firstDataRow || firstDataRow.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+
+    // Build a map from excel column name to value
+    const headers = excelHeaders || [];
+    const valueMap = {};
+    headers.forEach((h, idx) => {
+        valueMap[h] = firstDataRow[idx] !== undefined ? firstDataRow[idx] : '';
+    });
+
+    // Build rows
+    let html = '';
+    currentMappings.forEach(m => {
+        const templateCol = m.column_name || '';
+        const excelCol = m.excel_column || '—';
+        const value = excelCol && excelCol !== '—' ? (valueMap[excelCol] !== undefined ? valueMap[excelCol] : '') : '—';
+        // Truncate long values
+        const displayValue = typeof value === 'string' ? (value.length > 30 ? value.substring(0, 30) + '…' : value) : value;
+        html += `<tr>
+            <td style="font-weight:500;">${templateCol}</td>
+            <td>${excelCol}</td>
+            <td>${displayValue}</td>
+        </tr>`;
+    });
+
+    tbody.innerHTML = html;
+    container.style.display = 'block';
+    // Show the toggle button
+    const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
+    if (toggleBtn) toggleBtn.style.display = 'inline-block';
+}
+
+function toggleMiniPreview() {
+    const container = document.getElementById('miniPreviewContainer');
+    const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
+    if (!container || !toggleBtn) return;
+    if (container.style.display === 'none' || container.style.display === '') {
+        container.style.display = 'block';
+        toggleBtn.textContent = '📋 Hide Preview';
+        renderMiniPreview(); // ensure it's up to date
+    } else {
+        container.style.display = 'none';
+        toggleBtn.textContent = '📋 Mini Preview';
+    }
+}
+
+function closeMiniPreview() {
+    const container = document.getElementById('miniPreviewContainer');
+    const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
+    if (container) container.style.display = 'none';
+    if (toggleBtn) toggleBtn.textContent = '📋 Mini Preview';
 }
 
 // ---------- UNIQUE ID DROPDOWN ----------
@@ -814,4 +900,14 @@ window.onload = function() {
     console.log('📤 Upload module fully loaded');
     showStatus('Select a template and upload an Excel file to begin.', 'info');
     updatePreviewButtonState();
+
+    // Mini preview toggle button
+    const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', toggleMiniPreview);
+    }
+    const closeBtn = document.getElementById('closeMiniPreviewBtn');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', closeMiniPreview);
+    }
 };
