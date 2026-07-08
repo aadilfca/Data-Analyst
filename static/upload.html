@@ -30,6 +30,14 @@
             padding: 0 0 20px 0;
             box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
             position: relative;
+            min-height: 500px;
+            transition: height 0.3s ease;
+        }
+
+        /* When preview is active, give the container a fixed height */
+        .container.preview-active {
+            height: calc(100vh - 140px);
+            overflow: hidden;
         }
 
         /* ---------- MODULE HEADER ---------- */
@@ -526,19 +534,17 @@
         /* ---------- PREVIEW SHEET (Overlay) ---------- */
         .preview-sheet {
             display: none;
-            position: fixed;
-            top: 70px;
-            /* navbar height */
+            position: absolute;
+            top: 0;
             left: 0;
             width: 100%;
-            height: calc(100vh - 70px);
+            height: 100%;
             background: white;
-            z-index: 1000;
+            border-radius: 12px;
+            z-index: 10;
             padding: 20px 28px;
             flex-direction: column;
             overflow: hidden;
-            /* prevent outer scroll */
-            box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
         }
 
         .preview-sheet.active {

@@ -733,9 +733,12 @@ function showPreview() {
         document.getElementById('footerTimeValue').textContent = timeStr;
         document.getElementById('footerDateValue').textContent = dateStr;
 
-        // Show preview sheet, hide main page
+                // Show preview sheet, hide main page
         previewSheet.classList.add('active');
         mainUploadPage.style.display = 'none';
+        // Set container to fixed height
+        const container = document.getElementById('uploadContainer');
+        if (container) container.classList.add('preview-active');
 
     } catch (error) {
         showStatus('❌ Error previewing file: ' + error.message, 'error');
@@ -745,10 +748,13 @@ function showPreview() {
 // ---------- CLOSE PREVIEW ----------
 const closePreviewBtn = document.getElementById('closePreviewBtn');
 if (closePreviewBtn) {
-    closePreviewBtn.addEventListener('click', function(e) {
+        closePreviewBtn.addEventListener('click', function(e) {
         e.preventDefault();
         document.getElementById('previewSheet').classList.remove('active');
         document.getElementById('mainUploadPage').style.display = 'block';
+        // Remove fixed height from container
+        const container = document.getElementById('uploadContainer');
+        if (container) container.classList.remove('preview-active');
     });
 }
 
