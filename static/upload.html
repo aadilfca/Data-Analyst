@@ -717,20 +717,26 @@
             }
         }
 
-        /* ---------- MINI PREVIEW ---------- */
+        /* ---------- MINI PREVIEW (Matches Mapping Table) ---------- */
         #miniPreviewContainer {
             border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 12px;
-            background: #fafcff;
+            border-radius: 6px;
+            padding: 0;
+            background: white;
             margin-top: 16px;
+            overflow: hidden;
+            display: none;
+            /* hidden by default */
         }
 
         #miniPreviewContainer .mini-preview-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 8px;
+            padding: 10px 14px;
+            background: #f8fafc;
+            border-bottom: 2px solid #e2e8f0;
+            flex-shrink: 0;
         }
 
         #miniPreviewContainer .mini-preview-header span {
@@ -745,55 +751,66 @@
             cursor: pointer;
             font-size: 16px;
             color: #94a3b8;
+            padding: 0 4px;
         }
 
         #miniPreviewContainer .mini-preview-header button:hover {
             color: #dc2626;
         }
 
+        /* TABLE STYLES - MATCH MAPPING TABLE EXACTLY */
         #miniPreviewContainer table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 12px;
+            font-size: 13px;
+            border: none;
         }
 
         #miniPreviewContainer table thead {
             position: sticky;
             top: 0;
-            background: #f8fafc;
-            z-index: 1;
+            z-index: 2;
         }
 
         #miniPreviewContainer table th {
+            background: #f8fafc;
+            padding: 8px 12px;
             text-align: left;
-            padding: 4px 8px;
-            border-bottom: 2px solid #e2e8f0;
             font-weight: 600;
-            color: #475569;
             font-size: 11px;
             text-transform: uppercase;
+            letter-spacing: 0.3px;
+            border-bottom: 2px solid #e2e8f0;
+            color: #475569;
             white-space: nowrap;
         }
 
         #miniPreviewContainer table td {
-            padding: 4px 8px;
+            padding: 8px 12px;
             border-bottom: 1px solid #f0f2f5;
-            white-space: nowrap;
-            max-width: 150px;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            vertical-align: middle;
+            font-size: 13px;
+            background: white;
+        }
+
+        #miniPreviewContainer table tr:last-child td {
+            border-bottom: none;
+        }
+
+        #miniPreviewContainer table tr:hover td {
+            background: #fafcff;
         }
 
         #miniPreviewContainer table tr:nth-child(even) td {
             background: #fafcff;
         }
 
-        #miniPreviewContainer table tr:hover td {
-            background: #f1f5f9;
+        #miniPreviewContainer table tr:nth-child(even):hover td {
+            background: #f0f4ff;
         }
 
         #miniPreviewContainer .mini-preview-empty {
-            padding: 20px;
+            padding: 30px;
             text-align: center;
             color: #94a3b8;
             font-size: 13px;
@@ -929,25 +946,18 @@
                     </div>
 
                     <!-- Mini Preview Container -->
-                    <div id="miniPreviewContainer"
-                        style="display:none; margin-top:16px; border:1px solid #e2e8f0; border-radius:8px; padding:12px; background:#fafcff;">
-                        <div
-                            style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                            <span style="font-weight:600; font-size:13px; color:#1a1a2e;">📋 Mapping Confirmation</span>
-                            <button id="closeMiniPreviewBtn"
-                                style="background:none; border:none; cursor:pointer; font-size:16px; color:#94a3b8;"
-                                title="Close Mini Preview">✕</button>
+                    <div id="miniPreviewContainer">
+                        <div class="mini-preview-header">
+                            <span>📋 Mapping Confirmation</span>
+                            <button id="closeMiniPreviewBtn" title="Close Mini Preview">✕</button>
                         </div>
                         <div style="overflow-x:auto; max-height:300px; overflow-y:auto;">
-                            <table style="width:100%; border-collapse:collapse; font-size:12px;">
-                                <thead style="position:sticky; top:0; background:#f8fafc; z-index:1;">
+                            <table>
+                                <thead>
                                     <tr>
-                                        <th style="text-align:left; padding:4px 8px; border-bottom:1px solid #e2e8f0;">
-                                            Template</th>
-                                        <th style="text-align:left; padding:4px 8px; border-bottom:1px solid #e2e8f0;">
-                                            Excel Column</th>
-                                        <th style="text-align:left; padding:4px 8px; border-bottom:1px solid #e2e8f0;">
-                                            Row 2 Value</th>
+                                        <th>Template</th>
+                                        <th>Excel Column</th>
+                                        <th>Row 2 Value</th>
                                     </tr>
                                 </thead>
                                 <tbody id="miniPreviewBody">
