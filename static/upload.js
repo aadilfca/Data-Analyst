@@ -1,5 +1,5 @@
 // ================================================================
-// 📤 UPLOAD MODULE – FULLY FUNCTIONAL (CLEAN)
+// 📤 UPLOAD MODULE – FINAL
 // ================================================================
 
 // API_BASE is defined globally in client_context.js
@@ -98,6 +98,27 @@ function formatDate(d) {
     return date.toLocaleDateString('en-GB') + ' ' + date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
+// ---------- PREVIEW BUTTON STATE ----------
+function updatePreviewButtonState() {
+    const previewBtn = document.getElementById('previewBtn');
+    if (!previewBtn) return;
+
+    const isFileLoaded = workbookData !== null;
+    const isSheetSelected = currentSheet !== null && currentSheet !== '';
+    const isTemplateSelected = selectedTemplateId !== null;
+    const isMappingDone = currentMappings.length > 0 && mappingPanel && mappingPanel.style.display !== 'none';
+
+    const isReady = isFileLoaded && isSheetSelected && isTemplateSelected && isMappingDone;
+
+    if (isReady) {
+        previewBtn.style.display = 'inline-block';
+        previewBtn.disabled = false;
+    } else {
+        previewBtn.style.display = 'inline-block'; // Keep visible but disabled
+        previewBtn.disabled = true;
+    }
+}
+
 // ---------- LOAD TEMPLATES ----------
 async function loadTemplates() {
     try {
@@ -131,6 +152,7 @@ if (templateDropdown) {
             this.value = '';
             setBadge('⛔ No client selected');
             if (importBtn) importBtn.disabled = true;
+            updatePreviewButtonState();
             return;
         }
         const id = this.value;
@@ -142,6 +164,7 @@ if (templateDropdown) {
             if (importBtn) importBtn.disabled = true;
             setBadge('⏳ Select a template');
             showStatus('Select a template and upload an Excel file to begin.', 'info');
+            updatePreviewButtonState();
             return;
         }
         selectedTemplateId = parseInt(id);
@@ -170,6 +193,7 @@ if (templateDropdown) {
             setBadge('❌ Failed to load columns', 'error');
             showStatus('❌ Failed to load template columns: ' + error.message, 'error');
         }
+        updatePreviewButtonState();
     });
 }
 
@@ -237,12 +261,10 @@ async function handleFile(file) {
             currentSheet = sheetNames[0];
             if (sheetSelector) sheetSelector.value = currentSheet;
             if (sheetField) sheetField.style.display = 'block';
-            // Show preview button
-            const previewBtn = document.getElementById('previewBtn');
-            if (previewBtn) previewBtn.style.display = 'inline-block';
             uploadFileToServer(file);
 
             showStatus('📄 File loaded. Sheet "' + currentSheet + '" selected.', 'info');
+            updatePreviewButtonState();
         } catch (err) {
             showStatus('❌ Error reading file: ' + err.message, 'error');
         }
@@ -274,6 +296,7 @@ if (sheetSelector) {
                 uploadFileToServer(selectedFile);
             }
         }
+        updatePreviewButtonState();
     });
 }
 
@@ -325,17 +348,15 @@ function resetUpload() {
     currentSheet = null;
     sheetNames = [];
     workbookData = null;
-    if (footerMeta) footerMeta.style.display = 'none';
-    if (importBtn) importBtn.disabled = true;
     currentMappings = [];
     excelHeaders = [];
     templateColumns = [];
-    // Hide preview button
-    const previewBtn = document.getElementById('previewBtn');
-    if (previewBtn) previewBtn.style.display = 'none';
+    if (footerMeta) footerMeta.style.display = 'none';
+    if (importBtn) importBtn.disabled = true;
     showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     setBadge('⏳ Select a template');
     if (mappingBody) mappingBody.innerHTML = '';
+    updatePreviewButtonState();
 }
 
 // ---------- AUTO-MAP ----------
@@ -379,6 +400,8 @@ async function autoMapColumns() {
         if (mappingCount) mappingCount.textContent = matched + ' / ' + data.total_columns + ' matched';
         setBadge('✅ ' + matched + '/' + data.total_columns + ' matched');
         showStatus('✅ Auto‑mapped ' + matched + '/' + data.total_columns + ' columns', 'success');
+
+        updatePreviewButtonState();
 
     } catch (error) {
         console.error('Auto-map error:', error);
@@ -718,12 +741,12 @@ function showPreview() {
             previewBody.appendChild(tr);
         });
 
-                previewInfo.textContent = `${rows.length} rows · ${headers.length} columns`;
+        previewInfo.textContent = `${rows.length} rows · ${headers.length} columns`;
 
         // Update footer with client and user info
         const clientName = window.getSelectedClientName ? window.getSelectedClientName() : 'No Client';
         const clientCode = window.getSelectedClientCode ? window.getSelectedClientCode() : '';
-        const userName = 'Analyst'; // could be dynamic later
+        const userName = 'Analyst';
         const now = new Date();
         const timeStr = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
         const dateStr = now.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -733,7 +756,7 @@ function showPreview() {
         document.getElementById('footerTimeValue').textContent = timeStr;
         document.getElementById('footerDateValue').textContent = dateStr;
 
-                // Show preview sheet, hide main page
+        // Show preview sheet, hide main page
         previewSheet.classList.add('active');
         mainUploadPage.style.display = 'none';
         // Set container to fixed height
@@ -748,13 +771,15 @@ function showPreview() {
 // ---------- CLOSE PREVIEW ----------
 const closePreviewBtn = document.getElementById('closePreviewBtn');
 if (closePreviewBtn) {
-        closePreviewBtn.addEventListener('click', function(e) {
+    closePreviewBtn.addEventListener('click', function(e) {
         e.preventDefault();
         document.getElementById('previewSheet').classList.remove('active');
         document.getElementById('mainUploadPage').style.display = 'block';
         // Remove fixed height from container
         const container = document.getElementById('uploadContainer');
         if (container) container.classList.remove('preview-active');
+        // Re-enable preview button after closing (state already managed)
+        updatePreviewButtonState();
     });
 }
 
@@ -762,11 +787,24 @@ if (closePreviewBtn) {
 const previewBtn = document.getElementById('previewBtn');
 if (previewBtn) {
     previewBtn.addEventListener('click', function() {
-        if (workbookData && currentSheet) {
-            showPreview();
-        } else {
+        if (!workbookData) {
             showStatus('⚠️ Please upload a file first.', 'error');
+            return;
         }
+        if (!currentSheet) {
+            showStatus('⚠️ Please select a sheet.', 'error');
+            return;
+        }
+        if (!selectedTemplateId) {
+            showStatus('⚠️ Please select a template.', 'error');
+            return;
+        }
+        if (currentMappings.length === 0) {
+            showStatus('⚠️ Please wait for auto-mapping to complete.', 'error');
+            return;
+        }
+        // All conditions satisfied
+        showPreview();
     });
 }
 
@@ -775,4 +813,5 @@ window.onload = function() {
     loadTemplates();
     console.log('📤 Upload module fully loaded');
     showStatus('Select a template and upload an Excel file to begin.', 'info');
+    updatePreviewButtonState();
 };
