@@ -57,6 +57,7 @@ let sheetNames = [];
 let currentSheet = null;
 let workbookData = null;
 let isProcessing = false;
+let miniPreviewVisible = false; // Tracks whether mini preview is shown
 
 // ---------- HELPERS ----------
 function showStatus(msg, type = 'info', extra = '') {
@@ -357,6 +358,15 @@ function resetUpload() {
     setBadge('⏳ Select a template');
     if (mappingBody) mappingBody.innerHTML = '';
     updatePreviewButtonState();
+    // Hide mini preview and reset toggle
+    const container = document.getElementById('miniPreviewContainer');
+    const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
+    if (container) container.style.display = 'none';
+    if (toggleBtn) {
+        toggleBtn.textContent = '📋 Mini Preview';
+        toggleBtn.style.display = 'none';
+    }
+    miniPreviewVisible = false;
 }
 
 // ---------- AUTO-MAP ----------
@@ -389,7 +399,7 @@ async function autoMapColumns() {
         currentMappings = data.mappings;
         excelHeaders = data.excel_headers;
 
-        renderMapping(data.mappings);
+          renderMapping(data.mappings);
         populateUniqueIdDropdown();
 
         if (modeActions) modeActions.style.display = 'block';
@@ -400,6 +410,10 @@ async function autoMapColumns() {
         if (mappingCount) mappingCount.textContent = matched + ' / ' + data.total_columns + ' matched';
         setBadge('✅ ' + matched + '/' + data.total_columns + ' matched');
         showStatus('✅ Auto‑mapped ' + matched + '/' + data.total_columns + ' columns', 'success');
+
+        // Show mini preview toggle button
+        const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
+        if (toggleBtn) toggleBtn.style.display = 'inline-block';
 
         updatePreviewButtonState();
 
@@ -474,7 +488,7 @@ function renderMapping(mappings) {
         }
         buildOptions();
 
-        select.addEventListener('change', function() {
+                select.addEventListener('change', function() {
             const newVal = this.value || null;
             m.excel_column = newVal;
             m.is_matched = !!newVal;
@@ -491,6 +505,8 @@ function renderMapping(mappings) {
                     }
                 }
             }
+            // Update mini preview immediately
+            renderMiniPreview();
             requestAnimationFrame(() => {
                 renderMapping(currentMappings);
             });
@@ -592,7 +608,10 @@ function renderMiniPreview() {
     });
 
     tbody.innerHTML = html;
-    container.style.display = 'block';
+    // Only show container if mini preview is supposed to be visible
+    if (miniPreviewVisible) {
+        container.style.display = 'block';
+    }
     // Show the toggle button
     const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
     if (toggleBtn) toggleBtn.style.display = 'inline-block';
@@ -602,13 +621,15 @@ function toggleMiniPreview() {
     const container = document.getElementById('miniPreviewContainer');
     const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
     if (!container || !toggleBtn) return;
-    if (container.style.display === 'none' || container.style.display === '') {
+    if (!miniPreviewVisible) {
         container.style.display = 'block';
         toggleBtn.textContent = '📋 Hide Preview';
+        miniPreviewVisible = true;
         renderMiniPreview(); // ensure it's up to date
     } else {
         container.style.display = 'none';
         toggleBtn.textContent = '📋 Mini Preview';
+        miniPreviewVisible = false;
     }
 }
 
@@ -617,6 +638,7 @@ function closeMiniPreview() {
     const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
     if (container) container.style.display = 'none';
     if (toggleBtn) toggleBtn.textContent = '📋 Mini Preview';
+    miniPreviewVisible = false;
 }
 
 // ---------- UNIQUE ID DROPDOWN ----------
