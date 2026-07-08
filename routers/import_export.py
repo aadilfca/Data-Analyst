@@ -288,6 +288,138 @@ def check_duplicates(request: ImportRequest):
         "duplicates": duplicates,
         "count": len(duplicates)
     }
+# ---------- VALIDATE ONLY (NO IMPORT) ----------
+@router.post("/api/upload/validate")
+def validate_only(request: ImportRequest):
+    """
+    Validate the Excel file without importing any data.
+    Returns row-by-row validation errors.
+    """
+    # Validate template and file
+    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    if not template:
+        raise HTTPException(404, "Template not found")
+    file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
+    if not file_info:
+        raise HTTPException(404, "File not found")
+    
+    # Validate client exists
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    # Get template columns with their types
+    template_cols = execute_query(
+        """
+        SELECT m.id, m.column_name, m.data_type
+        FROM template_column_mappings p
+        JOIN master_columns m ON p.column_id = m.id
+        WHERE p.template_id = ? AND m.is_active = 1
+        ORDER BY p.sort_order ASC
+        """,
+        (request.template_id,)
+    )
+    if not template_cols:
+        raise HTTPException(400, "Template has no columns")
+
+    mapping_dict = {m.template_column_id: m for m in request.mappings}
+
+    # Build column mapping
+    col_mapping = {}
+    for t_col in template_cols:
+        mapping = mapping_dict.get(t_col['id'])
+        if mapping and mapping.excel_column_name:
+            col_mapping[t_col['column_name']] = mapping.excel_column_name
+
+    # Read Excel data
+    try:
+        df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
+        mapped_excel_cols = [m.excel_column_name for m in request.mappings if m.excel_column_name]
+        df = df[[col for col in mapped_excel_cols if col in df.columns]]
+    except Exception as e:
+        raise HTTPException(400, f"Error reading Excel: {str(e)}")
+
+    rows = df.to_dict('records')
+    
+        # --- Validation (same logic as import but without inserting) ---
+    validation_errors = []
+    for row_idx, row in enumerate(rows, start=2):  # row 1 = headers, row 2 = first data
+        row_errors = []
+        # Build a full row data dict (template column names -> values)
+        row_data_full = {}
+        for t_col in template_cols:
+            mapping = mapping_dict.get(t_col['id'])
+            if mapping and mapping.excel_column_name:
+                excel_col = mapping.excel_column_name
+                if excel_col in row:
+                    value = row[excel_col]
+                    if pd.isna(value):
+                        value = None
+                    if isinstance(value, datetime):
+                        value = value.strftime('%d/%m/%Y')
+                    row_data_full[t_col['column_name']] = value
+                else:
+                    row_data_full[t_col['column_name']] = None
+        # Now check each column for errors
+        for t_col in template_cols:
+            mapping = mapping_dict.get(t_col['id'])
+            if not mapping or not mapping.excel_column_name:
+                continue
+            excel_col = mapping.excel_column_name
+            if excel_col not in row:
+                continue
+            value = row[excel_col]
+            
+            # Required field check
+            if pd.isna(value):
+                row_errors.append({
+                    "column": t_col['column_name'],
+                    "excel_column": excel_col,
+                    "error_type": "required",
+                    "message": f"Required field '{t_col['column_name']}' is empty"
+                })
+            else:
+                # Data type checks
+                if t_col['data_type'] == "Numeric":
+                    try:
+                        float(value)
+                    except:
+                        row_errors.append({
+                            "column": t_col['column_name'],
+                            "excel_column": excel_col,
+                            "error_type": "data_type",
+                            "message": f"Expected Numeric but got '{value}'"
+                        })
+                elif t_col['data_type'] == "Date":
+                    try:
+                        if isinstance(value, str):
+                            datetime.strptime(value, "%d/%m/%Y")
+                        elif isinstance(value, (int, float)):
+                            # Excel serial date – will be handled on import, skip validation here
+                            pass
+                    except:
+                        row_errors.append({
+                            "column": t_col['column_name'],
+                            "excel_column": excel_col,
+                            "error_type": "data_type",
+                            "message": f"Expected Date (DD/MM/YYYY) but got '{value}'"
+                        })
+        
+        if row_errors:
+            validation_errors.append({
+                "row_number": row_idx,
+                "row_data": row_data_full,  # <-- NEW: full row data
+                "errors": row_errors
+            })
+
+    return {
+        "status": "validation_complete",
+        "has_errors": len(validation_errors) > 0,
+        "error_count": len(validation_errors),
+        "total_rows": len(rows),
+        "errors": validation_errors,
+        "valid_rows": len(rows) - len(validation_errors)
+    }
 def validate_and_import(request: ImportRequest):
     # Validate template and file
     template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))

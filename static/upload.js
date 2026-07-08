@@ -57,7 +57,19 @@ let sheetNames = [];
 let currentSheet = null;
 let workbookData = null;
 let isProcessing = false;
+let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
 let miniPreviewVisible = false; // Tracks whether mini preview is shown
+// ---------- RESET VALIDATION STATE ----------
+function resetValidationState() {
+    validationStatus = 'idle';
+    if (importBtn) {
+        importBtn.innerHTML = 'Validate';
+        importBtn.style.background = '';
+        importBtn.style.color = '';
+        importBtn.disabled = false;
+    }
+    updatePreviewButtonState();
+}
 
 // ---------- HELPERS ----------
 function showStatus(msg, type = 'info', extra = '') {
@@ -108,14 +120,15 @@ function updatePreviewButtonState() {
     const isSheetSelected = currentSheet !== null && currentSheet !== '';
     const isTemplateSelected = selectedTemplateId !== null;
     const isMappingDone = currentMappings.length > 0 && mappingPanel && mappingPanel.style.display !== 'none';
+    const isValidated = validationStatus === 'valid';
 
-    const isReady = isFileLoaded && isSheetSelected && isTemplateSelected && isMappingDone;
+    const isReady = isFileLoaded && isSheetSelected && isTemplateSelected && isMappingDone && isValidated;
 
     if (isReady) {
         previewBtn.style.display = 'inline-block';
         previewBtn.disabled = false;
     } else {
-        previewBtn.style.display = 'inline-block'; // Keep visible but disabled
+        previewBtn.style.display = 'inline-block';
         previewBtn.disabled = true;
     }
 }
@@ -156,7 +169,7 @@ if (templateDropdown) {
             updatePreviewButtonState();
             return;
         }
-        const id = this.value;
+                const id = this.value;
         if (!id) {
             selectedTemplateId = null;
             if (mappingPanel) mappingPanel.style.display = 'none';
@@ -165,6 +178,7 @@ if (templateDropdown) {
             if (importBtn) importBtn.disabled = true;
             setBadge('⏳ Select a template');
             showStatus('Select a template and upload an Excel file to begin.', 'info');
+            resetValidationState(); // Reset validation when template is cleared
             updatePreviewButtonState();
             return;
         }
@@ -194,7 +208,8 @@ if (templateDropdown) {
             setBadge('❌ Failed to load columns', 'error');
             showStatus('❌ Failed to load template columns: ' + error.message, 'error');
         }
-        updatePreviewButtonState();
+                updatePreviewButtonState();
+        resetValidationState(); // New template means new data – reset validation
     });
 }
 
@@ -264,8 +279,10 @@ async function handleFile(file) {
             if (sheetField) sheetField.style.display = 'block';
             uploadFileToServer(file);
 
-            showStatus('📄 File loaded. Sheet "' + currentSheet + '" selected.', 'info');
-            updatePreviewButtonState();
+                        showStatus('📄 File loaded. Sheet "' + currentSheet + '" selected.', 'info');
+            resetValidationState(); // Reset validation for new file
+                    updatePreviewButtonState();
+        resetValidationState(); // New mapping – reset validation
         } catch (err) {
             showStatus('❌ Error reading file: ' + err.message, 'error');
         }
@@ -289,7 +306,7 @@ function populateSheetSelector(sheets) {
 if (sheetSelector) {
     sheetSelector.addEventListener('change', function() {
         currentSheet = this.value;
-        if (currentSheet && selectedTemplateId && fileId) {
+                if (currentSheet && selectedTemplateId && fileId) {
             autoMapColumns();
             showStatus('📄 Sheet changed to "' + currentSheet + '". Re‑mapping...', 'info');
         } else if (currentSheet && selectedTemplateId && !fileId) {
@@ -297,6 +314,7 @@ if (sheetSelector) {
                 uploadFileToServer(selectedFile);
             }
         }
+        resetValidationState(); // Reset validation on sheet change
         updatePreviewButtonState();
     });
 }
@@ -354,7 +372,7 @@ function resetUpload() {
     templateColumns = [];
     if (footerMeta) footerMeta.style.display = 'none';
     if (importBtn) importBtn.disabled = true;
-    showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
+        showStatus('🔄 Reset complete. Select a template and upload a file.', 'info');
     setBadge('⏳ Select a template');
     if (mappingBody) mappingBody.innerHTML = '';
     updatePreviewButtonState();
@@ -367,6 +385,15 @@ function resetUpload() {
         toggleBtn.style.display = 'none';
     }
     miniPreviewVisible = false;
+    
+    // Reset validation status
+    validationStatus = 'idle';
+    if (importBtn) {
+        importBtn.innerHTML = 'Validate';
+        importBtn.style.background = '';
+        importBtn.style.color = '';
+        importBtn.disabled = false;
+    }
 }
 
 // ---------- AUTO-MAP ----------
@@ -771,7 +798,69 @@ function showImportSummary(result) {
         }
     });
 }
+// ---------- SHOW VALIDATION ERRORS ----------
+function showValidationErrors(result) {
+    const overlay = document.createElement('div');
+    overlay.id = 'validationErrorOverlay';
+    overlay.style.cssText = `
+        position: fixed; top:0; left:0; width:100%; height:100%;
+        background: rgba(0,0,0,0.5); z-index:2000;
+        display: flex; justify-content:center; align-items:center;
+        font-family: 'Segoe UI', sans-serif;
+    `;
 
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+        background: white; border-radius: 12px; padding: 24px 30px;
+        max-width: 700px; width: 95%; max-height: 80vh; overflow: auto;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    `;
+
+    let errorRows = '';
+    const errors = result.errors || [];
+    errors.forEach(err => {
+        const rowNum = err.row_number;
+        const errMsgs = err.errors.map(e => `${e.column}: ${e.message}`).join('; ');
+        errorRows += `<tr style="border-bottom:1px solid #f0f2f5;">
+            <td style="padding:6px 10px; font-weight:600;">${rowNum}</td>
+            <td style="padding:6px 10px; color:#dc2626;">${errMsgs}</td>
+        </tr>`;
+    });
+
+    modal.innerHTML = `
+        <h2 style="margin:0 0 4px; color:#dc2626;">❌ Validation Errors</h2>
+        <p style="color:#64748b; margin-bottom:12px;">
+            <strong>${result.error_count}</strong> error(s) found in <strong>${result.total_rows}</strong> rows.
+            Please fix the errors in your Excel file and try again.
+        </p>
+        <div style="overflow:auto; max-height:300px; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:12px;">
+            <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                <thead style="position:sticky; top:0; background:#f1f5f9;">
+                    <tr>
+                        <th style="padding:6px 10px; text-align:left; border-bottom:2px solid #e2e8f0;">Row</th>
+                        <th style="padding:6px 10px; text-align:left; border-bottom:2px solid #e2e8f0;">Error</th>
+                    </tr>
+                </thead>
+                <tbody>${errorRows}</tbody>
+            </table>
+        </div>
+        <div style="display:flex; gap:10px; justify-content:flex-end;">
+            <button id="validationErrorCloseBtn" style="padding:8px 24px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">Close</button>
+        </div>
+    `;
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#validationErrorCloseBtn').addEventListener('click', function() {
+        document.body.removeChild(overlay);
+    });
+    overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) {
+            document.body.removeChild(overlay);
+        }
+    });
+}
 // ---------- OVERWRITE CONFIRMATION DIALOG ----------
 function showOverwriteConfirmation(duplicates, count) {
     return new Promise((resolve) => {
@@ -874,7 +963,7 @@ if (importBtn) {
             return;
         }
         if (!fileId || !selectedTemplateId) {
-            showStatus('⚠️ Please upload a file and select a template', 'error');
+            showStatus('⚠️ Please upload a file and select a template.', 'error');
             return;
         }
 
@@ -906,79 +995,127 @@ if (importBtn) {
             sheet_name: currentSheet || 'Sheet1'
         };
 
-        // --- Check for duplicates first ---
+        // ---- NEW LOGIC: Validation Flow ----
+        // If validation status is already 'valid', proceed with import
+        if (validationStatus === 'valid') {
+            // Perform the actual import
+            await performImport(payload);
+            return;
+        }
+
+        // Otherwise, run validation first
         try {
-            setBadge('⏳ Checking for duplicates...', 'loading');
+            // Disable button and show spinner
+            importBtn.disabled = true;
+            importBtn.innerHTML = '<span class="spinner"></span> Validating...';
+            showStatus('⏳ Validating data...', 'loading');
+            setBadge('⏳ Validating...', 'loading');
+
+            const res = await fetch(API_BASE + '/api/upload/validate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.message || 'Validation failed');
+
+            if (result.has_errors) {
+                // Show validation errors
+                showValidationErrors(result);
+                validationStatus = 'invalid';
+                // Reset button state
+                importBtn.innerHTML = 'Validate';
+                importBtn.disabled = false;
+                importBtn.style.background = '#22c55e'; // Keep green but maybe orange? We'll keep default.
+                showStatus('❌ Validation failed. Please fix errors and try again.', 'error');
+                setBadge('❌ Validation failed', 'error');
+                return;
+            }
+
+            // Validation passed
+            validationStatus = 'valid';
+            // Change button to green "Upload"
+            importBtn.innerHTML = '🚀 Upload';
+            importBtn.style.background = '#16a34a';
+            importBtn.style.color = 'white';
+            importBtn.disabled = false;
+            showStatus('✅ Validation passed! Click "Upload" to import data.', 'success');
+            setBadge('✅ Data valid, ready to upload');
+            // Update preview button state (enable preview)
+            updatePreviewButtonState();
+
+        } catch (error) {
+            showStatus('❌ Validation error: ' + error.message, 'error');
+            setBadge('❌ Validation failed', 'error');
+            importBtn.innerHTML = 'Validate';
+            importBtn.disabled = false;
+            importBtn.style.background = '';
+            validationStatus = 'invalid';
+        }
+    });
+}
+// ---------- PERFORM IMPORT (after validation) ----------
+async function performImport(payload) {
+    try {
+        importBtn.disabled = true;
+        importBtn.innerHTML = '<span class="spinner"></span> Processing...';
+        showStatus('⏳ Importing data...', 'loading');
+        setBadge('⏳ Importing...', 'loading');
+
+        // Check for duplicates (if mode is update)
+        let proceed = true;
+        if (payload.mode === 'update' && payload.unique_column_id) {
             const checkRes = await fetch(API_BASE + '/api/upload/check-duplicates', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             const checkResult = await checkRes.json();
-            if (!checkRes.ok) {
-                throw new Error(checkResult.message || 'Duplicate check failed');
-            }
-
-            // If duplicates exist and mode is 'update', show confirmation dialog
-            if (checkResult.has_duplicates && checkResult.count > 0 && payload.mode === 'update') {
-                const proceed = await showOverwriteConfirmation(checkResult.duplicates, checkResult.count);
+            if (checkRes.ok && checkResult.has_duplicates) {
+                // Show overwrite confirmation
+                proceed = await showOverwriteConfirmation(checkResult.duplicates, checkResult.count);
                 if (!proceed) {
                     showStatus('⛔ Import cancelled by user.', 'info');
                     setBadge('⛔ Cancelled');
-                    isProcessing = false;
-                    showSpinner(false);
+                    importBtn.innerHTML = '🚀 Upload';
                     importBtn.disabled = false;
                     return;
                 }
             }
-        } catch (error) {
-            // If duplicate check fails, proceed with import anyway (fallback)
-            console.warn('Duplicate check failed, proceeding with import:', error);
         }
 
-        // --- Proceed with import ---
-        try {
-            isProcessing = true;
-            showSpinner(true);
-            importBtn.disabled = true;
-            showStatus('⏳ Importing data...', 'loading');
-            setBadge('⏳ Importing...', 'loading');
+        if (!proceed) return;
 
-            const res = await fetch(API_BASE + '/api/upload/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const result = await res.json();
-            if (!res.ok) throw new Error(result.message || 'Import failed');
+        // Perform the actual import
+        const res = await fetch(API_BASE + '/api/upload/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.message || 'Import failed');
 
-            if (result.status === 'validation_failed') {
-                let errorMsg = '❌ Validation errors:\n';
-                result.errors.forEach(err => {
-                    errorMsg += `Row ${err.row_number}: `;
-                    err.errors.forEach(e => {
-                        errorMsg += `${e.column} - ${e.message}; `;
-                    });
-                    errorMsg += '\n';
-                });
-                showStatus(errorMsg, 'error');
-                setBadge('❌ Validation failed', 'error');
-            } else {
-                // Show import summary popup
-                showImportSummary(result);
-                setBadge('✅ Import complete');
-            }
-        } catch (error) {
-            showStatus('❌ Import error: ' + error.message, 'error');
+        if (result.status === 'validation_failed') {
+            // This should not happen if validation passed, but handle it
+            showValidationErrors(result);
+            showStatus('❌ Import validation errors found.', 'error');
             setBadge('❌ Import failed', 'error');
-        } finally {
-            isProcessing = false;
-            showSpinner(false);
-            importBtn.disabled = false;
+        } else {
+            // Show import summary popup
+            showImportSummary(result);
+            setBadge('✅ Import complete');
+            // Reset validation state after successful import (will be reset after popup closes)
         }
-    });
+    } catch (error) {
+        showStatus('❌ Import error: ' + error.message, 'error');
+        setBadge('❌ Import failed', 'error');
+    } finally {
+        importBtn.disabled = false;
+        importBtn.innerHTML = '🚀 Upload';
+        // Reset validation status after import (whether success or failure)
+        // But we want to keep the button as "Upload" for the next file? We'll reset on file/template change.
+    }
 }
-
 // ---------- PREVIEW FUNCTION ----------
 function showPreview() {
     const previewSheet = document.getElementById('previewSheet');
@@ -1114,6 +1251,11 @@ if (previewBtn) {
             showStatus('⚠️ Please wait for auto-mapping to complete.', 'error');
             return;
         }
+        // --- NEW: Check validation ---
+        if (validationStatus !== 'valid') {
+            showStatus('⚠️ Please validate the data first (click "Validate" button).', 'error');
+            return;
+        }
         // All conditions satisfied
         showPreview();
     });
@@ -1125,6 +1267,13 @@ window.onload = function() {
     console.log('📤 Upload module fully loaded');
     showStatus('Select a template and upload an Excel file to begin.', 'info');
     updatePreviewButtonState();
+
+    // Set initial button text
+    if (importBtn) {
+        importBtn.innerHTML = 'Validate';
+        importBtn.style.background = '';
+        importBtn.style.color = '';
+    }
 
     // Mini preview toggle button
     const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
