@@ -233,7 +233,20 @@ async function openPreview(uploadId, templateName) {
 async function loadPreviewPage() {
     if (!previewUploadId) return;
     try {
-        const url = `${API_BASE}/api/data/datasets/${previewUploadId}/rows?page=${previewPage}&limit=${previewLimit}`;
+        // Build query string from filter inputs
+        const searchVal = document.getElementById('searchInput')?.value || '';
+        const amountMin = document.getElementById('amountMin')?.value || '';
+        const amountMax = document.getElementById('amountMax')?.value || '';
+        const dateStart = document.getElementById('dateStart')?.value || '';
+        const dateEnd = document.getElementById('dateEnd')?.value || '';
+
+        let url = `${API_BASE}/api/data/datasets/${previewUploadId}/rows?page=${previewPage}&limit=${previewLimit}`;
+        if (searchVal) url += `&search=${encodeURIComponent(searchVal)}`;
+        if (amountMin) url += `&amount_min=${encodeURIComponent(amountMin)}`;
+        if (amountMax) url += `&amount_max=${encodeURIComponent(amountMax)}`;
+        if (dateStart) url += `&date_start=${encodeURIComponent(dateStart)}`;
+        if (dateEnd) url += `&date_end=${encodeURIComponent(dateEnd)}`;
+
         const res = await fetch(url);
         if (!res.ok) {
             const err = await res.json();
@@ -329,7 +342,32 @@ previewModal.addEventListener('click', function(e) {
         this.classList.remove('active');
     }
 });
-
+// ---------- FILTER EVENT HANDLERS ----------
+const applyFiltersBtn = document.getElementById('applyFiltersBtn');
+const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+if (applyFiltersBtn) {
+    applyFiltersBtn.addEventListener('click', function() {
+        previewPage = 1; // reset to first page
+        loadPreviewPage();
+    });
+}
+if (clearFiltersBtn) {
+    clearFiltersBtn.addEventListener('click', function() {
+        // Clear all filter inputs
+        const searchInput = document.getElementById('searchInput');
+        const amountMin = document.getElementById('amountMin');
+        const amountMax = document.getElementById('amountMax');
+        const dateStart = document.getElementById('dateStart');
+        const dateEnd = document.getElementById('dateEnd');
+        if (searchInput) searchInput.value = '';
+        if (amountMin) amountMin.value = '';
+        if (amountMax) amountMax.value = '';
+        if (dateStart) dateStart.value = '';
+        if (dateEnd) dateEnd.value = '';
+        previewPage = 1;
+        loadPreviewPage();
+    });
+}
 // ---------- DELETE / RESTORE ----------
 async function confirmDelete(uploadId, fileName) {
     if (!confirm(`Are you sure you want to delete dataset "${fileName}"? This action can be undone.`)) return;

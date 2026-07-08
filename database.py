@@ -43,6 +43,30 @@ def log_audit(user, action, module, details=""):
     except:
         pass
 
+def log_data_audit(client_data_id, user, action, old_data=None, new_data=None):
+    """
+    Log a change to a specific data row.
+    - client_data_id: ID of the row in client_data
+    - user: username (e.g., 'Analyst', 'Admin')
+    - action: 'INSERT', 'UPDATE', 'DELETE', 'RESTORE'
+    - old_data: dict or None (previous row_data for UPDATE/DELETE)
+    - new_data: dict or None (new row_data for INSERT/UPDATE)
+    """
+    try:
+        import json
+        execute_write(
+            "INSERT INTO data_audit_log (client_data_id, user, action, old_row_data, new_row_data) VALUES (?, ?, ?, ?, ?)",
+            (
+                client_data_id,
+                user,
+                action,
+                json.dumps(old_data) if old_data else None,
+                json.dumps(new_data) if new_data else None
+            )
+        )
+    except Exception as e:
+        print(f"⚠️ Failed to log data audit: {e}")
+
 def init_db():
     conn = get_db()
     
@@ -142,7 +166,7 @@ def init_db():
         )
     ''')
     
-    # Client Data table – stores imported rows as JSON with indexed extracted columns
+        # Client Data table – stores imported rows as JSON with indexed extracted columns
     conn.execute('''
         CREATE TABLE IF NOT EXISTS client_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -159,6 +183,20 @@ def init_db():
             FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
             FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
             FOREIGN KEY (upload_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
+        )
+    ''')
+    
+    # Data Audit Log table – tracks changes to individual data rows
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS data_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_data_id INTEGER NOT NULL,
+            user TEXT NOT NULL,
+            action TEXT NOT NULL,                 -- 'INSERT', 'UPDATE', 'DELETE', 'RESTORE'
+            old_row_data TEXT,                    -- JSON of previous row (for UPDATE/DELETE)
+            new_row_data TEXT,                    -- JSON of new row (for INSERT/UPDATE)
+            changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (client_data_id) REFERENCES client_data(id) ON DELETE CASCADE
         )
     ''')
     

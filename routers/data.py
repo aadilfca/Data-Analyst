@@ -3,7 +3,7 @@
 # ==============================================
 
 from fastapi import APIRouter, HTTPException, Query
-from database import execute_query, execute_write, log_audit
+from database import execute_query, execute_write, log_audit, log_data_audit
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
@@ -126,10 +126,15 @@ def get_datasets(client_id: int = Query(..., description="Client ID")):
 def get_dataset_rows(
     upload_id: int,
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=500)
+    limit: int = Query(50, ge=1, le=500),
+    search: Optional[str] = Query(None, description="Search text (matches any column)"),
+    amount_min: Optional[float] = Query(None, description="Minimum amount"),
+    amount_max: Optional[float] = Query(None, description="Maximum amount"),
+    date_start: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_end: Optional[str] = Query(None, description="End date (YYYY-MM-DD)")
 ):
     """
-    Get paginated rows for a specific upload.
+    Get paginated rows for a specific upload, with optional search/filters.
     """
     # Check upload exists
     upload = execute_query(
@@ -139,11 +144,39 @@ def get_dataset_rows(
     if not upload:
         raise HTTPException(404, "Upload not found")
     
-    # Get total count
-    total = execute_query(
-        "SELECT COUNT(*) as count FROM client_data WHERE upload_id = ? AND is_deleted = 0",
-        (upload_id,)
-    )[0]['count']
+    # Build WHERE clause dynamically
+    where_clauses = ["upload_id = ? AND is_deleted = 0"]
+    params = [upload_id]
+    
+    # Search in row_data JSON (case-insensitive)
+    if search:
+        # SQLite JSON search: use json_each to search all values
+        where_clauses.append(
+            "EXISTS (SELECT 1 FROM json_each(row_data) WHERE LOWER(value) LIKE LOWER(?))"
+        )
+        params.append(f"%{search}%")
+    
+    # Amount range
+    if amount_min is not None:
+        where_clauses.append("extract_amount >= ?")
+        params.append(amount_min)
+    if amount_max is not None:
+        where_clauses.append("extract_amount <= ?")
+        params.append(amount_max)
+    
+    # Date range
+    if date_start:
+        where_clauses.append("extract_date >= ?")
+        params.append(date_start)
+    if date_end:
+        where_clauses.append("extract_date <= ?")
+        params.append(date_end)
+    
+    where_sql = " AND ".join(where_clauses)
+    
+    # Get total count with filters
+    count_sql = f"SELECT COUNT(*) as count FROM client_data WHERE {where_sql}"
+    total = execute_query(count_sql, params)[0]['count']
     
     if total == 0:
         return {
@@ -155,16 +188,15 @@ def get_dataset_rows(
         }
     
     offset = (page - 1) * limit
-    rows = execute_query(
-        """
+    data_sql = f"""
         SELECT id, row_data, extract_amount, extract_date, created_at
         FROM client_data
-        WHERE upload_id = ? AND is_deleted = 0
+        WHERE {where_sql}
         ORDER BY id
         LIMIT ? OFFSET ?
-        """,
-        (upload_id, limit, offset)
-    )
+    """
+    params.extend([limit, offset])
+    rows = execute_query(data_sql, params)
     
     result_rows = []
     for r in rows:
@@ -200,19 +232,32 @@ def delete_dataset(upload_id: int):
     if not upload:
         raise HTTPException(404, "Upload not found")
     
+    # Fetch all rows in this dataset (to log their data before deletion)
+    rows = execute_query(
+        "SELECT id, row_data FROM client_data WHERE upload_id = ? AND is_deleted = 0",
+        (upload_id,)
+    )
+    
     # Soft-delete all rows
     execute_write(
         "UPDATE client_data SET is_deleted = 1 WHERE upload_id = ?",
         (upload_id,)
     )
+    
+    # Log each row deletion
+    import json
+    for row in rows:
+        old_data = json.loads(row["row_data"]) if row["row_data"] else {}
+        log_data_audit(row["id"], "Analyst", "DELETE", old_data, None)
+    
     # Update upload status
     execute_write(
         "UPDATE uploaded_files SET status = 'Deleted' WHERE id = ?",
         (upload_id,)
     )
-    log_audit("Analyst", "Delete", "DataBank", f"Deleted dataset upload_id={upload_id}")
+    log_audit("Analyst", "Delete", "DataBank", f"Deleted dataset upload_id={upload_id} ({len(rows)} rows)")
     
-    return {"message": f"Dataset '{upload[0]['file_name']}' deleted successfully"}
+    return {"message": f"Dataset '{upload[0]['file_name']}' deleted successfully ({len(rows)} rows)"}
 
 @router.post("/api/data/datasets/{upload_id}/restore")
 def restore_dataset(upload_id: int):
@@ -226,14 +271,28 @@ def restore_dataset(upload_id: int):
     if not upload:
         raise HTTPException(404, "Deleted upload not found")
     
+    # Fetch rows that are currently deleted
+    rows = execute_query(
+        "SELECT id, row_data FROM client_data WHERE upload_id = ? AND is_deleted = 1",
+        (upload_id,)
+    )
+    
+    # Restore rows (set is_deleted = 0)
     execute_write(
         "UPDATE client_data SET is_deleted = 0 WHERE upload_id = ?",
         (upload_id,)
     )
+    
+    # Log each row restore
+    import json
+    for row in rows:
+        new_data = json.loads(row["row_data"]) if row["row_data"] else {}
+        log_data_audit(row["id"], "Analyst", "RESTORE", None, new_data)
+    
     execute_write(
         "UPDATE uploaded_files SET status = 'Imported' WHERE id = ?",
         (upload_id,)
     )
-    log_audit("Analyst", "Restore", "DataBank", f"Restored dataset upload_id={upload_id}")
+    log_audit("Analyst", "Restore", "DataBank", f"Restored dataset upload_id={upload_id} ({len(rows)} rows)")
     
-    return {"message": f"Dataset '{upload[0]['file_name']}' restored successfully"}
+    return {"message": f"Dataset '{upload[0]['file_name']}' restored successfully ({len(rows)} rows)"}

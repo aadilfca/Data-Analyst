@@ -2,7 +2,7 @@ from fastapi import APIRouter, File, UploadFile, HTTPException, Body
 from fastapi.responses import StreamingResponse
 import os, json, openpyxl, pandas as pd
 from io import BytesIO
-from database import execute_query, execute_write, log_audit, get_raw_conn
+from database import execute_query, execute_write, log_audit, get_raw_conn, log_data_audit
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
@@ -325,27 +325,29 @@ def validate_and_import(request: ImportRequest):
         # Extract amount and date for indexing
         amount, date_str = extract_columns_from_row(row_data, template_cols)
 
-        # Check if mode is update and we have a unique column
+                # Check if mode is update and we have a unique column
         if request.mode == "update" and unique_col_name:
             unique_value = row_data.get(unique_col_name)
             # If unique value is empty, we cannot find an existing row, so we'll insert new
             if unique_value is None or unique_value == '':
                 # Insert as new
-                execute_write(
+                row_id = execute_write(
                     """
-                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (request.client_id, request.template_id, request.file_id,
-                     json.dumps(row_data), amount, date_str, "Analyst")
+                     json.dumps(row_data), amount, date_str, "Analyst", 1)
                 )
                 inserted_count += 1
+                # Log INSERT
+                log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
                 continue
 
             # Query for existing row with same unique value
             existing = execute_query(
                 """
-                SELECT id, version FROM client_data
+                SELECT id, version, row_data FROM client_data
                 WHERE client_id = ? AND template_id = ? AND is_deleted = 0
                 AND json_extract(row_data, '$."{}"') = ?
                 """.format(unique_col_name),
@@ -355,6 +357,7 @@ def validate_and_import(request: ImportRequest):
             if existing:
                 # Update existing row
                 row_id = existing[0]['id']
+                old_row_data = json.loads(existing[0]['row_data']) if existing[0]['row_data'] else {}
                 new_version = (existing[0]['version'] or 1) + 1
                 execute_write(
                     """
@@ -365,11 +368,11 @@ def validate_and_import(request: ImportRequest):
                     (json.dumps(row_data), amount, date_str, new_version, row_id)
                 )
                 updated_count += 1
-                # Log the update in audit log (optional)
-                log_audit("Analyst", "Update", "Data", f"Updated row {row_id} for client {request.client_id}, unique {unique_col_name}={unique_value}")
+                # Log UPDATE with old and new data
+                log_data_audit(row_id, "Analyst", "UPDATE", old_row_data, row_data)
             else:
                 # Insert new row
-                execute_write(
+                row_id = execute_write(
                     """
                     INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -378,9 +381,10 @@ def validate_and_import(request: ImportRequest):
                      json.dumps(row_data), amount, date_str, "Analyst", 1)
                 )
                 inserted_count += 1
+                log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
         else:
             # Mode is "create" (insert always)
-            execute_write(
+            row_id = execute_write(
                 """
                 INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -389,6 +393,7 @@ def validate_and_import(request: ImportRequest):
                  json.dumps(row_data), amount, date_str, "Analyst", 1)
             )
             inserted_count += 1
+            log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
 
     log_audit("Analyst", "Import", "Upload",
               f"Imported {inserted_count} new records, updated {updated_count} records for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
