@@ -10,23 +10,30 @@ async function loadDashboardStats() {
             const stats = await res.json();
             document.getElementById('totalUploads').textContent = stats.total_uploads || 0;
             document.getElementById('pendingVerifications').textContent = stats.pending_verifications || 0;
+            document.getElementById('totalRecords').textContent = stats.total_records || 0;
+            const lastUpload = stats.last_upload ? new Date(stats.last_upload).toLocaleString() : 'Never';
+            // Add a new element for last upload if not exists; we'll add it in index.html.
+            // We'll handle it by updating an optional element.
+            const lastUploadEl = document.getElementById('lastUploadDate');
+            if (lastUploadEl) {
+                lastUploadEl.textContent = lastUpload;
+            }
             console.log('✅ Dashboard stats loaded:', stats);
         } else {
-            // Fallback: try test endpoint
-            const testRes = await fetch('/api/test');
-            if (testRes.ok) {
-                document.getElementById('totalUploads').textContent = '0';
-                document.getElementById('pendingVerifications').textContent = '0';
-                console.log('✅ Server connected but no stats available');
-            } else {
-                document.getElementById('totalUploads').textContent = '⚠️';
-                document.getElementById('pendingVerifications').textContent = '⚠️';
-            }
+            // Fallback
+            document.getElementById('totalUploads').textContent = '0';
+            document.getElementById('pendingVerifications').textContent = '0';
+            document.getElementById('totalRecords').textContent = '0';
+            const lastUploadEl = document.getElementById('lastUploadDate');
+            if (lastUploadEl) lastUploadEl.textContent = 'Never';
         }
     } catch (error) {
         console.log('⚠️ Error loading stats:', error.message);
         document.getElementById('totalUploads').textContent = '⚠️';
         document.getElementById('pendingVerifications').textContent = '⚠️';
+        document.getElementById('totalRecords').textContent = '⚠️';
+        const lastUploadEl = document.getElementById('lastUploadDate');
+        if (lastUploadEl) lastUploadEl.textContent = '⚠️';
     }
 }
 

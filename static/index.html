@@ -113,7 +113,11 @@
         <!-- Quick Stats Section -->
         <section class="quick-stats">
             <h2>📈 Quick Overview</h2>
-            <div class="stats-grid">
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));">
+                <div class="stat-card">
+                    <span class="stat-label">Total Records</span>
+                    <span class="stat-value" id="totalRecords">0</span>
+                </div>
                 <div class="stat-card">
                     <span class="stat-label">Total Uploads</span>
                     <span class="stat-value" id="totalUploads">0</span>
@@ -125,6 +129,10 @@
                 <div class="stat-card">
                     <span class="stat-label">System Status</span>
                     <span class="stat-value status-online">🟢 Online</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Last Upload</span>
+                    <span class="stat-value" id="lastUploadDate" style="font-size:16px;">Never</span>
                 </div>
             </div>
         </section>

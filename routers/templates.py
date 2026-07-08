@@ -221,16 +221,129 @@ class BackupData(BaseModel):
     columns: list
     templates: list
     mappings: list
+    clients: list = []
+    client_data: list = []
 
 @router.get("/api/backup/export")
 def export_backup():
+    import json
     columns = execute_query("SELECT * FROM master_columns ORDER BY id")
     templates = execute_query("SELECT * FROM templates ORDER BY id")
     mappings = execute_query("SELECT * FROM template_column_mappings ORDER BY template_id, sort_order")
-    return {"columns": columns, "templates": templates, "mappings": mappings}
+    clients = execute_query("SELECT * FROM clients ORDER BY id")
+    
+    # Get all client_data rows (convert JSON strings to objects for clean backup)
+    data_rows = execute_query("SELECT * FROM client_data ORDER BY client_id, upload_id, id")
+    client_data = []
+    for row in data_rows:
+        row_dict = dict(row)
+        # Convert row_data from JSON string to object for readable backup
+        try:
+            row_dict['row_data'] = json.loads(row_dict['row_data'])
+        except:
+            pass
+        client_data.append(row_dict)
+    
+    print(f"💾 Backup: {len(columns)} columns, {len(templates)} templates, {len(mappings)} mappings, {len(clients)} clients, {len(client_data)} data rows")
+    
+    return {
+        "columns": columns,
+        "templates": templates,
+        "mappings": mappings,
+        "clients": clients,
+        "client_data": client_data
+    }
 
 @router.post("/api/backup/import")
 def import_backup(data: BackupData = Body(...)):
+    import json
+    conn = get_raw_conn()
+    try:
+        conn.execute("BEGIN TRANSACTION")
+        conn.execute("PRAGMA foreign_keys = OFF")
+        
+        # Delete existing data in correct order (child tables first)
+        conn.execute("DELETE FROM client_data")
+        conn.execute("DELETE FROM uploaded_files")
+        conn.execute("DELETE FROM verifications")
+        conn.execute("DELETE FROM clients")
+        conn.execute("DELETE FROM template_column_mappings")
+        conn.execute("DELETE FROM templates")
+        conn.execute("DELETE FROM master_columns")
+        
+        # Restore master_columns
+        for col in data.columns:
+            conn.execute(
+                "INSERT INTO master_columns (id, column_name, data_type, category, is_active) VALUES (?, ?, ?, ?, ?)",
+                (col['id'], col['column_name'], col['data_type'], col.get('category', 'General'), col.get('is_active', 1))
+            )
+        
+        # Restore templates
+        for tpl in data.templates:
+            conn.execute(
+                "INSERT INTO templates (id, template_name, created_by, created_date, is_active) VALUES (?, ?, ?, ?, ?)",
+                (tpl['id'], tpl['template_name'], tpl.get('created_by', 'Admin'), tpl.get('created_date'), tpl.get('is_active', 1))
+            )
+        
+        # Restore template_column_mappings
+        for mp in data.mappings:
+            conn.execute(
+                "INSERT INTO template_column_mappings (id, template_id, column_id, sort_order) VALUES (?, ?, ?, ?)",
+                (mp['id'], mp['template_id'], mp['column_id'], mp['sort_order'])
+            )
+        
+        # Restore clients
+        for client in data.clients:
+            conn.execute(
+                "INSERT INTO clients (id, client_code, client_name, industry, contact_person, email, phone, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    client['id'],
+                    client['client_code'],
+                    client['client_name'],
+                    client.get('industry'),
+                    client.get('contact_person'),
+                    client.get('email'),
+                    client.get('phone'),
+                    client.get('is_active', 1),
+                    client.get('created_at')
+                )
+            )
+        
+        # Restore client_data (convert row_data back to JSON string)
+        for row in data.client_data:
+            row_data_str = json.dumps(row['row_data']) if isinstance(row['row_data'], dict) else row['row_data']
+            conn.execute(
+                """
+                INSERT INTO client_data (id, client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_at, created_by, is_deleted, version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row['id'],
+                    row['client_id'],
+                    row['template_id'],
+                    row['upload_id'],
+                    row_data_str,
+                    row.get('extract_amount'),
+                    row.get('extract_date'),
+                    row.get('created_at'),
+                    row.get('created_by', 'Analyst'),
+                    row.get('is_deleted', 0),
+                    row.get('version', 1)
+                )
+            )
+        
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
+        log_audit("Admin", "Import", "Backup", f"Imported backup: {len(data.columns)} columns, {len(data.templates)} templates, {len(data.clients)} clients, {len(data.client_data)} data rows")
+        
+        return {
+            "message": f"Successfully imported {len(data.columns)} columns, {len(data.templates)} templates, {len(data.mappings)} mappings, {len(data.clients)} clients, and {len(data.client_data)} data rows."
+        }
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(500, f"Import failed: {str(e)}")
+    finally:
+        conn.close()
     conn = get_raw_conn()
     try:
         conn.execute("BEGIN TRANSACTION")

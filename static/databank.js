@@ -154,7 +154,7 @@ function renderDatasets(datasets) {
         tdActions.style.textAlign = 'center';
         tdActions.style.whiteSpace = 'nowrap';
 
-        // View button (only if imported and has rows)
+                // View button (only if imported and has rows)
         if (ds.status === 'Imported' && ds.record_count > 0) {
             const viewBtn = document.createElement('button');
             viewBtn.className = 'action-btn view';
@@ -162,6 +162,15 @@ function renderDatasets(datasets) {
             viewBtn.title = 'View Data';
             viewBtn.addEventListener('click', () => openPreview(ds.upload_id, ds.template_name));
             tdActions.appendChild(viewBtn);
+
+            // Export button
+            const exportBtn = document.createElement('button');
+            exportBtn.className = 'action-btn export';
+            exportBtn.textContent = '📥';
+            exportBtn.title = 'Export to Excel';
+            exportBtn.style.marginLeft = '6px';
+            exportBtn.addEventListener('click', () => exportDataset(ds.upload_id, ds.template_name));
+            tdActions.appendChild(exportBtn);
         }
 
         // Delete / Restore based on status
@@ -345,6 +354,66 @@ async function confirmRestore(uploadId, fileName) {
         loadDatasets();
     } catch (error) {
         showStatus('❌ Error restoring: ' + error.message, 'error');
+    }
+}
+// ---------- EXPORT DATASET TO EXCEL ----------
+async function exportDataset(uploadId, templateName) {
+    try {
+        showStatus('⏳ Preparing export...', 'loading');
+        // Fetch all rows (we'll fetch all pages)
+        let allRows = [];
+        let page = 1;
+        let totalPages = 1;
+        const limit = 500; // fetch in batches
+
+        do {
+            const url = `${API_BASE}/api/data/datasets/${uploadId}/rows?page=${page}&limit=${limit}`;
+            const res = await fetch(url);
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || 'Failed to fetch data');
+            }
+            const data = await res.json();
+            const rows = data.rows || [];
+            allRows = allRows.concat(rows);
+            totalPages = Math.ceil(data.total_rows / limit);
+            page++;
+        } while (page <= totalPages && allRows.length < 10000); // safety limit
+
+        if (allRows.length === 0) {
+            showStatus('⚠️ No data to export.', 'error');
+            return;
+        }
+
+        // Build Excel data
+        const firstRow = allRows[0];
+        const headers = firstRow.row_data ? Object.keys(firstRow.row_data) : [];
+        const excelData = [headers];
+        allRows.forEach(row => {
+            const rowData = headers.map(h => row.row_data[h] !== undefined ? row.row_data[h] : '');
+            excelData.push(rowData);
+        });
+
+        // Create workbook
+        const ws = XLSX.utils.aoa_to_sheet(excelData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Data');
+        const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+
+        // Download
+        const blob = new Blob([wbout], { type: 'application/octet-stream' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${templateName || 'dataset'}_${new Date().toISOString().slice(0,10)}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+
+        showStatus(`✅ Exported ${allRows.length} rows to Excel`, 'success');
+    } catch (error) {
+        showStatus('❌ Export error: ' + error.message, 'error');
     }
 }
 
