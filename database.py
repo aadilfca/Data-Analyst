@@ -665,11 +665,13 @@ def init_db():
         print("⚠️ Could not add client_id to uploaded_files:", e)
     
     # Create indexes on client_data for performance
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_client ON client_data (client_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_client ON client_data (client_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_template ON client_data (template_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_upload ON client_data (upload_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_date ON client_data (extract_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_deleted ON client_data (is_deleted)")
+    # Composite index for faster date-range queries on a specific client
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_client_date ON client_data (client_id, extract_date)")
     print("✅ Created indexes on client_data")
     # (removed – verification tables will be moved to earlier location)
     conn.commit()

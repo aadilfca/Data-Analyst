@@ -12,7 +12,7 @@ let lineItems = [];
 let procedureData = {};
 let isNavigating = false;
 
-// DOM refs
+// DOM refs – ALL defined at the top before any function uses them
 const dashboardContent = document.getElementById('dashboardContent');
 const sessionContent = document.getElementById('verificationSessionContent');
 const popupOverlay = document.getElementById('sessionPopupOverlay');
@@ -41,6 +41,42 @@ const supportingSearchInput = document.getElementById('supportingSearchInput');
 const supportingSearchBtn = document.getElementById('supportingSearchBtn');
 const supportingResults = document.getElementById('supportingResults');
 const supportingModalClose = document.getElementById('supportingModalClose');
+
+// ---- PROCEDURE MODAL REFS ----
+let currentProcedureKey = null;
+let currentTemplateId = null;
+let selectedDocId = null;
+let selectedDocData = null;
+
+const procedureModal = document.getElementById('procedureModal');
+const procedureModalTitle = document.getElementById('procedureModalTitle');
+const procedureSearchInput = document.getElementById('procedureSearchInput');
+const procedureSearchBtn = document.getElementById('procedureSearchBtn');
+const procedureResults = document.getElementById('procedureResults');
+const procedureCancelBtn = document.getElementById('procedureCancelBtn');
+const procedureConfirmBtn = document.getElementById('procedureConfirmBtn');
+const procedureStatus = document.getElementById('procedureStatus');
+const procedureModalClose = document.getElementById('procedureModalClose');
+
+// ---- REPORT VIEW REFS ----
+let reportCurrentPage = 1;
+let reportPageSize = 25;  // reduced from 50 to improve load speed
+let reportTotalRows = 0;
+let reportTemplateId = null;
+
+const reportContent = document.getElementById('transactionReportContent');
+const reportStartDate = document.getElementById('reportStartDate');
+const reportEndDate = document.getElementById('reportEndDate');
+const reportFetchBtn = document.getElementById('reportFetchBtn');
+const reportStatus = document.getElementById('reportStatus');
+const reportTableWrapper = document.getElementById('reportTableWrapper');
+const reportPageSizeSelect = document.getElementById('reportPageSize');
+const reportPrevPage = document.getElementById('reportPrevPage');
+const reportNextPage = document.getElementById('reportNextPage');
+const reportPageInfo = document.getElementById('reportPageInfo');
+const reportRowCount = document.getElementById('reportRowCount');
+const reportClientInfo = document.getElementById('reportClientInfo');
+const exitReportLink = document.getElementById('exitReportLink');
 
 // ---------- HELPERS ----------
 function showStatus(msg, type = 'info') {
@@ -227,14 +263,45 @@ async function loadNextTransaction(detailId = null) {
 // ---------- RENDER TRANSACTION ----------
 function renderTransaction(data) {
     const row = data.row_data || {};
+    
+    // ----- Aliases for flexible column name matching -----
+    const dateAliases = ['Date', 'Transaction Date', 'Invoice Date', 'Doc Date', 'Posting Date', 'Entry Date', 'Date'];
+    const getDateValue = () => {
+        for (let alias of dateAliases) {
+            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
+        }
+        return data.extract_date || '—';
+    };
+    
+    const accountCodeAliases = ['Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID'];
+    const getAccountCode = () => {
+        for (let alias of accountCodeAliases) {
+            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
+        }
+        return '—';
+    };
+    
+    const amountAliases = ['Amount', 'Total', 'Net Amount', 'Gross Amount', 'Transaction Amount', 'Value', 'Debit', 'Credit'];
+    const getAmount = () => {
+        for (let alias of amountAliases) {
+            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') {
+                const val = parseFloat(row[alias]);
+                if (!isNaN(val)) return val;
+                return row[alias];
+            }
+        }
+        return data.extract_amount || '—';
+    };
+    
+    // ----- Build the card HTML -----
     let html = `
         <div class="row">
             <div><span class="label">Voucher ID:</span> <span class="value">${data.voucher_id || '—'}</span></div>
-            <div><span class="label">Date:</span> <span class="value">${row['Date'] || row['Invoice Date'] || data.extract_date || '—'}</span></div>
-            <div><span class="label">Account Code:</span> <span class="value">${row['Account Code'] || '—'}</span></div>
-            <div><span class="label">Account Name:</span> <span class="value">${row['Account Name'] || '—'}</span></div>
-            <div><span class="label">Amount:</span> <span class="value">${row['Amount'] || row['Debit'] || row['Credit'] || data.extract_amount || '—'}</span></div>
-            <div><span class="label">Description:</span> <span class="value">${row['Description'] || '—'}</span></div>
+            <div><span class="label">Date:</span> <span class="value">${getDateValue()}</span></div>
+            <div><span class="label">Account Code:</span> <span class="value">${getAccountCode()}</span></div>
+            <div><span class="label">Account Name:</span> <span class="value">${row['Account Name'] || row['Account'] || row['Account Detail'] || '—'}</span></div>
+            <div><span class="label">Amount:</span> <span class="value">${getAmount()}</span></div>
+            <div><span class="label">Description:</span> <span class="value">${row['Description'] || row['Voucher Detail'] || '—'}</span></div>
         </div>
         <div style="margin-top:10px;">
             <span class="label">Validation Status:</span>
@@ -243,7 +310,26 @@ function renderTransaction(data) {
         </div>
     `;
 
-    // Line items grid
+    // ----- Validation Summary -----
+    if (lineItems && lineItems.length > 0) {
+        const totalCalc = lineItems.reduce((sum, item) => sum + (parseFloat(item.calculated_amount) || 0), 0);
+        const transAmount = parseFloat(row['Amount'] || row['Debit'] || row['Credit'] || data.extract_amount || 0);
+        const diff = Math.abs(totalCalc - transAmount);
+        const match = diff < 0.01;
+        const percentMatch = transAmount > 0 ? ((totalCalc / transAmount) * 100).toFixed(1) : 0;
+        html += `<div style="margin-top:8px; padding:8px 12px; border-radius:6px; background:${match ? '#dcfce7' : '#fee2e2'}; border:1px solid ${match ? '#bbf7d0' : '#fecaca'};">
+            <span style="font-weight:600;">Validation Check:</span>
+            <span style="color:${match ? '#166534' : '#991b1b'};">
+                ${match ? '✅ Amounts match!' : '❌ Amount mismatch!'}
+            </span>
+            <span style="font-size:13px; color:#475569; margin-left:10px;">
+                Transaction: ${transAmount.toFixed(2)} | Sum of Line Items: ${totalCalc.toFixed(2)} 
+                ${!match ? `| Difference: ${diff.toFixed(2)} (${percentMatch}%)` : ''}
+            </span>
+        </div>`;
+    }
+
+    // ----- Line Items Grid -----
     html += `<div class="line-items-section">
         <div class="section-title" style="font-weight:600; font-size:16px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
             <span>📋 Line Items</span>
@@ -265,25 +351,44 @@ function renderTransaction(data) {
         </table>
     </div>`;
 
-    // Procedure ticks
+    // ----- Audit Procedures – clickable cards -----
     const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
+    const procLabels = {
+        'purchase_demand': '📋 Purchase Demand',
+        'purchase_order': '📄 Purchase Order',
+        'gate_pass': '🚪 Gate Pass',
+        'store_receiving': '📥 Store Receiving',
+        'vendor_bill': '🧾 Vendor Bill'
+    };
+    const procTemplateMap = {
+        'purchase_demand': 2,
+        'purchase_order': 3,
+        'gate_pass': 4,
+        'store_receiving': 5,
+        'vendor_bill': 6
+    };
+
     html += `<div class="procedure-section" style="margin-top:16px; border-top:1px solid #e2e8f0; padding-top:16px;">
         <div style="font-weight:600; margin-bottom:6px;">✅ Audit Procedures</div>
         <div class="procedure-grid" id="procedureGrid">`;
+    
     procKeys.forEach(key => {
-        const label = key.replace('_', ' ').toUpperCase();
-        const checked = procedureData[key] ? 'checked' : '';
+        const isDone = procedureData[key] === true;
+        const ref = procedureData[key + '_ref'] || '';
         html += `
-            <div class="procedure-item">
-                <input type="checkbox" id="proc_${key}" ${checked}>
-                <label for="proc_${key}">${label}</label>
-                <input type="text" placeholder="Ref #" value="${procedureData[key + '_ref'] || ''}" data-proc="${key}">
+            <div class="procedure-item clickable-proc" data-proc="${key}" style="cursor:pointer; background:${isDone ? '#dcfce7' : '#f8fafc'}; border:1px solid ${isDone ? '#bbf7d0' : '#e2e8f0'}; border-radius:8px; padding:8px 12px; transition:all 0.2s;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:20px;">${isDone ? '✅' : '⬜'}</span>
+                    <span style="font-weight:500; flex:1;">${procLabels[key]}</span>
+                    ${ref ? `<span style="font-size:11px; color:#64748b; background:#f1f5f9; padding:2px 8px; border-radius:10px;">${ref}</span>` : ''}
+                    <span style="font-size:12px; color:#94a3b8;">${isDone ? 'Done' : 'Click to verify'}</span>
+                </div>
             </div>
         `;
     });
     html += `</div></div>`;
 
-    // Transaction type dropdown & library panel
+    // ----- Transaction Type Dropdown + auto-guidance -----
     html += `<div class="procedure-section" style="margin-top:12px; border-top:1px solid #e2e8f0; padding-top:12px;">
         <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
             <label style="font-weight:600;">Transaction Type:</label>
@@ -297,7 +402,7 @@ function renderTransaction(data) {
                 <option value="Fixed Asset Purchased" ${currentTransactionType === 'Fixed Asset Purchased' ? 'selected' : ''}>Fixed Asset Purchased</option>
                 <option value="Kitchen Expenses" ${currentTransactionType === 'Kitchen Expenses' ? 'selected' : ''}>Kitchen Expenses</option>
             </select>
-            <button class="btn-outline" id="fetchLibraryBtn" style="padding:4px 16px;">📚 Show Guidance</button>
+            <button class="btn-outline" id="fetchLibraryBtn" style="padding:4px 16px; display:none;">📚 Show Guidance</button>
         </div>
         <div id="libraryPanel" class="library-panel" style="display:none; margin-top:8px;">
             <h4 style="margin:0 0 4px 0; font-size:14px; color:#1a1a2e;">📖 Audit Guidance</h4>
@@ -305,7 +410,7 @@ function renderTransaction(data) {
         </div>
     </div>`;
 
-    // Observations and Comments
+    // ----- Observations and Comments -----
     html += `<div style="margin-top:12px; display:flex; gap:16px; flex-wrap:wrap;">
         <div style="flex:1; min-width:200px;">
             <label style="font-weight:600; display:block;">Observations</label>
@@ -317,7 +422,7 @@ function renderTransaction(data) {
         </div>
     </div>`;
 
-    // Supporting docs buttons
+    // ----- Supporting Docs Buttons -----
     html += `<div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;" class="no-print">
         <button class="btn-outline" data-template="purchase_orders" data-label="Purchase Orders">📦 Search PO</button>
         <button class="btn-outline" data-template="gate_passes" data-label="Gate Passes">🚪 Search Gate Pass</button>
@@ -327,11 +432,11 @@ function renderTransaction(data) {
 
     transactionCard.innerHTML = html;
 
-    // Attach event listeners for line items
+    // ----- Attach event listeners -----
     renderLineItems();
     document.getElementById('addLineItemBtn')?.addEventListener('click', addLineItemRow);
 
-    // Procedure checkboxes
+    // Procedure checkboxes (if still present in HTML – we keep them for compatibility)
     procKeys.forEach(key => {
         const cb = document.getElementById(`proc_${key}`);
         if (cb) {
@@ -351,13 +456,27 @@ function renderTransaction(data) {
         }
     });
 
-    // Transaction type change
-    document.getElementById('transactionTypeSelect')?.addEventListener('change', function() {
-        currentTransactionType = this.value;
-        document.getElementById('libraryPanel').style.display = 'none';
-    });
+    // Transaction type change – auto-show guidance
+    const typeSelect = document.getElementById('transactionTypeSelect');
+    if (typeSelect) {
+        typeSelect.addEventListener('change', function() {
+            currentTransactionType = this.value;
+            if (this.value) {
+                fetchLibrary(this.value);
+            } else {
+                document.getElementById('libraryPanel').style.display = 'none';
+            }
+        });
+    }
 
-    // Fetch library button
+    // If currentTransactionType is already set, auto-show guidance on load
+    if (currentTransactionType) {
+        setTimeout(() => {
+            fetchLibrary(currentTransactionType);
+        }, 100);
+    }
+
+    // Fetch library button (hidden)
     document.getElementById('fetchLibraryBtn')?.addEventListener('click', async function() {
         const type = document.getElementById('transactionTypeSelect').value;
         if (!type) {
@@ -382,6 +501,22 @@ function renderTransaction(data) {
             const label = this.dataset.label;
             openSupportingModal(templateLabel, label);
         });
+    });
+
+    // ----- Event listeners for clickable procedure cards (scoped to current transactionCard) -----
+    transactionCard.querySelectorAll('.clickable-proc').forEach(el => {
+        if (el) {
+            el.addEventListener('click', function() {
+                const procKey = this.dataset.proc;
+                const procLabel = procLabels[procKey] || procKey;
+                const templateId = procTemplateMap[procKey] || 1;
+                if (typeof openProcedureModal === 'function') {
+                    openProcedureModal(procKey, procLabel, templateId);
+                } else {
+                    console.warn('⚠️ openProcedureModal not defined yet');
+                }
+            });
+        }
     });
 }
 
@@ -787,30 +922,144 @@ supportingModalClose.addEventListener('click', function() {
 supportingModal.addEventListener('click', function(e) {
     if (e.target === this) this.style.display = 'none';
 });
+
+// ==============================================
+// AUDIT PROCEDURE POPOVER
+// ==============================================
+
+function openProcedureModal(procKey, procLabel, templateId) {
+    currentProcedureKey = procKey;
+    currentTemplateId = templateId;
+    selectedDocId = null;
+    selectedDocData = null;
+    procedureModalTitle.textContent = `📋 ${procLabel}`;
+    procedureSearchInput.value = '';
+    procedureResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">Enter a reference number and click Search.</div>';
+    procedureStatus.textContent = '';
+    procedureConfirmBtn.disabled = true;
+    procedureModal.style.display = 'flex';
+    setTimeout(() => procedureSearchInput.focus(), 100);
+}
+
+function closeProcedureModal() {
+    procedureModal.style.display = 'none';
+    currentProcedureKey = null;
+    currentTemplateId = null;
+    selectedDocId = null;
+    selectedDocData = null;
+}
+
+// Search for supporting documents
+procedureSearchBtn.addEventListener('click', async function() {
+    const searchTerm = procedureSearchInput.value.trim();
+    if (!searchTerm) {
+        procedureResults.innerHTML = '<div style="color:#f59e0b; text-align:center; padding:10px;">Please enter a reference number.</div>';
+        return;
+    }
+    const clientId = getClientId();
+    if (!clientId) {
+        procedureResults.innerHTML = '<div style="color:#dc2626; text-align:center; padding:10px;">No client selected.</div>';
+        return;
+    }
+    procedureResults.innerHTML = '<div style="text-align:center; padding:10px;"><span class="spinner"></span> Searching...</div>';
+    procedureSearchBtn.disabled = true;
+    try {
+        const params = new URLSearchParams({
+            client_id: clientId,
+            search: searchTerm,
+            template_id: currentTemplateId,
+            limit: 20
+        });
+        const res = await fetch(`${API_BASE}/api/verification/supporting?${params}`);
+        if (!res.ok) throw new Error('Failed to search');
+        const data = await res.json();
+        const docs = data.supporting_documents || [];
+        if (docs.length === 0) {
+            procedureResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:10px;">No documents found with that reference.</div>';
+            procedureConfirmBtn.disabled = true;
+        } else {
+            let html = '<div style="font-weight:600; font-size:13px; padding:4px 8px; background:#f8fafc; margin-bottom:6px;">Select a document:</div>';
+            docs.forEach(doc => {
+                const row = doc.row_data || {};
+                const desc = row['Description'] || row['PO Number'] || row['GRN Number'] || row['Invoice Number'] || '';
+                const vendor = row['Vendor Name'] || row['Vendor'] || '—';
+                const unit = row['Unit'] || '—';
+                const qty = row['Qty'] || row['Quantity'] || '—';
+                const rate = row['Rate'] || '—';
+                const amount = doc.extract_amount || row['Amount'] || '—';
+                html += `
+                    <div class="result-item" data-id="${doc.id}" style="padding:8px; border-bottom:1px solid #f0f2f5; cursor:pointer; display:flex; justify-content:space-between; align-items:center; transition:background 0.1s;">
+                        <div style="flex:1;">
+                            <div><strong>${desc}</strong></div>
+                            <div style="font-size:12px; color:#64748b;">
+                                Vendor: ${vendor} | Unit: ${unit} | Qty: ${qty} | Rate: ${rate} | Amount: ${amount}
+                            </div>
+                        </div>
+                        <button class="select-doc-btn" data-id="${doc.id}" data-row='${JSON.stringify(row)}' style="padding:4px 12px; background:#3b82f6; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Select</button>
+                    </div>
+                `;
+            });
+            procedureResults.innerHTML = html;
+            // Add event listeners to Select buttons
+            procedureResults.querySelectorAll('.select-doc-btn').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const id = this.dataset.id;
+                    const rowData = JSON.parse(this.dataset.row);
+                    selectedDocId = id;
+                    selectedDocData = rowData;
+                    procedureConfirmBtn.disabled = false;
+                    // Highlight selected item
+                    procedureResults.querySelectorAll('.result-item').forEach(el => el.style.background = '');
+                    this.closest('.result-item').style.background = '#e0f2fe';
+                    procedureStatus.textContent = '✅ Document selected. Click "Confirm Selection" to apply.';
+                    procedureStatus.style.color = '#16a34a';
+                });
+            });
+            // Also allow clicking on the whole item
+            procedureResults.querySelectorAll('.result-item').forEach(el => {
+                el.addEventListener('click', function() {
+                    const btn = this.querySelector('.select-doc-btn');
+                    if (btn) btn.click();
+                });
+            });
+        }
+    } catch (error) {
+        console.error('Search error:', error);
+        procedureResults.innerHTML = `<div style="color:#dc2626; text-align:center; padding:10px;">Error: ${error.message}</div>`;
+    } finally {
+        procedureSearchBtn.disabled = false;
+    }
+});
+
+// Confirm selection
+procedureConfirmBtn.addEventListener('click', function() {
+    if (!selectedDocId || !currentProcedureKey) return;
+    // Store the selected document info in procedureData
+    procedureData[currentProcedureKey] = true;
+    procedureData[currentProcedureKey + '_ref'] = procedureSearchInput.value.trim();
+    procedureData[currentProcedureKey + '_doc_id'] = selectedDocId;
+    procedureData[currentProcedureKey + '_doc_data'] = selectedDocData;
+    closeProcedureModal();
+    // Reload the transaction from server to reflect the update
+    loadNextTransaction(currentDetailId);
+    showStatus('✅ Procedure updated!', 'success');
+});
+
+// Cancel / Close
+procedureCancelBtn.addEventListener('click', closeProcedureModal);
+procedureModalClose.addEventListener('click', closeProcedureModal);
+procedureModal.addEventListener('click', function(e) {
+    if (e.target === this) closeProcedureModal();
+});
+
+// Enter key triggers search
+procedureSearchInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') procedureSearchBtn.click();
+});
 // ==============================================
 // TRANSACTION REPORT VIEW (full page)
 // ==============================================
-
-let reportCurrentPage = 1;
-let reportPageSize = 50;
-let reportTotalRows = 0;
-let reportTemplateId = null;
-
-// DOM refs for report view
-const reportContent = document.getElementById('transactionReportContent');
-const reportStartDate = document.getElementById('reportStartDate');
-const reportEndDate = document.getElementById('reportEndDate');
-const reportFetchBtn = document.getElementById('reportFetchBtn');
-const reportStatus = document.getElementById('reportStatus');
-const reportTableWrapper = document.getElementById('reportTableWrapper');
-const reportPageSizeSelect = document.getElementById('reportPageSize');
-const reportPrevPage = document.getElementById('reportPrevPage');
-const reportNextPage = document.getElementById('reportNextPage');
-const reportPageInfo = document.getElementById('reportPageInfo');
-const reportRowCount = document.getElementById('reportRowCount');
-const reportClientInfo = document.getElementById('reportClientInfo');
-const exitReportLink = document.getElementById('exitReportLink');
-
 
 // Open the report view
 function openTransactionReport() {
@@ -911,6 +1160,12 @@ async function fetchReportData() {
     reportStatus.textContent = '⏳ Loading...';
     reportStatus.style.color = '#3b82f6';
     reportFetchBtn.disabled = true;
+
+        // Show loading indicator
+    reportStatus.textContent = '⏳ Loading... (large data may take a moment)';
+    reportStatus.style.color = '#3b82f6';
+    reportFetchBtn.disabled = true;
+    reportTableWrapper.innerHTML = '<div style="text-align:center; padding:40px;"><div class="spinner"></div> Loading transactions...</div>';
 
     const params = new URLSearchParams({
         client_id: clientId,
@@ -1042,6 +1297,8 @@ reportStartDate.addEventListener('keydown', function(e) {
 reportEndDate.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') fetchReportData();
 });
+
+
 // ---------- INIT ----------
 window.onload = function() {
     // Ensure dashboard is visible, session content hidden
