@@ -838,9 +838,19 @@
         <div id="mainUploadPage">
             <!-- MODULE HEADER -->
             <div class="module-header">
-                <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
-                <h1>📤 Upload Client Data</h1>
-                <p>Upload Excel files and map columns using pre‑defined templates</p>
+                <div
+                    style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">
+                    <div>
+                        <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
+                        <h1>📤 Upload Client Data</h1>
+                        <p>Upload Excel files and map columns using pre‑defined templates</p>
+                    </div>
+                    <button onclick="window.location.href='/static/databank.html'"
+                        style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:8px; font-weight:600; cursor:pointer; font-size:14px; margin-top:4px; white-space:nowrap; transition:background 0.2s;"
+                        onmouseover="this.style.background='#2563eb'" onmouseout="this.style.background='#3b82f6'">
+                        📊 Go to Data Bank
+                    </button>
+                </div>
             </div>
 
             <!-- Client Selection Warning -->

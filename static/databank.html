@@ -329,9 +329,18 @@
     <!-- Main Content -->
     <div class="main-container">
         <header class="module-header">
-            <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
-            <h1>📊 Client Data Bank</h1>
-            <p>Check data availability and preview aggregated transactions for the selected client</p>
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">
+                <div>
+                    <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
+                    <h1>📊 Client Data Bank</h1>
+                    <p>View and manage all uploaded data sets for the selected client</p>
+                </div>
+                <button onclick="window.location.href='/static/upload.html'"
+                    style="padding:8px 20px; background:#22c55e; color:white; border:none; border-radius:8px; font-weight:600; cursor:pointer; font-size:14px; margin-top:4px; white-space:nowrap; transition:background 0.2s;"
+                    onmouseover="this.style.background='#16a34a'" onmouseout="this.style.background='#22c55e'">
+                    📤 Upload More
+                </button>
+            </div>
         </header>
 
         <!-- ===== FILTER BAR ===== -->
