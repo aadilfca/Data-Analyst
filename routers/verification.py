@@ -105,6 +105,29 @@ def get_row_data(client_data_id: int) -> dict:
             return {}
     return rd if isinstance(rd, dict) else {}
 
+
+def looks_like_cashbook_row(raw_value: Any) -> bool:
+    if isinstance(raw_value, dict):
+        return True
+    if not isinstance(raw_value, str):
+        return False
+    lowered = raw_value.lower()
+    return any(token in lowered for token in ['voucher id', 'voucher no', 'account name', 'debit', 'credit'])
+
+
+def parse_row_data(raw_value: Any) -> Optional[Dict[str, Any]]:
+    if not looks_like_cashbook_row(raw_value):
+        return None
+    if isinstance(raw_value, dict):
+        return raw_value
+    if isinstance(raw_value, str):
+        try:
+            parsed = json.loads(raw_value)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
 def flatten_procedure_data(proc_data: dict) -> dict:
     """Extract standard procedure fields from JSON."""
     if not proc_data:
@@ -171,8 +194,8 @@ def get_cashbooks(
     debug_info = []
     for row in rows:
         try:
-            row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
-            if not isinstance(row_data, dict):
+            row_data = parse_row_data(row['row_data'])
+            if not row_data:
                 continue
             voucher_id = row_data.get('Voucher ID')
             vtype = get_voucher_type(voucher_id, patterns)

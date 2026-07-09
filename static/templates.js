@@ -116,6 +116,7 @@ function renderTemplates(templates) {
         previewBtn.style.fontSize = '18px';
         previewBtn.title = 'Preview template';
         previewBtn.addEventListener('click', () => openPreviewModal(tpl));
+        tdActions.appendChild(previewBtn);
 
         // Edit
         const editBtn = document.createElement('button');
@@ -127,8 +128,9 @@ function renderTemplates(templates) {
         editBtn.style.marginLeft = '8px';
         editBtn.title = 'Edit template';
         editBtn.addEventListener('click', () => openEditModal(tpl));
+        tdActions.appendChild(editBtn);
 
-                // Delete – hide for system templates
+        // Delete – hide for system templates
         if (!tpl.is_system) {
             const delBtn = document.createElement('button');
             delBtn.textContent = '🗑️';
@@ -149,10 +151,6 @@ function renderTemplates(templates) {
             lock.style.color = '#94a3b8';
             tdActions.appendChild(lock);
         }
-
-        tdActions.appendChild(previewBtn);
-        tdActions.appendChild(editBtn);
-        tdActions.appendChild(delBtn);
 
         tr.appendChild(tdId);
         tr.appendChild(tdName);

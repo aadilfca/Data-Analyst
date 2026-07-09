@@ -11,6 +11,7 @@ let currentTransactionType = '';
 let lineItems = [];
 let procedureData = {};
 let isNavigating = false;
+let cashbookLoadTimer = null;
 
 // DOM refs – ALL defined at the top before any function uses them
 const dashboardContent = document.getElementById('dashboardContent');
@@ -106,6 +107,14 @@ function getClientId() {
 }
 
 // ---------- POPUP: LOAD CASHBOOKS ----------
+function scheduleCashbookLoad() {
+    clearTimeout(cashbookLoadTimer);
+    popupCashbookSelect.innerHTML = '<option value="">Loading cashbooks...</option>';
+    popupCashbookSelect.disabled = true;
+    popupStartBtn.disabled = true;
+    cashbookLoadTimer = setTimeout(loadCashbooks, 250);
+}
+
 async function loadCashbooks() {
     const clientId = getClientId();
     const start = popupPeriodStart.value;
@@ -883,15 +892,15 @@ if (cashBtn) {
         popupPeriodStart.value = formatDate(firstDay);
         popupPeriodEnd.value = formatDate(lastDay);
         // Load cashbooks based on current client and dates
-        loadCashbooks();
+        scheduleCashbookLoad();
     });
 } else {
     console.warn('⚠️ Cash Verification button not found');
 }
 
 // Popup events
-popupPeriodStart.addEventListener('change', loadCashbooks);
-popupPeriodEnd.addEventListener('change', loadCashbooks);
+popupPeriodStart.addEventListener('change', scheduleCashbookLoad);
+popupPeriodEnd.addEventListener('change', scheduleCashbookLoad);
 popupCashbookSelect.addEventListener('change', function() {
     popupStartBtn.disabled = !this.value;
 });
