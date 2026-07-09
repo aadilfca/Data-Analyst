@@ -122,17 +122,27 @@ def init_db():
         )
     ''')
     
-    # Templates table (without selected_columns)
+        # Templates table (without selected_columns)
     conn.execute('''
         CREATE TABLE IF NOT EXISTS templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             template_name TEXT NOT NULL UNIQUE,
             created_by TEXT DEFAULT 'Admin',
             created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_active INTEGER DEFAULT 1
+            is_active INTEGER DEFAULT 1,
+            is_system INTEGER DEFAULT 0
         )
     ''')
-    
+    # Add is_system column to templates if missing (for existing databases)
+    try:
+        cur = conn.execute("PRAGMA table_info(templates)")
+        columns = [row[1] for row in cur.fetchall()]
+        if 'is_system' not in columns:
+            conn.execute("ALTER TABLE templates ADD COLUMN is_system INTEGER DEFAULT 0")
+            print("✅ Added is_system column to templates")
+    except Exception as e:
+        print("⚠️ Could not add is_system column:", e)
+
     # Pivot table for template-column mappings
     conn.execute('''
         CREATE TABLE IF NOT EXISTS template_column_mappings (
@@ -333,7 +343,7 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_verification_details_status ON verification_details (status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_verification_details_validation ON verification_details (validation_status)")
     print("✅ Created verification module tables and indexes")
-    
+
     # ---------- SEED ERROR CODES ----------
     # Seed the error_codes table if it's empty
     existing = conn.execute("SELECT COUNT(*) FROM error_codes").fetchone()[0]
@@ -563,7 +573,57 @@ def init_db():
                 (col[0], col[1], col[2])
             )
         print("✅ Inserted default columns")
-    
+        # ---------- CREATE SYSTEM TEMPLATE: Transaction Report ----------
+    # Check if template exists
+    tpl = conn.execute("SELECT id FROM templates WHERE template_name = 'Transaction Report'").fetchone()
+    if not tpl:
+        # Create the template
+        conn.execute(
+            "INSERT INTO templates (template_name, created_by, is_system) VALUES (?, ?, ?)",
+            ("Transaction Report", "System", 1)
+        )
+        tpl_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        # Define required columns and their IDs (create if missing)
+        required_columns = [
+            ("Voucher ID", "Text", "Transaction"),
+            ("Transaction Date", "Date", "Transaction"),
+            ("Account Detail", "Text", "Accounting"),
+            ("Account Name", "Text", "Accounting"),
+            ("Voucher Detail", "Text", "Transaction"),
+            ("Debit Amount", "Numeric", "Financial"),
+            ("Credit Amount", "Numeric", "Financial"),
+        ]
+        col_ids = []
+        for col_name, data_type, category in required_columns:
+            # Check if column exists
+            col = conn.execute(
+                "SELECT id FROM master_columns WHERE column_name = ?", (col_name,)
+            ).fetchone()
+            if col:
+                col_id = col[0]
+            else:
+                # Insert new column
+                conn.execute(
+                    "INSERT INTO master_columns (column_name, data_type, category) VALUES (?, ?, ?)",
+                    (col_name, data_type, category)
+                )
+                col_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                print(f"✅ Created column: {col_name}")
+            col_ids.append(col_id)
+        # Map columns to template
+        for idx, col_id in enumerate(col_ids):
+            conn.execute(
+                "INSERT INTO template_column_mappings (template_id, column_id, sort_order) VALUES (?, ?, ?)",
+                (tpl_id, col_id, idx)
+            )
+        print("✅ Created system template: Transaction Report")
+    else:
+        # Ensure is_system flag is set
+        conn.execute(
+            "UPDATE templates SET is_system = 1 WHERE id = ?",
+            (tpl[0],)
+        )
+        print("✅ Transaction Report template already exists (system flag ensured)")
         # ---------- APP SETTINGS ----------
     conn.execute('''
         CREATE TABLE IF NOT EXISTS app_settings (

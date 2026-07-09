@@ -156,10 +156,41 @@ def update_template(template_id: int, template: TemplateUpdate):
     return {"message": f"Template '{template.template_name}' updated successfully"}
 
 @router.delete("/api/templates/{template_id}")
+@router.delete("/api/templates/{template_id}")
 def delete_template(template_id: int):
-    existing = execute_query("SELECT template_name FROM templates WHERE id = ? AND is_active = 1", (template_id,))
+    existing = execute_query(
+        "SELECT template_name, is_system FROM templates WHERE id = ? AND is_active = 1",
+        (template_id,)
+    )
     if not existing:
         raise HTTPException(404, "Template not found")
+    if existing[0]['is_system'] == 1:
+        raise HTTPException(403, "Cannot delete a system template. It is required for the application to function.")
+
+    # Check if any client_data rows reference this template
+    dependent_rows = execute_query(
+        "SELECT COUNT(*) as count FROM client_data WHERE template_id = ? AND is_deleted = 0",
+        (template_id,)
+    )
+    if dependent_rows and dependent_rows[0]['count'] > 0:
+        raise HTTPException(
+            400,
+            f"Cannot delete template because it is used by {dependent_rows[0]['count']} data rows. "
+            "Please delete or reassign those rows first."
+        )
+
+    execute_write("UPDATE templates SET is_active = 0 WHERE id = ?", (template_id,))
+    execute_write("DELETE FROM template_column_mappings WHERE template_id = ?", (template_id,))
+    log_audit("Admin", "Delete", "Templates", f"Soft-deleted template: {existing[0]['template_name']}")
+    return {"message": "Template deleted successfully (soft-delete)"}
+    existing = execute_query(
+        "SELECT template_name, is_system FROM templates WHERE id = ? AND is_active = 1",
+        (template_id,)
+    )
+    if not existing:
+        raise HTTPException(404, "Template not found")
+    if existing[0]['is_system'] == 1:
+        raise HTTPException(403, "Cannot delete a system template. It is required for the application to function.")
     execute_write("UPDATE templates SET is_active = 0 WHERE id = ?", (template_id,))
     execute_write("DELETE FROM template_column_mappings WHERE template_id = ?", (template_id,))
     log_audit("Admin", "Delete", "Templates", f"Deleted template: {existing[0]['template_name']}")
@@ -215,7 +246,18 @@ def remove_template_column(template_id: int, column_id: int):
         raise HTTPException(404, "Column mapping not found")
     log_audit("Admin", "RemoveColumn", "Templates", f"Removed column {column_id} from template {template_id}")
     return {"message": "Column removed from template"}
-
+@router.get("/api/templates/by-name/{template_name}")
+def get_template_by_name(template_name: str):
+    """
+    Get template ID and details by its name. Useful for system lookups.
+    """
+    result = execute_query(
+        "SELECT id, template_name, is_system FROM templates WHERE template_name = ? AND is_active = 1",
+        (template_name,)
+    )
+    if not result:
+        raise HTTPException(404, f"Template '{template_name}' not found or inactive.")
+    return {"id": result[0]['id'], "template_name": result[0]['template_name'], "is_system": result[0]['is_system']}
 # ---------- BACKUP / RESTORE ----------
 class BackupData(BaseModel):
     columns: list

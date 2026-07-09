@@ -128,16 +128,27 @@ function renderTemplates(templates) {
         editBtn.title = 'Edit template';
         editBtn.addEventListener('click', () => openEditModal(tpl));
 
-        // Delete
-        const delBtn = document.createElement('button');
-        delBtn.textContent = '🗑️';
-        delBtn.style.background = 'none';
-        delBtn.style.border = 'none';
-        delBtn.style.cursor = 'pointer';
-        delBtn.style.fontSize = '18px';
-        delBtn.style.marginLeft = '8px';
-        delBtn.title = 'Delete template';
-        delBtn.addEventListener('click', () => confirmDelete(tpl.id, tpl.template_name));
+                // Delete – hide for system templates
+        if (!tpl.is_system) {
+            const delBtn = document.createElement('button');
+            delBtn.textContent = '🗑️';
+            delBtn.style.background = 'none';
+            delBtn.style.border = 'none';
+            delBtn.style.cursor = 'pointer';
+            delBtn.style.fontSize = '18px';
+            delBtn.style.marginLeft = '8px';
+            delBtn.title = 'Delete template';
+            delBtn.addEventListener('click', () => confirmDelete(tpl.id, tpl.template_name));
+            tdActions.appendChild(delBtn);
+        } else {
+            // Show a lock icon for system templates
+            const lock = document.createElement('span');
+            lock.textContent = '🔒';
+            lock.style.marginLeft = '8px';
+            lock.title = 'System template – cannot be deleted';
+            lock.style.color = '#94a3b8';
+            tdActions.appendChild(lock);
+        }
 
         tdActions.appendChild(previewBtn);
         tdActions.appendChild(editBtn);

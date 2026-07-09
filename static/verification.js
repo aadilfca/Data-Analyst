@@ -769,7 +769,147 @@ supportingModalClose.addEventListener('click', function() {
 supportingModal.addEventListener('click', function(e) {
     if (e.target === this) this.style.display = 'none';
 });
+// ==============================================
+// TRANSACTION REPORT MODAL
+// ==============================================
 
+const reportModalOverlay = document.getElementById('reportModalOverlay');
+const reportModal = document.getElementById('reportModal');
+const reportStartDate = document.getElementById('reportStartDate');
+const reportEndDate = document.getElementById('reportEndDate');
+const reportGenerateBtn = document.getElementById('reportGenerateBtn');
+const reportModalClose = document.getElementById('reportModalClose');
+const reportResults = document.getElementById('reportResults');
+const reportStatus = document.getElementById('reportStatus');
+
+// Open modal
+document.getElementById('transactionReportBtn')?.addEventListener('click', function() {
+    reportModalOverlay.style.display = 'flex';
+    // Set default date range to current month
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const formatDate = (d) => {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    };
+    reportStartDate.value = formatDate(firstDay);
+    reportEndDate.value = formatDate(lastDay);
+    reportResults.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:40px;">Select date range and click Generate.</div>';
+    reportStatus.textContent = '';
+});
+
+// Close modal
+function closeReportModal() {
+    reportModalOverlay.style.display = 'none';
+}
+reportModalClose.addEventListener('click', closeReportModal);
+reportModalOverlay.addEventListener('click', function(e) {
+    if (e.target === this) closeReportModal();
+});
+
+// Generate report
+reportGenerateBtn.addEventListener('click', async function() {
+    const start = reportStartDate.value;
+    const end = reportEndDate.value;
+    if (!start || !end) {
+        reportStatus.textContent = '⚠️ Please select both dates.';
+        reportStatus.style.color = '#f59e0b';
+        return;
+    }
+    if (start > end) {
+        reportStatus.textContent = '⚠️ Start date must be before or equal to end date.';
+        reportStatus.style.color = '#f59e0b';
+        return;
+    }
+    reportStatus.textContent = '⏳ Loading...';
+    reportStatus.style.color = '#3b82f6';
+    reportGenerateBtn.disabled = true;
+
+    const clientId = getClientId();
+    if (!clientId) {
+        reportStatus.textContent = '⚠️ No client selected.';
+        reportStatus.style.color = '#dc2626';
+        reportGenerateBtn.disabled = false;
+        return;
+    }
+
+    try {
+        // 1. Look up Transaction Report template by name
+        const tplRes = await fetch(`${API_BASE}/api/templates/by-name/Transaction Report`);
+        if (!tplRes.ok) {
+            if (tplRes.status === 404) {
+                throw new Error('Transaction Report template not found. Please restore it via Setup.');
+            }
+            throw new Error('Failed to fetch template details.');
+        }
+        const tplData = await tplRes.json();
+        const templateId = tplData.id;
+
+        // 2. Fetch data using /api/data/preview
+        const params = new URLSearchParams({
+            client_id: clientId,
+            template_id: templateId,
+            date_start: start,
+            date_end: end,
+            limit: 500  // we'll fetch up to 500 rows
+        });
+
+        const dataRes = await fetch(`${API_BASE}/api/data/preview?${params}`);
+        if (!dataRes.ok) {
+            const err = await dataRes.json();
+            throw new Error(err.detail || 'Failed to fetch data');
+        }
+        const data = await dataRes.json();
+        const rows = data.rows || [];
+        const totalRows = data.total_rows || 0;
+
+        // Render table
+        if (rows.length === 0) {
+            reportResults.innerHTML = `<div style="text-align:center; color:#94a3b8; padding:40px;">No transactions found for the selected period.</div>`;
+            reportStatus.textContent = '✅ 0 rows';
+            reportStatus.style.color = '#16a34a';
+            reportGenerateBtn.disabled = false;
+            return;
+        }
+
+        // Build table
+        const firstRow = rows[0].row_data;
+        const headers = firstRow ? Object.keys(firstRow) : [];
+
+        let tableHtml = `<table style="width:100%; border-collapse:collapse; font-size:13px;">
+            <thead style="background:#f8fafc; position:sticky; top:0; z-index:1;">
+                <tr>`;
+        headers.forEach(h => {
+            tableHtml += `<th style="padding:8px 12px; text-align:left; border-bottom:2px solid #e2e8f0; font-weight:600;">${h}</th>`;
+        });
+        tableHtml += `</tr></thead><tbody>`;
+
+        rows.forEach(row => {
+            tableHtml += `<tr style="border-bottom:1px solid #f0f2f5;">`;
+            headers.forEach(h => {
+                const val = row.row_data[h] !== undefined ? row.row_data[h] : '';
+                tableHtml += `<td style="padding:8px 12px;">${val}</td>`;
+            });
+            tableHtml += `</tr>`;
+        });
+        tableHtml += `</tbody></table>`;
+
+        reportResults.innerHTML = tableHtml;
+        reportStatus.textContent = `✅ ${totalRows} rows`;
+        reportStatus.style.color = '#16a34a';
+
+    } catch (error) {
+        console.error('Report error:', error);
+        reportResults.innerHTML = `<div style="text-align:center; color:#dc2626; padding:40px;">❌ ${error.message}</div>`;
+        reportStatus.textContent = '❌ Error';
+        reportStatus.style.color = '#dc2626';
+    } finally {
+        reportGenerateBtn.disabled = false;
+    }
+});
 // ---------- INIT ----------
 window.onload = function() {
     // Ensure dashboard is visible, session content hidden
