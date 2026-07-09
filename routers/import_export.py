@@ -467,16 +467,17 @@ def validate_and_import(request: ImportRequest):
         if mapping and mapping.excel_column_name:
             col_mapping[t_col['column_name']] = mapping.excel_column_name
 
+    # Always use the first column of the template as the unique identifier (upsert key)
     unique_col_name = None
-    if request.mode == "update":
-        if request.unique_column_id is None:
-            raise HTTPException(400, "Unique ID column is required when mode is 'Update Existing'")
-        unique_col_name = col_id_to_name.get(request.unique_column_id)
-        if not unique_col_name:
-            raise HTTPException(400, "Selected Unique ID column is not part of this template")
-        # Ensure the unique column is mapped to an Excel column
+    if template_cols:
+        # Get the first column (lowest sort_order)
+        first_col = template_cols[0]
+        unique_col_name = first_col['column_name']
+        # Ensure it is mapped to an Excel column
         if unique_col_name not in col_mapping:
-            raise HTTPException(400, f"Unique column '{unique_col_name}' must be mapped to an Excel column")
+            raise HTTPException(400, f"The first column '{unique_col_name}' must be mapped to an Excel column for upsert.")
+    else:
+        raise HTTPException(400, "Template has no columns.")
 
     # Read Excel data
     try:
@@ -570,8 +571,8 @@ def validate_and_import(request: ImportRequest):
         # Extract amount and date for indexing
         amount, date_str = extract_columns_from_row(row_data, template_cols)
 
-                # Check if mode is update and we have a unique column
-        if request.mode == "update" and unique_col_name:
+                # Always use upsert based on the unique column
+        if unique_col_name:
             unique_value = row_data.get(unique_col_name)
             # If unique value is empty, we cannot find an existing row, so we'll insert new
             if unique_value is None or unique_value == '':

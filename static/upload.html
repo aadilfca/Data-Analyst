@@ -907,23 +907,11 @@
                         </div>
                     </div>
 
-                    <!-- Mode & Actions -->
+                    <!-- Actions -->
                     <div class="mode-actions" id="modeActions" style="display:none;">
-                        <div class="mode-row">
-                            <div>
-                                <label>Mode</label>
-                                <select id="uploadMode">
-                                    <option value="create">Create New</option>
-                                    <option value="update">Update Existing</option>
-                                </select>
-                            </div>
-                            <div id="uniqueIdField" style="display:none;">
-                                <label>Unique ID</label>
-                                <select id="uniqueIdColumn">
-                                    <option value="">— None —</option>
-                                </select>
-                            </div>
-                            <span class="hint">💡 For "Update", select the unique identifier</span>
+                        <div class="mode-row" style="margin-bottom:0;">
+                            <span style="font-size:13px; color:#64748b;">💡 Data will be upserted based on the first
+                                column (unique identifier).</span>
                         </div>
                         <div class="btn-row">
                             <button class="btn-secondary" id="downloadBtn">📥 Download Template</button>

@@ -29,9 +29,6 @@ const mappingBody = getElement('mappingBody');
 const mappingCount = getElement('mappingCount');
 
 const modeActions = getElement('modeActions');
-const uploadMode = getElement('uploadMode');
-const uniqueIdField = getElement('uniqueIdField');
-const uniqueIdColumn = getElement('uniqueIdColumn');
 
 const downloadBtn = getElement('downloadBtn');
 const importBtn = getElement('importBtn');
@@ -427,7 +424,7 @@ async function autoMapColumns() {
         excelHeaders = data.excel_headers;
 
           renderMapping(data.mappings);
-        populateUniqueIdDropdown();
+        // populateUniqueIdDropdown() removed – no longer needed
 
         if (modeActions) modeActions.style.display = 'block';
         if (mappingPanel) mappingPanel.style.display = 'block';
@@ -668,27 +665,7 @@ function closeMiniPreview() {
     miniPreviewVisible = false;
 }
 
-// ---------- UNIQUE ID DROPDOWN ----------
-function populateUniqueIdDropdown() {
-    if (!uniqueIdColumn) return;
-    uniqueIdColumn.innerHTML = '<option value="">— None —</option>';
-    const mappedColumns = currentMappings.filter(m => m.is_matched);
-    mappedColumns.forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m.column_id;
-        opt.textContent = m.column_name;
-        uniqueIdColumn.appendChild(opt);
-    });
-    toggleUniqueIdVisibility();
-}
-
-function toggleUniqueIdVisibility() {
-    if (!uniqueIdField) return;
-    uniqueIdField.style.display = (uploadMode && uploadMode.value === 'update') ? 'block' : 'none';
-}
-if (uploadMode) {
-    uploadMode.addEventListener('change', toggleUniqueIdVisibility);
-}
+// ---------- UNIQUE ID DROPDOWN (removed – upsert is automatic) ----------
 
 // ---------- DOWNLOAD TEMPLATE ----------
 if (downloadBtn) {
@@ -1065,13 +1042,22 @@ if (importBtn) {
             }
         });
 
+        // Determine the first template column as the unique key
+        let uniqueColumnId = null;
+        if (currentMappings && currentMappings.length > 0) {
+            // Get the first mapped column (lowest sort_order)
+            const firstMapped = currentMappings.find(m => m.is_matched);
+            if (firstMapped) {
+                uniqueColumnId = firstMapped.column_id;
+            }
+        }
         const payload = {
             template_id: selectedTemplateId,
             file_id: fileId,
             client_id: parseInt(clientId),
             mappings: finalMappings,
-            mode: uploadMode ? uploadMode.value : 'create',
-            unique_column_id: uniqueIdColumn && uniqueIdColumn.value ? parseInt(uniqueIdColumn.value) : null,
+            mode: 'update',  // always upsert
+            unique_column_id: uniqueColumnId,  // use the first column
             sheet_name: currentSheet || 'Sheet1'
         };
 
