@@ -92,15 +92,27 @@ async function loadCashbooks() {
             throw new Error(err.detail || 'Failed to fetch cashbooks');
         }
         const data = await res.json();
-        popupCashbookSelect.innerHTML = '<option value="">-- Select Cashbook --</option>';
-        data.cashbooks.forEach(cb => {
-            const opt = document.createElement('option');
-            opt.value = cb;
-            opt.textContent = cb;
-            popupCashbookSelect.appendChild(opt);
-        });
-        popupCashbookSelect.disabled = false;
-        popupStartBtn.disabled = !popupCashbookSelect.value;
+        if (data.cashbooks && data.cashbooks.length > 0) {
+            popupCashbookSelect.innerHTML = '<option value="">-- Select Cashbook --</option>';
+            data.cashbooks.forEach(cb => {
+                const opt = document.createElement('option');
+                opt.value = cb;
+                opt.textContent = cb;
+                popupCashbookSelect.appendChild(opt);
+            });
+            popupCashbookSelect.disabled = false;
+            popupStartBtn.disabled = false;
+        } else {
+            // No cashbooks found – show a helpful message
+            popupCashbookSelect.innerHTML = '<option value="">⚠️ No cashbooks found</option>';
+            popupCashbookSelect.disabled = true;
+            popupStartBtn.disabled = true;
+            showPopupError(
+                'No cashbooks found for this client and date range.\n' +
+                'Make sure you have uploaded data containing CPV/CRV vouchers.\n' +
+                'The column names must be exactly: "Voucher ID", "Account Name", "Debit", "Credit".'
+            );
+        }
     } catch (e) {
         console.error('Error loading cashbooks:', e);
         popupCashbookSelect.innerHTML = '<option value="">⚠️ Error loading</option>';

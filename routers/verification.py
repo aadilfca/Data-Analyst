@@ -22,14 +22,8 @@ router = APIRouter()
 # ==============================================
 
 def get_voucher_patterns() -> dict:
-    """Fetch voucher pattern mappings from app_settings."""
-    rows = execute_query("SELECT value FROM app_settings WHERE key = 'voucher_patterns'")
-    if not rows:
-        return {"CPV": ["CPV","CV"], "CRV": ["CRV","CR"], "BPV": ["BPV","BV"], "BRV": ["BRV","BR"], "JV": ["JV"]}
-    try:
-        return json.loads(rows[0]['value'])
-    except:
-        return {"CPV": ["CPV","CV"], "CRV": ["CRV","CR"], "BPV": ["BPV","BV"], "BRV": ["BRV","BR"], "JV": ["JV"]}
+    """Hardcoded voucher pattern mappings (no database lookup)."""
+    return {"CPV": ["CPV","CV"], "CRV": ["CRV","CR"], "BPV": ["BPV","BV"], "BRV": ["BRV","BR"], "JV": ["JV"]}
 
 def get_voucher_type(voucher_id: str, patterns: dict) -> str:
     if not voucher_id:
@@ -41,7 +35,46 @@ def get_voucher_type(voucher_id: str, patterns: dict) -> str:
                 return vtype
     return None
 
+def get_column_value(row_data: dict, aliases: list) -> Optional[str]:
+    """
+    Try to get a value from row_data using a list of possible column name aliases.
+    Returns the first non-None value found.
+    """
+    for alias in aliases:
+        if alias in row_data:
+            val = row_data[alias]
+            if val is not None and val != '':
+                return val
+    return None
+
 def extract_cashbook_name(row_data: dict, patterns: dict) -> Optional[str]:
+    # Define aliases for required columns
+    voucher_aliases = ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher', 'Invoice No', 'Invoice Number']
+    account_aliases = ['Account Name', 'Account', 'Account Detail', 'Account Code', 'Ledger', 'Head']
+    debit_aliases = ['Debit', 'Debit Amount', 'Dr', 'Dr Amount', 'Debit (Dr)', 'Dr. Amount']
+    credit_aliases = ['Credit', 'Credit Amount', 'Cr', 'Cr Amount', 'Credit (Cr)', 'Cr. Amount']
+
+    voucher_id = get_column_value(row_data, voucher_aliases)
+    account_name = get_column_value(row_data, account_aliases)
+    debit_str = get_column_value(row_data, debit_aliases)
+    credit_str = get_column_value(row_data, credit_aliases)
+
+    if not voucher_id or not account_name:
+        return None
+
+    try:
+        debit = float(debit_str) if debit_str else 0.0
+        credit = float(credit_str) if credit_str else 0.0
+    except:
+        return None
+
+    vtype = get_voucher_type(voucher_id, patterns)
+    if vtype == 'CPV' and credit > 0:
+        return account_name
+    elif vtype == 'CRV' and debit > 0:
+        return account_name
+    return None
+
     voucher_id = row_data.get('Voucher ID')
     account_name = row_data.get('Account Name')
     debit = row_data.get('Debit')
@@ -108,7 +141,8 @@ def get_verification_stats():
 def get_cashbooks(
     client_id: int = Query(..., description="Client ID"),
     date_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    date_end: str = Query(..., description="End date (YYYY-MM-DD)")
+    date_end: str = Query(..., description="End date (YYYY-MM-DD)"),
+    debug: bool = Query(False, description="If true, return detailed debug info")
 ):
     client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
     if not client:
@@ -134,16 +168,44 @@ def get_cashbooks(
     )
     
     cashbooks = set()
+    debug_info = []
     for row in rows:
         try:
             row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
             if not isinstance(row_data, dict):
                 continue
-            cb_name = extract_cashbook_name(row_data, patterns)
+            voucher_id = row_data.get('Voucher ID')
+            vtype = get_voucher_type(voucher_id, patterns)
+            cb_name = None
+            if vtype in ['CPV', 'CRV']:
+                cb_name = extract_cashbook_name(row_data, patterns)
+            if debug:
+                debug_info.append({
+                    "row_id": row['id'],
+                    "voucher_id": voucher_id,
+                    "voucher_type": vtype,
+                    "account_name": row_data.get('Account Name'),
+                    "debit": row_data.get('Debit'),
+                    "credit": row_data.get('Credit'),
+                    "extracted_cashbook": cb_name
+                })
             if cb_name:
                 cashbooks.add(cb_name)
-        except:
+        except Exception as e:
+            if debug:
+                debug_info.append({"row_id": row['id'], "error": str(e)})
             continue
+    
+    if debug:
+        return {
+            "cashbooks": sorted(list(cashbooks)),
+            "count": len(cashbooks),
+            "debug": {
+                "total_rows": len(rows),
+                "patterns_used": patterns,
+                "rows": debug_info
+            }
+        }
     return {"cashbooks": sorted(list(cashbooks)), "count": len(cashbooks)}
 
 @router.post("/api/verification/start_session")
@@ -177,21 +239,37 @@ def start_verification_session(
         (client_id, period_start, period_end)
     )
     
+    # Aliases for flexible column matching
+    voucher_aliases = ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher', 'Invoice No', 'Invoice Number']
+    account_aliases = ['Account Name', 'Account', 'Account Detail', 'Account Code', 'Ledger', 'Head']
+    debit_aliases = ['Debit', 'Debit Amount', 'Dr', 'Dr Amount', 'Debit (Dr)', 'Dr. Amount']
+    credit_aliases = ['Credit', 'Credit Amount', 'Cr', 'Cr Amount', 'Credit (Cr)', 'Cr. Amount']
+    
+    def get_col_value(row_data, aliases):
+        for alias in aliases:
+            if alias in row_data:
+                val = row_data[alias]
+                if val is not None and val != '':
+                    return val
+        return None
+    
     vouchers = {}
     for row in rows:
         try:
             rd = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
             if not isinstance(rd, dict):
                 continue
-            voucher_id = rd.get('Voucher ID')
+            voucher_id = get_col_value(rd, voucher_aliases)
             if not voucher_id:
                 continue
             vtype = get_voucher_type(voucher_id, patterns)
             if vtype not in ['CPV', 'CRV']:
                 continue
-            debit = float(rd.get('Debit', 0) or 0)
-            credit = float(rd.get('Credit', 0) or 0)
-            account_name = rd.get('Account Name')
+            debit_str = get_col_value(rd, debit_aliases)
+            credit_str = get_col_value(rd, credit_aliases)
+            debit = float(debit_str) if debit_str else 0.0
+            credit = float(credit_str) if credit_str else 0.0
+            account_name = get_col_value(rd, account_aliases)
             if not account_name:
                 continue
             if voucher_id not in vouchers:
