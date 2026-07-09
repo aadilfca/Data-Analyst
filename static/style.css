@@ -740,3 +740,257 @@ body {
         grid-template-columns: 1fr;
     }
 }
+
+/* =============================================
+   VERIFICATION MODULE ADDITIONAL STYLES
+   ============================================= */
+/* Session popup */
+#sessionPopupOverlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+}
+#sessionPopup {
+    background: white;
+    padding: 30px;
+    border-radius: 16px;
+    max-width: 520px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+#sessionPopup .field {
+    margin-bottom: 16px;
+}
+#sessionPopup label {
+    display: block;
+    font-weight: 600;
+    font-size: 14px;
+    color: #1e293b;
+    margin-bottom: 4px;
+}
+#sessionPopup select,
+#sessionPopup input[type="date"] {
+    width: 100%;
+    padding: 8px 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 14px;
+}
+/* Verification main */
+#verificationMain {
+    display: none;
+}
+.verification-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+.transaction-card {
+    background: white;
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    margin-bottom: 20px;
+}
+.transaction-card .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    margin-bottom: 8px;
+}
+.transaction-card .label {
+    font-weight: 600;
+    color: #475569;
+    min-width: 100px;
+}
+.transaction-card .value {
+    font-weight: 500;
+    color: #1a1a2e;
+}
+.line-items-grid {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.line-items-grid th {
+    background: #f8fafc;
+    padding: 6px 8px;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid #e2e8f0;
+}
+.line-items-grid td {
+    padding: 4px 8px;
+    border-bottom: 1px solid #f0f2f5;
+}
+.line-items-grid input {
+    width: 100%;
+    padding: 4px 6px;
+    border: 1px solid #d0d5dd;
+    border-radius: 4px;
+    font-size: 13px;
+    box-sizing: border-box;
+}
+.line-items-grid .remove-btn {
+    background: none;
+    border: none;
+    color: #dc2626;
+    cursor: pointer;
+    font-size: 16px;
+}
+.procedure-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px 16px;
+}
+.procedure-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.procedure-item input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+}
+.procedure-item input[type="text"] {
+    flex: 1;
+    padding: 2px 6px;
+    border: 1px solid #d0d5dd;
+    border-radius: 4px;
+    font-size: 12px;
+}
+.library-panel {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 12px 0;
+}
+.nav-buttons {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    margin-top: 16px;
+}
+.btn-verify {
+    padding: 8px 20px;
+    background: #22c55e;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.btn-verify:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.btn-outline {
+    padding: 8px 20px;
+    background: white;
+    color: #1a1a2e;
+    border: 1px solid #d0d5dd;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.btn-outline:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.btn-danger {
+    padding: 8px 20px;
+    background: #dc2626;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.status-badge {
+    display: inline-block;
+    padding: 2px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.status-badge.pending { background: #fef3c7; color: #92400e; }
+.status-badge.passed { background: #dcfce7; color: #166534; }
+.status-badge.failed { background: #fee2e2; color: #991b1b; }
+.status-badge.verified { background: #e0f2fe; color: #0369a1; }
+/* Supporting modal */
+#supportingModal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 2000;
+    justify-content: center;
+    align-items: center;
+}
+#supportingModal .modal-content {
+    background: white;
+    border-radius: 16px;
+    padding: 24px;
+    max-width: 700px;
+    width: 90%;
+    max-height: 80vh;
+    overflow: auto;
+}
+#supportingModal .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+#supportingModal .search-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+#supportingModal .search-row input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+}
+#supportingModal .search-row button {
+    padding: 8px 16px;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+}
+#supportingModal .result-item {
+    padding: 8px;
+    border-bottom: 1px solid #f0f2f5;
+    font-size: 13px;
+    cursor: pointer;
+}
+#supportingModal .result-item:hover {
+    background: #f8fafc;
+}
+/* Print */
+@media print {
+    .no-print { display: none !important; }
+    .transaction-card { box-shadow: none; border: 1px solid #ccc; page-break-inside: avoid; }
+    .nav-buttons { display: none !important; }
+    body { background: white; }
+    .navbar { display: none !important; }
+    .main-container { padding: 10px; }
+}
