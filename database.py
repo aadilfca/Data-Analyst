@@ -420,6 +420,63 @@ def init_db():
                 (ec["code"], ec["severity"], ec["category"], ec["user_message"], ec["tech_description"], ec["suggested_action"])
             )
         print("✅ Seeded error codes (" + str(len(error_codes)) + " entries)")
+
+            # ---------- SEED AUDIT PROCEDURE LIBRARY ----------
+    existing_library = conn.execute("SELECT COUNT(*) FROM audit_procedure_library").fetchone()[0]
+    if existing_library == 0:
+        library_data = [
+            {
+                "transaction_type": "Material Purchased",
+                "management_controls": "Authorized Purchase demand; Approved Purchase order; Signed Gate pass; Inspection note; Store receiving; Vendor bill",
+                "audit_risks": "Unauthorized purchases; Inflated quantities; Unapproved vendors; Missing GRN",
+                "audit_procedures": "Verify purchase demand authorization; Check PO approval; Inspect gate pass; Review inspection note; Match GRN with PO; Compare vendor bill with PO/GRN; Reconcile quantities and amounts"
+            },
+            {
+                "transaction_type": "Repair & Maintenance (In-house)",
+                "management_controls": "Authorized Purchase demand; Signature of relevant supervisor on bill; Vendor bill",
+                "audit_risks": "Unapproved repairs; Overcharging; Duplicate bills",
+                "audit_procedures": "Check purchase demand authorization; Verify supervisor signature on bill; Review vendor bill for reasonableness; Compare with maintenance log if available"
+            },
+            {
+                "transaction_type": "Fuel Expense",
+                "management_controls": "Vehicle log; Fuel receipts; Mileage records",
+                "audit_risks": "Unexplained fuel consumption; Theft; Unauthorized vehicles",
+                "audit_procedures": "Reconcile fuel receipts with vehicle log; Check mileage against fuel consumption; Verify authorized vehicles"
+            },
+            {
+                "transaction_type": "Short Term Advance against Salary",
+                "management_controls": "Approved advance request; Employee acknowledgment; Payroll deduction schedule",
+                "audit_risks": "Unauthorized advances; Non-recovery; Duplicate advances",
+                "audit_procedures": "Verify approved advance request; Check employee acknowledgment; Review deduction schedule; Confirm with payroll records"
+            },
+            {
+                "transaction_type": "Payment to Contractors",
+                "management_controls": "Signed contract; Work completion certificate; Tax deduction certificate; Vendor bill",
+                "audit_risks": "Fake contractors; Unauthorized work; Overpayment; Non-deduction of tax",
+                "audit_procedures": "Review contract; Inspect work completion certificate; Verify tax deduction; Match vendor bill with contract"
+            },
+            {
+                "transaction_type": "Fixed Asset Purchased",
+                "management_controls": "Capital budget approval; Purchase order; Gate pass; Inspection note; Asset tagging",
+                "audit_risks": "Unauthorized purchase; Misclassification as expense; Incorrect valuation; Missing asset",
+                "audit_procedures": "Check capital budget approval; Verify PO; Inspect gate pass; Review inspection note; Ensure asset tagged and entered in fixed asset register"
+            },
+            {
+                "transaction_type": "Kitchen Expenses",
+                "management_controls": "Daily consumption report; Purchase invoices; Inventory count",
+                "audit_risks": "Theft; Over-purchasing; Unauthorized items; Missing invoices",
+                "audit_procedures": "Reconcile purchase invoices with consumption report; Verify inventory count; Check for approved purchase; Review daily consumption logs"
+            }
+        ]
+        for lib in library_data:
+            conn.execute(
+                """
+                INSERT INTO audit_procedure_library (transaction_type, management_controls, audit_risks, audit_procedures)
+                VALUES (?, ?, ?, ?)
+                """,
+                (lib["transaction_type"], lib["management_controls"], lib["audit_risks"], lib["audit_procedures"])
+            )
+        print("✅ Seeded audit procedure library (" + str(len(library_data)) + " entries)")
         # Insert default columns if master_columns is empty
     existing = conn.execute("SELECT COUNT(*) FROM master_columns").fetchone()[0]
     if existing == 0:
@@ -457,13 +514,14 @@ def init_db():
         )
     ''')
     
-    # Seed default settings
+        # Seed default settings
     default_settings = [
         ('date_format', 'DD/MM/YYYY', 'Global date format for display'),
         ('amount_grouping', '000', 'Amount grouping: 000 (thousands) or Lacs'),
         ('decimal_precision', '0', 'Default decimal places for amounts (0, 2, 4)'),
         ('default_date_range', 'Current Month', 'Default date range for dashboards'),
         ('materiality_threshold', '50000', 'Threshold for flagging high-value items'),
+        ('voucher_patterns', '{"CPV": ["CPV","CV"], "CRV": ["CRV","CR"], "BPV": ["BPV","BV"], "BRV": ["BRV","BR"], "JV": ["JV"]}', 'Voucher prefix patterns for cash, bank, journal vouchers'),
     ]
     for key, val, desc in default_settings:
         cur = conn.execute("SELECT id FROM app_settings WHERE key = ?", (key,))
@@ -492,7 +550,67 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_date ON client_data (extract_date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_deleted ON client_data (is_deleted)")
     print("✅ Created indexes on client_data")
+        # ==============================================
+    # VERIFICATION MODULE TABLES
+    # ==============================================
+    # Verification Sessions – header for each verification run
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS verification_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            cashbook_name TEXT NOT NULL,
+            period_start TEXT NOT NULL,   -- ISO date YYYY-MM-DD
+            period_end TEXT NOT NULL,
+            created_by TEXT DEFAULT 'Analyst',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT DEFAULT 'In Progress',  -- 'In Progress', 'Completed', 'Cancelled'
+            total_transactions INTEGER DEFAULT 0,
+            verified_count INTEGER DEFAULT 0,
+            FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+        )
+    ''')
     
+    # Verification Details – one per transaction
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS verification_details (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            client_data_id INTEGER NOT NULL,
+            transaction_ref TEXT,   -- voucher ID from row_data
+            line_items TEXT,        -- JSON array of line items: [{"vendor":"","unit":"","qty":0,"rate":0,"calculated_amount":0}]
+            procedure_data TEXT,    -- JSON: {"purchase_demand":true/false, "purchase_order":true/false, ...}
+            validation_status TEXT DEFAULT 'Pending',  -- 'Pending', 'Passed', 'Failed'
+            validation_message TEXT,
+            status TEXT DEFAULT 'Pending',  -- 'Pending', 'Verified', 'Skipped'
+            comments TEXT,
+            observations TEXT,
+            verified_by TEXT,
+            verified_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES verification_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (client_data_id) REFERENCES client_data(id) ON DELETE CASCADE
+        )
+    ''')
+    
+    # Audit Procedure Library – static reference for transaction types
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS audit_procedure_library (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_type TEXT UNIQUE NOT NULL,
+            management_controls TEXT,   -- plain text or JSON
+            audit_risks TEXT,
+            audit_procedures TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create indexes for verification tables
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_verification_sessions_client ON verification_sessions (client_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_verification_details_session ON verification_details (session_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_verification_details_clientdata ON verification_details (client_data_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_verification_details_status ON verification_details (status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_verification_details_validation ON verification_details (validation_status)")
+    print("✅ Created verification module tables and indexes")
     conn.commit()
     conn.close()
     print("✅ Database tables created/verified")
