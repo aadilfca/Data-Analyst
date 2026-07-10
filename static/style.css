@@ -985,6 +985,7 @@ body {
 #supportingModal .result-item:hover {
     background: #f8fafc;
 }
+
 /* Print */
 @media print {
     .no-print { display: none !important; }
@@ -993,6 +994,11 @@ body {
     body { background: white; }
     .navbar { display: none !important; }
     .main-container { padding: 10px; }
+}
+
+/* Verification session: remove container padding */
+.main-container.verification-active {
+    padding: 0 !important;
 }
 /* Verification session: remove container padding */
 .main-container.verification-active {

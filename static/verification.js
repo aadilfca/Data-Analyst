@@ -335,9 +335,12 @@ async function startSessionFromCashbook() {
             throw new Error(err.detail || 'Failed to start session');
         }
         const data = await res.json();
-        currentSessionId = data.session_id;
+               currentSessionId = data.session_id;
         cashbookContent.style.display = 'none';
         sessionContent.style.display = 'block';
+        // Remove padding from main container when verification session is active
+        const container = document.getElementById('verificationContainer');
+        if (container) container.classList.add('verification-active');
         if (typeof setNavStats === 'function') {
             setNavStats(`Session ${currentSessionId} · Cashbook: ${selectedCashbook} · 0 / ${data.total_transactions || 0} verified`);
         }
@@ -930,8 +933,11 @@ async function navigate(direction) {
 function exitSession() {
     if (confirm('Are you sure you want to exit this verification session? Progress will be saved.')) {
         saveLineItems();
-        sessionContent.style.display = 'none';
+                sessionContent.style.display = 'none';
         cashbookContent.style.display = 'block';
+        // Restore padding when session ends
+        const container = document.getElementById('verificationContainer');
+        if (container) container.classList.remove('verification-active');
         if (transactionCard) transactionCard.innerHTML = '';
         showStatus('Session exited. Returning to cashbook.', 'info');
         currentSessionId = null;
