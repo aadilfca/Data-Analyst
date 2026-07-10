@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
-from database import execute_query, execute_write, log_audit
+from database import execute_query, execute_write, log_audit, get_raw_conn
 from datetime import datetime
 import json
 from typing import List, Optional, Dict, Any
@@ -68,24 +68,6 @@ def extract_cashbook_name(row_data: dict, patterns: dict) -> Optional[str]:
     except:
         return None
 
-    vtype = get_voucher_type(voucher_id, patterns)
-    if vtype == 'CPV' and credit > 0:
-        return account_name
-    elif vtype == 'CRV' and debit > 0:
-        return account_name
-    return None
-
-    voucher_id = row_data.get('Voucher ID')
-    account_name = row_data.get('Account Name')
-    debit = row_data.get('Debit')
-    credit = row_data.get('Credit')
-    if not voucher_id or not account_name:
-        return None
-    try:
-        debit = float(debit) if debit else 0.0
-        credit = float(credit) if credit else 0.0
-    except:
-        return None
     vtype = get_voucher_type(voucher_id, patterns)
     if vtype == 'CPV' and credit > 0:
         return account_name
@@ -356,6 +338,7 @@ def start_verification_session(
     if not transactions_to_verify:
         raise HTTPException(400, f"No transactions found for cashbook '{cashbook_name}' in the given period.")
     
+        # Insert session header
     session_id = execute_write(
         """
         INSERT INTO verification_sessions (client_id, cashbook_name, period_start, period_end, created_by, status, total_transactions)
@@ -364,14 +347,24 @@ def start_verification_session(
         (client_id, cashbook_name, period_start, period_end, created_by, len(transactions_to_verify))
     )
     
+    # Prepare parameters for all details in one batch
+    detail_params = []
     for trans in transactions_to_verify:
-        execute_write(
+        detail_params.append((session_id, trans['client_data_id'], trans['voucher_id']))
+    
+    # Insert all details in a single transaction (fast)
+    conn = get_raw_conn()
+    try:
+        conn.executemany(
             """
             INSERT INTO verification_details (session_id, client_data_id, transaction_ref, status, validation_status)
             VALUES (?, ?, ?, 'Pending', 'Pending')
             """,
-            (session_id, trans['client_data_id'], trans['voucher_id'])
+            detail_params
         )
+        conn.commit()
+    finally:
+        conn.close()
     
     log_audit(created_by, "Start Verification Session", "Verification", f"Session {session_id}: {cashbook_name}, {len(transactions_to_verify)} transactions")
     
@@ -884,6 +877,26 @@ def get_audited_cashbook(session_id: int):
             "created_at": s['created_at']
         },
         "transactions": transactions
+    }
+@router.get("/api/verification/session/{session_id}/progress")
+def get_session_progress(session_id: int):
+    """
+    Lightweight endpoint to get only the progress counts for a session.
+    Returns total_transactions and verified_count.
+    """
+    session = execute_query(
+        """
+        SELECT total_transactions, verified_count
+        FROM verification_sessions
+        WHERE id = ? AND status != 'Cancelled'
+        """,
+        (session_id,)
+    )
+    if not session:
+        raise HTTPException(404, "Session not found or cancelled.")
+    return {
+        "total_transactions": session[0]['total_transactions'],
+        "verified_count": session[0]['verified_count']
     }
 
 @router.get("/api/verification/print_sheet/{session_id}")

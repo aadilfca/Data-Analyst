@@ -782,16 +782,19 @@ async function fetchLibrary(type) {
 }
 
 // ---------- UPDATE PROGRESS ----------
+// ---------- UPDATE PROGRESS (lightweight) ----------
 async function updateProgress() {
     if (!currentSessionId) return;
     try {
-        const res = await fetch(`${API_BASE}/api/verification/audited_cashbook/${currentSessionId}`);
+        // Use the lightweight progress endpoint
+        const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
         if (!res.ok) throw new Error('Failed to fetch progress');
         const data = await res.json();
-        const session = data.session;
         if (typeof setNavStats === 'function') {
-            const cashbook = session.cashbook_name || '';
-            setNavStats(`Session ${session.id} · Cashbook: ${cashbook} · ${session.verified_count || 0} / ${session.total_transactions || 0} verified`);
+            // We need the cashbook name; we can store it globally or retrieve from session data
+            // We'll store it in a variable when session starts.
+            const cashbook = window._currentCashbook || '';
+            setNavStats(`Session ${currentSessionId} · Cashbook: ${cashbook} · ${data.verified_count || 0} / ${data.total_transactions || 0} verified`);
         }
     } catch (e) {
         console.error('Error updating progress:', e);
