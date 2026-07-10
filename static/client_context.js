@@ -74,9 +74,10 @@ function updateSelectedClient() {
         localStorage.removeItem(STORAGE_CODE);
     }
     updateClientDependentUI();
-    // If we are on a non-dashboard page, re-render the badge
+    // If we are on a non-dashboard page, update the client name in the navbar
     if (!isDashboardPage()) {
-        renderClientBadge();
+        const name = getSelectedClientName() || 'No Client';
+        updateNavClientName(name);
     }
 }
 
@@ -139,8 +140,11 @@ function renderClientControl() {
     const container = document.getElementById('clientControl');
     if (!container) return;
 
-    if (isDashboardPage()) {
-        // Dashboard: show dropdown
+    // Determine if we are on the dashboard
+    const isDash = isDashboardPage();
+
+    if (isDash) {
+        // Dashboard: show dropdown for client selection, no back arrow
         container.innerHTML = `
             <label for="globalClientSelect">🏢 Client</label>
             <select id="globalClientSelect">
@@ -153,12 +157,59 @@ function renderClientControl() {
         // Add change listener
         clientSelectElement.addEventListener('change', updateSelectedClient);
     } else {
-        // Non-dashboard: show read-only badge with switch icon
-        renderClientBadge();
+        // Non-dashboard: show back arrow, client badge, AREA, stats
+        const clientName = getSelectedClientName() || 'No Client';
+        const moduleName = window._appNav?.module || 'Dashboard';
+        const statsText = window._appNav?.stats || '';
+
+        container.innerHTML = `
+            <a href="/static/index.html" id="navBackArrow" style="color:#94a3b8; text-decoration:none; font-size:20px; line-height:1; margin-right:4px;">◄</a>
+            <span class="nav-client-name" style="font-weight:500; font-size:13px; color:#f1f5f9; background:#1e293b; padding:2px 12px; border-radius:16px; border:1px solid #334155; white-space:nowrap;">${clientName}</span>
+            <span class="nav-area" style="font-weight:600; font-size:14px; color:#e0f2fe; letter-spacing:0.3px; white-space:nowrap;">AREA: ${moduleName}</span>
+            <span id="navStats" style="font-size:13px; color:#94a3b8; white-space:nowrap;">${statsText}</span>
+        `;
         // Enforce client selection on all non-dashboard pages
         enforceClientSelection();
     }
 }
+
+// ---------- GLOBAL NAVBAR UPDATE FUNCTIONS ----------
+window._appNav = window._appNav || { module: 'Dashboard', stats: '' };
+
+/**
+ * Set the module name displayed in the navbar (e.g., "Verification", "Upload")
+ * @param {string} name - The module name (e.g., "Verification")
+ */
+window.setNavModule = function(name) {
+    window._appNav.module = name || 'Dashboard';
+    const areaSpan = document.querySelector('.nav-area');
+    if (areaSpan) {
+        areaSpan.textContent = `AREA: ${window._appNav.module}`;
+    }
+};
+
+/**
+ * Set the statistics text displayed in the navbar (e.g., "Session 14 · Cashbook: ...")
+ * @param {string} stats - The stats text to display (empty string to hide)
+ */
+window.setNavStats = function(stats) {
+    window._appNav.stats = stats || '';
+    const statsSpan = document.getElementById('navStats');
+    if (statsSpan) {
+        statsSpan.textContent = window._appNav.stats;
+    }
+};
+
+/**
+ * Update the client name displayed in the navbar (used after client change)
+ * @param {string} name - The client name (e.g., "ACME")
+ */
+window.updateNavClientName = function(name) {
+    const clientSpan = document.querySelector('.nav-client-name');
+    if (clientSpan) {
+        clientSpan.textContent = name || 'No Client';
+    }
+};
 
 // ---------- RENDER CLIENT BADGE (read-only) ----------
 function renderClientBadge() {
