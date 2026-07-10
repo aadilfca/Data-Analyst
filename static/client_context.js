@@ -162,8 +162,7 @@ function renderClientControl() {
         const moduleName = window._appNav?.module || 'Dashboard';
         const statsText = window._appNav?.stats || '';
 
-        container.innerHTML = `
-            <a href="/static/index.html" id="navBackArrow" style="color:#94a3b8; text-decoration:none; font-size:20px; line-height:1; margin-right:4px;">◄</a>
+                container.innerHTML = `
             <span class="nav-client-name" style="font-weight:500; font-size:13px; color:#f1f5f9; background:#1e293b; padding:2px 12px; border-radius:16px; border:1px solid #334155; white-space:nowrap;">${clientName}</span>
             <span class="nav-area" style="font-weight:600; font-size:14px; color:#e0f2fe; letter-spacing:0.3px; white-space:nowrap;">AREA: ${moduleName}</span>
             <span id="navStats" style="font-size:13px; color:#94a3b8; white-space:nowrap;">${statsText}</span>
@@ -182,10 +181,8 @@ window._appNav = window._appNav || { module: 'Dashboard', stats: '' };
  */
 window.setNavModule = function(name) {
     window._appNav.module = name || 'Dashboard';
-    const areaSpan = document.querySelector('.nav-area');
-    if (areaSpan) {
-        areaSpan.textContent = `AREA: ${window._appNav.module}`;
-    }
+    // Re-render the entire navbar to reflect the change
+    renderClientControl();
 };
 
 /**
@@ -194,10 +191,8 @@ window.setNavModule = function(name) {
  */
 window.setNavStats = function(stats) {
     window._appNav.stats = stats || '';
-    const statsSpan = document.getElementById('navStats');
-    if (statsSpan) {
-        statsSpan.textContent = window._appNav.stats;
-    }
+    // Re-render the entire navbar to reflect the change
+    renderClientControl();
 };
 
 /**
@@ -210,7 +205,24 @@ window.updateNavClientName = function(name) {
         clientSpan.textContent = name || 'No Client';
     }
 };
+// ---------- RENDER LEFT SECTION (brand + back arrow) ----------
+function renderNavLeft() {
+    const container = document.getElementById('navLeft');
+    if (!container) return;
 
+    const isDash = isDashboardPage();
+
+    if (isDash) {
+        // Dashboard: show brand only (no arrow)
+        container.innerHTML = `<span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white;">🏢 System Analyst</span>`;
+    } else {
+        // Non-dashboard: show back arrow + brand
+        container.innerHTML = `
+            <a href="/static/index.html" style="color:#94a3b8; text-decoration:none; font-size:22px; line-height:1; margin-right:6px;">◄</a>
+            <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white;">System Analyst</span>
+        `;
+    }
+}
 // ---------- RENDER CLIENT BADGE (read-only) ----------
 function renderClientBadge() {
     const container = document.getElementById('clientControl');
@@ -252,6 +264,7 @@ function goToDashboard() {
 // ---------- INIT ----------
 function initClientContext() {
     renderClientControl();
+    renderNavLeft();
     console.log('🌐 Client context initialized');
 }
 

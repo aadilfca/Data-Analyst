@@ -24,10 +24,6 @@ const popupStartBtn = document.getElementById('popupStartBtn');
 const popupCancelBtn = document.getElementById('popupCancelBtn');
 const popupError = document.getElementById('popupError');
 
-const sessionIdDisplay = document.getElementById('sessionIdDisplay');
-const cashbookDisplay = document.getElementById('cashbookDisplay');
-const periodDisplay = document.getElementById('periodDisplay');
-const progressDisplay = document.getElementById('progressDisplay');
 const statusDiv = document.getElementById('verificationStatus');
 const transactionCard = document.getElementById('transactionCard');
 const prevBtn = document.getElementById('prevBtn');
@@ -44,11 +40,6 @@ const supportingResults = document.getElementById('supportingResults');
 const supportingModalClose = document.getElementById('supportingModalClose');
 
 // ---- PROCEDURE MODAL REFS ----
-let currentProcedureKey = null;
-let currentTemplateId = null;
-let selectedDocId = null;
-let selectedDocData = null;
-
 const procedureModal = document.getElementById('procedureModal');
 const procedureModalTitle = document.getElementById('procedureModalTitle');
 const procedureSearchInput = document.getElementById('procedureSearchInput');
@@ -59,9 +50,14 @@ const procedureConfirmBtn = document.getElementById('procedureConfirmBtn');
 const procedureStatus = document.getElementById('procedureStatus');
 const procedureModalClose = document.getElementById('procedureModalClose');
 
+let currentProcedureKey = null;
+let currentTemplateId = null;
+let selectedDocId = null;
+let selectedDocData = null;
+
 // ---- REPORT VIEW REFS ----
 let reportCurrentPage = 1;
-let reportPageSize = 25;  // reduced from 50 to improve load speed
+let reportPageSize = 25;
 let reportTotalRows = 0;
 let reportTemplateId = null;
 
@@ -81,22 +77,24 @@ const exitReportLink = document.getElementById('exitReportLink');
 
 // ---------- HELPERS ----------
 function showStatus(msg, type = 'info') {
+    if (!statusDiv) return;
     statusDiv.textContent = msg;
     statusDiv.className = 'upload-status ' + type;
     statusDiv.style.display = 'block';
     clearTimeout(window.statusTimeout);
     window.statusTimeout = setTimeout(() => {
-        statusDiv.style.display = 'none';
+        if (statusDiv) statusDiv.style.display = 'none';
     }, 5000);
 }
 
 function showPopupError(msg) {
+    if (!popupError) return;
     popupError.textContent = msg;
     popupError.style.display = 'block';
 }
 
 function hidePopupError() {
-    popupError.style.display = 'none';
+    if (popupError) popupError.style.display = 'none';
 }
 
 function getClientId() {
@@ -108,6 +106,7 @@ function getClientId() {
 
 // ---------- POPUP: LOAD CASHBOOKS ----------
 function scheduleCashbookLoad() {
+    if (!popupCashbookSelect || !popupStartBtn) return;
     clearTimeout(cashbookLoadTimer);
     popupCashbookSelect.innerHTML = '<option value="">Loading cashbooks...</option>';
     popupCashbookSelect.disabled = true;
@@ -116,6 +115,7 @@ function scheduleCashbookLoad() {
 }
 
 async function loadCashbooks() {
+    if (!popupCashbookSelect || !popupStartBtn || !popupPeriodStart || !popupPeriodEnd) return;
     const clientId = getClientId();
     const start = popupPeriodStart.value;
     const end = popupPeriodEnd.value;
@@ -148,7 +148,6 @@ async function loadCashbooks() {
             popupCashbookSelect.disabled = false;
             popupStartBtn.disabled = false;
         } else {
-            // No cashbooks found – show a helpful message
             popupCashbookSelect.innerHTML = '<option value="">⚠️ No cashbooks found</option>';
             popupCashbookSelect.disabled = true;
             popupStartBtn.disabled = true;
@@ -168,6 +167,7 @@ async function loadCashbooks() {
 
 // ---------- POPUP: START SESSION ----------
 async function startSession() {
+    if (!popupCashbookSelect || !popupPeriodStart || !popupPeriodEnd || !popupStartBtn) return;
     const clientId = getClientId();
     const cashbook = popupCashbookSelect.value;
     const start = popupPeriodStart.value;
@@ -197,27 +197,24 @@ async function startSession() {
         const data = await res.json();
         currentSessionId = data.session_id;
 
-        // Close popup
-        popupOverlay.style.display = 'none';
+        if (popupOverlay) popupOverlay.style.display = 'none';
+        if (dashboardContent) dashboardContent.style.display = 'none';
+        if (sessionContent) sessionContent.style.display = 'block';
 
-        // Switch to session content
-        dashboardContent.style.display = 'none';
-        sessionContent.style.display = 'block';
+        if (typeof setNavStats === 'function') {
+            setNavStats(`Session ${currentSessionId} · Cashbook: ${cashbook} · 0 / ${data.total_transactions || 0} verified`);
+        }
 
-        // Update header
-        sessionIdDisplay.textContent = currentSessionId;
-        cashbookDisplay.textContent = cashbook;
-        periodDisplay.textContent = start + ' to ' + end;
-
-        // Load first transaction
         await loadNextTransaction();
         await updateProgress();
     } catch (e) {
         console.error('Error starting session:', e);
         showPopupError('Error: ' + e.message);
     } finally {
-        popupStartBtn.disabled = false;
-        popupStartBtn.innerHTML = '🚀 Start Session';
+        if (popupStartBtn) {
+            popupStartBtn.disabled = false;
+            popupStartBtn.innerHTML = '🚀 Start Session';
+        }
     }
 }
 
@@ -232,10 +229,10 @@ async function loadNextTransaction(detailId = null) {
             const err = await res.json();
             if (err.detail && err.detail.includes('All transactions')) {
                 showStatus('✅ All transactions have been verified!', 'success');
-                transactionCard.innerHTML = `<div style="padding:30px; text-align:center; color:#16a34a; font-size:18px;">🎉 All transactions verified!</div>`;
-                prevBtn.disabled = true;
-                nextBtn.disabled = true;
-                verifyBtn.disabled = true;
+                if (transactionCard) transactionCard.innerHTML = `<div style="padding:30px; text-align:center; color:#16a34a; font-size:18px;">🎉 All transactions verified!</div>`;
+                if (prevBtn) prevBtn.disabled = true;
+                if (nextBtn) nextBtn.disabled = true;
+                if (verifyBtn) verifyBtn.disabled = true;
                 return;
             }
             throw new Error(err.detail || 'Failed to load transaction');
@@ -243,10 +240,10 @@ async function loadNextTransaction(detailId = null) {
         const data = await res.json();
         if (data.completed) {
             showStatus('✅ All transactions have been verified!', 'success');
-            transactionCard.innerHTML = `<div style="padding:30px; text-align:center; color:#16a34a; font-size:18px;">🎉 All transactions verified!</div>`;
-            prevBtn.disabled = true;
-            nextBtn.disabled = true;
-            verifyBtn.disabled = true;
+            if (transactionCard) transactionCard.innerHTML = `<div style="padding:30px; text-align:center; color:#16a34a; font-size:18px;">🎉 All transactions verified!</div>`;
+            if (prevBtn) prevBtn.disabled = true;
+            if (nextBtn) nextBtn.disabled = true;
+            if (verifyBtn) verifyBtn.disabled = true;
             return;
         }
         currentDetailId = data.detail_id;
@@ -257,9 +254,9 @@ async function loadNextTransaction(detailId = null) {
         procedureData = data.procedure_data || {};
         renderTransaction(data);
         await updateProgress();
-        prevBtn.disabled = false;
-        nextBtn.disabled = false;
-        verifyBtn.disabled = false;
+        if (prevBtn) prevBtn.disabled = false;
+        if (nextBtn) nextBtn.disabled = false;
+        if (verifyBtn) verifyBtn.disabled = false;
         showStatus('Loaded transaction ' + currentVoucherId, 'info');
     } catch (e) {
         console.error('Error loading transaction:', e);
@@ -271,6 +268,7 @@ async function loadNextTransaction(detailId = null) {
 
 // ---------- RENDER TRANSACTION ----------
 function renderTransaction(data) {
+    if (!transactionCard) return;
     const row = data.row_data || {};
     
     // ----- Aliases for flexible column name matching -----
@@ -661,7 +659,10 @@ async function updateProgress() {
         if (!res.ok) throw new Error('Failed to fetch progress');
         const data = await res.json();
         const session = data.session;
-        progressDisplay.textContent = `${session.verified_count || 0} / ${session.total_transactions || 0} verified`;
+        if (typeof setNavStats === 'function') {
+            const cashbook = session.cashbook_name || '';
+            setNavStats(`Session ${session.id} · Cashbook: ${cashbook} · ${session.verified_count || 0} / ${session.total_transactions || 0} verified`);
+        }
     } catch (e) {
         console.error('Error updating progress:', e);
     }
@@ -746,9 +747,9 @@ async function validateTransaction() {
             badge.className = `status-badge ${data.validation_status.toLowerCase()}`;
         }
         if (data.passed) {
-            verifyBtn.disabled = false;
+            if (verifyBtn) verifyBtn.disabled = false;
         } else {
-            verifyBtn.disabled = true;
+            if (verifyBtn) verifyBtn.disabled = true;
         }
     } catch (e) {
         console.error('Validation error:', e);
@@ -796,10 +797,9 @@ async function navigate(direction) {
 function exitSession() {
     if (confirm('Are you sure you want to exit this verification session? Progress will be saved.')) {
         saveLineItems();
-        // Hide session content and show dashboard
-        sessionContent.style.display = 'none';
-        dashboardContent.style.display = 'block';
-        transactionCard.innerHTML = '';
+        if (sessionContent) sessionContent.style.display = 'none';
+        if (dashboardContent) dashboardContent.style.display = 'block';
+        if (transactionCard) transactionCard.innerHTML = '';
         showStatus('Session exited.', 'info');
         currentSessionId = null;
         currentDetailId = null;
@@ -808,14 +808,16 @@ function exitSession() {
 
 // ---------- SUPPORTING DOCUMENTS MODAL ----------
 function openSupportingModal(templateKey, label) {
+    if (!supportingModal) return;
     supportingModal.style.display = 'flex';
-    supportingResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">Enter a search term and click Search.</div>';
-    supportingModal.dataset.template = templateKey;
-    supportingModal.dataset.label = label;
-    supportingSearchInput.focus();
+    if (supportingResults) supportingResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">Enter a search term and click Search.</div>';
+    if (supportingModal) supportingModal.dataset.template = templateKey;
+    if (supportingModal) supportingModal.dataset.label = label;
+    if (supportingSearchInput) supportingSearchInput.focus();
 }
 
 async function searchSupportingDocuments() {
+    if (!supportingSearchInput || !supportingResults) return;
     const searchTerm = supportingSearchInput.value.trim();
     if (!searchTerm) {
         supportingResults.innerHTML = '<div style="color:#f59e0b; text-align:center; padding:10px;">Please enter a search term.</div>';
@@ -878,8 +880,7 @@ const cashBtn = document.getElementById('cashVerificationBtn');
 if (cashBtn) {
     cashBtn.addEventListener('click', function() {
         console.log('💰 Cash Verification button clicked');
-        popupOverlay.style.display = 'flex';
-        // Set default date range to current month
+        if (popupOverlay) popupOverlay.style.display = 'flex';
         const now = new Date();
         const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
         const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -889,183 +890,202 @@ if (cashBtn) {
             const day = String(d.getDate()).padStart(2, '0');
             return `${y}-${m}-${day}`;
         };
-        popupPeriodStart.value = formatDate(firstDay);
-        popupPeriodEnd.value = formatDate(lastDay);
-        // Load cashbooks based on current client and dates
+        if (popupPeriodStart) popupPeriodStart.value = formatDate(firstDay);
+        if (popupPeriodEnd) popupPeriodEnd.value = formatDate(lastDay);
         scheduleCashbookLoad();
     });
-} else {
-    console.warn('⚠️ Cash Verification button not found');
 }
 
 // Popup events
-popupPeriodStart.addEventListener('change', scheduleCashbookLoad);
-popupPeriodEnd.addEventListener('change', scheduleCashbookLoad);
-popupCashbookSelect.addEventListener('change', function() {
-    popupStartBtn.disabled = !this.value;
-});
-popupStartBtn.addEventListener('click', startSession);
-popupCancelBtn.addEventListener('click', function() {
-    popupOverlay.style.display = 'none';
-});
+if (popupPeriodStart) popupPeriodStart.addEventListener('change', scheduleCashbookLoad);
+if (popupPeriodEnd) popupPeriodEnd.addEventListener('change', scheduleCashbookLoad);
+if (popupCashbookSelect) {
+    popupCashbookSelect.addEventListener('change', function() {
+        if (popupStartBtn) popupStartBtn.disabled = !this.value;
+    });
+}
+if (popupStartBtn) popupStartBtn.addEventListener('click', startSession);
+if (popupCancelBtn) {
+    popupCancelBtn.addEventListener('click', function() {
+        if (popupOverlay) popupOverlay.style.display = 'none';
+    });
+}
 
 // Session navigation
-prevBtn.addEventListener('click', () => navigate('prev'));
-nextBtn.addEventListener('click', () => navigate('next'));
-saveProgressBtn.addEventListener('click', saveLineItems);
-verifyBtn.addEventListener('click', completeTransaction);
-exitBtn.addEventListener('click', exitSession);
-exitSessionLink.addEventListener('click', function(e) {
-    e.preventDefault();
-    exitSession();
-});
+if (prevBtn) prevBtn.addEventListener('click', () => navigate('prev'));
+if (nextBtn) nextBtn.addEventListener('click', () => navigate('next'));
+if (saveProgressBtn) saveProgressBtn.addEventListener('click', saveLineItems);
+if (verifyBtn) verifyBtn.addEventListener('click', completeTransaction);
+if (exitBtn) exitBtn.addEventListener('click', exitSession);
+if (exitSessionLink) {
+    exitSessionLink.addEventListener('click', function(e) {
+        e.preventDefault();
+        exitSession();
+    });
+}
 
 // Supporting modal
-supportingSearchBtn.addEventListener('click', searchSupportingDocuments);
-supportingSearchInput.addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') searchSupportingDocuments();
-});
-supportingModalClose.addEventListener('click', function() {
-    supportingModal.style.display = 'none';
-});
-supportingModal.addEventListener('click', function(e) {
-    if (e.target === this) this.style.display = 'none';
-});
+if (supportingSearchBtn) supportingSearchBtn.addEventListener('click', searchSupportingDocuments);
+if (supportingSearchInput) {
+    supportingSearchInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') searchSupportingDocuments();
+    });
+}
+if (supportingModalClose) {
+    supportingModalClose.addEventListener('click', function() {
+        if (supportingModal) supportingModal.style.display = 'none';
+    });
+}
+if (supportingModal) {
+    supportingModal.addEventListener('click', function(e) {
+        if (e.target === this) supportingModal.style.display = 'none';
+    });
+}
 
 // ==============================================
 // AUDIT PROCEDURE POPOVER
 // ==============================================
 
 function openProcedureModal(procKey, procLabel, templateId) {
+    if (!procedureModal) return;
     currentProcedureKey = procKey;
     currentTemplateId = templateId;
     selectedDocId = null;
     selectedDocData = null;
-    procedureModalTitle.textContent = `📋 ${procLabel}`;
-    procedureSearchInput.value = '';
-    procedureResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">Enter a reference number and click Search.</div>';
-    procedureStatus.textContent = '';
-    procedureConfirmBtn.disabled = true;
+    if (procedureModalTitle) procedureModalTitle.textContent = `📋 ${procLabel}`;
+    if (procedureSearchInput) procedureSearchInput.value = '';
+    if (procedureResults) procedureResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">Enter a reference number and click Search.</div>';
+    if (procedureStatus) procedureStatus.textContent = '';
+    if (procedureConfirmBtn) procedureConfirmBtn.disabled = true;
     procedureModal.style.display = 'flex';
-    setTimeout(() => procedureSearchInput.focus(), 100);
+    setTimeout(() => {
+        if (procedureSearchInput) procedureSearchInput.focus();
+    }, 100);
 }
 
 function closeProcedureModal() {
-    procedureModal.style.display = 'none';
+    if (procedureModal) procedureModal.style.display = 'none';
     currentProcedureKey = null;
     currentTemplateId = null;
     selectedDocId = null;
     selectedDocData = null;
 }
 
-// Search for supporting documents
-procedureSearchBtn.addEventListener('click', async function() {
-    const searchTerm = procedureSearchInput.value.trim();
-    if (!searchTerm) {
-        procedureResults.innerHTML = '<div style="color:#f59e0b; text-align:center; padding:10px;">Please enter a reference number.</div>';
-        return;
-    }
-    const clientId = getClientId();
-    if (!clientId) {
-        procedureResults.innerHTML = '<div style="color:#dc2626; text-align:center; padding:10px;">No client selected.</div>';
-        return;
-    }
-    procedureResults.innerHTML = '<div style="text-align:center; padding:10px;"><span class="spinner"></span> Searching...</div>';
-    procedureSearchBtn.disabled = true;
-    try {
-        const params = new URLSearchParams({
-            client_id: clientId,
-            search: searchTerm,
-            template_id: currentTemplateId,
-            limit: 20
-        });
-        const res = await fetch(`${API_BASE}/api/verification/supporting?${params}`);
-        if (!res.ok) throw new Error('Failed to search');
-        const data = await res.json();
-        const docs = data.supporting_documents || [];
-        if (docs.length === 0) {
-            procedureResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:10px;">No documents found with that reference.</div>';
-            procedureConfirmBtn.disabled = true;
-        } else {
-            let html = '<div style="font-weight:600; font-size:13px; padding:4px 8px; background:#f8fafc; margin-bottom:6px;">Select a document:</div>';
-            docs.forEach(doc => {
-                const row = doc.row_data || {};
-                const desc = row['Description'] || row['PO Number'] || row['GRN Number'] || row['Invoice Number'] || '';
-                const vendor = row['Vendor Name'] || row['Vendor'] || '—';
-                const unit = row['Unit'] || '—';
-                const qty = row['Qty'] || row['Quantity'] || '—';
-                const rate = row['Rate'] || '—';
-                const amount = doc.extract_amount || row['Amount'] || '—';
-                html += `
-                    <div class="result-item" data-id="${doc.id}" style="padding:8px; border-bottom:1px solid #f0f2f5; cursor:pointer; display:flex; justify-content:space-between; align-items:center; transition:background 0.1s;">
-                        <div style="flex:1;">
-                            <div><strong>${desc}</strong></div>
-                            <div style="font-size:12px; color:#64748b;">
-                                Vendor: ${vendor} | Unit: ${unit} | Qty: ${qty} | Rate: ${rate} | Amount: ${amount}
-                            </div>
-                        </div>
-                        <button class="select-doc-btn" data-id="${doc.id}" data-row='${JSON.stringify(row)}' style="padding:4px 12px; background:#3b82f6; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Select</button>
-                    </div>
-                `;
-            });
-            procedureResults.innerHTML = html;
-            // Add event listeners to Select buttons
-            procedureResults.querySelectorAll('.select-doc-btn').forEach(btn => {
-                btn.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                    const id = this.dataset.id;
-                    const rowData = JSON.parse(this.dataset.row);
-                    selectedDocId = id;
-                    selectedDocData = rowData;
-                    procedureConfirmBtn.disabled = false;
-                    // Highlight selected item
-                    procedureResults.querySelectorAll('.result-item').forEach(el => el.style.background = '');
-                    this.closest('.result-item').style.background = '#e0f2fe';
-                    procedureStatus.textContent = '✅ Document selected. Click "Confirm Selection" to apply.';
-                    procedureStatus.style.color = '#16a34a';
-                });
-            });
-            // Also allow clicking on the whole item
-            procedureResults.querySelectorAll('.result-item').forEach(el => {
-                el.addEventListener('click', function() {
-                    const btn = this.querySelector('.select-doc-btn');
-                    if (btn) btn.click();
-                });
-            });
+// ---- Procedure modal event listeners (only if modal exists) ----
+if (procedureModal) {
+    // Search for supporting documents
+    procedureSearchBtn.addEventListener('click', async function() {
+        if (!procedureSearchInput || !procedureResults || !procedureConfirmBtn) return;
+        const searchTerm = procedureSearchInput.value.trim();
+        if (!searchTerm) {
+            procedureResults.innerHTML = '<div style="color:#f59e0b; text-align:center; padding:10px;">Please enter a reference number.</div>';
+            return;
         }
-    } catch (error) {
-        console.error('Search error:', error);
-        procedureResults.innerHTML = `<div style="color:#dc2626; text-align:center; padding:10px;">Error: ${error.message}</div>`;
-    } finally {
-        procedureSearchBtn.disabled = false;
-    }
-});
+        const clientId = getClientId();
+        if (!clientId) {
+            procedureResults.innerHTML = '<div style="color:#dc2626; text-align:center; padding:10px;">No client selected.</div>';
+            return;
+        }
+        procedureResults.innerHTML = '<div style="text-align:center; padding:10px;"><span class="spinner"></span> Searching...</div>';
+        procedureSearchBtn.disabled = true;
+        try {
+            const params = new URLSearchParams({
+                client_id: clientId,
+                search: searchTerm,
+                template_id: currentTemplateId,
+                limit: 20
+            });
+            const res = await fetch(`${API_BASE}/api/verification/supporting?${params}`);
+            if (!res.ok) throw new Error('Failed to search');
+            const data = await res.json();
+            const docs = data.supporting_documents || [];
+            if (docs.length === 0) {
+                procedureResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:10px;">No documents found with that reference.</div>';
+                procedureConfirmBtn.disabled = true;
+            } else {
+                let html = '<div style="font-weight:600; font-size:13px; padding:4px 8px; background:#f8fafc; margin-bottom:6px;">Select a document:</div>';
+                docs.forEach(doc => {
+                    const row = doc.row_data || {};
+                    const desc = row['Description'] || row['PO Number'] || row['GRN Number'] || row['Invoice Number'] || '';
+                    const vendor = row['Vendor Name'] || row['Vendor'] || '—';
+                    const unit = row['Unit'] || '—';
+                    const qty = row['Qty'] || row['Quantity'] || '—';
+                    const rate = row['Rate'] || '—';
+                    const amount = doc.extract_amount || row['Amount'] || '—';
+                    html += `
+                        <div class="result-item" data-id="${doc.id}" style="padding:8px; border-bottom:1px solid #f0f2f5; cursor:pointer; display:flex; justify-content:space-between; align-items:center; transition:background 0.1s;">
+                            <div style="flex:1;">
+                                <div><strong>${desc}</strong></div>
+                                <div style="font-size:12px; color:#64748b;">
+                                    Vendor: ${vendor} | Unit: ${unit} | Qty: ${qty} | Rate: ${rate} | Amount: ${amount}
+                                </div>
+                            </div>
+                            <button class="select-doc-btn" data-id="${doc.id}" data-row='${JSON.stringify(row)}' style="padding:4px 12px; background:#3b82f6; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Select</button>
+                        </div>
+                    `;
+                });
+                procedureResults.innerHTML = html;
+                // Add event listeners to Select buttons
+                procedureResults.querySelectorAll('.select-doc-btn').forEach(btn => {
+                    btn.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        const id = this.dataset.id;
+                        const rowData = JSON.parse(this.dataset.row);
+                        selectedDocId = id;
+                        selectedDocData = rowData;
+                        procedureConfirmBtn.disabled = false;
+                        // Highlight selected item
+                        procedureResults.querySelectorAll('.result-item').forEach(el => el.style.background = '');
+                        this.closest('.result-item').style.background = '#e0f2fe';
+                        if (procedureStatus) {
+                            procedureStatus.textContent = '✅ Document selected. Click "Confirm Selection" to apply.';
+                            procedureStatus.style.color = '#16a34a';
+                        }
+                    });
+                });
+                // Also allow clicking on the whole item
+                procedureResults.querySelectorAll('.result-item').forEach(el => {
+                    el.addEventListener('click', function() {
+                        const btn = this.querySelector('.select-doc-btn');
+                        if (btn) btn.click();
+                    });
+                });
+            }
+        } catch (error) {
+            console.error('Search error:', error);
+            procedureResults.innerHTML = `<div style="color:#dc2626; text-align:center; padding:10px;">Error: ${error.message}</div>`;
+        } finally {
+            procedureSearchBtn.disabled = false;
+        }
+    });
 
-// Confirm selection
-procedureConfirmBtn.addEventListener('click', function() {
-    if (!selectedDocId || !currentProcedureKey) return;
-    // Store the selected document info in procedureData
-    procedureData[currentProcedureKey] = true;
-    procedureData[currentProcedureKey + '_ref'] = procedureSearchInput.value.trim();
-    procedureData[currentProcedureKey + '_doc_id'] = selectedDocId;
-    procedureData[currentProcedureKey + '_doc_data'] = selectedDocData;
-    closeProcedureModal();
-    // Reload the transaction from server to reflect the update
-    loadNextTransaction(currentDetailId);
-    showStatus('✅ Procedure updated!', 'success');
-});
+    // Confirm selection
+    procedureConfirmBtn.addEventListener('click', function() {
+        if (!selectedDocId || !currentProcedureKey) return;
+        // Store the selected document info in procedureData
+        procedureData[currentProcedureKey] = true;
+        procedureData[currentProcedureKey + '_ref'] = procedureSearchInput.value.trim();
+        procedureData[currentProcedureKey + '_doc_id'] = selectedDocId;
+        procedureData[currentProcedureKey + '_doc_data'] = selectedDocData;
+        closeProcedureModal();
+        // Reload the transaction from server to reflect the update
+        loadNextTransaction(currentDetailId);
+        showStatus('✅ Procedure updated!', 'success');
+    });
 
-// Cancel / Close
-procedureCancelBtn.addEventListener('click', closeProcedureModal);
-procedureModalClose.addEventListener('click', closeProcedureModal);
-procedureModal.addEventListener('click', function(e) {
-    if (e.target === this) closeProcedureModal();
-});
+    // Cancel / Close
+    procedureCancelBtn.addEventListener('click', closeProcedureModal);
+    procedureModalClose.addEventListener('click', closeProcedureModal);
+    procedureModal.addEventListener('click', function(e) {
+        if (e.target === this) closeProcedureModal();
+    });
 
-// Enter key triggers search
-procedureSearchInput.addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') procedureSearchBtn.click();
-});
+    // Enter key triggers search
+    procedureSearchInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') procedureSearchBtn.click();
+    });
+}
+
 // ==============================================
 // TRANSACTION REPORT VIEW (full page)
 // ==============================================
@@ -1074,9 +1094,10 @@ procedureSearchInput.addEventListener('keypress', function(e) {
 function openTransactionReport() {
     console.log('📊 Transaction Report button clicked');
     try {
+        if (!reportContent) return;
         // Hide dashboard and session content, show report
-        dashboardContent.style.display = 'none';
-        sessionContent.style.display = 'none';
+        if (dashboardContent) dashboardContent.style.display = 'none';
+        if (sessionContent) sessionContent.style.display = 'none';
         reportContent.style.display = 'block';
 
         // Set default date range to current month
@@ -1093,8 +1114,8 @@ function openTransactionReport() {
         if (reportEndDate) reportEndDate.value = formatDate(lastDay);
 
         // Display client info
-        const clientName = typeof window.getSelectedClientName === 'function' 
-            ? window.getSelectedClientName() 
+        const clientName = typeof window.getSelectedClientName === 'function'
+            ? window.getSelectedClientName()
             : localStorage.getItem('selectedClientName') || 'Unknown Client';
         if (reportClientInfo) reportClientInfo.textContent = `Client: ${clientName}`;
 
@@ -1133,13 +1154,16 @@ async function loadTemplateId() {
         console.log('✅ Transaction Report template ID loaded:', reportTemplateId);
     } catch (error) {
         console.error('Error loading template:', error);
-        reportStatus.textContent = '❌ ' + error.message;
-        reportStatus.style.color = '#dc2626';
+        if (reportStatus) {
+            reportStatus.textContent = '❌ ' + error.message;
+            reportStatus.style.color = '#dc2626';
+        }
     }
 }
 
 // Fetch data from the server
 async function fetchReportData() {
+    if (!reportStartDate || !reportEndDate || !reportStatus || !reportFetchBtn || !reportTableWrapper) return;
     const start = reportStartDate.value;
     const end = reportEndDate.value;
     if (!start || !end) {
@@ -1166,11 +1190,6 @@ async function fetchReportData() {
         if (!reportTemplateId) return;
     }
 
-    reportStatus.textContent = '⏳ Loading...';
-    reportStatus.style.color = '#3b82f6';
-    reportFetchBtn.disabled = true;
-
-        // Show loading indicator
     reportStatus.textContent = '⏳ Loading... (large data may take a moment)';
     reportStatus.style.color = '#3b82f6';
     reportFetchBtn.disabled = true;
@@ -1200,13 +1219,12 @@ async function fetchReportData() {
 
         if (rows.length === 0 && reportTotalRows === 0) {
             reportTableWrapper.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:40px;">No transactions found for the selected period.</div>';
-            reportRowCount.textContent = '0 rows';
+            if (reportRowCount) reportRowCount.textContent = '0 rows';
         } else {
-            reportRowCount.textContent = `${reportTotalRows} rows`;
+            if (reportRowCount) reportRowCount.textContent = `${reportTotalRows} rows`;
         }
         reportStatus.textContent = `✅ ${reportTotalRows} rows`;
         reportStatus.style.color = '#16a34a';
-
     } catch (error) {
         console.error('Fetch error:', error);
         reportTableWrapper.innerHTML = `<div style="text-align:center; color:#dc2626; padding:40px;">❌ ${error.message}</div>`;
@@ -1219,6 +1237,7 @@ async function fetchReportData() {
 
 // Render the table
 function renderReportTable(rows, data) {
+    if (!reportTableWrapper) return;
     if (!rows || rows.length === 0) {
         reportTableWrapper.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:40px;">No data to display.</div>';
         return;
@@ -1251,9 +1270,9 @@ function renderReportTable(rows, data) {
 // Update pagination controls
 function updatePaginationControls() {
     const totalPages = Math.ceil(reportTotalRows / reportPageSize) || 1;
-    reportPageInfo.textContent = `Page ${reportCurrentPage} of ${totalPages}`;
-    reportPrevPage.disabled = reportCurrentPage <= 1;
-    reportNextPage.disabled = reportCurrentPage >= totalPages;
+    if (reportPageInfo) reportPageInfo.textContent = `Page ${reportCurrentPage} of ${totalPages}`;
+    if (reportPrevPage) reportPrevPage.disabled = reportCurrentPage <= 1;
+    if (reportNextPage) reportNextPage.disabled = reportCurrentPage >= totalPages;
 }
 
 // Event listeners for report view
@@ -1262,57 +1281,65 @@ if (reportFetchBtn) {
         console.log('📊 Fetch button clicked');
         fetchReportData();
     });
-} else {
-    console.warn('⚠️ reportFetchBtn not found');
 }
-
-// When page size changes, reset to page 1
-reportPageSizeSelect.addEventListener('change', function() {
-    reportPageSize = parseInt(this.value);
-    reportCurrentPage = 1;
-    fetchReportData();
-});
-
-reportPrevPage.addEventListener('click', function() {
-    if (reportCurrentPage > 1) {
-        reportCurrentPage--;
+if (reportPageSizeSelect) {
+    reportPageSizeSelect.addEventListener('change', function() {
+        reportPageSize = parseInt(this.value);
+        reportCurrentPage = 1;
         fetchReportData();
-    }
-});
-
-reportNextPage.addEventListener('click', function() {
-    const totalPages = Math.ceil(reportTotalRows / reportPageSize);
-    if (reportCurrentPage < totalPages) {
-        reportCurrentPage++;
-        fetchReportData();
-    }
-});
-
-// Exit report view
-exitReportLink.addEventListener('click', function(e) {
-    e.preventDefault();
-    reportContent.style.display = 'none';
-    dashboardContent.style.display = 'block';
-    sessionContent.style.display = 'none';
-    // Reset table
-    reportTableWrapper.innerHTML = '';
-    reportStatus.textContent = '';
-});
-
-// Keyboard shortcut: Enter on date inputs triggers fetch
-reportStartDate.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') fetchReportData();
-});
-reportEndDate.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') fetchReportData();
-});
-
+    });
+}
+if (reportPrevPage) {
+    reportPrevPage.addEventListener('click', function() {
+        if (reportCurrentPage > 1) {
+            reportCurrentPage--;
+            fetchReportData();
+        }
+    });
+}
+if (reportNextPage) {
+    reportNextPage.addEventListener('click', function() {
+        const totalPages = Math.ceil(reportTotalRows / reportPageSize);
+        if (reportCurrentPage < totalPages) {
+            reportCurrentPage++;
+            fetchReportData();
+        }
+    });
+}
+if (exitReportLink) {
+    exitReportLink.addEventListener('click', function(e) {
+        e.preventDefault();
+        if (reportContent) reportContent.style.display = 'none';
+        if (dashboardContent) dashboardContent.style.display = 'block';
+        if (sessionContent) sessionContent.style.display = 'none';
+        if (reportTableWrapper) reportTableWrapper.innerHTML = '';
+        if (reportStatus) reportStatus.textContent = '';
+    });
+}
+if (reportStartDate) {
+    reportStartDate.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') fetchReportData();
+    });
+}
+if (reportEndDate) {
+    reportEndDate.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') fetchReportData();
+    });
+}
 
 // ---------- INIT ----------
 window.onload = function() {
     // Ensure dashboard is visible, session content hidden
-    dashboardContent.style.display = 'block';
-    sessionContent.style.display = 'none';
+    if (dashboardContent) dashboardContent.style.display = 'block';
+    if (sessionContent) sessionContent.style.display = 'none';
+    // Set the module name in the navbar
+    if (typeof setNavModule === 'function') {
+        setNavModule('Verification');
+    }
+    // Clear any existing stats
+    if (typeof setNavStats === 'function') {
+        setNavStats('');
+    }
     // Load verification stats
     loadVerificationStats();
     console.log('✅ Verification module loaded (restored dashboard)');
@@ -1324,18 +1351,27 @@ async function loadVerificationStats() {
         const res = await fetch('/api/verification/stats');
         if (res.ok) {
             const stats = await res.json();
-            document.getElementById('pendingCount').textContent = stats.pending || 0;
-            document.getElementById('verifiedToday').textContent = stats.approved || 0;
-            document.getElementById('totalVerified').textContent = stats.total || 0;
+            const pendingEl = document.getElementById('pendingCount');
+            const verifiedTodayEl = document.getElementById('verifiedToday');
+            const totalVerifiedEl = document.getElementById('totalVerified');
+            if (pendingEl) pendingEl.textContent = stats.pending || 0;
+            if (verifiedTodayEl) verifiedTodayEl.textContent = stats.approved || 0;
+            if (totalVerifiedEl) totalVerifiedEl.textContent = stats.total || 0;
         } else {
-            document.getElementById('pendingCount').textContent = '0';
-            document.getElementById('verifiedToday').textContent = '0';
-            document.getElementById('totalVerified').textContent = '0';
+            const pendingEl = document.getElementById('pendingCount');
+            const verifiedTodayEl = document.getElementById('verifiedToday');
+            const totalVerifiedEl = document.getElementById('totalVerified');
+            if (pendingEl) pendingEl.textContent = '0';
+            if (verifiedTodayEl) verifiedTodayEl.textContent = '0';
+            if (totalVerifiedEl) totalVerifiedEl.textContent = '0';
         }
     } catch (error) {
         console.log('⚠️ Error loading verification stats:', error.message);
-        document.getElementById('pendingCount').textContent = '0';
-        document.getElementById('verifiedToday').textContent = '0';
-        document.getElementById('totalVerified').textContent = '0';
+        const pendingEl = document.getElementById('pendingCount');
+        const verifiedTodayEl = document.getElementById('verifiedToday');
+        const totalVerifiedEl = document.getElementById('totalVerified');
+        if (pendingEl) pendingEl.textContent = '0';
+        if (verifiedTodayEl) verifiedTodayEl.textContent = '0';
+        if (totalVerifiedEl) totalVerifiedEl.textContent = '0';
     }
 }

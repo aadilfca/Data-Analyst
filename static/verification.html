@@ -459,7 +459,7 @@
     <!-- Top Navigation Bar -->
     <nav class="navbar">
         <div class="nav-container">
-            <div class="nav-brand">🏢 System Analyst</div>
+            <div id="navLeft"></div>
             <div class="nav-client" id="clientControl">
                 <!-- Will be rendered by client_context.js -->
             </div>
@@ -576,17 +576,7 @@
         <!-- VERIFICATION SESSION CONTENT (hidden initially) -->
         <!-- ============================================= -->
         <div id="verificationSessionContent">
-            <!-- Session header -->
-            <div class="verification-header"
-                style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:20px;">
-                <div>
-                    <a href="#" class="back-link no-print" id="exitSessionLink">← Back to Dashboard</a>
-                    <h1 style="font-size:24px; margin:0; color:#1a1a2e;">✅ Verification</h1>
-                    <div style="font-size:14px; color:#64748b;">Session: <span id="sessionIdDisplay">—</span> ·
-                        Cashbook: <span id="cashbookDisplay">—</span> · Period: <span id="periodDisplay">—</span></div>
-                </div>
-                <div style="font-size:14px; font-weight:600; color:#3b82f6;" id="progressDisplay">0 / 0 verified</div>
-            </div>
+            <!-- Session header removed – now handled by global navbar -->
 
             <!-- Status bar -->
             <div id="verificationStatus" class="upload-status" style="display:none; margin-bottom:12px;"></div>
