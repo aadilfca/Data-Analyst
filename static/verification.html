@@ -613,28 +613,89 @@
     <div id="sessionPopupOverlay">
         <div id="sessionPopup">
             <h2>📋 Start Cash Verification</h2>
-            <p style="color:#64748b; margin-bottom:16px;">Select a cashbook and date range to begin verification.</p>
+            <p style="color:#64748b; margin-bottom:16px;">Select a cashbook to begin verification.</p>
             <div class="field">
                 <label>📒 Cashbook</label>
                 <select id="popupCashbookSelect" disabled>
-                    <option value="">-- Select client and period first --</option>
+                    <option value="">-- Loading cashbooks... --</option>
                 </select>
-            </div>
-            <div class="field">
-                <label>📅 Period Start</label>
-                <input type="date" id="popupPeriodStart">
-            </div>
-            <div class="field">
-                <label>📅 Period End</label>
-                <input type="date" id="popupPeriodEnd">
             </div>
             <div id="popupError" class="error-msg" style="display:none;"></div>
             <div class="btn-row">
                 <button class="btn-secondary" id="popupCancelBtn">Cancel</button>
-                <button class="btn-primary" id="popupStartBtn" disabled>🚀 Start Session</button>
+                <button class="btn-primary" id="popupStartBtn" disabled>🚀 Open Cashbook</button>
             </div>
         </div>
     </div>
+
+    <!-- ============================================= -->
+    <!-- CASHBOOK PAGE                                -->
+    <!-- ============================================= -->
+    <div id="cashbookContent" style="display:none;">
+        <div class="cashbook-header"
+            style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
+            <div>
+                <a href="#" class="back-link no-print" id="exitCashbookLink">← Back to Verification</a>
+                <h1 style="font-size:24px; margin:0; color:#1a1a2e;">📒 Cashbook: <span id="cashbookNameDisplay"></span>
+                </h1>
+            </div>
+            <div style="display:flex; align-items:center; gap:12px;">
+                <span id="cashbookProgress" style="font-size:13px; color:#64748b;"></span>
+                <button id="startVerificationBtn"
+                    style="padding:6px 16px; background:#22c55e; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">✅
+                    Verification</button>
+            </div>
+        </div>
+        <!-- Date Range Selector -->
+        <div
+            style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; background:white; padding:12px 16px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.04); margin-bottom:16px;">
+            <div>
+                <label style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">Start Date</label>
+                <input type="date" id="cashbookStartDate"
+                    style="padding:4px 8px; border:2px solid #e2e8f0; border-radius:6px; font-size:13px;">
+            </div>
+            <div>
+                <label style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">End Date</label>
+                <input type="date" id="cashbookEndDate"
+                    style="padding:4px 8px; border:2px solid #e2e8f0; border-radius:6px; font-size:13px;">
+            </div>
+            <button id="cashbookFetchBtn"
+                style="padding:4px 16px; background:#3b82f6; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:500;">📊
+                Apply</button>
+            <span id="cashbookStatus" style="font-size:12px; color:#64748b;"></span>
+        </div>
+        <!-- Table Container -->
+        <div id="cashbookTableContainer"
+            style="background:white; border-radius:12px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06); padding:12px;">
+            <div id="cashbookTableWrapper" style="overflow-x:auto;">
+                <!-- Table will be rendered here -->
+            </div>
+            <!-- Pagination Controls -->
+            <div id="cashbookPagination"
+                style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid #e2e8f0;">
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <label style="font-size:12px; font-weight:500;">Rows per page:</label>
+                    <select id="cashbookPageSize"
+                        style="padding:2px 6px; border:1px solid #d0d5dd; border-radius:4px; font-size:12px;">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <button id="cashbookPrevPage"
+                        style="padding:2px 10px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
+                        disabled>Previous</button>
+                    <span id="cashbookPageInfo" style="font-size:12px;">Page 1 of 1</span>
+                    <button id="cashbookNextPage"
+                        style="padding:2px 10px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
+                        disabled>Next</button>
+                </div>
+                <span id="cashbookRowCount" style="font-size:12px; color:#64748b;">0 rows</span>
+            </div>
+        </div>
+    </div>
+
     <!-- ============================================= -->
     <!-- TRANSACTION REPORT VIEW (full page)          -->
     <!-- ============================================= -->

@@ -179,6 +179,8 @@ def get_cashbooks(
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
     patterns = get_voucher_patterns()
+    print(f"🔍 [CASHBOOK] Fetching rows for client={client_id}, date_range={date_start} to {date_end}")
+    
     rows = execute_query(
         """
         SELECT id, row_data
@@ -190,18 +192,22 @@ def get_cashbooks(
         (client_id, date_start, date_end)
     )
     
+    print(f"🔍 [CASHBOOK] Found {len(rows)} rows total")
+    
     cashbooks = set()
     debug_info = []
     for row in rows:
         try:
-            row_data = parse_row_data(row['row_data'])
-            if not row_data:
+            row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
+            if not isinstance(row_data, dict):
                 continue
             voucher_id = row_data.get('Voucher ID')
             vtype = get_voucher_type(voucher_id, patterns)
             cb_name = None
             if vtype in ['CPV', 'CRV']:
                 cb_name = extract_cashbook_name(row_data, patterns)
+                if cb_name:
+                    print(f"✅ [CASHBOOK] Row {row['id']}: {voucher_id} -> {vtype} -> cashbook: {cb_name}")
             if debug:
                 debug_info.append({
                     "row_id": row['id'],
@@ -218,6 +224,8 @@ def get_cashbooks(
             if debug:
                 debug_info.append({"row_id": row['id'], "error": str(e)})
             continue
+    
+    print(f"🔍 [CASHBOOK] Final cashbooks found: {cashbooks}")
     
     if debug:
         return {
@@ -631,6 +639,156 @@ def get_supporting_documents(
         })
     return {"supporting_documents": result, "count": len(result)}
 
+# ==============================================
+# CASHBOOK PREVIEW (No session creation)
+# ==============================================
+
+@router.get("/api/verification/preview_cashbook")
+def preview_cashbook(
+    client_id: int = Query(..., description="Client ID"),
+    cashbook_name: str = Query(..., description="Cashbook name"),
+    date_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    date_end: str = Query(..., description="End date (YYYY-MM-DD)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(50, ge=1, le=200, description="Rows per page (max 200)")
+):
+    """
+    Get paginated transactions for a specific cashbook without creating a session.
+    Uses the same logic as start_verification_session but returns only the rows.
+    """
+    # Validate client
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+    
+    # Validate dates
+    try:
+        datetime.fromisoformat(date_start)
+        datetime.fromisoformat(date_end)
+    except ValueError:
+        raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+    if date_start > date_end:
+        raise HTTPException(400, "Start date must be before or equal to end date.")
+    
+    patterns = get_voucher_patterns()
+    
+    # Fetch rows
+    rows = execute_query(
+        """
+        SELECT id, row_data, extract_date, extract_amount
+        FROM client_data
+        WHERE client_id = ? AND is_deleted = 0
+          AND extract_date BETWEEN ? AND ?
+        ORDER BY extract_date
+        """,
+        (client_id, date_start, date_end)
+    )
+    
+    # Group by voucher ID and filter cashbook
+    vouchers = {}
+    voucher_aliases = ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher', 'Invoice No', 'Invoice Number']
+    account_aliases = ['Account Name', 'Account', 'Account Detail', 'Account Code', 'Ledger', 'Head']
+    debit_aliases = ['Debit', 'Debit Amount', 'Dr', 'Dr Amount', 'Debit (Dr)', 'Dr. Amount']
+    credit_aliases = ['Credit', 'Credit Amount', 'Cr', 'Cr Amount', 'Credit (Cr)', 'Cr. Amount']
+    
+    def get_col_value(row_data, aliases):
+        for alias in aliases:
+            if alias in row_data:
+                val = row_data[alias]
+                if val is not None and val != '':
+                    return val
+        return None
+    
+    for row in rows:
+        try:
+            rd = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
+            if not isinstance(rd, dict):
+                continue
+            voucher_id = get_col_value(rd, voucher_aliases)
+            if not voucher_id:
+                continue
+            vtype = get_voucher_type(voucher_id, patterns)
+            if vtype not in ['CPV', 'CRV']:
+                continue
+            debit_str = get_col_value(rd, debit_aliases)
+            credit_str = get_col_value(rd, credit_aliases)
+            debit = float(debit_str) if debit_str else 0.0
+            credit = float(credit_str) if credit_str else 0.0
+            account_name = get_col_value(rd, account_aliases)
+            if not account_name:
+                continue
+            if voucher_id not in vouchers:
+                vouchers[voucher_id] = {
+                    'vtype': vtype,
+                    'rows': [],
+                    'cashbook_account': None
+                }
+            vouchers[voucher_id]['rows'].append({
+                'row_id': row['id'],
+                'row_data': rd,
+                'debit': debit,
+                'credit': credit,
+                'account_name': account_name,
+                'extract_date': row['extract_date'],
+                'extract_amount': row['extract_amount']
+            })
+        except:
+            continue
+    
+    # Filter to only the selected cashbook and collect transaction rows
+    transactions = []
+    for vid, data in vouchers.items():
+        vtype = data['vtype']
+        cashbook_account = None
+        for row in data['rows']:
+            if vtype == 'CPV' and row['credit'] > 0:
+                cashbook_account = row['account_name']
+                break
+            elif vtype == 'CRV' and row['debit'] > 0:
+                cashbook_account = row['account_name']
+                break
+        if cashbook_account is None or cashbook_account != cashbook_name:
+            continue
+        for row in data['rows']:
+            if vtype == 'CPV' and row['debit'] > 0 and row['credit'] == 0:
+                transactions.append({
+                    'client_data_id': row['row_id'],
+                    'row_data': row['row_data'],
+                    'voucher_id': vid,
+                    'extract_date': row['extract_date'],
+                    'extract_amount': row['extract_amount']
+                })
+            elif vtype == 'CRV' and row['credit'] > 0 and row['debit'] == 0:
+                transactions.append({
+                    'client_data_id': row['row_id'],
+                    'row_data': row['row_data'],
+                    'voucher_id': vid,
+                    'extract_date': row['extract_date'],
+                    'extract_amount': row['extract_amount']
+                })
+    
+    # Pagination
+    total = len(transactions)
+    start_idx = (page - 1) * limit
+    end_idx = start_idx + limit
+    paginated = transactions[start_idx:end_idx]
+    
+    # Build response rows with row_data as dict
+    result_rows = []
+    for trans in paginated:
+        rd = json.loads(trans['row_data']) if isinstance(trans['row_data'], str) else trans['row_data']
+        result_rows.append({
+            'row_data': rd,
+            'extract_date': trans['extract_date'],
+            'extract_amount': trans['extract_amount']
+        })
+    
+    return {
+        'total_rows': total,
+        'page': page,
+        'limit': limit,
+        'rows': result_rows
+    }
 # ==============================================
 # PHASE 4 ENDPOINTS – Audited Cashbook & Export
 # ==============================================

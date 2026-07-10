@@ -1,5 +1,5 @@
 // ==============================================
-// ✅ VERIFICATION MODULE – RESTORED DASHBOARD + POPUP
+// ✅ VERIFICATION MODULE – CASHBOOK + VERIFICATION FLOW
 // ==============================================
 
 // API_BASE defined in client_context.js
@@ -11,15 +11,17 @@ let currentTransactionType = '';
 let lineItems = [];
 let procedureData = {};
 let isNavigating = false;
-let cashbookLoadTimer = null;
+let selectedCashbook = null;
+let cashbookCurrentPage = 1;
+let cashbookPageSize = 50;
+let cashbookTotalRows = 0;
 
-// DOM refs – ALL defined at the top before any function uses them
+// DOM refs
 const dashboardContent = document.getElementById('dashboardContent');
 const sessionContent = document.getElementById('verificationSessionContent');
+const cashbookContent = document.getElementById('cashbookContent');
 const popupOverlay = document.getElementById('sessionPopupOverlay');
 const popupCashbookSelect = document.getElementById('popupCashbookSelect');
-const popupPeriodStart = document.getElementById('popupPeriodStart');
-const popupPeriodEnd = document.getElementById('popupPeriodEnd');
 const popupStartBtn = document.getElementById('popupStartBtn');
 const popupCancelBtn = document.getElementById('popupCancelBtn');
 const popupError = document.getElementById('popupError');
@@ -32,6 +34,20 @@ const saveProgressBtn = document.getElementById('saveProgressBtn');
 const verifyBtn = document.getElementById('verifyBtn');
 const exitBtn = document.getElementById('exitBtn');
 const exitSessionLink = document.getElementById('exitSessionLink');
+
+const cashbookNameDisplay = document.getElementById('cashbookNameDisplay');
+const cashbookStartDate = document.getElementById('cashbookStartDate');
+const cashbookEndDate = document.getElementById('cashbookEndDate');
+const cashbookFetchBtn = document.getElementById('cashbookFetchBtn');
+const cashbookStatus = document.getElementById('cashbookStatus');
+const cashbookTableWrapper = document.getElementById('cashbookTableWrapper');
+const cashbookPageSizeSelect = document.getElementById('cashbookPageSize');
+const cashbookPrevPage = document.getElementById('cashbookPrevPage');
+const cashbookNextPage = document.getElementById('cashbookNextPage');
+const cashbookPageInfo = document.getElementById('cashbookPageInfo');
+const cashbookRowCount = document.getElementById('cashbookRowCount');
+const startVerificationBtn = document.getElementById('startVerificationBtn');
+const exitCashbookLink = document.getElementById('exitCashbookLink');
 
 const supportingModal = document.getElementById('supportingModal');
 const supportingSearchInput = document.getElementById('supportingSearchInput');
@@ -104,27 +120,27 @@ function getClientId() {
     return localStorage.getItem('selectedClientId');
 }
 
-// ---------- POPUP: LOAD CASHBOOKS ----------
-function scheduleCashbookLoad() {
-    if (!popupCashbookSelect || !popupStartBtn) return;
-    clearTimeout(cashbookLoadTimer);
-    popupCashbookSelect.innerHTML = '<option value="">Loading cashbooks...</option>';
-    popupCashbookSelect.disabled = true;
-    popupStartBtn.disabled = true;
-    cashbookLoadTimer = setTimeout(loadCashbooks, 250);
+function formatDateInput(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
 }
 
+// ---------- POPUP: LOAD CASHBOOKS ----------
 async function loadCashbooks() {
-    if (!popupCashbookSelect || !popupStartBtn || !popupPeriodStart || !popupPeriodEnd) return;
     const clientId = getClientId();
-    const start = popupPeriodStart.value;
-    const end = popupPeriodEnd.value;
-    if (!clientId || !start || !end) {
-        popupCashbookSelect.innerHTML = '<option value="">-- Select date range --</option>';
+    if (!clientId) {
+        popupCashbookSelect.innerHTML = '<option value="">-- Select client first --</option>';
         popupCashbookSelect.disabled = true;
         popupStartBtn.disabled = true;
         return;
     }
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const start = formatDateInput(firstDay);
+    const end = formatDateInput(lastDay);
     try {
         const params = new URLSearchParams({
             client_id: clientId,
@@ -152,7 +168,7 @@ async function loadCashbooks() {
             popupCashbookSelect.disabled = true;
             popupStartBtn.disabled = true;
             showPopupError(
-                'No cashbooks found for this client and date range.\n' +
+                'No cashbooks found for this client.\n' +
                 'Make sure you have uploaded data containing CPV/CRV vouchers.\n' +
                 'The column names must be exactly: "Voucher ID", "Account Name", "Debit", "Credit".'
             );
@@ -165,24 +181,148 @@ async function loadCashbooks() {
     }
 }
 
-// ---------- POPUP: START SESSION ----------
-async function startSession() {
-    if (!popupCashbookSelect || !popupPeriodStart || !popupPeriodEnd || !popupStartBtn) return;
-    const clientId = getClientId();
+// ---------- POPUP: OPEN CASHBOOK ----------
+async function openCashbook() {
+    if (!popupCashbookSelect) return;
     const cashbook = popupCashbookSelect.value;
-    const start = popupPeriodStart.value;
-    const end = popupPeriodEnd.value;
-    if (!clientId || !cashbook || !start || !end) {
-        showPopupError('Please fill all fields.');
+    if (!cashbook) {
+        showPopupError('Please select a cashbook.');
         return;
     }
     hidePopupError();
-    popupStartBtn.disabled = true;
-    popupStartBtn.innerHTML = '<span class="spinner"></span> Starting...';
+    selectedCashbook = cashbook;
+    popupOverlay.style.display = 'none';
+    dashboardContent.style.display = 'none';
+    sessionContent.style.display = 'none';
+    cashbookContent.style.display = 'block';
+    cashbookNameDisplay.textContent = cashbook;
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    cashbookStartDate.value = formatDateInput(firstDay);
+    cashbookEndDate.value = formatDateInput(lastDay);
+    await fetchCashbookData();
+}
+
+// ---------- CASHBOOK DATA FETCH ----------
+async function fetchCashbookData() {
+    if (!selectedCashbook) return;
+    const clientId = getClientId();
+    if (!clientId) {
+        cashbookStatus.textContent = '⚠️ No client selected';
+        return;
+    }
+    const start = cashbookStartDate.value;
+    const end = cashbookEndDate.value;
+    if (!start || !end) {
+        cashbookStatus.textContent = '⚠️ Please select date range';
+        return;
+    }
+    if (start > end) {
+        cashbookStatus.textContent = '⚠️ Start must be ≤ end';
+        return;
+    }
+    cashbookStatus.textContent = '⏳ Loading...';
+    cashbookFetchBtn.disabled = true;
+    const params = new URLSearchParams({
+        client_id: clientId,
+        cashbook_name: selectedCashbook,
+        date_start: start,
+        date_end: end,
+        page: cashbookCurrentPage,
+        limit: cashbookPageSize
+    });
     try {
+        const res = await fetch(`${API_BASE}/api/verification/preview_cashbook?${params}`);
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Failed to fetch cashbook data');
+        }
+        const data = await res.json();
+        cashbookTotalRows = data.total_rows || 0;
+        const rows = data.rows || [];
+        renderCashbookTable(rows);
+        updateCashbookPagination();
+        if (rows.length === 0 && cashbookTotalRows === 0) {
+            cashbookTableWrapper.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:20px;">No transactions found for this cashbook and date range.</div>';
+            cashbookRowCount.textContent = '0 rows';
+        } else {
+            cashbookRowCount.textContent = `${cashbookTotalRows} rows`;
+        }
+        cashbookStatus.textContent = `✅ ${cashbookTotalRows} rows`;
+        cashbookStatus.style.color = '#16a34a';
+    } catch (error) {
+        console.error('Cashbook fetch error:', error);
+        cashbookStatus.textContent = '❌ ' + error.message;
+        cashbookStatus.style.color = '#dc2626';
+        cashbookTableWrapper.innerHTML = `<div style="text-align:center; color:#dc2626; padding:20px;">❌ ${error.message}</div>`;
+    } finally {
+        cashbookFetchBtn.disabled = false;
+    }
+}
+
+// ---------- RENDER CASHBOOK TABLE ----------
+function renderCashbookTable(rows) {
+    if (!rows || rows.length === 0) {
+        cashbookTableWrapper.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:20px;">No data to display.</div>';
+        return;
+    }
+    const firstRow = rows[0].row_data;
+    const headers = firstRow ? Object.keys(firstRow) : [];
+    let html = `<table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <thead style="background:#f8fafc; position:sticky; top:0; z-index:1; border-bottom:2px solid #e2e8f0;">
+            <tr>`;
+    headers.forEach(h => {
+        html += `<th style="padding:6px 10px; text-align:left; font-weight:600; white-space:nowrap;">${h}</th>`;
+    });
+    html += `</tr></thead><tbody>`;
+    rows.forEach(row => {
+        html += `<tr style="border-bottom:1px solid #f0f2f5;">`;
+        headers.forEach(h => {
+            const val = row.row_data[h] !== undefined ? row.row_data[h] : '';
+            html += `<td style="padding:6px 10px;">${val}</td>`;
+        });
+        html += `</tr>`;
+    });
+    html += `</tbody></table>`;
+    cashbookTableWrapper.innerHTML = html;
+}
+
+// ---------- CASHBOOK PAGINATION ----------
+function updateCashbookPagination() {
+    const totalPages = Math.ceil(cashbookTotalRows / cashbookPageSize) || 1;
+    cashbookPageInfo.textContent = `Page ${cashbookCurrentPage} of ${totalPages}`;
+    cashbookPrevPage.disabled = cashbookCurrentPage <= 1;
+    cashbookNextPage.disabled = cashbookCurrentPage >= totalPages;
+}
+
+// ---------- START VERIFICATION SESSION ----------
+async function startSessionFromCashbook() {
+    const clientId = getClientId();
+    if (!clientId) {
+        showStatus('⚠️ No client selected.', 'error');
+        return;
+    }
+    if (!selectedCashbook) {
+        showStatus('⚠️ No cashbook selected.', 'error');
+        return;
+    }
+    const start = cashbookStartDate.value;
+    const end = cashbookEndDate.value;
+    if (!start || !end) {
+        showStatus('⚠️ Please select date range.', 'error');
+        return;
+    }
+    if (start > end) {
+        showStatus('⚠️ Start must be ≤ end.', 'error');
+        return;
+    }
+    try {
+        startVerificationBtn.disabled = true;
+        startVerificationBtn.textContent = '⏳ Starting...';
         const params = new URLSearchParams({
             client_id: clientId,
-            cashbook_name: cashbook,
+            cashbook_name: selectedCashbook,
             period_start: start,
             period_end: end,
             created_by: 'Analyst'
@@ -196,28 +336,19 @@ async function startSession() {
         }
         const data = await res.json();
         currentSessionId = data.session_id;
-
-                if (popupOverlay) popupOverlay.style.display = 'none';
-        if (dashboardContent) dashboardContent.style.display = 'none';
-        if (sessionContent) sessionContent.style.display = 'block';
-        // Remove padding from main container when session is active
-        const container = document.getElementById('verificationContainer');
-        if (container) container.classList.add('verification-active');
-
+        cashbookContent.style.display = 'none';
+        sessionContent.style.display = 'block';
         if (typeof setNavStats === 'function') {
-            setNavStats(`Session ${currentSessionId} · Cashbook: ${cashbook} · 0 / ${data.total_transactions || 0} verified`);
+            setNavStats(`Session ${currentSessionId} · Cashbook: ${selectedCashbook} · 0 / ${data.total_transactions || 0} verified`);
         }
-
         await loadNextTransaction();
         await updateProgress();
-    } catch (e) {
-        console.error('Error starting session:', e);
-        showPopupError('Error: ' + e.message);
+    } catch (error) {
+        console.error('Error starting session:', error);
+        showStatus('❌ Error starting verification: ' + error.message, 'error');
     } finally {
-        if (popupStartBtn) {
-            popupStartBtn.disabled = false;
-            popupStartBtn.innerHTML = '🚀 Start Session';
-        }
+        startVerificationBtn.disabled = false;
+        startVerificationBtn.textContent = '✅ Verification';
     }
 }
 
@@ -260,7 +391,7 @@ async function loadNextTransaction(detailId = null) {
         if (prevBtn) prevBtn.disabled = false;
         if (nextBtn) nextBtn.disabled = false;
         if (verifyBtn) verifyBtn.disabled = false;
-                // showStatus('Loaded transaction ' + currentVoucherId, 'info'); // removed as per user request
+        // Removed "Loaded transaction" message
     } catch (e) {
         console.error('Error loading transaction:', e);
         showStatus('Error loading transaction: ' + e.message, 'error');
@@ -446,7 +577,7 @@ function renderTransaction(data) {
     renderLineItems();
     document.getElementById('addLineItemBtn')?.addEventListener('click', addLineItemRow);
 
-    // Procedure checkboxes (if still present in HTML – we keep them for compatibility)
+    // Procedure checkboxes
     procKeys.forEach(key => {
         const cb = document.getElementById(`proc_${key}`);
         if (cb) {
@@ -479,14 +610,12 @@ function renderTransaction(data) {
         });
     }
 
-    // If currentTransactionType is already set, auto-show guidance on load
     if (currentTransactionType) {
         setTimeout(() => {
             fetchLibrary(currentTransactionType);
         }, 100);
     }
 
-    // Fetch library button (hidden)
     document.getElementById('fetchLibraryBtn')?.addEventListener('click', async function() {
         const type = document.getElementById('transactionTypeSelect').value;
         if (!type) {
@@ -496,7 +625,6 @@ function renderTransaction(data) {
         await fetchLibrary(type);
     });
 
-    // Observations & comments
     document.getElementById('observationsInput')?.addEventListener('input', function() {
         procedureData.observations = this.value;
     });
@@ -504,7 +632,6 @@ function renderTransaction(data) {
         procedureData.comments = this.value;
     });
 
-    // Supporting docs buttons
     transactionCard.querySelectorAll('[data-template]').forEach(btn => {
         btn.addEventListener('click', function() {
             const templateLabel = this.dataset.template;
@@ -513,7 +640,7 @@ function renderTransaction(data) {
         });
     });
 
-    // ----- Event listeners for clickable procedure cards (scoped to current transactionCard) -----
+    // ----- Event listeners for clickable procedure cards -----
     transactionCard.querySelectorAll('.clickable-proc').forEach(el => {
         if (el) {
             el.addEventListener('click', function() {
@@ -800,15 +927,13 @@ async function navigate(direction) {
 function exitSession() {
     if (confirm('Are you sure you want to exit this verification session? Progress will be saved.')) {
         saveLineItems();
-                if (sessionContent) sessionContent.style.display = 'none';
-        if (dashboardContent) dashboardContent.style.display = 'block';
-        // Restore padding when session ends
-        const container = document.getElementById('verificationContainer');
-        if (container) container.classList.remove('verification-active');
+        sessionContent.style.display = 'none';
+        cashbookContent.style.display = 'block';
         if (transactionCard) transactionCard.innerHTML = '';
-        showStatus('Session exited.', 'info');
+        showStatus('Session exited. Returning to cashbook.', 'info');
         currentSessionId = null;
         currentDetailId = null;
+        fetchCashbookData();
     }
 }
 
@@ -817,8 +942,10 @@ function openSupportingModal(templateKey, label) {
     if (!supportingModal) return;
     supportingModal.style.display = 'flex';
     if (supportingResults) supportingResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">Enter a search term and click Search.</div>';
-    if (supportingModal) supportingModal.dataset.template = templateKey;
-    if (supportingModal) supportingModal.dataset.label = label;
+    if (supportingModal) {
+        supportingModal.dataset.template = templateKey;
+        supportingModal.dataset.label = label;
+    }
     if (supportingSearchInput) supportingSearchInput.focus();
 }
 
@@ -881,39 +1008,56 @@ async function searchSupportingDocuments() {
 }
 
 // ---------- EVENT LISTENERS ----------
-// Cash Verification button (from the card)
 const cashBtn = document.getElementById('cashVerificationBtn');
 if (cashBtn) {
     cashBtn.addEventListener('click', function() {
         console.log('💰 Cash Verification button clicked');
-        if (popupOverlay) popupOverlay.style.display = 'flex';
-        const now = new Date();
-        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-        const formatDate = (d) => {
-            const y = d.getFullYear();
-            const m = String(d.getMonth() + 1).padStart(2, '0');
-            const day = String(d.getDate()).padStart(2, '0');
-            return `${y}-${m}-${day}`;
-        };
-        if (popupPeriodStart) popupPeriodStart.value = formatDate(firstDay);
-        if (popupPeriodEnd) popupPeriodEnd.value = formatDate(lastDay);
-        scheduleCashbookLoad();
+        popupOverlay.style.display = 'flex';
+        loadCashbooks();
     });
 }
 
-// Popup events
-if (popupPeriodStart) popupPeriodStart.addEventListener('change', scheduleCashbookLoad);
-if (popupPeriodEnd) popupPeriodEnd.addEventListener('change', scheduleCashbookLoad);
-if (popupCashbookSelect) {
-    popupCashbookSelect.addEventListener('change', function() {
-        if (popupStartBtn) popupStartBtn.disabled = !this.value;
-    });
-}
-if (popupStartBtn) popupStartBtn.addEventListener('click', startSession);
+if (popupStartBtn) popupStartBtn.addEventListener('click', openCashbook);
 if (popupCancelBtn) {
     popupCancelBtn.addEventListener('click', function() {
-        if (popupOverlay) popupOverlay.style.display = 'none';
+        popupOverlay.style.display = 'none';
+    });
+}
+
+// Cashbook page events
+if (cashbookFetchBtn) cashbookFetchBtn.addEventListener('click', fetchCashbookData);
+if (cashbookPageSizeSelect) {
+    cashbookPageSizeSelect.addEventListener('change', function() {
+        cashbookPageSize = parseInt(this.value);
+        cashbookCurrentPage = 1;
+        fetchCashbookData();
+    });
+}
+if (cashbookPrevPage) {
+    cashbookPrevPage.addEventListener('click', function() {
+        if (cashbookCurrentPage > 1) {
+            cashbookCurrentPage--;
+            fetchCashbookData();
+        }
+    });
+}
+if (cashbookNextPage) {
+    cashbookNextPage.addEventListener('click', function() {
+        const totalPages = Math.ceil(cashbookTotalRows / cashbookPageSize);
+        if (cashbookCurrentPage < totalPages) {
+            cashbookCurrentPage++;
+            fetchCashbookData();
+        }
+    });
+}
+if (startVerificationBtn) startVerificationBtn.addEventListener('click', startSessionFromCashbook);
+if (exitCashbookLink) {
+    exitCashbookLink.addEventListener('click', function(e) {
+        e.preventDefault();
+        cashbookContent.style.display = 'none';
+        dashboardContent.style.display = 'block';
+        selectedCashbook = null;
+        cashbookTableWrapper.innerHTML = '';
     });
 }
 
@@ -977,9 +1121,7 @@ function closeProcedureModal() {
     selectedDocData = null;
 }
 
-// ---- Procedure modal event listeners (only if modal exists) ----
 if (procedureModal) {
-    // Search for supporting documents
     procedureSearchBtn.addEventListener('click', async function() {
         if (!procedureSearchInput || !procedureResults || !procedureConfirmBtn) return;
         const searchTerm = procedureSearchInput.value.trim();
@@ -1031,7 +1173,6 @@ if (procedureModal) {
                     `;
                 });
                 procedureResults.innerHTML = html;
-                // Add event listeners to Select buttons
                 procedureResults.querySelectorAll('.select-doc-btn').forEach(btn => {
                     btn.addEventListener('click', function(e) {
                         e.stopPropagation();
@@ -1040,7 +1181,6 @@ if (procedureModal) {
                         selectedDocId = id;
                         selectedDocData = rowData;
                         procedureConfirmBtn.disabled = false;
-                        // Highlight selected item
                         procedureResults.querySelectorAll('.result-item').forEach(el => el.style.background = '');
                         this.closest('.result-item').style.background = '#e0f2fe';
                         if (procedureStatus) {
@@ -1049,7 +1189,6 @@ if (procedureModal) {
                         }
                     });
                 });
-                // Also allow clicking on the whole item
                 procedureResults.querySelectorAll('.result-item').forEach(el => {
                     el.addEventListener('click', function() {
                         const btn = this.querySelector('.select-doc-btn');
@@ -1065,48 +1204,41 @@ if (procedureModal) {
         }
     });
 
-    // Confirm selection
     procedureConfirmBtn.addEventListener('click', function() {
         if (!selectedDocId || !currentProcedureKey) return;
-        // Store the selected document info in procedureData
         procedureData[currentProcedureKey] = true;
         procedureData[currentProcedureKey + '_ref'] = procedureSearchInput.value.trim();
         procedureData[currentProcedureKey + '_doc_id'] = selectedDocId;
         procedureData[currentProcedureKey + '_doc_data'] = selectedDocData;
         closeProcedureModal();
-        // Reload the transaction from server to reflect the update
         loadNextTransaction(currentDetailId);
         showStatus('✅ Procedure updated!', 'success');
     });
 
-    // Cancel / Close
     procedureCancelBtn.addEventListener('click', closeProcedureModal);
     procedureModalClose.addEventListener('click', closeProcedureModal);
     procedureModal.addEventListener('click', function(e) {
         if (e.target === this) closeProcedureModal();
     });
 
-    // Enter key triggers search
     procedureSearchInput.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') procedureSearchBtn.click();
     });
 }
 
 // ==============================================
-// TRANSACTION REPORT VIEW (full page)
+// TRANSACTION REPORT VIEW
 // ==============================================
 
-// Open the report view
 function openTransactionReport() {
     console.log('📊 Transaction Report button clicked');
     try {
         if (!reportContent) return;
-        // Hide dashboard and session content, show report
         if (dashboardContent) dashboardContent.style.display = 'none';
         if (sessionContent) sessionContent.style.display = 'none';
+        if (cashbookContent) cashbookContent.style.display = 'none';
         reportContent.style.display = 'block';
 
-        // Set default date range to current month
         const now = new Date();
         const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
         const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -1119,13 +1251,11 @@ function openTransactionReport() {
         if (reportStartDate) reportStartDate.value = formatDate(firstDay);
         if (reportEndDate) reportEndDate.value = formatDate(lastDay);
 
-        // Display client info
         const clientName = typeof window.getSelectedClientName === 'function'
             ? window.getSelectedClientName()
             : localStorage.getItem('selectedClientName') || 'Unknown Client';
         if (reportClientInfo) reportClientInfo.textContent = `Client: ${clientName}`;
 
-        // Reset table and status
         if (reportTableWrapper) {
             reportTableWrapper.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:40px;">Select date range and click Fetch.</div>';
         }
@@ -1134,7 +1264,6 @@ function openTransactionReport() {
         reportTotalRows = 0;
         updatePaginationControls();
 
-        // Load the template ID once
         loadTemplateId();
     } catch (error) {
         console.error('Error opening transaction report:', error);
@@ -1145,7 +1274,6 @@ function openTransactionReport() {
     }
 }
 
-// Load the Transaction Report template ID
 async function loadTemplateId() {
     try {
         const res = await fetch(`${API_BASE}/api/templates/by-name/Transaction Report`);
@@ -1167,7 +1295,6 @@ async function loadTemplateId() {
     }
 }
 
-// Fetch data from the server
 async function fetchReportData() {
     if (!reportStartDate || !reportEndDate || !reportStatus || !reportFetchBtn || !reportTableWrapper) return;
     const start = reportStartDate.value;
@@ -1241,7 +1368,6 @@ async function fetchReportData() {
     }
 }
 
-// Render the table
 function renderReportTable(rows, data) {
     if (!reportTableWrapper) return;
     if (!rows || rows.length === 0) {
@@ -1273,7 +1399,6 @@ function renderReportTable(rows, data) {
     reportTableWrapper.innerHTML = html;
 }
 
-// Update pagination controls
 function updatePaginationControls() {
     const totalPages = Math.ceil(reportTotalRows / reportPageSize) || 1;
     if (reportPageInfo) reportPageInfo.textContent = `Page ${reportCurrentPage} of ${totalPages}`;
@@ -1281,7 +1406,6 @@ function updatePaginationControls() {
     if (reportNextPage) reportNextPage.disabled = reportCurrentPage >= totalPages;
 }
 
-// Event listeners for report view
 if (reportFetchBtn) {
     reportFetchBtn.addEventListener('click', function() {
         console.log('📊 Fetch button clicked');
@@ -1318,6 +1442,7 @@ if (exitReportLink) {
         if (reportContent) reportContent.style.display = 'none';
         if (dashboardContent) dashboardContent.style.display = 'block';
         if (sessionContent) sessionContent.style.display = 'none';
+        if (cashbookContent) cashbookContent.style.display = 'none';
         if (reportTableWrapper) reportTableWrapper.innerHTML = '';
         if (reportStatus) reportStatus.textContent = '';
     });
@@ -1335,49 +1460,36 @@ if (reportEndDate) {
 
 // ---------- INIT ----------
 window.onload = function() {
-    // Ensure dashboard is visible, session content hidden
     if (dashboardContent) dashboardContent.style.display = 'block';
     if (sessionContent) sessionContent.style.display = 'none';
-    // Set the module name in the navbar
+    if (cashbookContent) cashbookContent.style.display = 'none';
     if (typeof setNavModule === 'function') {
         setNavModule('Verification');
     }
-    // Clear any existing stats
     if (typeof setNavStats === 'function') {
         setNavStats('');
     }
-    // Load verification stats
     loadVerificationStats();
-    console.log('✅ Verification module loaded (restored dashboard)');
+    console.log('✅ Verification module loaded (cashbook + verification flow)');
 };
 
-// ---------- LOAD VERIFICATION STATS ----------
 async function loadVerificationStats() {
     try {
         const res = await fetch('/api/verification/stats');
         if (res.ok) {
             const stats = await res.json();
-            const pendingEl = document.getElementById('pendingCount');
-            const verifiedTodayEl = document.getElementById('verifiedToday');
-            const totalVerifiedEl = document.getElementById('totalVerified');
-            if (pendingEl) pendingEl.textContent = stats.pending || 0;
-            if (verifiedTodayEl) verifiedTodayEl.textContent = stats.approved || 0;
-            if (totalVerifiedEl) totalVerifiedEl.textContent = stats.total || 0;
+            document.getElementById('pendingCount').textContent = stats.pending || 0;
+            document.getElementById('verifiedToday').textContent = stats.approved || 0;
+            document.getElementById('totalVerified').textContent = stats.total || 0;
         } else {
-            const pendingEl = document.getElementById('pendingCount');
-            const verifiedTodayEl = document.getElementById('verifiedToday');
-            const totalVerifiedEl = document.getElementById('totalVerified');
-            if (pendingEl) pendingEl.textContent = '0';
-            if (verifiedTodayEl) verifiedTodayEl.textContent = '0';
-            if (totalVerifiedEl) totalVerifiedEl.textContent = '0';
+            document.getElementById('pendingCount').textContent = '0';
+            document.getElementById('verifiedToday').textContent = '0';
+            document.getElementById('totalVerified').textContent = '0';
         }
     } catch (error) {
         console.log('⚠️ Error loading verification stats:', error.message);
-        const pendingEl = document.getElementById('pendingCount');
-        const verifiedTodayEl = document.getElementById('verifiedToday');
-        const totalVerifiedEl = document.getElementById('totalVerified');
-        if (pendingEl) pendingEl.textContent = '0';
-        if (verifiedTodayEl) verifiedTodayEl.textContent = '0';
-        if (totalVerifiedEl) totalVerifiedEl.textContent = '0';
+        document.getElementById('pendingCount').textContent = '0';
+        document.getElementById('verifiedToday').textContent = '0';
+        document.getElementById('totalVerified').textContent = '0';
     }
 }
