@@ -197,9 +197,12 @@ async function startSession() {
         const data = await res.json();
         currentSessionId = data.session_id;
 
-        if (popupOverlay) popupOverlay.style.display = 'none';
+                if (popupOverlay) popupOverlay.style.display = 'none';
         if (dashboardContent) dashboardContent.style.display = 'none';
         if (sessionContent) sessionContent.style.display = 'block';
+        // Remove padding from main container when session is active
+        const container = document.getElementById('verificationContainer');
+        if (container) container.classList.add('verification-active');
 
         if (typeof setNavStats === 'function') {
             setNavStats(`Session ${currentSessionId} · Cashbook: ${cashbook} · 0 / ${data.total_transactions || 0} verified`);
@@ -257,7 +260,7 @@ async function loadNextTransaction(detailId = null) {
         if (prevBtn) prevBtn.disabled = false;
         if (nextBtn) nextBtn.disabled = false;
         if (verifyBtn) verifyBtn.disabled = false;
-        showStatus('Loaded transaction ' + currentVoucherId, 'info');
+                // showStatus('Loaded transaction ' + currentVoucherId, 'info'); // removed as per user request
     } catch (e) {
         console.error('Error loading transaction:', e);
         showStatus('Error loading transaction: ' + e.message, 'error');
@@ -797,8 +800,11 @@ async function navigate(direction) {
 function exitSession() {
     if (confirm('Are you sure you want to exit this verification session? Progress will be saved.')) {
         saveLineItems();
-        if (sessionContent) sessionContent.style.display = 'none';
+                if (sessionContent) sessionContent.style.display = 'none';
         if (dashboardContent) dashboardContent.style.display = 'block';
+        // Restore padding when session ends
+        const container = document.getElementById('verificationContainer');
+        if (container) container.classList.remove('verification-active');
         if (transactionCard) transactionCard.innerHTML = '';
         showStatus('Session exited.', 'info');
         currentSessionId = null;
