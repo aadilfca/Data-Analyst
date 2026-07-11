@@ -468,8 +468,8 @@ function renderTransaction(data) {
             <span class="progress-indicator" id="progressDisplay">Loading progress...</span>
         </div>
 
-        <!-- Header row: TRANSACTION | mirror icon | Type dropdown -->
-        <div class="verification-header-row" style="border-bottom: none; padding-bottom: 0;">
+                <!-- Header row: TRANSACTION | mirror icon | Type dropdown -->
+        <div class="verification-header-row" style="border-bottom: none; padding: 10px 20px 0 0;">
             <div class="vh-center" style="justify-content: flex-start; gap: 8px;">
                 <span class="vh-title">TRANSACTION</span>
                 <span class="vh-icon" id="transactionListIcon" title="View all transactions" style="cursor:pointer;">🔍</span>
@@ -531,7 +531,7 @@ function renderTransaction(data) {
             ${data.validation_message ? `<span class="validation-message">${data.validation_message}</span>` : ''}
         </div>
 
-        <!-- Mandatory Procedures Tiles (placed below the validation status) -->
+                                <!-- Mandatory Procedures Tiles (placed below the transaction table) -->
         <div style="margin-top:16px;">
             <div style="display:flex; align-items:center; gap:8px;">
                 <span class="vh-title" style="font-size:20px; font-weight:700; color:#1a1a2e;">PROCEDURES</span>
