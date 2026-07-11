@@ -498,6 +498,69 @@ def restore_dataset(upload_id: int):
     
     return {"message": f"Dataset '{upload[0]['file_name']}' restored successfully ({len(rows)} rows)"}
 
+@router.delete("/api/data/template/{template_id}")
+def delete_template_data(
+    template_id: int,
+    client_id: int = Query(..., description="Client ID")
+):
+    """
+    Soft-delete all client_data rows for a given client and template.
+    Also marks all associated uploaded_files as 'Deleted'.
+    """
+    # Verify client exists
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+    
+    # Verify template exists and is active
+    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (template_id,))
+    if not template:
+        raise HTTPException(404, "Template not found or inactive")
+    
+    # Get all upload_ids for this client+template that have data
+    uploads = execute_query(
+        """
+        SELECT DISTINCT upload_id
+        FROM client_data
+        WHERE client_id = ? AND template_id = ? AND is_deleted = 0
+        """,
+        (client_id, template_id)
+    )
+    
+    if not uploads:
+        return {"message": f"No data found for template '{template[0]['template_name']}' and client {client_id}."}
+    
+    # Count rows to be deleted
+    count_result = execute_query(
+        "SELECT COUNT(*) as count FROM client_data WHERE client_id = ? AND template_id = ? AND is_deleted = 0",
+        (client_id, template_id)
+    )
+    row_count = count_result[0]['count'] if count_result else 0
+    
+    # Soft-delete client_data rows
+    execute_write(
+        "UPDATE client_data SET is_deleted = 1 WHERE client_id = ? AND template_id = ? AND is_deleted = 0",
+        (client_id, template_id)
+    )
+    
+    # Mark uploaded_files as 'Deleted'
+    upload_ids = [str(u['upload_id']) for u in uploads]
+    if upload_ids:
+        placeholders = ','.join(['?'] * len(upload_ids))
+        execute_write(
+            f"UPDATE uploaded_files SET status = 'Deleted' WHERE id IN ({placeholders})",
+            upload_ids
+        )
+    
+    log_audit("Analyst", "Delete", "DataBank", f"Deleted {row_count} rows for template {template[0]['template_name']} (client {client_id})")
+    
+    return {
+        "message": f"Deleted {row_count} rows for template '{template[0]['template_name']}'.",
+        "rows_deleted": row_count,
+        "template_id": template_id,
+        "template_name": template[0]['template_name']
+    }
+
 # ==============================================
 # 📊 AVAILABILITY CHECKLIST ENDPOINT
 # ==============================================

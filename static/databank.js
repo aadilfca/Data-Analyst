@@ -350,7 +350,7 @@ function renderAvailabilityTable(data) {
         }
         tr.appendChild(tdStatus);
         
-        // Actions
+                // Actions
         const tdActions = document.createElement('td');
         tdActions.style.textAlign = 'center';
         tdActions.style.whiteSpace = 'nowrap';
@@ -378,6 +378,19 @@ function renderAvailabilityTable(data) {
                 exportDataset(item.template_id, item.template_name);
             });
             tdActions.appendChild(exportBtn);
+
+            // Delete button
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'action-btn delete';
+            deleteBtn.textContent = '🗑️';
+            deleteBtn.title = 'Delete all data for this template';
+            deleteBtn.setAttribute('data-tooltip', 'Delete all imported data for this template');
+            deleteBtn.style.marginLeft = '6px';
+            deleteBtn.style.color = '#dc2626';
+            deleteBtn.addEventListener('click', () => {
+                deleteTemplateData(item.template_id, item.template_name, item.total_row_count);
+            });
+            tdActions.appendChild(deleteBtn);
         } else {
             tdActions.textContent = '—';
             tdActions.style.color = '#94a3b8';
@@ -399,7 +412,39 @@ function renderAvailabilityTable(data) {
     statsMissingTemplates.textContent = missing;
     statsSundayRows.textContent = sundayRows;
 }
-
+async function deleteTemplateData(templateId, templateName, rowCount) {
+    const clientId = getSelectedClientId();
+    if (!clientId) {
+        showStatus('⚠️ No client selected.', 'error');
+        return;
+    }
+    
+    // Confirm deletion
+    const confirmMsg = `⚠️ Are you sure you want to delete ALL ${rowCount} rows for template "${templateName}"?\n\n` +
+                       `This will permanently remove this data from the system (soft-delete).\n` +
+                       `Templates and columns will NOT be affected.`;
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+    
+    try {
+        showStatus('⏳ Deleting data...', 'loading');
+        const res = await fetch(`${API_BASE}/api/data/template/${templateId}?client_id=${clientId}`, {
+            method: 'DELETE'
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Failed to delete data');
+        }
+        const result = await res.json();
+        showStatus(`✅ ${result.message}`, 'success');
+        // Refresh the availability table
+        await fetchAvailability();
+    } catch (error) {
+        console.error('Delete error:', error);
+        showStatus('❌ Error deleting data: ' + error.message, 'error');
+    }
+}
 // ==============================================
 // 📋 PREVIEW MODAL – FULL IMPLEMENTATION
 // ==============================================
@@ -532,6 +577,20 @@ function renderPreviewRows(rows) {
     previewTableHead.innerHTML = '';
     if (headers.length) {
         const tr = document.createElement('tr');
+        
+        // Add Serial Number column header
+        const thSerial = document.createElement('th');
+        thSerial.textContent = 'S.No';
+        thSerial.style.padding = '8px 12px';
+        thSerial.style.textAlign = 'center';
+        thSerial.style.borderBottom = '2px solid #e2e8f0';
+        thSerial.style.whiteSpace = 'nowrap';
+        thSerial.style.position = 'sticky';
+        thSerial.style.top = '0';
+        thSerial.style.background = '#f8fafc';
+        thSerial.style.width = '60px';
+        tr.appendChild(thSerial);
+        
         headers.forEach(h => {
             const th = document.createElement('th');
             th.textContent = h;
@@ -547,15 +606,25 @@ function renderPreviewRows(rows) {
         previewTableHead.appendChild(tr);
     }
     
-    // Render body rows
+    // Render body rows with serial numbers
     previewTableBody.innerHTML = '';
-    rows.forEach(row => {
+    const startSerial = (currentPage - 1) * previewLimit + 1;
+    rows.forEach((row, index) => {
         const tr = document.createElement('tr');
         // Check if this row's extract_date is Sunday
         const isSun = isSunday(row.extract_date);
         if (isSun) {
             tr.className = 'sunday-highlight';
         }
+        
+        // Serial number column
+        const tdSerial = document.createElement('td');
+        tdSerial.style.padding = '6px 12px';
+        tdSerial.style.borderBottom = '1px solid #f0f2f5';
+        tdSerial.style.textAlign = 'center';
+        tdSerial.style.color = '#64748b';
+        tdSerial.textContent = startSerial + index;
+        tr.appendChild(tdSerial);
         
         headers.forEach(h => {
             const td = document.createElement('td');
