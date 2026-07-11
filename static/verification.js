@@ -15,6 +15,7 @@ let selectedCashbook = null;
 let cashbookCurrentPage = 1;
 let cashbookPageSize = 50;
 let cashbookTotalRows = 0;
+let totalTransactions = 0;
 
 // DOM refs
 const dashboardContent = document.getElementById('dashboardContent');
@@ -334,16 +335,19 @@ async function startSessionFromCashbook() {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to start session');
         }
-        const data = await res.json();
+            const data = await res.json();
                currentSessionId = data.session_id;
+        totalTransactions = data.total_transactions || 0;
         cashbookContent.style.display = 'none';
         sessionContent.style.display = 'block';
         // Remove padding from main container when verification session is active
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.add('verification-active');
         if (typeof setNavStats === 'function') {
-            setNavStats(`Session ${currentSessionId} · Cashbook: ${selectedCashbook} · 0 / ${data.total_transactions || 0} verified`);
+            setNavStats(`Session ${currentSessionId} · Cashbook: ${selectedCashbook} · 0 / ${totalTransactions} verified`);
         }
+        // Load transaction list (without showing popover) to get indices and total
+        await loadTransactionList(false);
         await loadNextTransaction();
         await updateProgress();
     } catch (error) {
@@ -386,12 +390,23 @@ async function loadNextTransaction(detailId = null) {
             await updateProgressDisplay();
             return;
         }
-        currentDetailId = data.detail_id;
+                currentDetailId = data.detail_id;
         currentClientDataId = data.client_data_id;
         currentVoucherId = data.voucher_id;
         currentTransactionType = data.transaction_type || '';
         lineItems = data.line_items || [];
         procedureData = data.procedure_data || {};
+        // Update currentTransactionIndex from sessionTransactions
+        if (sessionTransactions.length > 0) {
+            currentTransactionIndex = sessionTransactions.findIndex(t => t.detail_id === currentDetailId);
+            if (currentTransactionIndex === -1) {
+                // If not found, maybe the list is not up to date; we'll set to 0
+                currentTransactionIndex = 0;
+            }
+        } else {
+            // If list not loaded, we can increment from previous index (if we have one)
+            // But we'll just keep it as is; updateProgressDisplay will handle
+        }
         renderTransaction(data);
         await updateProgress();
         await updateProgressDisplay(); // update the new progress element
@@ -420,7 +435,7 @@ function renderTransaction(data) {
         }
         return data.extract_date || '—';
     };
-    const accountCodeAliases = ['Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head'];
+        const accountCodeAliases = ['Account Detail', 'Account Details', 'Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head', 'Ledger Detail'];
     const getAccountHead = () => {
         for (let alias of accountCodeAliases) {
             if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
@@ -434,7 +449,7 @@ function renderTransaction(data) {
         }
         return '—';
     };
-    const amountAliases = ['Amount', 'Total', 'Net Amount', 'Gross Amount', 'Transaction Amount', 'Value', 'Debit', 'Credit'];
+        const amountAliases = ['Debit Amount', 'Debit', 'Dr Amount', 'Amount', 'Total', 'Net Amount', 'Gross Amount', 'Transaction Amount', 'Value', 'Credit'];
     const getAmount = () => {
         for (let alias of amountAliases) {
             if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') {
@@ -463,15 +478,10 @@ function renderTransaction(data) {
 
     // ----- Build the new layout (validation status moved up) -----
     let html = `
-        <!-- Progress Indicator -->
-        <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px; flex-wrap:wrap;">
-            <span class="progress-indicator" id="progressDisplay">Loading progress...</span>
-        </div>
-
-                <!-- Header row: TRANSACTION | mirror icon | Type dropdown -->
+                <!-- Header row: TRANSACTION - [index/total] | mirror icon | Type dropdown -->
         <div class="verification-header-row" style="border-bottom: none; padding: 10px 20px 0 0;">
             <div class="vh-center" style="justify-content: flex-start; gap: 8px;">
-                <span class="vh-title">TRANSACTION</span>
+                <span class="vh-title" id="transactionHeaderTitle">TRANSACTION</span>
                 <span class="vh-icon" id="transactionListIcon" title="View all transactions" style="cursor:pointer;">🔍</span>
                 <span class="vh-separator">|</span>
                 <span class="vh-type-label">Type</span>
@@ -602,11 +612,23 @@ function renderTransaction(data) {
 
     // ----- Attach event listeners (dynamic) -----
 
-    // Mirror icon – placeholder for Phase 2
+        // Mirror icon – toggle popover and position it below the icon
+        // Mirror icon – toggle popover
     document.getElementById('transactionListIcon')?.addEventListener('click', function() {
-        alert('Transaction list popover – coming soon in Phase 2');
+        const popover = document.getElementById('transactionListPopover');
+        if (!popover) return;
+        // If popover is visible, close it
+        if (popover.style.display === 'block') {
+            closeTransactionPopover();
+            return;
+        }
+        // Otherwise, load and show the list (pass true to show popover)
+        if (typeof loadTransactionList === 'function') {
+            loadTransactionList(true);
+        } else {
+            console.warn('loadTransactionList not defined yet');
+        }
     });
-
     // Cashbook return button
     document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
         if (typeof exitSession === 'function') {
@@ -884,36 +906,228 @@ async function updateProgress() {
     }
 }
 
-// Update the progress indicator in the transaction card
+// Update the header title and navbar stats
 async function updateProgressDisplay() {
-    const progressEl = document.getElementById('progressDisplay');
-    if (!progressEl) return;
-    if (!currentSessionId) {
-        progressEl.textContent = 'No session active';
-        return;
+    // Update header title: TRANSACTION - [index/total]
+    const titleEl = document.getElementById('transactionHeaderTitle');
+    if (titleEl) {
+        if (!currentSessionId) {
+            titleEl.textContent = 'TRANSACTION';
+        } else {
+            // Use sessionTransactions and currentTransactionIndex if available
+            let index = currentTransactionIndex;
+            let total = totalTransactions;
+            // If we don't have the list, try to fetch progress to get total and estimate index
+            if (total === 0) {
+                try {
+                    const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        total = data.total_transactions || 0;
+                        totalTransactions = total;
+                        // index not available from progress, we'll keep currentTransactionIndex
+                    }
+                } catch (e) {
+                    console.warn('Could not fetch progress for header:', e);
+                }
+            }
+            if (total > 0) {
+                const displayIndex = (index >= 0) ? index + 1 : '?';
+                titleEl.textContent = `TRANSACTION - [${displayIndex}/${total}]`;
+            } else {
+                titleEl.textContent = 'TRANSACTION';
+            }
+        }
     }
+
+    // Update navbar stats
+    if (!currentSessionId) return;
     try {
         const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
         if (!res.ok) throw new Error('Failed to fetch progress');
         const data = await res.json();
         const total = data.total_transactions || 0;
         const verified = data.verified_count || 0;
-        // Also update the navbar stats if function exists
         if (typeof setNavStats === 'function') {
             const cashbook = window._currentCashbook || '';
             setNavStats(`Session ${currentSessionId} · Cashbook: ${cashbook} · ${verified} / ${total} verified`);
         }
-        // Update the progress element
-        progressEl.textContent = `Transaction ${verified + 1} of ${total}`;
-        if (verified === total && total > 0) {
-            progressEl.textContent = `✅ All ${total} transactions verified!`;
-        }
     } catch (e) {
-        console.error('Error updating progress display:', e);
-        progressEl.textContent = 'Progress unavailable';
+        console.error('Error updating progress:', e);
+    }
+}
+// ==============================================
+// PHASE 2 – TRANSACTION LIST POPOVER
+// ==============================================
+
+let sessionTransactions = [];
+let currentTransactionIndex = -1;
+
+async function loadTransactionList(showPopover = false) {
+    if (!currentSessionId) {
+        showStatus('No active session.', 'error');
+        return;
+    }
+
+    // If already loaded and we want to show popover, just render it
+    if (sessionTransactions.length > 0) {
+        if (showPopover) {
+            renderTransactionPopover();
+        }
+        return;
+    }
+
+    // Fetch all transactions for this session
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/audited_cashbook/${currentSessionId}`);
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Failed to fetch transaction list');
+        }
+        const data = await res.json();
+        sessionTransactions = data.transactions || [];
+        // Also store the current index based on currentDetailId
+        if (currentDetailId) {
+            currentTransactionIndex = sessionTransactions.findIndex(t => t.detail_id === currentDetailId);
+        }
+        // Update totalTransactions if not set
+        if (totalTransactions === 0 && sessionTransactions.length > 0) {
+            totalTransactions = sessionTransactions.length;
+        }
+        if (showPopover) {
+            renderTransactionPopover();
+        }
+        // Update the header title now that we have data
+        updateProgressDisplay();
+    } catch (error) {
+        console.error('Error loading transaction list:', error);
+        showStatus('❌ Failed to load transaction list: ' + error.message, 'error');
     }
 }
 
+function renderTransactionPopover() {
+    const popover = document.getElementById('transactionListPopover');
+    const tbody = document.getElementById('transactionListBody');
+    const totalSpan = document.getElementById('popoverTotal');
+    if (!popover || !tbody) return;
+
+    const count = sessionTransactions.length;
+
+    if (count === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#94a3b8;">No transactions found.</td></tr>`;
+        if (totalSpan) totalSpan.textContent = '';
+        popover.style.display = 'block';
+        return;
+    }
+
+    // Show total number of transactions
+    if (totalSpan) {
+        totalSpan.textContent = `Total: ${count} transaction${count > 1 ? 's' : ''}`;
+    }
+
+    let html = '';
+    sessionTransactions.forEach((t, index) => {
+        const rowData = t.row_data || {};
+        const accountName = rowData['Account Name'] || rowData['Account'] || rowData['Ledger'] || '—';
+        const amount = t.extract_amount !== undefined && t.extract_amount !== null ? t.extract_amount : '—';
+        const status = t.validation_status || 'Pending';
+        let statusIcon = '';
+        if (status === 'Passed') {
+            statusIcon = '✅';
+        } else if (status === 'Pending') {
+            statusIcon = '⏳';
+        } else {
+            statusIcon = '❌';
+        }
+        const isCurrent = (t.detail_id === currentDetailId);
+        html += `<tr data-detail-id="${t.detail_id}" style="${isCurrent ? 'background:#e0f2fe;' : ''}">
+            <td style="text-align:center;">${index + 1}</td>
+            <td>${t.voucher_id || '—'}</td>
+            <td>${accountName}</td>
+            <td style="text-align:right;">${amount}</td>
+            <td style="text-align:center;"><span class="status-icon ${status.toLowerCase()}">${statusIcon}</span></td>
+        </tr>`;
+    });
+
+    tbody.innerHTML = html;
+
+    // Add click listeners to rows
+    tbody.querySelectorAll('tr[data-detail-id]').forEach(row => {
+        row.addEventListener('click', function() {
+            const detailId = parseInt(this.dataset.detailId);
+            if (detailId) {
+                navigateToTransaction(detailId);
+            }
+        });
+    });
+
+    popover.style.display = 'block';
+}
+
+function closeTransactionPopover() {
+    const popover = document.getElementById('transactionListPopover');
+    if (popover) popover.style.display = 'none';
+}
+// Close popover on outside click and close button
+document.addEventListener('click', function(e) {
+    const popover = document.getElementById('transactionListPopover');
+    if (!popover) return;
+    if (popover.style.display === 'block') {
+        // Check if click is inside popover or on the mirror icon
+        const icon = document.getElementById('transactionListIcon');
+        if (popover.contains(e.target) || (icon && icon.contains(e.target))) {
+            return;
+        }
+        closeTransactionPopover();
+    }
+});
+
+// Also wire the close button in the popover header
+const popoverCloseBtn = document.querySelector('#transactionListPopover .popover-header .close-btn');
+if (popoverCloseBtn) {
+    popoverCloseBtn.addEventListener('click', closeTransactionPopover);
+}
+function navigateToTransaction(detailId) {
+    const transaction = sessionTransactions.find(t => t.detail_id === detailId);
+    if (!transaction) {
+        showStatus('Transaction not found.', 'error');
+        return;
+    }
+
+    // Update current state
+    currentDetailId = detailId;
+    currentClientDataId = transaction.client_data_id;
+    currentVoucherId = transaction.voucher_id;
+    currentTransactionType = transaction.transaction_type || '';
+    lineItems = transaction.line_items || [];
+    procedureData = transaction.procedure_flags ? transaction.procedure_flags : {};
+    // Also merge procedure_data if exists
+    if (transaction.procedure_data) {
+        procedureData = { ...procedureData, ...transaction.procedure_data };
+    }
+    // Find index
+    currentTransactionIndex = sessionTransactions.findIndex(t => t.detail_id === detailId);
+
+    // Render the transaction
+    renderTransaction(transaction);
+    updateProgressDisplay();
+    closeTransactionPopover();
+
+    // Enable/disable navigation buttons (Phase 3 will handle this fully)
+    // For now, we just update the UI
+}
+
+// Override the mirror icon click – we replace the alert
+document.addEventListener('DOMContentLoaded', function() {
+    // We'll set up the listener after the card is rendered; but we can use event delegation or attach in renderTransaction.
+    // Instead, we'll attach a global listener for the icon that may not exist yet.
+    // We'll use a mutation observer or just attach in the renderTransaction function.
+    // But we already have a placeholder in renderTransaction; we'll replace that.
+    // We'll modify the renderTransaction to call our new function.
+    // Actually, we can do a direct replacement in the existing code: we'll replace the alert with loadTransactionList.
+    // We'll do that in a separate chunk to avoid conflict.
+    console.log('Phase 2 ready – mirror icon will now show popover.');
+});
 // ---------- SAVE LINE ITEMS ----------
 async function saveLineItems() {
     if (!currentDetailId) return;
