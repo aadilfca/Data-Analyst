@@ -492,9 +492,7 @@ function renderTransaction(data) {
         </div>
         <hr class="header-divider">
 
-                <!-- Flex container for table and procedures side by side -->
-        <div class="transaction-details-flex">
-                    <!-- Transaction Details Table – wrapped in a sub‑container to shrink‑wrap -->
+        <!-- Transaction Details Table – wrapped in a sub‑container to shrink‑wrap -->
         <div class="transaction-details-wrapper">
             <table class="transaction-details-table">
                 <tbody>
@@ -526,10 +524,10 @@ function renderTransaction(data) {
             </table>
         </div>
 
-            <!-- Mandatory Procedures Tiles (placed to the right) -->
-            <div class="procedure-section">
-                <div style="font-weight:600; font-size:14px; color:#1e293b; margin-bottom:6px;">📋 Mandatory Audit Procedures</div>
-                <div class="procedure-tiles" id="procedureTilesContainer">
+        <!-- Mandatory Procedures Tiles (placed below the transaction table) -->
+        <div class="procedure-section">
+            <div style="font-weight:600; font-size:14px; color:#1e293b; margin-bottom:6px;">📋 Mandatory Audit Procedures</div>
+            <div class="procedure-tiles" id="procedureTilesContainer">
     `;
 
     const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
@@ -562,11 +560,10 @@ function renderTransaction(data) {
     });
 
     html += `
-                </div>
             </div>
         </div>
 
-        <!-- Validation Status Row (below the flex container) -->
+        <!-- Validation Status Row -->
         <div class="validation-status-row">
             <span class="label">Validation Status:</span>
             <span class="status-badge ${(data.validation_status || 'Pending').toLowerCase()}">${data.validation_status || 'Pending'}</span>
