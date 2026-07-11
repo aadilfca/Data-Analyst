@@ -407,8 +407,8 @@ async function loadNextTransaction(detailId = null) {
 function renderTransaction(data) {
     if (!transactionCard) return;
     const row = data.row_data || {};
-    
-    // ----- Aliases for flexible column name matching -----
+
+    // ----- Aliases for flexible column name matching (unchanged) -----
     const dateAliases = ['Date', 'Transaction Date', 'Invoice Date', 'Doc Date', 'Posting Date', 'Entry Date', 'Date'];
     const getDateValue = () => {
         for (let alias of dateAliases) {
@@ -416,15 +416,20 @@ function renderTransaction(data) {
         }
         return data.extract_date || '—';
     };
-    
-    const accountCodeAliases = ['Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID'];
-    const getAccountCode = () => {
+    const accountCodeAliases = ['Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head'];
+    const getAccountHead = () => {
         for (let alias of accountCodeAliases) {
             if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
         }
         return '—';
     };
-    
+    const accountNameAliases = ['Account Name', 'Account', 'Account Detail', 'Ledger', 'Head'];
+    const getAccountName = () => {
+        for (let alias of accountNameAliases) {
+            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
+        }
+        return '—';
+    };
     const amountAliases = ['Amount', 'Total', 'Net Amount', 'Gross Amount', 'Transaction Amount', 'Value', 'Debit', 'Credit'];
     const getAmount = () => {
         for (let alias of amountAliases) {
@@ -436,198 +441,163 @@ function renderTransaction(data) {
         }
         return data.extract_amount || '—';
     };
-    
-    // ----- Build the card HTML -----
+    const descriptionAliases = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars'];
+    const getDescription = () => {
+        for (let alias of descriptionAliases) {
+            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
+        }
+        return '—';
+    };
+
+    // ----- Build the transaction details table (single column, dim borders, zebra) -----
     let html = `
-        <div class="row">
-            <div><span class="label">Voucher ID:</span> <span class="value">${data.voucher_id || '—'}</span></div>
-            <div><span class="label">Date:</span> <span class="value">${getDateValue()}</span></div>
-            <div><span class="label">Account Code:</span> <span class="value">${getAccountCode()}</span></div>
-            <div><span class="label">Account Name:</span> <span class="value">${row['Account Name'] || row['Account'] || row['Account Detail'] || '—'}</span></div>
-            <div><span class="label">Amount:</span> <span class="value">${getAmount()}</span></div>
-            <div><span class="label">Description:</span> <span class="value">${row['Description'] || row['Voucher Detail'] || '—'}</span></div>
-        </div>
-        <div style="margin-top:10px;">
+        <!-- Transaction Details Table -->
+        <table class="transaction-details-table">
+            <tbody>
+                <tr><td class="label">Voucher ID</td><td class="value">${data.voucher_id || '—'}</td></tr>
+                <tr><td class="label">Date</td><td class="value">${getDateValue()}</td></tr>
+                <tr><td class="label">Account head</td><td class="value">${getAccountHead()}</td></tr>
+                <tr><td class="label">Account Name</td><td class="value">${getAccountName()}</td></tr>
+                <tr><td class="label">Voucher Description</td><td class="value">${getDescription()}</td></tr>
+                <tr><td class="label">Amount</td><td class="value">${getAmount()}</td></tr>
+            </tbody>
+        </table>
+
+        <!-- Validation Status Row -->
+        <div class="validation-status-row">
             <span class="label">Validation Status:</span>
             <span class="status-badge ${data.validation_status.toLowerCase()}">${data.validation_status}</span>
-            ${data.validation_message ? `<span style="font-size:13px; color:#64748b; margin-left:10px;">${data.validation_message}</span>` : ''}
+            ${data.validation_message ? `<span class="validation-message">${data.validation_message}</span>` : ''}
         </div>
     `;
 
-    // ----- Validation Summary -----
-    if (lineItems && lineItems.length > 0) {
-        const totalCalc = lineItems.reduce((sum, item) => sum + (parseFloat(item.calculated_amount) || 0), 0);
-        const transAmount = parseFloat(row['Amount'] || row['Debit'] || row['Credit'] || data.extract_amount || 0);
-        const diff = Math.abs(totalCalc - transAmount);
-        const match = diff < 0.01;
-        const percentMatch = transAmount > 0 ? ((totalCalc / transAmount) * 100).toFixed(1) : 0;
-        html += `<div style="margin-top:8px; padding:8px 12px; border-radius:6px; background:${match ? '#dcfce7' : '#fee2e2'}; border:1px solid ${match ? '#bbf7d0' : '#fecaca'};">
-            <span style="font-weight:600;">Validation Check:</span>
-            <span style="color:${match ? '#166534' : '#991b1b'};">
-                ${match ? '✅ Amounts match!' : '❌ Amount mismatch!'}
-            </span>
-            <span style="font-size:13px; color:#475569; margin-left:10px;">
-                Transaction: ${transAmount.toFixed(2)} | Sum of Line Items: ${totalCalc.toFixed(2)} 
-                ${!match ? `| Difference: ${diff.toFixed(2)} (${percentMatch}%)` : ''}
-            </span>
-        </div>`;
-    }
-
-    // ----- Line Items Grid -----
-    html += `<div class="line-items-section">
-        <div class="section-title" style="font-weight:600; font-size:16px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-            <span>📋 Line Items</span>
-            <button class="add-btn" id="addLineItemBtn" style="background:#3b82f6; color:white; border:none; border-radius:4px; padding:4px 12px; cursor:pointer; font-size:13px;">+ Add Row</button>
-        </div>
-        <table class="line-items-grid">
-            <thead>
-                <tr>
-                    <th style="width:20%;">Vendor</th>
-                    <th style="width:15%;">Unit</th>
-                    <th style="width:12%;">Qty</th>
-                    <th style="width:15%;">Rate</th>
-                    <th style="width:18%;">Calculated Amount</th>
-                    <th style="width:10%;">Action</th>
-                </tr>
-            </thead>
-            <tbody id="lineItemsBody">
-            </tbody>
-        </table>
-    </div>`;
-
-    // ----- Audit Procedures – clickable cards -----
+    // ----- Mandatory Audit Procedures (horizontal cards with checkboxes) -----
     const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
     const procLabels = {
-        'purchase_demand': '📋 Purchase Demand',
-        'purchase_order': '📄 Purchase Order',
-        'gate_pass': '🚪 Gate Pass',
-        'store_receiving': '📥 Store Receiving',
-        'vendor_bill': '🧾 Vendor Bill'
+        'purchase_demand': 'Purchase Demand',
+        'purchase_order': 'Purchase Order',
+        'gate_pass': 'Gate Pass',
+        'store_receiving': 'Store Receiving',
+        'vendor_bill': 'Vendor Bill'
     };
-    const procTemplateMap = {
-        'purchase_demand': 2,
-        'purchase_order': 3,
-        'gate_pass': 4,
-        'store_receiving': 5,
-        'vendor_bill': 6
+    const procIcons = {
+        'purchase_demand': '📋',
+        'purchase_order': '📄',
+        'gate_pass': '🚪',
+        'store_receiving': '📥',
+        'vendor_bill': '🧾'
     };
 
-    html += `<div class="procedure-section" style="margin-top:16px; border-top:1px solid #e2e8f0; padding-top:16px;">
-        <div style="font-weight:600; margin-bottom:6px;">✅ Audit Procedures</div>
-        <div class="procedure-grid" id="procedureGrid">`;
-    
+    html += `<div class="procedure-section">
+        <div class="procedure-cards-container" id="procedureCardsContainer">
+    `;
+
     procKeys.forEach(key => {
-        const isDone = procedureData[key] === true;
-        const ref = procedureData[key + '_ref'] || '';
+        const isChecked = procedureData[key] === true;
+        const icon = procIcons[key] || '📌';
+        const label = procLabels[key] || key;
         html += `
-            <div class="procedure-item clickable-proc" data-proc="${key}" style="cursor:pointer; background:${isDone ? '#dcfce7' : '#f8fafc'}; border:1px solid ${isDone ? '#bbf7d0' : '#e2e8f0'}; border-radius:8px; padding:8px 12px; transition:all 0.2s;">
-                <div style="display:flex; align-items:center; gap:8px;">
-                    <span style="font-size:20px;">${isDone ? '✅' : '⬜'}</span>
-                    <span style="font-weight:500; flex:1;">${procLabels[key]}</span>
-                    ${ref ? `<span style="font-size:11px; color:#64748b; background:#f1f5f9; padding:2px 8px; border-radius:10px;">${ref}</span>` : ''}
-                    <span style="font-size:12px; color:#94a3b8;">${isDone ? 'Done' : 'Click to verify'}</span>
-                </div>
+            <div class="procedure-card clickable-proc" data-proc="${key}">
+                <input type="checkbox" class="proc-checkbox" ${isChecked ? 'checked' : ''} title="Mark as done">
+                <span class="proc-icon">${icon}</span>
+                <span class="proc-name">${label}</span>
             </div>
         `;
     });
+
     html += `</div></div>`;
 
-    // ----- Transaction Type Dropdown + auto-guidance -----
-    html += `<div class="procedure-section" style="margin-top:12px; border-top:1px solid #e2e8f0; padding-top:12px;">
-        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-            <label style="font-weight:600;">Transaction Type:</label>
-            <select id="transactionTypeSelect" style="padding:4px 10px; border:2px solid #e2e8f0; border-radius:6px;">
-                <option value="">-- Select --</option>
-                <option value="Material Purchased" ${currentTransactionType === 'Material Purchased' ? 'selected' : ''}>Material Purchased</option>
-                <option value="Repair & Maintenance (In-house)" ${currentTransactionType === 'Repair & Maintenance (In-house)' ? 'selected' : ''}>Repair & Maintenance (In-house)</option>
-                <option value="Fuel Expense" ${currentTransactionType === 'Fuel Expense' ? 'selected' : ''}>Fuel Expense</option>
-                <option value="Short Term Advance against Salary" ${currentTransactionType === 'Short Term Advance against Salary' ? 'selected' : ''}>Short Term Advance against Salary</option>
-                <option value="Payment to Contractors" ${currentTransactionType === 'Payment to Contractors' ? 'selected' : ''}>Payment to Contractors</option>
-                <option value="Fixed Asset Purchased" ${currentTransactionType === 'Fixed Asset Purchased' ? 'selected' : ''}>Fixed Asset Purchased</option>
-                <option value="Kitchen Expenses" ${currentTransactionType === 'Kitchen Expenses' ? 'selected' : ''}>Kitchen Expenses</option>
-            </select>
-            <button class="btn-outline" id="fetchLibraryBtn" style="padding:4px 16px; display:none;">📚 Show Guidance</button>
+    // ----- Observations & Comments -----
+    html += `<div class="obs-comments-section">
+        <div class="obs-row">
+            <div class="obs-textarea-wrapper">
+                <label for="observationsInput">Observations</label>
+                <textarea id="observationsInput" rows="2">${procedureData.observations || ''}</textarea>
+            </div>
+            <div class="obs-dropdown-wrapper">
+                <label>Frequent Observations</label>
+                <div class="obs-dropdown-container">
+                    <select id="observationsDropdown">
+                        <option value="">-- Select --</option>
+                    </select>
+                    <button class="btn-edit-obs" id="editObsBtn" title="Manage frequent observations">⚙️</button>
+                </div>
+            </div>
         </div>
-        <div id="libraryPanel" class="library-panel" style="display:none; margin-top:8px;">
-            <h4 style="margin:0 0 4px 0; font-size:14px; color:#1a1a2e;">📖 Audit Guidance</h4>
-            <div id="libraryContent" class="content" style="font-size:13px; color:#475569; white-space:pre-wrap;"></div>
-        </div>
-    </div>`;
-
-    // ----- Observations and Comments -----
-    html += `<div style="margin-top:12px; display:flex; gap:16px; flex-wrap:wrap;">
-        <div style="flex:1; min-width:200px;">
-            <label style="font-weight:600; display:block;">Observations</label>
-            <textarea id="observationsInput" rows="2" style="width:100%; padding:6px 10px; border:2px solid #e2e8f0; border-radius:6px;">${procedureData.observations || ''}</textarea>
-        </div>
-        <div style="flex:1; min-width:200px;">
-            <label style="font-weight:600; display:block;">Comments</label>
-            <textarea id="commentsInput" rows="2" style="width:100%; padding:6px 10px; border:2px solid #e2e8f0; border-radius:6px;">${procedureData.comments || ''}</textarea>
+        <div class="comments-row">
+            <label for="commentsInput">Comments</label>
+            <textarea id="commentsInput" rows="2">${procedureData.comments || ''}</textarea>
         </div>
     </div>`;
 
-    // ----- Supporting Docs Buttons -----
-    html += `<div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;" class="no-print">
-        <button class="btn-outline" data-template="purchase_orders" data-label="Purchase Orders">📦 Search PO</button>
-        <button class="btn-outline" data-template="gate_passes" data-label="Gate Passes">🚪 Search Gate Pass</button>
-        <button class="btn-outline" data-template="store_receiving" data-label="Store Receiving">📥 Search GRN</button>
-        <button class="btn-outline" data-template="vendor_bills" data-label="Vendor Bills">🧾 Search Vendor Bill</button>
+    // ----- Action Buttons (Back, Validate, Next) -----
+    html += `<div class="action-buttons-row">
+        <button class="btn-action btn-back" id="backPrevBtn">← Back</button>
+        <button class="btn-action btn-validate" id="validateBtn">Validate</button>
+        <button class="btn-action btn-next" id="nextSaveBtn">Next →</button>
     </div>`;
 
     transactionCard.innerHTML = html;
 
-    // ----- Attach event listeners -----
-    renderLineItems();
-    document.getElementById('addLineItemBtn')?.addEventListener('click', addLineItemRow);
+    // ----- Attach event listeners (dynamic) -----
 
-    // Procedure checkboxes
-    procKeys.forEach(key => {
-        const cb = document.getElementById(`proc_${key}`);
-        if (cb) {
-            cb.addEventListener('change', function() {
-                procedureData[key] = this.checked;
-                const refInput = this.parentElement.querySelector('input[type="text"]');
-                if (refInput) {
-                    procedureData[key + '_ref'] = refInput.value;
-                }
-            });
-        }
-        const refInput = document.querySelector(`input[data-proc="${key}"]`);
-        if (refInput) {
-            refInput.addEventListener('input', function() {
-                procedureData[key + '_ref'] = this.value;
-            });
-        }
-    });
-
-    // Transaction type change – auto-show guidance
-    const typeSelect = document.getElementById('transactionTypeSelect');
-    if (typeSelect) {
-        typeSelect.addEventListener('change', function() {
-            currentTransactionType = this.value;
-            if (this.value) {
-                fetchLibrary(this.value);
+    // Procedure cards – click to open modal (checkbox is just for visual status)
+    document.querySelectorAll('.clickable-proc').forEach(el => {
+        el.addEventListener('click', function(e) {
+            // If the click was on the checkbox, we don't want to toggle it manually; we'll let the checkbox handle its state.
+            // But the card click should open the modal anyway.
+            const procKey = this.dataset.proc;
+            const labels = {
+                'purchase_demand': 'Purchase Demand',
+                'purchase_order': 'Purchase Order',
+                'gate_pass': 'Gate Pass',
+                'store_receiving': 'Store Receiving',
+                'vendor_bill': 'Vendor Bill'
+            };
+            const templateMap = {
+                'purchase_demand': 2,
+                'purchase_order': 3,
+                'gate_pass': 4,
+                'store_receiving': 5,
+                'vendor_bill': 6
+            };
+            const procLabel = labels[procKey] || procKey;
+            const templateId = templateMap[procKey] || 1;
+            if (typeof openProcedureModal === 'function') {
+                openProcedureModal(procKey, procLabel, templateId);
             } else {
-                document.getElementById('libraryPanel').style.display = 'none';
+                console.warn('⚠️ openProcedureModal not defined yet');
             }
         });
-    }
-
-    if (currentTransactionType) {
-        setTimeout(() => {
-            fetchLibrary(currentTransactionType);
-        }, 100);
-    }
-
-    document.getElementById('fetchLibraryBtn')?.addEventListener('click', async function() {
-        const type = document.getElementById('transactionTypeSelect').value;
-        if (!type) {
-            alert('Please select a transaction type first.');
-            return;
-        }
-        await fetchLibrary(type);
     });
 
+    // Checkbox change – update procedureData
+    document.querySelectorAll('.proc-checkbox').forEach(cb => {
+        cb.addEventListener('change', function() {
+            const card = this.closest('.clickable-proc');
+            if (card) {
+                const procKey = card.dataset.proc;
+                procedureData[procKey] = this.checked;
+                // Optionally, we could save automatically, but we'll let the Next button save all.
+            }
+        });
+    });
+
+    // Observations dropdown – populate with saved list
+    populateObservationsDropdown();
+    document.getElementById('observationsDropdown')?.addEventListener('change', function() {
+        const val = this.value;
+        if (val) {
+            document.getElementById('observationsInput').value = val;
+            procedureData.observations = val;
+        }
+    });
+    document.getElementById('editObsBtn')?.addEventListener('click', function() {
+        // Placeholder for managing observations (Phase 4)
+        alert('Manage frequent observations – to be implemented in Phase 4');
+    });
+
+    // Observations textarea – update data
     document.getElementById('observationsInput')?.addEventListener('input', function() {
         procedureData.observations = this.value;
     });
@@ -635,28 +605,63 @@ function renderTransaction(data) {
         procedureData.comments = this.value;
     });
 
-    transactionCard.querySelectorAll('[data-template]').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const templateLabel = this.dataset.template;
-            const label = this.dataset.label;
-            openSupportingModal(templateLabel, label);
-        });
+    // Action buttons – attach listeners (functionality will be added in later phases)
+    document.getElementById('backPrevBtn')?.addEventListener('click', function() {
+        // Will be implemented in Phase 6: navigate to previous transaction
+        console.log('Back to previous transaction (Phase 6)');
+        showStatus('Back to previous transaction – coming soon', 'info');
     });
 
-    // ----- Event listeners for clickable procedure cards -----
-    transactionCard.querySelectorAll('.clickable-proc').forEach(el => {
-        if (el) {
-            el.addEventListener('click', function() {
-                const procKey = this.dataset.proc;
-                const procLabel = procLabels[procKey] || procKey;
-                const templateId = procTemplateMap[procKey] || 1;
-                if (typeof openProcedureModal === 'function') {
-                    openProcedureModal(procKey, procLabel, templateId);
-                } else {
-                    console.warn('⚠️ openProcedureModal not defined yet');
-                }
-            });
+    document.getElementById('validateBtn')?.addEventListener('click', function() {
+        // Validate – will be implemented in Phase 6 (or already exists)
+        if (typeof validateTransaction === 'function') {
+            validateTransaction();
+        } else {
+            console.warn('validateTransaction not defined');
         }
+    });
+
+    document.getElementById('nextSaveBtn')?.addEventListener('click', function() {
+        // Save and go to next – will be implemented in Phase 6
+        if (typeof completeTransaction === 'function') {
+            completeTransaction();
+        } else {
+            console.warn('completeTransaction not defined');
+        }
+    });
+
+    // Sync header dropdown with current type if any
+    const headerDropdown = document.getElementById('transactionTypeDropdown');
+    if (headerDropdown && currentTransactionType) {
+        headerDropdown.value = currentTransactionType;
+    }
+}
+
+// Helper: populate observations dropdown from localStorage
+function populateObservationsDropdown() {
+    const dropdown = document.getElementById('observationsDropdown');
+    if (!dropdown) return;
+    let obsList = JSON.parse(localStorage.getItem('frequentObservations') || '[]');
+    dropdown.innerHTML = '<option value="">-- Select --</option>';
+    obsList.forEach(text => {
+        const opt = document.createElement('option');
+        opt.value = text;
+        opt.textContent = text;
+        dropdown.appendChild(opt);
+    });
+}
+
+// Helper: populate observations dropdown from localStorage
+function populateObservationsDropdown() {
+    const dropdown = document.getElementById('observationsDropdown');
+    if (!dropdown) return;
+    let obsList = JSON.parse(localStorage.getItem('frequentObservations') || '[]');
+    dropdown.innerHTML = '<option value="">-- Select --</option>';
+    obsList.forEach(text => {
+        const opt = document.createElement('option');
+        opt.value = text;
+        opt.textContent = text;
+        dropdown.appendChild(opt);
     });
 }
 

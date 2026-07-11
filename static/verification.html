@@ -576,7 +576,52 @@
         <!-- VERIFICATION SESSION CONTENT (hidden initially) -->
         <!-- ============================================= -->
         <div id="verificationSessionContent">
-            <!-- Session header removed – now handled by global navbar -->
+
+            <!-- New Header Row -->
+            <div class="verification-header-row">
+                <div class="vh-left"></div>
+                <div class="vh-center">
+                    <span class="vh-title">TRANSACTION</span>
+                    <span class="vh-icon" id="transactionListIcon" title="View all transactions">🔍</span>
+                    <span class="vh-separator">|</span>
+                    <span class="vh-type-label">Type</span>
+                    <select id="transactionTypeDropdown" class="vh-type-dropdown">
+                        <option value="">-- Select --</option>
+                        <option value="Material Purchased">Material Purchased</option>
+                        <option value="Repair & Maintenance (In-house)">Repair & Maintenance (In-house)</option>
+                        <option value="Fuel Expense">Fuel Expense</option>
+                        <option value="Short Term Advance against Salary">Short Term Advance against Salary</option>
+                        <option value="Payment to Contractors">Payment to Contractors</option>
+                        <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
+                        <option value="Kitchen Expenses">Kitchen Expenses</option>
+                    </select>
+                </div>
+                <div class="vh-right">
+                    <button class="btn-cashbook" id="cashbookReturnBtn">📒 Cashbook</button>
+                </div>
+            </div>
+
+            <!-- Transaction List Popover (hidden) -->
+            <div id="transactionListPopover" class="transaction-list-popover" style="display:none;">
+                <div class="popover-header">📋 All Transactions</div>
+                <div class="popover-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Voucher ID</th>
+                                <th>Account Name</th>
+                                <th>Amount</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactionListBody">
+                            <tr>
+                                <td colspan="4" style="text-align:center; color:#94a3b8;">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
 
             <!-- Status bar -->
             <div id="verificationStatus" class="upload-status" style="display:none; margin-bottom:12px;"></div>
@@ -586,239 +631,229 @@
                 <!-- Will be filled by JS -->
             </div>
 
-            <!-- Navigation Buttons -->
-            <div class="nav-buttons no-print">
-                <div class="left">
-                    <button class="btn-outline" id="prevBtn" disabled>◀ Previous</button>
-                    <button class="btn-outline" id="nextBtn">Next ▶</button>
-                </div>
-                <div class="right">
-                    <button class="btn-outline" id="saveProgressBtn">💾 Save Progress</button>
-                    <button class="btn-verify" id="verifyBtn">✅ Verify & Next</button>
-                    <button class="btn-danger" id="exitBtn">✕ Exit Session</button>
-                </div>
-            </div>
-
             <!-- Hidden inputs -->
             <input type="hidden" id="currentSessionId" value="">
             <input type="hidden" id="currentDetailId" value="">
             <input type="hidden" id="currentClientDataId" value="">
             <input type="hidden" id="currentVoucherId" value="">
         </div>
-    </div>
 
-    <!-- ============================================= -->
-    <!-- SESSION POPUP (hidden by default)             -->
-    <!-- ============================================= -->
-    <div id="sessionPopupOverlay">
-        <div id="sessionPopup">
-            <h2>📋 Start Cash Verification</h2>
-            <p style="color:#64748b; margin-bottom:16px;">Select a cashbook to begin verification.</p>
-            <div class="field">
-                <label>📒 Cashbook</label>
-                <select id="popupCashbookSelect" disabled>
-                    <option value="">-- Loading cashbooks... --</option>
-                </select>
-            </div>
-            <div id="popupError" class="error-msg" style="display:none;"></div>
-            <div class="btn-row">
-                <button class="btn-secondary" id="popupCancelBtn">Cancel</button>
-                <button class="btn-primary" id="popupStartBtn" disabled>🚀 Open Cashbook</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- ============================================= -->
-    <!-- CASHBOOK PAGE                                -->
-    <!-- ============================================= -->
-    <div id="cashbookContent" style="display:none;">
-        <div class="cashbook-header"
-            style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
-            <div>
-                <a href="#" class="back-link no-print" id="exitCashbookLink">← Back to Verification</a>
-                <h1 style="font-size:24px; margin:0; color:#1a1a2e;">📒 Cashbook: <span id="cashbookNameDisplay"></span>
-                </h1>
-            </div>
-            <div style="display:flex; align-items:center; gap:12px;">
-                <span id="cashbookProgress" style="font-size:13px; color:#64748b;"></span>
-                <button id="startVerificationBtn"
-                    style="padding:6px 16px; background:#22c55e; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">✅
-                    Verification</button>
-            </div>
-        </div>
-        <!-- Date Range Selector -->
-        <div
-            style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; background:white; padding:12px 16px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.04); margin-bottom:16px;">
-            <div>
-                <label style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">Start Date</label>
-                <input type="date" id="cashbookStartDate"
-                    style="padding:4px 8px; border:2px solid #e2e8f0; border-radius:6px; font-size:13px;">
-            </div>
-            <div>
-                <label style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">End Date</label>
-                <input type="date" id="cashbookEndDate"
-                    style="padding:4px 8px; border:2px solid #e2e8f0; border-radius:6px; font-size:13px;">
-            </div>
-            <button id="cashbookFetchBtn"
-                style="padding:4px 16px; background:#3b82f6; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:500;">📊
-                Apply</button>
-            <span id="cashbookStatus" style="font-size:12px; color:#64748b;"></span>
-        </div>
-        <!-- Table Container -->
-        <div id="cashbookTableContainer"
-            style="background:white; border-radius:12px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06); padding:12px;">
-            <div id="cashbookTableWrapper" style="overflow-x:auto;">
-                <!-- Table will be rendered here -->
-            </div>
-            <!-- Pagination Controls -->
-            <div id="cashbookPagination"
-                style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid #e2e8f0;">
-                <div style="display:flex; gap:8px; align-items:center;">
-                    <label style="font-size:12px; font-weight:500;">Rows per page:</label>
-                    <select id="cashbookPageSize"
-                        style="padding:2px 6px; border:1px solid #d0d5dd; border-radius:4px; font-size:12px;">
-                        <option value="25">25</option>
-                        <option value="50" selected>50</option>
-                        <option value="100">100</option>
+        <!-- ============================================= -->
+        <!-- SESSION POPUP (hidden by default)             -->
+        <!-- ============================================= -->
+        <div id="sessionPopupOverlay">
+            <div id="sessionPopup">
+                <h2>📋 Start Cash Verification</h2>
+                <p style="color:#64748b; margin-bottom:16px;">Select a cashbook to begin verification.</p>
+                <div class="field">
+                    <label>📒 Cashbook</label>
+                    <select id="popupCashbookSelect" disabled>
+                        <option value="">-- Loading cashbooks... --</option>
                     </select>
                 </div>
-                <div style="display:flex; gap:8px; align-items:center;">
-                    <button id="cashbookPrevPage"
-                        style="padding:2px 10px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
-                        disabled>Previous</button>
-                    <span id="cashbookPageInfo" style="font-size:12px;">Page 1 of 1</span>
-                    <button id="cashbookNextPage"
-                        style="padding:2px 10px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
-                        disabled>Next</button>
+                <div id="popupError" class="error-msg" style="display:none;"></div>
+                <div class="btn-row">
+                    <button class="btn-secondary" id="popupCancelBtn">Cancel</button>
+                    <button class="btn-primary" id="popupStartBtn" disabled>🚀 Open Cashbook</button>
                 </div>
-                <span id="cashbookRowCount" style="font-size:12px; color:#64748b;">0 rows</span>
             </div>
-        </div>
-    </div>
-
-    <!-- ============================================= -->
-    <!-- TRANSACTION REPORT VIEW (full page)          -->
-    <!-- ============================================= -->
-    <div id="transactionReportContent" style="display:none;">
-        <div class="verification-header"
-            style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:20px;">
-            <div>
-                <a href="#" class="back-link no-print" id="exitReportLink">← Back to Verification</a>
-                <h1 style="font-size:24px; margin:0; color:#1a1a2e;">📊 Transaction Report</h1>
-            </div>
-            <div style="font-size:14px; color:#64748b;" id="reportClientInfo"></div>
         </div>
 
-        <!-- Date Range Selector -->
-        <div
-            style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; background:white; padding:16px 20px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.06); margin-bottom:20px;">
-            <div>
-                <label style="font-weight:600; font-size:13px; display:block; margin-bottom:2px;">Start Date</label>
-                <input type="date" id="reportStartDate"
-                    style="padding:6px 10px; border:2px solid #e2e8f0; border-radius:6px; font-size:14px;">
+        <!-- ============================================= -->
+        <!-- CASHBOOK PAGE                                -->
+        <!-- ============================================= -->
+        <div id="cashbookContent" style="display:none;">
+            <div class="cashbook-header"
+                style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
+                <div>
+                    <a href="#" class="back-link no-print" id="exitCashbookLink">← Back to Verification</a>
+                    <h1 style="font-size:24px; margin:0; color:#1a1a2e;">📒 Cashbook: <span
+                            id="cashbookNameDisplay"></span>
+                    </h1>
+                </div>
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <span id="cashbookProgress" style="font-size:13px; color:#64748b;"></span>
+                    <button id="startVerificationBtn"
+                        style="padding:6px 16px; background:#22c55e; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">✅
+                        Verification</button>
+                </div>
             </div>
-            <div>
-                <label style="font-weight:600; font-size:13px; display:block; margin-bottom:2px;">End Date</label>
-                <input type="date" id="reportEndDate"
-                    style="padding:6px 10px; border:2px solid #e2e8f0; border-radius:6px; font-size:14px;">
+            <!-- Date Range Selector -->
+            <div
+                style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; background:white; padding:12px 16px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.04); margin-bottom:16px;">
+                <div>
+                    <label style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">Start Date</label>
+                    <input type="date" id="cashbookStartDate"
+                        style="padding:4px 8px; border:2px solid #e2e8f0; border-radius:6px; font-size:13px;">
+                </div>
+                <div>
+                    <label style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">End Date</label>
+                    <input type="date" id="cashbookEndDate"
+                        style="padding:4px 8px; border:2px solid #e2e8f0; border-radius:6px; font-size:13px;">
+                </div>
+                <button id="cashbookFetchBtn"
+                    style="padding:4px 16px; background:#3b82f6; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:500;">📊
+                    Apply</button>
+                <span id="cashbookStatus" style="font-size:12px; color:#64748b;"></span>
             </div>
-            <button id="reportFetchBtn"
-                style="padding:6px 20px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">📊
-                Fetch</button>
-            <span id="reportStatus" style="font-size:13px; color:#64748b; margin-left:8px;"></span>
+            <!-- Table Container -->
+            <div id="cashbookTableContainer"
+                style="background:white; border-radius:12px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06); padding:12px;">
+                <div id="cashbookTableWrapper" style="overflow-x:auto;">
+                    <!-- Table will be rendered here -->
+                </div>
+                <!-- Pagination Controls -->
+                <div id="cashbookPagination"
+                    style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid #e2e8f0;">
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <label style="font-size:12px; font-weight:500;">Rows per page:</label>
+                        <select id="cashbookPageSize"
+                            style="padding:2px 6px; border:1px solid #d0d5dd; border-radius:4px; font-size:12px;">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button id="cashbookPrevPage"
+                            style="padding:2px 10px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
+                            disabled>Previous</button>
+                        <span id="cashbookPageInfo" style="font-size:12px;">Page 1 of 1</span>
+                        <button id="cashbookNextPage"
+                            style="padding:2px 10px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
+                            disabled>Next</button>
+                    </div>
+                    <span id="cashbookRowCount" style="font-size:12px; color:#64748b;">0 rows</span>
+                </div>
+            </div>
         </div>
 
-        <!-- Table Container -->
-        <div id="reportTableContainer"
-            style="background:white; border-radius:12px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06); padding:16px;">
-            <div id="reportTableWrapper" style="overflow-x:auto;">
-                <!-- Table will be rendered here -->
-            </div>
-            <!-- Pagination Controls -->
-            <div id="reportPagination"
-                style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid #e2e8f0;">
-                <div style="display:flex; gap:8px; align-items:center;">
-                    <label style="font-size:13px; font-weight:500;">Rows per page:</label>
-                    <select id="reportPageSize" style="padding:4px 8px; border:1px solid #d0d5dd; border-radius:4px;">
-                        <option value="25">25</option>
-                        <option value="50" selected>50</option>
-                        <option value="100">100</option>
-                    </select>
+        <!-- ============================================= -->
+        <!-- TRANSACTION REPORT VIEW (full page)          -->
+        <!-- ============================================= -->
+        <div id="transactionReportContent" style="display:none;">
+            <div class="verification-header"
+                style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:20px;">
+                <div>
+                    <a href="#" class="back-link no-print" id="exitReportLink">← Back to Verification</a>
+                    <h1 style="font-size:24px; margin:0; color:#1a1a2e;">📊 Transaction Report</h1>
                 </div>
-                <div style="display:flex; gap:8px; align-items:center;">
-                    <button id="reportPrevPage"
-                        style="padding:4px 12px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
-                        disabled>Previous</button>
-                    <span id="reportPageInfo" style="font-size:13px;">Page 1 of 1</span>
-                    <button id="reportNextPage"
-                        style="padding:4px 12px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
-                        disabled>Next</button>
-                </div>
-                <span id="reportRowCount" style="font-size:13px; color:#64748b;">0 rows</span>
+                <div style="font-size:14px; color:#64748b;" id="reportClientInfo"></div>
             </div>
-        </div>
-    </div>
-    <!-- ============================================= -->
-    <!-- SUPPORTING DOCUMENTS MODAL                    -->
-    <!-- ============================================= -->
-    <div id="supportingModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>📎 Supporting Documents</h3>
-                <button class="close-btn" id="supportingModalClose"
-                    style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
-            </div>
-            <div class="search-row">
-                <input type="text" id="supportingSearchInput" placeholder="Search by reference...">
-                <button id="supportingSearchBtn">Search</button>
-            </div>
-            <div id="supportingResults">
-                <div style="color:#94a3b8; text-align:center; padding:20px;">Enter a reference number and click Search.
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- ============================================= -->
-    <!-- AUDIT PROCEDURE POPOVER                      -->
-    <!-- ============================================= -->
-    <div id="procedureModal"
-        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:3000; justify-content:center; align-items:center;">
-        <div class="modal-content"
-            style="background:white; border-radius:16px; padding:24px; max-width:700px; width:95%; max-height:85vh; overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-            <div class="modal-header"
-                style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                <h3 id="procedureModalTitle" style="margin:0;">📋 Audit Procedure</h3>
-                <button class="close-btn" id="procedureModalClose"
-                    style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
-            </div>
-            <div style="margin-bottom:12px;">
-                <label style="font-weight:600; display:block; margin-bottom:2px;">Reference Number</label>
-                <div style="display:flex; gap:8px;">
-                    <input type="text" id="procedureSearchInput" placeholder="e.g., PO-001, GRN-2026-001"
-                        style="flex:1; padding:6px 10px; border:2px solid #e2e8f0; border-radius:6px;">
-                    <button id="procedureSearchBtn"
-                        style="padding:6px 16px; background:#3b82f6; color:white; border:none; border-radius:6px; cursor:pointer;">🔍
-                        Search</button>
-                </div>
-            </div>
-            <div id="procedureResults"
-                style="max-height:300px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:6px; padding:8px;">
-                <div style="color:#94a3b8; text-align:center; padding:20px;">Enter a reference number and click Search.
-                </div>
-            </div>
-            <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
-                <button id="procedureCancelBtn"
-                    style="padding:6px 20px; background:#e2e8f0; border:none; border-radius:6px; cursor:pointer;">Cancel</button>
-                <button id="procedureConfirmBtn"
-                    style="padding:6px 20px; background:#22c55e; color:white; border:none; border-radius:6px; cursor:pointer;"
-                    disabled>✅ Confirm Selection</button>
-            </div>
-            <div id="procedureStatus" style="margin-top:8px; font-size:13px; color:#64748b;"></div>
-        </div>
-    </div>
 
-    <script src="/static/client_context.js?v=2"></script>
-    <script src="/static/verification.js?v=2"></script>
+            <!-- Date Range Selector -->
+            <div
+                style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; background:white; padding:16px 20px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.06); margin-bottom:20px;">
+                <div>
+                    <label style="font-weight:600; font-size:13px; display:block; margin-bottom:2px;">Start Date</label>
+                    <input type="date" id="reportStartDate"
+                        style="padding:6px 10px; border:2px solid #e2e8f0; border-radius:6px; font-size:14px;">
+                </div>
+                <div>
+                    <label style="font-weight:600; font-size:13px; display:block; margin-bottom:2px;">End Date</label>
+                    <input type="date" id="reportEndDate"
+                        style="padding:6px 10px; border:2px solid #e2e8f0; border-radius:6px; font-size:14px;">
+                </div>
+                <button id="reportFetchBtn"
+                    style="padding:6px 20px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">📊
+                    Fetch</button>
+                <span id="reportStatus" style="font-size:13px; color:#64748b; margin-left:8px;"></span>
+            </div>
+
+            <!-- Table Container -->
+            <div id="reportTableContainer"
+                style="background:white; border-radius:12px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06); padding:16px;">
+                <div id="reportTableWrapper" style="overflow-x:auto;">
+                    <!-- Table will be rendered here -->
+                </div>
+                <!-- Pagination Controls -->
+                <div id="reportPagination"
+                    style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid #e2e8f0;">
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <label style="font-size:13px; font-weight:500;">Rows per page:</label>
+                        <select id="reportPageSize"
+                            style="padding:4px 8px; border:1px solid #d0d5dd; border-radius:4px;">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button id="reportPrevPage"
+                            style="padding:4px 12px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
+                            disabled>Previous</button>
+                        <span id="reportPageInfo" style="font-size:13px;">Page 1 of 1</span>
+                        <button id="reportNextPage"
+                            style="padding:4px 12px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
+                            disabled>Next</button>
+                    </div>
+                    <span id="reportRowCount" style="font-size:13px; color:#64748b;">0 rows</span>
+                </div>
+            </div>
+        </div>
+        <!-- ============================================= -->
+        <!-- SUPPORTING DOCUMENTS MODAL                    -->
+        <!-- ============================================= -->
+        <div id="supportingModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>📎 Supporting Documents</h3>
+                    <button class="close-btn" id="supportingModalClose"
+                        style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+                </div>
+                <div class="search-row">
+                    <input type="text" id="supportingSearchInput" placeholder="Search by reference...">
+                    <button id="supportingSearchBtn">Search</button>
+                </div>
+                <div id="supportingResults">
+                    <div style="color:#94a3b8; text-align:center; padding:20px;">Enter a reference number and click
+                        Search.
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- ============================================= -->
+        <!-- AUDIT PROCEDURE POPOVER                      -->
+        <!-- ============================================= -->
+        <div id="procedureModal"
+            style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:3000; justify-content:center; align-items:center;">
+            <div class="modal-content"
+                style="background:white; border-radius:16px; padding:24px; max-width:700px; width:95%; max-height:85vh; overflow:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+                <div class="modal-header"
+                    style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <h3 id="procedureModalTitle" style="margin:0;">📋 Audit Procedure</h3>
+                    <button class="close-btn" id="procedureModalClose"
+                        style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="font-weight:600; display:block; margin-bottom:2px;">Reference Number</label>
+                    <div style="display:flex; gap:8px;">
+                        <input type="text" id="procedureSearchInput" placeholder="e.g., PO-001, GRN-2026-001"
+                            style="flex:1; padding:6px 10px; border:2px solid #e2e8f0; border-radius:6px;">
+                        <button id="procedureSearchBtn"
+                            style="padding:6px 16px; background:#3b82f6; color:white; border:none; border-radius:6px; cursor:pointer;">🔍
+                            Search</button>
+                    </div>
+                </div>
+                <div id="procedureResults"
+                    style="max-height:300px; overflow-y:auto; border:1px solid #e2e8f0; border-radius:6px; padding:8px;">
+                    <div style="color:#94a3b8; text-align:center; padding:20px;">Enter a reference number and click
+                        Search.
+                    </div>
+                </div>
+                <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
+                    <button id="procedureCancelBtn"
+                        style="padding:6px 20px; background:#e2e8f0; border:none; border-radius:6px; cursor:pointer;">Cancel</button>
+                    <button id="procedureConfirmBtn"
+                        style="padding:6px 20px; background:#22c55e; color:white; border:none; border-radius:6px; cursor:pointer;"
+                        disabled>✅ Confirm Selection</button>
+                </div>
+                <div id="procedureStatus" style="margin-top:8px; font-size:13px; color:#64748b;"></div>
+            </div>
+        </div>
+
+        <script src="/static/client_context.js?v=2"></script>
+        <script src="/static/verification.js?v=2"></script>
 </body>
 
 </html>
