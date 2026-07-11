@@ -910,8 +910,16 @@
                     <!-- Actions -->
                     <div class="mode-actions" id="modeActions" style="display:none;">
                         <div class="mode-row" style="margin-bottom:0;">
-                            <span style="font-size:13px; color:#64748b;">💡 Data will be upserted based on the first
-                                column (unique identifier).</span>
+                            <span style="font-size:13px; color:#64748b;">💡 Data will be inserted as new rows.</span>
+                        </div>
+                        <div class="mode-row">
+                            <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer;">
+                                <input type="checkbox" id="replaceCheckbox" checked
+                                    style="width:16px; height:16px; cursor:pointer;">
+                                🔄 Replace existing data for this template
+                            </label>
+                            <span style="font-size:11px; color:#94a3b8; margin-left:4px;">(Deletes all existing rows
+                                before import)</span>
                         </div>
                         <div class="btn-row">
                             <button class="btn-secondary" id="downloadBtn">📥 Download Template</button>

@@ -27,6 +27,7 @@ class ImportRequest(BaseModel):
     unique_column_id: Optional[int] = None
     skip_validation: bool = False
     sheet_name: str = "Sheet1"
+    replace: bool = False   # <-- NEW: flag to delete existing data before import
 
 class AutoMapRequest(BaseModel):
     file_id: int
@@ -457,27 +458,12 @@ def validate_and_import(request: ImportRequest):
 
     mapping_dict = {m.template_column_id: m for m in request.mappings}
 
-    # Build a dict to map template column ID to its name (for unique column lookup)
-    col_id_to_name = {col['id']: col['column_name'] for col in template_cols}
-    
     # Build column mapping (template column name -> Excel column name)
     col_mapping = {}
     for t_col in template_cols:
         mapping = mapping_dict.get(t_col['id'])
         if mapping and mapping.excel_column_name:
             col_mapping[t_col['column_name']] = mapping.excel_column_name
-
-    # Always use the first column of the template as the unique identifier (upsert key)
-    unique_col_name = None
-    if template_cols:
-        # Get the first column (lowest sort_order)
-        first_col = template_cols[0]
-        unique_col_name = first_col['column_name']
-        # Ensure it is mapped to an Excel column
-        if unique_col_name not in col_mapping:
-            raise HTTPException(400, f"The first column '{unique_col_name}' must be mapped to an Excel column for upsert.")
-    else:
-        raise HTTPException(400, "Template has no columns.")
 
     # Read Excel data
     try:
@@ -543,9 +529,56 @@ def validate_and_import(request: ImportRequest):
             "error_count": len(validation_errors)
         }
 
-    # col_mapping is already defined above; skip redefinition.
+    # If replace is True, delete all existing data for this client + template
+    if request.replace:
+        # First, delete verification_details that belong to client_data for this client+template
+        execute_write(
+            """
+            DELETE FROM verification_details 
+            WHERE client_data_id IN (
+                SELECT id FROM client_data 
+                WHERE client_id = ? AND template_id = ? AND is_deleted = 0
+            )
+            """,
+            (request.client_id, request.template_id)
+        )
+        # Then delete verification_sessions that no longer have any details (or are linked)
+        # We'll delete sessions that have no remaining details, or we can delete sessions that had details above.
+        # Safer: delete sessions that were associated with the details we just deleted.
+        # We can delete sessions that are orphaned (no details left) – but we can also directly delete sessions linked to those client_data.
+        # Simpler: delete sessions that have any detail referencing the client_data we are about to delete.
+        execute_write(
+            """
+            DELETE FROM verification_sessions 
+            WHERE id IN (
+                SELECT DISTINCT session_id FROM verification_details 
+                WHERE client_data_id IN (
+                    SELECT id FROM client_data 
+                    WHERE client_id = ? AND template_id = ? AND is_deleted = 0
+                )
+            )
+            """,
+            (request.client_id, request.template_id)
+        )
+        # Soft-delete client_data rows
+        execute_write(
+            "UPDATE client_data SET is_deleted = 1 WHERE client_id = ? AND template_id = ? AND is_deleted = 0",
+            (request.client_id, request.template_id)
+        )
+        # Also mark uploaded_files as 'Deleted' for this client+template
+        execute_write(
+            """
+            UPDATE uploaded_files SET status = 'Deleted' 
+            WHERE client_id = ? AND id IN (
+                SELECT DISTINCT upload_id FROM client_data 
+                WHERE client_id = ? AND template_id = ?
+            )
+            """,
+            (request.client_id, request.client_id, request.template_id)
+        )
+        log_audit("Analyst", "Replace", "Upload", f"Deleted existing data for client {request.client_id}, template {request.template_id}")
 
-        # --- SIMPLE INSERT (no upsert) – every row becomes a new record ---
+    # ---- IMPORT: All rows inserted as new ----
     # Update uploaded_files status and set client_id
     execute_write(
         "UPDATE uploaded_files SET status = 'Imported', client_id = ? WHERE id = ?",

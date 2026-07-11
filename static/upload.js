@@ -19,6 +19,9 @@ const statusBadge = getElement('statusBadge');
 
 const uploadArea = getElement('uploadArea');
 const fileInput = getElement('fileInput');
+if (!fileInput) {
+    console.error('❌ File input element with id "fileInput" not found – upload will not work');
+}
 const fileInfo = getElement('fileInfo');
 const fileName = getElement('fileName');
 const fileSize = getElement('fileSize');
@@ -212,21 +215,43 @@ if (templateDropdown) {
 
 // ---------- FILE UPLOAD ----------
 if (uploadArea) {
-    uploadArea.addEventListener('click', () => fileInput && fileInput.click());
-    uploadArea.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        uploadArea.classList.add('dragover');
-    });
-    uploadArea.addEventListener('dragleave', () => {
-        uploadArea.classList.remove('dragover');
-    });
-    uploadArea.addEventListener('drop', (e) => {
-        e.preventDefault();
-        uploadArea.classList.remove('dragover');
-        if (e.dataTransfer.files.length) {
-            handleFile(e.dataTransfer.files[0]);
+    // Click to open file picker – with safety check
+    uploadArea.addEventListener('click', function(e) {
+        console.log('🖱️ Upload area clicked');
+        if (fileInput) {
+            fileInput.click();
+        } else {
+            console.error('❌ fileInput element not found');
         }
     });
+    
+    // Drag and drop events
+    uploadArea.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.classList.add('dragover');
+    });
+    
+    uploadArea.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.classList.remove('dragover');
+    });
+    
+    uploadArea.addEventListener('drop', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.classList.remove('dragover');
+        if (e.dataTransfer && e.dataTransfer.files.length) {
+            handleFile(e.dataTransfer.files[0]);
+        } else {
+            console.warn('⚠️ No file dropped');
+        }
+    });
+    
+    console.log('✅ Upload area events attached');
+} else {
+    console.error('❌ Upload area element not found');
 }
 
 if (fileInput) {
@@ -390,6 +415,12 @@ function resetUpload() {
         importBtn.style.background = '';
         importBtn.style.color = '';
         importBtn.disabled = false;
+    }
+
+    // Reset replaceCheckbox to default checked state
+    const replaceChk = document.getElementById('replaceCheckbox');
+    if (replaceChk) {
+        replaceChk.checked = true;
     }
 }
 
@@ -1050,23 +1081,16 @@ if (importBtn) {
             }
         });
 
-        // Determine the first template column as the unique key
-        let uniqueColumnId = null;
-        if (currentMappings && currentMappings.length > 0) {
-            // Get the first mapped column (lowest sort_order)
-            const firstMapped = currentMappings.find(m => m.is_matched);
-            if (firstMapped) {
-                uniqueColumnId = firstMapped.column_id;
-            }
-        }
-                const payload = {
+        // Get the "replace existing data" checkbox value
+        const replace = document.getElementById('replaceCheckbox')?.checked || false;
+        const payload = {
             template_id: selectedTemplateId,
             file_id: fileId,
             client_id: parseInt(clientId),
             mappings: finalMappings,
-            mode: 'create',   // always insert (no upsert)
-            // unique_column_id is not needed for 'create' mode – but we can leave it commented or remove
-            // unique_column_id: uniqueColumnId,
+            mode: 'create',
+            replace: replace,
+            unique_column_id: null,
             sheet_name: currentSheet || 'Sheet1'
         };
 
