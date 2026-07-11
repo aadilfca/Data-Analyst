@@ -492,38 +492,44 @@ function renderTransaction(data) {
         </div>
         <hr class="header-divider">
 
-        <!-- Transaction Details Grid -->
-        <div class="transaction-details-grid">
-            <div class="grid-item voucher"><span class="label">Voucher ID</span><span class="value">${voucherId}</span></div>
-            <div class="grid-item"><span class="label">Date</span><span class="value">${dateVal}</span></div>
-            <div class="grid-item"><span class="label">Account Code</span><span class="value">${accountHead}</span></div>
-            <div class="grid-item"><span class="label">Account Name</span><span class="value">${accountName}</span></div>
-            <div class="grid-item"><span class="label">Voucher Description</span><span class="value">${description}</span></div>
-            <div class="grid-item amount"><span class="label">Amount</span><span class="value">${amount}</span></div>
-        </div>
-
-        <!-- Validation Status Row -->
-        <div class="validation-status-row">
-            <span class="label">Validation Status:</span>
-            <span class="status-badge ${(data.validation_status || 'Pending').toLowerCase()}">${data.validation_status || 'Pending'}</span>
-            ${data.validation_message ? `<span class="validation-message">${data.validation_message}</span>` : ''}
-        </div>
-
-        <!-- Line Items Table (preserved) -->
-        <div style="margin: 12px 0;">
-            <table class="line-items-grid" id="lineItemsTable">
-                <thead><tr>
-                    <th>Vendor</th><th>Unit</th><th>Qty</th><th>Rate</th><th>Calculated Amount</th><th></th>
-                </tr></thead>
-                <tbody id="lineItemsBody"></tbody>
+                <!-- Flex container for table and procedures side by side -->
+        <div class="transaction-details-flex">
+                    <!-- Transaction Details Table – wrapped in a sub‑container to shrink‑wrap -->
+        <div class="transaction-details-wrapper">
+            <table class="transaction-details-table">
+                <tbody>
+                    <tr class="voucher-row">
+                        <td class="label">Voucher ID</td>
+                        <td class="value">${voucherId}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">Date</td>
+                        <td class="value">${dateVal}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">Account Code</td>
+                        <td class="value">${accountHead}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">Account Name</td>
+                        <td class="value">${accountName}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">Voucher Description</td>
+                        <td class="value">${description}</td>
+                    </tr>
+                    <tr class="amount-row">
+                        <td class="label">Amount</td>
+                        <td class="value">${amount}</td>
+                    </tr>
+                </tbody>
             </table>
-            <button id="addLineItemBtn" class="btn-outline" style="margin-top:4px; padding:4px 16px;">➕ Add Line Item</button>
         </div>
 
-        <!-- Mandatory Procedures Tiles -->
-        <div class="procedure-section">
-            <div style="font-weight:600; font-size:14px; color:#1e293b; margin-bottom:6px;">📋 Mandatory Audit Procedures</div>
-            <div class="procedure-tiles" id="procedureTilesContainer">
+            <!-- Mandatory Procedures Tiles (placed to the right) -->
+            <div class="procedure-section">
+                <div style="font-weight:600; font-size:14px; color:#1e293b; margin-bottom:6px;">📋 Mandatory Audit Procedures</div>
+                <div class="procedure-tiles" id="procedureTilesContainer">
     `;
 
     const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
@@ -547,16 +553,35 @@ function renderTransaction(data) {
         const icon = procIcons[key] || '📌';
         const label = procLabels[key] || key;
         html += `
-            <div class="procedure-tile clickable-proc" data-proc="${key}" style="${isChecked ? 'background:#dcfce7; border-color:#86efac;' : ''}">
-                <span class="proc-icon">${icon}</span>
-                <span class="proc-name">${label}</span>
-                <input type="checkbox" class="proc-checkbox" ${isChecked ? 'checked' : ''} title="Mark as done">
-            </div>
-        `;
+                    <div class="procedure-tile clickable-proc" data-proc="${key}" style="${isChecked ? 'background:#dcfce7; border-color:#86efac;' : ''}">
+                        <span class="proc-icon">${icon}</span>
+                        <span class="proc-name">${label}</span>
+                        <input type="checkbox" class="proc-checkbox" ${isChecked ? 'checked' : ''} title="Mark as done">
+                    </div>
+                `;
     });
 
     html += `
+                </div>
             </div>
+        </div>
+
+        <!-- Validation Status Row (below the flex container) -->
+        <div class="validation-status-row">
+            <span class="label">Validation Status:</span>
+            <span class="status-badge ${(data.validation_status || 'Pending').toLowerCase()}">${data.validation_status || 'Pending'}</span>
+            ${data.validation_message ? `<span class="validation-message">${data.validation_message}</span>` : ''}
+        </div>
+
+        <!-- Line Items Table (preserved) -->
+        <div style="margin: 12px 0;">
+            <table class="line-items-grid" id="lineItemsTable">
+                <thead><tr>
+                    <th>Vendor</th><th>Unit</th><th>Qty</th><th>Rate</th><th>Calculated Amount</th><th></th>
+                </tr></thead>
+                <tbody id="lineItemsBody"></tbody>
+            </table>
+            <button id="addLineItemBtn" class="btn-outline" style="margin-top:4px; padding:4px 16px;">➕ Add Line Item</button>
         </div>
 
         <!-- Observations & Comments -->

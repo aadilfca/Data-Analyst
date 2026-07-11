@@ -712,46 +712,88 @@ body {
     margin: 6px 0 16px 0;
 }
 
-/* Transaction details grid – two columns */
-.transaction-details-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px 20px;
-    padding: 8px 0;
-    margin-bottom: 12px;
+/* Transaction details table – vertical, dim borders, shrink-to-fit */
+.transaction-details-table {
+    width: auto;
+    border-collapse: collapse;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    overflow: hidden;
+    font-size: 14px;
+    flex-shrink: 0;
 }
 
-.transaction-details-grid .grid-item {
-    display: flex;
-    justify-content: space-between;
-    padding: 6px 0;
-    border-bottom: 1px solid #f0f2f5;
+.transaction-details-table tbody tr {
+    border-bottom: 1px solid #eef2f6;
 }
 
-.transaction-details-grid .grid-item .label {
+.transaction-details-table tbody tr:last-child {
+    border-bottom: none;
+}
+
+.transaction-details-table td {
+    padding: 8px 14px;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.transaction-details-table .label {
     font-weight: 600;
     color: #475569;
-    font-size: 14px;
+    background: #fafcfd;
+    border-right: 1px solid #e8edf2;
+    padding-right: 20px;
 }
 
-.transaction-details-grid .grid-item .value {
+.transaction-details-table .value {
     font-weight: 500;
     color: #1a1a2e;
-    font-size: 15px;
-    text-align: right;
+    background: white;
+    padding-left: 20px;
 }
 
 /* Emphasise Voucher ID and Amount */
-.transaction-details-grid .grid-item.voucher .value {
+.transaction-details-table .voucher-row .value {
     font-size: 18px;
     font-weight: 700;
     color: #2563eb;
 }
 
-.transaction-details-grid .grid-item.amount .value {
+.transaction-details-table .amount-row .value {
     font-size: 18px;
     font-weight: 700;
     color: #16a34a;
+}
+
+/* Zebra stripes for even rows */
+.transaction-details-table tbody tr:nth-child(even) .label {
+    background: #f5f8fa;
+}
+.transaction-details-table tbody tr:nth-child(even) .value {
+    background: #fafcff;
+}
+
+/* Hover effect */
+.transaction-details-table tbody tr:hover .label,
+.transaction-details-table tbody tr:hover .value {
+    background: #f1f5f9;
+}
+
+/* Flex container for table and procedure tiles side by side */
+.transaction-details-flex {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.transaction-details-flex .procedure-section {
+    flex: 1;
+    min-width: 200px;
+    margin: 0;
+    padding: 0;
+    border: none;
 }
 
 /* Validation status row */
@@ -1134,44 +1176,74 @@ body {
     margin-bottom: 20px;
 }
 
-/* ----- Transaction Details Table (single column, dim borders, zebra) ----- */
+/* Transaction details table – vertical, dim borders, shrink‑wrap */
+.transaction-details-wrapper {
+    max-width: 560px;
+    width: auto;
+    margin-bottom: 12px;
+}
+
 .transaction-details-table {
-    width: 100%;
+    width: auto;
+    min-width: 280px;
+    max-width: 100%;
     border-collapse: collapse;
-    margin: 12px 0;
     border: 1px solid #e2e8f0;
-    border-radius: 8px;
+    border-radius: 6px;
     overflow: hidden;
+    font-size: 14px;
 }
+
 .transaction-details-table tbody tr {
-    border-bottom: 1px solid #f0f2f5;
+    border-bottom: 1px solid #eef2f6;
 }
+
 .transaction-details-table tbody tr:last-child {
     border-bottom: none;
 }
+
 .transaction-details-table td {
     padding: 10px 16px;
-    font-size: 14px;
     vertical-align: middle;
 }
+
 .transaction-details-table .label {
     font-weight: 600;
     color: #475569;
-    width: 40%;
+    width: 1%;
+    white-space: nowrap;
     background: #fafcfd;
+    border-right: 1px solid #e8edf2;
 }
+
 .transaction-details-table .value {
     font-weight: 500;
     color: #1a1a2e;
     background: white;
+    word-break: break-word;
 }
-/* Zebra stripes – alternate rows */
+
+/* Emphasise Voucher ID and Amount */
+.transaction-details-table .voucher-row .value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #2563eb;
+}
+
+.transaction-details-table .amount-row .value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #16a34a;
+}
+
+/* Zebra stripes for even rows */
 .transaction-details-table tbody tr:nth-child(even) .label {
     background: #f5f8fa;
 }
 .transaction-details-table tbody tr:nth-child(even) .value {
     background: #fafcff;
 }
+
 /* Hover effect */
 .transaction-details-table tbody tr:hover .label,
 .transaction-details-table tbody tr:hover .value {
