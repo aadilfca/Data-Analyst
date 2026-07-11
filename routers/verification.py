@@ -497,7 +497,7 @@ def validate_transaction(
 ):
     detail = execute_query(
         """
-        SELECT vd.id, vd.client_data_id, vd.line_items, cd.extract_amount
+        SELECT vd.id, vd.client_data_id, vd.line_items, vd.status, cd.extract_amount
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
         WHERE vd.id = ?
@@ -507,9 +507,8 @@ def validate_transaction(
     if not detail:
         raise HTTPException(404, "Verification detail not found.")
     d = detail[0]
-    if d['status'] != 'Pending':
+    if d.get('status', 'Pending') != 'Pending':
         raise HTTPException(400, "Transaction is already verified or skipped.")
-    
     line_items = []
     if d['line_items']:
         try:
@@ -521,18 +520,15 @@ def validate_transaction(
             "validation_status": "Failed",
             "message": "No line items found. Please add line items before validation."
         }
-    
     total_line_amount = sum(float(item.get('calculated_amount', 0)) for item in line_items)
     transaction_amount = float(d['extract_amount'] or 0)
     tolerance = 0.01
     passed = abs(total_line_amount - transaction_amount) <= tolerance
-    
     validation_status = "Passed" if passed else "Failed"
     if passed:
         message = f"Validation passed: Sum of line items ({total_line_amount:.2f}) matches transaction amount ({transaction_amount:.2f})."
     else:
         message = f"Validation failed: Sum of line items ({total_line_amount:.2f}) does not match transaction amount ({transaction_amount:.2f}). Difference: {total_line_amount - transaction_amount:.2f}"
-    
     execute_write(
         """
         UPDATE verification_details
@@ -541,7 +537,6 @@ def validate_transaction(
         """,
         (validation_status, message, detail_id)
     )
-    
     log_audit("Analyst", "Validate Transaction", "Verification", f"Detail {detail_id}: {validation_status}")
     return {
         "validation_status": validation_status,
@@ -550,7 +545,6 @@ def validate_transaction(
         "transaction_amount": transaction_amount,
         "passed": passed
     }
-
 @router.post("/api/verification/complete")
 def complete_transaction(
     detail_id: int = Body(..., embed=True),
@@ -563,7 +557,8 @@ def complete_transaction(
     if not detail:
         raise HTTPException(404, "Verification detail not found.")
     d = detail[0]
-    if d['status'] != 'Pending':
+    # Use .get() with a fallback to handle missing or NULL status
+    if d.get('status', 'Pending') != 'Pending':
         raise HTTPException(400, "Transaction is already verified or skipped.")
     if d['validation_status'] != 'Passed':
         raise HTTPException(400, "Transaction validation has not passed. Please validate first.")

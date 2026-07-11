@@ -891,7 +891,84 @@ body {
     border-color: #4ade80;
     box-shadow: 0 4px 12px rgba(22, 163, 74, 0.2);
 }
+/* Vertical procedure table – two columns (no checkbox) */
+.procedure-vertical-container {
+    margin: 12px 0 16px 0;
+    overflow-x: auto;
+}
 
+.procedure-vertical-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 15px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+}
+
+.procedure-vertical-table th {
+    background: #f8fafc;
+    padding: 10px 16px;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid #e2e8f0;
+    color: #475569;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.procedure-vertical-table td {
+    padding: 10px 16px;
+    border-bottom: 1px solid #f0f2f5;
+    vertical-align: middle;
+}
+
+.procedure-vertical-table tr:last-child td {
+    border-bottom: none;
+}
+
+.procedure-vertical-table .procedure-row {
+    transition: background 0.2s ease;
+}
+
+.procedure-vertical-table .procedure-row:hover {
+    background: #fafcff;
+}
+
+.procedure-vertical-table .proc-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.procedure-vertical-table .proc-label .proc-name {
+    font-weight: 500;
+    color: #1a1a2e;
+    font-size: 15px;
+}
+
+.procedure-vertical-table .proc-label .proc-icon {
+    font-size: 24px;
+    line-height: 1.2;
+}
+
+/* Observation placeholder – future content will appear here */
+.procedure-observation-placeholder {
+    border-bottom: 1px dashed #d0d5dd;
+    min-height: 30px;
+    padding: 2px 4px;
+    color: #94a3b8;
+    font-style: italic;
+    font-size: 13px;
+    transition: border-color 0.2s;
+}
+
+.procedure-observation-placeholder:hover {
+    border-bottom-color: #94a3b8;
+}
 /* Observations & Comments row */
 .obs-comments-row {
     display: flex;
@@ -1214,7 +1291,7 @@ body {
 }
 /* Transaction details table – vertical, dim borders, shrink‑wrap */
 .transaction-details-wrapper {
-    max-width: 560px;
+    max-width: 480px;
     width: auto;
     margin-bottom: 12px;
     border: 1px solid #e2e8f0;

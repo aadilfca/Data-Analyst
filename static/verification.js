@@ -547,13 +547,21 @@ function renderTransaction(data) {
             ${data.validation_message ? `<span class="validation-message">${data.validation_message}</span>` : ''}
         </div>
 
-                                <!-- Mandatory Procedures Tiles (placed below the transaction table) -->
+                                        <!-- Mandatory Procedures – Vertical List with Observations -->
         <div style="margin-top:16px;">
             <div style="display:flex; align-items:center; gap:8px;">
                 <span class="vh-title" style="font-size:20px; font-weight:700; color:#1a1a2e;">PROCEDURES</span>
             </div>
             <hr class="header-divider">
-            <div class="procedure-tiles" id="procedureTilesContainer">
+            <div class="procedure-vertical-container" id="procedureVerticalContainer">
+                <table class="procedure-vertical-table">
+                                        <thead>
+                        <tr>
+                            <th style="text-align:left; width:30%;">Procedure</th>
+                            <th style="text-align:left; width:70%;">Observation</th>
+                        </tr>
+                    </thead>
+                    <tbody>
     `;
 
     const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
@@ -572,20 +580,28 @@ function renderTransaction(data) {
         'vendor_bill': '🧾'
     };
 
-    procKeys.forEach(key => {
-        const isChecked = procedureData[key] === true;
+                procKeys.forEach(key => {
         const icon = procIcons[key] || '📌';
         const label = procLabels[key] || key;
         html += `
-                    <div class="procedure-tile clickable-proc" data-proc="${key}" style="${isChecked ? 'background:#dcfce7; border-color:#86efac;' : ''}">
-                        <span class="proc-icon">${icon}</span>
-                        <span class="proc-name">${label}</span>
-                        <input type="checkbox" class="proc-checkbox" ${isChecked ? 'checked' : ''} title="Mark as done">
-                    </div>
-                `;
+                        <tr class="procedure-row" data-proc="${key}">
+                            <td style="padding:8px 12px;">
+                                <span class="proc-label clickable-proc" data-proc="${key}" style="cursor:pointer; font-weight:500; display:flex; align-items:center; gap:8px;">
+                                    <span class="proc-icon" style="font-size:24px;">${icon}</span>
+                                    <span class="proc-name" style="font-size:15px;">${label}</span>
+                                </span>
+                            </td>
+                            <td style="padding:8px 12px;">
+                                <div class="proc-observation-placeholder" data-proc="${key}" style="border-bottom: 1px dashed #d0d5dd; min-height: 28px; padding: 4px 2px; color: #94a3b8; font-style: italic; font-size: 13px;">
+                                </div>
+                            </td>
+                        </tr>
+                    `;
     });
 
     html += `
+                    </tbody>
+                </table>
             </div>
         </div>
 
@@ -643,7 +659,7 @@ function renderTransaction(data) {
         }
     });
 
-    // Procedure tiles – click to open supporting document modal
+                // Procedure label/icon – click to open supporting document modal
     document.querySelectorAll('.clickable-proc').forEach(el => {
         el.addEventListener('click', function(e) {
             const procKey = this.dataset.proc;
@@ -934,37 +950,47 @@ async function updateProgress() {
 
 // Update the header title and navbar stats
 async function updateProgressDisplay() {
-    // Update header title: TRANSACTION - [index/total]
-    const titleEl = document.getElementById('transactionHeaderTitle');
-    if (titleEl) {
-        if (!currentSessionId) {
-            titleEl.textContent = 'TRANSACTION';
-        } else {
-            // Use sessionTransactions and currentTransactionIndex if available
-            let index = currentTransactionIndex;
-            let total = totalTransactions;
-            // If we don't have the list, try to fetch progress to get total and estimate index
-            if (total === 0) {
-                try {
-                    const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
-                    if (res.ok) {
-                        const data = await res.json();
-                        total = data.total_transactions || 0;
-                        totalTransactions = total;
-                        // index not available from progress, we'll keep currentTransactionIndex
-                    }
-                } catch (e) {
-                    console.warn('Could not fetch progress for header:', e);
+    // Update header title: TRANSACTION - [index/total] – Cashbook Name
+const titleEl = document.getElementById('transactionHeaderTitle');
+if (titleEl) {
+    if (!currentSessionId) {
+        titleEl.textContent = 'TRANSACTION';
+    } else {
+        // Use sessionTransactions and currentTransactionIndex if available
+        let index = currentTransactionIndex;
+        let total = totalTransactions;
+        // If we don't have the list, try to fetch progress to get total and estimate index
+        if (total === 0) {
+            try {
+                const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
+                if (res.ok) {
+                    const data = await res.json();
+                    total = data.total_transactions || 0;
+                    totalTransactions = total;
+                    // index not available from progress, we'll keep currentTransactionIndex
                 }
+            } catch (e) {
+                console.warn('Could not fetch progress for header:', e);
             }
-            if (total > 0) {
-                const displayIndex = (index >= 0) ? index + 1 : '?';
+        }
+        // Get cashbook name from global variable
+        const cashbookName = window._currentCashbook || selectedCashbook || '';
+        if (total > 0) {
+            const displayIndex = (index >= 0) ? index + 1 : '?';
+            if (cashbookName) {
+                titleEl.textContent = `${cashbookName} – TRANSACTION [${displayIndex}/${total}]`;
+            } else {
                 titleEl.textContent = `TRANSACTION - [${displayIndex}/${total}]`;
+            }
+        } else {
+            if (cashbookName) {
+                titleEl.textContent = `${cashbookName} – TRANSACTION`;
             } else {
                 titleEl.textContent = 'TRANSACTION';
             }
         }
     }
+}
 
     // Update navbar stats
     if (!currentSessionId) return;
@@ -1191,7 +1217,7 @@ function isCurrentTransactionValidated() {
 // Go to previous transaction – with confirmation if not validated
 async function goToPreviousTransaction() {
     if (!sessionTransactions.length || currentTransactionIndex <= 0) {
-        showStatus('You are at the first transaction.', 'info');
+        // No message – silently ignore
         return;
     }
     // Save current state first (always)
@@ -1200,7 +1226,7 @@ async function goToPreviousTransaction() {
     if (!isCurrentTransactionValidated()) {
         const confirmed = await showNavigationConfirm();
         if (!confirmed) {
-            showStatus('Navigation cancelled.', 'info');
+            // User cancelled – no message
             return;
         }
     }
@@ -1208,7 +1234,40 @@ async function goToPreviousTransaction() {
     if (prev) {
         navigateToTransaction(prev.detail_id);
     } else {
-        showStatus('Previous transaction not found.', 'error');
+        // Silently ignore if not found
+    }
+}
+
+// Go to next transaction – with confirmation if not validated
+async function goToNextTransaction() {
+    if (!sessionTransactions.length || currentTransactionIndex >= sessionTransactions.length - 1) {
+        // No message – silently ignore
+        return;
+    }
+    // Save current state
+    await saveCurrentTransaction();
+    // If not validated, ask for confirmation
+    if (!isCurrentTransactionValidated()) {
+        const confirmed = await showNavigationConfirm();
+        if (!confirmed) {
+            // User cancelled – no message
+            return;
+        }
+    }
+    // Proceed: validate and move (if validation passes, mark verified; if fails, still allow navigation)
+    await validateTransaction(); // updates badge
+    // Check if it passed, if yes mark verified
+    const badge = document.querySelector('.status-badge');
+    if (badge && badge.textContent.trim() === 'Passed') {
+        await completeTransaction(); // marks verified and calls loadNextTransaction
+    } else {
+        // Even if validation failed, we move to next because user confirmed
+        const next = sessionTransactions[currentTransactionIndex + 1];
+        if (next) {
+            navigateToTransaction(next.detail_id);
+        } else {
+            // Silently ignore if not found
+        }
     }
 }
 
@@ -1237,17 +1296,15 @@ async function goToNextTransaction() {
     const badge = document.querySelector('.status-badge');
     if (badge && badge.textContent.trim() === 'Passed') {
         await completeTransaction(); // marks verified and calls loadNextTransaction
-    } else {
-        // Even if validation failed, we move to next because user confirmed
-        // But we should save the current state (already saved) and navigate
-        const next = sessionTransactions[currentTransactionIndex + 1];
-        if (next) {
-            navigateToTransaction(next.detail_id);
-            showStatus('Moved to next transaction (validation not passed).', 'info');
-        } else {
-            showStatus('Next transaction not found.', 'error');
-        }
-    }
+                } else {
+                // Even if validation failed, we move to next because user confirmed
+                const next = sessionTransactions[currentTransactionIndex + 1];
+                if (next) {
+                    navigateToTransaction(next.detail_id);
+                } else {
+                    showStatus('Next transaction not found.', 'error');
+                }
+            }
 }
 // Override the mirror icon click – we replace the alert
 document.addEventListener('DOMContentLoaded', function() {
@@ -1309,10 +1366,10 @@ async function saveLineItems() {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to save');
         }
-        showStatus('✅ Progress saved.', 'success');
+        // Success – no status bar message
     } catch (e) {
         console.error('Error saving:', e);
-        showStatus('❌ Error saving: ' + e.message, 'error');
+        // Do not show status bar error – only log
     }
 }
 
@@ -1332,7 +1389,7 @@ async function validateTransaction() {
             throw new Error(err.detail || 'Validation failed');
         }
         const data = await res.json();
-        showStatus(data.validation_message, data.passed ? 'success' : 'error');
+        // Update badge only – no status bar message
         const badge = document.querySelector('.status-badge');
         if (badge) {
             badge.textContent = data.validation_status;
@@ -1345,7 +1402,7 @@ async function validateTransaction() {
         }
     } catch (e) {
         console.error('Validation error:', e);
-        showStatus('❌ Validation error: ' + e.message, 'error');
+        // Do not show status bar message – only log to console
     }
 }
 
@@ -1365,12 +1422,12 @@ async function completeTransaction() {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to complete');
         }
-        showStatus('✅ Transaction verified!', 'success');
+        // No status message – proceed silently
         await loadNextTransaction();
         await updateProgress();
     } catch (e) {
         console.error('Error completing:', e);
-        showStatus('❌ Error completing: ' + e.message, 'error');
+        // Do not show status bar error – only log
     }
 }
 
