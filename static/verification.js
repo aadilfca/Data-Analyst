@@ -478,11 +478,17 @@ function renderTransaction(data) {
 
     // ----- Build the new layout (validation status moved up) -----
     let html = `
-                <!-- Header row: TRANSACTION - [index/total] | mirror icon | Type dropdown -->
+                        <!-- Header row with navigation arrows -->
         <div class="verification-header-row" style="border-bottom: none; padding: 10px 20px 0 0;">
-            <div class="vh-center" style="justify-content: flex-start; gap: 8px;">
+            <div class="vh-center" style="justify-content: flex-start; gap: 6px;">
+                <!-- Previous arrow -->
+                <button class="nav-arrow" id="prevArrow" ${currentTransactionIndex <= 0 ? 'disabled' : ''} title="Previous transaction">‹</button>
+                <!-- Title with index -->
                 <span class="vh-title" id="transactionHeaderTitle">TRANSACTION</span>
-                <span class="vh-icon" id="transactionListIcon" title="View all transactions" style="cursor:pointer;">🔍</span>
+                <!-- Next arrow -->
+                <button class="nav-arrow" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">›</button>
+                <!-- Mirror icon -->
+                <span class="vh-icon" id="transactionListIcon" title="View all transactions" style="cursor:pointer; margin-left:4px;">🔍</span>
                 <span class="vh-separator">|</span>
                 <span class="vh-type-label">Type</span>
                 <select id="transactionTypeDropdown" class="vh-type-dropdown">
@@ -497,7 +503,7 @@ function renderTransaction(data) {
                 </select>
             </div>
             <div class="vh-right">
-                <button class="btn-cashbook" id="cashbookReturnBtn" style="font-size:13px;">📒 Cashbook</button>
+                                <button class="btn-cashbook" id="cashbookReturnBtn">📒 Cashbook</button>
             </div>
         </div>
         <hr class="header-divider">
@@ -601,10 +607,9 @@ function renderTransaction(data) {
             </div>
         </div>
 
-        <!-- Action Buttons -->
-        <div class="action-buttons-row">
-            <button class="btn-action btn-back" id="backPrevBtn">← Back</button>
-            <button class="btn-action btn-next" id="nextSaveBtn">Next →</button>
+                <!-- Save Button (optional) -->
+        <div style="display:flex; justify-content:flex-end; margin-top:12px;">
+            <button class="btn-action btn-next" id="saveBtn" style="background:#8b5cf6; padding:6px 24px;">💾 Save Progress</button>
         </div>
     `;
 
@@ -705,10 +710,31 @@ function renderTransaction(data) {
         procedureData.comments = this.value;
     });
 
-    // Back button – placeholder for Phase 3
-    document.getElementById('backPrevBtn')?.addEventListener('click', function() {
-        console.log('Back to previous transaction (Phase 3)');
-        showStatus('Back to previous transaction – coming soon', 'info');
+            // Previous arrow
+    document.getElementById('prevArrow')?.addEventListener('click', function() {
+        if (typeof goToPreviousTransaction === 'function') {
+            goToPreviousTransaction();
+        } else {
+            console.warn('goToPreviousTransaction not defined');
+        }
+    });
+
+    // Next arrow
+    document.getElementById('nextArrow')?.addEventListener('click', function() {
+        if (typeof goToNextTransaction === 'function') {
+            goToNextTransaction();
+        } else {
+            console.warn('goToNextTransaction not defined');
+        }
+    });
+
+    // Save button
+    document.getElementById('saveBtn')?.addEventListener('click', function() {
+        if (typeof saveLineItems === 'function') {
+            saveLineItems();
+        } else {
+            console.warn('saveLineItems not defined');
+        }
     });
 
     // Next button – triggers validation and save (existing logic)
@@ -1116,7 +1142,113 @@ function navigateToTransaction(detailId) {
     // Enable/disable navigation buttons (Phase 3 will handle this fully)
     // For now, we just update the UI
 }
+// Save current transaction without validation (for going back)
+async function saveCurrentTransaction() {
+    await saveLineItems();
+    // Optionally, we could also validate but not mark as verified
+    // For now, just save.
+}
 
+// Show confirmation modal and return a promise that resolves to true (proceed) or false (cancel)
+function showNavigationConfirm() {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('navConfirmModal');
+        const cancelBtn = document.getElementById('navConfirmCancel');
+        const okBtn = document.getElementById('navConfirmOk');
+        if (!modal) {
+            resolve(true); // fallback if modal missing
+            return;
+        }
+        modal.style.display = 'flex';
+        const cleanup = () => {
+            modal.style.display = 'none';
+            cancelBtn.removeEventListener('click', onCancel);
+            okBtn.removeEventListener('click', onOk);
+        };
+        const onCancel = () => { cleanup(); resolve(false); };
+        const onOk = () => { cleanup(); resolve(true); };
+        cancelBtn.addEventListener('click', onCancel);
+        okBtn.addEventListener('click', onOk);
+        // Close on overlay click (optional)
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) {
+                cleanup();
+                resolve(false);
+            }
+        });
+    });
+}
+
+// Check if current transaction validation is Passed (or Verified)
+function isCurrentTransactionValidated() {
+    if (!sessionTransactions.length || currentTransactionIndex < 0) return false;
+    const current = sessionTransactions[currentTransactionIndex];
+    if (!current) return false;
+    const status = (current.validation_status || '').toLowerCase();
+    return status === 'passed' || status === 'verified';
+}
+
+// Go to previous transaction – with confirmation if not validated
+async function goToPreviousTransaction() {
+    if (!sessionTransactions.length || currentTransactionIndex <= 0) {
+        showStatus('You are at the first transaction.', 'info');
+        return;
+    }
+    // Save current state first (always)
+    await saveCurrentTransaction();
+    // If not validated, ask for confirmation
+    if (!isCurrentTransactionValidated()) {
+        const confirmed = await showNavigationConfirm();
+        if (!confirmed) {
+            showStatus('Navigation cancelled.', 'info');
+            return;
+        }
+    }
+    const prev = sessionTransactions[currentTransactionIndex - 1];
+    if (prev) {
+        navigateToTransaction(prev.detail_id);
+    } else {
+        showStatus('Previous transaction not found.', 'error');
+    }
+}
+
+// Go to next transaction – with confirmation if not validated
+async function goToNextTransaction() {
+    if (!sessionTransactions.length || currentTransactionIndex >= sessionTransactions.length - 1) {
+        showStatus('You are at the last transaction.', 'info');
+        return;
+    }
+    // Save current state
+    await saveCurrentTransaction();
+    // If not validated, ask for confirmation
+    if (!isCurrentTransactionValidated()) {
+        const confirmed = await showNavigationConfirm();
+        if (!confirmed) {
+            showStatus('Navigation cancelled.', 'info');
+            return;
+        }
+    }
+    // Proceed: validate and move (if validation passes, mark verified; if fails, still allow navigation? 
+    // The user confirmed they want to proceed even if not validated, so we just move.
+    // But we also want to attempt validation and mark if passed.
+    // We'll call validateTransaction but not block navigation on failure.
+    await validateTransaction(); // updates badge
+    // Check if it passed, if yes mark verified
+    const badge = document.querySelector('.status-badge');
+    if (badge && badge.textContent.trim() === 'Passed') {
+        await completeTransaction(); // marks verified and calls loadNextTransaction
+    } else {
+        // Even if validation failed, we move to next because user confirmed
+        // But we should save the current state (already saved) and navigate
+        const next = sessionTransactions[currentTransactionIndex + 1];
+        if (next) {
+            navigateToTransaction(next.detail_id);
+            showStatus('Moved to next transaction (validation not passed).', 'info');
+        } else {
+            showStatus('Next transaction not found.', 'error');
+        }
+    }
+}
 // Override the mirror icon click – we replace the alert
 document.addEventListener('DOMContentLoaded', function() {
     // We'll set up the listener after the card is rendered; but we can use event delegation or attach in renderTransaction.

@@ -834,8 +834,28 @@
             </div>
         </div>
 
+        <!-- ============================================= -->
+        <!-- NAVIGATION CONFIRM MODAL (moved outside procedureModal) -->
+        <!-- ============================================= -->
+        <div id="navConfirmModal"
+            style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:4000; justify-content:center; align-items:center;">
+            <div class="modal-content"
+                style="background:white; border-radius:16px; padding:30px; max-width:480px; width:90%; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+                <h3 style="margin:0 0 8px 0; color:#1a1a2e;">⚠️ Transaction Not Validated</h3>
+                <p style="color:#64748b; font-size:15px; margin-bottom:20px;" id="navConfirmMessage">This transaction
+                    has not been validated. Do you want to proceed anyway?</p>
+                <div style="display:flex; gap:12px; justify-content:flex-end;">
+                    <button id="navConfirmCancel"
+                        style="padding:8px 24px; background:#e2e8f0; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Cancel</button>
+                    <button id="navConfirmOk"
+                        style="padding:8px 24px; background:#f59e0b; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px; color:white;">Confirm</button>
+                </div>
+            </div>
+        </div>
+
         <script src="/static/client_context.js?v=2"></script>
         <script src="/static/verification.js?v=2"></script>
+    </div>
 </body>
 
 </html>
