@@ -704,7 +704,7 @@ function showImportSummary(result) {
     const modal = document.createElement('div');
     modal.style.cssText = `
         background: white; border-radius: 12px; padding: 30px;
-        max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        max-width: 560px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         font-family: 'Segoe UI', sans-serif;
     `;
     
@@ -735,16 +735,23 @@ function showImportSummary(result) {
         detailMessage = 'ℹ️ No changes were made.';
     }
     
+    // Add an explanatory note about debit/credit lines
+    const note = `<div style="font-size:13px; color:#64748b; background:#f8fafc; padding:8px 12px; border-radius:6px; margin-top:8px; border-left:3px solid #3b82f6;">
+        💡 <strong>Note:</strong> Each voucher may appear twice in the file (debit and credit). 
+        The system stores one transaction per voucher ID. Total records in the Data Bank reflect distinct vouchers.
+    </div>`;
+    
     modal.innerHTML = `
         <div style="text-align:center; margin-bottom:16px;">
             <div style="font-size:48px;">${statusIcon}</div>
             <h2 style="margin:8px 0 4px; color:#1a1a2e;">${statusText}</h2>
             <p style="color:#64748b; font-size:14px;">${detailMessage}</p>
+            ${note}
         </div>
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin:16px 0;">
             <div style="background:#f8fafc; padding:12px; border-radius:8px; text-align:center;">
                 <div style="font-size:24px; font-weight:700; color:#3b82f6;">${total}</div>
-                <div style="font-size:12px; color:#64748b;">Total Rows</div>
+                <div style="font-size:12px; color:#64748b;">Lines Processed</div>
             </div>
             <div style="background:#dcfce7; padding:12px; border-radius:8px; text-align:center;">
                 <div style="font-size:24px; font-weight:700; color:#16a34a;">${inserted}</div>
@@ -766,8 +773,9 @@ function showImportSummary(result) {
                 ${errors.length > 5 ? `<div style="font-size:12px; color:#991b1b;">... and ${errors.length - 5} more.</div>` : ''}
             </div>
         ` : ''}
-        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
-            <button id="importSummaryCloseBtn" style="padding:8px 24px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">Close</button>
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap;">
+            <a href="/static/databank.html" target="_blank" style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; font-size:14px;">📊 View in Data Bank</a>
+            <button id="importSummaryCloseBtn" style="padding:8px 24px; background:#e2e8f0; color:#1a1a2e; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Close</button>
         </div>
     `;
     
@@ -1051,13 +1059,14 @@ if (importBtn) {
                 uniqueColumnId = firstMapped.column_id;
             }
         }
-        const payload = {
+                const payload = {
             template_id: selectedTemplateId,
             file_id: fileId,
             client_id: parseInt(clientId),
             mappings: finalMappings,
-            mode: 'update',  // always upsert
-            unique_column_id: uniqueColumnId,  // use the first column
+            mode: 'create',   // always insert (no upsert)
+            // unique_column_id is not needed for 'create' mode – but we can leave it commented or remove
+            // unique_column_id: uniqueColumnId,
             sheet_name: currentSheet || 'Sheet1'
         };
 
@@ -1098,16 +1107,16 @@ if (importBtn) {
                 return;
             }
 
-            // Validation passed
+                                    // Validation passed – show simple success message
+            const totalRows = result.total_rows || 0;
             validationStatus = 'valid';
-            // Change button to green "Upload"
             importBtn.innerHTML = '🚀 Upload';
             importBtn.style.background = '#16a34a';
             importBtn.style.color = 'white';
             importBtn.disabled = false;
-            showStatus('✅ Validation passed! Click "Upload" to import data.', 'success');
+            let statusMsg = `✅ Validation passed! ${totalRows} rows identified. Click "Upload" to import all rows.`;
+            showStatus(statusMsg, 'success');
             setBadge('✅ Data valid, ready to upload');
-            // Update preview button state (enable preview)
             updatePreviewButtonState();
 
         } catch (error) {
@@ -1135,26 +1144,8 @@ async function performImport(payload) {
             console.log('🔍 Skipping validation (already passed)');
         }
 
-        // Check for duplicates (if mode is update)
+                // No duplicate check – we always insert new rows (simple insert)
         let proceed = true;
-        if (payload.mode === 'update' && payload.unique_column_id) {
-            const checkRes = await fetch(API_BASE + '/api/upload/check-duplicates', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const checkResult = await checkRes.json();
-            if (checkRes.ok && checkResult.has_duplicates) {
-                proceed = await showOverwriteConfirmation(checkResult.duplicates, checkResult.count);
-                if (!proceed) {
-                    showStatus('⛔ Import cancelled by user.', 'info');
-                    setBadge('⛔ Cancelled');
-                    importBtn.innerHTML = '🚀 Upload';
-                    importBtn.disabled = false;
-                    return;
-                }
-            }
-        }
 
         if (!proceed) return;
 

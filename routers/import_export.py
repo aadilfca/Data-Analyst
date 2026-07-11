@@ -545,7 +545,7 @@ def validate_and_import(request: ImportRequest):
 
     # col_mapping is already defined above; skip redefinition.
 
-    # --- UPSERT LOGIC ---
+        # --- SIMPLE INSERT (no upsert) – every row becomes a new record ---
     # Update uploaded_files status and set client_id
     execute_write(
         "UPDATE uploaded_files SET status = 'Imported', client_id = ? WHERE id = ?",
@@ -554,10 +554,9 @@ def validate_and_import(request: ImportRequest):
 
     inserted_count = 0
     updated_count = 0
-    skipped_count = 0
 
     for row in rows:
-        # Build JSON row_data (same as before)
+        # Build JSON row_data
         row_data = {}
         for t_col_name, excel_col in col_mapping.items():
             if excel_col in row:
@@ -571,74 +570,17 @@ def validate_and_import(request: ImportRequest):
         # Extract amount and date for indexing
         amount, date_str = extract_columns_from_row(row_data, template_cols)
 
-                # Always use upsert based on the unique column
-        if unique_col_name:
-            unique_value = row_data.get(unique_col_name)
-            # If unique value is empty, we cannot find an existing row, so we'll insert new
-            if unique_value is None or unique_value == '':
-                # Insert as new
-                row_id = execute_write(
-                    """
-                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (request.client_id, request.template_id, request.file_id,
-                     json.dumps(row_data), amount, date_str, "Analyst", 1)
-                )
-                inserted_count += 1
-                # Log INSERT
-                log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
-                continue
-
-            # Query for existing row with same unique value
-            existing = execute_query(
-                """
-                SELECT id, version, row_data FROM client_data
-                WHERE client_id = ? AND template_id = ? AND is_deleted = 0
-                AND json_extract(row_data, '$."{}"') = ?
-                """.format(unique_col_name),
-                (request.client_id, request.template_id, str(unique_value))
-            )
-
-            if existing:
-                # Overwrite existing row – no version increment, keep only one version
-                row_id = existing[0]['id']
-                old_row_data = json.loads(existing[0]['row_data']) if existing[0]['row_data'] else {}
-                execute_write(
-                    """
-                    UPDATE client_data
-                    SET row_data = ?, extract_amount = ?, extract_date = ?
-                    WHERE id = ?
-                    """,
-                    (json.dumps(row_data), amount, date_str, row_id)
-                )
-                updated_count += 1
-                # Log the overwrite (action = 'OVERWRITE' for clarity)
-                log_data_audit(row_id, "Analyst", "OVERWRITE", old_row_data, row_data)
-            else:
-                # Insert new row
-                row_id = execute_write(
-                    """
-                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (request.client_id, request.template_id, request.file_id,
-                     json.dumps(row_data), amount, date_str, "Analyst", 1)
-                )
-                inserted_count += 1
-                log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
-        else:
-            # Mode is "create" (insert always)
-            row_id = execute_write(
-                """
-                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (request.client_id, request.template_id, request.file_id,
-                 json.dumps(row_data), amount, date_str, "Analyst", 1)
-            )
-            inserted_count += 1
-            log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
+        # Insert every row as new
+        row_id = execute_write(
+            """
+            INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (request.client_id, request.template_id, request.file_id,
+             json.dumps(row_data), amount, date_str, "Analyst", 1)
+        )
+        inserted_count += 1
+        log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
 
     log_audit("Analyst", "Import", "Upload",
               f"Imported {inserted_count} new records, updated {updated_count} records for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
