@@ -688,6 +688,274 @@ body {
 }
 
 /* ---------- RESPONSIVE ---------- */
+
+/* =============================================
+   VERIFICATION PHASE 1 – NEW LAYOUT STYLES
+   ============================================= */
+
+/* Progress indicator */
+.progress-indicator {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1e293b;
+    background: #f1f5f9;
+    padding: 4px 16px;
+    border-radius: 20px;
+    margin-right: 12px;
+    white-space: nowrap;
+}
+
+/* Header divider line */
+.header-divider {
+    border: none;
+    border-top: 2px solid #e2e8f0;
+    margin: 6px 0 16px 0;
+}
+
+/* Transaction details grid – two columns */
+.transaction-details-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 20px;
+    padding: 8px 0;
+    margin-bottom: 12px;
+}
+
+.transaction-details-grid .grid-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid #f0f2f5;
+}
+
+.transaction-details-grid .grid-item .label {
+    font-weight: 600;
+    color: #475569;
+    font-size: 14px;
+}
+
+.transaction-details-grid .grid-item .value {
+    font-weight: 500;
+    color: #1a1a2e;
+    font-size: 15px;
+    text-align: right;
+}
+
+/* Emphasise Voucher ID and Amount */
+.transaction-details-grid .grid-item.voucher .value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #2563eb;
+}
+
+.transaction-details-grid .grid-item.amount .value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #16a34a;
+}
+
+/* Validation status row */
+.validation-status-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    margin-bottom: 12px;
+    border-top: 1px solid #e2e8f0;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.validation-status-row .label {
+    font-weight: 600;
+    color: #475569;
+    font-size: 14px;
+}
+
+.validation-status-row .validation-message {
+    font-size: 13px;
+    color: #64748b;
+}
+
+/* Procedure tiles – Odoo‑style cards */
+.procedure-tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 8px 0 12px 0;
+}
+
+.procedure-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 120px;
+    height: 80px;
+    background: #f8fafc;
+    border: 2px solid #e2e8f0;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    padding: 6px;
+    text-align: center;
+    user-select: none;
+}
+
+.procedure-tile:hover {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+}
+
+.procedure-tile .proc-icon {
+    font-size: 24px;
+    line-height: 1.2;
+}
+
+.procedure-tile .proc-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: #1e293b;
+    margin-top: 2px;
+    white-space: nowrap;
+}
+
+.procedure-tile .proc-checkbox {
+    margin-top: 4px;
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.procedure-tile.checked {
+    background: #dcfce7;
+    border-color: #86efac;
+}
+
+/* Observations & Comments row */
+.obs-comments-row {
+    display: flex;
+    gap: 16px;
+    margin: 12px 0;
+    flex-wrap: wrap;
+}
+
+.obs-comments-row .obs-wrapper,
+.obs-comments-row .comments-wrapper {
+    flex: 1;
+    min-width: 200px;
+}
+
+.obs-comments-row label {
+    font-weight: 600;
+    font-size: 13px;
+    display: block;
+    margin-bottom: 2px;
+    color: #475569;
+}
+
+.obs-comments-row textarea {
+    width: 100%;
+    padding: 6px 10px;
+    border: 2px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 14px;
+    resize: vertical;
+    min-height: 50px;
+}
+
+.obs-comments-row .obs-dropdown-container {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 4px;
+}
+
+.obs-comments-row .obs-dropdown-container select {
+    flex: 1;
+    padding: 4px 8px;
+    border: 1px solid #d0d5dd;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.obs-comments-row .btn-edit-obs {
+    background: none;
+    border: 1px solid #d0d5dd;
+    border-radius: 4px;
+    padding: 2px 8px;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+/* Action buttons row */
+.action-buttons-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 2px solid #e2e8f0;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.btn-action {
+    padding: 10px 32px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 15px;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+}
+
+.btn-action:active { transform: scale(0.96); }
+
+.btn-back {
+    background: #e2e8f0;
+    color: #1a1a2e;
+}
+.btn-back:hover { background: #cbd5e1; }
+
+.btn-next {
+    background: #22c55e;
+    color: white;
+}
+.btn-next:hover { background: #16a34a; }
+.btn-next:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Responsive tweaks for new layout */
+@media (max-width: 768px) {
+    .transaction-details-grid {
+        grid-template-columns: 1fr;
+    }
+    .obs-comments-row {
+        flex-direction: column;
+    }
+    .procedure-tile {
+        width: 100px;
+        height: 70px;
+    }
+    .procedure-tile .proc-icon { font-size: 20px; }
+    .procedure-tile .proc-name { font-size: 10px; }
+    .action-buttons-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .btn-action {
+        width: 100%;
+        text-align: center;
+    }
+    .progress-indicator {
+        font-size: 12px;
+        padding: 2px 12px;
+    }
+}
+
 @media (max-width: 768px) {
     .navbar {
         padding: 0 15px;

@@ -370,6 +370,8 @@ async function loadNextTransaction(detailId = null) {
                 if (prevBtn) prevBtn.disabled = true;
                 if (nextBtn) nextBtn.disabled = true;
                 if (verifyBtn) verifyBtn.disabled = true;
+                // Update progress display to show completion
+                await updateProgressDisplay();
                 return;
             }
             throw new Error(err.detail || 'Failed to load transaction');
@@ -381,6 +383,7 @@ async function loadNextTransaction(detailId = null) {
             if (prevBtn) prevBtn.disabled = true;
             if (nextBtn) nextBtn.disabled = true;
             if (verifyBtn) verifyBtn.disabled = true;
+            await updateProgressDisplay();
             return;
         }
         currentDetailId = data.detail_id;
@@ -391,6 +394,7 @@ async function loadNextTransaction(detailId = null) {
         procedureData = data.procedure_data || {};
         renderTransaction(data);
         await updateProgress();
+        await updateProgressDisplay(); // update the new progress element
         if (prevBtn) prevBtn.disabled = false;
         if (nextBtn) nextBtn.disabled = false;
         if (verifyBtn) verifyBtn.disabled = false;
@@ -449,29 +453,79 @@ function renderTransaction(data) {
         return '—';
     };
 
-    // ----- Build the transaction details table (single column, dim borders, zebra) -----
+    // ----- Prepare values for display -----
+    const voucherId = data.voucher_id || '—';
+    const dateVal = getDateValue();
+    const accountHead = getAccountHead();
+    const accountName = getAccountName();
+    const description = getDescription();
+    const amount = getAmount();
+
+    // ----- Build the new layout -----
     let html = `
-        <!-- Transaction Details Table -->
-        <table class="transaction-details-table">
-            <tbody>
-                <tr><td class="label">Voucher ID</td><td class="value">${data.voucher_id || '—'}</td></tr>
-                <tr><td class="label">Date</td><td class="value">${getDateValue()}</td></tr>
-                <tr><td class="label">Account head</td><td class="value">${getAccountHead()}</td></tr>
-                <tr><td class="label">Account Name</td><td class="value">${getAccountName()}</td></tr>
-                <tr><td class="label">Voucher Description</td><td class="value">${getDescription()}</td></tr>
-                <tr><td class="label">Amount</td><td class="value">${getAmount()}</td></tr>
-            </tbody>
-        </table>
+        <!-- Progress Indicator (already in header, but we add a visible element) -->
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px; flex-wrap:wrap;">
+            <span class="progress-indicator" id="progressDisplay">Loading progress...</span>
+        </div>
+
+        <!-- Header row: TRANSACTION | mirror icon | Type dropdown -->
+        <div class="verification-header-row" style="border-bottom: none; padding-bottom: 0;">
+            <div class="vh-center" style="justify-content: flex-start; gap: 8px;">
+                <span class="vh-title">TRANSACTION</span>
+                <span class="vh-icon" id="transactionListIcon" title="View all transactions" style="cursor:pointer;">🔍</span>
+                <span class="vh-separator">|</span>
+                <span class="vh-type-label">Type</span>
+                <select id="transactionTypeDropdown" class="vh-type-dropdown">
+                    <option value="">-- Select --</option>
+                    <option value="Material Purchased">Material Purchased</option>
+                    <option value="Repair & Maintenance (In-house)">Repair & Maintenance (In-house)</option>
+                    <option value="Fuel Expense">Fuel Expense</option>
+                    <option value="Short Term Advance against Salary">Short Term Advance against Salary</option>
+                    <option value="Payment to Contractors">Payment to Contractors</option>
+                    <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
+                    <option value="Kitchen Expenses">Kitchen Expenses</option>
+                </select>
+            </div>
+            <div class="vh-right">
+                <button class="btn-cashbook" id="cashbookReturnBtn" style="font-size:13px;">📒 Cashbook</button>
+            </div>
+        </div>
+        <hr class="header-divider">
+
+        <!-- Transaction Details Grid -->
+        <div class="transaction-details-grid">
+            <div class="grid-item voucher"><span class="label">Voucher ID</span><span class="value">${voucherId}</span></div>
+            <div class="grid-item"><span class="label">Date</span><span class="value">${dateVal}</span></div>
+            <div class="grid-item"><span class="label">Account Code</span><span class="value">${accountHead}</span></div>
+            <div class="grid-item"><span class="label">Account Name</span><span class="value">${accountName}</span></div>
+            <div class="grid-item"><span class="label">Voucher Description</span><span class="value">${description}</span></div>
+            <div class="grid-item amount"><span class="label">Amount</span><span class="value">${amount}</span></div>
+        </div>
 
         <!-- Validation Status Row -->
         <div class="validation-status-row">
             <span class="label">Validation Status:</span>
-            <span class="status-badge ${data.validation_status.toLowerCase()}">${data.validation_status}</span>
+            <span class="status-badge ${(data.validation_status || 'Pending').toLowerCase()}">${data.validation_status || 'Pending'}</span>
             ${data.validation_message ? `<span class="validation-message">${data.validation_message}</span>` : ''}
         </div>
+
+        <!-- Line Items Table (preserved) -->
+        <div style="margin: 12px 0;">
+            <table class="line-items-grid" id="lineItemsTable">
+                <thead><tr>
+                    <th>Vendor</th><th>Unit</th><th>Qty</th><th>Rate</th><th>Calculated Amount</th><th></th>
+                </tr></thead>
+                <tbody id="lineItemsBody"></tbody>
+            </table>
+            <button id="addLineItemBtn" class="btn-outline" style="margin-top:4px; padding:4px 16px;">➕ Add Line Item</button>
+        </div>
+
+        <!-- Mandatory Procedures Tiles -->
+        <div class="procedure-section">
+            <div style="font-weight:600; font-size:14px; color:#1e293b; margin-bottom:6px;">📋 Mandatory Audit Procedures</div>
+            <div class="procedure-tiles" id="procedureTilesContainer">
     `;
 
-    // ----- Mandatory Audit Procedures (horizontal cards with checkboxes) -----
     const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
     const procLabels = {
         'purchase_demand': 'Purchase Demand',
@@ -488,60 +542,70 @@ function renderTransaction(data) {
         'vendor_bill': '🧾'
     };
 
-    html += `<div class="procedure-section">
-        <div class="procedure-cards-container" id="procedureCardsContainer">
-    `;
-
     procKeys.forEach(key => {
         const isChecked = procedureData[key] === true;
         const icon = procIcons[key] || '📌';
         const label = procLabels[key] || key;
         html += `
-            <div class="procedure-card clickable-proc" data-proc="${key}">
-                <input type="checkbox" class="proc-checkbox" ${isChecked ? 'checked' : ''} title="Mark as done">
+            <div class="procedure-tile clickable-proc" data-proc="${key}" style="${isChecked ? 'background:#dcfce7; border-color:#86efac;' : ''}">
                 <span class="proc-icon">${icon}</span>
                 <span class="proc-name">${label}</span>
+                <input type="checkbox" class="proc-checkbox" ${isChecked ? 'checked' : ''} title="Mark as done">
             </div>
         `;
     });
 
-    html += `</div></div>`;
+    html += `
+            </div>
+        </div>
 
-    // ----- Observations & Comments -----
-    html += `<div class="obs-comments-section">
-        <div class="obs-row">
-            <div class="obs-textarea-wrapper">
+        <!-- Observations & Comments -->
+        <div class="obs-comments-row">
+            <div class="obs-wrapper">
                 <label for="observationsInput">Observations</label>
                 <textarea id="observationsInput" rows="2">${procedureData.observations || ''}</textarea>
-            </div>
-            <div class="obs-dropdown-wrapper">
-                <label>Frequent Observations</label>
                 <div class="obs-dropdown-container">
                     <select id="observationsDropdown">
-                        <option value="">-- Select --</option>
+                        <option value="">-- Select frequent --</option>
                     </select>
                     <button class="btn-edit-obs" id="editObsBtn" title="Manage frequent observations">⚙️</button>
                 </div>
             </div>
+            <div class="comments-wrapper">
+                <label for="commentsInput">Comments</label>
+                <textarea id="commentsInput" rows="2">${procedureData.comments || ''}</textarea>
+            </div>
         </div>
-        <div class="comments-row">
-            <label for="commentsInput">Comments</label>
-            <textarea id="commentsInput" rows="2">${procedureData.comments || ''}</textarea>
-        </div>
-    </div>`;
 
-    // ----- Action Buttons (Back, Validate, Next) -----
-    html += `<div class="action-buttons-row">
-        <button class="btn-action btn-back" id="backPrevBtn">← Back</button>
-        <button class="btn-action btn-validate" id="validateBtn">Validate</button>
-        <button class="btn-action btn-next" id="nextSaveBtn">Next →</button>
-    </div>`;
+        <!-- Action Buttons -->
+        <div class="action-buttons-row">
+            <button class="btn-action btn-back" id="backPrevBtn">← Back</button>
+            <button class="btn-action btn-next" id="nextSaveBtn">Next →</button>
+        </div>
+    `;
 
     transactionCard.innerHTML = html;
 
+    // ----- Render line items (existing function) -----
+    renderLineItems();
+
     // ----- Attach event listeners (dynamic) -----
 
-    // Procedure cards – click to open modal (checkbox is just for visual status)
+    // Mirror icon – placeholder for Phase 2
+    document.getElementById('transactionListIcon')?.addEventListener('click', function() {
+        alert('Transaction list popover – coming soon in Phase 2');
+    });
+
+    // Cashbook return button
+    document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
+        if (typeof exitSession === 'function') {
+            exitSession();
+        } else {
+            console.warn('exitSession not defined');
+        }
+    });
+
+    // Procedure tiles – click to open supporting document modal
     document.querySelectorAll('.clickable-proc').forEach(el => {
         el.addEventListener('click', function(e) {
             // If the click was on the checkbox, we don't want to toggle it manually; we'll let the checkbox handle its state.
@@ -571,14 +635,20 @@ function renderTransaction(data) {
         });
     });
 
-    // Checkbox change – update procedureData
+    // Procedure checkbox change – update procedureData and tile style
     document.querySelectorAll('.proc-checkbox').forEach(cb => {
         cb.addEventListener('change', function() {
-            const card = this.closest('.clickable-proc');
-            if (card) {
-                const procKey = card.dataset.proc;
+            const tile = this.closest('.procedure-tile');
+            if (tile) {
+                const procKey = tile.dataset.proc;
                 procedureData[procKey] = this.checked;
-                // Optionally, we could save automatically, but we'll let the Next button save all.
+                if (this.checked) {
+                    tile.style.background = '#dcfce7';
+                    tile.style.borderColor = '#86efac';
+                } else {
+                    tile.style.background = '#f8fafc';
+                    tile.style.borderColor = '#e2e8f0';
+                }
             }
         });
     });
@@ -605,28 +675,28 @@ function renderTransaction(data) {
         procedureData.comments = this.value;
     });
 
-    // Action buttons – attach listeners (functionality will be added in later phases)
+    // Back button – placeholder for Phase 3
     document.getElementById('backPrevBtn')?.addEventListener('click', function() {
-        // Will be implemented in Phase 6: navigate to previous transaction
-        console.log('Back to previous transaction (Phase 6)');
+        // Will be implemented in Phase 3: navigate to previous transaction
+        console.log('Back to previous transaction (Phase 3)');
         showStatus('Back to previous transaction – coming soon', 'info');
     });
 
-    document.getElementById('validateBtn')?.addEventListener('click', function() {
-        // Validate – will be implemented in Phase 6 (or already exists)
-        if (typeof validateTransaction === 'function') {
-            validateTransaction();
-        } else {
-            console.warn('validateTransaction not defined');
-        }
-    });
-
+    // Next button – triggers validation and save (existing logic)
     document.getElementById('nextSaveBtn')?.addEventListener('click', function() {
-        // Save and go to next – will be implemented in Phase 6
         if (typeof completeTransaction === 'function') {
             completeTransaction();
         } else {
             console.warn('completeTransaction not defined');
+        }
+    });
+
+    // Add line item button
+    document.getElementById('addLineItemBtn')?.addEventListener('click', function() {
+        if (typeof addLineItemRow === 'function') {
+            addLineItemRow();
+        } else {
+            console.warn('addLineItemRow not defined');
         }
     });
 
@@ -635,6 +705,14 @@ function renderTransaction(data) {
     if (headerDropdown && currentTransactionType) {
         headerDropdown.value = currentTransactionType;
     }
+    // Also listen to header dropdown changes and update transaction type
+    headerDropdown?.addEventListener('change', function() {
+        currentTransactionType = this.value;
+        procedureData.transaction_type = currentTransactionType;
+    });
+
+    // Update progress display
+    updateProgressDisplay();
 }
 
 // Helper: populate observations dropdown from localStorage
@@ -806,6 +884,36 @@ async function updateProgress() {
         }
     } catch (e) {
         console.error('Error updating progress:', e);
+    }
+}
+
+// Update the progress indicator in the transaction card
+async function updateProgressDisplay() {
+    const progressEl = document.getElementById('progressDisplay');
+    if (!progressEl) return;
+    if (!currentSessionId) {
+        progressEl.textContent = 'No session active';
+        return;
+    }
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
+        if (!res.ok) throw new Error('Failed to fetch progress');
+        const data = await res.json();
+        const total = data.total_transactions || 0;
+        const verified = data.verified_count || 0;
+        // Also update the navbar stats if function exists
+        if (typeof setNavStats === 'function') {
+            const cashbook = window._currentCashbook || '';
+            setNavStats(`Session ${currentSessionId} · Cashbook: ${cashbook} · ${verified} / ${total} verified`);
+        }
+        // Update the progress element
+        progressEl.textContent = `Transaction ${verified + 1} of ${total}`;
+        if (verified === total && total > 0) {
+            progressEl.textContent = `✅ All ${total} transactions verified!`;
+        }
+    } catch (e) {
+        console.error('Error updating progress display:', e);
+        progressEl.textContent = 'Progress unavailable';
     }
 }
 
