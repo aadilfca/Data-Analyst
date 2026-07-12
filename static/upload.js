@@ -740,6 +740,8 @@ function showImportSummary(result) {
         background: white; border-radius: 12px; padding: 30px;
         max-width: 560px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         font-family: 'Segoe UI', sans-serif;
+        max-height: 90vh;
+        overflow-y: auto;
     `;
     
     const total = result.total_rows || 0;
@@ -747,6 +749,13 @@ function showImportSummary(result) {
     const updated = result.updated_count || 0;
     const errors = result.validation_errors || [];
     const errorCount = errors.length;
+    
+    // --- Change detection counts ---
+    const cd = result.change_detection || {};
+    const unchanged = cd.unchanged_count || 0;
+    const changed = cd.changed_count || 0;
+    const newRows = cd.new_count || 0;
+    const deleted = cd.deleted_count || 0;
     
     let statusIcon = '✅';
     let statusColor = '#16a34a';
@@ -769,7 +778,26 @@ function showImportSummary(result) {
         detailMessage = 'ℹ️ No changes were made.';
     }
     
-    // Add an explanatory note about debit/credit lines
+    // Add change detection summary
+    let changeSummary = '';
+    if (unchanged > 0 || changed > 0 || newRows > 0 || deleted > 0) {
+        changeSummary = `
+            <div style="font-size:13px; color:#64748b; background:#f8fafc; padding:10px 12px; border-radius:6px; margin-top:8px; border-left:3px solid #3b82f6;">
+                <strong style="display:block; margin-bottom:4px;">📋 Change Detection Summary:</strong>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 16px;">
+                    <span>✅ Unchanged: <strong>${unchanged}</strong></span>
+                    <span>🔄 Changed: <strong>${changed}</strong></span>
+                    <span>➕ New: <strong>${newRows}</strong></span>
+                    <span>🗑️ Missing: <strong>${deleted}</strong></span>
+                </div>
+                <div style="font-size:11px; color:#94a3b8; margin-top:4px;">
+                    ⚠️ Changed rows have been reset to "Pending" and require re‑verification.
+                </div>
+            </div>
+        `;
+    }
+    
+    // Add explanatory note about debit/credit lines
     const note = `<div style="font-size:13px; color:#64748b; background:#f8fafc; padding:8px 12px; border-radius:6px; margin-top:8px; border-left:3px solid #3b82f6;">
         💡 <strong>Note:</strong> Each voucher may appear twice in the file (debit and credit). 
         The system stores one transaction per voucher ID. Total records in the Data Bank reflect distinct vouchers.
@@ -780,6 +808,7 @@ function showImportSummary(result) {
             <div style="font-size:48px;">${statusIcon}</div>
             <h2 style="margin:8px 0 4px; color:#1a1a2e;">${statusText}</h2>
             <p style="color:#64748b; font-size:14px;">${detailMessage}</p>
+            ${changeSummary}
             ${note}
         </div>
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin:16px 0;">
