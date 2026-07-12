@@ -60,6 +60,10 @@ const closePreviewBtn = document.getElementById('closePreviewBtn');
 // Row revision history popover elements (Phase 3)
 const rowHistoryPopover = document.getElementById('rowHistoryPopover');
 const rowHistoryBody = document.getElementById('rowHistoryBody');
+// Tracks which history icon (if any) currently has its popover open, so the
+// click handler can toggle it closed and the outside-click handler knows
+// what counts as "inside".
+let activeHistoryIcon = null;
 
 // ---------- HELPERS ----------
 function showStatus(msg, type = 'info') {
@@ -135,11 +139,12 @@ function escapeHtml(value) {
 }
 
 // ---------- ROW REVISION HISTORY POPOVER (Phase 3) ----------
-// Hover-triggered popover on the S.No column's history icon. Fetches from
+// Click-triggered popover on the S.No column's history icon. Fetches from
 // the Phase 1 endpoint and renders generically off the "changes" array,
 // so it works for any template without hardcoding field names.
 function hideRowHistoryPopover() {
     rowHistoryPopover.style.display = 'none';
+    activeHistoryIcon = null;
 }
 
 function renderRowHistoryPopover(data) {
@@ -174,10 +179,24 @@ async function showRowHistoryPopover(icon, clientDataId) {
         left = Math.max(8, window.innerWidth - popoverWidth - 8);
     }
     rowHistoryPopover.style.left = left + 'px';
-    rowHistoryPopover.style.top = (rect.bottom + 6) + 'px';
+
+    // Flip above the icon when there isn't enough room below (matches the
+    // popover's CSS max-height of 320px), so it's never cut off at the
+    // bottom of the viewport. Anchoring with "bottom" when flipped lets it
+    // grow upward without needing to know its rendered height in advance.
+    const popoverMaxHeight = 320;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow >= popoverMaxHeight + 6) {
+        rowHistoryPopover.style.top = (rect.bottom + 6) + 'px';
+        rowHistoryPopover.style.bottom = 'auto';
+    } else {
+        rowHistoryPopover.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+        rowHistoryPopover.style.top = 'auto';
+    }
 
     rowHistoryBody.innerHTML = '<div style="color:#94a3b8;">Loading...</div>';
     rowHistoryPopover.style.display = 'block';
+    activeHistoryIcon = icon;
 
     try {
         const res = await fetch(`${API_BASE}/api/data/rows/${clientDataId}/history`);
@@ -696,8 +715,16 @@ function renderPreviewRows(rows) {
             historyIcon.className = 'history-icon';
             historyIcon.textContent = '⚠️';
             historyIcon.title = `${row.revision_count} revision(s)`;
-            historyIcon.addEventListener('mouseenter', () => showRowHistoryPopover(historyIcon, row.id));
-            historyIcon.addEventListener('mouseleave', hideRowHistoryPopover);
+            // Click-to-open/toggle instead of hover: hover closed the popover
+            // as soon as the mouse moved toward it, before it could be read.
+            historyIcon.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (activeHistoryIcon === historyIcon) {
+                    hideRowHistoryPopover();
+                } else {
+                    showRowHistoryPopover(historyIcon, row.id);
+                }
+            });
             tdSerial.appendChild(historyIcon);
         }
 
@@ -912,6 +939,15 @@ searchInput.addEventListener('input', function() {
 // Amount filters – apply on Enter key
 amountMin.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
 amountMax.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
+
+// Close the row history popover when clicking anywhere outside it (the icon's
+// own click is stopped from propagating here, so this only fires for clicks
+// elsewhere on the page).
+document.addEventListener('click', (e) => {
+    if (rowHistoryPopover.style.display === 'block' && !rowHistoryPopover.contains(e.target)) {
+        hideRowHistoryPopover();
+    }
+});
 
 // ESC key closes preview
 document.addEventListener('keydown', (e) => {
