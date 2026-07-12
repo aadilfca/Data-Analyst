@@ -676,6 +676,23 @@ def init_db():
         # Composite index for faster date-range queries on a specific client
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_client_date ON client_data (client_id, extract_date)")
 
+        # ---------- DATA AUDIT LOG TABLE (for change detection old_row_data) ----------
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS data_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_data_id INTEGER NOT NULL,
+                user TEXT DEFAULT 'System',
+                action TEXT NOT NULL,
+                old_row_data TEXT,
+                new_row_data TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_data_id) REFERENCES client_data(id) ON DELETE CASCADE
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_data_audit_log_clientdata ON data_audit_log (client_data_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_data_audit_log_action ON data_audit_log (action)")
+        print("✅ Created data_audit_log table for change tracking")
+
         # Schema upgrade: add change_detection_status column for re-upload change tracking (Phase 2)
         try:
             cur = conn.execute("PRAGMA table_info(client_data)")

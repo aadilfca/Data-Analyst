@@ -420,10 +420,12 @@ function resetUpload() {
         importBtn.disabled = false;
     }
 
-    // Reset replaceCheckbox to default checked state
+    // Reset replaceCheckbox to UNCHECKED by default
+    // When unchecked, change detection runs on re-upload: compares incoming vs existing rows
+    // and preserves validation status for unchanged transactions.
     const replaceChk = document.getElementById('replaceCheckbox');
     if (replaceChk) {
-        replaceChk.checked = true;
+        replaceChk.checked = false;
     }
 }
 
