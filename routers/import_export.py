@@ -57,14 +57,15 @@ def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, te
     return new_count, existing_count
 
 
-# ---------- CHANGE DETECTION (Phase 2: identify & categorise each row with details) ----------
+# ---------- CHANGE DETECTION (Phase 3: document-level grouping using document_group_id) ----------
 def compare_transactions(client_id: int, template_id: int, template_cols: list,
                          incoming_rows: list, col_mapping: dict, mapping_dict: dict) -> dict:
     """
     Compares incoming transaction rows with existing data for the same client+template.
-    Uses Voucher ID + Account Code (or Account Detail) as the composite key.
+    Groups rows by document_group_id (derived from the first column / Document ID).
+    If ANY row within a document has changed, the ENTIRE document is treated as changed.
 
-    Returns a dict with counts AND per-row data for the import loop to act upon.
+    Returns a dict with counts AND per-document data for the import loop to act upon.
     """
     result = {
         "unchanged_count": 0,
@@ -79,26 +80,10 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         "missing": []         # list of {client_data_id, old_row_data} to flag as 'deleted'
     }
 
-    # Identify the composite key columns by name (case-insensitive)
-    voucher_col = None
-    account_col = None
-    for col in template_cols:
-        name = col['column_name'].strip().lower()
-        if name == 'voucher id':
-            voucher_col = col['column_name']
-        elif name in ('account code', 'account detail'):
-            # Prefer "Account Code" over "Account Detail" if both exist
-            if account_col is None or name == 'account code':
-                account_col = col['column_name']
-
-    # Cannot detect changes without both key columns
-    if not voucher_col or not account_col:
-        return result
-
-    # Fetch existing client_data rows for this client+template, with their validation status
+    # Fetch existing client_data rows for this client+template, with their document_group_id and validation status
     existing_rows = execute_query(
         """
-        SELECT cd.id, cd.row_data, cd.version,
+        SELECT cd.id, cd.row_data, cd.version, cd.document_group_id,
                vd.validation_status, vd.id AS verification_detail_id
         FROM client_data cd
         LEFT JOIN verification_details vd ON vd.client_data_id = cd.id
@@ -108,32 +93,32 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
     )
     result["total_existing_before_import"] = len(existing_rows)
 
-    # Build a lookup dict: composite_key -> {client_data_id, row_data, validation_status, version, verification_detail_id}
-    existing_lookup = {}
-    cd_id_by_key = {}  # separate mapping for missing-detection at the end
+    # Group existing rows by document_group_id
+    # existing_docs: doc_group_id -> { client_data_ids, row_datas, validation_statuses, ... }
+    existing_docs = {}
     for row in existing_rows:
         try:
             row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
         except Exception:
             continue
-        vid = str(row_data.get(voucher_col, '') or '').strip().lower()
-        acc = str(row_data.get(account_col, '') or '').strip().lower()
-        if vid and acc:  # Only index rows with valid composite keys
-            key = f"{vid}|{acc}"
-            existing_lookup[key] = {
-                "client_data_id": row['id'],
-                "row_data": row_data,
-                "version": row.get('version', 1),
-                "validation_status": row.get("validation_status") or "Pending",
-                "verification_detail_id": row.get("verification_detail_id")
+        doc_group_id = row.get('document_group_id') or f"legacy-{row['id']}"
+        if doc_group_id not in existing_docs:
+            existing_docs[doc_group_id] = {
+                "client_data_ids": [],
+                "row_datas": [],
+                "versions": [],
+                "validation_statuses": [],
+                "verification_detail_ids": []
             }
-            cd_id_by_key[key] = row['id']
+        existing_docs[doc_group_id]["client_data_ids"].append(row['id'])
+        existing_docs[doc_group_id]["row_datas"].append(row_data)
+        existing_docs[doc_group_id]["versions"].append(row.get('version', 1))
+        existing_docs[doc_group_id]["validation_statuses"].append(row.get("validation_status") or "Pending")
+        existing_docs[doc_group_id]["verification_detail_ids"].append(row.get("verification_detail_id"))
 
-    # Track which existing keys appear in the incoming data
-    seen_keys = set()
-
+    # Build incoming row data with their document_group_id
+    incoming_docs = {}  # doc_group_id -> list of row_data dicts
     for raw_row in incoming_rows:
-        # Build row_data from the incoming Excel row (same pattern as the import loop)
         row_data = {}
         for t_col_name, excel_col in col_mapping.items():
             if excel_col in raw_row:
@@ -144,60 +129,77 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
                     value = value.strftime('%d/%m/%Y')
                 row_data[t_col_name] = value
 
-        # Build composite key from the incoming row
-        vid = str(row_data.get(voucher_col, '') or '').strip().lower()
-        acc = str(row_data.get(account_col, '') or '').strip().lower()
-        if not vid or not acc:
-            # Missing composite key – cannot compare, treat as new
-            result["new_count"] += 1
-            result["new"].append(row_data)
-            continue
+        # Compute document_group_id for this incoming row
+        doc_group_id = get_document_group_id(template_cols, row_data, template_id)
+        if doc_group_id not in incoming_docs:
+            incoming_docs[doc_group_id] = []
+        incoming_docs[doc_group_id].append(row_data)
 
-        key = f"{vid}|{acc}"
-        seen_keys.add(key)
+    # Track which doc_group_ids appear in the incoming data
+    seen_doc_ids = set()
 
-        if key in existing_lookup:
-            existing = existing_lookup[key]
-            existing_data = existing["row_data"]
+    for doc_group_id, incoming_rows_data in incoming_docs.items():
+        seen_doc_ids.add(doc_group_id)
 
-            # Compare ALL fields between old and new data
-            all_fields = set(list(row_data.keys()) + list(existing_data.keys()))
-            is_same = True
-            for field in all_fields:
-                new_val = row_data.get(field)
-                old_val = existing_data.get(field)
-                # Normalise both to strings for a robust comparison
-                if str(new_val or '').strip() != str(old_val or '').strip():
-                    is_same = False
-                    break
+        if doc_group_id in existing_docs:
+            existing = existing_docs[doc_group_id]
+            existing_row_datas = existing["row_datas"]
+
+            # Compare ALL rows of this document
+            # If incoming has different number of rows OR any field differs → changed
+            is_same = len(incoming_rows_data) == len(existing_row_datas)
+            if is_same:
+                for new_row_data, old_row_data in zip(incoming_rows_data, existing_row_datas):
+                    all_fields = set(list(new_row_data.keys()) + list(old_row_data.keys()))
+                    for field in all_fields:
+                        new_val = new_row_data.get(field)
+                        old_val = old_row_data.get(field)
+                        if str(new_val or '').strip() != str(old_val or '').strip():
+                            is_same = False
+                            break
+                    if not is_same:
+                        break
 
             if is_same:
-                result["unchanged_count"] += 1
-                result["unchanged"].append(existing["client_data_id"])
+                # Unchanged: preserve validation status – skip all rows in this document
+                result["unchanged_count"] += len(existing["client_data_ids"])
+                result["unchanged"].extend(existing["client_data_ids"])
             else:
-                result["changed_count"] += 1
-                result["changed"].append({
-                    "client_data_id": existing["client_data_id"],
-                    "old_row_data": existing_data,
-                    "new_row_data": row_data,
-                    "old_validation_status": existing["validation_status"],
-                    "old_version": existing["version"],
-                    "verification_detail_id": existing["verification_detail_id"]
-                })
+                # Changed: overwrite ALL rows of this document
+                # Pair incoming rows with existing rows 1:1 (or handle mismatch)
+                for i, new_row_data in enumerate(incoming_rows_data):
+                    new_row_data_for_import = new_row_data
+                    if i < len(existing["client_data_ids"]):
+                        result["changed"].append({
+                            "client_data_id": existing["client_data_ids"][i],
+                            "old_row_data": existing["row_datas"][i],
+                            "new_row_data": new_row_data_for_import,
+                            "old_validation_status": existing["validation_statuses"][i],
+                            "old_version": existing["versions"][i],
+                            "verification_detail_id": existing["verification_detail_ids"][i]
+                        })
+                        result["changed_count"] += 1
+                    else:
+                        # More incoming rows than existing – insert extras as new
+                        result["new"].append(new_row_data_for_import)
+                        result["new_count"] += 1
         else:
-            result["new_count"] += 1
-            result["new"].append(row_data)
+            # New document – all rows are new
+            for new_row_data in incoming_rows_data:
+                result["new"].append(new_row_data)
+                result["new_count"] += 1
 
-    # Count & list missing: existing composite keys not present in the incoming data
-    for key, existing in existing_lookup.items():
-        if key not in seen_keys:
-            result["missing_count"] += 1
-            result["missing"].append({
-                "client_data_id": existing["client_data_id"],
-                "old_row_data": existing["row_data"],
-                "validation_status": existing["validation_status"],
-                "verification_detail_id": existing["verification_detail_id"]
-            })
+    # Missing: existing doc_group_ids not present in incoming data
+    for doc_group_id, existing in existing_docs.items():
+        if doc_group_id not in seen_doc_ids:
+            for i, cid in enumerate(existing["client_data_ids"]):
+                result["missing"].append({
+                    "client_data_id": cid,
+                    "old_row_data": existing["row_datas"][i],
+                    "validation_status": existing["validation_statuses"][i],
+                    "verification_detail_id": existing["verification_detail_ids"][i]
+                })
+                result["missing_count"] += 1
 
     return result
 
@@ -219,12 +221,29 @@ class ImportRequest(BaseModel):
     unique_column_id: Optional[int] = None
     skip_validation: bool = False
     sheet_name: str = "Sheet1"
-    replace: bool = False   # <-- NEW: flag to delete existing data before import
-
+ 
 class AutoMapRequest(BaseModel):
     file_id: int
     template_id: int
     sheet_name: str = "Sheet1"
+
+# ---------- HELPER: Compute document_group_id from the first template column ----------
+def get_document_group_id(template_cols: list, row_data: dict, template_id: int) -> str:
+    """
+    Returns a unique document group ID by taking the value of the first template column
+    (lowest sort_order) and prefixing it with the template_id for uniqueness.
+    If the column value is empty/missing, returns a fallback hash.
+    """
+    # Find the first column by sort_order (lowest sort_order = first column)
+    first_col = template_cols[0] if template_cols else None
+    if first_col:
+        doc_value = row_data.get(first_col["column_name"])
+        if doc_value is not None and doc_value != '':
+            return f"{template_id}-{str(doc_value).strip()}"
+    # Fallback: use a hash of all row_data
+    import hashlib
+    return f"{template_id}-{hashlib.md5(str(row_data).encode()).hexdigest()[:8]}"
+
 
 # ---------- HELPER: Extract numeric & date columns from row data ----------
 def extract_columns_from_row(row_data: dict, template_cols: list) -> tuple:
@@ -728,67 +747,17 @@ def validate_and_import(request: ImportRequest):
             "error_count": len(validation_errors)
         }
 
-    # If replace is True, delete all existing data for this client + template
-    if request.replace:
-        # First, delete verification_details that belong to client_data for this client+template
-        execute_write(
-            """
-            DELETE FROM verification_details 
-            WHERE client_data_id IN (
-                SELECT id FROM client_data 
-                WHERE client_id = ? AND template_id = ? AND is_deleted = 0
-            )
-            """,
-            (request.client_id, request.template_id)
-        )
-        # Then delete verification_sessions that no longer have any details (or are linked)
-        # We'll delete sessions that have no remaining details, or we can delete sessions that had details above.
-        # Safer: delete sessions that were associated with the details we just deleted.
-        # We can delete sessions that are orphaned (no details left) – but we can also directly delete sessions linked to those client_data.
-        # Simpler: delete sessions that have any detail referencing the client_data we are about to delete.
-        execute_write(
-            """
-            DELETE FROM verification_sessions 
-            WHERE id IN (
-                SELECT DISTINCT session_id FROM verification_details 
-                WHERE client_data_id IN (
-                    SELECT id FROM client_data 
-                    WHERE client_id = ? AND template_id = ? AND is_deleted = 0
-                )
-            )
-            """,
-            (request.client_id, request.template_id)
-        )
-        # Soft-delete client_data rows
-        execute_write(
-            "UPDATE client_data SET is_deleted = 1 WHERE client_id = ? AND template_id = ? AND is_deleted = 0",
-            (request.client_id, request.template_id)
-        )
-        # Also mark uploaded_files as 'Deleted' for this client+template
-        execute_write(
-            """
-            UPDATE uploaded_files SET status = 'Deleted' 
-            WHERE client_id = ? AND id IN (
-                SELECT DISTINCT upload_id FROM client_data 
-                WHERE client_id = ? AND template_id = ?
-            )
-            """,
-            (request.client_id, request.client_id, request.template_id)
-        )
-        log_audit("Analyst", "Replace", "Upload", f"Deleted existing data for client {request.client_id}, template {request.template_id}")
-
     # ---- CHANGE DETECTION (Phase 2): Compare incoming rows with existing data ----
-    # Only run change detection when NOT replacing; replace=True means all old data is gone
-    change_detection = None
-    if not request.replace:
-        change_detection = compare_transactions(
-            client_id=request.client_id,
-            template_id=request.template_id,
-            template_cols=template_cols,
-            incoming_rows=rows,
-            col_mapping=col_mapping,
-            mapping_dict=mapping_dict
-        )
+    # Change detection always runs; it groups rows by Document ID and identifies
+    # unchanged, changed, new, and missing documents.
+    change_detection = compare_transactions(
+        client_id=request.client_id,
+        template_id=request.template_id,
+        template_cols=template_cols,
+        incoming_rows=rows,
+        col_mapping=col_mapping,
+        mapping_dict=mapping_dict
+    )
 
     # ---- IMPORT: Use change_detection result to decide per-row action ----
     # Update uploaded_files status and set client_id
@@ -810,19 +779,23 @@ def validate_and_import(request: ImportRequest):
         for item in change_detection["changed"]:
             cid = item["client_data_id"]
             new_version = (item.get("old_version") or 1) + 1
+            new_row_data = item["new_row_data"]
 
-            # Update the existing row_data, increment version, set change_detection_status='updated'
+            # Compute document_group_id from the new row_data
+            doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
+
+            # Update the existing row_data, increment version, update document_group_id, set change_detection_status='updated'
             execute_write(
                 """
                 UPDATE client_data
-                SET row_data = ?, version = ?, change_detection_status = 'updated'
+                SET row_data = ?, version = ?, document_group_id = ?, change_detection_status = 'updated'
                 WHERE id = ?
                 """,
-                (json.dumps(item["new_row_data"]), new_version, cid)
+                (json.dumps(new_row_data), new_version, doc_group_id, cid)
             )
 
             # Log the old values for audit trail
-            log_data_audit(cid, "Analyst", "UPDATE", item["old_row_data"], item["new_row_data"])
+            log_data_audit(cid, "Analyst", "UPDATE", item["old_row_data"], new_row_data)
 
             # Reset validation_status to 'Pending' if a verification_detail row exists
             if item.get("verification_detail_id"):
@@ -836,13 +809,14 @@ def validate_and_import(request: ImportRequest):
         # 3. New: insert fresh rows
         for new_row_data in change_detection["new"]:
             amount, date_str = extract_columns_from_row(new_row_data, template_cols)
+            doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
             row_id = execute_write(
                 """
-                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added')
+                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added', ?)
                 """,
                 (request.client_id, request.template_id, request.file_id,
-                 json.dumps(new_row_data), amount, date_str, "Analyst", 1)
+                 json.dumps(new_row_data), amount, date_str, "Analyst", 1, doc_group_id)
             )
             inserted_count += 1
             log_data_audit(row_id, "Analyst", "INSERT", None, new_row_data)
@@ -862,7 +836,7 @@ def validate_and_import(request: ImportRequest):
             deleted_count += 1
 
     else:
-        # --- First-time upload or replace=True: insert all rows as new ---
+        # --- First-time upload (no existing data with valid composite key): insert all rows as new ---
         for row in rows:
             # Build JSON row_data
             row_data = {}
@@ -875,17 +849,20 @@ def validate_and_import(request: ImportRequest):
                         value = value.strftime('%d/%m/%Y')
                     row_data[t_col_name] = value
 
+            # Compute document_group_id from the first column value
+            doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)
+
             # Extract amount and date for indexing
             amount, date_str = extract_columns_from_row(row_data, template_cols)
 
             # Insert every row as new
             row_id = execute_write(
                 """
-                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
                 """,
                 (request.client_id, request.template_id, request.file_id,
-                 json.dumps(row_data), amount, date_str, "Analyst", 1)
+                 json.dumps(row_data), amount, date_str, "Analyst", 1, doc_group_id)
             )
             inserted_count += 1
             log_data_audit(row_id, "Analyst", "INSERT", None, row_data)

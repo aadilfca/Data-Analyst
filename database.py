@@ -693,6 +693,16 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_data_audit_log_action ON data_audit_log (action)")
         print("✅ Created data_audit_log table for change tracking")
 
+        # Schema upgrade: add document_group_id column for grouping rows by Document ID (Phase 1)
+        try:
+            cur = conn.execute("PRAGMA table_info(client_data)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'document_group_id' not in columns:
+                conn.execute("ALTER TABLE client_data ADD COLUMN document_group_id TEXT DEFAULT NULL")
+                print("✅ Added document_group_id column to client_data")
+        except Exception as e:
+            print("⚠️ Could not add document_group_id to client_data:", e)
+
         # Schema upgrade: add change_detection_status column for re-upload change tracking (Phase 2)
         try:
             cur = conn.execute("PRAGMA table_info(client_data)")

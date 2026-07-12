@@ -59,7 +59,6 @@ let workbookData = null;
 let isProcessing = false;
 let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
 let miniPreviewVisible = false; // Tracks whether mini preview is shown
-let importWasReplace = false;   // Tracks whether the last import used "replace" mode; used by showImportSummary to hide change detection
 
 // Pagination state variables
 let previewCurrentPage = 1;
@@ -428,24 +427,6 @@ function resetUpload() {
         importBtn.disabled = false;
     }
 
-    // Reset replaceCheckbox to UNCHECKED by default
-    // When unchecked, change detection runs on re-upload: compares incoming vs existing rows
-    // and preserves validation status for unchanged transactions.
-    const replaceChk = document.getElementById('replaceCheckbox');
-    if (replaceChk) {
-        replaceChk.checked = false;
-    }
-}
-
-// ---------- REPLACE CHECKBOX WARNING TOGGLE ----------
-// Show/hide the warning message below the checkbox when its state changes
-const replaceCheckbox = document.getElementById('replaceCheckbox');
-const replaceWarning = document.getElementById('replaceWarning');
-if (replaceCheckbox && replaceWarning) {
-    replaceCheckbox.addEventListener('change', function() {
-        // Display warning when checkbox is ticked to alert user that change detection won't apply
-        replaceWarning.style.display = this.checked ? 'block' : 'none';
-    });
 }
 
 // ---------- AUTO-MAP ----------
@@ -799,19 +780,9 @@ function showImportSummary(result) {
         detailMessage = 'ℹ️ No changes were made.';
     }
     
-    // Build change detection summary.
-    // If the import used replace mode, show a notice that change detection was not performed.
-    // Otherwise, show the standard change detection counts when available.
+    // Build change detection summary showing unchanged, changed, new, and missing document counts.
     let changeSummary = '';
-    if (importWasReplace) {
-        // Replace mode: all old data was deleted, so change detection counts are meaningless
-        changeSummary = `
-            <div style="font-size:13px; color:#64748b; background:#fef3c7; padding:10px 12px; border-radius:6px; margin-top:8px; border-left:3px solid #f59e0b;">
-                <strong style="display:block; margin-bottom:4px;">🔄 Data Replaced</strong>
-                <div>All existing data was replaced. No change detection was performed.</div>
-            </div>
-        `;
-    } else if (unchanged > 0 || changed > 0 || newRows > 0 || deleted > 0) {
+    if (unchanged > 0 || changed > 0 || newRows > 0 || deleted > 0) {
         changeSummary = `
             <div style="font-size:13px; color:#64748b; background:#f8fafc; padding:10px 12px; border-radius:6px; margin-top:8px; border-left:3px solid #3b82f6;">
                 <strong style="display:block; margin-bottom:4px;">📋 Change Detection Summary:</strong>
@@ -1144,15 +1115,12 @@ if (importBtn) {
             }
         });
 
-        // Get the "replace existing data" checkbox value
-        const replace = document.getElementById('replaceCheckbox')?.checked || false;
         const payload = {
             template_id: selectedTemplateId,
             file_id: fileId,
             client_id: parseInt(clientId),
             mappings: finalMappings,
             mode: 'create',
-            replace: replace,
             unique_column_id: null,
             sheet_name: currentSheet || 'Sheet1'
         };
@@ -1270,8 +1238,6 @@ async function performImport(payload) {
                     }
                     modalRef.resolve(true);
                     window._overwriteModal = null;
-                    // Record whether replace mode was used, so showImportSummary can adjust its output
-                    importWasReplace = payload.replace;
                     showImportSummary(result);
                 };
             }
@@ -1283,8 +1249,6 @@ async function performImport(payload) {
             setBadge('❌ Import failed', 'error');
         } else {
             if (!modalRef || modalRef.isResolved) {
-                // Record whether replace mode was used, so showImportSummary can adjust its output
-                importWasReplace = payload.replace;
                 showImportSummary(result);
             }
             setBadge('✅ Import complete');
