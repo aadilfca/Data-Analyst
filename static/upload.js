@@ -760,79 +760,91 @@ function showImportSummary(result) {
         statusColor = '#f59e0b';
         statusText = 'Import with Warnings';
     }
-    
-    // Build descriptive message
+
+    // Build a plain, single-line outcome summary (no inline emoji, no run-on sentence).
     let detailMessage = '';
     if (inserted > 0 && updated > 0) {
-        detailMessage = `✅ ${inserted} new row(s) inserted. 🔄 ${updated} existing row(s) overwritten.`;
+        detailMessage = `${inserted} new row${inserted === 1 ? '' : 's'} inserted &middot; ${updated} existing row${updated === 1 ? '' : 's'} updated`;
     } else if (inserted > 0) {
-        detailMessage = `✅ ${inserted} new row(s) inserted.`;
+        detailMessage = `${inserted} new row${inserted === 1 ? '' : 's'} inserted`;
     } else if (updated > 0) {
-        detailMessage = `🔄 ${updated} existing row(s) overwritten.`;
+        detailMessage = `${updated} existing row${updated === 1 ? '' : 's'} updated`;
     } else {
-        detailMessage = 'ℹ️ No changes were made.';
+        detailMessage = 'No changes were made';
     }
-    
-    // Build change detection summary showing unchanged, changed, new, and missing document counts.
+
+    // Change Detection Summary: labeled stat block matching the tile styling below, color-coded via left border instead of emoji.
     let changeSummary = '';
     if (unchanged > 0 || changed > 0 || newRows > 0 || deleted > 0) {
         changeSummary = `
-            <div style="font-size:13px; color:#64748b; background:#f8fafc; padding:10px 12px; border-radius:6px; margin-top:8px; border-left:3px solid #3b82f6;">
-                <strong style="display:block; margin-bottom:4px;">📋 Change Detection Summary:</strong>
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px 16px;">
-                    <span>✅ Unchanged: <strong>${unchanged}</strong></span>
-                    <span>🔄 Changed: <strong>${changed}</strong></span>
-                    <span>➕ New: <strong>${newRows}</strong></span>
-                    <span>🗑️ Missing: <strong>${deleted}</strong></span>
+            <div style="margin-top:20px;">
+                <div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:#94a3b8; margin-bottom:8px;">Change Detection</div>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:8px;">
+                    <div style="background:#f8fafc; border-left:3px solid #94a3b8; border-radius:6px; padding:8px 10px;">
+                        <div style="font-size:18px; font-weight:700; color:#334155;">${unchanged}</div>
+                        <div style="font-size:11px; color:#64748b;">Unchanged</div>
+                    </div>
+                    <div style="background:#f8fafc; border-left:3px solid #f59e0b; border-radius:6px; padding:8px 10px;">
+                        <div style="font-size:18px; font-weight:700; color:#334155;">${changed}</div>
+                        <div style="font-size:11px; color:#64748b;">Changed</div>
+                    </div>
+                    <div style="background:#f8fafc; border-left:3px solid #16a34a; border-radius:6px; padding:8px 10px;">
+                        <div style="font-size:18px; font-weight:700; color:#334155;">${newRows}</div>
+                        <div style="font-size:11px; color:#64748b;">New</div>
+                    </div>
+                    <div style="background:#f8fafc; border-left:3px solid #dc2626; border-radius:6px; padding:8px 10px;">
+                        <div style="font-size:18px; font-weight:700; color:#334155;">${deleted}</div>
+                        <div style="font-size:11px; color:#64748b;">Missing</div>
+                    </div>
                 </div>
-                <div style="font-size:11px; color:#94a3b8; margin-top:4px;">
-                    ⚠️ Changed rows have been reset to "Pending" and require re‑verification.
+                <div style="font-size:11px; color:#94a3b8; margin-top:8px;">
+                    Changed rows have been reset to "Pending" and require re-verification.
                 </div>
             </div>
         `;
     }
-    
-    // Add explanatory note about debit/credit lines
-    const note = `<div style="font-size:13px; color:#64748b; background:#f8fafc; padding:8px 12px; border-radius:6px; margin-top:8px; border-left:3px solid #3b82f6;">
-        💡 <strong>Note:</strong> Each voucher may appear twice in the file (debit and credit). 
+
+    // Explanatory note about debit/credit lines, styled as a plain muted info box.
+    const note = `<div style="font-size:12px; color:#64748b; background:#f8fafc; padding:10px 12px; border-radius:6px; margin-top:16px;">
+        <strong style="color:#475569;">Note:</strong> Each voucher may appear twice in the file (debit and credit).
         The system stores one transaction per voucher ID. Total records in the Data Bank reflect distinct vouchers.
     </div>`;
-    
+
     modal.innerHTML = `
-        <div style="text-align:center; margin-bottom:16px;">
-            <div style="font-size:48px;">${statusIcon}</div>
-            <h2 style="margin:8px 0 4px; color:#1a1a2e;">${statusText}</h2>
-            <p style="color:#64748b; font-size:14px;">${detailMessage}</p>
-            ${changeSummary}
-            ${note}
+        <div style="text-align:center; margin-bottom:20px;">
+            <div style="font-size:40px; line-height:1;">${statusIcon}</div>
+            <h2 style="margin:10px 0 4px; color:#1a1a2e; font-size:20px;">${statusText}</h2>
+            <p style="color:#64748b; font-size:14px; margin:0;">${detailMessage}</p>
         </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin:16px 0;">
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px;">
             <div style="background:#f8fafc; padding:12px; border-radius:8px; text-align:center;">
                 <div style="font-size:24px; font-weight:700; color:#3b82f6;">${total}</div>
                 <div style="font-size:12px; color:#64748b;">Lines Processed</div>
             </div>
-            <div style="background:#dcfce7; padding:12px; border-radius:8px; text-align:center;">
+            <div style="background:#f8fafc; padding:12px; border-radius:8px; text-align:center;">
                 <div style="font-size:24px; font-weight:700; color:#16a34a;">${inserted}</div>
                 <div style="font-size:12px; color:#64748b;">New Rows</div>
             </div>
-            <div style="background:#fef3c7; padding:12px; border-radius:8px; text-align:center;">
+            <div style="background:#f8fafc; padding:12px; border-radius:8px; text-align:center;">
                 <div style="font-size:24px; font-weight:700; color:#f59e0b;">${updated}</div>
                 <div style="font-size:12px; color:#64748b;">Updated Rows</div>
             </div>
         </div>
+        ${changeSummary}
+        ${note}
         ${errorCount > 0 ? `
-            <div style="background:#fee2e2; padding:12px; border-radius:8px; margin-bottom:12px; max-height:150px; overflow-y:auto;">
-                <div style="font-weight:600; color:#991b1b; margin-bottom:4px;">${errorCount} validation error(s):</div>
+            <div style="background:#fef2f2; border:1px solid #fecaca; padding:12px; border-radius:8px; margin-top:16px; max-height:150px; overflow-y:auto;">
+                <div style="font-weight:600; color:#991b1b; margin-bottom:4px; font-size:13px;">${errorCount} validation error${errorCount === 1 ? '' : 's'}</div>
                 ${errors.slice(0,5).map(err => `
                     <div style="font-size:12px; color:#991b1b; padding:2px 0; border-bottom:1px solid #fecaca;">
                         Row ${err.row_number}: ${err.errors.map(e => `${e.column} - ${e.message}`).join('; ')}
                     </div>
                 `).join('')}
-                ${errors.length > 5 ? `<div style="font-size:12px; color:#991b1b;">... and ${errors.length - 5} more.</div>` : ''}
+                ${errors.length > 5 ? `<div style="font-size:12px; color:#991b1b; margin-top:2px;">...and ${errors.length - 5} more.</div>` : ''}
             </div>
         ` : ''}
-        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px; flex-wrap:wrap;">
-            <a href="/static/databank.html" target="_blank" style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; font-size:14px;">📊 View in Data Bank</a>
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px; flex-wrap:wrap;">
+            <a href="/static/databank.html" target="_blank" style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; font-size:14px;">View in Data Bank</a>
             <button id="importSummaryCloseBtn" style="padding:8px 24px; background:#e2e8f0; color:#1a1a2e; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Close</button>
         </div>
     `;

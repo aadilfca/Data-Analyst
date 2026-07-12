@@ -36,6 +36,8 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Status log
 - 2026-07-09: main.py NameError fixed
 - 2026-07-09: clients module reviewed, no issues
+- 2026-07-12: Phase 3 done — hover ⚠️ history icon + popover added to Data Bank preview S.No column (static/databank.js, static/databank.html). Also fixed a pre-existing bug found during verification: get_data_audit_history() and /api/data/rows/{id}/history queried a non-existent "created_at" column instead of "changed_at" (database.py, routers/data.py) — this was blocking the Phase 1 history endpoint entirely.
+- 2026-07-12: Phase 4 done — redesigned Import Summary popup (showImportSummary() in static/upload.js): removed run-on emoji sentences, restyled Change Detection Summary as a clean 4-tile stat block, kept View in Data Bank / Close buttons unchanged. No backend/data changes. Pending manual browser verification of the upload flow.
 [keep adding one line per session]
 
 

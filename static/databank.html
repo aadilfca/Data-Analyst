@@ -279,6 +279,83 @@
             opacity: 1;
         }
 
+        /* ===== ROW REVISION HISTORY (hover icon + popover) ===== */
+        .history-icon {
+            cursor: pointer;
+            margin-left: 6px;
+        }
+
+        .row-history-popover {
+            position: fixed;
+            z-index: 1100;
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+            width: 340px;
+            max-height: 320px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+
+        .row-history-popover .popover-header {
+            font-weight: 600;
+            padding: 8px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #1a1a2e;
+            position: sticky;
+            top: 0;
+            background: white;
+        }
+
+        .row-history-popover .popover-body {
+            padding: 8px 12px;
+        }
+
+        .row-history-popover .revision-block {
+            padding: 6px 0;
+            border-bottom: 1px solid #f0f2f5;
+        }
+
+        .row-history-popover .revision-block:last-child {
+            border-bottom: none;
+        }
+
+        .row-history-popover .revision-meta {
+            color: #64748b;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        .row-history-popover table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .row-history-popover table td {
+            padding: 2px 4px;
+            vertical-align: top;
+        }
+
+        .row-history-popover .field-name {
+            color: #475569;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .row-history-popover .value-change {
+            color: #1a1a2e;
+        }
+
+        .row-history-popover .value-change .old-value {
+            color: #b91c1c;
+            text-decoration: line-through;
+        }
+
+        .row-history-popover .value-change .new-value {
+            color: #15803d;
+        }
+
         /* Responsive tweaks */
         @media (max-width: 768px) {
             .filter-bar {
@@ -479,6 +556,16 @@
                 <div id="previewCountInfo" style="font-size:13px; color:#64748b;">0 rows</div>
             </div>
         </div>
+    </div>
+
+    <!-- ============================================= -->
+    <!-- ROW REVISION HISTORY POPOVER (hover, Phase 3) -->
+    <!-- Sibling of previewModal (not nested inside modal-content) -->
+    <!-- so its fixed positioning isn't clipped by the modal's overflow:auto. -->
+    <!-- ============================================= -->
+    <div id="rowHistoryPopover" class="row-history-popover" style="display:none;">
+        <div class="popover-header">Revision History</div>
+        <div class="popover-body" id="rowHistoryBody"></div>
     </div>
 
     <script src="/static/client_context.js?v=2"></script>

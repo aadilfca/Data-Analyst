@@ -98,6 +98,37 @@ def log_data_audit(client_data_id, user, action, old_data=None, new_data=None):
         print(f"⚠️ Failed to log data audit: {e}")
 
 
+def get_data_audit_history(client_data_id):
+    """
+    Return the full revision timeline for one client_data row, oldest first,
+    from data_audit_log. Generic across templates: callers diff the raw
+    old/new JSON snapshots themselves via diff_row_data().
+    """
+    return execute_query(
+        "SELECT id, user, action, old_row_data, new_row_data, changed_at "
+        "FROM data_audit_log WHERE client_data_id = ? ORDER BY changed_at ASC",
+        (client_data_id,)
+    )
+
+
+def diff_row_data(old_data, new_data):
+    """
+    Generic field-level diff between two row_data dicts (any template's
+    column set). Returns only fields whose value differs, as
+    [{"field", "old_value", "new_value"}]. A field present on only one side
+    is reported with the other side's value as None (covers INSERT/DELETE).
+    """
+    old_data = old_data or {}
+    new_data = new_data or {}
+    changes = []
+    for field in sorted(set(old_data.keys()) | set(new_data.keys())):
+        old_value = old_data.get(field)
+        new_value = new_data.get(field)
+        if old_value != new_value:
+            changes.append({"field": field, "old_value": old_value, "new_value": new_value})
+    return changes
+
+
 def create_index_with_retry(conn, sql, retries=5, delay=0.5):
     last_exception = None
     for attempt in range(retries):

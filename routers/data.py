@@ -3,7 +3,7 @@
 # ==============================================
 
 from fastapi import APIRouter, HTTPException, Query
-from database import execute_query, execute_write, log_audit, log_data_audit
+from database import execute_query, execute_write, log_audit, log_data_audit, get_data_audit_history, diff_row_data
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
@@ -35,6 +35,29 @@ def format_datetime(dt_str):
         return dt.strftime('%d/%m/%Y %H:%M')
     except:
         return dt_str
+
+def attach_history_flags(rows):
+    """
+    Given a list of row dicts (each with an "id"), batch-check data_audit_log
+    for revision history and attach two additive fields per row:
+      - has_history: bool  -> True if at least one data_audit_log entry exists
+      - revision_count: int -> number of data_audit_log entries for that row
+    Uses a single grouped query for the whole page instead of one query per row.
+    """
+    if not rows:
+        return
+    row_ids = [r["id"] for r in rows]
+    placeholders = ','.join(['?'] * len(row_ids))
+    counts = execute_query(
+        f"SELECT client_data_id, COUNT(*) as cnt FROM data_audit_log "
+        f"WHERE client_data_id IN ({placeholders}) GROUP BY client_data_id",
+        row_ids
+    )
+    count_lookup = {c["client_data_id"]: c["cnt"] for c in counts}
+    for r in rows:
+        cnt = count_lookup.get(r["id"], 0)
+        r["has_history"] = cnt > 0
+        r["revision_count"] = cnt
 
 # ---------- ENDPOINTS ----------
 
@@ -240,7 +263,10 @@ def get_preview_rows(
             "extract_date": r["extract_date"],
             "created_at": format_datetime(r["created_at"])
         })
-    
+
+    # Batch-flag rows that have revision history (one query for the whole page)
+    attach_history_flags(result_rows)
+
     return {
         "template_id": template_id,
         "template_name": template[0]['template_name'],
@@ -339,7 +365,10 @@ def get_dataset_rows(
             "extract_date": r["extract_date"],
             "created_at": format_datetime(r["created_at"])
         })
-    
+
+    # Batch-flag rows that have revision history (one query for the whole page)
+    attach_history_flags(result_rows)
+
     return {
         "upload_id": upload_id,
         "total_rows": total,
@@ -486,6 +515,42 @@ def delete_template_data(
         "rows_deleted": row_count,
         "template_id": template_id,
         "template_name": template[0]['template_name']
+    }
+
+# ==============================================
+# 📊 ROW REVISION HISTORY ENDPOINT
+# ==============================================
+
+@router.get("/api/data/rows/{client_data_id}/history")
+def get_row_history(client_data_id: int):
+    """
+    Return the full revision timeline for a single client_data row (any
+    template), built from data_audit_log entries logged by import_export.py
+    on INSERT/UPDATE/DELETE/RESTORE. Each revision includes the per-field
+    old-value -> new-value changes, computed generically so it works for any
+    template's column set.
+    """
+    row = execute_query("SELECT id FROM client_data WHERE id = ?", (client_data_id,))
+    if not row:
+        raise HTTPException(404, "Row not found")
+
+    audit_rows = get_data_audit_history(client_data_id)
+
+    revisions = []
+    for a in audit_rows:
+        old_data = json.loads(a["old_row_data"]) if a["old_row_data"] else None
+        new_data = json.loads(a["new_row_data"]) if a["new_row_data"] else None
+        revisions.append({
+            "action": a["action"],
+            "user": a["user"],
+            "changed_at": format_datetime(a["changed_at"]),
+            "changes": diff_row_data(old_data, new_data)
+        })
+
+    return {
+        "client_data_id": client_data_id,
+        "revision_count": len(revisions),
+        "revisions": revisions
     }
 
 # ==============================================

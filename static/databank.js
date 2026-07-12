@@ -57,6 +57,10 @@ const pageInfo = document.getElementById('pageInfo');
 const previewCountInfo = document.getElementById('previewCountInfo');
 const closePreviewBtn = document.getElementById('closePreviewBtn');
 
+// Row revision history popover elements (Phase 3)
+const rowHistoryPopover = document.getElementById('rowHistoryPopover');
+const rowHistoryBody = document.getElementById('rowHistoryBody');
+
 // ---------- HELPERS ----------
 function showStatus(msg, type = 'info') {
     statusDiv.textContent = msg;
@@ -122,6 +126,67 @@ function formatCellValue(value, columnName = '') {
         return value.substring(0, 100) + '…';
     }
     return value;
+}
+
+function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value === undefined || value === null ? '' : String(value);
+    return div.innerHTML;
+}
+
+// ---------- ROW REVISION HISTORY POPOVER (Phase 3) ----------
+// Hover-triggered popover on the S.No column's history icon. Fetches from
+// the Phase 1 endpoint and renders generically off the "changes" array,
+// so it works for any template without hardcoding field names.
+function hideRowHistoryPopover() {
+    rowHistoryPopover.style.display = 'none';
+}
+
+function renderRowHistoryPopover(data) {
+    if (!data.revisions || data.revisions.length === 0) {
+        rowHistoryBody.innerHTML = '<div style="color:#94a3b8;">No revision history.</div>';
+        return;
+    }
+    rowHistoryBody.innerHTML = data.revisions.map(rev => {
+        const changeRows = (rev.changes || []).map(c => `
+            <tr>
+                <td class="field-name">${escapeHtml(c.field)}</td>
+                <td class="value-change">
+                    <span class="old-value">${escapeHtml(formatCellValue(c.old_value))}</span>
+                    &rarr;
+                    <span class="new-value">${escapeHtml(formatCellValue(c.new_value))}</span>
+                </td>
+            </tr>`).join('');
+        return `
+            <div class="revision-block">
+                <div class="revision-meta">${escapeHtml(rev.action)} &middot; ${escapeHtml(rev.changed_at)} &middot; ${escapeHtml(rev.user)}</div>
+                <table>${changeRows}</table>
+            </div>`;
+    }).join('');
+}
+
+async function showRowHistoryPopover(icon, clientDataId) {
+    // Position near the icon, clamped so it stays within the viewport.
+    const rect = icon.getBoundingClientRect();
+    const popoverWidth = 340;
+    let left = rect.left;
+    if (left + popoverWidth > window.innerWidth) {
+        left = Math.max(8, window.innerWidth - popoverWidth - 8);
+    }
+    rowHistoryPopover.style.left = left + 'px';
+    rowHistoryPopover.style.top = (rect.bottom + 6) + 'px';
+
+    rowHistoryBody.innerHTML = '<div style="color:#94a3b8;">Loading...</div>';
+    rowHistoryPopover.style.display = 'block';
+
+    try {
+        const res = await fetch(`${API_BASE}/api/data/rows/${clientDataId}/history`);
+        if (!res.ok) throw new Error('Failed to fetch history');
+        const data = await res.json();
+        renderRowHistoryPopover(data);
+    } catch (error) {
+        rowHistoryBody.innerHTML = '<div style="color:#b91c1c;">Failed to load history.</div>';
+    }
 }
 
 // ---------- LOAD TEMPLATES INTO DROPDOWN ----------
@@ -563,6 +628,7 @@ async function fetchPreviewData() {
 
 // ---------- RENDER PREVIEW ROWS ----------
 function renderPreviewRows(rows) {
+    hideRowHistoryPopover();
     if (!rows || rows.length === 0) {
         previewTableBody.innerHTML = '<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">No rows to display.</td></tr>';
         previewTableHead.innerHTML = '';
@@ -623,6 +689,18 @@ function renderPreviewRows(rows) {
         tdSerial.style.textAlign = 'center';
         tdSerial.style.color = '#64748b';
         tdSerial.textContent = startSerial + index;
+
+        // Revision history icon: only shown for rows overwritten during a re-upload.
+        if (row.has_history) {
+            const historyIcon = document.createElement('span');
+            historyIcon.className = 'history-icon';
+            historyIcon.textContent = '⚠️';
+            historyIcon.title = `${row.revision_count} revision(s)`;
+            historyIcon.addEventListener('mouseenter', () => showRowHistoryPopover(historyIcon, row.id));
+            historyIcon.addEventListener('mouseleave', hideRowHistoryPopover);
+            tdSerial.appendChild(historyIcon);
+        }
+
         tr.appendChild(tdSerial);
         
         headers.forEach(h => {
@@ -767,11 +845,13 @@ filterTemplate.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetch
 closePreviewBtn.addEventListener('click', () => {
     previewModal.style.display = 'none';
     isPreviewOpen = false;
+    hideRowHistoryPopover();
 });
 previewModal.addEventListener('click', (e) => {
     if (e.target === previewModal) {
         previewModal.style.display = 'none';
         isPreviewOpen = false;
+        hideRowHistoryPopover();
     }
 });
 
