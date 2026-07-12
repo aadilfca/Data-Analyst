@@ -10,6 +10,53 @@ from datetime import datetime
 # ⭐ MUST HAVE THIS LINE
 router = APIRouter()
 
+
+def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, template_cols: list, mapping_dict: dict):
+    """Count rows that are new versus already present for the same client/template."""
+    existing_rows = execute_query(
+        """
+        SELECT row_data
+        FROM client_data
+        WHERE client_id = ? AND template_id = ? AND is_deleted = 0
+        """,
+        (client_id, template_id),
+    )
+
+    seen_existing = set()
+    for row in existing_rows:
+        raw = row.get("row_data")
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                seen_existing.add(json.dumps(parsed, sort_keys=True, ensure_ascii=False))
+            except Exception:
+                seen_existing.add(raw)
+
+    new_count = 0
+    existing_count = 0
+
+    for row in rows:
+        row_data = {}
+        for t_col in template_cols:
+            mapping = mapping_dict.get(t_col["id"])
+            if mapping and mapping.excel_column_name and mapping.excel_column_name in row:
+                value = row[mapping.excel_column_name]
+                if pd.isna(value):
+                    value = None
+                if isinstance(value, datetime):
+                    value = value.strftime("%d/%m/%Y")
+                row_data[t_col["column_name"]] = value
+
+        row_json = json.dumps(row_data, sort_keys=True, ensure_ascii=False)
+        if row_json in seen_existing:
+            existing_count += 1
+        else:
+            new_count += 1
+            seen_existing.add(row_json)
+
+    return new_count, existing_count
+
+
 # ---------- DATA MODELS ----------
 class ColumnMapping(BaseModel):
     template_column_id: int
@@ -415,13 +462,23 @@ def validate_only(request: ImportRequest):
                 "errors": row_errors
             })
 
+    new_count, existing_count = count_new_and_existing_rows(
+        request.client_id,
+        request.template_id,
+        rows,
+        template_cols,
+        mapping_dict,
+    )
+
     return {
         "status": "validation_complete",
         "has_errors": len(validation_errors) > 0,
         "error_count": len(validation_errors),
         "total_rows": len(rows),
         "errors": validation_errors,
-        "valid_rows": len(rows) - len(validation_errors)
+        "valid_rows": len(rows) - len(validation_errors),
+        "new_rows_count": new_count,
+        "existing_rows_count": existing_count,
     }
 
 # ---------- VALIDATE & IMPORT ----------

@@ -77,8 +77,11 @@ function showStatus(msg, type = 'info', extra = '') {
         console.log('📢 Status:', msg, type, extra);
         return;
     }
-    statusMessage.textContent = msg;
-    if (statusExtra) statusExtra.textContent = extra || '';
+    statusMessage.innerHTML = msg;
+    if (extra) {
+        statusMessage.innerHTML += '<div style="font-size:12px; opacity:0.9; margin-top:2px;">' + extra + '</div>';
+    }
+    if (statusExtra) statusExtra.textContent = '';
     statusBar.className = 'status-bar ' + type;
     statusBar.style.display = 'flex';
 }
@@ -1133,13 +1136,16 @@ if (importBtn) {
 
                                     // Validation passed – show simple success message
             const totalRows = result.total_rows || 0;
+            const newRowsCount = result.new_rows_count || 0;
+            const existingRowsCount = result.existing_rows_count || 0;
             validationStatus = 'valid';
             importBtn.innerHTML = '🚀 Upload';
             importBtn.style.background = '#16a34a';
             importBtn.style.color = 'white';
             importBtn.disabled = false;
             let statusMsg = `✅ Validation passed! ${totalRows} rows identified. Click "Upload" to import all rows.`;
-            showStatus(statusMsg, 'success');
+            const extraMsg = `<span style="color: maroon; font-weight: bold;">${newRowsCount} new row(s) • ${existingRowsCount} already exists in client data</span>`;
+            showStatus(statusMsg, 'success', extraMsg);
             setBadge('✅ Data valid, ready to upload');
             updatePreviewButtonState();
 
