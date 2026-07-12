@@ -1316,6 +1316,16 @@ function showPreview() {
         previewHead.innerHTML = '';
         if (headers.length) {
             const tr = document.createElement('tr');
+            
+            // Add S.No header column as the first column with specified styling
+            const thSNo = document.createElement('th');
+            thSNo.textContent = 'S.No';
+            thSNo.style.textAlign = 'center';
+            thSNo.style.color = '#64748b';
+            thSNo.style.width = '50px';
+            thSNo.style.fontWeight = '500';
+            tr.appendChild(thSNo);
+
             headers.forEach(h => {
                 const th = document.createElement('th');
                 th.textContent = h || '—';
@@ -1326,8 +1336,18 @@ function showPreview() {
 
         // Build body (all rows)
         previewBody.innerHTML = '';
-        rows.forEach(row => {
+        rows.forEach((row, rowIndex) => {
             const tr = document.createElement('tr');
+            
+            // Add S.No serial number cell (starting from 1) before all other cells
+            const tdSNo = document.createElement('td');
+            tdSNo.textContent = rowIndex + 1;
+            tdSNo.style.textAlign = 'center';
+            tdSNo.style.color = '#64748b';
+            tdSNo.style.width = '50px';
+            tdSNo.style.fontWeight = '500';
+            tr.appendChild(tdSNo);
+
             row.forEach((cell, idx) => {
                 const td = document.createElement('td');
                 let displayValue = cell;
