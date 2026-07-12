@@ -18,7 +18,6 @@ async function loadDashboardStats() {
             if (lastUploadEl) {
                 lastUploadEl.textContent = lastUpload;
             }
-            console.log('✅ Dashboard stats loaded:', stats);
         } else {
             // Fallback
             document.getElementById('totalUploads').textContent = '0';
@@ -28,7 +27,6 @@ async function loadDashboardStats() {
             if (lastUploadEl) lastUploadEl.textContent = 'Never';
         }
     } catch (error) {
-        console.log('⚠️ Error loading stats:', error.message);
         document.getElementById('totalUploads').textContent = '⚠️';
         document.getElementById('pendingVerifications').textContent = '⚠️';
         document.getElementById('totalRecords').textContent = '⚠️';
@@ -50,18 +48,14 @@ document.querySelectorAll('.module-card').forEach(card => {
 // ---------- LOAD ON PAGE OPEN ----------
 window.onload = function() {
     loadDashboardStats();
-    console.log('🏢 System Analyst Dashboard loaded successfully!');
 };
 
 // ---------- KEYBOARD SHORTCUTS ----------
 document.addEventListener('keydown', function(e) {
     if (e.key === 'r' || e.key === 'R') {
         loadDashboardStats();
-        console.log('🔄 Stats refreshed');
     }
 });
-
-console.log('📊 Dashboard ready. Press "R" to refresh stats.');
 
 // ---------- CLOSE MODALS WITH ESC KEY (Global) ----------
 document.addEventListener('keydown', function(e) {
@@ -99,4 +93,3 @@ document.addEventListener('keydown', function(e) {
         }
     }
 });
-console.log('🔑 ESC key handler enabled');

@@ -138,7 +138,6 @@ async function loadTemplateDropdown() {
             opt.textContent = tpl.template_name;
             filterTemplate.appendChild(opt);
         });
-        console.log('✅ Template dropdown loaded with ' + templates.length + ' templates');
     } catch (error) {
         console.error('Error loading templates:', error);
         filterTemplate.innerHTML = '<option value="">⚠️ Failed to load</option>';
@@ -891,5 +890,4 @@ window.onload = async function() {
     }
     
     fetchAvailability();
-    console.log('📊 Data Bank final polished version loaded');
 };

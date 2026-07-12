@@ -100,5 +100,3 @@ async function initUtils() {
 window.formatDate = formatDate;
 window.formatAmount = formatAmount;
 window.initUtils = initUtils;
-
-console.log('📦 Utility functions loaded');

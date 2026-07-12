@@ -1346,7 +1346,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // We'll modify the renderTransaction to call our new function.
     // Actually, we can do a direct replacement in the existing code: we'll replace the alert with loadTransactionList.
     // We'll do that in a separate chunk to avoid conflict.
-    console.log('Phase 2 ready – mirror icon will now show popover.');
 });
 // ---------- SAVE LINE ITEMS ----------
 async function saveLineItems() {
@@ -1564,7 +1563,6 @@ async function searchSupportingDocuments() {
 const cashBtn = document.getElementById('cashVerificationBtn');
 if (cashBtn) {
     cashBtn.addEventListener('click', function() {
-        console.log('💰 Cash Verification button clicked');
         popupOverlay.style.display = 'flex';
         loadCashbooks();
     });
@@ -1784,7 +1782,6 @@ if (procedureModal) {
 // ==============================================
 
 function openTransactionReport() {
-    console.log('📊 Transaction Report button clicked');
     try {
         if (!reportContent) return;
         if (dashboardContent) dashboardContent.style.display = 'none';
@@ -1838,7 +1835,6 @@ async function loadTemplateId() {
         }
         const data = await res.json();
         reportTemplateId = data.id;
-        console.log('✅ Transaction Report template ID loaded:', reportTemplateId);
     } catch (error) {
         console.error('Error loading template:', error);
         if (reportStatus) {
@@ -1961,7 +1957,6 @@ function updatePaginationControls() {
 
 if (reportFetchBtn) {
     reportFetchBtn.addEventListener('click', function() {
-        console.log('📊 Fetch button clicked');
         fetchReportData();
     });
 }
@@ -2023,7 +2018,6 @@ window.onload = function() {
         setNavStats('');
     }
     loadVerificationStats();
-    console.log('✅ Verification module loaded (cashbook + verification flow)');
 };
 
 async function loadVerificationStats() {
@@ -2040,7 +2034,6 @@ async function loadVerificationStats() {
             document.getElementById('totalVerified').textContent = '0';
         }
     } catch (error) {
-        console.log('⚠️ Error loading verification stats:', error.message);
         document.getElementById('pendingCount').textContent = '0';
         document.getElementById('verifiedToday').textContent = '0';
         document.getElementById('totalVerified').textContent = '0';

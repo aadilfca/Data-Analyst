@@ -47,8 +47,6 @@ async function loadClientDropdown() {
             select.value = currentVal;
         }
         updateSelectedClient();
-
-        console.log('✅ Client dropdown loaded with ' + clientList.length + ' clients');
     } catch (error) {
         console.error('⚠️ Error loading clients:', error.message);
         select.innerHTML = '<option value="">⚠️ Failed to load clients</option>';
@@ -265,7 +263,6 @@ function goToDashboard() {
 function initClientContext() {
     renderClientControl();
     renderNavLeft();
-    console.log('🌐 Client context initialized');
 }
 
 // ---------- EXPOSE GLOBALLY ----------
@@ -285,5 +282,3 @@ if (document.readyState === 'loading') {
 } else {
     initClientContext();
 }
-
-console.log('📦 Client context module loaded (centralised switching)');

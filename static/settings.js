@@ -143,5 +143,4 @@ function showStatus(msg, type) {
 
 window.onload = function() {
     loadSettings();
-    console.log('⚙️ Settings module loaded');
 };

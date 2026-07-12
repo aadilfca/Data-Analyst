@@ -3,7 +3,6 @@
 // ================================================================
 
 // API_BASE is defined globally in client_context.js
-console.log('📤 Upload module loaded');
 
 // ---------- DOM REFS ----------
 function getElement(id) {
@@ -81,7 +80,6 @@ function resetValidationState() {
 // ---------- HELPERS ----------
 function showStatus(msg, type = 'info', extra = '') {
     if (!statusBar || !statusMessage) {
-        console.log('📢 Status:', msg, type, extra);
         return;
     }
     statusMessage.innerHTML = msg;
@@ -159,7 +157,6 @@ async function loadTemplates() {
             });
         }
         setBadge('✅ ' + templates.length + ' templates loaded');
-        console.log('✅ Templates loaded:', templates.length);
     } catch (error) {
         console.error('Error loading templates:', error);
         setBadge('❌ Failed to load templates', 'error');
@@ -227,7 +224,6 @@ if (templateDropdown) {
 if (uploadArea) {
     // Click to open file picker – with safety check
     uploadArea.addEventListener('click', function(e) {
-        console.log('🖱️ Upload area clicked');
         if (fileInput) {
             fileInput.click();
         } else {
@@ -259,16 +255,13 @@ if (uploadArea) {
         }
     });
     
-    console.log('✅ Upload area events attached');
 } else {
     console.error('❌ Upload area element not found');
 }
 
 if (fileInput) {
     fileInput.addEventListener('change', function(e) {
-        console.log('📄 File input change event triggered');
         if (this.files && this.files.length > 0) {
-            console.log('📄 File selected:', this.files[0].name);
             handleFile(this.files[0]);
             this.value = '';
         } else {
@@ -1199,7 +1192,6 @@ async function performImport(payload) {
         // --- FIX: Add skip_validation if validation already passed ---
         if (validationStatus === 'valid') {
             payload.skip_validation = true;
-            console.log('🔍 Skipping validation (already passed)');
         }
 
                 // No duplicate check – we always insert new rows (simple insert)
@@ -1480,7 +1472,6 @@ if (previewBtn) {
 // ---------- INIT ----------
 window.onload = function() {
     loadTemplates();
-    console.log('📤 Upload module fully loaded');
     showStatus('Select a template and upload an Excel file to begin.', 'info');
     updatePreviewButtonState();
 

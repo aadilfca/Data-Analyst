@@ -467,5 +467,4 @@ detailModal.addEventListener('click', function(e) {
 window.onload = function() {
     loadStats();
     loadErrors();
-    console.log('📋 Error Dashboard loaded');
 };

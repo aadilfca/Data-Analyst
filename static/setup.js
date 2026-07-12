@@ -20,10 +20,7 @@ async function loadSetupStats() {
         // Count active templates
         const active = templates.filter(t => t.is_active !== 0).length;
         document.getElementById('activeTemplates').textContent = active || 0;
-        
-        console.log('✅ Setup stats loaded');
     } catch (error) {
-        console.log('⚠️ Error loading setup stats:', error.message);
         document.getElementById('totalColumns').textContent = '⚠️';
         document.getElementById('totalTemplates').textContent = '⚠️';
         document.getElementById('activeTemplates').textContent = '⚠️';
@@ -144,7 +141,6 @@ async function handleImportFile(event) {
 // ---------- LOAD ON PAGE OPEN ----------
 window.onload = function() {
     loadSetupStats();
-    console.log('🔧 Setup Module loaded successfully!');
 
     // Backup export button
     document.getElementById('exportBackupBtn').addEventListener('click', exportBackup);
@@ -158,5 +154,4 @@ window.onload = function() {
 // Reload stats when page becomes visible again (e.g., after navigating back from columns/templates)
 window.addEventListener('pageshow', function(event) {
     loadSetupStats();
-    console.log('🔄 Setup stats refreshed on pageshow');
 });

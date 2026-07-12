@@ -173,7 +173,6 @@ async function loadMasterColumns() {
         window.allMasterColumns = columns;
         return columns;
     } catch (error) {
-        console.log('⚠️ Error loading columns:', error.message);
         return [];
     }
 }
@@ -587,5 +586,4 @@ document.addEventListener('keydown', function(e) {
 // ---------- INIT ----------
 window.onload = function() {
     loadTemplates();
-    console.log('📄 Templates Manager loaded (pivot table version)');
 };
