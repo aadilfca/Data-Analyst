@@ -914,12 +914,18 @@
                         </div>
                         <div class="mode-row">
                             <label style="display:flex; align-items:center; gap:6px; font-size:13px; cursor:pointer;">
-                                <input type="checkbox" id="replaceCheckbox" checked
+                                <input type="checkbox" id="replaceCheckbox"
                                     style="width:16px; height:16px; cursor:pointer;">
                                 🔄 Replace existing data for this template
                             </label>
                             <span style="font-size:11px; color:#94a3b8; margin-left:4px;">(Deletes all existing rows
                                 before import)</span>
+                        </div>
+                        <!-- Replace warning: shown when checkbox is ticked; warns that change detection won't apply -->
+                        <div id="replaceWarning"
+                            style="display:none; margin-top:8px; padding:10px 14px; background:#fef3c7; border:1px solid #f59e0b; border-radius:6px; font-size:13px; color:#92400e;">
+                            ⚠️ This will delete all existing data for this template. Change detection
+                            (unchanged/changed/missing) will not apply.
                         </div>
                         <div class="btn-row">
                             <button class="btn-secondary" id="downloadBtn">📥 Download Template</button>

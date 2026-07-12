@@ -59,6 +59,7 @@ let workbookData = null;
 let isProcessing = false;
 let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
 let miniPreviewVisible = false; // Tracks whether mini preview is shown
+let importWasReplace = false;   // Tracks whether the last import used "replace" mode; used by showImportSummary to hide change detection
 // ---------- RESET VALIDATION STATE ----------
 function resetValidationState() {
     validationStatus = 'idle';
@@ -429,6 +430,17 @@ function resetUpload() {
     }
 }
 
+// ---------- REPLACE CHECKBOX WARNING TOGGLE ----------
+// Show/hide the warning message below the checkbox when its state changes
+const replaceCheckbox = document.getElementById('replaceCheckbox');
+const replaceWarning = document.getElementById('replaceWarning');
+if (replaceCheckbox && replaceWarning) {
+    replaceCheckbox.addEventListener('change', function() {
+        // Display warning when checkbox is ticked to alert user that change detection won't apply
+        replaceWarning.style.display = this.checked ? 'block' : 'none';
+    });
+}
+
 // ---------- AUTO-MAP ----------
 async function autoMapColumns() {
     if (!selectedTemplateId || !currentSheet || !fileId) {
@@ -780,9 +792,19 @@ function showImportSummary(result) {
         detailMessage = 'ℹ️ No changes were made.';
     }
     
-    // Add change detection summary
+    // Build change detection summary.
+    // If the import used replace mode, show a notice that change detection was not performed.
+    // Otherwise, show the standard change detection counts when available.
     let changeSummary = '';
-    if (unchanged > 0 || changed > 0 || newRows > 0 || deleted > 0) {
+    if (importWasReplace) {
+        // Replace mode: all old data was deleted, so change detection counts are meaningless
+        changeSummary = `
+            <div style="font-size:13px; color:#64748b; background:#fef3c7; padding:10px 12px; border-radius:6px; margin-top:8px; border-left:3px solid #f59e0b;">
+                <strong style="display:block; margin-bottom:4px;">🔄 Data Replaced</strong>
+                <div>All existing data was replaced. No change detection was performed.</div>
+            </div>
+        `;
+    } else if (unchanged > 0 || changed > 0 || newRows > 0 || deleted > 0) {
         changeSummary = `
             <div style="font-size:13px; color:#64748b; background:#f8fafc; padding:10px 12px; border-radius:6px; margin-top:8px; border-left:3px solid #3b82f6;">
                 <strong style="display:block; margin-bottom:4px;">📋 Change Detection Summary:</strong>
@@ -1241,6 +1263,8 @@ async function performImport(payload) {
                     }
                     modalRef.resolve(true);
                     window._overwriteModal = null;
+                    // Record whether replace mode was used, so showImportSummary can adjust its output
+                    importWasReplace = payload.replace;
                     showImportSummary(result);
                 };
             }
@@ -1252,6 +1276,8 @@ async function performImport(payload) {
             setBadge('❌ Import failed', 'error');
         } else {
             if (!modalRef || modalRef.isResolved) {
+                // Record whether replace mode was used, so showImportSummary can adjust its output
+                importWasReplace = payload.replace;
                 showImportSummary(result);
             }
             setBadge('✅ Import complete');
