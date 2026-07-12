@@ -1006,8 +1006,16 @@
                     <h2>📊 Excel Preview</h2>
                     <a href="#" class="back-link" id="closePreviewBtn">← Back to Upload</a>
                 </div>
-                <div>
+                <div class="preview-header-controls">
                     <span class="preview-info" id="previewInfo">0 rows · 0 columns</span>
+                    <div class="preview-pagesize-container">
+                        <label for="previewPageSize">Rows per page:</label>
+                        <select id="previewPageSize">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
                 </div>
             </div>
             <!-- Table Area (flex:1, scrollable) -->
@@ -1023,6 +1031,14 @@
                 <span id="footerUser">👤 <span id="footerUserName">Analyst</span></span>
                 <span id="footerTime">🕐 <span id="footerTimeValue">--:--</span></span>
                 <span id="footerDate">📅 <span id="footerDateValue">--/--/----</span></span>
+
+                <!-- Pagination Controls -->
+                <div class="preview-pagination">
+                    <span id="previewRowRange">Showing 0-0 of 0 rows</span>
+                    <button id="previewPrevPage" class="btn-pagination">Previous</button>
+                    <span id="previewPageInfo">Page 1 of 1</span>
+                    <button id="previewNextPage" class="btn-pagination">Next</button>
+                </div>
             </div>
         </div>
 

@@ -1894,3 +1894,99 @@ body {
 .transaction-list-popover tr[data-detail-id]:hover td {
     background: #f1f5f9;
 }
+
+/* =============================================
+   PREVIEW SHEET PAGINATION STYLES
+   ============================================= */
+
+/* Preview header controls: row/column info + page size dropdown side by side */
+.preview-header-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+/* Page size dropdown container */
+.preview-pagesize-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: #64748b;
+}
+
+.preview-pagesize-container label {
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.preview-pagesize-container select {
+    padding: 4px 8px;
+    border: 1px solid #d0d5dd;
+    border-radius: 4px;
+    font-size: 12px;
+    background: white;
+    cursor: pointer;
+    color: #1e293b;
+}
+
+.preview-pagesize-container select:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+/* Pagination controls in the preview footer */
+.preview-pagination {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+    flex-wrap: wrap;
+}
+
+.preview-pagination #previewRowRange {
+    font-size: 13px;
+    color: #64748b;
+    white-space: nowrap;
+}
+
+.preview-pagination #previewPageInfo {
+    font-size: 13px;
+    color: #64748b;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+/* Pagination buttons (Previous / Next) */
+.btn-pagination {
+    padding: 5px 14px;
+    background: #f1f5f9;
+    color: #1e293b;
+    border: 1px solid #d0d5dd;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    line-height: 1.4;
+}
+
+.btn-pagination:hover:not(:disabled) {
+    background: #e2e8f0;
+    border-color: #94a3b8;
+}
+
+.btn-pagination:active:not(:disabled) {
+    background: #cbd5e1;
+    transform: scale(0.97);
+}
+
+.btn-pagination:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: #f8fafc;
+    color: #94a3b8;
+}

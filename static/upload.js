@@ -60,6 +60,13 @@ let isProcessing = false;
 let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
 let miniPreviewVisible = false; // Tracks whether mini preview is shown
 let importWasReplace = false;   // Tracks whether the last import used "replace" mode; used by showImportSummary to hide change detection
+
+// Pagination state variables
+let previewCurrentPage = 1;
+let previewPageSize = 50;
+let previewTotalRows = 0;
+let previewAllRows = [];
+let previewHeaders = [];
 // ---------- RESET VALIDATION STATE ----------
 function resetValidationState() {
     validationStatus = 'idle';
@@ -1291,12 +1298,132 @@ async function performImport(payload) {
     }
 }
 
-function showPreview() {
-    const previewSheet = document.getElementById('previewSheet');
-    const mainUploadPage = document.getElementById('mainUploadPage');
+function renderPreviewPage() {
     const previewHead = document.getElementById('previewSheetHead');
     const previewBody = document.getElementById('previewSheetBody');
     const previewInfo = document.getElementById('previewInfo');
+    const previewRowRange = document.getElementById('previewRowRange');
+    const previewPageInfo = document.getElementById('previewPageInfo');
+    const previewPrevPage = document.getElementById('previewPrevPage');
+    const previewNextPage = document.getElementById('previewNextPage');
+
+    const headers = previewHeaders || [];
+    const totalRows = previewAllRows.length;
+    previewTotalRows = totalRows;
+
+    // Calculate pagination details
+    const totalPages = Math.ceil(totalRows / previewPageSize) || 1;
+    if (previewCurrentPage > totalPages) {
+        previewCurrentPage = totalPages;
+    }
+    if (previewCurrentPage < 1) {
+        previewCurrentPage = 1;
+    }
+
+    const startIndex = (previewCurrentPage - 1) * previewPageSize;
+    const endIndex = Math.min(startIndex + previewPageSize, totalRows);
+
+    // Build headers
+    previewHead.innerHTML = '';
+    if (headers.length) {
+        const tr = document.createElement('tr');
+        
+        // Add S.No header column as the first column with specified styling
+        const thSNo = document.createElement('th');
+        thSNo.textContent = 'S.No';
+        thSNo.style.textAlign = 'center';
+        thSNo.style.color = '#64748b';
+        thSNo.style.width = '50px';
+        thSNo.style.fontWeight = '500';
+        tr.appendChild(thSNo);
+
+        headers.forEach(h => {
+            const th = document.createElement('th');
+            th.textContent = h || '—';
+            tr.appendChild(th);
+        });
+        previewHead.appendChild(tr);
+    }
+
+    // Build body for current page rows
+    previewBody.innerHTML = '';
+    const pageRows = previewAllRows.slice(startIndex, endIndex);
+
+    pageRows.forEach((row, index) => {
+        const tr = document.createElement('tr');
+        const rowIndex = startIndex + index; // Actual 0-based index in full Excel sheet
+        
+        // Add S.No serial number cell (starting from 1) before all other cells
+        const tdSNo = document.createElement('td');
+        tdSNo.textContent = rowIndex + 1;
+        tdSNo.style.textAlign = 'center';
+        tdSNo.style.color = '#64748b';
+        tdSNo.style.width = '50px';
+        tdSNo.style.fontWeight = '500';
+        tr.appendChild(tdSNo);
+
+        row.forEach((cell, idx) => {
+            const td = document.createElement('td');
+            let displayValue = cell;
+            const headerName = (headers[idx] || '').toLowerCase();
+            if (typeof cell === 'number' && cell > 30000 && 
+                (headerName.includes('date') || headerName.includes('day') || headerName.includes('month'))) {
+                const date = new Date((cell - 25569) * 86400 * 1000);
+                if (!isNaN(date)) {
+                    const d = String(date.getDate()).padStart(2, '0');
+                    const m = String(date.getMonth() + 1).padStart(2, '0');
+                    const y = date.getFullYear();
+                    displayValue = d + '/' + m + '/' + y;
+                }
+            } else if (typeof cell === 'string' && /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(cell)) {
+                const parts = cell.split('/');
+                if (parts.length === 3) {
+                    let day, month, year;
+                    if (parseInt(parts[0]) > 12) {
+                        day = parts[0];
+                        month = parts[1];
+                    } else {
+                        month = parts[0];
+                        day = parts[1];
+                    }
+                    year = parts[2];
+                    if (year.length === 2) year = '20' + year;
+                    displayValue = day.padStart(2, '0') + '/' + month.padStart(2, '0') + '/' + year;
+                }
+            }
+            td.textContent = displayValue !== undefined ? displayValue : '';
+            tr.appendChild(td);
+        });
+        previewBody.appendChild(tr);
+    });
+
+    // Update displays
+    if (previewInfo) {
+        previewInfo.textContent = `${totalRows} rows · ${headers.length} columns`;
+    }
+    if (previewRowRange) {
+        if (totalRows === 0) {
+            previewRowRange.textContent = 'Showing 0-0 of 0 rows';
+        } else {
+            previewRowRange.textContent = `Showing ${startIndex + 1}-${endIndex} of ${totalRows} rows`;
+        }
+    }
+    if (previewPageInfo) {
+        previewPageInfo.textContent = `Page ${previewCurrentPage} of ${totalPages}`;
+    }
+
+    // Disable buttons at boundaries
+    if (previewPrevPage) {
+        previewPrevPage.disabled = (previewCurrentPage === 1);
+    }
+    if (previewNextPage) {
+        previewNextPage.disabled = (previewCurrentPage === totalPages);
+    }
+}
+
+function showPreview() {
+    const previewSheet = document.getElementById('previewSheet');
+    const mainUploadPage = document.getElementById('mainUploadPage');
 
     if (!workbookData) {
         showStatus('⚠️ No file loaded to preview.', 'error');
@@ -1309,81 +1436,12 @@ function showPreview() {
         const sheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
         
-        const headers = jsonData[0] || [];
-        const rows = jsonData.slice(1); // All rows, not limited
+        previewHeaders = jsonData[0] || [];
+        previewAllRows = jsonData.slice(1); // All rows, not limited
+        previewCurrentPage = 1;
 
-        // Build headers
-        previewHead.innerHTML = '';
-        if (headers.length) {
-            const tr = document.createElement('tr');
-            
-            // Add S.No header column as the first column with specified styling
-            const thSNo = document.createElement('th');
-            thSNo.textContent = 'S.No';
-            thSNo.style.textAlign = 'center';
-            thSNo.style.color = '#64748b';
-            thSNo.style.width = '50px';
-            thSNo.style.fontWeight = '500';
-            tr.appendChild(thSNo);
-
-            headers.forEach(h => {
-                const th = document.createElement('th');
-                th.textContent = h || '—';
-                tr.appendChild(th);
-            });
-            previewHead.appendChild(tr);
-        }
-
-        // Build body (all rows)
-        previewBody.innerHTML = '';
-        rows.forEach((row, rowIndex) => {
-            const tr = document.createElement('tr');
-            
-            // Add S.No serial number cell (starting from 1) before all other cells
-            const tdSNo = document.createElement('td');
-            tdSNo.textContent = rowIndex + 1;
-            tdSNo.style.textAlign = 'center';
-            tdSNo.style.color = '#64748b';
-            tdSNo.style.width = '50px';
-            tdSNo.style.fontWeight = '500';
-            tr.appendChild(tdSNo);
-
-            row.forEach((cell, idx) => {
-                const td = document.createElement('td');
-                let displayValue = cell;
-                const headerName = (headers[idx] || '').toLowerCase();
-                if (typeof cell === 'number' && cell > 30000 && 
-                    (headerName.includes('date') || headerName.includes('day') || headerName.includes('month'))) {
-                    const date = new Date((cell - 25569) * 86400 * 1000);
-                    if (!isNaN(date)) {
-                        const d = String(date.getDate()).padStart(2, '0');
-                        const m = String(date.getMonth() + 1).padStart(2, '0');
-                        const y = date.getFullYear();
-                        displayValue = d + '/' + m + '/' + y;
-                    }
-                } else if (typeof cell === 'string' && /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(cell)) {
-                    const parts = cell.split('/');
-                    if (parts.length === 3) {
-                        let day, month, year;
-                        if (parseInt(parts[0]) > 12) {
-                            day = parts[0];
-                            month = parts[1];
-                        } else {
-                            month = parts[0];
-                            day = parts[1];
-                        }
-                        year = parts[2];
-                        if (year.length === 2) year = '20' + year;
-                        displayValue = day.padStart(2, '0') + '/' + month.padStart(2, '0') + '/' + year;
-                    }
-                }
-                td.textContent = displayValue !== undefined ? displayValue : '';
-                tr.appendChild(td);
-            });
-            previewBody.appendChild(tr);
-        });
-
-        previewInfo.textContent = `${rows.length} rows · ${headers.length} columns`;
+        // Render current page
+        renderPreviewPage();
 
         // Update footer with client and user info
         const clientName = window.getSelectedClientName ? window.getSelectedClientName() : 'No Client';
@@ -1477,5 +1535,38 @@ window.onload = function() {
     const closeBtn = document.getElementById('closeMiniPreviewBtn');
     if (closeBtn) {
         closeBtn.addEventListener('click', closeMiniPreview);
+    }
+
+    // Pagination controls event listeners
+    const previewPageSizeDropdown = document.getElementById('previewPageSize');
+    if (previewPageSizeDropdown) {
+        previewPageSizeDropdown.addEventListener('change', function() {
+            previewPageSize = parseInt(this.value) || 50;
+            previewCurrentPage = 1;
+            renderPreviewPage();
+        });
+    }
+
+    const previewPrevPageBtn = document.getElementById('previewPrevPage');
+    if (previewPrevPageBtn) {
+        previewPrevPageBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (previewCurrentPage > 1) {
+                previewCurrentPage--;
+                renderPreviewPage();
+            }
+        });
+    }
+
+    const previewNextPageBtn = document.getElementById('previewNextPage');
+    if (previewNextPageBtn) {
+        previewNextPageBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            const totalPages = Math.ceil(previewTotalRows / previewPageSize) || 1;
+            if (previewCurrentPage < totalPages) {
+                previewCurrentPage++;
+                renderPreviewPage();
+            }
+        });
     }
 };
