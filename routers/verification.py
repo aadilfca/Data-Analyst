@@ -421,6 +421,36 @@ def get_next_transaction(session_id: int):
             procedure_data = {}
     
     transaction_type = procedure_data.get('transaction_type', '')
+
+    # --- Phase 3: Fetch change_detection info for the transaction ---
+    change_info = execute_query(
+        """
+        SELECT cd.change_detection_status, cd.version,
+               dal.old_row_data
+        FROM client_data cd
+        LEFT JOIN data_audit_log dal ON dal.client_data_id = cd.id
+            AND dal.action = 'UPDATE'
+            AND dal.id = (
+                SELECT MAX(id) FROM data_audit_log
+                WHERE client_data_id = cd.id AND action = 'UPDATE'
+            )
+        WHERE cd.id = ?
+        """,
+        (d['client_data_id'],)
+    )
+    change_detection_status = None
+    old_row_data = None
+    current_version = 1
+    if change_info:
+        ci = change_info[0]
+        current_version = ci.get('version') or 1
+        change_detection_status = ci.get('change_detection_status')
+        old_raw = ci.get('old_row_data')
+        if old_raw:
+            try:
+                old_row_data = json.loads(old_raw) if isinstance(old_raw, str) else old_raw
+            except:
+                pass
     
     return {
         "detail_id": d['id'],
@@ -431,7 +461,11 @@ def get_next_transaction(session_id: int):
         "procedure_data": procedure_data,
         "validation_status": d['validation_status'],
         "validation_message": d['validation_message'],
-        "transaction_type": transaction_type
+        "transaction_type": transaction_type,
+        # Phase 3: change detection data for the verification card
+        "change_detection_status": change_detection_status,
+        "old_row_data": old_row_data,
+        "version": current_version
     }
 
 @router.post("/api/verification/save_line_items")

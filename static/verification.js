@@ -547,6 +547,37 @@ function renderTransaction(data) {
             ${data.validation_message ? `<span class="validation-message">${data.validation_message}</span>` : ''}
         </div>
 
+        <!-- Phase 3: Change Detection Warning Banner (only for updated transactions) -->
+        ${data.change_detection_status === 'updated' ? `
+        <div class="change-detection-banner">
+            <span class="banner-icon">⚠️</span>
+            <div class="banner-content">
+                <div class="banner-title">Transaction was modified during re-upload</div>
+                <div class="banner-subtitle">Values changed — validation has been reset to "Pending". Review the differences below.</div>
+                <button class="banner-toggle" id="diffToggleBtn">Show old vs new values ▸</button>
+                <div class="diff-table-wrapper" id="diffTableWrapper">
+                    <table class="diff-table">
+                        <thead>
+                            <tr><th>Field</th><th>Old Value</th><th>New Value</th></tr>
+                        </thead>
+                        <tbody>
+                            ${buildDiffRows(data.old_row_data, data.row_data)}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        ` : ''}
+        ${data.change_detection_status === 'deleted' ? `
+        <div class="change-detection-banner" style="border-left-color:#dc2626; background:#fef2f2;">
+            <span class="banner-icon">🗑️</span>
+            <div class="banner-content">
+                <div class="banner-title" style="color:#991b1b;">Transaction flagged as deleted</div>
+                <div class="banner-subtitle" style="color:#b91c1c;">This transaction was present in previous uploads but is missing from the current re-upload. Awaiting auditor review.</div>
+            </div>
+        </div>
+        ` : ''}
+
                                         <!-- Mandatory Procedures – Vertical List with Observations -->
         <div style="margin-top:16px;">
             <div style="display:flex; align-items:center; gap:8px;">
@@ -771,6 +802,9 @@ function renderTransaction(data) {
         currentTransactionType = this.value;
         procedureData.transaction_type = currentTransactionType;
     });
+
+    // Attach diff toggle event listener for the change detection banner
+    setupDiffToggle();
 
     // Update progress display
     updateProgressDisplay();
@@ -1008,6 +1042,38 @@ if (titleEl) {
         console.error('Error updating progress:', e);
     }
 }
+// ---------- Phase 3: Build diff rows for change detection banner ----------
+function buildDiffRows(oldData, newData) {
+    if (!oldData || !newData) return '<tr><td colspan="3" style="color:#94a3b8; text-align:center;">No previous data available.</td></tr>';
+    const allFields = new Set([...Object.keys(oldData), ...Object.keys(newData)]);
+    let rows = '';
+    allFields.forEach(field => {
+        const oldVal = oldData[field] !== undefined ? oldData[field] : '';
+        const newVal = newData[field] !== undefined ? newData[field] : '';
+        const oldStr = String(oldVal).trim();
+        const newStr = String(newVal).trim();
+        if (oldStr === newStr) {
+            rows += `<tr><td class="field-label">${field}</td><td class="same-value" colspan="2">${newStr || '—'}</td></tr>`;
+        } else {
+            rows += `<tr><td class="field-label">${field}</td><td class="old-value">${oldStr || '—'}</td><td class="new-value">${newStr || '—'}</td></tr>`;
+        }
+    });
+    return rows;
+}
+
+// Attach diff toggle event listener after card is rendered (called from renderTransaction event handlers)
+function setupDiffToggle() {
+    const toggleBtn = document.getElementById('diffToggleBtn');
+    const wrapper = document.getElementById('diffTableWrapper');
+    if (toggleBtn && wrapper) {
+        toggleBtn.addEventListener('click', function() {
+            const isVisible = wrapper.classList.contains('visible');
+            wrapper.classList.toggle('visible');
+            toggleBtn.textContent = isVisible ? 'Show old vs new values ▸' : 'Hide old vs new values ▾';
+        });
+    }
+}
+
 // ==============================================
 // PHASE 2 – TRANSACTION LIST POPOVER
 // ==============================================
