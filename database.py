@@ -675,6 +675,17 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_deleted ON client_data (is_deleted)")
         # Composite index for faster date-range queries on a specific client
         conn.execute("CREATE INDEX IF NOT EXISTS idx_client_data_client_date ON client_data (client_id, extract_date)")
+
+        # Schema upgrade: add change_detection_status column for re-upload change tracking (Phase 2)
+        try:
+            cur = conn.execute("PRAGMA table_info(client_data)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'change_detection_status' not in columns:
+                conn.execute("ALTER TABLE client_data ADD COLUMN change_detection_status TEXT DEFAULT 'active'")
+                print("✅ Added change_detection_status column to client_data")
+        except Exception as e:
+            print("⚠️ Could not add change_detection_status to client_data:", e)
+
         print("✅ Created indexes on client_data")
 
         conn.commit()

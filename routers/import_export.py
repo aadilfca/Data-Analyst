@@ -57,26 +57,26 @@ def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, te
     return new_count, existing_count
 
 
-# ---------- CHANGE DETECTION (Phase 1: identify unchanged/changed/new/missing) ----------
+# ---------- CHANGE DETECTION (Phase 2: identify & categorise each row with details) ----------
 def compare_transactions(client_id: int, template_id: int, template_cols: list,
                          incoming_rows: list, col_mapping: dict, mapping_dict: dict) -> dict:
     """
     Compares incoming transaction rows with existing data for the same client+template.
     Uses Voucher ID + Account Code (or Account Detail) as the composite key.
 
-    Returns a dict with counts for:
-    - unchanged_count: rows where all fields match existing data exactly
-    - changed_count:  rows where at least one field differs from existing data
-    - new_count:      rows whose composite key does not exist in existing data
-    - missing_count:  existing rows whose composite key is absent from incoming data
-    - total_existing_before_import: number of existing rows before this import
+    Returns a dict with counts AND per-row data for the import loop to act upon.
     """
     result = {
         "unchanged_count": 0,
         "changed_count": 0,
         "new_count": 0,
         "missing_count": 0,
-        "total_existing_before_import": 0
+        "total_existing_before_import": 0,
+        # Detailed lists consumed by the import loop:
+        "unchanged": [],      # list of existing client_data_ids to skip
+        "changed": [],        # list of {client_data_id, old_row_data, new_row_data, old_validation_status}
+        "new": [],            # list of new row_data dicts to insert
+        "missing": []         # list of {client_data_id, old_row_data} to flag as 'deleted'
     }
 
     # Identify the composite key columns by name (case-insensitive)
@@ -98,18 +98,19 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
     # Fetch existing client_data rows for this client+template, with their validation status
     existing_rows = execute_query(
         """
-        SELECT cd.id, cd.row_data,
-               vd.validation_status
+        SELECT cd.id, cd.row_data, cd.version,
+               vd.validation_status, vd.id AS verification_detail_id
         FROM client_data cd
         LEFT JOIN verification_details vd ON vd.client_data_id = cd.id
-        WHERE cd.client_id = ? AND cd.template_id = ? AND cd.is_deleted = 0
+        WHERE cd.client_id = ? AND cd.template_id = ? AND cd.is_deleted = 0 AND cd.change_detection_status != 'deleted'
         """,
         (client_id, template_id)
     )
     result["total_existing_before_import"] = len(existing_rows)
 
-    # Build a lookup dict: composite_key -> {row_data, validation_status}
+    # Build a lookup dict: composite_key -> {client_data_id, row_data, validation_status, version, verification_detail_id}
     existing_lookup = {}
+    cd_id_by_key = {}  # separate mapping for missing-detection at the end
     for row in existing_rows:
         try:
             row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
@@ -120,9 +121,13 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         if vid and acc:  # Only index rows with valid composite keys
             key = f"{vid}|{acc}"
             existing_lookup[key] = {
+                "client_data_id": row['id'],
                 "row_data": row_data,
-                "validation_status": row.get("validation_status") or "Pending"
+                "version": row.get('version', 1),
+                "validation_status": row.get("validation_status") or "Pending",
+                "verification_detail_id": row.get("verification_detail_id")
             }
+            cd_id_by_key[key] = row['id']
 
     # Track which existing keys appear in the incoming data
     seen_keys = set()
@@ -145,6 +150,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         if not vid or not acc:
             # Missing composite key – cannot compare, treat as new
             result["new_count"] += 1
+            result["new"].append(row_data)
             continue
 
         key = f"{vid}|{acc}"
@@ -167,15 +173,31 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
 
             if is_same:
                 result["unchanged_count"] += 1
+                result["unchanged"].append(existing["client_data_id"])
             else:
                 result["changed_count"] += 1
+                result["changed"].append({
+                    "client_data_id": existing["client_data_id"],
+                    "old_row_data": existing_data,
+                    "new_row_data": row_data,
+                    "old_validation_status": existing["validation_status"],
+                    "old_version": existing["version"],
+                    "verification_detail_id": existing["verification_detail_id"]
+                })
         else:
             result["new_count"] += 1
+            result["new"].append(row_data)
 
-    # Count missing: existing composite keys not present in the incoming data
-    for key in existing_lookup:
+    # Count & list missing: existing composite keys not present in the incoming data
+    for key, existing in existing_lookup.items():
         if key not in seen_keys:
             result["missing_count"] += 1
+            result["missing"].append({
+                "client_data_id": existing["client_data_id"],
+                "old_row_data": existing["row_data"],
+                "validation_status": existing["validation_status"],
+                "verification_detail_id": existing["verification_detail_id"]
+            })
 
     return result
 
@@ -758,7 +780,7 @@ def validate_and_import(request: ImportRequest):
         )
         log_audit("Analyst", "Replace", "Upload", f"Deleted existing data for client {request.client_id}, template {request.template_id}")
 
-    # ---- CHANGE DETECTION (Phase 1): Compare incoming rows with existing data ----
+    # ---- CHANGE DETECTION (Phase 2): Compare incoming rows with existing data ----
     # Only run change detection when NOT replacing; replace=True means all old data is gone
     change_detection = None
     if not request.replace:
@@ -771,7 +793,7 @@ def validate_and_import(request: ImportRequest):
             mapping_dict=mapping_dict
         )
 
-    # ---- IMPORT: All rows inserted as new ----
+    # ---- IMPORT: Use change_detection result to decide per-row action ----
     # Update uploaded_files status and set client_id
     execute_write(
         "UPDATE uploaded_files SET status = 'Imported', client_id = ? WHERE id = ?",
@@ -780,45 +802,109 @@ def validate_and_import(request: ImportRequest):
 
     inserted_count = 0
     updated_count = 0
+    deleted_count = 0
 
-    for row in rows:
-        # Build JSON row_data
-        row_data = {}
-        for t_col_name, excel_col in col_mapping.items():
-            if excel_col in row:
-                value = row[excel_col]
-                if pd.isna(value):
-                    value = None
-                if isinstance(value, datetime):
-                    value = value.strftime('%d/%m/%Y')
-                row_data[t_col_name] = value
+    if change_detection is not None and change_detection.get("unchanged") is not None:
+        # --- Re-upload scenario: handle each category ---
+        # 1. Unchanged: skip — retain existing validation status (no action needed)
+        #    (These rows already exist in client_data and their validation_status is preserved)
 
-        # Extract amount and date for indexing
-        amount, date_str = extract_columns_from_row(row_data, template_cols)
+        # 2. Changed: update row_data, reset validation_status to 'Pending', log old values
+        for item in change_detection["changed"]:
+            cid = item["client_data_id"]
+            new_version = (item.get("old_version") or 1) + 1
 
-        # Insert every row as new
-        row_id = execute_write(
-            """
-            INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (request.client_id, request.template_id, request.file_id,
-             json.dumps(row_data), amount, date_str, "Analyst", 1)
-        )
-        inserted_count += 1
-        log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
+            # Update the existing row_data, increment version, set change_detection_status='updated'
+            execute_write(
+                """
+                UPDATE client_data
+                SET row_data = ?, version = ?, change_detection_status = 'updated'
+                WHERE id = ?
+                """,
+                (json.dumps(item["new_row_data"]), new_version, cid)
+            )
+
+            # Log the old values for audit trail
+            log_data_audit(cid, "Analyst", "UPDATE", item["old_row_data"], item["new_row_data"])
+
+            # Reset validation_status to 'Pending' if a verification_detail row exists
+            if item.get("verification_detail_id"):
+                execute_write(
+                    "UPDATE verification_details SET validation_status = 'Pending' WHERE id = ?",
+                    (item["verification_detail_id"],)
+                )
+
+            updated_count += 1
+
+        # 3. New: insert fresh rows
+        for new_row_data in change_detection["new"]:
+            amount, date_str = extract_columns_from_row(new_row_data, template_cols)
+            row_id = execute_write(
+                """
+                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added')
+                """,
+                (request.client_id, request.template_id, request.file_id,
+                 json.dumps(new_row_data), amount, date_str, "Analyst", 1)
+            )
+            inserted_count += 1
+            log_data_audit(row_id, "Analyst", "INSERT", None, new_row_data)
+
+        # 4. Missing: flag existing rows as 'deleted' for auditor review (soft flag)
+        for item in change_detection["missing"]:
+            cid = item["client_data_id"]
+            execute_write(
+                """
+                UPDATE client_data
+                SET change_detection_status = 'deleted'
+                WHERE id = ?
+                """,
+                (cid,)
+            )
+            log_data_audit(cid, "Analyst", "DELETE", item["old_row_data"], None)
+            deleted_count += 1
+
+    else:
+        # --- First-time upload or replace=True: insert all rows as new ---
+        for row in rows:
+            # Build JSON row_data
+            row_data = {}
+            for t_col_name, excel_col in col_mapping.items():
+                if excel_col in row:
+                    value = row[excel_col]
+                    if pd.isna(value):
+                        value = None
+                    if isinstance(value, datetime):
+                        value = value.strftime('%d/%m/%Y')
+                    row_data[t_col_name] = value
+
+            # Extract amount and date for indexing
+            amount, date_str = extract_columns_from_row(row_data, template_cols)
+
+            # Insert every row as new
+            row_id = execute_write(
+                """
+                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                """,
+                (request.client_id, request.template_id, request.file_id,
+                 json.dumps(row_data), amount, date_str, "Analyst", 1)
+            )
+            inserted_count += 1
+            log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
 
     log_audit("Analyst", "Import", "Upload",
-              f"Imported {inserted_count} new records, updated {updated_count} records for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
+              f"Imported {inserted_count} new, {updated_count} updated, {deleted_count} flagged missing for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
 
     return {
         "status": "success",
-        "message": f"Successfully imported: {inserted_count} new, {updated_count} updated",
+        "message": f"Successfully imported: {inserted_count} new, {updated_count} updated, {deleted_count} flagged missing",
         "total_rows": len(rows),
         "imported_count": inserted_count,
         "updated_count": updated_count,
+        "deleted_count": deleted_count,
         "validation_errors": [],
-        "change_detection": change_detection  # Phase 1: counts of unchanged/changed/new/missing transactions
+        "change_detection": change_detection  # Phase 2: detailed breakdown of unchanged/changed/new/missing
     }
 # ---------- DOWNLOAD TEMPLATE ----------
 @router.get("/api/upload/download-template/{template_id}")
