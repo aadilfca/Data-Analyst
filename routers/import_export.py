@@ -57,6 +57,129 @@ def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, te
     return new_count, existing_count
 
 
+# ---------- CHANGE DETECTION (Phase 1: identify unchanged/changed/new/missing) ----------
+def compare_transactions(client_id: int, template_id: int, template_cols: list,
+                         incoming_rows: list, col_mapping: dict, mapping_dict: dict) -> dict:
+    """
+    Compares incoming transaction rows with existing data for the same client+template.
+    Uses Voucher ID + Account Code (or Account Detail) as the composite key.
+
+    Returns a dict with counts for:
+    - unchanged_count: rows where all fields match existing data exactly
+    - changed_count:  rows where at least one field differs from existing data
+    - new_count:      rows whose composite key does not exist in existing data
+    - missing_count:  existing rows whose composite key is absent from incoming data
+    - total_existing_before_import: number of existing rows before this import
+    """
+    result = {
+        "unchanged_count": 0,
+        "changed_count": 0,
+        "new_count": 0,
+        "missing_count": 0,
+        "total_existing_before_import": 0
+    }
+
+    # Identify the composite key columns by name (case-insensitive)
+    voucher_col = None
+    account_col = None
+    for col in template_cols:
+        name = col['column_name'].strip().lower()
+        if name == 'voucher id':
+            voucher_col = col['column_name']
+        elif name in ('account code', 'account detail'):
+            # Prefer "Account Code" over "Account Detail" if both exist
+            if account_col is None or name == 'account code':
+                account_col = col['column_name']
+
+    # Cannot detect changes without both key columns
+    if not voucher_col or not account_col:
+        return result
+
+    # Fetch existing client_data rows for this client+template, with their validation status
+    existing_rows = execute_query(
+        """
+        SELECT cd.id, cd.row_data,
+               vd.validation_status
+        FROM client_data cd
+        LEFT JOIN verification_details vd ON vd.client_data_id = cd.id
+        WHERE cd.client_id = ? AND cd.template_id = ? AND cd.is_deleted = 0
+        """,
+        (client_id, template_id)
+    )
+    result["total_existing_before_import"] = len(existing_rows)
+
+    # Build a lookup dict: composite_key -> {row_data, validation_status}
+    existing_lookup = {}
+    for row in existing_rows:
+        try:
+            row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
+        except Exception:
+            continue
+        vid = str(row_data.get(voucher_col, '') or '').strip().lower()
+        acc = str(row_data.get(account_col, '') or '').strip().lower()
+        if vid and acc:  # Only index rows with valid composite keys
+            key = f"{vid}|{acc}"
+            existing_lookup[key] = {
+                "row_data": row_data,
+                "validation_status": row.get("validation_status") or "Pending"
+            }
+
+    # Track which existing keys appear in the incoming data
+    seen_keys = set()
+
+    for raw_row in incoming_rows:
+        # Build row_data from the incoming Excel row (same pattern as the import loop)
+        row_data = {}
+        for t_col_name, excel_col in col_mapping.items():
+            if excel_col in raw_row:
+                value = raw_row[excel_col]
+                if pd.isna(value):
+                    value = None
+                if isinstance(value, datetime):
+                    value = value.strftime('%d/%m/%Y')
+                row_data[t_col_name] = value
+
+        # Build composite key from the incoming row
+        vid = str(row_data.get(voucher_col, '') or '').strip().lower()
+        acc = str(row_data.get(account_col, '') or '').strip().lower()
+        if not vid or not acc:
+            # Missing composite key – cannot compare, treat as new
+            result["new_count"] += 1
+            continue
+
+        key = f"{vid}|{acc}"
+        seen_keys.add(key)
+
+        if key in existing_lookup:
+            existing = existing_lookup[key]
+            existing_data = existing["row_data"]
+
+            # Compare ALL fields between old and new data
+            all_fields = set(list(row_data.keys()) + list(existing_data.keys()))
+            is_same = True
+            for field in all_fields:
+                new_val = row_data.get(field)
+                old_val = existing_data.get(field)
+                # Normalise both to strings for a robust comparison
+                if str(new_val or '').strip() != str(old_val or '').strip():
+                    is_same = False
+                    break
+
+            if is_same:
+                result["unchanged_count"] += 1
+            else:
+                result["changed_count"] += 1
+        else:
+            result["new_count"] += 1
+
+    # Count missing: existing composite keys not present in the incoming data
+    for key in existing_lookup:
+        if key not in seen_keys:
+            result["missing_count"] += 1
+
+    return result
+
+
 # ---------- DATA MODELS ----------
 class ColumnMapping(BaseModel):
     template_column_id: int
@@ -635,6 +758,19 @@ def validate_and_import(request: ImportRequest):
         )
         log_audit("Analyst", "Replace", "Upload", f"Deleted existing data for client {request.client_id}, template {request.template_id}")
 
+    # ---- CHANGE DETECTION (Phase 1): Compare incoming rows with existing data ----
+    # Only run change detection when NOT replacing; replace=True means all old data is gone
+    change_detection = None
+    if not request.replace:
+        change_detection = compare_transactions(
+            client_id=request.client_id,
+            template_id=request.template_id,
+            template_cols=template_cols,
+            incoming_rows=rows,
+            col_mapping=col_mapping,
+            mapping_dict=mapping_dict
+        )
+
     # ---- IMPORT: All rows inserted as new ----
     # Update uploaded_files status and set client_id
     execute_write(
@@ -681,7 +817,8 @@ def validate_and_import(request: ImportRequest):
         "total_rows": len(rows),
         "imported_count": inserted_count,
         "updated_count": updated_count,
-        "validation_errors": []
+        "validation_errors": [],
+        "change_detection": change_detection  # Phase 1: counts of unchanged/changed/new/missing transactions
     }
 # ---------- DOWNLOAD TEMPLATE ----------
 @router.get("/api/upload/download-template/{template_id}")
