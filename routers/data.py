@@ -44,11 +44,9 @@ def get_datasets(client_id: int = Query(..., description="Client ID")):
     Get all datasets (uploads) for a given client.
     Uses both uploaded_files.client_id and client_data.client_id to handle missing client_id in uploaded_files.
     """
-    print(f"🔍 Data Bank request for client_id={client_id}")
     # Verify client exists
     client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
     if not client:
-        print(f"❌ Client {client_id} not found")
         raise HTTPException(404, "Client not found or inactive")
 
     # Get all uploads that either have client_id matching OR have client_data rows with that client_id
@@ -75,8 +73,6 @@ def get_datasets(client_id: int = Query(..., description="Client ID")):
         """,
         (client_id, client_id)
     )
-    print(f"📊 Found {len(uploads)} uploads for client {client_id}")
-
     result = []
     for row in uploads:
         # If template_name is 'Unknown' but we have a template_id, try to fetch name
@@ -119,7 +115,6 @@ def get_datasets(client_id: int = Query(..., description="Client ID")):
                 "status": row["status"]
             })
     
-    print(f"📤 Returning {len(result)} datasets")
     return result
 
 # ==============================================
@@ -164,41 +159,43 @@ def get_preview_rows(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    # Build WHERE clause dynamically
-    where_clauses = [
+    # Build WHERE clause dynamically (base filters, excluding sunday_only)
+    base_where = [
         "cd.client_id = ?",
         "cd.template_id = ?",
         "cd.is_deleted = 0",
         "cd.extract_date BETWEEN ? AND ?"
     ]
-    params = [client_id, template_id, date_start, date_end]
-    
-    # Sunday-only filter
-    if sunday_only:
-        where_clauses.append("strftime('%w', cd.extract_date) = '0'")
-    
+    base_params = [client_id, template_id, date_start, date_end]
+
     # Search in row_data (case-insensitive) – use json_each to search all values
     if search:
-        where_clauses.append(
-            "EXISTS (SELECT 1 FROM json_each(cd.row_data) WHERE LOWER(value) LIKE LOWER(?))"
-        )
-        params.append(f"%{search}%")
-    
+        base_where.append("EXISTS (SELECT 1 FROM json_each(cd.row_data) WHERE LOWER(value) LIKE LOWER(?))")
+        base_params.append(f"%{search}%")
+
     # Amount range
     if amount_min is not None:
-        where_clauses.append("cd.extract_amount >= ?")
-        params.append(amount_min)
+        base_where.append("cd.extract_amount >= ?")
+        base_params.append(amount_min)
     if amount_max is not None:
-        where_clauses.append("cd.extract_amount <= ?")
-        params.append(amount_max)
-    
-    where_sql = " AND ".join(where_clauses)
-    
+        base_where.append("cd.extract_amount <= ?")
+        base_params.append(amount_max)
+
+    # Final filters add sunday_only on top of the base filters (used for the
+    # count/data queries); the Sunday-count query below intentionally uses
+    # base_where only, so it always reflects the full filtered range.
+    final_where = base_where.copy()
+    final_params = base_params.copy()
+    if sunday_only:
+        final_where.append("strftime('%w', cd.extract_date) = '0'")
+
+    where_sql = " AND ".join(final_where)
+
     # Get total count
     count_sql = f"SELECT COUNT(*) as total FROM client_data cd WHERE {where_sql}"
-    total_result = execute_query(count_sql, params)
+    total_result = execute_query(count_sql, final_params)
     total_count = total_result[0]['total'] if total_result else 0
-    
+
     if total_count == 0:
         return {
             "template_id": template_id,
@@ -209,84 +206,14 @@ def get_preview_rows(
             "limit": limit,
             "rows": []
         }
-    
-    # Get Sunday count (for footer) – need to compute separately if we have filters applied
-    # We'll compute it by counting rows where extract_date is Sunday (without sunday_only filter? 
-    # Actually we want to show Sunday count in the footer even when not filtering by Sunday.
-    # So we need to compute it separately, without the sunday_only filter.
-    sunday_params = params.copy()
-    # Remove sunday_only condition from the where clause for the Sunday count
-    # We'll build a separate query without the sunday_only filter, but with all other filters.
-    sunday_where = [c for c in where_clauses if "strftime('%w', cd.extract_date)" not in c]
-    sunday_sql = f"""
-        SELECT COUNT(*) as sunday_count 
-        FROM client_data cd 
-        WHERE {' AND '.join(sunday_where)} AND strftime('%w', cd.extract_date) = '0'
-    """
-    # But we need to adjust params: the sunday_where clauses have the same params as the original without the sunday_only condition.
-    # We'll need to use the original params without the sunday_only param if it was added.
-    # Actually, easier: we'll just compute the Sunday count from the data we fetch? That could be heavy if we paginate.
-    # Better: compute it separately using a query.
-    # Since we have the original params (without the sunday_only condition), we can use them.
-    # But the params list may have been modified if sunday_only was true, we need to reconstruct.
-    # Simpler: we'll compute using a subquery with the same filters but adding the Sunday condition.
-    # We'll build the Sunday count query similarly.
-    # We'll use the original where_clauses without the sunday_only clause.
-    # We'll store the base params before adding sunday_only.
-    # So we'll restructure: build base params and clauses first, then add sunday_only condition.
-    # Let's refactor a bit.
-    
-    # Rebuild to get sunday_count correctly:
-    # We'll separate the base filters (without sunday_only) and then add it.
-    base_where = [
-        "cd.client_id = ?",
-        "cd.template_id = ?",
-        "cd.is_deleted = 0",
-        "cd.extract_date BETWEEN ? AND ?"
-    ]
-    base_params = [client_id, template_id, date_start, date_end]
-    
-    if search:
-        base_where.append("EXISTS (SELECT 1 FROM json_each(cd.row_data) WHERE LOWER(value) LIKE LOWER(?))")
-        base_params.append(f"%{search}%")
-    if amount_min is not None:
-        base_where.append("cd.extract_amount >= ?")
-        base_params.append(amount_min)
-    if amount_max is not None:
-        base_where.append("cd.extract_amount <= ?")
-        base_params.append(amount_max)
-    
-    # Now build the final where with sunday_only if needed
-    final_where = base_where.copy()
-    final_params = base_params.copy()
-    if sunday_only:
-        final_where.append("strftime('%w', cd.extract_date) = '0'")
-        # No extra param needed for strftime
-    
-    where_sql = " AND ".join(final_where)
-    
-    # Get total count with final filters
-    count_sql = f"SELECT COUNT(*) as total FROM client_data cd WHERE {where_sql}"
-    total_result = execute_query(count_sql, final_params)
-    total_count = total_result[0]['total'] if total_result else 0
-    
-    # Get Sunday count (without sunday_only filter, but with other filters)
+
+    # Get Sunday count (for footer) – uses base filters only, without the
+    # sunday_only filter, so it always reflects the full filtered range.
     sunday_where = base_where + ["strftime('%w', cd.extract_date) = '0'"]
     sunday_sql = f"SELECT COUNT(*) as sunday_count FROM client_data cd WHERE {' AND '.join(sunday_where)}"
     sunday_result = execute_query(sunday_sql, base_params)
     sunday_count = sunday_result[0]['sunday_count'] if sunday_result else 0
-    
-    if total_count == 0:
-        return {
-            "template_id": template_id,
-            "template_name": template[0]['template_name'],
-            "total_rows": 0,
-            "sunday_count": sunday_count,
-            "page": page,
-            "limit": limit,
-            "rows": []
-        }
-    
+
     # Pagination
     offset = (page - 1) * limit
     data_sql = f"""

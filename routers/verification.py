@@ -161,8 +161,7 @@ def get_cashbooks(
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
     patterns = get_voucher_patterns()
-    print(f"🔍 [CASHBOOK] Fetching rows for client={client_id}, date_range={date_start} to {date_end}")
-    
+
     rows = execute_query(
         """
         SELECT id, row_data
@@ -173,8 +172,6 @@ def get_cashbooks(
         """,
         (client_id, date_start, date_end)
     )
-    
-    print(f"🔍 [CASHBOOK] Found {len(rows)} rows total")
     
     cashbooks = set()
     debug_info = []
@@ -188,8 +185,6 @@ def get_cashbooks(
             cb_name = None
             if vtype in ['CPV', 'CRV']:
                 cb_name = extract_cashbook_name(row_data, patterns)
-                if cb_name:
-                    print(f"✅ [CASHBOOK] Row {row['id']}: {voucher_id} -> {vtype} -> cashbook: {cb_name}")
             if debug:
                 debug_info.append({
                     "row_id": row['id'],
@@ -206,8 +201,6 @@ def get_cashbooks(
             if debug:
                 debug_info.append({"row_id": row['id'], "error": str(e)})
             continue
-    
-    print(f"🔍 [CASHBOOK] Final cashbooks found: {cashbooks}")
     
     if debug:
         return {

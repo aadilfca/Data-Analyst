@@ -187,7 +187,6 @@ async function loadCategoryDropdown() {
             if (this.value) colCategory.value = this.value;
         };
     } catch (error) {
-        console.log('⚠️ Could not load categories:', error.message);
     }
 }
 
@@ -407,5 +406,4 @@ document.addEventListener('keydown', function(e) {
 window.onload = function() {
     loadColumns();
     setupSorting();
-    console.log('📋 Columns Manager loaded');
 };

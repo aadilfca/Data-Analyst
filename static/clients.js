@@ -428,5 +428,4 @@ document.addEventListener('keydown', function(e) {
 window.onload = function() {
     loadClients();
     setupSorting();
-    console.log('🏢 Clients Manager loaded');
 };

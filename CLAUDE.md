@@ -26,6 +26,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 - No <script> inside HTML containers
 - Meaningful comments on new/changed code
 - Keep changes scoped — don't touch unrelated code
+- Document grouping (get_document_group_id in routers/import_export.py) assumes the first template column (lowest sort_order) is a unique document key. Do not reorder template columns without checking this assumption holds.
 
 ## Workflow rules
 - Before editing, list files to be touched and wait for my confirmation

@@ -31,8 +31,6 @@ app.include_router(error_log.router)
 app.include_router(settings.router)
 
 # ---------- GLOBAL EXCEPTION HANDLER ----------
-import traceback
-import sys
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 from database import log_error, get_error_code_for_exception

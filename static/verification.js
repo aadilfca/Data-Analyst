@@ -1307,39 +1307,6 @@ async function goToPreviousTransaction() {
 // Go to next transaction – with confirmation if not validated
 async function goToNextTransaction() {
     if (!sessionTransactions.length || currentTransactionIndex >= sessionTransactions.length - 1) {
-        // No message – silently ignore
-        return;
-    }
-    // Save current state
-    await saveCurrentTransaction();
-    // If not validated, ask for confirmation
-    if (!isCurrentTransactionValidated()) {
-        const confirmed = await showNavigationConfirm();
-        if (!confirmed) {
-            // User cancelled – no message
-            return;
-        }
-    }
-    // Proceed: validate and move (if validation passes, mark verified; if fails, still allow navigation)
-    await validateTransaction(); // updates badge
-    // Check if it passed, if yes mark verified
-    const badge = document.querySelector('.status-badge');
-    if (badge && badge.textContent.trim() === 'Passed') {
-        await completeTransaction(); // marks verified and calls loadNextTransaction
-    } else {
-        // Even if validation failed, we move to next because user confirmed
-        const next = sessionTransactions[currentTransactionIndex + 1];
-        if (next) {
-            navigateToTransaction(next.detail_id);
-        } else {
-            // Silently ignore if not found
-        }
-    }
-}
-
-// Go to next transaction – with confirmation if not validated
-async function goToNextTransaction() {
-    if (!sessionTransactions.length || currentTransactionIndex >= sessionTransactions.length - 1) {
         showStatus('You are at the last transaction.', 'info');
         return;
     }
@@ -1353,24 +1320,22 @@ async function goToNextTransaction() {
             return;
         }
     }
-    // Proceed: validate and move (if validation passes, mark verified; if fails, still allow navigation? 
-    // The user confirmed they want to proceed even if not validated, so we just move.
-    // But we also want to attempt validation and mark if passed.
-    // We'll call validateTransaction but not block navigation on failure.
+    // Proceed: validate and move (if validation passes, mark verified; if it fails, still allow
+    // navigation since the user already confirmed they want to proceed).
     await validateTransaction(); // updates badge
     // Check if it passed, if yes mark verified
     const badge = document.querySelector('.status-badge');
     if (badge && badge.textContent.trim() === 'Passed') {
         await completeTransaction(); // marks verified and calls loadNextTransaction
-                } else {
-                // Even if validation failed, we move to next because user confirmed
-                const next = sessionTransactions[currentTransactionIndex + 1];
-                if (next) {
-                    navigateToTransaction(next.detail_id);
-                } else {
-                    showStatus('Next transaction not found.', 'error');
-                }
-            }
+    } else {
+        // Even if validation failed, we move to next because user confirmed
+        const next = sessionTransactions[currentTransactionIndex + 1];
+        if (next) {
+            navigateToTransaction(next.detail_id);
+        } else {
+            showStatus('Next transaction not found.', 'error');
+        }
+    }
 }
 // Override the mirror icon click – we replace the alert
 document.addEventListener('DOMContentLoaded', function() {

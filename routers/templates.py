@@ -156,7 +156,6 @@ def update_template(template_id: int, template: TemplateUpdate):
     return {"message": f"Template '{template.template_name}' updated successfully"}
 
 @router.delete("/api/templates/{template_id}")
-@router.delete("/api/templates/{template_id}")
 def delete_template(template_id: int):
     existing = execute_query(
         "SELECT template_name, is_system FROM templates WHERE id = ? AND is_active = 1",
@@ -183,18 +182,6 @@ def delete_template(template_id: int):
     execute_write("DELETE FROM template_column_mappings WHERE template_id = ?", (template_id,))
     log_audit("Admin", "Delete", "Templates", f"Soft-deleted template: {existing[0]['template_name']}")
     return {"message": "Template deleted successfully (soft-delete)"}
-    existing = execute_query(
-        "SELECT template_name, is_system FROM templates WHERE id = ? AND is_active = 1",
-        (template_id,)
-    )
-    if not existing:
-        raise HTTPException(404, "Template not found")
-    if existing[0]['is_system'] == 1:
-        raise HTTPException(403, "Cannot delete a system template. It is required for the application to function.")
-    execute_write("UPDATE templates SET is_active = 0 WHERE id = ?", (template_id,))
-    execute_write("DELETE FROM template_column_mappings WHERE template_id = ?", (template_id,))
-    log_audit("Admin", "Delete", "Templates", f"Deleted template: {existing[0]['template_name']}")
-    return {"message": "Template deleted successfully"}
 
 # ---------- NEW ENDPOINTS FOR UPLOAD & PREVIEW ----------
 
