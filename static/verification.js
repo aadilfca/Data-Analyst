@@ -715,6 +715,10 @@ function renderTransaction(data) {
             const tab = this.dataset.tab;
             document.querySelectorAll('.segment2-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
             document.querySelectorAll('.segment2-tab-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === tab));
+            // DFD content needs full page width to stay legible as diagrams, so it opens as a modal instead of inline (Phase 5)
+            if (tab === 'dfd') {
+                openDfdModal();
+            }
         });
     });
 
@@ -1731,6 +1735,27 @@ if (supportingModalClose) {
 if (supportingModal) {
     supportingModal.addEventListener('click', function(e) {
         if (e.target === this) supportingModal.style.display = 'none';
+    });
+}
+
+// ---------- DFD (DATA FLOW DIAGRAM) PLACEHOLDER MODAL (Phase 5: shell only, no diagram content) ----------
+const dfdModal = document.getElementById('dfdModal');
+const dfdModalClose = document.getElementById('dfdModalClose');
+
+function openDfdModal() {
+    if (dfdModal) dfdModal.style.display = 'flex';
+}
+
+function closeDfdModal() {
+    if (dfdModal) dfdModal.style.display = 'none';
+}
+
+if (dfdModalClose) {
+    dfdModalClose.addEventListener('click', closeDfdModal);
+}
+if (dfdModal) {
+    dfdModal.addEventListener('click', function(e) {
+        if (e.target === this) closeDfdModal();
     });
 }
 
