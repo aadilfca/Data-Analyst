@@ -632,10 +632,11 @@ function renderTransaction(data) {
         </div>
         ` : ''}
 
-        <!-- Observations & Comments -->
+        <!-- Observations & Comments (Phase 9: helper subtext + icon/border accent distinguish the two fields) -->
         <div class="obs-comments-row">
             <div class="obs-wrapper">
-                <label for="observationsInput">Observations</label>
+                <label for="observationsInput"><span class="field-icon">📝</span>Observations</label>
+                <p class="field-hint">Overall audit finding for this transaction</p>
                 <textarea id="observationsInput" rows="2">${procedureData.observations || ''}</textarea>
                 <div class="obs-dropdown-container">
                     <select id="observationsDropdown">
@@ -645,7 +646,8 @@ function renderTransaction(data) {
                 </div>
             </div>
             <div class="comments-wrapper">
-                <label for="commentsInput">Comments</label>
+                <label for="commentsInput"><span class="field-icon">💬</span>Comments</label>
+                <p class="field-hint">Management's response or remarks from inquiry</p>
                 <textarea id="commentsInput" rows="2">${procedureData.comments || ''}</textarea>
             </div>
         </div>
