@@ -475,6 +475,8 @@ function renderTransaction(data) {
     const accountName = getAccountName();
     const description = getDescription();
     const amount = getAmount();
+    // Phase 7: drives the Amount cell's color/checkmark instead of the removed standalone status row
+    const validationStatus = (data.validation_status || 'Pending').toLowerCase();
 
     // ----- Build the new layout (validation status moved up) -----
     let html = `
@@ -542,7 +544,10 @@ function renderTransaction(data) {
                         </tr>
                         <tr class="amount-row">
                             <td class="label">Amount</td>
-                            <td class="value">${amount}</td>
+                            <td class="value status-${validationStatus}" data-validation-status="${validationStatus}">
+                                <span class="amount-text">${amount}</span>
+                                ${validationStatus === 'passed' ? '<span class="amount-check-icon">✓</span>' : ''}
+                            </td>
                         </tr>
                     </tbody>
                 </table>
@@ -606,13 +611,6 @@ function renderTransaction(data) {
     html += `
                 </div>
             </div>
-        </div>
-
-        <!-- Validation Status Row (below the grid) -->
-        <div class="validation-status-row">
-            <span class="label">Validation Status:</span>
-            <span class="status-badge ${(data.validation_status || 'Pending').toLowerCase()}">${data.validation_status || 'Pending'}</span>
-            ${data.validation_message ? `<span class="validation-message">${data.validation_message}</span>` : ''}
         </div>
 
         <!-- Phase 3: Change Detection Warning Banner (only for updated transactions) -->
@@ -1408,10 +1406,10 @@ async function goToNextTransaction() {
     }
     // Proceed: validate and move (if validation passes, mark verified; if it fails, still allow
     // navigation since the user already confirmed they want to proceed).
-    await validateTransaction(); // updates badge
+    await validateTransaction(); // updates Amount cell color/checkmark
     // Check if it passed, if yes mark verified
-    const badge = document.querySelector('.status-badge');
-    if (badge && badge.textContent.trim() === 'Passed') {
+    const amountCell = document.querySelector('.amount-row .value');
+    if (amountCell && amountCell.dataset.validationStatus === 'passed') {
         await completeTransaction(); // marks verified and calls loadNextTransaction
     } else {
         // Even if validation failed, we move to next because user confirmed
@@ -1505,11 +1503,18 @@ async function validateTransaction() {
             throw new Error(err.detail || 'Validation failed');
         }
         const data = await res.json();
-        // Update badge only – no status bar message
-        const badge = document.querySelector('.status-badge');
-        if (badge) {
-            badge.textContent = data.validation_status;
-            badge.className = `status-badge ${data.validation_status.toLowerCase()}`;
+        // Phase 7: reflect result on the Amount cell (color + checkmark) instead of a separate badge
+        const amountCell = document.querySelector('.amount-row .value');
+        if (amountCell) {
+            const status = data.validation_status.toLowerCase();
+            amountCell.className = `value status-${status}`;
+            amountCell.dataset.validationStatus = status;
+            const checkIcon = amountCell.querySelector('.amount-check-icon');
+            if (status === 'passed' && !checkIcon) {
+                amountCell.insertAdjacentHTML('beforeend', '<span class="amount-check-icon">✓</span>');
+            } else if (status !== 'passed' && checkIcon) {
+                checkIcon.remove();
+            }
         }
         if (data.passed) {
             if (verifyBtn) verifyBtn.disabled = false;

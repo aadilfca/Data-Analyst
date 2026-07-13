@@ -1,0 +1,90 @@
+📁 Database path: D:\Excel Auto\2. Python App\test.db
+🚀 Starting System Analyst App...
+🔌 Database connection opened for initialization
+✅ Database tables created/verified
+✅ Transaction Report template already exists (system flag ensured)
+✅ Seeded app settings
+✅ Created data_audit_log table for change tracking
+✅ Created indexes on client_data
+✅ Database initialization complete
+🔌 Database connection closed
+✅ App ready!
+INFO:     127.0.0.1:63613 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63628 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63630 - "GET /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63631 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63633 - "GET /api/clients HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63636 - "GET /api/verification/cashbooks?client_id=1 HTTP/1.1" 422 Unprocessable Content
+INFO:     127.0.0.1:63639 - "GET /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63639 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63640 - "GET /static/client_context.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63641 - "GET /static/verification.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63640 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63640 - "GET /static/utils.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63641 - "GET /static/script.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63640 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63640 - "GET /static/index.html HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:63640 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63694 - "GET /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63694 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63695 - "GET /static/client_context.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63696 - "GET /static/verification.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63696 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63696 - "GET /static/utils.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63695 - "GET /static/script.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63695 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63711 - "GET /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63711 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63712 - "GET /static/client_context.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63713 - "GET /static/verification.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63713 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63712 - "GET /static/script.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63713 - "GET /static/utils.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63713 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63721 - "GET /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63722 - "HEAD /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63731 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63731 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63732 - "GET /static/client_context.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63733 - "GET /static/utils.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63734 - "GET /static/script.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63734 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63734 - "GET /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63734 - "GET /static/verification.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63734 - "GET /api/verification/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63747 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63747 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63748 - "GET /static/client_context.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63749 - "GET /static/utils.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63750 - "GET /static/script.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63750 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63750 - "GET /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63750 - "GET /static/verification.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63750 - "GET /api/verification/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63761 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63761 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63763 - "GET /static/utils.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63762 - "GET /static/client_context.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63764 - "GET /static/script.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63764 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63764 - "GET /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63764 - "GET /static/verification.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63764 - "GET /api/verification/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63775 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63775 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63777 - "GET /static/utils.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63776 - "GET /static/client_context.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63778 - "GET /static/script.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63777 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63777 - "GET /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63777 - "GET /static/verification.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63777 - "GET /api/verification/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63830 - "GET /static/index.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63830 - "GET /static/style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63832 - "GET /static/client_context.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63831 - "GET /static/utils.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63833 - "GET /static/script.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63833 - "GET /api/dashboard/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63833 - "GET /static/verification.html HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63833 - "GET /static/verification.js?v=2 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63833 - "GET /api/verification/stats HTTP/1.1" 200 OK

@@ -1514,6 +1514,19 @@ body {
 .transaction-details-table .amount-row .value {
     font-size: 18px;
     font-weight: 700;
+}
+
+/* Phase 7: color state driven by validation_status (Pending/Failed = red, Passed = green + checkmark) */
+.transaction-details-table .amount-row .value.status-pending,
+.transaction-details-table .amount-row .value.status-failed {
+    color: #991b1b;
+}
+.transaction-details-table .amount-row .value.status-passed {
+    color: #16a34a;
+}
+.amount-check-icon {
+    margin-left: 8px;
+    font-size: 15px;
     color: #16a34a;
 }
 
@@ -1529,25 +1542,6 @@ body {
 .transaction-details-table tbody tr:hover .label,
 .transaction-details-table tbody tr:hover .value {
     background: #f1f5f9;
-}
-
-/* ----- Validation Status Row ----- */
-.validation-status-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 6px 0;
-    margin-bottom: 12px;
-}
-.validation-status-row .label {
-    font-weight: 600;
-    color: #475569;
-    font-size: 14px;
-}
-.validation-message {
-    font-size: 13px;
-    color: #64748b;
-    margin-left: 6px;
 }
 
 /* ----- Mandatory Procedure Cards (horizontal, checkbox + icon + name) ----- */
