@@ -427,6 +427,11 @@ function renderTransaction(data) {
     if (!transactionCard) return;
     const row = data.row_data || {};
 
+    // Phase 8: diff data for the Voucher ID change-alert popover, read by showVoucherChangePopover()
+    currentChangeDiffData = data.change_detection_status === 'updated'
+        ? { old: data.old_row_data, new: data.row_data }
+        : null;
+
     // ----- Aliases for flexible column name matching (unchanged) -----
     const dateAliases = ['Date', 'Transaction Date', 'Invoice Date', 'Doc Date', 'Posting Date', 'Entry Date', 'Date'];
     const getDateValue = () => {
@@ -524,7 +529,10 @@ function renderTransaction(data) {
                     <tbody>
                         <tr class="voucher-row">
                             <td class="label">Voucher ID</td>
-                            <td class="value">${voucherId}</td>
+                            <td class="value">
+                                ${voucherId}
+                                ${data.change_detection_status === 'updated' ? '<span class="voucher-change-icon" id="voucherChangeIcon" title="Changed on re-upload">⚠️</span>' : ''}
+                            </td>
                         </tr>
                         <tr>
                             <td class="label">Date</td>
@@ -613,27 +621,7 @@ function renderTransaction(data) {
             </div>
         </div>
 
-        <!-- Phase 3: Change Detection Warning Banner (only for updated transactions) -->
-        ${data.change_detection_status === 'updated' ? `
-        <div class="change-detection-banner">
-            <span class="banner-icon">⚠️</span>
-            <div class="banner-content">
-                <div class="banner-title">Transaction was modified during re-upload</div>
-                <div class="banner-subtitle">Values changed — validation has been reset to "Pending". Review the differences below.</div>
-                <button class="banner-toggle" id="diffToggleBtn">Show old vs new values ▸</button>
-                <div class="diff-table-wrapper" id="diffTableWrapper">
-                    <table class="diff-table">
-                        <thead>
-                            <tr><th>Field</th><th>Old Value</th><th>New Value</th></tr>
-                        </thead>
-                        <tbody>
-                            ${buildDiffRows(data.old_row_data, data.row_data)}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        ` : ''}
+        <!-- Phase 8: updated-state change alert now lives in the Voucher ID icon + popover (see voucher-row above / showVoucherChangePopover) -->
         ${data.change_detection_status === 'deleted' ? `
         <div class="change-detection-banner" style="border-left-color:#dc2626; background:#fef2f2;">
             <span class="banner-icon">🗑️</span>
@@ -825,8 +813,8 @@ function renderTransaction(data) {
         renderAuditGuidancePanel();
     });
 
-    // Attach diff toggle event listener for the change detection banner
-    setupDiffToggle();
+    // Attach the Voucher ID change-alert icon's click listener (Phase 8)
+    setupVoucherChangeIcon();
 
     // Populate the AUDIT tab for this transaction's current type
     renderAuditGuidancePanel();
@@ -1145,18 +1133,84 @@ function buildDiffRows(oldData, newData) {
     return rows;
 }
 
-// Attach diff toggle event listener after card is rendered (called from renderTransaction event handlers)
-function setupDiffToggle() {
-    const toggleBtn = document.getElementById('diffToggleBtn');
-    const wrapper = document.getElementById('diffTableWrapper');
-    if (toggleBtn && wrapper) {
-        toggleBtn.addEventListener('click', function() {
-            const isVisible = wrapper.classList.contains('visible');
-            wrapper.classList.toggle('visible');
-            toggleBtn.textContent = isVisible ? 'Show old vs new values ▸' : 'Hide old vs new values ▾';
-        });
-    }
+// ---------- Phase 8: Voucher ID change-alert popover ----------
+// Holds the old/new row data for the currently rendered transaction, set in
+// renderTransaction(). No fetch needed — the diff data is already loaded.
+let currentChangeDiffData = null;
+// Tracks whether the popover is currently open, mirroring databank.js's
+// activeHistoryIcon so the outside-click handler knows when to act.
+let voucherChangePopoverOpen = false;
+
+function hideVoucherChangePopover() {
+    const popover = document.getElementById('voucherChangePopover');
+    if (popover) popover.style.display = 'none';
+    voucherChangePopoverOpen = false;
 }
+
+function showVoucherChangePopover(icon) {
+    const popover = document.getElementById('voucherChangePopover');
+    if (!popover || !currentChangeDiffData) return;
+
+    popover.innerHTML = `
+        <div class="popover-header">Changed on Re-upload</div>
+        <div class="popover-body">
+            <table class="diff-table">
+                <thead>
+                    <tr><th>Field</th><th>Old Value</th><th>New Value</th></tr>
+                </thead>
+                <tbody>
+                    ${buildDiffRows(currentChangeDiffData.old, currentChangeDiffData.new)}
+                </tbody>
+            </table>
+        </div>
+    `;
+
+    // Position near the icon, clamped so it stays within the viewport
+    // (same logic as showRowHistoryPopover in databank.js).
+    const rect = icon.getBoundingClientRect();
+    const popoverWidth = 360;
+    let left = rect.left;
+    if (left + popoverWidth > window.innerWidth) {
+        left = Math.max(8, window.innerWidth - popoverWidth - 8);
+    }
+    popover.style.left = left + 'px';
+
+    const popoverMaxHeight = 320;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow >= popoverMaxHeight + 6) {
+        popover.style.top = (rect.bottom + 6) + 'px';
+        popover.style.bottom = 'auto';
+    } else {
+        popover.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+        popover.style.top = 'auto';
+    }
+
+    popover.style.display = 'block';
+    voucherChangePopoverOpen = true;
+}
+
+// Attach the change-alert icon's click listener after card is rendered (called from renderTransaction event handlers)
+function setupVoucherChangeIcon() {
+    const icon = document.getElementById('voucherChangeIcon');
+    if (!icon) return;
+    icon.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (voucherChangePopoverOpen) {
+            hideVoucherChangePopover();
+        } else {
+            showVoucherChangePopover(icon);
+        }
+    });
+}
+
+// Close the popover when clicking anywhere outside it (the icon's own click
+// is stopped from propagating here, so this only fires for clicks elsewhere).
+document.addEventListener('click', function(e) {
+    const popover = document.getElementById('voucherChangePopover');
+    if (popover && popover.style.display === 'block' && !popover.contains(e.target)) {
+        hideVoucherChangePopover();
+    }
+});
 
 // ==============================================
 // PHASE 2 – TRANSACTION LIST POPOVER

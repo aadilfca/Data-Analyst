@@ -1530,6 +1530,44 @@ body {
     color: #16a34a;
 }
 
+/* ----- Phase 8: Voucher ID change-alert icon + popover ----- */
+.voucher-change-icon {
+    margin-left: 8px;
+    font-size: 15px;
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+/* Popover styling matches the Data Bank row-history popover (databank.html)
+   for visual/interaction consistency across the app. */
+.voucher-change-popover {
+    position: fixed;
+    z-index: 1100;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    width: 360px;
+    max-height: 320px;
+    overflow-y: auto;
+    font-size: 12px;
+}
+.voucher-change-popover .popover-header {
+    font-weight: 600;
+    padding: 8px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    color: #1a1a2e;
+    position: sticky;
+    top: 0;
+    background: white;
+}
+.voucher-change-popover .popover-body {
+    padding: 8px 12px;
+}
+.voucher-change-popover .diff-table {
+    font-size: 12px;
+}
+
 /* Zebra stripes for even rows */
 .transaction-details-table tbody tr:nth-child(even) .label {
     background: #f5f8fa;
@@ -1724,29 +1762,7 @@ body {
     color: #a16207;
     margin-bottom: 8px;
 }
-.change-detection-banner .banner-toggle {
-    font-size: 12px;
-    color: #d97706;
-    cursor: pointer;
-    text-decoration: underline;
-    background: none;
-    border: none;
-    padding: 0;
-}
-.change-detection-banner .banner-toggle:hover {
-    color: #b45309;
-}
-/* ----- Diff Table (old vs new) ----- */
-.diff-table-wrapper {
-    display: none;
-    margin-top: 8px;
-    border: 1px solid #fde68a;
-    border-radius: 6px;
-    overflow: hidden;
-}
-.diff-table-wrapper.visible {
-    display: block;
-}
+/* ----- Diff Table (old vs new) — reused inside the Phase 8 voucher-change popover ----- */
 .diff-table {
     width: 100%;
     border-collapse: collapse;
