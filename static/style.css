@@ -1317,6 +1317,42 @@ body {
     text-align: center;
 }
 
+/* ----- AUDIT tab guidance table (Phase 4) ----- */
+.audit-guidance-columns {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.audit-guidance-col {
+    flex: 1;
+    min-width: 140px;
+}
+.audit-guidance-col-header {
+    font-weight: 600;
+    font-size: 12px;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding-bottom: 6px;
+    margin-bottom: 6px;
+    border-bottom: 2px solid #e2e8f0;
+}
+.audit-guidance-col ul {
+    margin: 0;
+    padding-left: 18px;
+}
+.audit-guidance-col li {
+    font-size: 13px;
+    color: #1a1a2e;
+    margin-bottom: 6px;
+    line-height: 1.4;
+}
+@media (max-width: 768px) {
+    .audit-guidance-columns {
+        flex-direction: column;
+    }
+}
+
 /* ----- Transaction Card Container ----- */
 .transaction-card {
     position: relative;

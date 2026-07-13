@@ -1044,3 +1044,29 @@ def export_audited_cashbook_excel(session_id: int):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+# ==============================================
+# PHASE 3 (SEGMENT 2) ENDPOINT – Audit Guidance Lookup
+# ==============================================
+
+@router.get("/api/verification/audit_guidance")
+def get_audit_guidance(
+    transaction_type: str = Query(..., description="Transaction type to look up (must match dropdown values)")
+):
+    """
+    Look up audit guidance (management controls, risks, procedures) for a transaction type.
+    Read-only lookup against audit_procedure_library; used by the Segment 2 AUDIT tab.
+    """
+    rows = execute_query(
+        "SELECT management_controls, audit_risks, audit_procedures FROM audit_procedure_library WHERE transaction_type = ?",
+        (transaction_type,)
+    )
+    if not rows:
+        raise HTTPException(404, f"No audit guidance found for transaction type '{transaction_type}'.")
+    r = rows[0]
+    return {
+        "transaction_type": transaction_type,
+        "management_controls": r['management_controls'],
+        "audit_risks": r['audit_risks'],
+        "audit_procedures": r['audit_procedures']
+    }

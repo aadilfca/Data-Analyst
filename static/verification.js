@@ -553,7 +553,7 @@ function renderTransaction(data) {
                         <p class="segment2-placeholder-text">Content coming soon</p>
                     </div>
                     <div class="segment2-tab-panel active" data-panel="audit">
-                        <p class="segment2-placeholder-text">Content coming soon</p>
+                        <div id="auditGuidancePanel"></div>
                     </div>
                 </div>
             </div>
@@ -829,10 +829,14 @@ function renderTransaction(data) {
     headerDropdown?.addEventListener('change', function() {
         currentTransactionType = this.value;
         procedureData.transaction_type = currentTransactionType;
+        renderAuditGuidancePanel();
     });
 
     // Attach diff toggle event listener for the change detection banner
     setupDiffToggle();
+
+    // Populate the AUDIT tab for this transaction's current type
+    renderAuditGuidancePanel();
 
     // Update progress display
     updateProgressDisplay();
@@ -988,6 +992,65 @@ async function fetchLibrary(type) {
         `;
     }
     document.getElementById('libraryPanel').style.display = 'block';
+}
+
+// ---------- SEGMENT 2 AUDIT TAB: fetch + render guidance for currentTransactionType ----------
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+}
+
+function buildAuditGuidanceTable(data) {
+    const toItems = (text) => (text || '')
+        .split(';')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(s => `<li>${escapeHtml(s)}</li>`)
+        .join('');
+    return `
+        <div class="audit-guidance-columns">
+            <div class="audit-guidance-col">
+                <div class="audit-guidance-col-header">Management Controls</div>
+                <ul>${toItems(data.management_controls)}</ul>
+            </div>
+            <div class="audit-guidance-col">
+                <div class="audit-guidance-col-header">Audit Risks</div>
+                <ul>${toItems(data.audit_risks)}</ul>
+            </div>
+            <div class="audit-guidance-col">
+                <div class="audit-guidance-col-header">Audit Procedures</div>
+                <ul>${toItems(data.audit_procedures)}</ul>
+            </div>
+        </div>
+    `;
+}
+
+async function renderAuditGuidancePanel() {
+    const panel = document.getElementById('auditGuidancePanel');
+    if (!panel) return;
+    const type = currentTransactionType;
+    if (!type) {
+        panel.innerHTML = `<p class="segment2-placeholder-text">Select a transaction type to view audit guidance.</p>`;
+        return;
+    }
+    panel.innerHTML = `<p class="segment2-placeholder-text">Loading audit guidance...</p>`;
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
+        // Discard stale response if the type changed again while this fetch was in flight
+        if (currentTransactionType !== type) return;
+        if (res.status === 404) {
+            panel.innerHTML = `<p class="segment2-placeholder-text">No guidance available for this transaction type yet.</p>`;
+            return;
+        }
+        if (!res.ok) throw new Error('Failed to fetch audit guidance');
+        const data = await res.json();
+        panel.innerHTML = buildAuditGuidanceTable(data);
+    } catch (e) {
+        if (currentTransactionType !== type) return;
+        console.error('Error fetching audit guidance:', e);
+        panel.innerHTML = `<p class="segment2-placeholder-text">Unable to load audit guidance.</p>`;
+    }
 }
 
 // ---------- UPDATE PROGRESS ----------
