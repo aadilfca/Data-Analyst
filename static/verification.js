@@ -513,6 +513,12 @@ function renderTransaction(data) {
             <!-- Transaction Details Table – wrapped in a sub‑container to shrink‑wrap -->
             <div class="transaction-details-wrapper grid-segment-1">
                 <table class="transaction-details-table">
+                    <thead>
+                        <tr>
+                            <th>Particulars</th>
+                            <th>Value</th>
+                        </tr>
+                    </thead>
                     <tbody>
                         <tr class="voucher-row">
                             <td class="label">Voucher ID</td>
