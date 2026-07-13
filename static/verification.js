@@ -508,91 +508,58 @@ function renderTransaction(data) {
         </div>
         <hr class="header-divider">
 
-        <!-- Transaction Details Table – wrapped in a sub‑container to shrink‑wrap -->
-        <div class="transaction-details-wrapper">
-            <table class="transaction-details-table">
-                <tbody>
-                    <tr class="voucher-row">
-                        <td class="label">Voucher ID</td>
-                        <td class="value">${voucherId}</td>
-                    </tr>
-                    <tr>
-                        <td class="label">Date</td>
-                        <td class="value">${dateVal}</td>
-                    </tr>
-                    <tr>
-                        <td class="label">Account Code</td>
-                        <td class="value">${accountHead}</td>
-                    </tr>
-                    <tr>
-                        <td class="label">Account Name</td>
-                        <td class="value">${accountName}</td>
-                    </tr>
-                    <tr>
-                        <td class="label">Voucher Description</td>
-                        <td class="value">${description}</td>
-                    </tr>
-                    <tr class="amount-row">
-                        <td class="label">Amount</td>
-                        <td class="value">${amount}</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
+        <!-- Phase 1 layout skeleton: Segment 1 (details table) + Segment 2 (placeholder) + Segment 3 (procedures), full-width row 2 -->
+        <div class="transaction-grid">
+            <!-- Transaction Details Table – wrapped in a sub‑container to shrink‑wrap -->
+            <div class="transaction-details-wrapper grid-segment-1">
+                <table class="transaction-details-table">
+                    <tbody>
+                        <tr class="voucher-row">
+                            <td class="label">Voucher ID</td>
+                            <td class="value">${voucherId}</td>
+                        </tr>
+                        <tr>
+                            <td class="label">Date</td>
+                            <td class="value">${dateVal}</td>
+                        </tr>
+                        <tr>
+                            <td class="label">Account Code</td>
+                            <td class="value">${accountHead}</td>
+                        </tr>
+                        <tr>
+                            <td class="label">Account Name</td>
+                            <td class="value">${accountName}</td>
+                        </tr>
+                        <tr>
+                            <td class="label">Voucher Description</td>
+                            <td class="value">${description}</td>
+                        </tr>
+                        <tr class="amount-row">
+                            <td class="label">Amount</td>
+                            <td class="value">${amount}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
 
-        <!-- Validation Status Row (now placed directly below the transaction table) -->
-        <div class="validation-status-row">
-            <span class="label">Validation Status:</span>
-            <span class="status-badge ${(data.validation_status || 'Pending').toLowerCase()}">${data.validation_status || 'Pending'}</span>
-            ${data.validation_message ? `<span class="validation-message">${data.validation_message}</span>` : ''}
-        </div>
+            <!-- Segment 2 placeholder – populated in Phase 2 onward -->
+            <div class="grid-segment-2"></div>
 
-        <!-- Phase 3: Change Detection Warning Banner (only for updated transactions) -->
-        ${data.change_detection_status === 'updated' ? `
-        <div class="change-detection-banner">
-            <span class="banner-icon">⚠️</span>
-            <div class="banner-content">
-                <div class="banner-title">Transaction was modified during re-upload</div>
-                <div class="banner-subtitle">Values changed — validation has been reset to "Pending". Review the differences below.</div>
-                <button class="banner-toggle" id="diffToggleBtn">Show old vs new values ▸</button>
-                <div class="diff-table-wrapper" id="diffTableWrapper">
-                    <table class="diff-table">
-                        <thead>
-                            <tr><th>Field</th><th>Old Value</th><th>New Value</th></tr>
+            <!-- Mandatory Procedures – Vertical List with Observations -->
+            <div class="grid-segment-3">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span class="vh-title" style="font-size:20px; font-weight:700; color:#1a1a2e;">PROCEDURES</span>
+                </div>
+                <hr class="header-divider">
+                <div class="procedure-vertical-container" id="procedureVerticalContainer">
+                    <table class="procedure-vertical-table">
+                                            <thead>
+                            <tr>
+                                <th style="text-align:left; width:30%;">Procedure</th>
+                                <th style="text-align:left; width:70%;">Observation</th>
+                            </tr>
                         </thead>
                         <tbody>
-                            ${buildDiffRows(data.old_row_data, data.row_data)}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        ` : ''}
-        ${data.change_detection_status === 'deleted' ? `
-        <div class="change-detection-banner" style="border-left-color:#dc2626; background:#fef2f2;">
-            <span class="banner-icon">🗑️</span>
-            <div class="banner-content">
-                <div class="banner-title" style="color:#991b1b;">Transaction flagged as deleted</div>
-                <div class="banner-subtitle" style="color:#b91c1c;">This transaction was present in previous uploads but is missing from the current re-upload. Awaiting auditor review.</div>
-            </div>
-        </div>
-        ` : ''}
-
-                                        <!-- Mandatory Procedures – Vertical List with Observations -->
-        <div style="margin-top:16px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-                <span class="vh-title" style="font-size:20px; font-weight:700; color:#1a1a2e;">PROCEDURES</span>
-            </div>
-            <hr class="header-divider">
-            <div class="procedure-vertical-container" id="procedureVerticalContainer">
-                <table class="procedure-vertical-table">
-                                        <thead>
-                        <tr>
-                            <th style="text-align:left; width:30%;">Procedure</th>
-                            <th style="text-align:left; width:70%;">Observation</th>
-                        </tr>
-                    </thead>
-                    <tbody>
     `;
 
     const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
@@ -633,8 +600,47 @@ function renderTransaction(data) {
     html += `
                     </tbody>
                 </table>
+                </div>
             </div>
         </div>
+
+        <!-- Validation Status Row (below the grid) -->
+        <div class="validation-status-row">
+            <span class="label">Validation Status:</span>
+            <span class="status-badge ${(data.validation_status || 'Pending').toLowerCase()}">${data.validation_status || 'Pending'}</span>
+            ${data.validation_message ? `<span class="validation-message">${data.validation_message}</span>` : ''}
+        </div>
+
+        <!-- Phase 3: Change Detection Warning Banner (only for updated transactions) -->
+        ${data.change_detection_status === 'updated' ? `
+        <div class="change-detection-banner">
+            <span class="banner-icon">⚠️</span>
+            <div class="banner-content">
+                <div class="banner-title">Transaction was modified during re-upload</div>
+                <div class="banner-subtitle">Values changed — validation has been reset to "Pending". Review the differences below.</div>
+                <button class="banner-toggle" id="diffToggleBtn">Show old vs new values ▸</button>
+                <div class="diff-table-wrapper" id="diffTableWrapper">
+                    <table class="diff-table">
+                        <thead>
+                            <tr><th>Field</th><th>Old Value</th><th>New Value</th></tr>
+                        </thead>
+                        <tbody>
+                            ${buildDiffRows(data.old_row_data, data.row_data)}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        ` : ''}
+        ${data.change_detection_status === 'deleted' ? `
+        <div class="change-detection-banner" style="border-left-color:#dc2626; background:#fef2f2;">
+            <span class="banner-icon">🗑️</span>
+            <div class="banner-content">
+                <div class="banner-title" style="color:#991b1b;">Transaction flagged as deleted</div>
+                <div class="banner-subtitle" style="color:#b91c1c;">This transaction was present in previous uploads but is missing from the current re-upload. Awaiting auditor review.</div>
+            </div>
+        </div>
+        ` : ''}
 
         <!-- Observations & Comments -->
         <div class="obs-comments-row">
