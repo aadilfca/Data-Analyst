@@ -969,6 +969,72 @@ body {
 .procedure-observation-placeholder:hover {
     border-bottom-color: #94a3b8;
 }
+
+/* ----- Segment 3 Procedure Cards (Phase 6) ----- */
+.procedure-card-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin: 12px 0 16px 0;
+}
+
+.procedure-card-item {
+    flex: 1 1 180px;
+    max-width: 220px;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.procedure-card-item:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+    border-color: #94a3b8;
+}
+
+.procedure-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.procedure-card-header .proc-icon {
+    font-size: 24px;
+    line-height: 1.2;
+}
+
+.procedure-card-header .proc-name {
+    font-weight: 600;
+    font-size: 15px;
+    color: #1a1a2e;
+}
+
+.procedure-card-observation {
+    margin-top: 10px;
+    border-bottom: 1px dashed #d0d5dd;
+    min-height: 28px;
+    padding: 4px 2px;
+    color: #94a3b8;
+    font-style: italic;
+    font-size: 13px;
+    transition: border-color 0.2s;
+}
+
+.procedure-card-item:hover .procedure-card-observation {
+    border-bottom-color: #94a3b8;
+}
+
+@media (max-width: 768px) {
+    .procedure-card-item {
+        flex: 1 1 100%;
+        max-width: none;
+    }
+}
+
 /* Observations & Comments row */
 .obs-comments-row {
     display: flex;

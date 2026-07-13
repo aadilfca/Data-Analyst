@@ -570,15 +570,7 @@ function renderTransaction(data) {
                     <span class="vh-title" style="font-size:20px; font-weight:700; color:#1a1a2e;">PROCEDURES</span>
                 </div>
                 <hr class="header-divider">
-                <div class="procedure-vertical-container" id="procedureVerticalContainer">
-                    <table class="procedure-vertical-table">
-                                            <thead>
-                            <tr>
-                                <th style="text-align:left; width:30%;">Procedure</th>
-                                <th style="text-align:left; width:70%;">Observation</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+                <div class="procedure-card-grid" id="procedureVerticalContainer">
     `;
 
     const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
@@ -601,24 +593,17 @@ function renderTransaction(data) {
         const icon = procIcons[key] || '📌';
         const label = procLabels[key] || key;
         html += `
-                        <tr class="procedure-row" data-proc="${key}">
-                            <td style="padding:8px 12px;">
-                                <span class="proc-label clickable-proc" data-proc="${key}" style="cursor:pointer; font-weight:500; display:flex; align-items:center; gap:8px;">
-                                    <span class="proc-icon" style="font-size:24px;">${icon}</span>
-                                    <span class="proc-name" style="font-size:15px;">${label}</span>
-                                </span>
-                            </td>
-                            <td style="padding:8px 12px;">
-                                <div class="proc-observation-placeholder" data-proc="${key}" style="border-bottom: 1px dashed #d0d5dd; min-height: 28px; padding: 4px 2px; color: #94a3b8; font-style: italic; font-size: 13px;">
-                                </div>
-                            </td>
-                        </tr>
+                    <div class="procedure-card-item">
+                        <div class="procedure-card-header clickable-proc" data-proc="${key}">
+                            <span class="proc-icon">${icon}</span>
+                            <span class="proc-name">${label}</span>
+                        </div>
+                        <div class="procedure-card-observation proc-observation-placeholder" data-proc="${key}"></div>
+                    </div>
                     `;
     });
 
     html += `
-                    </tbody>
-                </table>
                 </div>
             </div>
         </div>
