@@ -542,8 +542,21 @@ function renderTransaction(data) {
                 </table>
             </div>
 
-            <!-- Segment 2 placeholder – populated in Phase 2 onward -->
-            <div class="grid-segment-2"></div>
+            <!-- Segment 2 tab shell: DFD / AUDIT tabs, client-side switching only (Phase 2) -->
+            <div class="grid-segment-2">
+                <div class="segment2-tab-header">
+                    <button class="segment2-tab-btn" data-tab="dfd">DFD</button>
+                    <button class="segment2-tab-btn active" data-tab="audit">AUDIT</button>
+                </div>
+                <div class="segment2-tab-panels">
+                    <div class="segment2-tab-panel" data-panel="dfd">
+                        <p class="segment2-placeholder-text">Content coming soon</p>
+                    </div>
+                    <div class="segment2-tab-panel active" data-panel="audit">
+                        <p class="segment2-placeholder-text">Content coming soon</p>
+                    </div>
+                </div>
+            </div>
 
             <!-- Mandatory Procedures – Vertical List with Observations -->
             <div class="grid-segment-3">
@@ -694,6 +707,15 @@ function renderTransaction(data) {
         } else {
             console.warn('exitSession not defined');
         }
+    });
+
+    // Segment 2 tab shell – switch between DFD and AUDIT panels (Phase 2: client-side only, no API calls)
+    document.querySelectorAll('.segment2-tab-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const tab = this.dataset.tab;
+            document.querySelectorAll('.segment2-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+            document.querySelectorAll('.segment2-tab-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === tab));
+        });
     });
 
                 // Procedure label/icon – click to open supporting document modal

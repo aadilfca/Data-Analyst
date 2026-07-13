@@ -1283,6 +1283,40 @@ body {
     .grid-segment-1, .grid-segment-2, .grid-segment-3 { grid-column: 1; }
 }
 
+/* ----- Segment 2 Tab Shell (DFD / AUDIT) ----- */
+.segment2-tab-header {
+    display: flex;
+    gap: 8px;
+    border-bottom: 2px solid #e2e8f0;
+    margin-bottom: 12px;
+}
+.segment2-tab-btn {
+    padding: 8px 20px;
+    border: none;
+    background: none;
+    font-weight: 600;
+    font-size: 14px;
+    color: #64748b;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.2s, border-color 0.2s;
+}
+.segment2-tab-btn:hover { color: #1a1a2e; }
+.segment2-tab-btn.active {
+    color: #3b82f6;
+    border-bottom-color: #3b82f6;
+}
+.segment2-tab-panel { display: none; }
+.segment2-tab-panel.active { display: block; }
+.segment2-placeholder-text {
+    color: #94a3b8;
+    font-style: italic;
+    font-size: 14px;
+    padding: 20px 4px;
+    text-align: center;
+}
+
 /* ----- Transaction Card Container ----- */
 .transaction-card {
     position: relative;
