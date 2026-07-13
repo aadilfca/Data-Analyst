@@ -40,49 +40,80 @@
             overflow: hidden;
         }
 
-        /* ---------- MODULE HEADER ---------- */
-        .module-header {
-            padding: 20px 28px 0 28px;
-            margin-bottom: 18px;
-        }
-
-        .module-header .back-link {
-            display: inline-block;
-            margin-bottom: 8px;
-            color: #3b82f6;
-            text-decoration: none;
-            font-weight: 600;
-            font-size: 14px;
-        }
-
-        .module-header .back-link:hover {
-            text-decoration: underline;
-        }
-
-        .module-header h1 {
-            font-size: 28px;
-            color: #1a1a2e;
-            font-weight: 700;
-            margin: 0;
-        }
-
-        .module-header p {
-            color: #64748b;
-            font-size: 16px;
-            margin-top: 4px;
-        }
-
-        /* ---------- TOP BAR ---------- */
+        /* ---------- TOP BAR (breadcrumb-style: back link · template · sheet · actions) ---------- */
         .top-bar {
             display: flex;
             flex-wrap: wrap;
             gap: 16px 24px;
             background: #f8fafc;
-            padding: 10px 20px;
+            padding: 12px 20px;
             border-radius: 8px;
-            margin: 0 28px 16px 28px;
+            margin: 20px 28px 16px 28px;
             align-items: center;
             border: 1px solid #e2e8f0;
+        }
+
+        .top-bar .breadcrumb-back {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: #3b82f6;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+
+        .top-bar .breadcrumb-back:hover {
+            text-decoration: underline;
+        }
+
+        .top-bar .breadcrumb-sep {
+            color: #cbd5e1;
+            font-size: 14px;
+        }
+
+        .top-bar .breadcrumb-current {
+            color: #1a1a2e;
+            font-weight: 600;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+
+        .top-bar .btn-download,
+        .top-bar .btn-databank {
+            padding: 5px 14px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }
+
+        .top-bar .btn-download {
+            background: #8b5cf6;
+            color: white;
+        }
+
+        .top-bar .btn-download:hover:not(:disabled) {
+            background: #7c3aed;
+        }
+
+        .top-bar .btn-download:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .top-bar .btn-databank {
+            background: #3b82f6;
+            color: white;
+            margin-left: auto;
+        }
+
+        .top-bar .btn-databank:hover {
+            background: #2563eb;
         }
 
         .top-bar .field {
@@ -113,7 +144,6 @@
             color: #2e7d32;
             padding: 2px 10px;
             border-radius: 10px;
-            margin-left: auto;
             white-space: nowrap;
         }
 
@@ -446,7 +476,7 @@
             border: 1px solid #f59e0b;
             border-radius: 8px;
             padding: 10px 16px;
-            margin: 0 28px 16px 28px;
+            margin: 20px 28px 16px 28px;
             color: #92400e;
             font-size: 14px;
             font-weight: 500;
@@ -682,6 +712,10 @@
                 text-align: center;
             }
 
+            .top-bar .btn-databank {
+                margin-left: 0;
+            }
+
             .file-detail {
                 width: 100%;
                 justify-content: center;
@@ -836,37 +870,24 @@
 
         <!-- ====== MAIN UPLOAD PAGE ====== -->
         <div id="mainUploadPage">
-            <!-- MODULE HEADER -->
-            <div class="module-header">
-                <div
-                    style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">
-                    <div>
-                        <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
-                        <h1>📤 Upload Client Data</h1>
-                        <p>Upload Excel files and map columns using pre‑defined templates</p>
-                    </div>
-                    <button onclick="window.location.href='/static/databank.html'"
-                        style="padding:8px 20px; background:#3b82f6; color:white; border:none; border-radius:8px; font-weight:600; cursor:pointer; font-size:14px; margin-top:4px; white-space:nowrap; transition:background 0.2s;"
-                        onmouseover="this.style.background='#2563eb'" onmouseout="this.style.background='#3b82f6'">
-                        📊 Go to Data Bank
-                    </button>
-                </div>
-            </div>
-
             <!-- Client Selection Warning -->
             <div id="clientSelectionWarning" class="client-warning">
                 <span class="icon">⚠️</span>
                 <span><strong>Please select a client</strong> from the dropdown above before uploading data.</span>
             </div>
 
-            <!-- TOP BAR -->
+            <!-- TOP BAR: breadcrumb (back link · template · download · sheet) + status badge + data bank shortcut -->
             <div class="top-bar">
+                <a href="/static/index.html" class="breadcrumb-back">← Dashboard</a>
+                <span class="breadcrumb-sep">/</span>
+                <span class="breadcrumb-current">Upload Client Data</span>
                 <div class="field">
                     <label>📋 Template</label>
                     <select id="templateDropdown">
                         <option value="">-- Select --</option>
                     </select>
                 </div>
+                <button class="btn-download" id="downloadBtn" disabled>📥 Download Template</button>
                 <div class="field" id="sheetField" style="display:none;">
                     <label>📄 Sheet</label>
                     <select id="sheetSelector">
@@ -875,6 +896,7 @@
                     <button class="preview-btn" id="previewBtn">👁️ Preview</button>
                 </div>
                 <span class="badge" id="statusBadge">⏳ Select a template</span>
+                <button class="btn-databank" id="goToDataBankBtn">📊 Go to Data Bank</button>
             </div>
 
             <!-- MAIN GRID -->
@@ -914,7 +936,6 @@
                                 documents will be added.</span>
                         </div>
                         <div class="btn-row">
-                            <button class="btn-secondary" id="downloadBtn">📥 Download Template</button>
                             <button class="btn-primary" id="importBtn" disabled>🚀 Upload</button>
                             <button class="btn-neutral" id="resetBtn">🔄 Reset</button>
                         </div>

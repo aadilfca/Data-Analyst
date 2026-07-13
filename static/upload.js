@@ -1504,6 +1504,14 @@ window.onload = function() {
         closeBtn.addEventListener('click', closeMiniPreview);
     }
 
+    // Go to Data Bank shortcut (top bar)
+    const goToDataBankBtn = document.getElementById('goToDataBankBtn');
+    if (goToDataBankBtn) {
+        goToDataBankBtn.addEventListener('click', function() {
+            window.location.href = '/static/databank.html';
+        });
+    }
+
     // Pagination controls event listeners
     const previewPageSizeDropdown = document.getElementById('previewPageSize');
     if (previewPageSizeDropdown) {
