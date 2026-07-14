@@ -32,13 +32,9 @@ const popupCancelBtn = document.getElementById('popupCancelBtn');
 const popupError = document.getElementById('popupError');
 
 const statusDiv = document.getElementById('verificationStatus');
-const transactionCard = document.getElementById('transactionCard');
-const prevBtn = document.getElementById('prevBtn');
-const nextBtn = document.getElementById('nextBtn');
-const saveProgressBtn = document.getElementById('saveProgressBtn');
-const verifyBtn = document.getElementById('verifyBtn');
-const exitBtn = document.getElementById('exitBtn');
-const exitSessionLink = document.getElementById('exitSessionLink');
+// Phase 2: standalone transaction view removed — prevBtn/nextBtn/verifyBtn/saveProgressBtn/exitBtn
+// elements no longer exist in verification.html (the nav controls are now in #voucherHeaderBar).
+// Their JS references and listener blocks have been removed alongside the old view.
 
 const cashbookNameDisplay = document.getElementById('cashbookNameDisplay');
 const cashbookStartDate = document.getElementById('cashbookStartDate');
@@ -375,14 +371,9 @@ async function loadNextTransaction(detailId = null) {
         const res = await fetch(url);
         if (!res.ok) {
             const err = await res.json();
-            if (err.detail && err.detail.includes('All transactions')) {
+        if (err.detail && err.detail.includes('All transactions')) {
                 showStatus('✅ All transactions have been verified!', 'success');
-                if (transactionCard) transactionCard.innerHTML = `<div style="padding:30px; text-align:center; color:#16a34a; font-size:18px;">🎉 All transactions verified!</div>`;
                 clearVoucherHeader();
-                if (prevBtn) prevBtn.disabled = true;
-                if (nextBtn) nextBtn.disabled = true;
-                if (verifyBtn) verifyBtn.disabled = true;
-                // Update progress display to show completion
                 await updateProgressDisplay();
                 return;
             }
@@ -391,11 +382,8 @@ async function loadNextTransaction(detailId = null) {
         const data = await res.json();
         if (data.completed) {
             showStatus('✅ All transactions have been verified!', 'success');
-            if (transactionCard) transactionCard.innerHTML = `<div style="padding:30px; text-align:center; color:#16a34a; font-size:18px;">🎉 All transactions verified!</div>`;
             clearVoucherHeader();
-            if (prevBtn) prevBtn.disabled = true;
-            if (nextBtn) nextBtn.disabled = true;
-            if (verifyBtn) verifyBtn.disabled = true;
+            await updateProgressDisplay();
             await updateProgressDisplay();
             return;
         }
@@ -432,9 +420,6 @@ async function loadNextTransaction(detailId = null) {
         renderVoucherLines(voucherLines);
         await updateProgress();
         await updateProgressDisplay(); // update the new progress element
-        if (prevBtn) prevBtn.disabled = false;
-        if (nextBtn) nextBtn.disabled = false;
-        if (verifyBtn) verifyBtn.disabled = false;
         // Removed "Loaded transaction" message
     } catch (e) {
         console.error('Error loading transaction:', e);
@@ -444,11 +429,11 @@ async function loadNextTransaction(detailId = null) {
     }
 }
 
-// ---------- VOUCHER HEADER (Phase 2, extended in cleanup pass) ----------
+// ---------- VOUCHER HEADER (Phase 2, extended in cleanup pass; Phase 1 redesign) ----------
 // Renders the voucher-level chrome above the voucher lines list: a nav row (Prev/Next arrows,
-// progress title, view-all icon, Save Progress, Cashbook return — moved here from the now-removed
-// standalone renderTransaction() view) plus the existing lightweight Voucher ID/Date/line-count
-// summary line. The per-line collapsed/expand rows (renderVoucherLines()) own everything else.
+// module-title + counter, view-all icon, Save Progress, Cashbook return) plus the Voucher
+// ID/Date/line-count summary line. The per-line collapsed/expand rows (renderVoucherLines())
+// own everything else below this header.
 function renderVoucherHeader(voucherId, voucherDate, lines) {
     const bar = document.getElementById('voucherHeaderBar');
     if (!bar) return;
@@ -457,17 +442,19 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
         <div class="verification-header-row">
             <div class="vh-center" style="justify-content: flex-start; gap: 6px;">
                 <button class="nav-arrow" id="prevArrow" ${currentTransactionIndex <= 0 ? 'disabled' : ''} title="Previous transaction">‹</button>
-                <span class="vh-title" id="transactionHeaderTitle">TRANSACTION</span>
+                <span class="vh-title" id="transactionHeaderTitle">VOUCHER</span>
                 <button class="nav-arrow" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">›</button>
-                <span class="vh-icon" id="transactionListIcon" title="View all transactions" style="cursor:pointer; margin-left:4px;">🔍</span>
+                <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer; margin-left:4px;">
+                    <span class="vh-icon-symbol">🔍</span>
+                </span>
             </div>
             <div class="vh-right">
-                <button class="btn-action btn-next" id="saveBtn" style="background:#8b5cf6; padding:6px 16px;">💾 Save Progress</button>
-                <button class="btn-cashbook" id="cashbookReturnBtn">📒 Cashbook</button>
+                <button class="btn-save-header" id="saveBtn"><span class="btn-icon">💾</span> Save Progress</button>
+                <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
             </div>
         </div>
         <div class="voucher-header-summary">
-            <span>📑 Voucher: ${voucherId || '—'}</span>
+            <span><span class="vh-icon-symbol">📑</span> Voucher: ${voucherId || '—'}</span>
             <span>Date: ${voucherDate || '—'}</span>
             <span>${lineCount} line${lineCount === 1 ? '' : 's'}</span>
         </div>
@@ -986,129 +973,9 @@ function populateObservationsDropdown(dropdownId) {
     });
 }
 
-// ---------- RENDER LINE ITEMS ----------
-function renderLineItems() {
-    const tbody = document.getElementById('lineItemsBody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
-    if (!lineItems || lineItems.length === 0) {
-        lineItems = [{ vendor: '', unit: '', qty: '', rate: '', calculated_amount: '' }];
-    }
-    lineItems.forEach((item, index) => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td><input type="text" class="li-vendor" value="${item.vendor || ''}" data-index="${index}"></td>
-            <td><input type="text" class="li-unit" value="${item.unit || ''}" data-index="${index}"></td>
-            <td><input type="number" class="li-qty" value="${item.qty || ''}" step="any" data-index="${index}"></td>
-            <td><input type="number" class="li-rate" value="${item.rate || ''}" step="any" data-index="${index}"></td>
-            <td><input type="number" class="li-calc" value="${item.calculated_amount || ''}" step="any" data-index="${index}"></td>
-            <td><button class="remove-btn" data-index="${index}">✕</button></td>
-        `;
-        tbody.appendChild(tr);
-    });
-    tbody.querySelectorAll('.remove-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const idx = parseInt(this.dataset.index);
-            if (lineItems.length <= 1) {
-                alert('At least one line item is required.');
-                return;
-            }
-            lineItems.splice(idx, 1);
-            renderLineItems();
-        });
-    });
-    tbody.querySelectorAll('.li-qty, .li-rate').forEach(input => {
-        input.addEventListener('input', function() {
-            const idx = parseInt(this.dataset.index);
-            const row = tbody.children[idx];
-            const qty = parseFloat(row.querySelector('.li-qty').value) || 0;
-            const rate = parseFloat(row.querySelector('.li-rate').value) || 0;
-            const calc = qty * rate;
-            row.querySelector('.li-calc').value = calc.toFixed(2);
-            lineItems[idx].qty = qty;
-            lineItems[idx].rate = rate;
-            lineItems[idx].calculated_amount = calc;
-        });
-    });
-    tbody.querySelectorAll('.li-vendor').forEach(inp => {
-        inp.addEventListener('input', function() {
-            const idx = parseInt(this.dataset.index);
-            lineItems[idx].vendor = this.value;
-        });
-    });
-    tbody.querySelectorAll('.li-unit').forEach(inp => {
-        inp.addEventListener('input', function() {
-            const idx = parseInt(this.dataset.index);
-            lineItems[idx].unit = this.value;
-        });
-    });
-    tbody.querySelectorAll('.li-calc').forEach(inp => {
-        inp.addEventListener('input', function() {
-            const idx = parseInt(this.dataset.index);
-            lineItems[idx].calculated_amount = parseFloat(this.value) || 0;
-        });
-    });
-}
-
-function addLineItemRow() {
-    lineItems.push({ vendor: '', unit: '', qty: '', rate: '', calculated_amount: '' });
-    renderLineItems();
-    const tbody = document.getElementById('lineItemsBody');
-    if (tbody) tbody.scrollIntoView({ behavior: 'smooth', block: 'end' });
-}
-
-// ---------- FETCH LIBRARY ----------
-async function fetchLibrary(type) {
-    const libraryData = {
-        'Material Purchased': {
-            controls: 'Authorized Purchase demand; Approved Purchase order; Signed Gate pass; Inspection note; Store receiving; Vendor bill',
-            risks: 'Unauthorized purchases; Inflated quantities; Unapproved vendors; Missing GRN',
-            procedures: 'Verify purchase demand authorization; Check PO approval; Inspect gate pass; Review inspection note; Match GRN with PO; Compare vendor bill with PO/GRN; Reconcile quantities and amounts'
-        },
-        'Repair & Maintenance (In-house)': {
-            controls: 'Authorized Purchase demand; Signature of relevant supervisor on bill; Vendor bill',
-            risks: 'Unapproved repairs; Overcharging; Duplicate bills',
-            procedures: 'Check purchase demand authorization; Verify supervisor signature on bill; Review vendor bill for reasonableness; Compare with maintenance log if available'
-        },
-        'Fuel Expense': {
-            controls: 'Vehicle log; Fuel receipts; Mileage records',
-            risks: 'Unexplained fuel consumption; Theft; Unauthorized vehicles',
-            procedures: 'Reconcile fuel receipts with vehicle log; Check mileage against fuel consumption; Verify authorized vehicles'
-        },
-        'Short Term Advance against Salary': {
-            controls: 'Approved advance request; Employee acknowledgment; Payroll deduction schedule',
-            risks: 'Unauthorized advances; Non-recovery; Duplicate advances',
-            procedures: 'Verify approved advance request; Check employee acknowledgment; Review deduction schedule; Confirm with payroll records'
-        },
-        'Payment to Contractors': {
-            controls: 'Signed contract; Work completion certificate; Tax deduction certificate; Vendor bill',
-            risks: 'Fake contractors; Unauthorized work; Overpayment; Non-deduction of tax',
-            procedures: 'Review contract; Inspect work completion certificate; Verify tax deduction; Match vendor bill with contract'
-        },
-        'Fixed Asset Purchased': {
-            controls: 'Capital budget approval; Purchase order; Gate pass; Inspection note; Asset tagging',
-            risks: 'Unauthorized purchase; Misclassification as expense; Incorrect valuation; Missing asset',
-            procedures: 'Check capital budget approval; Verify PO; Inspect gate pass; Review inspection note; Ensure asset tagged and entered in fixed asset register'
-        },
-        'Kitchen Expenses': {
-            controls: 'Daily consumption report; Purchase invoices; Inventory count',
-            risks: 'Theft; Over-purchasing; Unauthorized items; Missing invoices',
-            procedures: 'Reconcile purchase invoices with consumption report; Verify inventory count; Check for approved purchase; Review daily consumption logs'
-        }
-    };
-    const data = libraryData[type];
-    const content = document.getElementById('libraryContent');
-    if (!data) {
-        content.textContent = 'No guidance available for this transaction type.';
-    } else {
-        content.innerHTML = `
-            <strong>Management Controls:</strong> ${data.controls}<br>
-            <strong>Audit Risks:</strong> ${data.risks}<br>
-            <strong>Audit Procedures:</strong> ${data.procedures}
-        `;
-    }
-    document.getElementById('libraryPanel').style.display = 'block';
-}
+// Phase 2: renderLineItems(), addLineItemRow(), and fetchLibrary() were standalone-only functions
+// used exclusively by the now-deleted renderTransaction() single-transaction view. They are removed
+// to avoid leaving dead code — no callers remain anywhere in the codebase.
 
 // ---------- SEGMENT 2 AUDIT TAB: fetch + render guidance for currentTransactionType ----------
 function escapeHtml(str) {
@@ -1167,45 +1034,65 @@ async function updateProgress() {
 }
 
 // Update the header title and navbar stats
+// Phase 1 redesign: counter now shows voucher-based position instead of row/transaction count,
+// reflecting the voucher-stepping logic already returned by the backend. The "TRANSACTION" label
+// is replaced with "VOUCHER" to match the voucher-grouped navigation.
 async function updateProgressDisplay() {
-    // Update header title: TRANSACTION - [index/total] – Cashbook Name
+    // Update header title: VOUCHER [voucher n/total] – Cashbook Name
 const titleEl = document.getElementById('transactionHeaderTitle');
 if (titleEl) {
     if (!currentSessionId) {
-        titleEl.textContent = 'TRANSACTION';
+        titleEl.textContent = 'VOUCHER';
     } else {
-        // Use sessionTransactions and currentTransactionIndex if available
-        let index = currentTransactionIndex;
-        let total = totalTransactions;
-        // If we don't have the list, try to fetch progress to get total and estimate index
-        if (total === 0) {
-            try {
-                const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
-                if (res.ok) {
-                    const data = await res.json();
-                    total = data.total_transactions || 0;
-                    totalTransactions = total;
-                    // index not available from progress, we'll keep currentTransactionIndex
-                }
-            } catch (e) {
-                console.warn('Could not fetch progress for header:', e);
-            }
+        // Compute voucher-based position from sessionTransactions' unique voucher_ids,
+        // rather than the old line-level currentTransactionIndex / totalTransactions.
+        const uniqueVouchers = [...new Set(sessionTransactions.map(t => t.voucher_id).filter(Boolean))];
+        let voucherIndex = -1;
+        let voucherTotal = uniqueVouchers.length;
+        if (currentVoucherId && voucherTotal > 0) {
+            voucherIndex = uniqueVouchers.indexOf(currentVoucherId);
         }
-        // Get cashbook name from global variable
+        // Fallback: if no voucher list yet (e.g. first load), use line-level values
+        if (voucherTotal === 0) {
+            let index = currentTransactionIndex;
+            let total = totalTransactions;
+            if (total === 0) {
+                try {
+                    const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        total = data.total_transactions || 0;
+                        totalTransactions = total;
+                    }
+                } catch (e) {
+                    console.warn('Could not fetch progress for header:', e);
+                }
+            }
+            // Get cashbook name from global variable
+            const cashbookName = window._currentCashbook || selectedCashbook || '';
+            if (total > 0) {
+                const displayIndex = (index >= 0) ? index + 1 : '?';
+                if (cashbookName) {
+                    titleEl.textContent = `${cashbookName} – VOUCHER [voucher ${displayIndex}/${total}]`;
+                } else {
+                    titleEl.textContent = `VOUCHER [voucher ${displayIndex}/${total}]`;
+                }
+            } else {
+                if (cashbookName) {
+                    titleEl.textContent = `${cashbookName} – VOUCHER`;
+                } else {
+                    titleEl.textContent = 'VOUCHER';
+                }
+            }
+            return;
+        }
+        // Voucher-based position: index of currentVoucherId among unique sorted voucher_ids
+        const displayIndex = (voucherIndex >= 0) ? voucherIndex + 1 : '?';
         const cashbookName = window._currentCashbook || selectedCashbook || '';
-        if (total > 0) {
-            const displayIndex = (index >= 0) ? index + 1 : '?';
-            if (cashbookName) {
-                titleEl.textContent = `${cashbookName} – TRANSACTION [${displayIndex}/${total}]`;
-            } else {
-                titleEl.textContent = `TRANSACTION - [${displayIndex}/${total}]`;
-            }
+        if (cashbookName) {
+            titleEl.textContent = `${cashbookName} – VOUCHER [voucher ${displayIndex}/${voucherTotal}]`;
         } else {
-            if (cashbookName) {
-                titleEl.textContent = `${cashbookName} – TRANSACTION`;
-            } else {
-                titleEl.textContent = 'TRANSACTION';
-            }
+            titleEl.textContent = `VOUCHER [voucher ${displayIndex}/${voucherTotal}]`;
         }
     }
 }
@@ -1717,11 +1604,8 @@ async function validateTransaction() {
                 checkIcon.remove();
             }
         }
-        if (data.passed) {
-            if (verifyBtn) verifyBtn.disabled = false;
-        } else {
-            if (verifyBtn) verifyBtn.disabled = true;
-        }
+        // Phase 2: standalone transaction view removed — verifyBtn DOM element no longer exists.
+        // Validation result is reflected via the per-line amount cell styling above.
     } catch (e) {
         console.error('Validation error:', e);
         // Do not show status bar message – only log to console
@@ -1755,17 +1639,6 @@ async function completeTransaction() {
     }
 }
 
-// ---------- NAVIGATION ----------
-async function navigate(direction) {
-    if (isNavigating) return;
-    await saveLineItems();
-    if (direction === 'next') {
-        await loadNextTransaction();
-    } else {
-        showStatus('Previous not implemented yet.', 'info');
-    }
-}
-
 // ---------- EXIT SESSION ----------
 function exitSession() {
     if (confirm('Are you sure you want to exit this verification session? Progress will be saved.')) {
@@ -1775,7 +1648,6 @@ function exitSession() {
         // Restore padding when session ends
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.remove('verification-active');
-        if (transactionCard) transactionCard.innerHTML = '';
         clearVoucherHeader();
         showStatus('Session exited. Returning to cashbook.', 'info');
         currentSessionId = null;
@@ -1907,18 +1779,10 @@ if (exitCashbookLink) {
     });
 }
 
-// Session navigation
-if (prevBtn) prevBtn.addEventListener('click', () => navigate('prev'));
-if (nextBtn) nextBtn.addEventListener('click', () => navigate('next'));
-if (saveProgressBtn) saveProgressBtn.addEventListener('click', saveLineItems);
-if (verifyBtn) verifyBtn.addEventListener('click', completeTransaction);
-if (exitBtn) exitBtn.addEventListener('click', exitSession);
-if (exitSessionLink) {
-    exitSessionLink.addEventListener('click', function(e) {
-        e.preventDefault();
-        exitSession();
-    });
-}
+// Phase 2: standalone transaction view removed — prevBtn/nextBtn/verifyBtn/saveProgressBtn/exitBtn
+// are no longer static DOM elements (nav controls are dynamically rendered in #voucherHeaderBar).
+// Navigation event wiring is handled by renderVoucherHeader() which binds #prevArrow/#nextArrow/
+// #saveBtn/#cashbookReturnBtn after each innerHTML write.
 
 // Supporting modal
 if (supportingSearchBtn) supportingSearchBtn.addEventListener('click', searchSupportingDocuments);
