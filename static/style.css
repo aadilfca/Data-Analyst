@@ -1500,7 +1500,6 @@ body {
     width: auto;
     margin-bottom: 12px;
     border: 1px solid #e2e8f0;
-    border-radius: 6px;
     overflow: hidden;
 }
 
@@ -1680,16 +1679,13 @@ body {
 }
 
 /* ----- Voucher Lines (collapsed/expand rows) -----
-   Cleanup pass: changed from a stack of separately-shadowed white cards to a flat button/row
-   list (single bordered block, plain divider between rows) per the approved prototype — the
-   chevron toggle already sits directly on each row (Phase 3); this is a visual-only change. */
+   Phase 3: flat theme-matched styling — no card background, no shadow, no border-radius.
+   The outer container uses only a hairline border; each row is separated by a bottom border.
+   The page body background (#f0f2f5) shows through as the only background. */
 .voucher-lines-container {
     display: flex;
     flex-direction: column;
-    background: white;
     border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    overflow: hidden;
     margin-bottom: 20px;
 }
 
@@ -1828,9 +1824,73 @@ body {
     opacity: 1;
     padding: 14px 16px 18px;
     border-top-color: #e2e8f0;
-    background: #fafcff;
 }
 
+/* Phase 4: horizontal action bar inside the expanded panel — type dropdown (right-aligned)
+   + two action buttons (Audit Guidance, Supporting). */
+.expanded-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    margin-top: 10px;
+    border-top: 1px solid #e2e8f0;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+/* Button: Audit Guidance — blue theme, matching the app's primary color */
+.btn-audit-guidance {
+    padding: 6px 16px;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+    white-space: nowrap;
+    line-height: 1.4;
+}
+.btn-audit-guidance:hover {
+    background: #2563eb;
+}
+.btn-audit-guidance:active {
+    transform: scale(0.96);
+}
+
+/* Button: Supporting — green theme, matching the app's success color */
+.btn-supporting {
+    padding: 6px 16px;
+    background: #22c55e;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+    white-space: nowrap;
+    line-height: 1.4;
+}
+.btn-supporting:hover {
+    background: #16a34a;
+}
+.btn-supporting:active {
+    transform: scale(0.96);
+}
+
+/* Supporting popup card hover effect */
+.supporting-proc-card:hover {
+    border-color: #3b82f6 !important;
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+    transform: translateY(-2px);
+}
+
+/* The .voucher-line-segments block below is no longer rendered in Phase 4 (Segment 2/3 removed
+   from buildLineDetailHtml()). Kept to avoid breaking any other references; will be removed in a
+   future cleanup pass. */
 .voucher-line-segments {
     display: flex;
     gap: 20px;

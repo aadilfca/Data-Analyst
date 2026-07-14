@@ -609,22 +609,17 @@ function renderVoucherLines(lines) {
     });
     container.innerHTML = html;
 
-    // Sync each line's type dropdown with its seeded state, and populate its AUDIT panel
-    // (placeholder text if no type yet, otherwise fetch guidance) — mirrors renderTransaction()
-    // calling renderAuditGuidancePanel() once after building its own card.
+    // Sync each line's type dropdown with its seeded state.
     container.querySelectorAll('.voucher-line-type-dropdown').forEach(select => {
         const uid = select.dataset.uid;
         const state = voucherLineState[uid];
         if (state && state.transactionType) select.value = state.transactionType;
-        renderAuditGuidancePanelForLine(state ? state.transactionType : '', uid);
     });
 
-    // Phase 4: attach each line's change-alert icon (only present for lines flagged 'updated')
-    // and populate each line's frequent-observations dropdown.
+    // Phase 4: attach each line's change-alert icon (only present for lines flagged 'updated').
     lines.forEach(line => {
         const uid = line.detail_id;
         setupVoucherChangeIcon(uid);
-        populateObservationsDropdown(`observationsDropdown-${uid}`);
     });
 
     // ----- Event wiring (rebound after every innerHTML write, matching this file's convention) -----
@@ -637,20 +632,6 @@ function renderVoucherLines(lines) {
             if (!detailEl || !row) return;
             const expanded = detailEl.classList.toggle('expanded');
             row.classList.toggle('expanded', expanded);
-        });
-    });
-
-    // Segment 2 tab shell (DFD/AUDIT), scoped per line via data-uid and the closest detail panel
-    // (uses voucher-line-tab-btn/-panel, not segment2-tab-btn/-panel — see buildLineDetailHtml()).
-    container.querySelectorAll('.voucher-line-tab-btn').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const tab = this.dataset.tab;
-            const scope = this.closest('.voucher-line-detail');
-            if (!scope) return;
-            scope.querySelectorAll('.voucher-line-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-            scope.querySelectorAll('.voucher-line-tab-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === tab));
-            if (tab === 'dfd') openDfdModal();
         });
     });
 
@@ -668,71 +649,24 @@ function renderVoucherLines(lines) {
                 badge.textContent = type || 'Not set';
                 badge.className = `voucher-line-badge ${type ? 'set' : 'unset'}`;
             }
-            renderAuditGuidancePanelForLine(type, uid);
         });
     });
 
-    // Procedure cards, scoped per line — opens the existing shared supporting-document modal
-    // with a per-line target so the Confirm handler writes into this line's own state.
-    container.querySelectorAll('.voucher-line-detail .voucher-line-proc-trigger').forEach(el => {
-        el.addEventListener('click', function(e) {
+    // Audit Guidance button — opens a popup with the audit guidance content for this line's type.
+    container.querySelectorAll('.btn-audit-guidance').forEach(btn => {
+        btn.addEventListener('click', function(e) {
             e.stopPropagation();
-            const procKey = this.dataset.proc;
             const uid = this.dataset.uid;
-            const labels = {
-                'purchase_demand': 'Purchase Demand',
-                'purchase_order': 'Purchase Order',
-                'gate_pass': 'Gate Pass',
-                'store_receiving': 'Store Receiving',
-                'vendor_bill': 'Vendor Bill'
-            };
-            const templateMap = {
-                'purchase_demand': 2,
-                'purchase_order': 3,
-                'gate_pass': 4,
-                'store_receiving': 5,
-                'vendor_bill': 6
-            };
-            const procLabel = labels[procKey] || procKey;
-            const templateId = templateMap[procKey] || 1;
-            if (typeof openProcedureModal === 'function') {
-                openProcedureModal(procKey, procLabel, templateId, uid);
-            } else {
-                console.warn('⚠️ openProcedureModal not defined yet');
-            }
+            openAuditGuidancePopup(uid);
         });
     });
 
-    // Phase 4: Observations/Comments, scoped per line — update this line's own
-    // voucherLineState[uid].procedureData directly, same pattern as the removed global listeners.
-    container.querySelectorAll('.voucher-line-detail textarea[id^="observationsInput-"]').forEach(ta => {
-        ta.addEventListener('input', function() {
+    // Supporting button — opens a popup with the five procedure cards for this line.
+    container.querySelectorAll('.btn-supporting').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
             const uid = this.dataset.uid;
-            if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
-            voucherLineState[uid].procedureData.observations = this.value;
-        });
-    });
-    container.querySelectorAll('.voucher-line-detail textarea[id^="commentsInput-"]').forEach(ta => {
-        ta.addEventListener('input', function() {
-            const uid = this.dataset.uid;
-            if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
-            voucherLineState[uid].procedureData.comments = this.value;
-        });
-    });
-    container.querySelectorAll('.voucher-line-detail select[id^="observationsDropdown-"]').forEach(select => {
-        select.addEventListener('change', function() {
-            const uid = this.dataset.uid;
-            const val = this.value;
-            if (!val) return;
-            const textarea = document.getElementById(`observationsInput-${uid}`);
-            if (textarea) textarea.value = val;
-            if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
-            voucherLineState[uid].procedureData.observations = val;
-        });
-    });
-    container.querySelectorAll('.voucher-line-edit-obs').forEach(btn => {
-        btn.addEventListener('click', function() {
-            alert('Manage frequent observations – not part of this requirement yet.');
+            openSupportingPopup(uid);
         });
     });
 }
@@ -804,19 +738,17 @@ function buildParticularsValueTable(row, extractDate) {
     `;
 }
 
-// ---------- BUILD LINE DETAIL HTML (Phase 3) ----------
-// Particulars/Value table, Segment 2 (DFD/AUDIT tabs + type dropdown), and Segment 3 (procedure
-// cards) for one line — the full content that used to live in the now-removed standalone
-// renderTransaction() view, adapted to render once per line with ids suffixed by uid so multiple
-// lines can render simultaneously without collisions.
+// ---------- BUILD LINE DETAIL HTML (Phase 4) ----------
+// Expanded panel: Particulars/Value table + horizontal bar with transaction type dropdown and
+// two action buttons (Audit Guidance, Supporting). Segment 2 tabs, Segment 3 procedure cards,
+// and Observations & Comments have been removed — relocated into popups per Phase 4.
 function buildLineDetailHtml(line, uid) {
     const state = voucherLineState[uid] || { transactionType: '', procedureData: {} };
 
-    // Particulars/Value table for this line, above the deleted-state banner and Segment 2/3.
+    // Particulars/Value table for this line, above the deleted-state banner and action bar.
     let html = buildParticularsValueTable(line.row_data || {}, line.extract_date);
 
-    // Phase 4: deleted-state banner, moved here from renderTransaction() — same markup/classes,
-    // now shown inside this line's own expanded panel instead of voucher-wide.
+    // Deleted-state banner, shown inside this line's own expanded panel.
     if (line.change_detection_status === 'deleted') {
         html += `
         <div class="change-detection-banner" style="border-left-color:#dc2626; background:#fef2f2;">
@@ -829,100 +761,22 @@ function buildLineDetailHtml(line, uid) {
         `;
     }
 
+    // Horizontal bar: transaction type dropdown (right‑aligned) + Audit Guidance + Supporting buttons.
     html += `
-        <div class="voucher-line-segments">
-            <div class="grid-segment-2">
-                <div class="segment2-tab-header">
-                    <!-- Phase 3: uses voucher-line-tab-btn/-panel (not segment2-tab-btn/-panel) so
-                         renderTransaction()'s unscoped document.querySelectorAll('.segment2-tab-btn')
-                         doesn't also bind to these per-line tabs and corrupt cross-line tab state.
-                         Same visual styling is reused via extended CSS selectors in style.css. -->
-                    <button class="voucher-line-tab-btn" data-tab="dfd" data-uid="${uid}">DFD</button>
-                    <button class="voucher-line-tab-btn active" data-tab="audit" data-uid="${uid}">AUDIT</button>
-                </div>
-                <div style="margin-bottom:10px;">
-                    <label class="vh-type-label" style="margin-right:8px;">Type</label>
-                    <select class="vh-type-dropdown voucher-line-type-dropdown" data-uid="${uid}">
-                        <option value="">-- Select --</option>
-                        <option value="Material Purchased">Material Purchased</option>
-                        <option value="Repair & Maintenance (In-house)">Repair & Maintenance (In-house)</option>
-                        <option value="Fuel Expense">Fuel Expense</option>
-                        <option value="Short Term Advance against Salary">Short Term Advance against Salary</option>
-                        <option value="Payment to Contractors">Payment to Contractors</option>
-                        <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
-                        <option value="Kitchen Expenses">Kitchen Expenses</option>
-                    </select>
-                </div>
-                <div class="segment2-tab-panels">
-                    <div class="voucher-line-tab-panel" data-panel="dfd">
-                        <p class="segment2-placeholder-text">Content coming soon</p>
-                    </div>
-                    <div class="voucher-line-tab-panel active" data-panel="audit">
-                        <div id="auditGuidancePanel-${uid}"></div>
-                    </div>
-                </div>
-            </div>
-            <div class="grid-segment-3">
-                <div class="procedure-card-grid">
-    `;
-
-    const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
-    const procLabels = {
-        'purchase_demand': 'Purchase Demand',
-        'purchase_order': 'Purchase Order',
-        'gate_pass': 'Gate Pass',
-        'store_receiving': 'Store Receiving',
-        'vendor_bill': 'Vendor Bill'
-    };
-    const procIcons = {
-        'purchase_demand': '📋',
-        'purchase_order': '📄',
-        'gate_pass': '🚪',
-        'store_receiving': '📥',
-        'vendor_bill': '🧾'
-    };
-    procKeys.forEach(key => {
-        const icon = procIcons[key] || '📌';
-        const label = procLabels[key] || key;
-        // Phase 3: voucher-line-proc-trigger (not clickable-proc) — same reasoning as the tab
-        // classes above, renderTransaction() unscoped-selects '.clickable-proc' document-wide.
-        html += `
-            <div class="procedure-card-item">
-                <div class="procedure-card-header voucher-line-proc-trigger" data-proc="${key}" data-uid="${uid}">
-                    <span class="proc-icon">${icon}</span>
-                    <span class="proc-name">${label}</span>
-                </div>
-                <div class="procedure-card-observation proc-observation-placeholder" data-proc="${key}"></div>
-            </div>
-        `;
-    });
-
-    html += `
-                </div>
-            </div>
-        </div>
-    `;
-
-    // Phase 4: Observations & Comments, moved here from renderTransaction() — same markup/classes
-    // (helper subtext + icon/border accent), now per line instead of one voucher-wide box.
-    html += `
-        <div class="obs-comments-row">
-            <div class="obs-wrapper">
-                <label for="observationsInput-${uid}"><span class="field-icon">📝</span>Observations</label>
-                <p class="field-hint">Overall audit finding for this line</p>
-                <textarea id="observationsInput-${uid}" data-uid="${uid}" rows="2">${state.procedureData.observations || ''}</textarea>
-                <div class="obs-dropdown-container">
-                    <select id="observationsDropdown-${uid}" data-uid="${uid}">
-                        <option value="">-- Select frequent --</option>
-                    </select>
-                    <button class="btn-edit-obs voucher-line-edit-obs" data-uid="${uid}" title="Manage frequent observations">⚙️</button>
-                </div>
-            </div>
-            <div class="comments-wrapper">
-                <label for="commentsInput-${uid}"><span class="field-icon">💬</span>Comments</label>
-                <p class="field-hint">Management's response or remarks from inquiry</p>
-                <textarea id="commentsInput-${uid}" data-uid="${uid}" rows="2">${state.procedureData.comments || ''}</textarea>
-            </div>
+        <div class="expanded-bar">
+            <label class="vh-type-label">Type</label>
+            <select class="vh-type-dropdown voucher-line-type-dropdown" data-uid="${uid}">
+                <option value="">-- Select --</option>
+                <option value="Material Purchased">Material Purchased</option>
+                <option value="Repair & Maintenance (In-house)">Repair & Maintenance (In-house)</option>
+                <option value="Fuel Expense">Fuel Expense</option>
+                <option value="Short Term Advance against Salary">Short Term Advance against Salary</option>
+                <option value="Payment to Contractors">Payment to Contractors</option>
+                <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
+                <option value="Kitchen Expenses">Kitchen Expenses</option>
+            </select>
+            <button class="btn-audit-guidance" data-uid="${uid}" title="View audit guidance for this transaction type">📋 Audit Guidance</button>
+            <button class="btn-supporting" data-uid="${uid}" title="View and confirm supporting documents">📎 Supporting</button>
         </div>
     `;
     return html;
@@ -1821,6 +1675,127 @@ if (dfdModal) {
     dfdModal.addEventListener('click', function(e) {
         if (e.target === this) closeDfdModal();
     });
+}
+
+// ---------- Phase 4: Audit Guidance Popup ----------
+// Opens a modal displaying audit guidance (management controls, risks, procedures) for
+// the given line's transaction type. Relies on the same buildAuditGuidanceTable() / fetch
+// logic that the removed AUDIT tab used, but rendered as a standalone popup triggered by
+// the Audit Guidance button in the expanded bar.
+async function openAuditGuidancePopup(uid) {
+    const state = voucherLineState[uid];
+    const type = state ? state.transactionType : '';
+    if (!type) {
+        showStatus('⚠️ Select a transaction type first.', 'info');
+        return;
+    }
+    // Reuse the procedure modal container, repurposing its content for audit guidance.
+    // We swap the modal's title, hide the search/confirm UI, and insert guidance content.
+    if (!procedureModal) return;
+    if (procedureModalTitle) procedureModalTitle.textContent = '📋 Audit Guidance';
+    // Hide search/confirm elements that belong to the procedure modal flow
+    const searchRow = procedureModal.querySelector('.search-row');
+    if (searchRow) searchRow.style.display = 'none';
+    const confirmRow = procedureModal.querySelector('.modal-confirm-row');
+    if (confirmRow) confirmRow.style.display = 'none';
+    if (procedureStatus) procedureStatus.textContent = '';
+    // Show loading
+    if (procedureResults) procedureResults.innerHTML = '<div style="text-align:center; padding:20px;"><span class="spinner"></span> Loading audit guidance...</div>';
+    procedureModal.style.display = 'flex';
+
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
+        if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+        if (res.status === 404) {
+            if (procedureResults) procedureResults.innerHTML = '<p style="color:#94a3b8; text-align:center; padding:30px;">No audit guidance available for this transaction type yet.</p>';
+            return;
+        }
+        if (!res.ok) throw new Error('Failed to fetch audit guidance');
+        const data = await res.json();
+        if (procedureResults) procedureResults.innerHTML = buildAuditGuidanceTable(data);
+    } catch (e) {
+        if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+        console.error('Error fetching audit guidance:', e);
+        if (procedureResults) procedureResults.innerHTML = '<p style="color:#dc2626; text-align:center; padding:30px;">Unable to load audit guidance.</p>';
+    }
+}
+
+// ---------- Phase 4: Supporting Popup ----------
+// Opens the procedure modal with all five supporting-document cards listed for the given
+// line. The user can click any card to open the existing search/confirm flow (openProcedureModal)
+// for that specific procedure. This replaces the removed Segment 3 procedure cards.
+function openSupportingPopup(uid) {
+    if (!procedureModal) return;
+    currentProcedureTarget = uid;
+    if (procedureModalTitle) procedureModalTitle.textContent = '📎 Supporting Documents';
+    // Show search/confirm elements (they may have been hidden by audit guidance popup)
+    const searchRow = procedureModal.querySelector('.search-row');
+    if (searchRow) searchRow.style.display = '';
+    const confirmRow = procedureModal.querySelector('.modal-confirm-row');
+    if (confirmRow) confirmRow.style.display = '';
+    if (procedureStatus) procedureStatus.textContent = '';
+
+    // Render a list of five procedure cards, each clickable to open the search modal
+    const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
+    const procLabels = {
+        'purchase_demand': 'Purchase Demand',
+        'purchase_order': 'Purchase Order',
+        'gate_pass': 'Gate Pass',
+        'store_receiving': 'Store Receiving',
+        'vendor_bill': 'Vendor Bill'
+    };
+    const procIcons = {
+        'purchase_demand': '📋',
+        'purchase_order': '📄',
+        'gate_pass': '🚪',
+        'store_receiving': '📥',
+        'vendor_bill': '🧾'
+    };
+    const templateMap = {
+        'purchase_demand': 2,
+        'purchase_order': 3,
+        'gate_pass': 4,
+        'store_receiving': 5,
+        'vendor_bill': 6
+    };
+
+    // Build a compact grid of procedure cards
+    let html = '<div style="display:flex; flex-wrap:wrap; gap:12px; padding:12px 0;">';
+    procKeys.forEach(key => {
+        const label = procLabels[key] || key;
+        const icon = procIcons[key] || '📌';
+        const templateId = templateMap[key] || 1;
+        // Check if this line already has this procedure confirmed
+        const state = voucherLineState[uid];
+        const confirmed = state && state.procedureData && state.procedureData[key];
+        html += `
+            <div class="procedure-card-item supporting-proc-card" data-proc="${key}" data-template="${templateId}" data-uid="${uid}" style="flex:1 1 160px; max-width:200px; background:white; border:2px solid ${confirmed ? '#86efac' : '#e2e8f0'}; border-radius:12px; padding:16px; cursor:pointer; text-align:center; transition:all 0.2s;">
+                <div style="font-size:32px; margin-bottom:6px;">${icon}</div>
+                <div style="font-weight:600; font-size:14px; color:#1a1a2e;">${label}</div>
+                ${confirmed ? '<div style="font-size:12px; color:#16a34a; margin-top:4px;">✅ Confirmed</div>' : '<div style="font-size:12px; color:#94a3b8; margin-top:4px;">Click to search</div>'}
+            </div>
+        `;
+    });
+    html += '</div>';
+    // Also add a brief instruction
+    html += '<p style="color:#64748b; font-size:13px; text-align:center; margin:8px 0 0 0;">Click a card to search for and confirm a supporting document.</p>';
+
+    if (procedureResults) procedureResults.innerHTML = html;
+
+    // Wire click listeners on the cards to open the procedure search modal
+    procedureResults.querySelectorAll('.supporting-proc-card').forEach(card => {
+        card.addEventListener('click', function() {
+            const procKey = this.dataset.proc;
+            const label = procLabels[procKey] || procKey;
+            const templateId = parseInt(this.dataset.template);
+            const lineUid = this.dataset.uid;
+            // Close the supporting popup first, then open the procedure modal for this doc
+            procedureModal.style.display = 'none';
+            openProcedureModal(procKey, label, templateId, lineUid);
+        });
+    });
+
+    procedureModal.style.display = 'flex';
 }
 
 // ==============================================
