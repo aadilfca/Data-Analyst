@@ -612,6 +612,11 @@
                  placeholder list of the voucher's lines. Per-line collapsed/expand UI is Phase 3. -->
             <div id="voucherHeaderBar" class="voucher-header-bar"></div>
 
+            <!-- Voucher Lines (Phase 3): collapsed/expand summary rows, one per line. Each row
+                 expands to reveal its own Segment 2 (DFD/AUDIT + type dropdown) and Segment 3
+                 (procedure cards), independently of the other lines and of #transactionCard below. -->
+            <div id="voucherLinesContainer" class="voucher-lines-container"></div>
+
             <!-- Transaction Card -->
             <div id="transactionCard" class="transaction-card">
                 <!-- Will be filled by JS -->

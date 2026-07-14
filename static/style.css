@@ -1411,7 +1411,8 @@ body {
     border-bottom: 2px solid #e2e8f0;
     margin-bottom: 12px;
 }
-.segment2-tab-btn {
+.segment2-tab-btn,
+.voucher-line-tab-btn {
     padding: 8px 20px;
     border: none;
     background: none;
@@ -1423,13 +1424,21 @@ body {
     margin-bottom: -2px;
     transition: color 0.2s, border-color 0.2s;
 }
-.segment2-tab-btn:hover { color: #1a1a2e; }
-.segment2-tab-btn.active {
+.segment2-tab-btn:hover,
+.voucher-line-tab-btn:hover { color: #1a1a2e; }
+.segment2-tab-btn.active,
+.voucher-line-tab-btn.active {
     color: #3b82f6;
     border-bottom-color: #3b82f6;
 }
-.segment2-tab-panel { display: none; }
-.segment2-tab-panel.active { display: block; }
+/* Phase 3: voucher-line-tab-btn/-panel are distinct class names from segment2-tab-btn/-panel
+   (same styling, reused via these combined selectors) specifically so renderTransaction()'s
+   unscoped document.querySelectorAll('.segment2-tab-btn'/'.segment2-tab-panel') doesn't also
+   bind to the per-line voucher-lines tabs and corrupt cross-line tab state. */
+.segment2-tab-panel,
+.voucher-line-tab-panel { display: none; }
+.segment2-tab-panel.active,
+.voucher-line-tab-panel.active { display: block; }
 .segment2-placeholder-text {
     color: #94a3b8;
     font-style: italic;
@@ -1621,6 +1630,176 @@ body {
 }
 .voucher-change-popover .diff-table {
     font-size: 12px;
+}
+
+/* ----- Phase 3: Voucher Lines (collapsed/expand rows) ----- */
+.voucher-lines-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.voucher-line-row {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    overflow: hidden;
+}
+
+.voucher-line-summary {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s ease;
+    flex-wrap: wrap;
+}
+
+.voucher-line-summary:hover {
+    background: #f8fafc;
+}
+
+.voucher-line-code {
+    font-weight: 600;
+    color: #475569;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.voucher-line-name {
+    font-weight: 600;
+    color: #1a1a2e;
+    font-size: 14px;
+}
+
+.voucher-line-desc {
+    color: #64748b;
+    font-size: 13px;
+    flex: 1 1 auto;
+    min-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.voucher-line-amount {
+    font-weight: 700;
+    font-size: 14px;
+    white-space: nowrap;
+}
+
+/* Phase 4: validation-status color/checkmark, moved here from the removed .amount-row
+   (same status-pending/failed/passed + data-validation-status convention as before). */
+.voucher-line-amount.status-pending,
+.voucher-line-amount.status-failed {
+    color: #991b1b;
+}
+.voucher-line-amount.status-passed {
+    color: #16a34a;
+}
+.voucher-line-amount .amount-check-icon {
+    margin-left: 6px;
+    font-size: 13px;
+    color: #16a34a;
+}
+
+/* Phase 4: per-line change-alert icon (moved from the removed voucher-row) — placed inline next
+   to the account name in the summary row. */
+.voucher-line-change-icon {
+    margin-left: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+/* Phase 4: compact "deleted" indicator in the summary row (fuller banner text lives in the
+   line's expanded panel, reusing .change-detection-banner). */
+.voucher-line-deleted-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #fee2e2;
+    color: #991b1b;
+    white-space: nowrap;
+}
+
+.voucher-line-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.voucher-line-badge.unset {
+    background: #f1f5f9;
+    color: #94a3b8;
+}
+
+.voucher-line-badge.set {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.voucher-line-chevron {
+    font-size: 18px;
+    color: #94a3b8;
+    transition: transform 0.2s ease;
+    margin-left: auto;
+}
+
+.voucher-line-row.expanded .voucher-line-chevron {
+    transform: rotate(90deg);
+}
+
+.voucher-line-detail {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    padding: 0 16px;
+    transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.25s ease;
+    border-top: 1px solid transparent;
+}
+
+.voucher-line-detail.expanded {
+    max-height: 2000px;
+    opacity: 1;
+    padding: 14px 16px 18px;
+    border-top-color: #e2e8f0;
+}
+
+.voucher-line-segments {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.voucher-line-segments .grid-segment-2 {
+    flex: 1 1 320px;
+    min-width: 280px;
+}
+
+.voucher-line-segments .grid-segment-3 {
+    flex: 1 1 400px;
+    min-width: 300px;
+}
+
+@media (max-width: 768px) {
+    .voucher-line-summary {
+        gap: 8px;
+    }
+    .voucher-line-segments {
+        flex-direction: column;
+    }
 }
 
 /* Zebra stripes for even rows */

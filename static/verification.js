@@ -11,6 +11,10 @@ let currentTransactionType = '';
 let lineItems = [];
 let procedureData = {};
 let isNavigating = false;
+// Phase 3: per-line client state for the collapsed/expand voucher lines list, keyed by
+// detail_id. Fully separate from currentTransactionType/procedureData above, which remain
+// scoped to #transactionCard's single "active" line — no shared state between the two.
+let voucherLineState = {};
 let selectedCashbook = null;
 let cashbookCurrentPage = 1;
 let cashbookPageSize = 50;
@@ -71,6 +75,9 @@ let currentProcedureKey = null;
 let currentTemplateId = null;
 let selectedDocId = null;
 let selectedDocData = null;
+// Phase 3: null = the existing #transactionCard flow (unchanged behavior below); set to a line's
+// detail_id when the modal was opened from a voucher line's collapsed/expand row.
+let currentProcedureTarget = null;
 
 // ---- REPORT VIEW REFS ----
 let reportCurrentPage = 1;
@@ -419,6 +426,8 @@ async function loadNextTransaction(detailId = null) {
             // But we'll just keep it as is; updateProgressDisplay will handle
         }
         renderVoucherHeader(data.voucher_id, data.voucher_date, voucherLines);
+        seedVoucherLineState(voucherLines);
+        renderVoucherLines(voucherLines);
         renderTransaction(activeLine);
         await updateProgress();
         await updateProgressDisplay(); // update the new progress element
@@ -436,39 +445,18 @@ async function loadNextTransaction(detailId = null) {
 
 // ---------- VOUCHER HEADER (Phase 2) ----------
 // Renders a lightweight voucher-level summary (Voucher ID, Date, line count) above the
-// transaction card, plus a simple placeholder list of the voucher's lines. This is a
-// display-only shell for now — collapsed/expand per-line UI arrives in Phase 3.
+// voucher lines list. The placeholder line list from Phase 2 has been replaced by the real
+// collapsed/expand rows in renderVoucherLines() (Phase 3).
 function renderVoucherHeader(voucherId, voucherDate, lines) {
     const bar = document.getElementById('voucherHeaderBar');
     if (!bar) return;
     const lineCount = lines ? lines.length : 0;
-    const accountAliases = ['Account Name', 'Account', 'Account Detail', 'Ledger', 'Head'];
-    const amountAliases = ['Debit Amount', 'Debit', 'Dr Amount', 'Credit Amount', 'Credit'];
-    const getAlias = (row, aliases) => {
-        for (const alias of aliases) {
-            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
-        }
-        return '—';
-    };
-    let listHtml = '';
-    if (lines && lines.length > 0) {
-        listHtml = '<ul class="voucher-line-list" style="margin:6px 0 0; padding-left:18px; font-size:13px; color:#475569;">' +
-            lines.map((line, index) => {
-                const row = line.row_data || {};
-                const account = getAlias(row, accountAliases);
-                const amount = getAlias(row, amountAliases);
-                const activeTag = index === 0 ? ' <em style="color:#3b82f6;">(active)</em>' : '';
-                return `<li>${account} — ${amount}${activeTag}</li>`;
-            }).join('') +
-            '</ul>';
-    }
     bar.innerHTML = `
         <div class="voucher-header-summary" style="display:flex; gap:16px; flex-wrap:wrap; font-weight:600; color:#1a1a2e;">
             <span>📑 Voucher: ${voucherId || '—'}</span>
             <span>Date: ${voucherDate || '—'}</span>
             <span>${lineCount} line${lineCount === 1 ? '' : 's'}</span>
         </div>
-        ${listHtml}
     `;
 }
 
@@ -478,15 +466,412 @@ function clearVoucherHeader() {
     if (bar) bar.innerHTML = '';
 }
 
+// ---------- VOUCHER LINE ALIAS HELPERS (Phase 3) ----------
+// Small, shared alias lookups reused by renderVoucherLines()/buildLineDetailHtml() — mirrors the
+// alias arrays already used inside renderTransaction(), kept local to avoid touching that
+// function (left untouched this phase per the confirmed plan).
+const VOUCHER_LINE_ACCOUNT_CODE_ALIASES = ['Account Detail', 'Account Details', 'Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head', 'Ledger Detail'];
+const VOUCHER_LINE_ACCOUNT_NAME_ALIASES = ['Account Name', 'Account', 'Account Detail', 'Ledger', 'Head'];
+const VOUCHER_LINE_DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars'];
+const VOUCHER_LINE_DEBIT_ALIASES = ['Debit Amount', 'Debit', 'Dr Amount', 'Dr'];
+const VOUCHER_LINE_CREDIT_ALIASES = ['Credit Amount', 'Credit', 'Cr Amount', 'Cr'];
+
+function getVoucherLineAlias(row, aliases) {
+    for (const alias of aliases) {
+        if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
+    }
+    return '—';
+}
+
+// Returns { label: 'Dr'|'Cr', value } for a line's row_data, preferring whichever side is populated.
+function getVoucherLineDrCr(row) {
+    const debit = getVoucherLineAlias(row, VOUCHER_LINE_DEBIT_ALIASES);
+    if (debit !== '—') return { label: 'Dr', value: debit };
+    const credit = getVoucherLineAlias(row, VOUCHER_LINE_CREDIT_ALIASES);
+    if (credit !== '—') return { label: 'Cr', value: credit };
+    return { label: '', value: '—' };
+}
+
+// Maps a validation_status string to the same icon/class convention used by the transaction-list
+// popover's .status-icon (renderTransactionPopover()) — reused rather than inventing a new one.
+function getVoucherLineStatusIcon(validationStatus) {
+    const status = (validationStatus || 'Pending');
+    const statusClass = status.toLowerCase();
+    let icon = '❌';
+    if (statusClass === 'passed') icon = '✅';
+    else if (statusClass === 'pending') icon = '⏳';
+    return `<span class="status-icon ${statusClass}" title="${status}">${icon}</span>`;
+}
+
+// ---------- VOUCHER LINE STATE (Phase 3) ----------
+// Seeds voucherLineState fresh from a voucher's lines. Accepts either a /next line object
+// (has transaction_type + procedure_data + change_detection_status/old_row_data) or an
+// audited_cashbook line object (has procedure_flags, no transaction_type/change-detection fields)
+// — same fallback pattern navigateToTransaction() already uses for the single-active-line
+// globals, applied per line here.
+function seedVoucherLineState(lines) {
+    voucherLineState = {};
+    // Phase 4: each line's own change-alert diff data (undefined/absent fields for
+    // audited_cashbook-sourced lines simply mean no icon shows for that line — not a regression,
+    // same pre-existing gap noted for transaction_type in Phases 2/3).
+    voucherLineDiffData = {};
+    (lines || []).forEach(line => {
+        let procedureData = line.procedure_flags ? { ...line.procedure_flags } : {};
+        if (line.procedure_data) procedureData = { ...procedureData, ...line.procedure_data };
+        const transactionType = line.transaction_type || procedureData.transaction_type || '';
+        voucherLineState[line.detail_id] = { transactionType, procedureData, lineItems: line.line_items || [] };
+        if (line.change_detection_status === 'updated') {
+            voucherLineDiffData[line.detail_id] = { old: line.old_row_data, new: line.row_data };
+        }
+    });
+}
+
+// ---------- RENDER VOUCHER LINES (Phase 3) ----------
+// Renders one collapsed/expand row per line into #voucherLinesContainer. Segment 1 is not
+// repeated here (its fields — account code/name/description/amount — are covered by the
+// compact summary row); Segment 2/3 render inside each row's detail panel via
+// buildLineDetailHtml(), independently per line.
+function renderVoucherLines(lines) {
+    const container = document.getElementById('voucherLinesContainer');
+    if (!container) return;
+    if (!lines || lines.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let html = '';
+    lines.forEach(line => {
+        const uid = line.detail_id;
+        const row = line.row_data || {};
+        const state = voucherLineState[uid] || { transactionType: '', procedureData: {} };
+        const accountCode = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_CODE_ALIASES);
+        const accountName = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_NAME_ALIASES);
+        const description = getVoucherLineAlias(row, VOUCHER_LINE_DESCRIPTION_ALIASES);
+        const drCr = getVoucherLineDrCr(row);
+        const badgeText = state.transactionType || 'Not set';
+        const badgeClass = state.transactionType ? 'set' : 'unset';
+        // Phase 4: validation-status color/checkmark, moved here from the removed .amount-row
+        // (same status-pending/failed/passed + data-validation-status convention as before).
+        const validationStatus = (line.validation_status || 'Pending').toLowerCase();
+        // Phase 4: change-alert icon (updated) / compact indicator (deleted), moved here from the
+        // removed voucher-row. Only 'updated' lines have diff data seeded in voucherLineDiffData.
+        const changeIconHtml = voucherLineDiffData[uid]
+            ? `<span class="voucher-line-change-icon" id="voucherChangeIcon-${uid}" title="Changed on re-upload">⚠️</span>`
+            : '';
+        const deletedBadgeHtml = line.change_detection_status === 'deleted'
+            ? `<span class="voucher-line-deleted-badge" title="Missing from latest re-upload">🗑️ Deleted</span>`
+            : '';
+
+        html += `
+            <div class="voucher-line-row" data-detail-id="${uid}">
+                <div class="voucher-line-summary" data-detail-id="${uid}">
+                    <span class="voucher-line-code">${accountCode}</span>
+                    <span class="voucher-line-name">${accountName}${changeIconHtml}</span>
+                    <span class="voucher-line-desc">${description}</span>
+                    ${deletedBadgeHtml}
+                    <span class="voucher-line-amount status-${validationStatus}" data-validation-status="${validationStatus}">
+                        <span class="amount-text">${drCr.label} ${drCr.value}</span>
+                        ${validationStatus === 'passed' ? '<span class="amount-check-icon">✓</span>' : ''}
+                    </span>
+                    <span class="voucher-line-badge ${badgeClass}" id="voucherLineBadge-${uid}">${badgeText}</span>
+                    ${getVoucherLineStatusIcon(line.validation_status)}
+                    <span class="voucher-line-chevron">›</span>
+                </div>
+                <div class="voucher-line-detail" id="voucherLineDetail-${uid}">
+                    ${buildLineDetailHtml(line, uid)}
+                </div>
+            </div>
+        `;
+    });
+    container.innerHTML = html;
+
+    // Sync each line's type dropdown with its seeded state, and populate its AUDIT panel
+    // (placeholder text if no type yet, otherwise fetch guidance) — mirrors renderTransaction()
+    // calling renderAuditGuidancePanel() once after building its own card.
+    container.querySelectorAll('.voucher-line-type-dropdown').forEach(select => {
+        const uid = select.dataset.uid;
+        const state = voucherLineState[uid];
+        if (state && state.transactionType) select.value = state.transactionType;
+        renderAuditGuidancePanelForLine(state ? state.transactionType : '', uid);
+    });
+
+    // Phase 4: attach each line's change-alert icon (only present for lines flagged 'updated')
+    // and populate each line's frequent-observations dropdown.
+    lines.forEach(line => {
+        const uid = line.detail_id;
+        setupVoucherChangeIcon(uid);
+        populateObservationsDropdown(`observationsDropdown-${uid}`);
+    });
+
+    // ----- Event wiring (rebound after every innerHTML write, matching this file's convention) -----
+
+    // Summary bar click toggles that row's expanded state — independent per line.
+    container.querySelectorAll('.voucher-line-summary').forEach(bar => {
+        bar.addEventListener('click', function() {
+            const detailEl = document.getElementById(`voucherLineDetail-${this.dataset.detailId}`);
+            const row = this.closest('.voucher-line-row');
+            if (!detailEl || !row) return;
+            const expanded = detailEl.classList.toggle('expanded');
+            row.classList.toggle('expanded', expanded);
+        });
+    });
+
+    // Segment 2 tab shell (DFD/AUDIT), scoped per line via data-uid and the closest detail panel
+    // (uses voucher-line-tab-btn/-panel, not segment2-tab-btn/-panel — see buildLineDetailHtml()).
+    container.querySelectorAll('.voucher-line-tab-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const tab = this.dataset.tab;
+            const scope = this.closest('.voucher-line-detail');
+            if (!scope) return;
+            scope.querySelectorAll('.voucher-line-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+            scope.querySelectorAll('.voucher-line-tab-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === tab));
+            if (tab === 'dfd') openDfdModal();
+        });
+    });
+
+    // Transaction type dropdown, scoped per line.
+    container.querySelectorAll('.voucher-line-type-dropdown').forEach(select => {
+        select.addEventListener('click', function(e) { e.stopPropagation(); });
+        select.addEventListener('change', function() {
+            const uid = this.dataset.uid;
+            const type = this.value;
+            if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
+            voucherLineState[uid].transactionType = type;
+            voucherLineState[uid].procedureData.transaction_type = type;
+            const badge = document.getElementById(`voucherLineBadge-${uid}`);
+            if (badge) {
+                badge.textContent = type || 'Not set';
+                badge.className = `voucher-line-badge ${type ? 'set' : 'unset'}`;
+            }
+            renderAuditGuidancePanelForLine(type, uid);
+        });
+    });
+
+    // Procedure cards, scoped per line — opens the existing shared supporting-document modal
+    // with a per-line target so the Confirm handler writes into this line's own state.
+    container.querySelectorAll('.voucher-line-detail .voucher-line-proc-trigger').forEach(el => {
+        el.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const procKey = this.dataset.proc;
+            const uid = this.dataset.uid;
+            const labels = {
+                'purchase_demand': 'Purchase Demand',
+                'purchase_order': 'Purchase Order',
+                'gate_pass': 'Gate Pass',
+                'store_receiving': 'Store Receiving',
+                'vendor_bill': 'Vendor Bill'
+            };
+            const templateMap = {
+                'purchase_demand': 2,
+                'purchase_order': 3,
+                'gate_pass': 4,
+                'store_receiving': 5,
+                'vendor_bill': 6
+            };
+            const procLabel = labels[procKey] || procKey;
+            const templateId = templateMap[procKey] || 1;
+            if (typeof openProcedureModal === 'function') {
+                openProcedureModal(procKey, procLabel, templateId, uid);
+            } else {
+                console.warn('⚠️ openProcedureModal not defined yet');
+            }
+        });
+    });
+
+    // Phase 4: Observations/Comments, scoped per line — update this line's own
+    // voucherLineState[uid].procedureData directly, same pattern as the removed global listeners.
+    container.querySelectorAll('.voucher-line-detail textarea[id^="observationsInput-"]').forEach(ta => {
+        ta.addEventListener('input', function() {
+            const uid = this.dataset.uid;
+            if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
+            voucherLineState[uid].procedureData.observations = this.value;
+        });
+    });
+    container.querySelectorAll('.voucher-line-detail textarea[id^="commentsInput-"]').forEach(ta => {
+        ta.addEventListener('input', function() {
+            const uid = this.dataset.uid;
+            if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
+            voucherLineState[uid].procedureData.comments = this.value;
+        });
+    });
+    container.querySelectorAll('.voucher-line-detail select[id^="observationsDropdown-"]').forEach(select => {
+        select.addEventListener('change', function() {
+            const uid = this.dataset.uid;
+            const val = this.value;
+            if (!val) return;
+            const textarea = document.getElementById(`observationsInput-${uid}`);
+            if (textarea) textarea.value = val;
+            if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
+            voucherLineState[uid].procedureData.observations = val;
+        });
+    });
+    container.querySelectorAll('.voucher-line-edit-obs').forEach(btn => {
+        btn.addEventListener('click', function() {
+            alert('Manage frequent observations – not part of this requirement yet.');
+        });
+    });
+}
+
+// ---------- BUILD LINE DETAIL HTML (Phase 3) ----------
+// Segment 2 (DFD/AUDIT tabs + type dropdown) and Segment 3 (procedure cards) for one line,
+// adapted from the equivalent block inside renderTransaction() — same markup/classes, with ids
+// suffixed by uid so multiple lines can render simultaneously without collisions.
+function buildLineDetailHtml(line, uid) {
+    const state = voucherLineState[uid] || { transactionType: '', procedureData: {} };
+
+    // Phase 4: deleted-state banner, moved here from renderTransaction() — same markup/classes,
+    // now shown inside this line's own expanded panel instead of voucher-wide.
+    let html = '';
+    if (line.change_detection_status === 'deleted') {
+        html += `
+        <div class="change-detection-banner" style="border-left-color:#dc2626; background:#fef2f2;">
+            <span class="banner-icon">🗑️</span>
+            <div class="banner-content">
+                <div class="banner-title" style="color:#991b1b;">Transaction flagged as deleted</div>
+                <div class="banner-subtitle" style="color:#b91c1c;">This transaction was present in previous uploads but is missing from the current re-upload. Awaiting auditor review.</div>
+            </div>
+        </div>
+        `;
+    }
+
+    html += `
+        <div class="voucher-line-segments">
+            <div class="grid-segment-2">
+                <div class="segment2-tab-header">
+                    <!-- Phase 3: uses voucher-line-tab-btn/-panel (not segment2-tab-btn/-panel) so
+                         renderTransaction()'s unscoped document.querySelectorAll('.segment2-tab-btn')
+                         doesn't also bind to these per-line tabs and corrupt cross-line tab state.
+                         Same visual styling is reused via extended CSS selectors in style.css. -->
+                    <button class="voucher-line-tab-btn" data-tab="dfd" data-uid="${uid}">DFD</button>
+                    <button class="voucher-line-tab-btn active" data-tab="audit" data-uid="${uid}">AUDIT</button>
+                </div>
+                <div style="margin-bottom:10px;">
+                    <label class="vh-type-label" style="margin-right:8px;">Type</label>
+                    <select class="vh-type-dropdown voucher-line-type-dropdown" data-uid="${uid}">
+                        <option value="">-- Select --</option>
+                        <option value="Material Purchased">Material Purchased</option>
+                        <option value="Repair & Maintenance (In-house)">Repair & Maintenance (In-house)</option>
+                        <option value="Fuel Expense">Fuel Expense</option>
+                        <option value="Short Term Advance against Salary">Short Term Advance against Salary</option>
+                        <option value="Payment to Contractors">Payment to Contractors</option>
+                        <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
+                        <option value="Kitchen Expenses">Kitchen Expenses</option>
+                    </select>
+                </div>
+                <div class="segment2-tab-panels">
+                    <div class="voucher-line-tab-panel" data-panel="dfd">
+                        <p class="segment2-placeholder-text">Content coming soon</p>
+                    </div>
+                    <div class="voucher-line-tab-panel active" data-panel="audit">
+                        <div id="auditGuidancePanel-${uid}"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="grid-segment-3">
+                <div class="procedure-card-grid">
+    `;
+
+    const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
+    const procLabels = {
+        'purchase_demand': 'Purchase Demand',
+        'purchase_order': 'Purchase Order',
+        'gate_pass': 'Gate Pass',
+        'store_receiving': 'Store Receiving',
+        'vendor_bill': 'Vendor Bill'
+    };
+    const procIcons = {
+        'purchase_demand': '📋',
+        'purchase_order': '📄',
+        'gate_pass': '🚪',
+        'store_receiving': '📥',
+        'vendor_bill': '🧾'
+    };
+    procKeys.forEach(key => {
+        const icon = procIcons[key] || '📌';
+        const label = procLabels[key] || key;
+        // Phase 3: voucher-line-proc-trigger (not clickable-proc) — same reasoning as the tab
+        // classes above, renderTransaction() unscoped-selects '.clickable-proc' document-wide.
+        html += `
+            <div class="procedure-card-item">
+                <div class="procedure-card-header voucher-line-proc-trigger" data-proc="${key}" data-uid="${uid}">
+                    <span class="proc-icon">${icon}</span>
+                    <span class="proc-name">${label}</span>
+                </div>
+                <div class="procedure-card-observation proc-observation-placeholder" data-proc="${key}"></div>
+            </div>
+        `;
+    });
+
+    html += `
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Phase 4: Observations & Comments, moved here from renderTransaction() — same markup/classes
+    // (helper subtext + icon/border accent), now per line instead of one voucher-wide box.
+    html += `
+        <div class="obs-comments-row">
+            <div class="obs-wrapper">
+                <label for="observationsInput-${uid}"><span class="field-icon">📝</span>Observations</label>
+                <p class="field-hint">Overall audit finding for this line</p>
+                <textarea id="observationsInput-${uid}" data-uid="${uid}" rows="2">${state.procedureData.observations || ''}</textarea>
+                <div class="obs-dropdown-container">
+                    <select id="observationsDropdown-${uid}" data-uid="${uid}">
+                        <option value="">-- Select frequent --</option>
+                    </select>
+                    <button class="btn-edit-obs voucher-line-edit-obs" data-uid="${uid}" title="Manage frequent observations">⚙️</button>
+                </div>
+            </div>
+            <div class="comments-wrapper">
+                <label for="commentsInput-${uid}"><span class="field-icon">💬</span>Comments</label>
+                <p class="field-hint">Management's response or remarks from inquiry</p>
+                <textarea id="commentsInput-${uid}" data-uid="${uid}" rows="2">${state.procedureData.comments || ''}</textarea>
+            </div>
+        </div>
+    `;
+    return html;
+}
+
+// ---------- AUDIT GUIDANCE PANEL, PER LINE (Phase 3) ----------
+// Sibling to renderAuditGuidancePanel() (left untouched) — same fetch/template logic, reusing
+// buildAuditGuidanceTable() unchanged, but targets a per-line panel id and stale-checks against
+// that line's own voucherLineState instead of the global currentTransactionType.
+async function renderAuditGuidancePanelForLine(type, uid) {
+    const panel = document.getElementById(`auditGuidancePanel-${uid}`);
+    if (!panel) return;
+    if (!type) {
+        panel.innerHTML = `<p class="segment2-placeholder-text">Select a transaction type to view audit guidance.</p>`;
+        return;
+    }
+    panel.innerHTML = `<p class="segment2-placeholder-text">Loading audit guidance...</p>`;
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
+        // Discard stale response if this line's type changed again while the fetch was in flight
+        if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+        if (res.status === 404) {
+            panel.innerHTML = `<p class="segment2-placeholder-text">No guidance available for this transaction type yet.</p>`;
+            return;
+        }
+        if (!res.ok) throw new Error('Failed to fetch audit guidance');
+        const data = await res.json();
+        panel.innerHTML = buildAuditGuidanceTable(data);
+    } catch (e) {
+        if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+        console.error('Error fetching audit guidance:', e);
+        panel.innerHTML = `<p class="segment2-placeholder-text">Unable to load audit guidance.</p>`;
+    }
+}
+
 // ---------- RENDER TRANSACTION ----------
 function renderTransaction(data) {
     if (!transactionCard) return;
     const row = data.row_data || {};
 
-    // Phase 8: diff data for the Voucher ID change-alert popover, read by showVoucherChangePopover()
-    currentChangeDiffData = data.change_detection_status === 'updated'
-        ? { old: data.old_row_data, new: data.row_data }
-        : null;
+    // Phase 4: the change-alert icon/popover, Observations/Comments, and amount validation
+    // display all moved to per-line rows (renderVoucherLines()/buildLineDetailHtml()) — this
+    // function no longer sets currentChangeDiffData or renders those pieces.
 
     // ----- Aliases for flexible column name matching (unchanged) -----
     const dateAliases = ['Date', 'Transaction Date', 'Invoice Date', 'Doc Date', 'Posting Date', 'Entry Date', 'Date'];
@@ -510,17 +895,6 @@ function renderTransaction(data) {
         }
         return '—';
     };
-        const amountAliases = ['Debit Amount', 'Debit', 'Dr Amount', 'Amount', 'Total', 'Net Amount', 'Gross Amount', 'Transaction Amount', 'Value', 'Credit'];
-    const getAmount = () => {
-        for (let alias of amountAliases) {
-            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') {
-                const val = parseFloat(row[alias]);
-                if (!isNaN(val)) return val;
-                return row[alias];
-            }
-        }
-        return data.extract_amount || '—';
-    };
     const descriptionAliases = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars'];
     const getDescription = () => {
         for (let alias of descriptionAliases) {
@@ -530,14 +904,10 @@ function renderTransaction(data) {
     };
 
     // ----- Prepare values for display -----
-    const voucherId = data.voucher_id || '—';
     const dateVal = getDateValue();
     const accountHead = getAccountHead();
     const accountName = getAccountName();
     const description = getDescription();
-    const amount = getAmount();
-    // Phase 7: drives the Amount cell's color/checkmark instead of the removed standalone status row
-    const validationStatus = (data.validation_status || 'Pending').toLowerCase();
 
     // ----- Build the new layout (validation status moved up) -----
     let html = `
@@ -583,13 +953,10 @@ function renderTransaction(data) {
                         </tr>
                     </thead>
                     <tbody>
-                        <tr class="voucher-row">
-                            <td class="label">Voucher ID</td>
-                            <td class="value">
-                                ${voucherId}
-                                ${data.change_detection_status === 'updated' ? '<span class="voucher-change-icon" id="voucherChangeIcon" title="Changed on re-upload">⚠️</span>' : ''}
-                            </td>
-                        </tr>
+                        <!-- Phase 4: Voucher ID row (with its change-alert icon) and Amount row (with
+                             validation-status color/checkmark) moved to each line's own row in
+                             renderVoucherLines() — the Voucher ID is already shown in the voucher
+                             header bar above, and the amount is shown per line in the lines list. -->
                         <tr>
                             <td class="label">Date</td>
                             <td class="value">${dateVal}</td>
@@ -605,13 +972,6 @@ function renderTransaction(data) {
                         <tr>
                             <td class="label">Voucher Description</td>
                             <td class="value">${description}</td>
-                        </tr>
-                        <tr class="amount-row">
-                            <td class="label">Amount</td>
-                            <td class="value status-${validationStatus}" data-validation-status="${validationStatus}">
-                                <span class="amount-text">${amount}</span>
-                                ${validationStatus === 'passed' ? '<span class="amount-check-icon">✓</span>' : ''}
-                            </td>
                         </tr>
                     </tbody>
                 </table>
@@ -677,38 +1037,11 @@ function renderTransaction(data) {
             </div>
         </div>
 
-        <!-- Phase 8: updated-state change alert now lives in the Voucher ID icon + popover (see voucher-row above / showVoucherChangePopover) -->
-        ${data.change_detection_status === 'deleted' ? `
-        <div class="change-detection-banner" style="border-left-color:#dc2626; background:#fef2f2;">
-            <span class="banner-icon">🗑️</span>
-            <div class="banner-content">
-                <div class="banner-title" style="color:#991b1b;">Transaction flagged as deleted</div>
-                <div class="banner-subtitle" style="color:#b91c1c;">This transaction was present in previous uploads but is missing from the current re-upload. Awaiting auditor review.</div>
-            </div>
-        </div>
-        ` : ''}
+        <!-- Phase 4: the deleted-state banner and Observations/Comments both moved to each line's
+             own row/expanded panel (renderVoucherLines()/buildLineDetailHtml()) since both are now
+             per-line, not voucher-wide. -->
 
-        <!-- Observations & Comments (Phase 9: helper subtext + icon/border accent distinguish the two fields) -->
-        <div class="obs-comments-row">
-            <div class="obs-wrapper">
-                <label for="observationsInput"><span class="field-icon">📝</span>Observations</label>
-                <p class="field-hint">Overall audit finding for this transaction</p>
-                <textarea id="observationsInput" rows="2">${procedureData.observations || ''}</textarea>
-                <div class="obs-dropdown-container">
-                    <select id="observationsDropdown">
-                        <option value="">-- Select frequent --</option>
-                    </select>
-                    <button class="btn-edit-obs" id="editObsBtn" title="Manage frequent observations">⚙️</button>
-                </div>
-            </div>
-            <div class="comments-wrapper">
-                <label for="commentsInput"><span class="field-icon">💬</span>Comments</label>
-                <p class="field-hint">Management's response or remarks from inquiry</p>
-                <textarea id="commentsInput" rows="2">${procedureData.comments || ''}</textarea>
-            </div>
-        </div>
-
-                <!-- Save Button (optional) -->
+                <!-- Save Button: now saves every line in the voucher (see saveAllVoucherLines()) -->
         <div style="display:flex; justify-content:flex-end; margin-top:12px;">
             <button class="btn-action btn-next" id="saveBtn" style="background:#8b5cf6; padding:6px 24px;">💾 Save Progress</button>
         </div>
@@ -803,26 +1136,8 @@ function renderTransaction(data) {
         });
     });
 
-    // Observations dropdown – populate with saved list
-    populateObservationsDropdown();
-    document.getElementById('observationsDropdown')?.addEventListener('change', function() {
-        const val = this.value;
-        if (val) {
-            document.getElementById('observationsInput').value = val;
-            procedureData.observations = val;
-        }
-    });
-    document.getElementById('editObsBtn')?.addEventListener('click', function() {
-        alert('Manage frequent observations – to be implemented in Phase 4');
-    });
-
-    // Observations textarea – update data
-    document.getElementById('observationsInput')?.addEventListener('input', function() {
-        procedureData.observations = this.value;
-    });
-    document.getElementById('commentsInput')?.addEventListener('input', function() {
-        procedureData.comments = this.value;
-    });
+    // Phase 4: Observations/Comments (with their frequent-observations dropdown) moved to each
+    // line's own row — see buildLineDetailHtml()'s wiring in renderVoucherLines().
 
             // Previous arrow
     document.getElementById('prevArrow')?.addEventListener('click', function() {
@@ -842,12 +1157,12 @@ function renderTransaction(data) {
         }
     });
 
-    // Save button
+    // Save button — Phase 4: saves every line in the voucher, not just the active one.
     document.getElementById('saveBtn')?.addEventListener('click', function() {
-        if (typeof saveLineItems === 'function') {
-            saveLineItems();
+        if (typeof saveAllVoucherLines === 'function') {
+            saveAllVoucherLines();
         } else {
-            console.warn('saveLineItems not defined');
+            console.warn('saveAllVoucherLines not defined');
         }
     });
 
@@ -871,8 +1186,8 @@ function renderTransaction(data) {
         renderAuditGuidancePanel();
     });
 
-    // Attach the Voucher ID change-alert icon's click listener (Phase 8)
-    setupVoucherChangeIcon();
+    // Phase 4: the Voucher ID change-alert icon/popover moved to each line's own row — see
+    // setupVoucherChangeIcon()'s per-line call in renderVoucherLines().
 
     // Populate the AUDIT tab for this transaction's current type
     renderAuditGuidancePanel();
@@ -881,23 +1196,10 @@ function renderTransaction(data) {
     updateProgressDisplay();
 }
 
-// Helper: populate observations dropdown from localStorage
-function populateObservationsDropdown() {
-    const dropdown = document.getElementById('observationsDropdown');
-    if (!dropdown) return;
-    let obsList = JSON.parse(localStorage.getItem('frequentObservations') || '[]');
-    dropdown.innerHTML = '<option value="">-- Select --</option>';
-    obsList.forEach(text => {
-        const opt = document.createElement('option');
-        opt.value = text;
-        opt.textContent = text;
-        dropdown.appendChild(opt);
-    });
-}
-
-// Helper: populate observations dropdown from localStorage
-function populateObservationsDropdown() {
-    const dropdown = document.getElementById('observationsDropdown');
+// Helper: populate a frequent-observations dropdown from localStorage. Phase 4: takes an explicit
+// dropdown element id so it can be reused per line (each line has its own observations dropdown).
+function populateObservationsDropdown(dropdownId) {
+    const dropdown = document.getElementById(dropdownId);
     if (!dropdown) return;
     let obsList = JSON.parse(localStorage.getItem('frequentObservations') || '[]');
     dropdown.innerHTML = '<option value="">-- Select --</option>';
@@ -1191,10 +1493,11 @@ function buildDiffRows(oldData, newData) {
     return rows;
 }
 
-// ---------- Phase 8: Voucher ID change-alert popover ----------
-// Holds the old/new row data for the currently rendered transaction, set in
-// renderTransaction(). No fetch needed — the diff data is already loaded.
-let currentChangeDiffData = null;
+// ---------- Phase 4 (was Phase 8, now per-line): Voucher ID change-alert popover ----------
+// Holds each line's own old/new row data, keyed by detail_id (uid). Seeded in
+// seedVoucherLineState() from that line's change_detection_status/old_row_data/row_data — no
+// fetch needed, the diff data is already loaded per line.
+let voucherLineDiffData = {};
 // Tracks whether the popover is currently open, mirroring databank.js's
 // activeHistoryIcon so the outside-click handler knows when to act.
 let voucherChangePopoverOpen = false;
@@ -1205,9 +1508,10 @@ function hideVoucherChangePopover() {
     voucherChangePopoverOpen = false;
 }
 
-function showVoucherChangePopover(icon) {
+function showVoucherChangePopover(icon, uid) {
     const popover = document.getElementById('voucherChangePopover');
-    if (!popover || !currentChangeDiffData) return;
+    const diffData = voucherLineDiffData[uid];
+    if (!popover || !diffData) return;
 
     popover.innerHTML = `
         <div class="popover-header">Changed on Re-upload</div>
@@ -1217,7 +1521,7 @@ function showVoucherChangePopover(icon) {
                     <tr><th>Field</th><th>Old Value</th><th>New Value</th></tr>
                 </thead>
                 <tbody>
-                    ${buildDiffRows(currentChangeDiffData.old, currentChangeDiffData.new)}
+                    ${buildDiffRows(diffData.old, diffData.new)}
                 </tbody>
             </table>
         </div>
@@ -1247,16 +1551,16 @@ function showVoucherChangePopover(icon) {
     voucherChangePopoverOpen = true;
 }
 
-// Attach the change-alert icon's click listener after card is rendered (called from renderTransaction event handlers)
-function setupVoucherChangeIcon() {
-    const icon = document.getElementById('voucherChangeIcon');
+// Attach one line's change-alert icon click listener (called per line from renderVoucherLines()).
+function setupVoucherChangeIcon(uid) {
+    const icon = document.getElementById(`voucherChangeIcon-${uid}`);
     if (!icon) return;
     icon.addEventListener('click', function(e) {
         e.stopPropagation();
         if (voucherChangePopoverOpen) {
             hideVoucherChangePopover();
         } else {
-            showVoucherChangePopover(icon);
+            showVoucherChangePopover(icon, uid);
         }
     });
 }
@@ -1427,6 +1731,8 @@ function navigateToTransaction(detailId) {
     // lines are derived by matching voucher_id within that already-loaded list.
     const voucherLines = sessionTransactions.filter(t => t.voucher_id === transaction.voucher_id);
     renderVoucherHeader(transaction.voucher_id, transaction.extract_date, voucherLines);
+    seedVoucherLineState(voucherLines);
+    renderVoucherLines(voucherLines);
 
     // Render the transaction
     renderTransaction(transaction);
@@ -1436,9 +1742,10 @@ function navigateToTransaction(detailId) {
     // Enable/disable navigation buttons (Phase 3 will handle this fully)
     // For now, we just update the UI
 }
-// Save current transaction without validation (for going back)
+// Save current transaction without validation (for going back). Phase 4: saves every line in the
+// voucher (not just the active one), so edits on any expanded line survive navigation.
 async function saveCurrentTransaction() {
-    await saveLineItems();
+    await saveAllVoucherLines();
     // Optionally, we could also validate but not mark as verified
     // For now, just save.
 }
@@ -1524,9 +1831,10 @@ async function goToNextTransaction() {
     }
     // Proceed: validate and move (if validation passes, mark verified; if it fails, still allow
     // navigation since the user already confirmed they want to proceed).
-    await validateTransaction(); // updates Amount cell color/checkmark
-    // Check if it passed, if yes mark verified
-    const amountCell = document.querySelector('.amount-row .value');
+    await validateTransaction(); // updates the active line's .voucher-line-amount color/checkmark
+    // Check if it passed, if yes mark verified. Phase 4: the validation display moved from the
+    // removed .amount-row into the active line's own row in the voucher lines list.
+    const amountCell = document.querySelector(`.voucher-line-row[data-detail-id="${currentDetailId}"] .voucher-line-amount`);
     if (amountCell && amountCell.dataset.validationStatus === 'passed') {
         await completeTransaction(); // marks verified and calls loadNextTransaction
     } else {
@@ -1550,44 +1858,53 @@ document.addEventListener('DOMContentLoaded', function() {
     // We'll do that in a separate chunk to avoid conflict.
 });
 // ---------- SAVE LINE ITEMS ----------
-async function saveLineItems() {
-    if (!currentDetailId) return;
+// Phase 4: accepts an explicit detailId (defaults to the active line, currentDetailId) so any
+// line in the voucher can be saved independently, not just the active one — see
+// saveAllVoucherLines(). Reads/writes that line's own voucherLineState entry (kept in sync by
+// the per-line type-dropdown/observations/comments/procedure-modal listeners in
+// renderVoucherLines()) rather than the bare currentTransactionType/procedureData/lineItems
+// globals, which remain #transactionCard's own separate concern (its Segment 2/3 duplicate of
+// the active line, per Phase 3's decision — not reconciled with voucherLineState this phase).
+async function saveLineItems(detailId = currentDetailId) {
+    if (!detailId) return;
+    if (!voucherLineState[detailId]) {
+        voucherLineState[detailId] = { transactionType: '', procedureData: {}, lineItems: [] };
+    }
+    const state = voucherLineState[detailId];
+
+    // Legacy vendor/unit/qty/rate mini-table — #lineItemsBody is not rendered by the current
+    // voucher-line templates, so this is inert; kept unchanged from before voucher/line grouping.
     const tbody = document.getElementById('lineItemsBody');
     if (tbody) {
         const rows = tbody.querySelectorAll('tr');
-        lineItems = [];
+        const items = [];
         rows.forEach(row => {
             const vendor = row.querySelector('.li-vendor')?.value || '';
             const unit = row.querySelector('.li-unit')?.value || '';
             const qty = parseFloat(row.querySelector('.li-qty')?.value) || 0;
             const rate = parseFloat(row.querySelector('.li-rate')?.value) || 0;
             const calc = parseFloat(row.querySelector('.li-calc')?.value) || 0;
-            lineItems.push({ vendor, unit, qty, rate, calculated_amount: calc });
+            items.push({ vendor, unit, qty, rate, calculated_amount: calc });
         });
+        state.lineItems = items;
     }
+
+    // Legacy checkbox-based procedure inputs — also not rendered by the current templates
+    // (procedure state is written by the supporting-document modal's Confirm handler instead).
     const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
     procKeys.forEach(key => {
         const cb = document.getElementById(`proc_${key}`);
-        if (cb) procedureData[key] = cb.checked;
+        if (cb) state.procedureData[key] = cb.checked;
         const refInput = document.querySelector(`input[data-proc="${key}"]`);
-        if (refInput) procedureData[key + '_ref'] = refInput.value;
+        if (refInput) state.procedureData[key + '_ref'] = refInput.value;
     });
-    const obs = document.getElementById('observationsInput');
-    const comm = document.getElementById('commentsInput');
-    if (obs) procedureData.observations = obs.value;
-    if (comm) procedureData.comments = comm.value;
-    const typeSelect = document.getElementById('transactionTypeSelect');
-    if (typeSelect) {
-        currentTransactionType = typeSelect.value;
-        procedureData.transaction_type = currentTransactionType;
-    }
 
     try {
         const payload = {
-            detail_id: currentDetailId,
-            line_items: lineItems,
-            transaction_type: currentTransactionType,
-            procedure_data: procedureData
+            detail_id: detailId,
+            line_items: state.lineItems || [],
+            transaction_type: state.transactionType,
+            procedure_data: state.procedureData
         };
         const res = await fetch(`${API_BASE}/api/verification/save_line_items`, {
             method: 'POST',
@@ -1602,6 +1919,18 @@ async function saveLineItems() {
     } catch (e) {
         console.error('Error saving:', e);
         // Do not show status bar error – only log
+    }
+}
+
+// ---------- SAVE ALL VOUCHER LINES (Phase 4) ----------
+// "Comments save per line ... called once per line instead of once per screen": saves every line
+// currently loaded in the voucher via the existing save_line_items endpoint, one call per line,
+// instead of a single call for just the active line. Wired to the Save Progress button and to the
+// pre-navigation auto-save so edits on any expanded line (not just the active one) aren't lost.
+async function saveAllVoucherLines() {
+    const uids = Object.keys(voucherLineState);
+    for (const uid of uids) {
+        await saveLineItems(uid);
     }
 }
 
@@ -1621,11 +1950,13 @@ async function validateTransaction() {
             throw new Error(err.detail || 'Validation failed');
         }
         const data = await res.json();
-        // Phase 7: reflect result on the Amount cell (color + checkmark) instead of a separate badge
-        const amountCell = document.querySelector('.amount-row .value');
+        // Phase 7: reflect result on the Amount cell (color + checkmark) instead of a separate badge.
+        // Phase 4: that cell is now the active line's own .voucher-line-amount in the lines list
+        // (the old voucher-wide .amount-row was removed from #transactionCard).
+        const amountCell = document.querySelector(`.voucher-line-row[data-detail-id="${currentDetailId}"] .voucher-line-amount`);
         if (amountCell) {
             const status = data.validation_status.toLowerCase();
-            amountCell.className = `value status-${status}`;
+            amountCell.className = `voucher-line-amount status-${status}`;
             amountCell.dataset.validationStatus = status;
             const checkIcon = amountCell.querySelector('.amount-check-icon');
             if (status === 'passed' && !checkIcon) {
@@ -1648,7 +1979,9 @@ async function validateTransaction() {
 // ---------- COMPLETE TRANSACTION ----------
 async function completeTransaction() {
     if (!currentDetailId) return;
-    await saveLineItems();
+    // Phase 4: save every line before completing/reloading, not just the active one — otherwise
+    // edits on a different expanded line would be lost when loadNextTransaction() re-renders.
+    await saveAllVoucherLines();
     await validateTransaction();
     try {
         const payload = { detail_id: currentDetailId, verified_by: 'Analyst' };
@@ -1684,7 +2017,7 @@ async function navigate(direction) {
 // ---------- EXIT SESSION ----------
 function exitSession() {
     if (confirm('Are you sure you want to exit this verification session? Progress will be saved.')) {
-        saveLineItems();
+        saveAllVoucherLines(); // Phase 4: saves every line, not just the active one
                 sessionContent.style.display = 'none';
         cashbookContent.style.display = 'block';
         // Restore padding when session ends
@@ -1878,10 +2211,13 @@ if (dfdModal) {
 // AUDIT PROCEDURE POPOVER
 // ==============================================
 
-function openProcedureModal(procKey, procLabel, templateId) {
+function openProcedureModal(procKey, procLabel, templateId, lineUid = null) {
     if (!procedureModal) return;
     currentProcedureKey = procKey;
     currentTemplateId = templateId;
+    // Phase 3: when opened from a voucher line's collapsed/expand row, lineUid targets that
+    // line's own voucherLineState instead of the global procedureData used by #transactionCard.
+    currentProcedureTarget = lineUid;
     selectedDocId = null;
     selectedDocData = null;
     if (procedureModalTitle) procedureModalTitle.textContent = `📋 ${procLabel}`;
@@ -1899,6 +2235,7 @@ function closeProcedureModal() {
     if (procedureModal) procedureModal.style.display = 'none';
     currentProcedureKey = null;
     currentTemplateId = null;
+    currentProcedureTarget = null;
     selectedDocId = null;
     selectedDocData = null;
 }
@@ -1988,6 +2325,22 @@ if (procedureModal) {
 
     procedureConfirmBtn.addEventListener('click', function() {
         if (!selectedDocId || !currentProcedureKey) return;
+        if (currentProcedureTarget) {
+            // Phase 3: write into the target line's own state and refresh just its observation
+            // text — no voucher reload, so other expanded lines/state are left untouched.
+            const uid = currentProcedureTarget;
+            if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
+            const target = voucherLineState[uid].procedureData;
+            target[currentProcedureKey] = true;
+            target[currentProcedureKey + '_ref'] = procedureSearchInput.value.trim();
+            target[currentProcedureKey + '_doc_id'] = selectedDocId;
+            target[currentProcedureKey + '_doc_data'] = selectedDocData;
+            const placeholder = document.querySelector(`#voucherLineDetail-${uid} .proc-observation-placeholder[data-proc="${currentProcedureKey}"]`);
+            if (placeholder) placeholder.textContent = procedureSearchInput.value.trim();
+            closeProcedureModal();
+            showStatus('✅ Procedure updated!', 'success');
+            return;
+        }
         procedureData[currentProcedureKey] = true;
         procedureData[currentProcedureKey + '_ref'] = procedureSearchInput.value.trim();
         procedureData[currentProcedureKey + '_doc_id'] = selectedDocId;
