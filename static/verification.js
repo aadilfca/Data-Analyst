@@ -371,6 +371,7 @@ async function loadNextTransaction(detailId = null) {
             if (err.detail && err.detail.includes('All transactions')) {
                 showStatus('✅ All transactions have been verified!', 'success');
                 if (transactionCard) transactionCard.innerHTML = `<div style="padding:30px; text-align:center; color:#16a34a; font-size:18px;">🎉 All transactions verified!</div>`;
+                clearVoucherHeader();
                 if (prevBtn) prevBtn.disabled = true;
                 if (nextBtn) nextBtn.disabled = true;
                 if (verifyBtn) verifyBtn.disabled = true;
@@ -384,18 +385,28 @@ async function loadNextTransaction(detailId = null) {
         if (data.completed) {
             showStatus('✅ All transactions have been verified!', 'success');
             if (transactionCard) transactionCard.innerHTML = `<div style="padding:30px; text-align:center; color:#16a34a; font-size:18px;">🎉 All transactions verified!</div>`;
+            clearVoucherHeader();
             if (prevBtn) prevBtn.disabled = true;
             if (nextBtn) nextBtn.disabled = true;
             if (verifyBtn) verifyBtn.disabled = true;
             await updateProgressDisplay();
             return;
         }
-                currentDetailId = data.detail_id;
-        currentClientDataId = data.client_data_id;
+        // Phase 2: /next now returns a voucher (header fields + ordered lines[]) instead of a
+        // single row. Segment 1/2/3 (renderTransaction) still render one line at a time — the
+        // first line is treated as "active" for now; per-line switching arrives in Phase 3.
+        const voucherLines = data.lines || [];
+        const activeLine = voucherLines[0];
+        if (!activeLine) {
+            showStatus('Voucher has no lines to display.', 'error');
+            return;
+        }
+        currentDetailId = activeLine.detail_id;
+        currentClientDataId = activeLine.client_data_id;
         currentVoucherId = data.voucher_id;
-        currentTransactionType = data.transaction_type || '';
-        lineItems = data.line_items || [];
-        procedureData = data.procedure_data || {};
+        currentTransactionType = activeLine.transaction_type || '';
+        lineItems = activeLine.line_items || [];
+        procedureData = activeLine.procedure_data || {};
         // Update currentTransactionIndex from sessionTransactions
         if (sessionTransactions.length > 0) {
             currentTransactionIndex = sessionTransactions.findIndex(t => t.detail_id === currentDetailId);
@@ -407,7 +418,8 @@ async function loadNextTransaction(detailId = null) {
             // If list not loaded, we can increment from previous index (if we have one)
             // But we'll just keep it as is; updateProgressDisplay will handle
         }
-        renderTransaction(data);
+        renderVoucherHeader(data.voucher_id, data.voucher_date, voucherLines);
+        renderTransaction(activeLine);
         await updateProgress();
         await updateProgressDisplay(); // update the new progress element
         if (prevBtn) prevBtn.disabled = false;
@@ -420,6 +432,50 @@ async function loadNextTransaction(detailId = null) {
     } finally {
         isNavigating = false;
     }
+}
+
+// ---------- VOUCHER HEADER (Phase 2) ----------
+// Renders a lightweight voucher-level summary (Voucher ID, Date, line count) above the
+// transaction card, plus a simple placeholder list of the voucher's lines. This is a
+// display-only shell for now — collapsed/expand per-line UI arrives in Phase 3.
+function renderVoucherHeader(voucherId, voucherDate, lines) {
+    const bar = document.getElementById('voucherHeaderBar');
+    if (!bar) return;
+    const lineCount = lines ? lines.length : 0;
+    const accountAliases = ['Account Name', 'Account', 'Account Detail', 'Ledger', 'Head'];
+    const amountAliases = ['Debit Amount', 'Debit', 'Dr Amount', 'Credit Amount', 'Credit'];
+    const getAlias = (row, aliases) => {
+        for (const alias of aliases) {
+            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
+        }
+        return '—';
+    };
+    let listHtml = '';
+    if (lines && lines.length > 0) {
+        listHtml = '<ul class="voucher-line-list" style="margin:6px 0 0; padding-left:18px; font-size:13px; color:#475569;">' +
+            lines.map((line, index) => {
+                const row = line.row_data || {};
+                const account = getAlias(row, accountAliases);
+                const amount = getAlias(row, amountAliases);
+                const activeTag = index === 0 ? ' <em style="color:#3b82f6;">(active)</em>' : '';
+                return `<li>${account} — ${amount}${activeTag}</li>`;
+            }).join('') +
+            '</ul>';
+    }
+    bar.innerHTML = `
+        <div class="voucher-header-summary" style="display:flex; gap:16px; flex-wrap:wrap; font-weight:600; color:#1a1a2e;">
+            <span>📑 Voucher: ${voucherId || '—'}</span>
+            <span>Date: ${voucherDate || '—'}</span>
+            <span>${lineCount} line${lineCount === 1 ? '' : 's'}</span>
+        </div>
+        ${listHtml}
+    `;
+}
+
+// Clear the voucher header bar (used when a session completes or exits).
+function clearVoucherHeader() {
+    const bar = document.getElementById('voucherHeaderBar');
+    if (bar) bar.innerHTML = '';
 }
 
 // ---------- RENDER TRANSACTION ----------
@@ -1366,6 +1422,12 @@ function navigateToTransaction(detailId) {
     // Find index
     currentTransactionIndex = sessionTransactions.findIndex(t => t.detail_id === detailId);
 
+    // Phase 2: keep the voucher header bar in sync when navigating via Prev/popover — these
+    // paths step through the flat per-line sessionTransactions list, not /next, so the voucher's
+    // lines are derived by matching voucher_id within that already-loaded list.
+    const voucherLines = sessionTransactions.filter(t => t.voucher_id === transaction.voucher_id);
+    renderVoucherHeader(transaction.voucher_id, transaction.extract_date, voucherLines);
+
     // Render the transaction
     renderTransaction(transaction);
     updateProgressDisplay();
@@ -1629,6 +1691,7 @@ function exitSession() {
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.remove('verification-active');
         if (transactionCard) transactionCard.innerHTML = '';
+        clearVoucherHeader();
         showStatus('Session exited. Returning to cashbook.', 'info');
         currentSessionId = null;
         currentDetailId = null;
