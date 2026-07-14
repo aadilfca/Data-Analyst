@@ -14,6 +14,9 @@ import io
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
+# Reused for voucher/line grouping in get_next_transaction (Phase 1) — same document-key
+# logic already used by import's compare_transactions, applied at query time.
+from routers.import_export import get_document_group_id
 
 router = APIRouter()
 
@@ -109,6 +112,19 @@ def parse_row_data(raw_value: Any) -> Optional[Dict[str, Any]]:
         except Exception:
             return None
     return None
+
+def get_template_columns(template_id: int) -> list:
+    """Fetch a template's active columns ordered by sort_order (lowest first), for document_group_id computation."""
+    return execute_query(
+        """
+        SELECT m.id AS column_id, m.column_name, m.data_type, p.sort_order
+        FROM template_column_mappings p
+        JOIN master_columns m ON p.column_id = m.id
+        WHERE p.template_id = ? AND m.is_active = 1
+        ORDER BY p.sort_order ASC
+        """,
+        (template_id,)
+    )
 
 def flatten_procedure_data(proc_data: dict) -> dict:
     """Extract standard procedure fields from JSON."""
@@ -372,33 +388,8 @@ def start_verification_session(
 # PHASE 3 ENDPOINTS
 # ==============================================
 
-@router.get("/api/verification/next/{session_id}")
-def get_next_transaction(session_id: int):
-    session = execute_query("SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
-    if not session:
-        raise HTTPException(404, "Verification session not found or cancelled.")
-    
-    detail = execute_query(
-        """
-        SELECT id, client_data_id, transaction_ref, line_items, procedure_data, validation_status, validation_message
-        FROM verification_details
-        WHERE session_id = ? AND status = 'Pending'
-        ORDER BY id
-        LIMIT 1
-        """,
-        (session_id,)
-    )
-    if not detail:
-        pending_count = execute_query(
-            "SELECT COUNT(*) as count FROM verification_details WHERE session_id = ? AND status = 'Pending'",
-            (session_id,)
-        )[0]['count']
-        if pending_count == 0:
-            return {"message": "All transactions in this session have been verified.", "completed": True}
-        else:
-            raise HTTPException(404, "No pending transaction found.")
-    
-    d = detail[0]
+def _build_verification_line(d: dict) -> dict:
+    """Build the per-line payload (unchanged shape from the pre-Phase-1 single-row response)."""
     row_data = get_row_data(d['client_data_id'])
     line_items = []
     if d['line_items']:
@@ -412,7 +403,7 @@ def get_next_transaction(session_id: int):
             procedure_data = json.loads(d['procedure_data']) if isinstance(d['procedure_data'], str) else d['procedure_data']
         except:
             procedure_data = {}
-    
+
     transaction_type = procedure_data.get('transaction_type', '')
 
     # --- Phase 3: Fetch change_detection info for the transaction ---
@@ -444,7 +435,7 @@ def get_next_transaction(session_id: int):
                 old_row_data = json.loads(old_raw) if isinstance(old_raw, str) else old_raw
             except:
                 pass
-    
+
     return {
         "detail_id": d['id'],
         "client_data_id": d['client_data_id'],
@@ -459,6 +450,63 @@ def get_next_transaction(session_id: int):
         "change_detection_status": change_detection_status,
         "old_row_data": old_row_data,
         "version": current_version
+    }
+
+@router.get("/api/verification/next/{session_id}")
+def get_next_transaction(session_id: int):
+    """
+    Phase 1 (voucher/line grouping): returns the next voucher — header + ordered
+    array of its lines — instead of a single client_data row. Lines are grouped
+    using the same document-key logic as import's compare_transactions
+    (get_document_group_id), computed at query time (not persisted).
+    """
+    session = execute_query("SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
+    if not session:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+
+    # Fetch all details for the session (with the client_data fields needed for grouping)
+    # in one query, ordered by client_data_id so line order matches the physical voucher.
+    details = execute_query(
+        """
+        SELECT vd.id, vd.client_data_id, vd.transaction_ref, vd.line_items, vd.procedure_data,
+               vd.validation_status, vd.validation_message, vd.status,
+               cd.template_id, cd.row_data, cd.extract_date
+        FROM verification_details vd
+        JOIN client_data cd ON vd.client_data_id = cd.id
+        WHERE vd.session_id = ?
+        ORDER BY cd.id ASC
+        """,
+        (session_id,)
+    )
+
+    pending = [d for d in details if d['status'] == 'Pending']
+    if not pending:
+        return {"message": "All transactions in this session have been verified.", "completed": True}
+
+    # Anchor = earliest pending detail row (by verification_details.id, same tie-break as before)
+    anchor = min(pending, key=lambda d: d['id'])
+
+    # Compute document_group_id for every detail row, caching template columns per template_id
+    template_cols_cache: Dict[int, list] = {}
+
+    def doc_group_id_for(d: dict) -> str:
+        tpl_id = d['template_id']
+        if tpl_id not in template_cols_cache:
+            template_cols_cache[tpl_id] = get_template_columns(tpl_id)
+        rd = json.loads(d['row_data']) if isinstance(d['row_data'], str) else d['row_data']
+        return get_document_group_id(template_cols_cache[tpl_id], rd, tpl_id)
+
+    anchor_group_id = doc_group_id_for(anchor)
+    voucher_rows = [d for d in details if doc_group_id_for(d) == anchor_group_id]
+
+    lines = [_build_verification_line(d) for d in voucher_rows]
+
+    return {
+        "voucher_id": anchor['transaction_ref'],
+        "voucher_date": anchor['extract_date'],
+        "document_group_id": anchor_group_id,
+        "line_count": len(lines),
+        "lines": lines
     }
 
 @router.post("/api/verification/save_line_items")
