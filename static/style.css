@@ -712,93 +712,6 @@ body {
     margin: 6px 0 16px 0;
 }
 
-/* Transaction details table – vertical, dim borders, shrink-to-fit */
-.transaction-details-table {
-    width: auto;
-    min-width: 280px;
-    max-width: 100%;
-    border-collapse: collapse;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    overflow: hidden;
-    font-size: 14px;
-}
-
-.transaction-details-table td {
-    padding: 8px 14px;
-    vertical-align: middle;
-    border: 1px solid #e2e8f0;
-}
-
-.transaction-details-table tbody tr {
-    border-bottom: 1px solid #eef2f6;
-}
-
-.transaction-details-table tbody tr:last-child {
-    border-bottom: none;
-}
-
-
-
-.transaction-details-table .label {
-    font-weight: 600;
-    color: #475569;
-    background: #fafcfd;
-    border-right: 1px solid #e8edf2;
-    padding-right: 20px;
-}
-
-.transaction-details-table .value {
-    font-weight: 500;
-    color: #1a1a2e;
-    background: white;
-    padding-left: 20px;
-}
-
-/* Emphasise Voucher ID and Amount */
-.transaction-details-table .voucher-row .value {
-    font-size: 18px;
-    font-weight: 700;
-    color: #2563eb;
-}
-
-.transaction-details-table .amount-row .value {
-    font-size: 18px;
-    font-weight: 700;
-    color: #16a34a;
-}
-
-/* Zebra stripes for even rows */
-.transaction-details-table tbody tr:nth-child(even) .label {
-    background: #f5f8fa;
-}
-.transaction-details-table tbody tr:nth-child(even) .value {
-    background: #fafcff;
-}
-
-/* Hover effect */
-.transaction-details-table tbody tr:hover .label,
-.transaction-details-table tbody tr:hover .value {
-    background: #f1f5f9;
-}
-
-/* Flex container for table and procedure tiles side by side */
-.transaction-details-flex {
-    display: flex;
-    gap: 24px;
-    align-items: flex-start;
-    margin-bottom: 12px;
-    flex-wrap: wrap;
-}
-
-.transaction-details-flex .procedure-section {
-    flex: 1;
-    min-width: 200px;
-    margin: 0;
-    padding: 0;
-    border: none;
-}
-
 /* Validation status row */
 .validation-status-row {
     display: flex;
@@ -1272,11 +1185,10 @@ body {
    VERIFICATION MODULE ADDITIONAL STYLES
    ============================================= */
 
-/* ----- Header Row ----- */
-/* Cleanup pass: this is now only used for the voucher header bar's nav row (its other former use,
-   the removed standalone renderTransaction() view, is gone) — simplified from a shadowed white
-   card top to a plain flex row, matching "no separate styling treatment / remove the extra visual
-   weight" for this whole header area. */
+/* ----- Header Row -----
+   Voucher header prototype layout: a primary row (Prev voucher / centered title+subtitle / Next
+   voucher) and a secondary slim toolbar row (view-all / Save Progress / Cashbook), both plain
+   flex rows with no card background/shadow. */
 .verification-header-row {
     display: flex;
     justify-content: space-between;
@@ -1285,21 +1197,40 @@ body {
     flex-wrap: wrap;
     gap: 10px;
 }
-.vh-left { flex: 0 0 auto; }
-.vh-right { flex: 0 0 auto; }
-.vh-center {
-    flex: 1 1 auto;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    justify-content: center;
+.voucher-nav-row {
+    justify-content: space-between;
 }
-.vh-title {
-    font-weight: 700;
-    font-size: 20px;
+.voucher-title-block {
+    flex: 1 1 auto;
+    text-align: center;
+}
+.voucher-title {
+    font-weight: 600;
+    font-size: 16px;
     color: #1a1a2e;
-    letter-spacing: 0.5px;
+}
+.voucher-subtitle {
+    font-size: 13px;
+    color: #666;
+    margin-top: 2px;
+}
+.btn-voucher-nav {
+    padding: 6px 4px;
+    border: none;
+    background: none;
+    color: #3b82f6;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.2s;
+}
+.btn-voucher-nav:hover:not(:disabled) { color: #2563eb; text-decoration: underline; }
+.btn-voucher-nav:disabled { color: #cbd5e1; cursor: not-allowed; }
+.voucher-toolbar-row {
+    justify-content: flex-end;
+    gap: 12px;
+    padding-top: 6px;
 }
 .vh-icon {
     font-size: 18px;
@@ -1389,8 +1320,9 @@ body {
 /* Cleanup pass: .transaction-grid and the base (non-compound) .grid-segment-1/2/3 grid-placement
    rules were removed — they only had meaning inside .transaction-grid, which no longer exists
    anywhere now that the standalone renderTransaction() view is gone. The .grid-segment-2/-3 class
-   NAMES are still used per-line (buildLineDetailHtml()) but styled by the separate, more specific
-   .voucher-line-segments .grid-segment-2/-3 { flex: ... } rules further down — untouched. */
+   names are no longer used anywhere either (buildLineDetailHtml() dropped Segment 2/3 markup when
+   Audit Guidance/Supporting moved into popups), so their .voucher-line-segments styling rules
+   were removed too. */
 
 /* ----- Segment 2 Tab Shell (DFD / AUDIT) ----- */
 .segment2-tab-header {
@@ -1494,93 +1426,6 @@ body {
     overflow: hidden;
     z-index: 200;
 }
-/* Transaction details table – vertical, dim borders, shrink‑wrap */
-.transaction-details-wrapper {
-    max-width: 480px;
-    width: auto;
-    margin-bottom: 12px;
-    border: 1px solid #e2e8f0;
-    overflow: hidden;
-}
-
-.transaction-details-table {
-    width: auto;
-    min-width: 280px;
-    max-width: 100%;
-    border-collapse: collapse;
-    border: none;
-    font-size: 14px;
-}
-
-.transaction-details-table tbody tr {
-    border-bottom: 1px solid #eef2f6;
-}
-
-.transaction-details-table tbody tr:last-child {
-    border-bottom: none;
-}
-
-.transaction-details-table td {
-    padding: 8px 14px;
-    vertical-align: middle;
-    border: 1px solid #e2e8f0;
-}
-
-/* Header row – matches .procedure-vertical-table th convention */
-.transaction-details-table thead th {
-    background: #f8fafc;
-    padding: 10px 14px;
-    text-align: left;
-    font-weight: 600;
-    border-bottom: 2px solid #e2e8f0;
-    color: #475569;
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-}
-
-.transaction-details-table .label {
-    font-weight: 600;
-    color: #475569;
-    width: 1%;
-    white-space: nowrap;
-    background: #fafcfd;
-    border-right: 1px solid #e8edf2;
-}
-
-.transaction-details-table .value {
-    font-weight: 500;
-    color: #1a1a2e;
-    background: white;
-    word-break: break-word;
-}
-
-/* Emphasise Voucher ID and Amount */
-.transaction-details-table .voucher-row .value {
-    font-size: 18px;
-    font-weight: 700;
-    color: #2563eb;
-}
-
-.transaction-details-table .amount-row .value {
-    font-size: 18px;
-    font-weight: 700;
-}
-
-/* Phase 7: color state driven by validation_status (Pending/Failed = red, Passed = green + checkmark) */
-.transaction-details-table .amount-row .value.status-pending,
-.transaction-details-table .amount-row .value.status-failed {
-    color: #991b1b;
-}
-.transaction-details-table .amount-row .value.status-passed {
-    color: #16a34a;
-}
-.amount-check-icon {
-    margin-left: 8px;
-    font-size: 15px;
-    color: #16a34a;
-}
-
 /* ----- Phase 8: Voucher ID change-alert icon + popover ----- */
 .voucher-change-icon {
     margin-left: 8px;
@@ -1619,24 +1464,12 @@ body {
     font-size: 12px;
 }
 
-/* ----- Voucher Header Bar (nav row + voucher summary line) -----
-   Cleanup pass: now holds the Prev/Next/Save/Cashbook nav row (reusing .verification-header-row/
-   .vh-*, moved here from the removed standalone renderTransaction() view) plus the existing
-   voucher-summary line, styled plainly per "no separate styling treatment / remove the extra
-   visual weight" — no card background/shadow, just a light divider under the whole bar. */
+/* ----- Voucher Header Bar (nav row + toolbar row) -----
+   Plain layout, no card background/shadow — just a light divider under the whole bar. */
 .voucher-header-bar {
     margin-bottom: 16px;
     border-bottom: 1px solid #e2e8f0;
     padding-bottom: 10px;
-}
-.voucher-header-summary {
-    display: flex;
-    gap: 20px;
-    flex-wrap: wrap;
-    padding: 8px 20px 0;
-    font-weight: 500;
-    font-size: 13px;
-    color: #475569;
 }
 
 /* Phase 1 redesign: emoji icon sizing/alignment for header buttons and standalone icons.
@@ -1679,33 +1512,51 @@ body {
 }
 
 /* ----- Voucher Lines (collapsed/expand rows) -----
-   Phase 3: flat theme-matched styling — no card background, no shadow, no border-radius.
-   The outer container uses only a hairline border; each row is separated by a bottom border.
-   The page body background (#f0f2f5) shows through as the only background. */
+   Matches the approved prototype: each line is its own bordered, rounded box with a gap between
+   rows (not one continuous bordered list) — see
+   C:\Users\LENOVO\.claude\plans\melodic-dazzling-feather.md. No card shadow/background; the page
+   body background (#f0f2f5) still shows through. */
 .voucher-lines-container {
     display: flex;
     flex-direction: column;
-    border: 1px solid #e2e8f0;
+    gap: 8px;
     margin-bottom: 20px;
 }
 
 .voucher-line-row {
-    border-bottom: 1px solid #e2e8f0;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    overflow: hidden;
 }
 
-.voucher-line-row:last-child {
-    border-bottom: none;
+/* Shared column layout — used by the column-title row, each line's summary row, and the total
+   row, so all three line up under the same headings (Account Code / Account Name / Amount /
+   Status / chevron). */
+.voucher-line-summary-grid {
+    display: grid;
+    grid-template-columns: 80px 1fr 90px 110px 24px;
+    gap: 12px;
+    align-items: center;
+}
+
+/* Column-title row, naming the cashbook's own columns. */
+.voucher-line-header-row {
+    padding: 6px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #94a3b8;
+}
+.voucher-line-header-row .voucher-line-amount-col {
+    text-align: right;
 }
 
 .voucher-line-summary {
-    display: flex;
-    align-items: center;
-    gap: 16px;
     padding: 10px 16px;
     cursor: pointer;
     user-select: none;
     transition: background 0.15s ease;
-    flex-wrap: wrap;
 }
 
 .voucher-line-summary:hover {
@@ -1719,6 +1570,12 @@ body {
     white-space: nowrap;
 }
 
+.voucher-line-name-cell {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
 .voucher-line-name {
     font-weight: 600;
     color: #1a1a2e;
@@ -1727,37 +1584,62 @@ body {
 
 .voucher-line-desc {
     color: #64748b;
-    font-size: 13px;
-    flex: 1 1 auto;
-    min-width: 120px;
+    font-size: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .voucher-line-amount {
-    font-weight: 700;
+    font-weight: 500;
     font-size: 14px;
+    text-align: right;
     white-space: nowrap;
 }
 
-/* Phase 4: validation-status color/checkmark, moved here from the removed .amount-row
-   (same status-pending/failed/passed + data-validation-status convention as before). */
-.voucher-line-amount.status-pending,
-.voucher-line-amount.status-failed {
-    color: #991b1b;
+/* Total line — a distinct footer row under the last line, summing Amount for the voucher and
+   naming the source cashbook in the description slot. Not a real line: no hover/cursor-pointer,
+   no chevron. */
+.voucher-line-total-row {
+    margin-top: 2px;
+    padding: 12px 16px;
+    border: 1px solid #93c5fd;
+    border-radius: 6px;
+    background: linear-gradient(135deg, #eff6ff, #f5f9ff);
 }
-.voucher-line-amount.status-passed {
-    color: #16a34a;
+.voucher-line-total-row .voucher-line-name {
+    color: #1e40af;
+    font-weight: 700;
+    font-size: 15px;
 }
-.voucher-line-amount .amount-check-icon {
-    margin-left: 6px;
-    font-size: 13px;
-    color: #16a34a;
+.voucher-line-total-row .voucher-line-desc {
+    color: #3b82f6;
+}
+.voucher-line-total-row .voucher-line-amount {
+    font-weight: 700;
+    font-size: 16px;
+    color: #1e40af;
 }
 
-/* Phase 4: per-line change-alert icon (moved from the removed voucher-row) — placed inline next
-   to the account name in the summary row. */
+/* Status cell: icon + label, colored by validation_status — green for passed, amber for pending,
+   red for failed. Replaces the old amount-cell checkmark + separate badge approach. */
+.voucher-line-status {
+    font-size: 12px;
+    text-align: right;
+    white-space: nowrap;
+}
+.voucher-line-status.status-pending {
+    color: #b45309;
+}
+.voucher-line-status.status-passed {
+    color: #16a34a;
+}
+.voucher-line-status.status-failed {
+    color: #dc2626;
+}
+
+/* Change-alert icon (⚠️) — placed inline next to the account name; a functional signal, not
+   decoration, so it's kept even though the badge/type indicators around it were dropped. */
 .voucher-line-change-icon {
     margin-left: 6px;
     font-size: 14px;
@@ -1765,49 +1647,32 @@ body {
     vertical-align: middle;
 }
 
-/* Phase 4: compact "deleted" indicator in the summary row (fuller banner text lives in the
-   line's expanded panel, reusing .change-detection-banner). */
+/* Deleted-badge chip — compact indicator inline next to the account name (fuller banner text
+   lives in the line's expanded panel, reusing .change-detection-banner). */
 .voucher-line-deleted-badge {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 10px;
     font-weight: 600;
     background: #fee2e2;
     color: #991b1b;
     white-space: nowrap;
-}
-
-.voucher-line-badge {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-    white-space: nowrap;
-}
-
-.voucher-line-badge.unset {
-    background: #f1f5f9;
-    color: #94a3b8;
-}
-
-.voucher-line-badge.set {
-    background: #dbeafe;
-    color: #1e40af;
+    margin-left: 6px;
 }
 
 .voucher-line-chevron {
-    font-size: 18px;
+    font-size: 14px;
     color: #94a3b8;
-    transition: transform 0.2s ease;
-    margin-left: auto;
+    transition: transform 0.15s ease;
+    text-align: right;
+    display: inline-block;
 }
 
 .voucher-line-row.expanded .voucher-line-chevron {
-    transform: rotate(90deg);
+    transform: rotate(180deg);
 }
 
 .voucher-line-detail {
@@ -1826,8 +1691,9 @@ body {
     border-top-color: #e2e8f0;
 }
 
-/* Phase 4: horizontal action bar inside the expanded panel — type dropdown (right-aligned)
-   + two action buttons (Audit Guidance, Supporting). */
+/* Horizontal action bar inside the expanded panel — type dropdown on the left, Audit Guidance +
+   Supporting buttons grouped on the right. Two flex items (.expanded-bar-type/-actions) so
+   space-between pushes the group apart instead of spacing every control individually. */
 .expanded-bar {
     display: flex;
     align-items: center;
@@ -1835,8 +1701,18 @@ body {
     padding: 10px 0;
     margin-top: 10px;
     border-top: 1px solid #e2e8f0;
-    justify-content: flex-end;
+    justify-content: space-between;
     flex-wrap: wrap;
+}
+.expanded-bar-type {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.expanded-bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 /* Button: Audit Guidance — blue theme, matching the app's primary color */
@@ -1888,46 +1764,11 @@ body {
     transform: translateY(-2px);
 }
 
-/* The .voucher-line-segments block below is no longer rendered in Phase 4 (Segment 2/3 removed
-   from buildLineDetailHtml()). Kept to avoid breaking any other references; will be removed in a
-   future cleanup pass. */
-.voucher-line-segments {
-    display: flex;
-    gap: 20px;
-    flex-wrap: wrap;
-}
-
-.voucher-line-segments .grid-segment-2 {
-    flex: 1 1 320px;
-    min-width: 280px;
-}
-
-.voucher-line-segments .grid-segment-3 {
-    flex: 1 1 400px;
-    min-width: 300px;
-}
-
 @media (max-width: 768px) {
-    .voucher-line-summary {
+    .voucher-line-summary-grid {
+        grid-template-columns: 55px 1fr 65px 70px 18px;
         gap: 8px;
     }
-    .voucher-line-segments {
-        flex-direction: column;
-    }
-}
-
-/* Zebra stripes for even rows */
-.transaction-details-table tbody tr:nth-child(even) .label {
-    background: #f5f8fa;
-}
-.transaction-details-table tbody tr:nth-child(even) .value {
-    background: #fafcff;
-}
-
-/* Hover effect */
-.transaction-details-table tbody tr:hover .label,
-.transaction-details-table tbody tr:hover .value {
-    background: #f1f5f9;
 }
 
 /* ----- Mandatory Procedure Cards (horizontal, checkbox + icon + name) ----- */
@@ -2368,51 +2209,6 @@ body {
     padding: 0 !important;
 }
 
-/* Professional navigation arrows – Odoo-style (larger, refined).
-   Cleanup pass: this block used to sit inside the @media (max-width: 768px) query below, so on any
-   normal desktop-width screen the Prev/Next arrows (now relocated into the voucher header bar)
-   rendered with no styling at all (default browser button). Moved out to the unconditional base
-   stylesheet — same rules, just no longer accidentally mobile-only. */
-.nav-arrow {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    border: 1px solid transparent;
-    background: #f1f5f9;
-    font-size: 24px;
-    font-weight: 400;
-    cursor: pointer;
-    color: #1e293b;
-    transition: all 0.2s ease;
-    user-select: none;
-    line-height: 1;
-    padding: 0;
-    margin: 0 4px;
-}
-.nav-arrow:hover:not(:disabled) {
-    background: #e2e8f0;
-    border-color: #cbd5e1;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.06);
-}
-.nav-arrow:active:not(:disabled) {
-    transform: scale(0.92);
-    background: #d0d5dd;
-}
-.nav-arrow:disabled {
-    background: #f8fafc;
-    border-color: transparent;
-    color: #cbd5e1;
-    cursor: not-allowed;
-    box-shadow: none;
-}
-.nav-arrow:focus-visible {
-    outline: 2px solid #3b82f6;
-    outline-offset: 2px;
-}
-
 /* ----- Responsive ----- */
 @media (max-width: 768px) {
     .verification-header-row {
@@ -2420,9 +2216,8 @@ body {
         align-items: stretch;
         gap: 8px;
     }
-    .vh-center {
-        justify-content: flex-start;
-        flex-wrap: wrap;
+    .voucher-title-block {
+        text-align: left;
     }
     .procedure-cards-container {
         flex-direction: column;

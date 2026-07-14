@@ -429,34 +429,33 @@ async function loadNextTransaction(detailId = null) {
     }
 }
 
-// ---------- VOUCHER HEADER (Phase 2, extended in cleanup pass; Phase 1 redesign) ----------
-// Renders the voucher-level chrome above the voucher lines list: a nav row (Prev/Next arrows,
-// module-title + counter, view-all icon, Save Progress, Cashbook return) plus the Voucher
-// ID/Date/line-count summary line. The per-line collapsed/expand rows (renderVoucherLines())
-// own everything else below this header.
+// ---------- VOUCHER HEADER ----------
+// Renders the voucher-level chrome above the voucher lines list: a primary row with text
+// Prev/Next voucher buttons flanking a centered title ("Voucher {id}") + subtitle
+// (date · line count · Amount total · position counter), and a secondary slim toolbar row for
+// Save Progress / Cashbook return / view-all. Matches the approved prototype layout — see
+// C:\Users\LENOVO\.claude\plans\melodic-dazzling-feather.md. The per-line collapsed/expand rows
+// (renderVoucherLines()) own everything else below this header.
 function renderVoucherHeader(voucherId, voucherDate, lines) {
     const bar = document.getElementById('voucherHeaderBar');
     if (!bar) return;
     const lineCount = lines ? lines.length : 0;
+    const total = computeVoucherTotal(lines);
     bar.innerHTML = `
-        <div class="verification-header-row">
-            <div class="vh-center" style="justify-content: flex-start; gap: 6px;">
-                <button class="nav-arrow" id="prevArrow" ${currentTransactionIndex <= 0 ? 'disabled' : ''} title="Previous transaction">‹</button>
-                <span class="vh-title" id="transactionHeaderTitle">VOUCHER</span>
-                <button class="nav-arrow" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">›</button>
-                <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer; margin-left:4px;">
-                    <span class="vh-icon-symbol">🔍</span>
-                </span>
+        <div class="verification-header-row voucher-nav-row">
+            <button class="btn-voucher-nav" id="prevArrow" ${currentTransactionIndex <= 0 ? 'disabled' : ''} title="Previous transaction">← Prev voucher</button>
+            <div class="voucher-title-block">
+                <div class="voucher-title">Voucher ${voucherId || '—'}</div>
+                <div class="voucher-subtitle">${voucherDate || '—'} · ${lineCount} line${lineCount === 1 ? '' : 's'} · Amount ${total}<span id="voucherPositionCounter"></span></div>
             </div>
-            <div class="vh-right">
-                <button class="btn-save-header" id="saveBtn"><span class="btn-icon">💾</span> Save Progress</button>
-                <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
-            </div>
+            <button class="btn-voucher-nav" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
         </div>
-        <div class="voucher-header-summary">
-            <span><span class="vh-icon-symbol">📑</span> Voucher: ${voucherId || '—'}</span>
-            <span>Date: ${voucherDate || '—'}</span>
-            <span>${lineCount} line${lineCount === 1 ? '' : 's'}</span>
+        <div class="verification-header-row voucher-toolbar-row">
+            <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
+                <span class="vh-icon-symbol">🔍</span>
+            </span>
+            <button class="btn-save-header" id="saveBtn"><span class="btn-icon">💾</span> Save Progress</button>
+            <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
         </div>
     `;
 
@@ -507,13 +506,30 @@ function getVoucherLineAlias(row, aliases) {
     return '—';
 }
 
-// Returns { label: 'Dr'|'Cr', value } for a line's row_data, preferring whichever side is populated.
-function getVoucherLineDrCr(row) {
+// Returns a single Amount value for a line's row_data — this cashbook only ever populates one
+// side (Debit for CPV vouchers, Credit for CRV vouchers; the other side is always zero at
+// source), so Dr/Cr is not a meaningful distinction here and the row shows one plain number.
+function getVoucherLineAmount(row) {
     const debit = getVoucherLineAlias(row, VOUCHER_LINE_DEBIT_ALIASES);
-    if (debit !== '—') return { label: 'Dr', value: debit };
+    if (debit !== '—') return debit;
     const credit = getVoucherLineAlias(row, VOUCHER_LINE_CREDIT_ALIASES);
-    if (credit !== '—') return { label: 'Cr', value: credit };
-    return { label: '', value: '—' };
+    return credit !== '—' ? credit : '';
+}
+
+// Parses an Amount display value (may contain commas/currency formatting) into a number, 0 if empty.
+function parseVoucherAmount(value) {
+    if (value === '' || value === undefined || value === null) return 0;
+    const n = parseFloat(String(value).replace(/,/g, ''));
+    return isNaN(n) ? 0 : n;
+}
+
+// Sums Amount across all of a voucher's lines, for the header subtitle and the total line.
+function computeVoucherTotal(lines) {
+    let total = 0;
+    (lines || []).forEach(line => {
+        total += parseVoucherAmount(getVoucherLineAmount(line.row_data || {}));
+    });
+    return total;
 }
 
 // Maps a validation_status string to the same icon/class convention used by the transaction-list
@@ -551,10 +567,10 @@ function seedVoucherLineState(lines) {
 }
 
 // ---------- RENDER VOUCHER LINES (Phase 3) ----------
-// Renders one collapsed/expand row per line into #voucherLinesContainer. Segment 1 is not
-// repeated here (its fields — account code/name/description/amount — are covered by the
-// compact summary row); Segment 2/3 render inside each row's detail panel via
-// buildLineDetailHtml(), independently per line.
+// Renders a column-title row, one collapsed/expand row per line, and a total-line footer into
+// #voucherLinesContainer. Segment 1 is not repeated here (its fields — account code/name/
+// description/amount — are covered by the compact summary row); Segment 2/3 render inside each
+// row's detail panel via buildLineDetailHtml(), independently per line.
 function renderVoucherLines(lines) {
     const container = document.getElementById('voucherLinesContainer');
     if (!container) return;
@@ -563,22 +579,30 @@ function renderVoucherLines(lines) {
         return;
     }
 
-    let html = '';
+    // Column-title row, matching the cashbook's own column names — aligned with the summary
+    // row's grid via the shared .voucher-line-summary-grid class.
+    let html = `
+        <div class="voucher-line-header-row voucher-line-summary-grid">
+            <span>Account Code</span>
+            <span>Account Name</span>
+            <span class="voucher-line-amount-col">Amount</span>
+            <span>Status</span>
+            <span></span>
+        </div>
+    `;
+
     lines.forEach(line => {
         const uid = line.detail_id;
         const row = line.row_data || {};
-        const state = voucherLineState[uid] || { transactionType: '', procedureData: {} };
         const accountCode = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_CODE_ALIASES);
         const accountName = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_NAME_ALIASES);
         const description = getVoucherLineAlias(row, VOUCHER_LINE_DESCRIPTION_ALIASES);
-        const drCr = getVoucherLineDrCr(row);
-        const badgeText = state.transactionType || 'Not set';
-        const badgeClass = state.transactionType ? 'set' : 'unset';
-        // Phase 4: validation-status color/checkmark, moved here from the removed .amount-row
-        // (same status-pending/failed/passed + data-validation-status convention as before).
+        const amount = getVoucherLineAmount(row);
+        // Phase 4: validation-status color, moved here from the removed .amount-row (same
+        // status-pending/failed/passed convention as before), now driving the status cell's color.
         const validationStatus = (line.validation_status || 'Pending').toLowerCase();
-        // Phase 4: change-alert icon (updated) / compact indicator (deleted), moved here from the
-        // removed voucher-row. Only 'updated' lines have diff data seeded in voucherLineDiffData.
+        // Change-alert icon (updated) / deleted-badge chip — functional signals, kept inline next
+        // to the account name/description. Only 'updated' lines have diff data in voucherLineDiffData.
         const changeIconHtml = voucherLineDiffData[uid]
             ? `<span class="voucher-line-change-icon" id="voucherChangeIcon-${uid}" title="Changed on re-upload">⚠️</span>`
             : '';
@@ -588,18 +612,15 @@ function renderVoucherLines(lines) {
 
         html += `
             <div class="voucher-line-row" data-detail-id="${uid}">
-                <div class="voucher-line-summary" data-detail-id="${uid}">
+                <div class="voucher-line-summary voucher-line-summary-grid" data-detail-id="${uid}">
                     <span class="voucher-line-code">${accountCode}</span>
-                    <span class="voucher-line-name">${accountName}${changeIconHtml}</span>
-                    <span class="voucher-line-desc">${description}</span>
-                    ${deletedBadgeHtml}
-                    <span class="voucher-line-amount status-${validationStatus}" data-validation-status="${validationStatus}">
-                        <span class="amount-text">${drCr.label} ${drCr.value}</span>
-                        ${validationStatus === 'passed' ? '<span class="amount-check-icon">✓</span>' : ''}
+                    <span class="voucher-line-name-cell">
+                        <span class="voucher-line-name">${accountName}${changeIconHtml}${deletedBadgeHtml}</span>
+                        <span class="voucher-line-desc">${description}</span>
                     </span>
-                    <span class="voucher-line-badge ${badgeClass}" id="voucherLineBadge-${uid}">${badgeText}</span>
-                    ${getVoucherLineStatusIcon(line.validation_status)}
-                    <span class="voucher-line-chevron">›</span>
+                    <span class="voucher-line-amount">${amount}</span>
+                    <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
+                    <span class="voucher-line-chevron">▾</span>
                 </div>
                 <div class="voucher-line-detail" id="voucherLineDetail-${uid}">
                     ${buildLineDetailHtml(line, uid)}
@@ -607,6 +628,24 @@ function renderVoucherLines(lines) {
             </div>
         `;
     });
+
+    // Total line: cashbook name in the description slot, summed Amount — see
+    // computeVoucherTotal(). Not a real line (no detail-id, not expandable).
+    const cashbookName = window._currentCashbook || selectedCashbook || '';
+    const total = computeVoucherTotal(lines);
+    html += `
+        <div class="voucher-line-total-row voucher-line-summary-grid">
+            <span></span>
+            <span class="voucher-line-name-cell">
+                <span class="voucher-line-name">Total</span>
+                <span class="voucher-line-desc">${cashbookName}</span>
+            </span>
+            <span class="voucher-line-amount">${total}</span>
+            <span></span>
+            <span></span>
+        </div>
+    `;
+
     container.innerHTML = html;
 
     // Sync each line's type dropdown with its seeded state.
@@ -644,11 +683,6 @@ function renderVoucherLines(lines) {
             if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
             voucherLineState[uid].transactionType = type;
             voucherLineState[uid].procedureData.transaction_type = type;
-            const badge = document.getElementById(`voucherLineBadge-${uid}`);
-            if (badge) {
-                badge.textContent = type || 'Not set';
-                badge.className = `voucher-line-badge ${type ? 'set' : 'unset'}`;
-            }
         });
     });
 
@@ -671,82 +705,14 @@ function renderVoucherLines(lines) {
     });
 }
 
-// ---------- PARTICULARS/VALUE TABLE (moved here from the removed renderTransaction()) ----------
-// Date/Account Code/Account Name/Voucher Description table for one line, reusing the exact same
-// alias-lookup logic and .transaction-details-wrapper/.transaction-details-table classes the old
-// standalone view used. Voucher ID and Amount rows stay out of this table — they already live in
-// the voucher header bar and this line's own summary row, respectively (Phase 4).
-function buildParticularsValueTable(row, extractDate) {
-    const dateAliases = ['Date', 'Transaction Date', 'Invoice Date', 'Doc Date', 'Posting Date', 'Entry Date', 'Date'];
-    const getDateValue = () => {
-        for (let alias of dateAliases) {
-            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
-        }
-        return extractDate || '—';
-    };
-    const accountCodeAliases = ['Account Detail', 'Account Details', 'Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head', 'Ledger Detail'];
-    const getAccountHead = () => {
-        for (let alias of accountCodeAliases) {
-            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
-        }
-        return '—';
-    };
-    const accountNameAliases = ['Account Name', 'Account', 'Account Detail', 'Ledger', 'Head'];
-    const getAccountName = () => {
-        for (let alias of accountNameAliases) {
-            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
-        }
-        return '—';
-    };
-    const descriptionAliases = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars'];
-    const getDescription = () => {
-        for (let alias of descriptionAliases) {
-            if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
-        }
-        return '—';
-    };
-
-    return `
-        <div class="transaction-details-wrapper">
-            <table class="transaction-details-table">
-                <thead>
-                    <tr>
-                        <th>Particulars</th>
-                        <th>Value</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td class="label">Date</td>
-                        <td class="value">${getDateValue()}</td>
-                    </tr>
-                    <tr>
-                        <td class="label">Account Code</td>
-                        <td class="value">${getAccountHead()}</td>
-                    </tr>
-                    <tr>
-                        <td class="label">Account Name</td>
-                        <td class="value">${getAccountName()}</td>
-                    </tr>
-                    <tr>
-                        <td class="label">Voucher Description</td>
-                        <td class="value">${getDescription()}</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-    `;
-}
-
 // ---------- BUILD LINE DETAIL HTML (Phase 4) ----------
-// Expanded panel: Particulars/Value table + horizontal bar with transaction type dropdown and
-// two action buttons (Audit Guidance, Supporting). Segment 2 tabs, Segment 3 procedure cards,
-// and Observations & Comments have been removed — relocated into popups per Phase 4.
+// Expanded panel: horizontal bar with Audit Guidance/Supporting buttons and the transaction type
+// dropdown. The Particulars/Value table was removed — Date/Account Code/Account Name/Description
+// are already shown in the line's own summary row (renderVoucherLines()), so it was a duplicate.
 function buildLineDetailHtml(line, uid) {
     const state = voucherLineState[uid] || { transactionType: '', procedureData: {} };
 
-    // Particulars/Value table for this line, above the deleted-state banner and action bar.
-    let html = buildParticularsValueTable(line.row_data || {}, line.extract_date);
+    let html = '';
 
     // Deleted-state banner, shown inside this line's own expanded panel.
     if (line.change_detection_status === 'deleted') {
@@ -761,70 +727,30 @@ function buildLineDetailHtml(line, uid) {
         `;
     }
 
-    // Horizontal bar: transaction type dropdown (right‑aligned) + Audit Guidance + Supporting buttons.
+    // Horizontal bar: Audit Guidance + Supporting buttons grouped on the left, transaction type
+    // dropdown on the extreme right (two flex items so space-between splits them apart).
     html += `
         <div class="expanded-bar">
-            <label class="vh-type-label">Type</label>
-            <select class="vh-type-dropdown voucher-line-type-dropdown" data-uid="${uid}">
-                <option value="">-- Select --</option>
-                <option value="Material Purchased">Material Purchased</option>
-                <option value="Repair & Maintenance (In-house)">Repair & Maintenance (In-house)</option>
-                <option value="Fuel Expense">Fuel Expense</option>
-                <option value="Short Term Advance against Salary">Short Term Advance against Salary</option>
-                <option value="Payment to Contractors">Payment to Contractors</option>
-                <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
-                <option value="Kitchen Expenses">Kitchen Expenses</option>
-            </select>
-            <button class="btn-audit-guidance" data-uid="${uid}" title="View audit guidance for this transaction type">📋 Audit Guidance</button>
-            <button class="btn-supporting" data-uid="${uid}" title="View and confirm supporting documents">📎 Supporting</button>
+            <div class="expanded-bar-actions">
+                <button class="btn-audit-guidance" data-uid="${uid}" title="View audit guidance for this transaction type">📋 Audit Guidance</button>
+                <button class="btn-supporting" data-uid="${uid}" title="View and confirm supporting documents">📎 Supporting</button>
+            </div>
+            <div class="expanded-bar-type">
+                <label class="vh-type-label">Type</label>
+                <select class="vh-type-dropdown voucher-line-type-dropdown" data-uid="${uid}">
+                    <option value="">-- Select --</option>
+                    <option value="Material Purchased">Material Purchased</option>
+                    <option value="Repair & Maintenance (In-house)">Repair & Maintenance (In-house)</option>
+                    <option value="Fuel Expense">Fuel Expense</option>
+                    <option value="Short Term Advance against Salary">Short Term Advance against Salary</option>
+                    <option value="Payment to Contractors">Payment to Contractors</option>
+                    <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
+                    <option value="Kitchen Expenses">Kitchen Expenses</option>
+                </select>
+            </div>
         </div>
     `;
     return html;
-}
-
-// ---------- AUDIT GUIDANCE PANEL, PER LINE (Phase 3) ----------
-// Sibling to renderAuditGuidancePanel() (left untouched) — same fetch/template logic, reusing
-// buildAuditGuidanceTable() unchanged, but targets a per-line panel id and stale-checks against
-// that line's own voucherLineState instead of the global currentTransactionType.
-async function renderAuditGuidancePanelForLine(type, uid) {
-    const panel = document.getElementById(`auditGuidancePanel-${uid}`);
-    if (!panel) return;
-    if (!type) {
-        panel.innerHTML = `<p class="segment2-placeholder-text">Select a transaction type to view audit guidance.</p>`;
-        return;
-    }
-    panel.innerHTML = `<p class="segment2-placeholder-text">Loading audit guidance...</p>`;
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
-        // Discard stale response if this line's type changed again while the fetch was in flight
-        if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
-        if (res.status === 404) {
-            panel.innerHTML = `<p class="segment2-placeholder-text">No guidance available for this transaction type yet.</p>`;
-            return;
-        }
-        if (!res.ok) throw new Error('Failed to fetch audit guidance');
-        const data = await res.json();
-        panel.innerHTML = buildAuditGuidanceTable(data);
-    } catch (e) {
-        if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
-        console.error('Error fetching audit guidance:', e);
-        panel.innerHTML = `<p class="segment2-placeholder-text">Unable to load audit guidance.</p>`;
-    }
-}
-
-// Helper: populate a frequent-observations dropdown from localStorage. Phase 4: takes an explicit
-// dropdown element id so it can be reused per line (each line has its own observations dropdown).
-function populateObservationsDropdown(dropdownId) {
-    const dropdown = document.getElementById(dropdownId);
-    if (!dropdown) return;
-    let obsList = JSON.parse(localStorage.getItem('frequentObservations') || '[]');
-    dropdown.innerHTML = '<option value="">-- Select --</option>';
-    obsList.forEach(text => {
-        const opt = document.createElement('option');
-        opt.value = text;
-        opt.textContent = text;
-        dropdown.appendChild(opt);
-    });
 }
 
 // Phase 2: renderLineItems(), addLineItemRow(), and fetchLibrary() were standalone-only functions
@@ -863,9 +789,7 @@ function buildAuditGuidanceTable(data) {
     `;
 }
 
-// Cleanup pass: the non-per-line renderAuditGuidancePanel() (fed by the now-removed standalone
-// renderTransaction() view's header Type dropdown) was deleted — renderAuditGuidancePanelForLine()
-// is the only remaining consumer of buildAuditGuidanceTable()/escapeHtml() above.
+// buildAuditGuidanceTable()/escapeHtml() are now consumed only by openAuditGuidancePopup().
 
 // ---------- UPDATE PROGRESS ----------
 // ---------- UPDATE PROGRESS (lightweight) ----------
@@ -887,69 +811,47 @@ async function updateProgress() {
     }
 }
 
-// Update the header title and navbar stats
-// Phase 1 redesign: counter now shows voucher-based position instead of row/transaction count,
-// reflecting the voucher-stepping logic already returned by the backend. The "TRANSACTION" label
-// is replaced with "VOUCHER" to match the voucher-grouped navigation.
+// Update the voucher position counter (small "· voucher n/total" suffix on the header subtitle,
+// written by renderVoucherHeader()) and navbar stats. Cashbook name is already shown in the
+// navbar stats below, so it's not repeated here.
 async function updateProgressDisplay() {
-    // Update header title: VOUCHER [voucher n/total] – Cashbook Name
-const titleEl = document.getElementById('transactionHeaderTitle');
-if (titleEl) {
-    if (!currentSessionId) {
-        titleEl.textContent = 'VOUCHER';
-    } else {
-        // Compute voucher-based position from sessionTransactions' unique voucher_ids,
-        // rather than the old line-level currentTransactionIndex / totalTransactions.
-        const uniqueVouchers = [...new Set(sessionTransactions.map(t => t.voucher_id).filter(Boolean))];
-        let voucherIndex = -1;
-        let voucherTotal = uniqueVouchers.length;
-        if (currentVoucherId && voucherTotal > 0) {
-            voucherIndex = uniqueVouchers.indexOf(currentVoucherId);
-        }
-        // Fallback: if no voucher list yet (e.g. first load), use line-level values
-        if (voucherTotal === 0) {
-            let index = currentTransactionIndex;
-            let total = totalTransactions;
-            if (total === 0) {
-                try {
-                    const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
-                    if (res.ok) {
-                        const data = await res.json();
-                        total = data.total_transactions || 0;
-                        totalTransactions = total;
-                    }
-                } catch (e) {
-                    console.warn('Could not fetch progress for header:', e);
-                }
-            }
-            // Get cashbook name from global variable
-            const cashbookName = window._currentCashbook || selectedCashbook || '';
-            if (total > 0) {
-                const displayIndex = (index >= 0) ? index + 1 : '?';
-                if (cashbookName) {
-                    titleEl.textContent = `${cashbookName} – VOUCHER [voucher ${displayIndex}/${total}]`;
-                } else {
-                    titleEl.textContent = `VOUCHER [voucher ${displayIndex}/${total}]`;
-                }
-            } else {
-                if (cashbookName) {
-                    titleEl.textContent = `${cashbookName} – VOUCHER`;
-                } else {
-                    titleEl.textContent = 'VOUCHER';
-                }
-            }
-            return;
-        }
-        // Voucher-based position: index of currentVoucherId among unique sorted voucher_ids
-        const displayIndex = (voucherIndex >= 0) ? voucherIndex + 1 : '?';
-        const cashbookName = window._currentCashbook || selectedCashbook || '';
-        if (cashbookName) {
-            titleEl.textContent = `${cashbookName} – VOUCHER [voucher ${displayIndex}/${voucherTotal}]`;
+    const counterEl = document.getElementById('voucherPositionCounter');
+    if (counterEl) {
+        if (!currentSessionId) {
+            counterEl.textContent = '';
         } else {
-            titleEl.textContent = `VOUCHER [voucher ${displayIndex}/${voucherTotal}]`;
+            // Compute voucher-based position from sessionTransactions' unique voucher_ids,
+            // rather than the old line-level currentTransactionIndex / totalTransactions.
+            const uniqueVouchers = [...new Set(sessionTransactions.map(t => t.voucher_id).filter(Boolean))];
+            let voucherIndex = -1;
+            let voucherTotal = uniqueVouchers.length;
+            if (currentVoucherId && voucherTotal > 0) {
+                voucherIndex = uniqueVouchers.indexOf(currentVoucherId);
+            }
+            if (voucherTotal === 0) {
+                // Fallback: if no voucher list yet (e.g. first load), use line-level values.
+                let index = currentTransactionIndex;
+                let total = totalTransactions;
+                if (total === 0) {
+                    try {
+                        const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            total = data.total_transactions || 0;
+                            totalTransactions = total;
+                        }
+                    } catch (e) {
+                        console.warn('Could not fetch progress for header:', e);
+                    }
+                }
+                const displayIndex = (index >= 0) ? index + 1 : '?';
+                counterEl.textContent = total > 0 ? ` · voucher ${displayIndex}/${total}` : '';
+            } else {
+                const displayIndex = (voucherIndex >= 0) ? voucherIndex + 1 : '?';
+                counterEl.textContent = ` · voucher ${displayIndex}/${voucherTotal}`;
+            }
         }
     }
-}
 
     // Update navbar stats
     if (!currentSessionId) return;
@@ -1324,11 +1226,10 @@ async function goToNextTransaction() {
     }
     // Proceed: validate and move (if validation passes, mark verified; if it fails, still allow
     // navigation since the user already confirmed they want to proceed).
-    await validateTransaction(); // updates the active line's .voucher-line-amount color/checkmark
-    // Check if it passed, if yes mark verified. Phase 4: the validation display moved from the
-    // removed .amount-row into the active line's own row in the voucher lines list.
-    const amountCell = document.querySelector(`.voucher-line-row[data-detail-id="${currentDetailId}"] .voucher-line-amount`);
-    if (amountCell && amountCell.dataset.validationStatus === 'passed') {
+    await validateTransaction(); // updates the active line's .voucher-line-status color/icon/label
+    // Check if it passed, if yes mark verified.
+    const statusCell = document.querySelector(`.voucher-line-row[data-detail-id="${currentDetailId}"] .voucher-line-status`);
+    if (statusCell && statusCell.dataset.validationStatus === 'passed') {
         await completeTransaction(); // marks verified and calls loadNextTransaction
     } else {
         // Even if validation failed, we move to next because user confirmed
@@ -1443,23 +1344,16 @@ async function validateTransaction() {
             throw new Error(err.detail || 'Validation failed');
         }
         const data = await res.json();
-        // Phase 7: reflect result on the Amount cell (color + checkmark) instead of a separate badge.
-        // Phase 4: that cell is now the active line's own .voucher-line-amount in the lines list
-        // (the old voucher-wide .amount-row was removed from #transactionCard).
-        const amountCell = document.querySelector(`.voucher-line-row[data-detail-id="${currentDetailId}"] .voucher-line-amount`);
-        if (amountCell) {
+        // Reflect result on the active line's status cell (icon + label + color).
+        const statusCell = document.querySelector(`.voucher-line-row[data-detail-id="${currentDetailId}"] .voucher-line-status`);
+        if (statusCell) {
             const status = data.validation_status.toLowerCase();
-            amountCell.className = `voucher-line-amount status-${status}`;
-            amountCell.dataset.validationStatus = status;
-            const checkIcon = amountCell.querySelector('.amount-check-icon');
-            if (status === 'passed' && !checkIcon) {
-                amountCell.insertAdjacentHTML('beforeend', '<span class="amount-check-icon">✓</span>');
-            } else if (status !== 'passed' && checkIcon) {
-                checkIcon.remove();
-            }
+            statusCell.className = `voucher-line-status status-${status}`;
+            statusCell.dataset.validationStatus = status;
+            statusCell.innerHTML = `${getVoucherLineStatusIcon(data.validation_status)} ${status}`;
         }
         // Phase 2: standalone transaction view removed — verifyBtn DOM element no longer exists.
-        // Validation result is reflected via the per-line amount cell styling above.
+        // Validation result is reflected via the per-line status cell above.
     } catch (e) {
         console.error('Validation error:', e);
         // Do not show status bar message – only log to console
