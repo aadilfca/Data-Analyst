@@ -1654,36 +1654,46 @@ body {
     min-width: 0;
 }
 
-/* Spans the full cell width so the Audit Guidance icon can sit at the extreme right of the
-   Account Name line, separate from the description line below it. */
-.voucher-line-name-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    width: 100%;
-}
-
 .voucher-line-name {
     font-weight: 600;
     color: #1a1a2e;
     font-size: 14px;
 }
 
-/* Audit Guidance icon — subtle by default, more visible on hover; opens the same popup as the
-   "Audit Guidance" button in the expanded panel (see openAuditGuidancePopup() in
-   verification.js), and doubles as a close toggle when clicked again while its own popup is
-   open. */
-.voucher-line-audit-icon {
-    font-size: 13px;
-    line-height: 1;
-    cursor: pointer;
-    opacity: 0.5;
-    flex-shrink: 0;
-    transition: opacity 0.15s ease;
+/* Type cell stacks the dropdown above its two chips (Guide / DFD), overriding the shared cell
+   rule's centered row layout. */
+.voucher-line-type-cell {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
 }
-.voucher-line-audit-icon:hover {
-    opacity: 1;
+.voucher-line-type-chips {
+    display: flex;
+    gap: 6px;
+}
+/* Small pill buttons below the Type dropdown. "Guide" opens the same audit guidance popup as
+   the "Audit Guidance" button in the expanded panel (see openAuditGuidancePopup() in
+   verification.js) via showAuditGuidancePopover(), and doubles as a close toggle when clicked
+   again while its own popup is open. "DFD" opens the existing Data Flow Diagram placeholder
+   modal (openDfdModal()). */
+.voucher-line-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border: 1px solid #d0d5dd;
+    border-radius: 999px;
+    background: #f8fafc;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.voucher-line-chip:hover {
+    background: #eef2f6;
+    border-color: #94a3b8;
 }
 
 .voucher-line-desc {

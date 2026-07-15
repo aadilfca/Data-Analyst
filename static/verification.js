@@ -642,12 +642,13 @@ function renderVoucherLines(lines) {
                             <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
                             <option value="Kitchen Expenses">Kitchen Expenses</option>
                         </select>
+                        <span class="voucher-line-type-chips">
+                            <button type="button" class="voucher-line-chip voucher-line-audit-icon" data-uid="${uid}" title="Audit guidance">📋 Guide</button>
+                            <button type="button" class="voucher-line-chip voucher-line-dfd-chip" data-uid="${uid}" title="Data Flow Diagram">🔀 DFD</button>
+                        </span>
                     </span>
                     <span class="voucher-line-name-cell">
-                        <span class="voucher-line-name-row">
-                            <span class="voucher-line-name">${accountName}${changeIconHtml}${deletedBadgeHtml}</span>
-                            <span class="voucher-line-audit-icon" data-uid="${uid}" title="Audit guidance">📋</span>
-                        </span>
+                        <span class="voucher-line-name">${accountName}${changeIconHtml}${deletedBadgeHtml}</span>
                         <span class="voucher-line-desc">${description}</span>
                     </span>
                     <span class="voucher-line-amount">${amount}</span>
@@ -728,9 +729,9 @@ function renderVoucherLines(lines) {
         });
     });
 
-    // Audit Guidance icon (top-right of the Account Name cell) — same underlying audit guidance
-    // content as the button in the expanded panel, but shown in a small popover anchored to the
-    // icon (not the full-page modal) so the icon stays clickable to toggle it closed.
+    // "Guide" chip (below the Type dropdown) — same underlying audit guidance content as the
+    // button in the expanded panel, but shown in a small popover anchored to the chip (not the
+    // full-page modal) so the chip stays clickable to toggle it closed.
     container.querySelectorAll('.voucher-line-audit-icon').forEach(icon => {
         icon.addEventListener('click', function(e) {
             e.stopPropagation();
@@ -740,6 +741,15 @@ function renderVoucherLines(lines) {
             } else {
                 showAuditGuidancePopover(this, uid);
             }
+        });
+    });
+
+    // "DFD" chip (below the Type dropdown) — reuses the existing Data Flow Diagram placeholder
+    // modal (openDfdModal(), same one this app already has elsewhere).
+    container.querySelectorAll('.voucher-line-dfd-chip').forEach(chip => {
+        chip.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (typeof openDfdModal === 'function') openDfdModal();
         });
     });
 
