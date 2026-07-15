@@ -608,14 +608,19 @@
             <!-- Status bar -->
             <div id="verificationStatus" class="upload-status" style="display:none; margin-bottom:12px;"></div>
 
-            <!-- Voucher Header (Phase 2): Voucher ID / Date / line count summary, plus a simple
-                 placeholder list of the voucher's lines. Per-line collapsed/expand UI is Phase 3. -->
-            <div id="voucherHeaderBar" class="voucher-header-bar"></div>
+            <!-- Voucher Panel: constrained to the left half of the screen, leaving the right half
+                 clear for future development (per user request). Internal grid/column alignment of
+                 the header subtitle and line rows is unchanged — only the outer width is capped. -->
+            <div class="voucher-panel">
+                <!-- Voucher Header (Phase 2): Voucher ID / Date / line count summary, plus a simple
+                     placeholder list of the voucher's lines. Per-line collapsed/expand UI is Phase 3. -->
+                <div id="voucherHeaderBar" class="voucher-header-bar"></div>
 
-            <!-- Voucher Lines (Phase 3): collapsed/expand summary rows, one per line. Each row
-                 expands to reveal its own Segment 2 (DFD/AUDIT + type dropdown) and Segment 3
-                 (procedure cards), independently of the other lines and of #transactionCard below. -->
-            <div id="voucherLinesContainer" class="voucher-lines-container"></div>
+                <!-- Voucher Lines (Phase 3): collapsed/expand summary rows, one per line. Each row
+                     expands to reveal its own Segment 2 (DFD/AUDIT + type dropdown) and Segment 3
+                     (procedure cards), independently of the other lines and of #transactionCard below. -->
+                <div id="voucherLinesContainer" class="voucher-lines-container"></div>
+            </div>
 
             <!-- Transaction Card -->
             <div id="transactionCard" class="transaction-card">

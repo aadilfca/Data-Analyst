@@ -1465,6 +1465,16 @@ body {
     font-size: 12px;
 }
 
+/* ----- Voucher Panel -----
+   Caps the voucher header + line list to the left half of the screen, leaving the right half
+   clear for future development. Left-aligned by default (no margin:auto) since
+   .main-container.verification-active has zero padding, so this sits flush against the left
+   edge. Internal grid/column alignment (voucher-line-summary-grid, expanded-bar, etc.) is
+   untouched — only the outer width is capped. */
+.voucher-panel {
+    width: 50%;
+}
+
 /* ----- Voucher Header Bar (nav row + toolbar row) -----
    Plain layout, no card background/shadow — just a light divider under the whole bar. */
 .voucher-header-bar {
@@ -1746,6 +1756,9 @@ body {
 }
 
 @media (max-width: 768px) {
+    .voucher-panel {
+        width: 100%;
+    }
     .voucher-line-summary-grid {
         grid-template-columns: 55px 1fr 65px 70px 18px;
         gap: 8px;
