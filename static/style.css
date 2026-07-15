@@ -2357,6 +2357,19 @@ body {
     height: 10px;
 }
 
+/* Phase E: whole-voucher active highlight — shades the group-header + all of a voucher's lines
+   together when it's the voucher currently open in the main card (isActiveVoucher in
+   renderTransactionPopover()), replacing the old per-line detail_id-keyed highlight that only
+   ever shaded a single row. Hover overrides are re-declared (like the header/subtotal :hover
+   rules above) so the active tint survives hovering, matching the old inline-style behavior
+   (inline styles always beat stylesheet hover rules) that this replaces. */
+.transaction-list-popover tr.popover-voucher-active td {
+    background: #e0f2fe;
+}
+.transaction-list-popover tr.popover-voucher-active:hover td {
+    background: #e0f2fe;
+}
+
 /* =============================================
    PREVIEW SHEET PAGINATION STYLES
    ============================================= */

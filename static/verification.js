@@ -1267,9 +1267,15 @@ function renderTransactionPopover() {
         const groupDate = lines[0].extract_date || '—';
         // Voucher-level serial number (1-based), replacing the old per-line S.No.
         const voucherSerial = groupIndex + 1;
+        // Phase E: highlight is per-voucher (whole block), not per-line — replaces the old
+        // isCurrent = (t.detail_id === currentDetailId) check, which only ever shaded a single
+        // line and never the group header, so a multi-line voucher never read as "active" as a
+        // whole. currentVoucherId is already kept in sync by loadNextTransaction()/
+        // moveToAdjacentVoucher()/navigateToTransaction().
+        const isActiveVoucher = (vid === currentVoucherId);
 
         if (isMultiLine) {
-            html += `<tr class="voucher-group-header-row">
+            html += `<tr class="voucher-group-header-row${isActiveVoucher ? ' popover-voucher-active' : ''}">
                 <td colspan="5">${voucherSerial}. <strong>Voucher ${vid}</strong> &nbsp;·&nbsp; ${groupDate}</td>
             </tr>`;
         }
@@ -1280,14 +1286,13 @@ function renderTransactionPopover() {
             const accountName = rowData['Account Name'] || rowData['Account'] || rowData['Ledger'] || '—';
             const amount = getVoucherLineAmount(rowData);
             subtotal += parseVoucherAmount(amount);
-            const isCurrent = (t.detail_id === currentDetailId);
             // Multi-line vouchers already show Voucher ID/Date on the group header row above,
             // so line rows leave those two cells blank instead of repeating the same value.
             // Single-line vouchers have no header row, so their serial number is prefixed
             // directly onto the Voucher ID cell here instead.
             const voucherCell = isMultiLine ? '' : `${voucherSerial}. ${t.voucher_id || '—'}`;
             const dateCell = isMultiLine ? '' : (t.extract_date || '—');
-            html += `<tr data-detail-id="${t.detail_id}" style="${isCurrent ? 'background:#e0f2fe;' : ''}">
+            html += `<tr data-detail-id="${t.detail_id}" class="${isActiveVoucher ? 'popover-voucher-active' : ''}">
                 <td>${voucherCell}</td>
                 <td>${dateCell}</td>
                 <td>${accountName}</td>
