@@ -13,7 +13,7 @@ let procedureData = {};
 let isNavigating = false;
 // Phase 3: per-line client state for the collapsed/expand voucher lines list, keyed by
 // detail_id. Fully separate from currentTransactionType/procedureData above, which remain
-// scoped to #transactionCard's single "active" line — no shared state between the two.
+// scoped to the session's single "active" line — no shared state between the two.
 let voucherLineState = {};
 let selectedCashbook = null;
 let cashbookCurrentPage = 1;
@@ -71,7 +71,7 @@ let currentProcedureKey = null;
 let currentTemplateId = null;
 let selectedDocId = null;
 let selectedDocData = null;
-// Phase 3: null = the existing #transactionCard flow (unchanged behavior below); set to a line's
+// Phase 3: null = the legacy global-state flow (unchanged behavior below); set to a line's
 // detail_id when the modal was opened from a voucher line's collapsed/expand row.
 let currentProcedureTarget = null;
 
@@ -430,15 +430,14 @@ async function loadNextTransaction(detailId = null) {
 }
 
 // ---------- VOUCHER HEADER ----------
-// Renders the voucher-level chrome above the voucher lines list: a primary row with text
-// Prev/Next voucher buttons flanking a centered title ("Voucher {id}") + subtitle
-// (date · line count · Amount total · position counter), and a secondary slim toolbar row for
-// Cashbook return / view-all. No manual Save Progress button — progress already autosaves via
-// saveAllVoucherLines() on Prev/Next/Complete/Exit (see saveCurrentTransaction(),
-// completeTransaction(), exitSession()), so a manual save had no effect a user could rely on.
-// Matches the approved prototype layout — see
-// C:\Users\LENOVO\.claude\plans\melodic-dazzling-feather.md. The per-line collapsed/expand rows
-// (renderVoucherLines()) own everything else below this header.
+// Renders the voucher-level chrome above the voucher lines list: a single row with the Prev
+// voucher button on the left, a centered title ("Voucher {id}") + subtitle (date · line count ·
+// Amount total · position counter), and a right-hand cluster (Next voucher / view-all / Cashbook
+// return) ending flush with the extreme right edge. No manual Save Progress button — progress
+// already autosaves via saveAllVoucherLines() on Prev/Next/Complete/Exit (see
+// saveCurrentTransaction(), completeTransaction(), exitSession()), so a manual save had no effect
+// a user could rely on. The per-line collapsed/expand rows (renderVoucherLines()) own everything
+// else below this header.
 function renderVoucherHeader(voucherId, voucherDate, lines) {
     const bar = document.getElementById('voucherHeaderBar');
     if (!bar) return;
@@ -451,13 +450,13 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
                 <div class="voucher-title">Voucher ${voucherId || '—'}</div>
                 <div class="voucher-subtitle">${voucherDate || '—'} · ${lineCount} line${lineCount === 1 ? '' : 's'} · Amount ${total}<span id="voucherPositionCounter"></span></div>
             </div>
-            <button class="btn-voucher-nav" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
-        </div>
-        <div class="verification-header-row voucher-toolbar-row">
-            <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
-                <span class="vh-icon-symbol">🔍</span>
-            </span>
-            <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
+            <div class="voucher-nav-right">
+                <button class="btn-voucher-nav" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
+                <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
+                    <span class="vh-icon-symbol">🔍</span>
+                </span>
+                <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
+            </div>
         </div>
     `;
 
@@ -1256,8 +1255,8 @@ document.addEventListener('DOMContentLoaded', function() {
 // saveAllVoucherLines(). Reads/writes that line's own voucherLineState entry (kept in sync by
 // the per-line type-dropdown/observations/comments/procedure-modal listeners in
 // renderVoucherLines()) rather than the bare currentTransactionType/procedureData/lineItems
-// globals, which remain #transactionCard's own separate concern (its Segment 2/3 duplicate of
-// the active line, per Phase 3's decision — not reconciled with voucherLineState this phase).
+// globals, which are legacy leftovers from the removed standalone view and not reconciled with
+// voucherLineState.
 async function saveLineItems(detailId = currentDetailId) {
     if (!detailId) return;
     if (!voucherLineState[detailId]) {
@@ -1701,7 +1700,7 @@ function openProcedureModal(procKey, procLabel, templateId, lineUid = null) {
     currentProcedureKey = procKey;
     currentTemplateId = templateId;
     // Phase 3: when opened from a voucher line's collapsed/expand row, lineUid targets that
-    // line's own voucherLineState instead of the global procedureData used by #transactionCard.
+    // line's own voucherLineState instead of the legacy global procedureData.
     currentProcedureTarget = lineUid;
     selectedDocId = null;
     selectedDocData = null;

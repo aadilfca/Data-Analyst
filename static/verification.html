@@ -158,33 +158,6 @@
             display: none;
         }
 
-        /* Transaction card styles (reused from Phase 5) */
-        .transaction-card {
-            background: white;
-            border-radius: 16px;
-            padding: 24px;
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-            margin-bottom: 20px;
-        }
-
-        .transaction-card .row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px 24px;
-            margin-bottom: 8px;
-        }
-
-        .transaction-card .label {
-            font-weight: 600;
-            color: #475569;
-            min-width: 100px;
-        }
-
-        .transaction-card .value {
-            font-weight: 500;
-            color: #1a1a2e;
-        }
-
         .line-items-grid {
             width: 100%;
             border-collapse: collapse;
@@ -430,12 +403,6 @@
                 display: none !important;
             }
 
-            .transaction-card {
-                box-shadow: none;
-                border: 1px solid #ccc;
-                page-break-inside: avoid;
-            }
-
             .nav-buttons {
                 display: none !important;
             }
@@ -617,14 +584,9 @@
                 <div id="voucherHeaderBar" class="voucher-header-bar"></div>
 
                 <!-- Voucher Lines (Phase 3): collapsed/expand summary rows, one per line. Each row
-                     expands to reveal its own Segment 2 (DFD/AUDIT + type dropdown) and Segment 3
-                     (procedure cards), independently of the other lines and of #transactionCard below. -->
+                     expands to reveal its own action bar (Audit Guidance / Supporting / Type),
+                     independently of the other lines. -->
                 <div id="voucherLinesContainer" class="voucher-lines-container"></div>
-            </div>
-
-            <!-- Transaction Card -->
-            <div id="transactionCard" class="transaction-card">
-                <!-- Will be filled by JS -->
             </div>
 
             <!-- Hidden inputs -->
