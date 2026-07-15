@@ -1677,6 +1677,16 @@ body {
     background: #ffffff;
 }
 
+/* ----- Click-to-lock focus (Phase C) -----
+   Purely visual, transient "the intern is currently working on this line" aid — toggled by
+   toggleVoucherLineLock() in verification.js, reset on every new render (voucher navigation).
+   Dims the row per the brief's literal spec (muted background + softened text), not a highlight —
+   it does not gate or disable anything on the row, every control stays fully clickable. */
+.voucher-line-row.voucher-line-locked .voucher-line-summary {
+    background: #f1f5f9;
+    opacity: 0.7;
+}
+
 .voucher-line-code {
     font-weight: 600;
     color: #64748b;

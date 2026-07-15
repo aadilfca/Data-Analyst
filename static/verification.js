@@ -15,6 +15,10 @@ let isNavigating = false;
 // detail_id. Fully separate from currentTransactionType/procedureData above, which remain
 // scoped to the session's single "active" line — no shared state between the two.
 let voucherLineState = {};
+// Phase C: transient click-to-lock focus aid — the detail_id of the one voucher line currently
+// "locked"/dimmed, or null if none. Purely visual, not persisted; reset whenever a new voucher's
+// lines are rendered (see renderVoucherLines()).
+let lockedLineUid = null;
 let selectedCashbook = null;
 let cashbookCurrentPage = 1;
 let cashbookPageSize = 50;
@@ -619,10 +623,35 @@ function seedVoucherLineState(lines) {
 // Renders a column-title row, one row per line, and a total-line footer into
 // #voucherLinesContainer. There is no expand/collapse — every field and action (Type + Guide/DFD
 // chips, Amount, Supporting → Procedures chip, Status) is visible directly in the row.
+// Phase C: click-to-lock focus. Toggles the dim class on the clicked row and updates
+// lockedLineUid — pure DOM class manipulation, no re-render, so it can't disturb any other
+// line's state (dropdown selection, etc.). Only one line can be locked at a time: locking a new
+// line automatically unlocks whichever one was previously locked.
+function toggleVoucherLineLock(uid) {
+    const container = document.getElementById('voucherLinesContainer');
+    if (!container) return;
+    if (lockedLineUid === uid) {
+        const row = container.querySelector(`.voucher-line-row[data-detail-id="${uid}"]`);
+        if (row) row.classList.remove('voucher-line-locked');
+        lockedLineUid = null;
+        return;
+    }
+    if (lockedLineUid) {
+        const prevRow = container.querySelector(`.voucher-line-row[data-detail-id="${lockedLineUid}"]`);
+        if (prevRow) prevRow.classList.remove('voucher-line-locked');
+    }
+    const row = container.querySelector(`.voucher-line-row[data-detail-id="${uid}"]`);
+    if (row) row.classList.add('voucher-line-locked');
+    lockedLineUid = uid;
+}
+
 function renderVoucherLines(lines) {
     const container = document.getElementById('voucherLinesContainer');
     if (!container) return;
     applyVoucherColumnWidths();
+    // Phase C: lock state is a transient focus aid, not saved data — reset on every new render
+    // (voucher load/navigation) rather than trying to carry it across different lines/vouchers.
+    lockedLineUid = null;
     if (!lines || lines.length === 0) {
         container.innerHTML = '';
         return;
@@ -737,6 +766,17 @@ function renderVoucherLines(lines) {
     });
 
     // ----- Event wiring (rebound after every innerHTML write, matching this file's convention) -----
+
+    // Phase C: click-to-lock/dim focus. Every interactive control inside a row (type dropdown,
+    // Guide/DFD chips, procedure links, resize handles — wired below) already calls
+    // e.stopPropagation() in its own click handler, so this row-level listener only ever fires for
+    // clicks that land on blank row space / account name / amount / status — it never competes
+    // with or gates any of those controls, which stay fully clickable regardless of lock state.
+    container.querySelectorAll('.voucher-line-row').forEach(row => {
+        row.addEventListener('click', function() {
+            toggleVoucherLineLock(this.dataset.detailId);
+        });
+    });
 
     // Transaction type dropdown, scoped per line.
     container.querySelectorAll('.voucher-line-type-dropdown').forEach(select => {
@@ -1196,7 +1236,7 @@ function renderTransactionPopover() {
     const count = sessionTransactions.length;
 
     if (count === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#94a3b8;">No transactions found.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#94a3b8;">No transactions found.</td></tr>`;
         if (totalSpan) totalSpan.textContent = '';
         popover.style.display = 'block';
         return;
@@ -1221,21 +1261,21 @@ function renderTransactionPopover() {
     }
 
     let html = '';
-    let rowNumber = 0;
     groupOrder.forEach((vid, groupIndex) => {
         const lines = groupsByVoucherId[vid];
         const isMultiLine = lines.length > 1;
         const groupDate = lines[0].extract_date || '—';
+        // Voucher-level serial number (1-based), replacing the old per-line S.No.
+        const voucherSerial = groupIndex + 1;
 
         if (isMultiLine) {
             html += `<tr class="voucher-group-header-row">
-                <td colspan="6"><strong>Voucher ${vid}</strong> &nbsp;·&nbsp; ${groupDate}</td>
+                <td colspan="5">${voucherSerial}. <strong>Voucher ${vid}</strong> &nbsp;·&nbsp; ${groupDate}</td>
             </tr>`;
         }
 
         let subtotal = 0;
         lines.forEach(t => {
-            rowNumber++;
             const rowData = t.row_data || {};
             const accountName = rowData['Account Name'] || rowData['Account'] || rowData['Ledger'] || '—';
             const amount = getVoucherLineAmount(rowData);
@@ -1243,10 +1283,11 @@ function renderTransactionPopover() {
             const isCurrent = (t.detail_id === currentDetailId);
             // Multi-line vouchers already show Voucher ID/Date on the group header row above,
             // so line rows leave those two cells blank instead of repeating the same value.
-            const voucherCell = isMultiLine ? '' : (t.voucher_id || '—');
+            // Single-line vouchers have no header row, so their serial number is prefixed
+            // directly onto the Voucher ID cell here instead.
+            const voucherCell = isMultiLine ? '' : `${voucherSerial}. ${t.voucher_id || '—'}`;
             const dateCell = isMultiLine ? '' : (t.extract_date || '—');
             html += `<tr data-detail-id="${t.detail_id}" style="${isCurrent ? 'background:#e0f2fe;' : ''}">
-                <td style="text-align:center;">${rowNumber}</td>
                 <td>${voucherCell}</td>
                 <td>${dateCell}</td>
                 <td>${accountName}</td>
@@ -1259,7 +1300,6 @@ function renderTransactionPopover() {
             html += `<tr class="voucher-group-subtotal-row">
                 <td></td>
                 <td></td>
-                <td></td>
                 <td>Subtotal</td>
                 <td style="text-align:right;">${subtotal}</td>
                 <td></td>
@@ -1268,7 +1308,7 @@ function renderTransactionPopover() {
 
         // Spacer between groups (not before the first one) for visual breathing room.
         if (groupIndex < groupOrder.length - 1) {
-            html += `<tr class="voucher-group-spacer"><td colspan="6"></td></tr>`;
+            html += `<tr class="voucher-group-spacer"><td colspan="5"></td></tr>`;
         }
     });
 
