@@ -1171,6 +1171,15 @@ async function loadTransactionList(showPopover = false) {
     }
 }
 
+// Builds the status icon span shared by every transaction row in the popover.
+function buildPopoverStatusIcon(validationStatus) {
+    const status = validationStatus || 'Pending';
+    let statusIcon = '⏳';
+    if (status === 'Passed') statusIcon = '✅';
+    else if (status !== 'Pending') statusIcon = '❌';
+    return `<span class="status-icon ${status.toLowerCase()}">${statusIcon}</span>`;
+}
+
 function renderTransactionPopover() {
     const popover = document.getElementById('transactionListPopover');
     const tbody = document.getElementById('transactionListBody');
@@ -1180,39 +1189,80 @@ function renderTransactionPopover() {
     const count = sessionTransactions.length;
 
     if (count === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#94a3b8;">No transactions found.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#94a3b8;">No transactions found.</td></tr>`;
         if (totalSpan) totalSpan.textContent = '';
         popover.style.display = 'block';
         return;
     }
 
-    // Show total number of transactions
+    // Group transactions by Voucher ID, preserving first-seen order (the array is usually
+    // already contiguous by voucher, but this doesn't assume it).
+    const groupOrder = [];
+    const groupsByVoucherId = {};
+    sessionTransactions.forEach(t => {
+        const vid = t.voucher_id || '—';
+        if (!groupsByVoucherId[vid]) {
+            groupsByVoucherId[vid] = [];
+            groupOrder.push(vid);
+        }
+        groupsByVoucherId[vid].push(t);
+    });
+
+    // Header: "Total vouchers: X | Total: Y transactions", both from the current dataset.
     if (totalSpan) {
-        totalSpan.textContent = `Total: ${count} transaction${count > 1 ? 's' : ''}`;
+        totalSpan.textContent = `Total vouchers: ${groupOrder.length} | Total: ${count} transaction${count > 1 ? 's' : ''}`;
     }
 
     let html = '';
-    sessionTransactions.forEach((t, index) => {
-        const rowData = t.row_data || {};
-        const accountName = rowData['Account Name'] || rowData['Account'] || rowData['Ledger'] || '—';
-        const amount = t.extract_amount !== undefined && t.extract_amount !== null ? t.extract_amount : '—';
-        const status = t.validation_status || 'Pending';
-        let statusIcon = '';
-        if (status === 'Passed') {
-            statusIcon = '✅';
-        } else if (status === 'Pending') {
-            statusIcon = '⏳';
-        } else {
-            statusIcon = '❌';
+    let rowNumber = 0;
+    groupOrder.forEach((vid, groupIndex) => {
+        const lines = groupsByVoucherId[vid];
+        const isMultiLine = lines.length > 1;
+        const groupDate = lines[0].extract_date || '—';
+
+        if (isMultiLine) {
+            html += `<tr class="voucher-group-header-row">
+                <td colspan="6"><strong>Voucher ${vid}</strong> &nbsp;·&nbsp; ${groupDate}</td>
+            </tr>`;
         }
-        const isCurrent = (t.detail_id === currentDetailId);
-        html += `<tr data-detail-id="${t.detail_id}" style="${isCurrent ? 'background:#e0f2fe;' : ''}">
-            <td style="text-align:center;">${index + 1}</td>
-            <td>${t.voucher_id || '—'}</td>
-            <td>${accountName}</td>
-            <td style="text-align:right;">${amount}</td>
-            <td style="text-align:center;"><span class="status-icon ${status.toLowerCase()}">${statusIcon}</span></td>
-        </tr>`;
+
+        let subtotal = 0;
+        lines.forEach(t => {
+            rowNumber++;
+            const rowData = t.row_data || {};
+            const accountName = rowData['Account Name'] || rowData['Account'] || rowData['Ledger'] || '—';
+            const amount = getVoucherLineAmount(rowData);
+            subtotal += parseVoucherAmount(amount);
+            const isCurrent = (t.detail_id === currentDetailId);
+            // Multi-line vouchers already show Voucher ID/Date on the group header row above,
+            // so line rows leave those two cells blank instead of repeating the same value.
+            const voucherCell = isMultiLine ? '' : (t.voucher_id || '—');
+            const dateCell = isMultiLine ? '' : (t.extract_date || '—');
+            html += `<tr data-detail-id="${t.detail_id}" style="${isCurrent ? 'background:#e0f2fe;' : ''}">
+                <td style="text-align:center;">${rowNumber}</td>
+                <td>${voucherCell}</td>
+                <td>${dateCell}</td>
+                <td>${accountName}</td>
+                <td style="text-align:right;">${amount !== '' ? amount : '—'}</td>
+                <td style="text-align:center;">${buildPopoverStatusIcon(t.validation_status)}</td>
+            </tr>`;
+        });
+
+        if (isMultiLine) {
+            html += `<tr class="voucher-group-subtotal-row">
+                <td></td>
+                <td></td>
+                <td></td>
+                <td>Subtotal</td>
+                <td style="text-align:right;">${subtotal}</td>
+                <td></td>
+            </tr>`;
+        }
+
+        // Spacer between groups (not before the first one) for visual breathing room.
+        if (groupIndex < groupOrder.length - 1) {
+            html += `<tr class="voucher-group-spacer"><td colspan="6"></td></tr>`;
+        }
     });
 
     tbody.innerHTML = html;

@@ -2310,6 +2310,43 @@ body {
     background: #f1f5f9;
 }
 
+/* ----- Voucher Grouping (Phase 3) -----
+   Styles the group structure renderTransactionPopover() (verification.js) already builds:
+   a header row per multi-line voucher, a subtotal row after its last line, and a spacer row
+   between groups. Single-line vouchers and each grouped line share the same plain
+   tr[data-detail-id] markup/CSS as before, so they stay visually identical without any new
+   rules here. Neutral slate tint (#f8fafc/#cbd5e1, already used for this popover's own header
+   bar) rather than the stronger #dbeafe used on the main voucher table — keeps #e0f2fe (the
+   "current line" highlight) as the one unambiguous blue signal in this popover. */
+.voucher-group-header-row td {
+    background: #f8fafc;
+    border-bottom: 2px solid #cbd5e1;
+    padding: 8px 8px;
+    font-weight: 600;
+    color: #1a1a2e;
+    cursor: default;
+}
+.voucher-group-header-row:hover td {
+    background: #f8fafc;
+}
+.voucher-group-subtotal-row td {
+    background: #f8fafc;
+    border-top: 2px solid #cbd5e1;
+    border-bottom: 1px solid #f0f2f5;
+    padding: 6px 8px;
+    font-weight: 700;
+    color: #1a1a2e;
+    cursor: default;
+}
+.voucher-group-subtotal-row:hover td {
+    background: #f8fafc;
+}
+.voucher-group-spacer td {
+    border: none;
+    padding: 0;
+    height: 10px;
+}
+
 /* =============================================
    PREVIEW SHEET PAGINATION STYLES
    ============================================= */
