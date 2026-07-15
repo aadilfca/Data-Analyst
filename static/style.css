@@ -1526,13 +1526,12 @@ body {
 }
 
 /* ----- Voucher Panel -----
-   Caps the voucher header + line list to 65% of screen width, on the left, leaving the remainder
-   clear for future development. Left-aligned by default (no margin:auto) since
-   .main-container.verification-active has zero padding, so this sits flush against the left
-   edge. Widened from 60% when the Type column was added to .voucher-line-summary-grid, so the
-   new fixed-width column fits without cramping Account Name or overlapping neighbors. */
+   Spans the full visible width — .main-container.verification-active already has zero padding, so
+   100% is the true available width. Was previously capped at 65%; widened per direct request once
+   columns became individually resizable (see .voucher-col-resize-handle below), so the extra space
+   is genuinely usable instead of sitting empty to the right of the table. */
 .voucher-panel {
-    width: 65%;
+    width: 100%;
 }
 
 /* ----- Voucher Header Bar (nav row + toolbar row) -----
@@ -1575,6 +1574,9 @@ body {
     border-top: 1px solid #94a3b8;
     border-left: 1px solid #94a3b8;
     margin-bottom: 20px;
+    /* Columns are now user-resizable (drag handles in the header row) and can grow past the
+       screen's width — scroll horizontally instead of overflowing the page. */
+    overflow-x: auto;
 }
 
 /* .voucher-line-row no longer needs its own rule — it's no longer an individually bordered/
@@ -1583,12 +1585,23 @@ body {
 
 /* Shared column layout — used by the column-title row, each line's summary row, and the total
    row, so all three line up under the same headings (Account Code / Type / Account Name / Amount
-   / Supporting / Status). Status is sized tight to its content ("⏳ pending" is the longest
-   value). No expand/collapse anymore — every column is a plain data/action cell. */
+   / Supporting / Observations / Status). Status is sized tight to its content ("⏳ pending" is the
+   longest value). Observations is currently an empty placeholder cell — values are a future
+   addition. No expand/collapse anymore — every column is a plain data/action cell.
+   Column widths come from the --voucher-col-widths custom property (set on #voucherLinesContainer
+   by applyVoucherColumnWidths() in verification.js) instead of a literal list, so the header row's
+   drag handles (.voucher-col-resize-handle) can resize any column live — updating the one CSS
+   variable re-lines-up the header/line/total rows in one shot since they all read from it. */
 .voucher-line-summary-grid {
     display: grid;
-    grid-template-columns: 100px 170px 1fr 90px 110px 90px;
+    grid-template-columns: var(--voucher-col-widths, 100px 170px 395px 90px 130px 300px 90px);
     align-items: stretch;
+    /* Block-level (and flex-stretched, for the header/total rows) boxes default to filling their
+       container's full width — now that .voucher-panel is 100% wide and columns are fixed pixel
+       widths instead of a fill-the-rest 1fr, that left the header/total rows' blue background (and
+       every row's own box) stretching past the last real column into empty space. Shrinking the
+       box to its own column tracks stops that "background/border running off to the right" look. */
+    width: fit-content;
 }
 .voucher-line-summary-grid > * {
     border-right: 1px solid #94a3b8;
@@ -1609,16 +1622,55 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.4px;
     background: #dbeafe;
-    color: #1e40af;
+    color: #000000;
 }
 .voucher-line-header-row > * {
     padding-top: 8px;
     padding-bottom: 8px;
+    /* Anchors each header cell's .voucher-col-resize-handle, which is absolutely positioned. */
+    position: relative;
+    justify-content: center;
+    text-align: center;
 }
 .voucher-line-header-row .voucher-line-amount-col,
-.voucher-line-header-row > *:nth-child(6) {
-    justify-content: flex-end;
-    text-align: right;
+.voucher-line-header-row > *:nth-child(7) {
+    justify-content: center;
+    text-align: center;
+}
+
+/* Drag-to-resize handle — one per header cell (see renderVoucherLines() in verification.js).
+   Straddles the column's right border; the native col-resize cursor supplies the "<->" symbol the
+   user hovers to see, so no custom icon is needed. Dragging updates voucherColumnWidths and, via
+   applyVoucherColumnWidths(), the --voucher-col-widths custom property .voucher-line-summary-grid
+   reads its columns from. Excel/Sheets-style: resizing one column never touches its neighbors. */
+.voucher-col-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -4px;
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 5;
+}
+.voucher-col-resize-handle:hover,
+.voucher-col-resize-handle.resizing {
+    background: rgba(59, 130, 246, 0.35);
+}
+
+/* Floating "Width: N px" readout that follows the cursor while dragging a resize handle — same
+   idea as Excel's own column-resize tooltip (renderVoucherLines()'s mousedown/mousemove handlers
+   in verification.js create/update/remove this element for the duration of one drag). */
+.voucher-col-resize-tooltip {
+    position: fixed;
+    background: #1a1a2e;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 2000;
+    white-space: nowrap;
 }
 
 .voucher-line-summary {
@@ -1701,19 +1753,20 @@ body {
    bracketing the body rows. */
 .voucher-line-total-row {
     background: #dbeafe;
+    color: #000000;
 }
 .voucher-line-total-row .voucher-line-name {
-    color: #1e40af;
+    color: #000000;
     font-weight: 700;
     font-size: 15px;
 }
 .voucher-line-total-row .voucher-line-desc {
-    color: #3b82f6;
+    color: #000000;
 }
 .voucher-line-total-row .voucher-line-amount {
     font-weight: 700;
     font-size: 16px;
-    color: #1e40af;
+    color: #000000;
 }
 
 /* Status cell: icon + label, colored by validation_status — green for passed, amber for pending,
@@ -1759,17 +1812,26 @@ body {
     margin-left: 6px;
 }
 
-/* Supporting cell — centers its single "Procedures" chip (openSupportingPopup() in
-   verification.js), matching the Type cell's chip styling (.voucher-line-chip). */
+/* Supporting cell — stacks the five procedure names as plain bold text links (no button/card
+   chrome, to keep the column compact); each opens openProcedureModal() directly for its own
+   procedure (renderVoucherLines() in verification.js). */
 .voucher-line-supporting-cell {
-    justify-content: center;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
 }
-
-/* Supporting popup card hover effect */
-.supporting-proc-card:hover {
-    border-color: #3b82f6 !important;
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
-    transform: translateY(-2px);
+.voucher-line-proc-link {
+    font-weight: 700;
+    font-size: 11px;
+    color: #1a1a2e;
+    cursor: pointer;
+    line-height: 1.3;
+}
+.voucher-line-proc-link:hover {
+    text-decoration: underline;
+}
+.voucher-line-proc-link.confirmed {
+    color: #16a34a;
 }
 
 @media (max-width: 768px) {
@@ -1777,7 +1839,7 @@ body {
         width: 100%;
     }
     .voucher-line-summary-grid {
-        grid-template-columns: 50px 100px 1fr 55px 70px 55px;
+        grid-template-columns: 50px 100px 1fr 55px 70px 80px 55px;
         gap: 8px;
     }
 }

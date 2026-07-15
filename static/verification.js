@@ -522,6 +522,32 @@ function getVoucherLineAlias(row, aliases) {
     return '—';
 }
 
+// The five supporting-document procedures, shared between the Supporting column's text links
+// (renderVoucherLines()) and openProcedureModal()'s search/confirm flow — each column entry opens
+// the modal directly for its own procedure now, replacing the old intermediate card-picker popup.
+const VOUCHER_LINE_PROCEDURES = [
+    { key: 'purchase_demand', label: 'Purchase Demand', templateId: 2 },
+    { key: 'purchase_order', label: 'Purchase Order', templateId: 3 },
+    { key: 'gate_pass', label: 'Gate Pass', templateId: 4 },
+    { key: 'store_receiving', label: 'Store Receiving', templateId: 5 },
+    { key: 'vendor_bill', label: 'Vendor Bill', templateId: 6 }
+];
+
+// Order matches .voucher-line-summary-grid's columns: Account Code, Type, Account Name, Amount,
+// Supporting, Observations, Status. User-resizable (see the drag handles in renderVoucherLines()'s
+// header row) — persists at module scope across renders/navigation, same convention as
+// voucherLineState, so dragging a column survives Prev/Next voucher navigation.
+let voucherColumnWidths = [100, 170, 395, 90, 130, 300, 90];
+
+// Pushes voucherColumnWidths into the CSS custom property .voucher-line-summary-grid reads its
+// grid-template-columns from. Set on #voucherLinesContainer itself (not its innerHTML content),
+// so it survives every renderVoucherLines() re-render without needing to be reapplied — called
+// anyway at the top of renderVoucherLines() to stay in sync on first render.
+function applyVoucherColumnWidths() {
+    const container = document.getElementById('voucherLinesContainer');
+    if (container) container.style.setProperty('--voucher-col-widths', voucherColumnWidths.map(w => w + 'px').join(' '));
+}
+
 // Returns a single Amount value for a line's row_data — this cashbook only ever populates one
 // side (Debit for CPV vouchers, Credit for CRV vouchers; the other side is always zero at
 // source), so Dr/Cr is not a meaningful distinction here and the row shows one plain number.
@@ -589,21 +615,25 @@ function seedVoucherLineState(lines) {
 function renderVoucherLines(lines) {
     const container = document.getElementById('voucherLinesContainer');
     if (!container) return;
+    applyVoucherColumnWidths();
     if (!lines || lines.length === 0) {
         container.innerHTML = '';
         return;
     }
 
     // Column-title row, matching the cashbook's own column names — aligned with the summary
-    // row's grid via the shared .voucher-line-summary-grid class.
+    // row's grid via the shared .voucher-line-summary-grid class. Each cell carries a drag-to-
+    // resize handle (data-col matches voucherColumnWidths' index) — only the header row gets one,
+    // per the standard spreadsheet convention of resizing from the column header, not the body.
     let html = `
         <div class="voucher-line-header-row voucher-line-summary-grid">
-            <span>Account Code</span>
-            <span>Type</span>
-            <span>Account Name</span>
-            <span class="voucher-line-amount-col">Amount</span>
-            <span>Supporting</span>
-            <span>Status</span>
+            <span>Account Code<span class="voucher-col-resize-handle" data-col="0"></span></span>
+            <span>Type<span class="voucher-col-resize-handle" data-col="1"></span></span>
+            <span>Account Name<span class="voucher-col-resize-handle" data-col="2"></span></span>
+            <span class="voucher-line-amount-col">Amount<span class="voucher-col-resize-handle" data-col="3"></span></span>
+            <span>Supporting<span class="voucher-col-resize-handle" data-col="4"></span></span>
+            <span>Observations<span class="voucher-col-resize-handle" data-col="5"></span></span>
+            <span>Status<span class="voucher-col-resize-handle" data-col="6"></span></span>
         </div>
     `;
 
@@ -652,8 +682,13 @@ function renderVoucherLines(lines) {
                     </span>
                     <span class="voucher-line-amount">${amount}</span>
                     <span class="voucher-line-supporting-cell">
-                        <button type="button" class="voucher-line-chip voucher-line-supporting-chip" data-uid="${uid}" title="View and confirm supporting documents">📎 Procedures</button>
+                        ${VOUCHER_LINE_PROCEDURES.map(proc => {
+                            const state = voucherLineState[uid];
+                            const confirmed = state && state.procedureData && state.procedureData[proc.key];
+                            return `<span class="voucher-line-proc-link${confirmed ? ' confirmed' : ''}" data-uid="${uid}" data-proc="${proc.key}" data-label="${proc.label}" data-template="${proc.templateId}" title="${confirmed ? proc.label + ' — confirmed' : 'Search ' + proc.label}">${proc.label}</span>`;
+                        }).join('')}
                     </span>
+                    <span class="voucher-line-observations-cell"></span>
                     <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
                 </div>
             </div>
@@ -673,6 +708,7 @@ function renderVoucherLines(lines) {
                 <span class="voucher-line-desc">${cashbookName}</span>
             </span>
             <span class="voucher-line-amount">${total}</span>
+            <span></span>
             <span></span>
             <span></span>
         </div>
@@ -731,13 +767,60 @@ function renderVoucherLines(lines) {
         });
     });
 
-    // "Procedures" chip (Supporting column) — opens a popup with the five procedure cards for
-    // this line.
-    container.querySelectorAll('.voucher-line-supporting-chip').forEach(chip => {
-        chip.addEventListener('click', function(e) {
+    // Supporting column — each procedure name is a plain bold text link (no button/card, to save
+    // space); clicking one opens the procedure modal directly for that specific procedure, instead
+    // of an intermediate card-picker popup.
+    container.querySelectorAll('.voucher-line-proc-link').forEach(link => {
+        link.addEventListener('click', function(e) {
             e.stopPropagation();
             const uid = this.dataset.uid;
-            openSupportingPopup(uid);
+            const procKey = this.dataset.proc;
+            const label = this.dataset.label;
+            const templateId = parseInt(this.dataset.template);
+            openProcedureModal(procKey, label, templateId, uid);
+        });
+    });
+
+    // Column drag-to-resize handles (header row only). Excel/Sheets-style: dragging a column's
+    // border only resizes that column — the table's total width changes with it (no neighbor
+    // compensation), scrolling horizontally via #voucherLinesContainer's overflow-x if it grows
+    // past the screen. Widths live in voucherColumnWidths (module scope), so they persist across
+    // re-renders/voucher navigation.
+    container.querySelectorAll('.voucher-col-resize-handle').forEach(handle => {
+        handle.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const colIndex = parseInt(this.dataset.col);
+            const startX = e.clientX;
+            const startWidth = voucherColumnWidths[colIndex];
+            this.classList.add('resizing');
+
+            // Small floating "Width: N px" readout that follows the cursor while dragging, same
+            // idea as Excel's own column-resize tooltip — created fresh per drag, removed on
+            // mouseup so it never lingers in the DOM.
+            const tooltip = document.createElement('div');
+            tooltip.className = 'voucher-col-resize-tooltip';
+            tooltip.textContent = `Width: ${startWidth} px`;
+            tooltip.style.left = `${e.clientX + 12}px`;
+            tooltip.style.top = `${e.clientY - 28}px`;
+            document.body.appendChild(tooltip);
+
+            const onMouseMove = (e2) => {
+                const newWidth = Math.max(40, startWidth + (e2.clientX - startX));
+                voucherColumnWidths[colIndex] = newWidth;
+                applyVoucherColumnWidths();
+                tooltip.textContent = `Width: ${newWidth} px`;
+                tooltip.style.left = `${e2.clientX + 12}px`;
+                tooltip.style.top = `${e2.clientY - 28}px`;
+            };
+            const onMouseUp = () => {
+                handle.classList.remove('resizing');
+                tooltip.remove();
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
         });
     });
 }
@@ -1665,84 +1748,6 @@ if (dfdModal) {
     dfdModal.addEventListener('click', function(e) {
         if (e.target === this) closeDfdModal();
     });
-}
-
-// ---------- Phase 4: Supporting Popup ----------
-// Opens the procedure modal with all five supporting-document cards listed for the given
-// line. The user can click any card to open the existing search/confirm flow (openProcedureModal)
-// for that specific procedure. This replaces the removed Segment 3 procedure cards.
-function openSupportingPopup(uid) {
-    if (!procedureModal) return;
-    currentProcedureTarget = uid;
-    if (procedureModalTitle) procedureModalTitle.textContent = '📎 Supporting Documents';
-    // Show search/confirm elements (they may have been hidden by audit guidance popup)
-    const searchRow = procedureModal.querySelector('.search-row');
-    if (searchRow) searchRow.style.display = '';
-    const confirmRow = procedureModal.querySelector('.modal-confirm-row');
-    if (confirmRow) confirmRow.style.display = '';
-    if (procedureStatus) procedureStatus.textContent = '';
-
-    // Render a list of five procedure cards, each clickable to open the search modal
-    const procKeys = ['purchase_demand', 'purchase_order', 'gate_pass', 'store_receiving', 'vendor_bill'];
-    const procLabels = {
-        'purchase_demand': 'Purchase Demand',
-        'purchase_order': 'Purchase Order',
-        'gate_pass': 'Gate Pass',
-        'store_receiving': 'Store Receiving',
-        'vendor_bill': 'Vendor Bill'
-    };
-    const procIcons = {
-        'purchase_demand': '📋',
-        'purchase_order': '📄',
-        'gate_pass': '🚪',
-        'store_receiving': '📥',
-        'vendor_bill': '🧾'
-    };
-    const templateMap = {
-        'purchase_demand': 2,
-        'purchase_order': 3,
-        'gate_pass': 4,
-        'store_receiving': 5,
-        'vendor_bill': 6
-    };
-
-    // Build a compact grid of procedure cards
-    let html = '<div style="display:flex; flex-wrap:wrap; gap:12px; padding:12px 0;">';
-    procKeys.forEach(key => {
-        const label = procLabels[key] || key;
-        const icon = procIcons[key] || '📌';
-        const templateId = templateMap[key] || 1;
-        // Check if this line already has this procedure confirmed
-        const state = voucherLineState[uid];
-        const confirmed = state && state.procedureData && state.procedureData[key];
-        html += `
-            <div class="procedure-card-item supporting-proc-card" data-proc="${key}" data-template="${templateId}" data-uid="${uid}" style="flex:1 1 160px; max-width:200px; background:white; border:2px solid ${confirmed ? '#86efac' : '#e2e8f0'}; border-radius:12px; padding:16px; cursor:pointer; text-align:center; transition:all 0.2s;">
-                <div style="font-size:32px; margin-bottom:6px;">${icon}</div>
-                <div style="font-weight:600; font-size:14px; color:#1a1a2e;">${label}</div>
-                ${confirmed ? '<div style="font-size:12px; color:#16a34a; margin-top:4px;">✅ Confirmed</div>' : '<div style="font-size:12px; color:#94a3b8; margin-top:4px;">Click to search</div>'}
-            </div>
-        `;
-    });
-    html += '</div>';
-    // Also add a brief instruction
-    html += '<p style="color:#64748b; font-size:13px; text-align:center; margin:8px 0 0 0;">Click a card to search for and confirm a supporting document.</p>';
-
-    if (procedureResults) procedureResults.innerHTML = html;
-
-    // Wire click listeners on the cards to open the procedure search modal
-    procedureResults.querySelectorAll('.supporting-proc-card').forEach(card => {
-        card.addEventListener('click', function() {
-            const procKey = this.dataset.proc;
-            const label = procLabels[procKey] || procKey;
-            const templateId = parseInt(this.dataset.template);
-            const lineUid = this.dataset.uid;
-            // Close the supporting popup first, then open the procedure modal for this doc
-            procedureModal.style.display = 'none';
-            openProcedureModal(procKey, label, templateId, lineUid);
-        });
-    });
-
-    procedureModal.style.display = 'flex';
 }
 
 // ==============================================
