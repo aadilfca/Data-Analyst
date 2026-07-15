@@ -575,9 +575,16 @@
             <!-- Status bar -->
             <div id="verificationStatus" class="upload-status" style="display:none; margin-bottom:12px;"></div>
 
-            <!-- Voucher Panel: constrained to the left half of the screen, leaving the right half
-                 clear for future development (per user request). Internal grid/column alignment of
-                 the header subtitle and line rows is unchanged — only the outer width is capped. -->
+            <!-- Module Toolbar: full-width page-level actions (Search/view-all, Cashbook return) —
+                 kept out of .voucher-panel below since those are cross-voucher actions, not scoped
+                 to "this voucher" the way Prev/Next are. Populated once per session by
+                 renderVerificationToolbar() in verification.js, not re-rendered per voucher. -->
+            <div id="verificationToolbar" class="verification-toolbar"></div>
+
+            <!-- Voucher Panel: constrained to 60% of screen width, on the left, leaving the
+                 remainder clear for future development (per user request). Internal grid/column
+                 alignment of the header subtitle and line rows is unchanged — only the outer width
+                 is capped. -->
             <div class="voucher-panel">
                 <!-- Voucher Header (Phase 2): Voucher ID / Date / line count summary, plus a simple
                      placeholder list of the voucher's lines. Per-line collapsed/expand UI is Phase 3. -->

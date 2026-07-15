@@ -1185,11 +1185,24 @@ body {
    VERIFICATION MODULE ADDITIONAL STYLES
    ============================================= */
 
-/* ----- Header Row -----
-   Voucher header prototype layout: a primary row (Prev voucher / centered title+subtitle / Next
-   voucher) and a secondary slim toolbar row (view-all / Cashbook), both plain flex rows with no
-   card background/shadow. No manual Save Progress button — progress autosaves (see
-   verification.js renderVoucherHeader()). */
+/* ----- Module Toolbar -----
+   Full-width, page-level actions (Search/view-all, Cashbook return) — kept out of .voucher-panel
+   since these are cross-voucher actions, not scoped to "this voucher" the way Prev/Next are.
+   Rendered once per session by renderVerificationToolbar() in verification.js. */
+.verification-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 14px;
+    padding: 12px 30px;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+/* ----- Voucher Identity Row -----
+   Scoped to the voucher panel's own (60%) width: Prev voucher / centered title+subtitle / Next
+   voucher — both nav buttons act only on "this voucher", so they stay separate from the toolbar
+   above. Plain flex row with no card background/shadow. No manual Save Progress button —
+   progress autosaves (see verification.js renderVoucherHeader()). */
 .verification-header-row {
     display: flex;
     justify-content: space-between;
@@ -1212,30 +1225,24 @@ body {
 }
 .voucher-subtitle {
     font-size: 13px;
-    color: #666;
+    color: #64748b;
     margin-top: 2px;
 }
+/* Bordered, button-like Prev/Next — previously plain text links with no visible affordance. */
 .btn-voucher-nav {
-    padding: 6px 4px;
-    border: none;
-    background: none;
+    padding: 6px 14px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
     color: #3b82f6;
     font-weight: 600;
     font-size: 14px;
     cursor: pointer;
     white-space: nowrap;
-    transition: color 0.2s;
+    transition: border-color 0.2s, background 0.2s;
 }
-.btn-voucher-nav:hover:not(:disabled) { color: #2563eb; text-decoration: underline; }
-.btn-voucher-nav:disabled { color: #cbd5e1; cursor: not-allowed; }
-/* Right-hand cluster in the primary nav row: Next voucher / view-all / Cashbook return, ending
-   flush with the row's (and therefore the panel's) right edge. */
-.voucher-nav-right {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex: 0 0 auto;
-}
+.btn-voucher-nav:hover:not(:disabled) { border-color: #3b82f6; background: #eff6ff; }
+.btn-voucher-nav:disabled { color: #cbd5e1; border-color: #e2e8f0; cursor: not-allowed; }
 .vh-icon {
     font-size: 18px;
     cursor: pointer;
@@ -1520,7 +1527,7 @@ body {
    Status / chevron). */
 .voucher-line-summary-grid {
     display: grid;
-    grid-template-columns: 80px 1fr 90px 110px 24px;
+    grid-template-columns: 100px 1fr 90px 110px 24px;
     align-items: stretch;
 }
 .voucher-line-summary-grid > * {
@@ -1529,6 +1536,10 @@ body {
     padding: 10px 12px;
     display: flex;
     align-items: center;
+    /* Flex/grid children default to a content-based min-width, which let long description text
+       push cells past their column and overlap neighbors. Forcing 0 makes cells respect the
+       track width so content wraps/clips within its own column instead. */
+    min-width: 0;
 }
 
 /* Column-title row, naming the cashbook's own columns — dim blue header bar. */
@@ -1563,9 +1574,8 @@ body {
 
 .voucher-line-code {
     font-weight: 600;
-    color: #475569;
+    color: #64748b;
     font-size: 13px;
-    white-space: nowrap;
 }
 
 .voucher-line-name-cell {
@@ -1584,9 +1594,8 @@ body {
 .voucher-line-desc {
     color: #64748b;
     font-size: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: break-word;
 }
 
 .voucher-line-amount {
@@ -1599,8 +1608,10 @@ body {
 /* Total line — a distinct footer row under the last line, summing Amount for the voucher and
    naming the source cashbook in the description slot. Not a real line: no hover/cursor-pointer,
    no chevron. */
+/* Same solid dim-blue as .voucher-line-header-row so the header/footer read as a matched pair
+   bracketing the body rows. */
 .voucher-line-total-row {
-    background: linear-gradient(135deg, #eff6ff, #f5f9ff);
+    background: #dbeafe;
 }
 .voucher-line-total-row .voucher-line-name {
     color: #1e40af;
@@ -2207,6 +2218,10 @@ body {
 
 /* ----- Responsive ----- */
 @media (max-width: 768px) {
+    .verification-toolbar {
+        justify-content: space-between;
+        padding: 10px 15px;
+    }
     .verification-header-row {
         flex-direction: column;
         align-items: stretch;

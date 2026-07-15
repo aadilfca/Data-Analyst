@@ -346,6 +346,7 @@ async function startSessionFromCashbook() {
         // Remove padding from main container when verification session is active
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.add('verification-active');
+        renderVerificationToolbar();
         if (typeof setNavStats === 'function') {
             setNavStats(`Session ${currentSessionId} · Cashbook: ${selectedCashbook} · 0 / ${totalTransactions} verified`);
         }
@@ -429,15 +430,50 @@ async function loadNextTransaction(detailId = null) {
     }
 }
 
+// ---------- MODULE TOOLBAR ----------
+// Renders the full-width, page-level toolbar (Search/view-all, Cashbook return) above the
+// 60%-width voucher panel — these are cross-voucher actions, not scoped to "this voucher", so
+// they live outside .voucher-panel per the confirmed layout split. Unlike renderVoucherHeader(),
+// this doesn't depend on which voucher is active, so it's rendered once per session (called from
+// startSessionFromCashbook()), not re-rendered on every voucher navigation.
+function renderVerificationToolbar() {
+    const bar = document.getElementById('verificationToolbar');
+    if (!bar) return;
+    bar.innerHTML = `
+        <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
+            <span class="vh-icon-symbol">🔍</span>
+        </span>
+        <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
+    `;
+    document.getElementById('transactionListIcon')?.addEventListener('click', function() {
+        const popover = document.getElementById('transactionListPopover');
+        if (!popover) return;
+        if (popover.style.display === 'block') {
+            closeTransactionPopover();
+            return;
+        }
+        if (typeof loadTransactionList === 'function') loadTransactionList(true);
+    });
+    document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
+        if (typeof exitSession === 'function') exitSession();
+    });
+}
+
+// Clear the module toolbar (used when a session exits back to the cashbook view).
+function clearVerificationToolbar() {
+    const bar = document.getElementById('verificationToolbar');
+    if (bar) bar.innerHTML = '';
+}
+
 // ---------- VOUCHER HEADER ----------
-// Renders the voucher-level chrome above the voucher lines list: a single row with the Prev
-// voucher button on the left, a centered title ("Voucher {id}") + subtitle (date · line count ·
-// Amount total · position counter), and a right-hand cluster (Next voucher / view-all / Cashbook
-// return) ending flush with the extreme right edge. No manual Save Progress button — progress
-// already autosaves via saveAllVoucherLines() on Prev/Next/Complete/Exit (see
-// saveCurrentTransaction(), completeTransaction(), exitSession()), so a manual save had no effect
-// a user could rely on. The per-line collapsed/expand rows (renderVoucherLines()) own everything
-// else below this header.
+// Renders the voucher-identity row, scoped to the voucher panel's own (60%) width: Prev voucher
+// on the left, a centered title ("Voucher {id}") + subtitle (date · line count · Amount total ·
+// position counter), and Next voucher on the right. Both buttons act only on "this voucher", so
+// they stay here rather than in the page-level toolbar (see renderVerificationToolbar()). No
+// manual Save Progress button — progress already autosaves via saveAllVoucherLines() on
+// Prev/Next/Complete/Exit (see saveCurrentTransaction(), completeTransaction(), exitSession()),
+// so a manual save had no effect a user could rely on. The per-line collapsed/expand rows
+// (renderVoucherLines()) own everything else below this header.
 function renderVoucherHeader(voucherId, voucherDate, lines) {
     const bar = document.getElementById('voucherHeaderBar');
     if (!bar) return;
@@ -450,13 +486,7 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
                 <div class="voucher-title">Voucher ${voucherId || '—'}</div>
                 <div class="voucher-subtitle">${voucherDate || '—'} · ${lineCount} line${lineCount === 1 ? '' : 's'} · Amount ${total}<span id="voucherPositionCounter"></span></div>
             </div>
-            <div class="voucher-nav-right">
-                <button class="btn-voucher-nav" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
-                <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
-                    <span class="vh-icon-symbol">🔍</span>
-                </span>
-                <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
-            </div>
+            <button class="btn-voucher-nav" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
         </div>
     `;
 
@@ -466,18 +496,6 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
     });
     document.getElementById('nextArrow')?.addEventListener('click', function() {
         if (typeof goToNextTransaction === 'function') goToNextTransaction();
-    });
-    document.getElementById('transactionListIcon')?.addEventListener('click', function() {
-        const popover = document.getElementById('transactionListPopover');
-        if (!popover) return;
-        if (popover.style.display === 'block') {
-            closeTransactionPopover();
-            return;
-        }
-        if (typeof loadTransactionList === 'function') loadTransactionList(true);
-    });
-    document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
-        if (typeof exitSession === 'function') exitSession();
     });
 }
 
@@ -1396,6 +1414,7 @@ function exitSession() {
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.remove('verification-active');
         clearVoucherHeader();
+        clearVerificationToolbar();
         showStatus('Session exited. Returning to cashbook.', 'info');
         currentSessionId = null;
         currentDetailId = null;
