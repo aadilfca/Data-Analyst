@@ -1185,19 +1185,56 @@ body {
    VERIFICATION MODULE ADDITIONAL STYLES
    ============================================= */
 
+/* ----- Cashbook Bar -----
+   Free-standing page-level action, outside .voucher-panel so it isn't confined to the table's 60%
+   width — pinned to the extreme right of the full page. Populated by renderVoucherHeader() in
+   verification.js (same #cashbookReturnBtn id/handler as before, just relocated). */
+.cashbook-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 30px;
+    background: #ffffff;
+    border-bottom: 1px solid #e2e8f0;
+    flex-wrap: wrap;
+}
+
+/* Cashbook name + session-wide voucher stats, left side of .cashbook-bar. */
+.cashbook-stats {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+.cashbook-stat {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+.cashbook-stat-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #94a3b8;
+}
+.cashbook-stat-value {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1a1a2e;
+}
+
 /* ----- Voucher Header Row -----
-   Single full-width row holding everything: Prev voucher / centered title (+ inline 🔍 view-all
-   icon, a sibling of the voucher number since that's how you search for a specific voucher) with
-   subtitle below / Next voucher + Cashbook return grouped at the extreme right. Kept outside
-   .voucher-panel (see verification.html) so it isn't capped to the panel's 60% width. Previously
-   split across two separate bars (a page-level toolbar plus a 60%-width voucher row) — merged
-   into one per user request. No manual Save Progress button — progress autosaves (see
-   verification.js renderVoucherHeader()). */
+   Scoped to the voucher panel's own (60%) width: Prev voucher / centered title (+ inline 🔍
+   view-all icon, a sibling of the voucher number since that's how you search for a specific
+   voucher) with subtitle below / Next voucher. No manual Save Progress button — progress
+   autosaves (see verification.js renderVoucherHeader()). */
 .verification-header-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 30px;
+    padding: 10px 20px 0;
     flex-wrap: wrap;
     gap: 10px;
 }
@@ -1237,13 +1274,6 @@ body {
 }
 .btn-voucher-nav:hover:not(:disabled) { border-color: #3b82f6; background: #eff6ff; }
 .btn-voucher-nav:disabled { color: #cbd5e1; border-color: #e2e8f0; cursor: not-allowed; }
-/* Right-hand cluster: Next voucher + Cashbook return, grouped at the row's extreme right edge. */
-.voucher-nav-right {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex: 0 0 auto;
-}
 .vh-icon {
     font-size: 18px;
     cursor: pointer;

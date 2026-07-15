@@ -430,13 +430,14 @@ async function loadNextTransaction(detailId = null) {
 }
 
 // ---------- VOUCHER HEADER ----------
-// Renders one single, full-width row above the voucher panel holding everything: Prev voucher on
-// the left, a centered title (voucher id + the 🔍 view-all icon inline right next to it — the
-// icon is how you search for a specific voucher, so it sits as a sibling of the voucher number,
-// not off in a separate toolbar) with the date/line-count/amount/position subtitle below, then
-// Next voucher and Cashbook return grouped at the extreme right. Previously this was split across
-// two separate bars (a page-level toolbar plus a 60%-width voucher row) — merged into one per
-// user request. No manual Save Progress button — progress already autosaves via
+// Renders the voucher-identity row, scoped to the voucher panel's own (60%) width: Prev voucher
+// on the left, a centered title (voucher id + the 🔍 view-all icon inline right next to it — the
+// icon is how you search for a specific voucher, so it sits as a sibling of the voucher number)
+// with the date/line-count/amount/position subtitle below, and Next voucher on the right. Also
+// renders #cashbookBar, outside .voucher-panel so it isn't confined to the table's width: cashbook
+// name + session-wide voucher stats (total/verified, see computeVoucherStats()) on the left, the
+// Cashbook return button on the right — all page-level info/actions, not scoped to "this voucher"
+// the way Prev/Next are. No manual Save Progress button — progress already autosaves via
 // saveAllVoucherLines() on Prev/Next/Complete/Exit (see saveCurrentTransaction(),
 // completeTransaction(), exitSession()), so a manual save had no effect a user could rely on. The
 // per-line collapsed/expand rows (renderVoucherLines()) own everything else below this header.
@@ -457,12 +458,26 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
                 </div>
                 <div class="voucher-subtitle">${voucherDate || '—'} · ${lineCount} line${lineCount === 1 ? '' : 's'} · Amount ${total}<span id="voucherPositionCounter"></span></div>
             </div>
-            <div class="voucher-nav-right">
-                <button class="btn-voucher-nav" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
-                <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
-            </div>
+            <button class="btn-voucher-nav" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
         </div>
     `;
+
+    const cashbookBar = document.getElementById('cashbookBar');
+    if (cashbookBar) {
+        const cashbookName = window._currentCashbook || selectedCashbook || '—';
+        const stats = computeVoucherStats();
+        cashbookBar.innerHTML = `
+            <div class="cashbook-stats">
+                <span class="cashbook-stat"><span class="cashbook-stat-label">Cashbook</span><span class="cashbook-stat-value">${cashbookName}</span></span>
+                <span class="cashbook-stat"><span class="cashbook-stat-label">Total Vouchers</span><span class="cashbook-stat-value">${stats.totalVouchers}</span></span>
+                <span class="cashbook-stat"><span class="cashbook-stat-label">Verified</span><span class="cashbook-stat-value">${stats.verifiedVouchers}</span></span>
+            </div>
+            <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
+        `;
+        document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
+            if (typeof exitSession === 'function') exitSession();
+        });
+    }
 
     // ----- Event wiring (rebound after every innerHTML write, matching this file's convention) -----
     document.getElementById('prevArrow')?.addEventListener('click', function() {
@@ -480,15 +495,14 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
         }
         if (typeof loadTransactionList === 'function') loadTransactionList(true);
     });
-    document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
-        if (typeof exitSession === 'function') exitSession();
-    });
 }
 
-// Clear the voucher header bar (used when a session completes or exits).
+// Clear the voucher header bar and Cashbook bar (used when a session completes or exits).
 function clearVoucherHeader() {
     const bar = document.getElementById('voucherHeaderBar');
     if (bar) bar.innerHTML = '';
+    const cashbookBar = document.getElementById('cashbookBar');
+    if (cashbookBar) cashbookBar.innerHTML = '';
 }
 
 // ---------- VOUCHER LINE ALIAS HELPERS (Phase 3) ----------
@@ -1186,6 +1200,25 @@ function isCurrentTransactionValidated() {
     return status === 'passed' || status === 'verified';
 }
 
+// Counts distinct vouchers in the session (not lines/transactions) and how many are fully
+// verified (every one of that voucher's lines is Passed/Verified). Reads sessionTransactions,
+// which validateTransaction() keeps patched with fresh validation_status so this stays accurate
+// as the user works through the session, without a dedicated refresh fetch.
+function computeVoucherStats() {
+    const linesByVoucher = {};
+    sessionTransactions.forEach(t => {
+        if (!t.voucher_id) return;
+        if (!linesByVoucher[t.voucher_id]) linesByVoucher[t.voucher_id] = [];
+        linesByVoucher[t.voucher_id].push(t);
+    });
+    const voucherIds = Object.keys(linesByVoucher);
+    const verifiedCount = voucherIds.filter(id => linesByVoucher[id].every(t => {
+        const status = (t.validation_status || '').toLowerCase();
+        return status === 'passed' || status === 'verified';
+    })).length;
+    return { totalVouchers: voucherIds.length, verifiedVouchers: verifiedCount };
+}
+
 // Go to previous transaction – with confirmation if not validated
 async function goToPreviousTransaction() {
     if (!sessionTransactions.length || currentTransactionIndex <= 0) {
@@ -1357,6 +1390,11 @@ async function validateTransaction() {
             statusCell.dataset.validationStatus = status;
             statusCell.innerHTML = `${getVoucherLineStatusIcon(data.validation_status)} ${status}`;
         }
+        // Keep the cached sessionTransactions entry in sync — it's fetched once by
+        // loadTransactionList() and otherwise never patched, so isCurrentTransactionValidated()
+        // and computeVoucherStats() would see stale data without this.
+        const cachedTransaction = sessionTransactions.find(t => t.detail_id === currentDetailId);
+        if (cachedTransaction) cachedTransaction.validation_status = data.validation_status;
         // Phase 2: standalone transaction view removed — verifyBtn DOM element no longer exists.
         // Validation result is reflected via the per-line status cell above.
     } catch (e) {

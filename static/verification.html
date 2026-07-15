@@ -575,18 +575,21 @@
             <!-- Status bar -->
             <div id="verificationStatus" class="upload-status" style="display:none; margin-bottom:12px;"></div>
 
-            <!-- Voucher Header: single full-width row holding everything — Prev voucher, the
-                 voucher title (with the 🔍 view-all icon inline next to the voucher number) +
-                 subtitle, Next voucher, and Cashbook return. Kept outside .voucher-panel below so
-                 it isn't capped to the panel's 60% width. Populated by renderVoucherHeader() in
-                 verification.js, re-rendered on every voucher navigation. -->
-            <div id="voucherHeaderBar" class="voucher-header-bar"></div>
+            <!-- Cashbook return — a page-level action, free of the 60%-wide voucher table, pinned
+                 to the extreme right of the full page. Populated once per session by
+                 renderVoucherHeader() in verification.js (same click handler as before). -->
+            <div id="cashbookBar" class="cashbook-bar"></div>
 
             <!-- Voucher Panel: constrained to 60% of screen width, on the left, leaving the
-                 remainder clear for future development (per user request). Internal grid/column
-                 alignment of the header subtitle and line rows is unchanged — only the outer width
-                 is capped. -->
+                 remainder clear for future development (per user request). -->
             <div class="voucher-panel">
+                <!-- Voucher Header: Prev voucher, the voucher title (with the 🔍 view-all icon
+                     inline next to the voucher number) + subtitle, Next voucher. Kept inside
+                     .voucher-panel so it aligns with the table's width. Populated by
+                     renderVoucherHeader() in verification.js, re-rendered on every voucher
+                     navigation. -->
+                <div id="voucherHeaderBar" class="voucher-header-bar"></div>
+
                 <!-- Voucher Lines (Phase 3): collapsed/expand summary rows, one per line. Each row
                      expands to reveal its own action bar (Audit Guidance / Supporting / Type),
                      independently of the other lines. -->
