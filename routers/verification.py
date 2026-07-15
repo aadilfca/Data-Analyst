@@ -452,20 +452,14 @@ def _build_verification_line(d: dict) -> dict:
         "version": current_version
     }
 
-@router.get("/api/verification/next/{session_id}")
-def get_next_transaction(session_id: int):
+def _fetch_session_details_grouped(session_id: int) -> list:
     """
-    Phase 1 (voucher/line grouping): returns the next voucher — header + ordered
-    array of its lines — instead of a single client_data row. Lines are grouped
-    using the same document-key logic as import's compare_transactions
-    (get_document_group_id), computed at query time (not persisted).
+    Fetch all verification_details for a session (joined with client_data),
+    each annotated with its computed '_doc_group_id' (Phase A: shared by
+    get_next_transaction and get_voucher_nav so both group vouchers the same
+    way). Ordered by client_data_id so line/voucher order matches the
+    physical row order. Does not filter by status.
     """
-    session = execute_query("SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
-    if not session:
-        raise HTTPException(404, "Verification session not found or cancelled.")
-
-    # Fetch all details for the session (with the client_data fields needed for grouping)
-    # in one query, ordered by client_data_id so line order matches the physical voucher.
     details = execute_query(
         """
         SELECT vd.id, vd.client_data_id, vd.transaction_ref, vd.line_items, vd.procedure_data,
@@ -479,13 +473,6 @@ def get_next_transaction(session_id: int):
         (session_id,)
     )
 
-    pending = [d for d in details if d['status'] == 'Pending']
-    if not pending:
-        return {"message": "All transactions in this session have been verified.", "completed": True}
-
-    # Anchor = earliest pending detail row (by verification_details.id, same tie-break as before)
-    anchor = min(pending, key=lambda d: d['id'])
-
     # Compute document_group_id for every detail row, caching template columns per template_id
     template_cols_cache: Dict[int, list] = {}
 
@@ -496,8 +483,34 @@ def get_next_transaction(session_id: int):
         rd = json.loads(d['row_data']) if isinstance(d['row_data'], str) else d['row_data']
         return get_document_group_id(template_cols_cache[tpl_id], rd, tpl_id)
 
-    anchor_group_id = doc_group_id_for(anchor)
-    voucher_rows = [d for d in details if doc_group_id_for(d) == anchor_group_id]
+    for d in details:
+        d['_doc_group_id'] = doc_group_id_for(d)
+
+    return details
+
+
+@router.get("/api/verification/next/{session_id}")
+def get_next_transaction(session_id: int):
+    """
+    Phase 1 (voucher/line grouping): returns the next voucher — header + ordered
+    array of its lines — instead of a single client_data row. Lines are grouped
+    using the same document-key logic as import's compare_transactions
+    (get_document_group_id), computed at query time (not persisted).
+    """
+    session = execute_query("SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
+    if not session:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+
+    details = _fetch_session_details_grouped(session_id)
+
+    pending = [d for d in details if d['status'] == 'Pending']
+    if not pending:
+        return {"message": "All transactions in this session have been verified.", "completed": True}
+
+    # Anchor = earliest pending detail row (by verification_details.id, same tie-break as before)
+    anchor = min(pending, key=lambda d: d['id'])
+    anchor_group_id = anchor['_doc_group_id']
+    voucher_rows = [d for d in details if d['_doc_group_id'] == anchor_group_id]
 
     lines = [_build_verification_line(d) for d in voucher_rows]
 
@@ -507,6 +520,67 @@ def get_next_transaction(session_id: int):
         "document_group_id": anchor_group_id,
         "line_count": len(lines),
         "lines": lines
+    }
+
+
+@router.get("/api/verification/voucher_nav/{session_id}")
+def get_voucher_nav(
+    session_id: int,
+    current_detail_id: int = Query(..., description="detail_id of any line in the currently displayed voucher"),
+    direction: str = Query(..., pattern="^(next|prev)$", description="'next' or 'prev'")
+):
+    """
+    Phase A: sequential voucher-to-voucher navigation, independent of
+    verification status (unlike /next, which always jumps to the next
+    Pending voucher). Vouchers are ordered by each group's earliest
+    client_data_id — the same physical row order /next already uses for
+    lines within a voucher.
+    """
+    session = execute_query("SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
+    if not session:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+
+    details = _fetch_session_details_grouped(session_id)
+
+    # Ordered list of distinct voucher group ids (first appearance = earliest client_data_id,
+    # since `details` is already ordered by cd.id ASC).
+    ordered_group_ids = []
+    seen = set()
+    for d in details:
+        gid = d['_doc_group_id']
+        if gid not in seen:
+            seen.add(gid)
+            ordered_group_ids.append(gid)
+    total_vouchers = len(ordered_group_ids)
+
+    current = next((d for d in details if d['id'] == current_detail_id), None)
+    if current is None:
+        raise HTTPException(404, "Verification detail not found in this session.")
+
+    current_index = ordered_group_ids.index(current['_doc_group_id'])
+    target_index = current_index - 1 if direction == "prev" else current_index + 1
+
+    if target_index < 0 or target_index >= total_vouchers:
+        return {
+            "boundary": True,
+            "message": "No previous voucher." if direction == "prev" else "No next voucher.",
+            "voucher_index": current_index + 1,
+            "total_vouchers": total_vouchers
+        }
+
+    target_group_id = ordered_group_ids[target_index]
+    voucher_rows = [d for d in details if d['_doc_group_id'] == target_group_id]
+    anchor = voucher_rows[0]
+    lines = [_build_verification_line(d) for d in voucher_rows]
+
+    return {
+        "voucher_id": anchor['transaction_ref'],
+        "voucher_date": anchor['extract_date'],
+        "document_group_id": target_group_id,
+        "line_count": len(lines),
+        "lines": lines,
+        "voucher_index": target_index + 1,
+        "total_vouchers": total_vouchers
     }
 
 @router.post("/api/verification/save_line_items")

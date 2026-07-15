@@ -446,9 +446,16 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
     if (!bar) return;
     const lineCount = lines ? lines.length : 0;
     const total = computeVoucherTotal(lines);
+    // Phase B: disabled state is voucher-level (getVoucherPosition()), not line-level — a
+    // multi-line voucher no longer has to be "the last line" for Next to disable correctly.
+    // Position unknown (sessionTransactions not loaded yet) defaults both disabled, same safe
+    // default the previous line-based check already fell into before sessionTransactions loaded.
+    const pos = getVoucherPosition();
+    const prevDisabled = !(pos.total > 0 && pos.index > 1);
+    const nextDisabled = !(pos.total > 0 && pos.index < pos.total);
     bar.innerHTML = `
         <div class="verification-header-row voucher-nav-row">
-            <button class="btn-voucher-nav" id="prevArrow" ${currentTransactionIndex <= 0 ? 'disabled' : ''} title="Previous transaction">← Prev voucher</button>
+            <button class="btn-voucher-nav" id="prevArrow" ${prevDisabled ? 'disabled' : ''} title="Previous transaction">← Prev voucher</button>
             <div class="voucher-title-block">
                 <div class="voucher-title">
                     Voucher ${voucherId || '—'}
@@ -458,7 +465,7 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
                 </div>
                 <div class="voucher-subtitle">${voucherDate || '—'} · ${lineCount} line${lineCount === 1 ? '' : 's'} · Amount ${total}<span id="voucherPositionCounter"></span></div>
             </div>
-            <button class="btn-voucher-nav" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
+            <button class="btn-voucher-nav" id="nextArrow" ${nextDisabled ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
         </div>
     `;
 
@@ -1378,13 +1385,28 @@ function showNavigationConfirm() {
     });
 }
 
-// Check if current transaction validation is Passed (or Verified)
-function isCurrentTransactionValidated() {
-    if (!sessionTransactions.length || currentTransactionIndex < 0) return false;
-    const current = sessionTransactions[currentTransactionIndex];
-    if (!current) return false;
-    const status = (current.validation_status || '').toLowerCase();
-    return status === 'passed' || status === 'verified';
+// Phase B: Prev/Next now move by whole voucher, so "has the current work been validated"
+// must consider every line of the current voucher, not just one arbitrary line — reuses the
+// same per-voucher aggregation computeVoucherStats() already does.
+function isCurrentVoucherValidated() {
+    if (!sessionTransactions.length || !currentVoucherId) return false;
+    const voucherLines = sessionTransactions.filter(t => t.voucher_id === currentVoucherId);
+    if (!voucherLines.length) return false;
+    return voucherLines.every(t => {
+        const status = (t.validation_status || '').toLowerCase();
+        return status === 'passed' || status === 'verified';
+    });
+}
+
+// Phase B: 1-based position of currentVoucherId among sessionTransactions' distinct voucher_ids,
+// e.g. {index: 3, total: 7} — used by the Prev/Next arrows' disabled state and boundary guards.
+// {index: 0, total: 0} means "unknown" (sessionTransactions not loaded yet, or no current voucher).
+function getVoucherPosition() {
+    const uniqueVouchers = [...new Set(sessionTransactions.map(t => t.voucher_id).filter(Boolean))];
+    const total = uniqueVouchers.length;
+    if (!currentVoucherId || total === 0) return { index: 0, total: 0 };
+    const idx = uniqueVouchers.indexOf(currentVoucherId);
+    return { index: idx >= 0 ? idx + 1 : 0, total };
 }
 
 // Counts distinct vouchers in the session (not lines/transactions) and how many are fully
@@ -1406,41 +1428,75 @@ function computeVoucherStats() {
     return { totalVouchers: voucherIds.length, verifiedVouchers: verifiedCount };
 }
 
-// Go to previous transaction – with confirmation if not validated
+// Phase B: fetches the whole adjacent voucher (Phase A's /voucher_nav) and renders it via the
+// same pipeline loadNextTransaction() already uses for /next's voucher-shaped response. Returns
+// true on success, false on a boundary (no more vouchers that way) or fetch error — both handled
+// silently, matching this file's existing silent-boundary convention (e.g. the old "last
+// transaction" no-op).
+async function moveToAdjacentVoucher(direction) {
+    if (!currentSessionId || !currentDetailId) return false;
+    try {
+        const url = `${API_BASE}/api/verification/voucher_nav/${currentSessionId}?current_detail_id=${currentDetailId}&direction=${direction}`;
+        const res = await fetch(url);
+        if (!res.ok) return false;
+        const data = await res.json();
+        if (data.boundary) return false;
+        const voucherLines = data.lines || [];
+        const activeLine = voucherLines[0];
+        if (!activeLine) return false;
+        currentDetailId = activeLine.detail_id;
+        currentClientDataId = activeLine.client_data_id;
+        currentVoucherId = data.voucher_id;
+        currentTransactionType = activeLine.transaction_type || '';
+        lineItems = activeLine.line_items || [];
+        procedureData = activeLine.procedure_data || {};
+        if (sessionTransactions.length > 0) {
+            currentTransactionIndex = sessionTransactions.findIndex(t => t.detail_id === currentDetailId);
+            if (currentTransactionIndex === -1) currentTransactionIndex = 0;
+        }
+        renderVoucherHeader(data.voucher_id, data.voucher_date, voucherLines);
+        seedVoucherLineState(voucherLines);
+        renderVoucherLines(voucherLines);
+        await updateProgressDisplay();
+        return true;
+    } catch (e) {
+        console.error('Error navigating to adjacent voucher:', e);
+        return false;
+    }
+}
+
+// Go to previous voucher – with confirmation if not validated
 async function goToPreviousTransaction() {
-    if (!sessionTransactions.length || currentTransactionIndex <= 0) {
-        // No message – silently ignore
+    const pos = getVoucherPosition();
+    if (pos.total > 0 && pos.index <= 1) {
+        // No message – silently ignore (already at the first voucher)
         return;
     }
     // Save current state first (always)
     await saveCurrentTransaction();
     // If not validated, ask for confirmation
-    if (!isCurrentTransactionValidated()) {
+    if (!isCurrentVoucherValidated()) {
         const confirmed = await showNavigationConfirm();
         if (!confirmed) {
             // User cancelled – no message
             return;
         }
     }
-    const prev = sessionTransactions[currentTransactionIndex - 1];
-    if (prev) {
-        navigateToTransaction(prev.detail_id);
-    } else {
-        // Silently ignore if not found
-    }
+    await moveToAdjacentVoucher('prev');
 }
 
-// Go to next transaction – with confirmation if not validated
+// Go to next voucher – with confirmation if not validated
 async function goToNextTransaction() {
-    // Silently no-op at the last transaction — the Next button is already disabled there, so
+    // Silently no-op at the last voucher — the Next button is already disabled there, so
     // this restates nothing new to the user.
-    if (!sessionTransactions.length || currentTransactionIndex >= sessionTransactions.length - 1) {
+    const pos = getVoucherPosition();
+    if (pos.total > 0 && pos.index >= pos.total) {
         return;
     }
     // Save current state
     await saveCurrentTransaction();
     // If not validated, ask for confirmation
-    if (!isCurrentTransactionValidated()) {
+    if (!isCurrentVoucherValidated()) {
         const confirmed = await showNavigationConfirm();
         if (!confirmed) {
             // Cancelled — stay on the current voucher, no toast (nothing changed for the user
@@ -1457,10 +1513,8 @@ async function goToNextTransaction() {
         await completeTransaction(); // marks verified and calls loadNextTransaction
     } else {
         // Even if validation failed, we move to next because user confirmed
-        const next = sessionTransactions[currentTransactionIndex + 1];
-        if (next) {
-            navigateToTransaction(next.detail_id);
-        } else {
+        const moved = await moveToAdjacentVoucher('next');
+        if (!moved) {
             showStatus('Next transaction not found.', 'error');
         }
     }
@@ -1578,7 +1632,7 @@ async function validateTransaction() {
             statusCell.innerHTML = `${getVoucherLineStatusIcon(data.validation_status)} ${status}`;
         }
         // Keep the cached sessionTransactions entry in sync — it's fetched once by
-        // loadTransactionList() and otherwise never patched, so isCurrentTransactionValidated()
+        // loadTransactionList() and otherwise never patched, so isCurrentVoucherValidated()
         // and computeVoucherStats() would see stale data without this.
         const cachedTransaction = sessionTransactions.find(t => t.detail_id === currentDetailId);
         if (cachedTransaction) cachedTransaction.validation_status = data.validation_status;
