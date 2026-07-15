@@ -346,7 +346,6 @@ async function startSessionFromCashbook() {
         // Remove padding from main container when verification session is active
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.add('verification-active');
-        renderVerificationToolbar();
         if (typeof setNavStats === 'function') {
             setNavStats(`Session ${currentSessionId} · Cashbook: ${selectedCashbook} · 0 / ${totalTransactions} verified`);
         }
@@ -430,21 +429,48 @@ async function loadNextTransaction(detailId = null) {
     }
 }
 
-// ---------- MODULE TOOLBAR ----------
-// Renders the full-width, page-level toolbar (Search/view-all, Cashbook return) above the
-// 60%-width voucher panel — these are cross-voucher actions, not scoped to "this voucher", so
-// they live outside .voucher-panel per the confirmed layout split. Unlike renderVoucherHeader(),
-// this doesn't depend on which voucher is active, so it's rendered once per session (called from
-// startSessionFromCashbook()), not re-rendered on every voucher navigation.
-function renderVerificationToolbar() {
-    const bar = document.getElementById('verificationToolbar');
+// ---------- VOUCHER HEADER ----------
+// Renders one single, full-width row above the voucher panel holding everything: Prev voucher on
+// the left, a centered title (voucher id + the 🔍 view-all icon inline right next to it — the
+// icon is how you search for a specific voucher, so it sits as a sibling of the voucher number,
+// not off in a separate toolbar) with the date/line-count/amount/position subtitle below, then
+// Next voucher and Cashbook return grouped at the extreme right. Previously this was split across
+// two separate bars (a page-level toolbar plus a 60%-width voucher row) — merged into one per
+// user request. No manual Save Progress button — progress already autosaves via
+// saveAllVoucherLines() on Prev/Next/Complete/Exit (see saveCurrentTransaction(),
+// completeTransaction(), exitSession()), so a manual save had no effect a user could rely on. The
+// per-line collapsed/expand rows (renderVoucherLines()) own everything else below this header.
+function renderVoucherHeader(voucherId, voucherDate, lines) {
+    const bar = document.getElementById('voucherHeaderBar');
     if (!bar) return;
+    const lineCount = lines ? lines.length : 0;
+    const total = computeVoucherTotal(lines);
     bar.innerHTML = `
-        <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
-            <span class="vh-icon-symbol">🔍</span>
-        </span>
-        <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
+        <div class="verification-header-row voucher-nav-row">
+            <button class="btn-voucher-nav" id="prevArrow" ${currentTransactionIndex <= 0 ? 'disabled' : ''} title="Previous transaction">← Prev voucher</button>
+            <div class="voucher-title-block">
+                <div class="voucher-title">
+                    Voucher ${voucherId || '—'}
+                    <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
+                        <span class="vh-icon-symbol">🔍</span>
+                    </span>
+                </div>
+                <div class="voucher-subtitle">${voucherDate || '—'} · ${lineCount} line${lineCount === 1 ? '' : 's'} · Amount ${total}<span id="voucherPositionCounter"></span></div>
+            </div>
+            <div class="voucher-nav-right">
+                <button class="btn-voucher-nav" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
+                <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
+            </div>
+        </div>
     `;
+
+    // ----- Event wiring (rebound after every innerHTML write, matching this file's convention) -----
+    document.getElementById('prevArrow')?.addEventListener('click', function() {
+        if (typeof goToPreviousTransaction === 'function') goToPreviousTransaction();
+    });
+    document.getElementById('nextArrow')?.addEventListener('click', function() {
+        if (typeof goToNextTransaction === 'function') goToNextTransaction();
+    });
     document.getElementById('transactionListIcon')?.addEventListener('click', function() {
         const popover = document.getElementById('transactionListPopover');
         if (!popover) return;
@@ -456,46 +482,6 @@ function renderVerificationToolbar() {
     });
     document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
         if (typeof exitSession === 'function') exitSession();
-    });
-}
-
-// Clear the module toolbar (used when a session exits back to the cashbook view).
-function clearVerificationToolbar() {
-    const bar = document.getElementById('verificationToolbar');
-    if (bar) bar.innerHTML = '';
-}
-
-// ---------- VOUCHER HEADER ----------
-// Renders the voucher-identity row, scoped to the voucher panel's own (60%) width: Prev voucher
-// on the left, a centered title ("Voucher {id}") + subtitle (date · line count · Amount total ·
-// position counter), and Next voucher on the right. Both buttons act only on "this voucher", so
-// they stay here rather than in the page-level toolbar (see renderVerificationToolbar()). No
-// manual Save Progress button — progress already autosaves via saveAllVoucherLines() on
-// Prev/Next/Complete/Exit (see saveCurrentTransaction(), completeTransaction(), exitSession()),
-// so a manual save had no effect a user could rely on. The per-line collapsed/expand rows
-// (renderVoucherLines()) own everything else below this header.
-function renderVoucherHeader(voucherId, voucherDate, lines) {
-    const bar = document.getElementById('voucherHeaderBar');
-    if (!bar) return;
-    const lineCount = lines ? lines.length : 0;
-    const total = computeVoucherTotal(lines);
-    bar.innerHTML = `
-        <div class="verification-header-row voucher-nav-row">
-            <button class="btn-voucher-nav" id="prevArrow" ${currentTransactionIndex <= 0 ? 'disabled' : ''} title="Previous transaction">← Prev voucher</button>
-            <div class="voucher-title-block">
-                <div class="voucher-title">Voucher ${voucherId || '—'}</div>
-                <div class="voucher-subtitle">${voucherDate || '—'} · ${lineCount} line${lineCount === 1 ? '' : 's'} · Amount ${total}<span id="voucherPositionCounter"></span></div>
-            </div>
-            <button class="btn-voucher-nav" id="nextArrow" ${currentTransactionIndex >= sessionTransactions.length - 1 ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
-        </div>
-    `;
-
-    // ----- Event wiring (rebound after every innerHTML write, matching this file's convention) -----
-    document.getElementById('prevArrow')?.addEventListener('click', function() {
-        if (typeof goToPreviousTransaction === 'function') goToPreviousTransaction();
-    });
-    document.getElementById('nextArrow')?.addEventListener('click', function() {
-        if (typeof goToNextTransaction === 'function') goToNextTransaction();
     });
 }
 
@@ -1226,8 +1212,9 @@ async function goToPreviousTransaction() {
 
 // Go to next transaction – with confirmation if not validated
 async function goToNextTransaction() {
+    // Silently no-op at the last transaction — the Next button is already disabled there, so
+    // this restates nothing new to the user.
     if (!sessionTransactions.length || currentTransactionIndex >= sessionTransactions.length - 1) {
-        showStatus('You are at the last transaction.', 'info');
         return;
     }
     // Save current state
@@ -1236,7 +1223,8 @@ async function goToNextTransaction() {
     if (!isCurrentTransactionValidated()) {
         const confirmed = await showNavigationConfirm();
         if (!confirmed) {
-            showStatus('Navigation cancelled.', 'info');
+            // Cancelled — stay on the current voucher, no toast (nothing changed for the user
+            // to be informed about).
             return;
         }
     }
@@ -1414,7 +1402,6 @@ function exitSession() {
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.remove('verification-active');
         clearVoucherHeader();
-        clearVerificationToolbar();
         showStatus('Session exited. Returning to cashbook.', 'info');
         currentSessionId = null;
         currentDetailId = null;
