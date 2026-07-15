@@ -600,8 +600,8 @@ function renderVoucherLines(lines) {
     let html = `
         <div class="voucher-line-header-row voucher-line-summary-grid">
             <span>Account Code</span>
-            <span>Account Name</span>
             <span>Type</span>
+            <span>Account Name</span>
             <span class="voucher-line-amount-col">Amount</span>
             <span>Status</span>
             <span></span>
@@ -631,10 +631,6 @@ function renderVoucherLines(lines) {
             <div class="voucher-line-row" data-detail-id="${uid}">
                 <div class="voucher-line-summary voucher-line-summary-grid" data-detail-id="${uid}">
                     <span class="voucher-line-code">${accountCode}</span>
-                    <span class="voucher-line-name-cell">
-                        <span class="voucher-line-name">${accountName}${changeIconHtml}${deletedBadgeHtml}</span>
-                        <span class="voucher-line-desc">${description}</span>
-                    </span>
                     <span class="voucher-line-type-cell">
                         <select class="vh-type-dropdown voucher-line-type-dropdown" data-uid="${uid}">
                             <option value="">-- Select --</option>
@@ -646,6 +642,13 @@ function renderVoucherLines(lines) {
                             <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
                             <option value="Kitchen Expenses">Kitchen Expenses</option>
                         </select>
+                    </span>
+                    <span class="voucher-line-name-cell">
+                        <span class="voucher-line-name-row">
+                            <span class="voucher-line-name">${accountName}${changeIconHtml}${deletedBadgeHtml}</span>
+                            <span class="voucher-line-audit-icon" data-uid="${uid}" title="Audit guidance">📋</span>
+                        </span>
+                        <span class="voucher-line-desc">${description}</span>
                     </span>
                     <span class="voucher-line-amount">${amount}</span>
                     <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
@@ -665,11 +668,11 @@ function renderVoucherLines(lines) {
     html += `
         <div class="voucher-line-total-row voucher-line-summary-grid">
             <span></span>
+            <span></span>
             <span class="voucher-line-name-cell">
                 <span class="voucher-line-name">Total</span>
                 <span class="voucher-line-desc">${cashbookName}</span>
             </span>
-            <span></span>
             <span class="voucher-line-amount">${total}</span>
             <span></span>
             <span></span>
@@ -722,6 +725,21 @@ function renderVoucherLines(lines) {
             e.stopPropagation();
             const uid = this.dataset.uid;
             openAuditGuidancePopup(uid);
+        });
+    });
+
+    // Audit Guidance icon (top-right of the Account Name cell) — same underlying audit guidance
+    // content as the button in the expanded panel, but shown in a small popover anchored to the
+    // icon (not the full-page modal) so the icon stays clickable to toggle it closed.
+    container.querySelectorAll('.voucher-line-audit-icon').forEach(icon => {
+        icon.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const uid = this.dataset.uid;
+            if (auditGuidancePopoverUid === uid) {
+                hideAuditGuidancePopover();
+            } else {
+                showAuditGuidancePopover(this, uid);
+            }
         });
     });
 
@@ -984,6 +1002,88 @@ document.addEventListener('click', function(e) {
     const popover = document.getElementById('voucherChangePopover');
     if (popover && popover.style.display === 'block' && !popover.contains(e.target)) {
         hideVoucherChangePopover();
+    }
+});
+
+// ---------- Audit Guidance icon popover ----------
+// Small popover anchored to the 📋 icon in each line's Account Name cell — reuses the same
+// audit_guidance fetch/render logic as openAuditGuidancePopup() (the expanded panel's button),
+// but as a lightweight popover instead of the full-page #procedureModal, so the icon stays
+// clickable to toggle it closed (a full-screen modal's backdrop would otherwise cover the icon).
+// Tracks the open line's uid (not just a boolean) so clicking a different line's icon switches
+// content instead of needing a close-then-reopen.
+let auditGuidancePopoverUid = null;
+
+function hideAuditGuidancePopover() {
+    const popover = document.getElementById('auditGuidancePopover');
+    if (popover) popover.style.display = 'none';
+    auditGuidancePopoverUid = null;
+}
+
+async function showAuditGuidancePopover(icon, uid) {
+    const popover = document.getElementById('auditGuidancePopover');
+    if (!popover) return;
+    const state = voucherLineState[uid];
+    const type = state ? state.transactionType : '';
+    // No transaction type picked yet for this line — do nothing, same as the expanded panel's
+    // Audit Guidance button.
+    if (!type) return;
+
+    popover.innerHTML = `
+        <div class="popover-header">📋 Audit Guidance</div>
+        <div class="popover-body"><p class="segment2-placeholder-text">Loading audit guidance...</p></div>
+    `;
+
+    // Position near the icon, clamped so it stays within the viewport (same logic as
+    // showVoucherChangePopover()/showRowHistoryPopover() in databank.js).
+    const rect = icon.getBoundingClientRect();
+    const popoverWidth = 480;
+    let left = rect.left;
+    if (left + popoverWidth > window.innerWidth) {
+        left = Math.max(8, window.innerWidth - popoverWidth - 8);
+    }
+    popover.style.left = left + 'px';
+
+    const popoverMaxHeight = 360;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow >= popoverMaxHeight + 6) {
+        popover.style.top = (rect.bottom + 6) + 'px';
+        popover.style.bottom = 'auto';
+    } else {
+        popover.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+        popover.style.top = 'auto';
+    }
+
+    popover.style.display = 'block';
+    auditGuidancePopoverUid = uid;
+
+    const body = popover.querySelector('.popover-body');
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
+        // Discard a stale response if the popover was closed or switched to another line/type
+        // while the fetch was in flight.
+        if (auditGuidancePopoverUid !== uid) return;
+        if (res.status === 404) {
+            if (body) body.innerHTML = '<p class="segment2-placeholder-text">No guidance available for this transaction type yet.</p>';
+            return;
+        }
+        if (!res.ok) throw new Error('Failed to fetch audit guidance');
+        const data = await res.json();
+        if (body) body.innerHTML = buildAuditGuidanceTable(data);
+    } catch (e) {
+        if (auditGuidancePopoverUid !== uid) return;
+        console.error('Error fetching audit guidance:', e);
+        if (body) body.innerHTML = '<p class="segment2-placeholder-text">Unable to load audit guidance.</p>';
+    }
+}
+
+// Close the popover when clicking anywhere outside it (the icon's own click is stopped from
+// propagating here, so this only fires for clicks elsewhere — including scrolling/clicking
+// inside the popover itself, which .contains(e.target) correctly leaves open).
+document.addEventListener('click', function(e) {
+    const popover = document.getElementById('auditGuidancePopover');
+    if (popover && popover.style.display === 'block' && !popover.contains(e.target)) {
+        hideAuditGuidancePopover();
     }
 });
 
@@ -1442,7 +1542,6 @@ function exitSession() {
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.remove('verification-active');
         clearVoucherHeader();
-        showStatus('Session exited. Returning to cashbook.', 'info');
         currentSessionId = null;
         currentDetailId = null;
         fetchCashbookData();
@@ -1620,7 +1719,10 @@ if (dfdModal) {
 // Opens a modal displaying audit guidance (management controls, risks, procedures) for
 // the given line's transaction type. Relies on the same buildAuditGuidanceTable() / fetch
 // logic that the removed AUDIT tab used, but rendered as a standalone popup triggered by
-// the Audit Guidance button in the expanded bar.
+// the Audit Guidance button in the expanded bar. (The Account Name cell's Audit Guidance
+// icon uses a separate, lighter popover instead — see showAuditGuidancePopover() below — since
+// this modal's full-page backdrop would otherwise cover the icon and make "click the icon again
+// to close" impossible.)
 async function openAuditGuidancePopup(uid) {
     const state = voucherLineState[uid];
     const type = state ? state.transactionType : '';

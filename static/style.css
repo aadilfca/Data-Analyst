@@ -1498,6 +1498,33 @@ body {
     font-size: 12px;
 }
 
+/* Audit Guidance icon popover — same shell as .voucher-change-popover, just wider to fit the
+   3-column audit-guidance-columns layout (see showAuditGuidancePopover() in verification.js). */
+.audit-guidance-popover {
+    position: fixed;
+    z-index: 1100;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    width: 480px;
+    max-height: 360px;
+    overflow-y: auto;
+    font-size: 12px;
+}
+.audit-guidance-popover .popover-header {
+    font-weight: 600;
+    padding: 8px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    color: #1a1a2e;
+    position: sticky;
+    top: 0;
+    background: white;
+}
+.audit-guidance-popover .popover-body {
+    padding: 10px 12px;
+}
+
 /* ----- Voucher Panel -----
    Caps the voucher header + line list to 65% of screen width, on the left, leaving the remainder
    clear for future development. Left-aligned by default (no margin:auto) since
@@ -1555,11 +1582,11 @@ body {
    so adjacent rows form one continuous table. */
 
 /* Shared column layout — used by the column-title row, each line's summary row, and the total
-   row, so all three line up under the same headings (Account Code / Account Name / Type / Amount
-   / Status / chevron). */
+   row, so all three line up under the same headings (Account Code / Type / Account Name / Amount
+   / Status / chevron). Status is sized tight to its content ("⏳ pending" is the longest value). */
 .voucher-line-summary-grid {
     display: grid;
-    grid-template-columns: 100px 1fr 170px 90px 110px 24px;
+    grid-template-columns: 100px 170px 1fr 90px 90px 24px;
     align-items: stretch;
 }
 .voucher-line-summary-grid > * {
@@ -1627,10 +1654,36 @@ body {
     min-width: 0;
 }
 
+/* Spans the full cell width so the Audit Guidance icon can sit at the extreme right of the
+   Account Name line, separate from the description line below it. */
+.voucher-line-name-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+}
+
 .voucher-line-name {
     font-weight: 600;
     color: #1a1a2e;
     font-size: 14px;
+}
+
+/* Audit Guidance icon — subtle by default, more visible on hover; opens the same popup as the
+   "Audit Guidance" button in the expanded panel (see openAuditGuidancePopup() in
+   verification.js), and doubles as a close toggle when clicked again while its own popup is
+   open. */
+.voucher-line-audit-icon {
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.5;
+    flex-shrink: 0;
+    transition: opacity 0.15s ease;
+}
+.voucher-line-audit-icon:hover {
+    opacity: 1;
 }
 
 .voucher-line-desc {
@@ -1817,7 +1870,7 @@ body {
         width: 100%;
     }
     .voucher-line-summary-grid {
-        grid-template-columns: 50px 1fr 100px 55px 60px 16px;
+        grid-template-columns: 50px 100px 1fr 55px 55px 16px;
         gap: 8px;
     }
 }
