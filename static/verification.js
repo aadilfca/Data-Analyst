@@ -506,9 +506,9 @@ function clearVoucherHeader() {
 }
 
 // ---------- VOUCHER LINE ALIAS HELPERS (Phase 3) ----------
-// Small, shared alias lookups reused by renderVoucherLines()/buildLineDetailHtml() — mirrors the
-// alias arrays already used inside renderTransaction(), kept local to avoid touching that
-// function (left untouched this phase per the confirmed plan).
+// Small, shared alias lookups reused by renderVoucherLines() — mirrors the alias arrays already
+// used inside renderTransaction(), kept local to avoid touching that function (left untouched
+// this phase per the confirmed plan).
 const VOUCHER_LINE_ACCOUNT_CODE_ALIASES = ['Account Detail', 'Account Details', 'Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head', 'Ledger Detail'];
 const VOUCHER_LINE_ACCOUNT_NAME_ALIASES = ['Account Name', 'Account', 'Account Detail', 'Ledger', 'Head'];
 const VOUCHER_LINE_DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars'];
@@ -583,10 +583,9 @@ function seedVoucherLineState(lines) {
 }
 
 // ---------- RENDER VOUCHER LINES (Phase 3) ----------
-// Renders a column-title row, one collapsed/expand row per line, and a total-line footer into
-// #voucherLinesContainer. Segment 1 is not repeated here (its fields — account code/name/
-// description/amount — are covered by the compact summary row); Segment 2/3 render inside each
-// row's detail panel via buildLineDetailHtml(), independently per line.
+// Renders a column-title row, one row per line, and a total-line footer into
+// #voucherLinesContainer. There is no expand/collapse — every field and action (Type + Guide/DFD
+// chips, Amount, Supporting → Procedures chip, Status) is visible directly in the row.
 function renderVoucherLines(lines) {
     const container = document.getElementById('voucherLinesContainer');
     if (!container) return;
@@ -603,8 +602,8 @@ function renderVoucherLines(lines) {
             <span>Type</span>
             <span>Account Name</span>
             <span class="voucher-line-amount-col">Amount</span>
+            <span>Supporting</span>
             <span>Status</span>
-            <span></span>
         </div>
     `;
 
@@ -652,11 +651,10 @@ function renderVoucherLines(lines) {
                         <span class="voucher-line-desc">${description}</span>
                     </span>
                     <span class="voucher-line-amount">${amount}</span>
+                    <span class="voucher-line-supporting-cell">
+                        <button type="button" class="voucher-line-chip voucher-line-supporting-chip" data-uid="${uid}" title="View and confirm supporting documents">📎 Procedures</button>
+                    </span>
                     <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
-                    <span class="voucher-line-chevron">▾</span>
-                </div>
-                <div class="voucher-line-detail" id="voucherLineDetail-${uid}">
-                    ${buildLineDetailHtml(line, uid)}
                 </div>
             </div>
         `;
@@ -697,17 +695,6 @@ function renderVoucherLines(lines) {
 
     // ----- Event wiring (rebound after every innerHTML write, matching this file's convention) -----
 
-    // Summary bar click toggles that row's expanded state — independent per line.
-    container.querySelectorAll('.voucher-line-summary').forEach(bar => {
-        bar.addEventListener('click', function() {
-            const detailEl = document.getElementById(`voucherLineDetail-${this.dataset.detailId}`);
-            const row = this.closest('.voucher-line-row');
-            if (!detailEl || !row) return;
-            const expanded = detailEl.classList.toggle('expanded');
-            row.classList.toggle('expanded', expanded);
-        });
-    });
-
     // Transaction type dropdown, scoped per line.
     container.querySelectorAll('.voucher-line-type-dropdown').forEach(select => {
         select.addEventListener('click', function(e) { e.stopPropagation(); });
@@ -720,18 +707,9 @@ function renderVoucherLines(lines) {
         });
     });
 
-    // Audit Guidance button — opens a popup with the audit guidance content for this line's type.
-    container.querySelectorAll('.btn-audit-guidance').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const uid = this.dataset.uid;
-            openAuditGuidancePopup(uid);
-        });
-    });
-
-    // "Guide" chip (below the Type dropdown) — same underlying audit guidance content as the
-    // button in the expanded panel, but shown in a small popover anchored to the chip (not the
-    // full-page modal) so the chip stays clickable to toggle it closed.
+    // "Guide" chip (below the Type dropdown) — opens the audit guidance content for this line's
+    // type in a small popover anchored to the chip (not a full-page modal), so the chip stays
+    // clickable to toggle it closed.
     container.querySelectorAll('.voucher-line-audit-icon').forEach(icon => {
         icon.addEventListener('click', function(e) {
             e.stopPropagation();
@@ -753,50 +731,15 @@ function renderVoucherLines(lines) {
         });
     });
 
-    // Supporting button — opens a popup with the five procedure cards for this line.
-    container.querySelectorAll('.btn-supporting').forEach(btn => {
-        btn.addEventListener('click', function(e) {
+    // "Procedures" chip (Supporting column) — opens a popup with the five procedure cards for
+    // this line.
+    container.querySelectorAll('.voucher-line-supporting-chip').forEach(chip => {
+        chip.addEventListener('click', function(e) {
             e.stopPropagation();
             const uid = this.dataset.uid;
             openSupportingPopup(uid);
         });
     });
-}
-
-// ---------- BUILD LINE DETAIL HTML (Phase 4) ----------
-// Expanded panel: horizontal bar with Audit Guidance/Supporting buttons and the transaction type
-// dropdown. The Particulars/Value table was removed — Date/Account Code/Account Name/Description
-// are already shown in the line's own summary row (renderVoucherLines()), so it was a duplicate.
-function buildLineDetailHtml(line, uid) {
-    const state = voucherLineState[uid] || { transactionType: '', procedureData: {} };
-
-    let html = '';
-
-    // Deleted-state banner, shown inside this line's own expanded panel.
-    if (line.change_detection_status === 'deleted') {
-        html += `
-        <div class="change-detection-banner" style="border-left-color:#dc2626; background:#fef2f2;">
-            <span class="banner-icon">🗑️</span>
-            <div class="banner-content">
-                <div class="banner-title" style="color:#991b1b;">Transaction flagged as deleted</div>
-                <div class="banner-subtitle" style="color:#b91c1c;">This transaction was present in previous uploads but is missing from the current re-upload. Awaiting auditor review.</div>
-            </div>
-        </div>
-        `;
-    }
-
-    // Horizontal bar: just Audit Guidance + Supporting now — the transaction type dropdown moved
-    // to its own "Type" column in the summary row (renderVoucherLines()), visible without
-    // expanding the line.
-    html += `
-        <div class="expanded-bar">
-            <div class="expanded-bar-actions">
-                <button class="btn-audit-guidance" data-uid="${uid}" title="View audit guidance for this transaction type">📋 Audit Guidance</button>
-                <button class="btn-supporting" data-uid="${uid}" title="View and confirm supporting documents">📎 Supporting</button>
-            </div>
-        </div>
-    `;
-    return html;
 }
 
 // Phase 2: renderLineItems(), addLineItemRow(), and fetchLibrary() were standalone-only functions
@@ -835,7 +778,7 @@ function buildAuditGuidanceTable(data) {
     `;
 }
 
-// buildAuditGuidanceTable()/escapeHtml() are now consumed only by openAuditGuidancePopup().
+// buildAuditGuidanceTable()/escapeHtml() are now consumed only by showAuditGuidancePopover().
 
 // ---------- UPDATE PROGRESS ----------
 // ---------- UPDATE PROGRESS (lightweight) ----------
@@ -1015,13 +958,12 @@ document.addEventListener('click', function(e) {
     }
 });
 
-// ---------- Audit Guidance icon popover ----------
-// Small popover anchored to the 📋 icon in each line's Account Name cell — reuses the same
-// audit_guidance fetch/render logic as openAuditGuidancePopup() (the expanded panel's button),
-// but as a lightweight popover instead of the full-page #procedureModal, so the icon stays
-// clickable to toggle it closed (a full-screen modal's backdrop would otherwise cover the icon).
-// Tracks the open line's uid (not just a boolean) so clicking a different line's icon switches
-// content instead of needing a close-then-reopen.
+// ---------- Audit Guidance popover ("Guide" chip) ----------
+// Small popover anchored to the "Guide" chip below each line's Type dropdown — fetches audit
+// guidance for that line's transaction type as a lightweight popover instead of a full-page
+// modal, so the chip stays clickable to toggle it closed (a full-screen modal's backdrop would
+// otherwise cover it). Tracks the open line's uid (not just a boolean) so clicking a different
+// line's chip switches content instead of needing a close-then-reopen.
 let auditGuidancePopoverUid = null;
 
 function hideAuditGuidancePopover() {
@@ -1723,52 +1665,6 @@ if (dfdModal) {
     dfdModal.addEventListener('click', function(e) {
         if (e.target === this) closeDfdModal();
     });
-}
-
-// ---------- Phase 4: Audit Guidance Popup ----------
-// Opens a modal displaying audit guidance (management controls, risks, procedures) for
-// the given line's transaction type. Relies on the same buildAuditGuidanceTable() / fetch
-// logic that the removed AUDIT tab used, but rendered as a standalone popup triggered by
-// the Audit Guidance button in the expanded bar. (The Account Name cell's Audit Guidance
-// icon uses a separate, lighter popover instead — see showAuditGuidancePopover() below — since
-// this modal's full-page backdrop would otherwise cover the icon and make "click the icon again
-// to close" impossible.)
-async function openAuditGuidancePopup(uid) {
-    const state = voucherLineState[uid];
-    const type = state ? state.transactionType : '';
-    // No transaction type picked yet for this line — do nothing (no toast). A clearer inline
-    // signal near the button can be added later; the page-level warning toast looked out of
-    // place here per user feedback.
-    if (!type) return;
-    // Reuse the procedure modal container, repurposing its content for audit guidance.
-    // We swap the modal's title, hide the search/confirm UI, and insert guidance content.
-    if (!procedureModal) return;
-    if (procedureModalTitle) procedureModalTitle.textContent = '📋 Audit Guidance';
-    // Hide search/confirm elements that belong to the procedure modal flow
-    const searchRow = procedureModal.querySelector('.search-row');
-    if (searchRow) searchRow.style.display = 'none';
-    const confirmRow = procedureModal.querySelector('.modal-confirm-row');
-    if (confirmRow) confirmRow.style.display = 'none';
-    if (procedureStatus) procedureStatus.textContent = '';
-    // Show loading
-    if (procedureResults) procedureResults.innerHTML = '<div style="text-align:center; padding:20px;"><span class="spinner"></span> Loading audit guidance...</div>';
-    procedureModal.style.display = 'flex';
-
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
-        if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
-        if (res.status === 404) {
-            if (procedureResults) procedureResults.innerHTML = '<p style="color:#94a3b8; text-align:center; padding:30px;">No audit guidance available for this transaction type yet.</p>';
-            return;
-        }
-        if (!res.ok) throw new Error('Failed to fetch audit guidance');
-        const data = await res.json();
-        if (procedureResults) procedureResults.innerHTML = buildAuditGuidanceTable(data);
-    } catch (e) {
-        if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
-        console.error('Error fetching audit guidance:', e);
-        if (procedureResults) procedureResults.innerHTML = '<p style="color:#dc2626; text-align:center; padding:30px;">Unable to load audit guidance.</p>';
-    }
 }
 
 // ---------- Phase 4: Supporting Popup ----------

@@ -1363,9 +1363,9 @@ body {
 /* Cleanup pass: .transaction-grid and the base (non-compound) .grid-segment-1/2/3 grid-placement
    rules were removed — they only had meaning inside .transaction-grid, which no longer exists
    anywhere now that the standalone renderTransaction() view is gone. The .grid-segment-2/-3 class
-   names are no longer used anywhere either (buildLineDetailHtml() dropped Segment 2/3 markup when
-   Audit Guidance/Supporting moved into popups), so their .voucher-line-segments styling rules
-   were removed too. */
+   names are no longer used anywhere either (Segment 2/3 markup was dropped when Audit
+   Guidance/Supporting moved into popups, and the line's expand/collapse panel that held them was
+   later removed entirely), so their .voucher-line-segments styling rules were removed too. */
 
 /* ----- Segment 2 Tab Shell (DFD / AUDIT) ----- */
 .segment2-tab-header {
@@ -1583,10 +1583,11 @@ body {
 
 /* Shared column layout — used by the column-title row, each line's summary row, and the total
    row, so all three line up under the same headings (Account Code / Type / Account Name / Amount
-   / Status / chevron). Status is sized tight to its content ("⏳ pending" is the longest value). */
+   / Supporting / Status). Status is sized tight to its content ("⏳ pending" is the longest
+   value). No expand/collapse anymore — every column is a plain data/action cell. */
 .voucher-line-summary-grid {
     display: grid;
-    grid-template-columns: 100px 170px 1fr 90px 90px 24px;
+    grid-template-columns: 100px 170px 1fr 90px 110px 90px;
     align-items: stretch;
 }
 .voucher-line-summary-grid > * {
@@ -1599,16 +1600,6 @@ body {
        push cells past their column and overlap neighbors. Forcing 0 makes cells respect the
        track width so content wraps/clips within its own column instead. */
     min-width: 0;
-}
-/* The chevron column is just an expand/collapse affordance, not real tabular data — dropping the
-   divider between it and Status merges them into one visual unit instead of the arrow looking
-   like an awkward, isolated mini-column of its own. The table's right outer edge still comes from
-   the chevron cell's own border-right, so the overall "All Borders" outline is unaffected. */
-.voucher-line-summary-grid > *:nth-child(5) {
-    border-right: none;
-}
-.voucher-line-summary-grid > *:nth-child(6) {
-    padding-left: 0;
 }
 
 /* Column-title row, naming the cashbook's own columns — dim blue header bar. */
@@ -1625,20 +1616,13 @@ body {
     padding-bottom: 8px;
 }
 .voucher-line-header-row .voucher-line-amount-col,
-.voucher-line-header-row > *:nth-child(5) {
+.voucher-line-header-row > *:nth-child(6) {
     justify-content: flex-end;
     text-align: right;
 }
 
 .voucher-line-summary {
     background: #ffffff;
-    cursor: pointer;
-    user-select: none;
-    transition: background 0.15s ease;
-}
-
-.voucher-line-summary:hover > * {
-    background: #f8fafc;
 }
 
 .voucher-line-code {
@@ -1758,8 +1742,9 @@ body {
     vertical-align: middle;
 }
 
-/* Deleted-badge chip — compact indicator inline next to the account name (fuller banner text
-   lives in the line's expanded panel, reusing .change-detection-banner). */
+/* Deleted-badge chip — compact indicator inline next to the account name. (The fuller banner
+   text this used to pair with, in the now-removed expand panel, was dropped along with
+   expand/collapse — this compact badge is the sole "deleted" signal now.) */
 .voucher-line-deleted-badge {
     display: inline-flex;
     align-items: center;
@@ -1774,98 +1759,10 @@ body {
     margin-left: 6px;
 }
 
-.voucher-line-chevron {
-    font-size: 14px;
-    color: #94a3b8;
-    transition: transform 0.15s ease;
+/* Supporting cell — centers its single "Procedures" chip (openSupportingPopup() in
+   verification.js), matching the Type cell's chip styling (.voucher-line-chip). */
+.voucher-line-supporting-cell {
     justify-content: center;
-}
-
-.voucher-line-row.expanded .voucher-line-chevron {
-    transform: rotate(180deg);
-}
-
-.voucher-line-detail {
-    max-height: 0;
-    opacity: 0;
-    overflow: hidden;
-    padding: 0 16px;
-    transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.25s ease;
-    border-top: 1px solid transparent;
-    border-right: 1px solid transparent;
-}
-
-/* The collapsed summary row's right/bottom edges come from its grid cells (see
-   .voucher-line-summary-grid > *), but the expanded panel below sits outside that grid — without
-   its own matching border it left the table's right edge looking cut off / broken whenever a row
-   was expanded. border-right continues the table's outer frame; border-bottom closes the row off
-   (needed since, unlike the grid cells, this panel doesn't otherwise supply one). */
-.voucher-line-detail.expanded {
-    max-height: 2000px;
-    opacity: 1;
-    padding: 14px 16px 18px;
-    border-top-color: #e2e8f0;
-    border-right-color: #94a3b8;
-    border-bottom: 1px solid #94a3b8;
-}
-
-/* Horizontal action bar inside the expanded panel — just Audit Guidance + Supporting now (the
-   transaction type dropdown moved to its own "Type" column in the summary row). */
-.expanded-bar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 0;
-    margin-top: 10px;
-    border-top: 1px solid #e2e8f0;
-    flex-wrap: wrap;
-}
-.expanded-bar-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-/* Button: Audit Guidance — blue theme, matching the app's primary color */
-.btn-audit-guidance {
-    padding: 6px 16px;
-    background: #3b82f6;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    transition: background 0.2s, transform 0.1s;
-    white-space: nowrap;
-    line-height: 1.4;
-}
-.btn-audit-guidance:hover {
-    background: #2563eb;
-}
-.btn-audit-guidance:active {
-    transform: scale(0.96);
-}
-
-/* Button: Supporting — green theme, matching the app's success color */
-.btn-supporting {
-    padding: 6px 16px;
-    background: #22c55e;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    transition: background 0.2s, transform 0.1s;
-    white-space: nowrap;
-    line-height: 1.4;
-}
-.btn-supporting:hover {
-    background: #16a34a;
-}
-.btn-supporting:active {
-    transform: scale(0.96);
 }
 
 /* Supporting popup card hover effect */
@@ -1880,7 +1777,7 @@ body {
         width: 100%;
     }
     .voucher-line-summary-grid {
-        grid-template-columns: 50px 100px 1fr 55px 55px 16px;
+        grid-template-columns: 50px 100px 1fr 55px 70px 55px;
         gap: 8px;
     }
 }
@@ -2035,36 +1932,6 @@ body {
 }
 .btn-next:hover { background: #16a34a; }
 
-/* ----- Change Detection Warning Banner ----- */
-.change-detection-banner {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 12px 16px;
-    margin: 12px 0;
-    border-radius: 8px;
-    border-left: 4px solid #f59e0b;
-    background: #fffbeb;
-}
-.change-detection-banner .banner-icon {
-    font-size: 20px;
-    flex-shrink: 0;
-    margin-top: 2px;
-}
-.change-detection-banner .banner-content {
-    flex: 1;
-}
-.change-detection-banner .banner-title {
-    font-weight: 700;
-    font-size: 14px;
-    color: #92400e;
-    margin-bottom: 4px;
-}
-.change-detection-banner .banner-subtitle {
-    font-size: 13px;
-    color: #a16207;
-    margin-bottom: 8px;
-}
 /* ----- Diff Table (old vs new) — reused inside the Phase 8 voucher-change popover ----- */
 .diff-table {
     width: 100%;
