@@ -1579,10 +1579,10 @@ if (dfdModal) {
 async function openAuditGuidancePopup(uid) {
     const state = voucherLineState[uid];
     const type = state ? state.transactionType : '';
-    if (!type) {
-        showStatus('⚠️ Select a transaction type first.', 'info');
-        return;
-    }
+    // No transaction type picked yet for this line — do nothing (no toast). A clearer inline
+    // signal near the button can be added later; the page-level warning toast looked out of
+    // place here per user feedback.
+    if (!type) return;
     // Reuse the procedure modal container, repurposing its content for audit guidance.
     // We swap the modal's title, hide the search/confirm UI, and insert guidance content.
     if (!procedureModal) return;
