@@ -1281,14 +1281,15 @@ body {
     transition: transform 0.2s;
 }
 .vh-icon:hover { transform: scale(1.15); }
-.vh-type-label { font-weight: 500; color: #475569; font-size: 14px; }
+/* Sized to sit inline in the voucher table's own Type column (.voucher-line-type-cell) — trimmed
+   from a larger, spacious-context size since it moved out of the expanded panel. */
 .vh-type-dropdown {
-    padding: 4px 12px;
-    border: 2px solid #e2e8f0;
-    border-radius: 6px;
-    font-size: 14px;
+    width: 100%;
+    padding: 4px 6px;
+    border: 1px solid #d0d5dd;
+    border-radius: 4px;
+    font-size: 12px;
     background: white;
-    min-width: 160px;
     cursor: pointer;
 }
 .vh-type-dropdown:focus { outline: none; border-color: #3b82f6; }
@@ -1498,13 +1499,13 @@ body {
 }
 
 /* ----- Voucher Panel -----
-   Caps the voucher header + line list to 60% of screen width, on the left, leaving the remainder
+   Caps the voucher header + line list to 65% of screen width, on the left, leaving the remainder
    clear for future development. Left-aligned by default (no margin:auto) since
    .main-container.verification-active has zero padding, so this sits flush against the left
-   edge. Internal grid/column alignment (voucher-line-summary-grid, expanded-bar, etc.) is
-   untouched — only the outer width is capped. */
+   edge. Widened from 60% when the Type column was added to .voucher-line-summary-grid, so the
+   new fixed-width column fits without cramping Account Name or overlapping neighbors. */
 .voucher-panel {
-    width: 60%;
+    width: 65%;
 }
 
 /* ----- Voucher Header Bar (nav row + toolbar row) -----
@@ -1554,11 +1555,11 @@ body {
    so adjacent rows form one continuous table. */
 
 /* Shared column layout — used by the column-title row, each line's summary row, and the total
-   row, so all three line up under the same headings (Account Code / Account Name / Amount /
-   Status / chevron). */
+   row, so all three line up under the same headings (Account Code / Account Name / Type / Amount
+   / Status / chevron). */
 .voucher-line-summary-grid {
     display: grid;
-    grid-template-columns: 100px 1fr 90px 110px 24px;
+    grid-template-columns: 100px 1fr 170px 90px 110px 24px;
     align-items: stretch;
 }
 .voucher-line-summary-grid > * {
@@ -1571,6 +1572,16 @@ body {
        push cells past their column and overlap neighbors. Forcing 0 makes cells respect the
        track width so content wraps/clips within its own column instead. */
     min-width: 0;
+}
+/* The chevron column is just an expand/collapse affordance, not real tabular data — dropping the
+   divider between it and Status merges them into one visual unit instead of the arrow looking
+   like an awkward, isolated mini-column of its own. The table's right outer edge still comes from
+   the chevron cell's own border-right, so the overall "All Borders" outline is unaffected. */
+.voucher-line-summary-grid > *:nth-child(5) {
+    border-right: none;
+}
+.voucher-line-summary-grid > *:nth-child(6) {
+    padding-left: 0;
 }
 
 /* Column-title row, naming the cashbook's own columns — dim blue header bar. */
@@ -1587,7 +1598,7 @@ body {
     padding-bottom: 8px;
 }
 .voucher-line-header-row .voucher-line-amount-col,
-.voucher-line-header-row > *:nth-child(4) {
+.voucher-line-header-row > *:nth-child(5) {
     justify-content: flex-end;
     text-align: right;
 }
@@ -1718,18 +1729,25 @@ body {
     padding: 0 16px;
     transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.25s ease;
     border-top: 1px solid transparent;
+    border-right: 1px solid transparent;
 }
 
+/* The collapsed summary row's right/bottom edges come from its grid cells (see
+   .voucher-line-summary-grid > *), but the expanded panel below sits outside that grid — without
+   its own matching border it left the table's right edge looking cut off / broken whenever a row
+   was expanded. border-right continues the table's outer frame; border-bottom closes the row off
+   (needed since, unlike the grid cells, this panel doesn't otherwise supply one). */
 .voucher-line-detail.expanded {
     max-height: 2000px;
     opacity: 1;
     padding: 14px 16px 18px;
     border-top-color: #e2e8f0;
+    border-right-color: #94a3b8;
+    border-bottom: 1px solid #94a3b8;
 }
 
-/* Horizontal action bar inside the expanded panel — type dropdown on the left, Audit Guidance +
-   Supporting buttons grouped on the right. Two flex items (.expanded-bar-type/-actions) so
-   space-between pushes the group apart instead of spacing every control individually. */
+/* Horizontal action bar inside the expanded panel — just Audit Guidance + Supporting now (the
+   transaction type dropdown moved to its own "Type" column in the summary row). */
 .expanded-bar {
     display: flex;
     align-items: center;
@@ -1737,13 +1755,7 @@ body {
     padding: 10px 0;
     margin-top: 10px;
     border-top: 1px solid #e2e8f0;
-    justify-content: space-between;
     flex-wrap: wrap;
-}
-.expanded-bar-type {
-    display: flex;
-    align-items: center;
-    gap: 8px;
 }
 .expanded-bar-actions {
     display: flex;
@@ -1805,7 +1817,7 @@ body {
         width: 100%;
     }
     .voucher-line-summary-grid {
-        grid-template-columns: 55px 1fr 65px 70px 18px;
+        grid-template-columns: 50px 1fr 100px 55px 60px 16px;
         gap: 8px;
     }
 }

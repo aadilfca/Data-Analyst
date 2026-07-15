@@ -601,6 +601,7 @@ function renderVoucherLines(lines) {
         <div class="voucher-line-header-row voucher-line-summary-grid">
             <span>Account Code</span>
             <span>Account Name</span>
+            <span>Type</span>
             <span class="voucher-line-amount-col">Amount</span>
             <span>Status</span>
             <span></span>
@@ -634,6 +635,18 @@ function renderVoucherLines(lines) {
                         <span class="voucher-line-name">${accountName}${changeIconHtml}${deletedBadgeHtml}</span>
                         <span class="voucher-line-desc">${description}</span>
                     </span>
+                    <span class="voucher-line-type-cell">
+                        <select class="vh-type-dropdown voucher-line-type-dropdown" data-uid="${uid}">
+                            <option value="">-- Select --</option>
+                            <option value="Material Purchased">Material Purchased</option>
+                            <option value="Repair & Maintenance (In-house)">Repair & Maintenance (In-house)</option>
+                            <option value="Fuel Expense">Fuel Expense</option>
+                            <option value="Short Term Advance against Salary">Short Term Advance against Salary</option>
+                            <option value="Payment to Contractors">Payment to Contractors</option>
+                            <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
+                            <option value="Kitchen Expenses">Kitchen Expenses</option>
+                        </select>
+                    </span>
                     <span class="voucher-line-amount">${amount}</span>
                     <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
                     <span class="voucher-line-chevron">▾</span>
@@ -656,6 +669,7 @@ function renderVoucherLines(lines) {
                 <span class="voucher-line-name">Total</span>
                 <span class="voucher-line-desc">${cashbookName}</span>
             </span>
+            <span></span>
             <span class="voucher-line-amount">${total}</span>
             <span></span>
             <span></span>
@@ -743,26 +757,14 @@ function buildLineDetailHtml(line, uid) {
         `;
     }
 
-    // Horizontal bar: Audit Guidance + Supporting buttons grouped on the left, transaction type
-    // dropdown on the extreme right (two flex items so space-between splits them apart).
+    // Horizontal bar: just Audit Guidance + Supporting now — the transaction type dropdown moved
+    // to its own "Type" column in the summary row (renderVoucherLines()), visible without
+    // expanding the line.
     html += `
         <div class="expanded-bar">
             <div class="expanded-bar-actions">
                 <button class="btn-audit-guidance" data-uid="${uid}" title="View audit guidance for this transaction type">📋 Audit Guidance</button>
                 <button class="btn-supporting" data-uid="${uid}" title="View and confirm supporting documents">📎 Supporting</button>
-            </div>
-            <div class="expanded-bar-type">
-                <label class="vh-type-label">Type</label>
-                <select class="vh-type-dropdown voucher-line-type-dropdown" data-uid="${uid}">
-                    <option value="">-- Select --</option>
-                    <option value="Material Purchased">Material Purchased</option>
-                    <option value="Repair & Maintenance (In-house)">Repair & Maintenance (In-house)</option>
-                    <option value="Fuel Expense">Fuel Expense</option>
-                    <option value="Short Term Advance against Salary">Short Term Advance against Salary</option>
-                    <option value="Payment to Contractors">Payment to Contractors</option>
-                    <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
-                    <option value="Kitchen Expenses">Kitchen Expenses</option>
-                </select>
             </div>
         </div>
     `;
