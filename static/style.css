@@ -1187,8 +1187,9 @@ body {
 
 /* ----- Header Row -----
    Voucher header prototype layout: a primary row (Prev voucher / centered title+subtitle / Next
-   voucher) and a secondary slim toolbar row (view-all / Save Progress / Cashbook), both plain
-   flex rows with no card background/shadow. */
+   voucher) and a secondary slim toolbar row (view-all / Cashbook), both plain flex rows with no
+   card background/shadow. No manual Save Progress button — progress autosaves (see
+   verification.js renderVoucherHeader()). */
 .verification-header-row {
     display: flex;
     justify-content: space-between;
@@ -1476,7 +1477,7 @@ body {
    The app uses Unicode emoji throughout (not Tabler/Font Awesome) — these classes give them
    consistent sizing, vertical alignment, and hover behavior matching the app's existing theme. */
 
-/* Icons inside buttons (Save Progress, Cashbook) */
+/* Icons inside buttons (Cashbook) */
 .btn-icon {
     font-size: 16px;
     line-height: 1;
@@ -1489,26 +1490,6 @@ body {
     font-size: 18px;
     line-height: 1;
     vertical-align: middle;
-}
-
-/* Save Progress button — gradient style matching the app's purple accent elsewhere */
-.btn-save-header {
-    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
-    color: white;
-    padding: 6px 18px;
-    border: none;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-    transition: background 0.2s, transform 0.1s;
-    white-space: nowrap;
-}
-.btn-save-header:hover {
-    background: linear-gradient(135deg, #7c3aed, #6d28d9);
-}
-.btn-save-header:active {
-    transform: scale(0.96);
 }
 
 /* ----- Voucher Lines (collapsed/expand rows) -----

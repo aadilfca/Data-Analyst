@@ -433,7 +433,10 @@ async function loadNextTransaction(detailId = null) {
 // Renders the voucher-level chrome above the voucher lines list: a primary row with text
 // Prev/Next voucher buttons flanking a centered title ("Voucher {id}") + subtitle
 // (date · line count · Amount total · position counter), and a secondary slim toolbar row for
-// Save Progress / Cashbook return / view-all. Matches the approved prototype layout — see
+// Cashbook return / view-all. No manual Save Progress button — progress already autosaves via
+// saveAllVoucherLines() on Prev/Next/Complete/Exit (see saveCurrentTransaction(),
+// completeTransaction(), exitSession()), so a manual save had no effect a user could rely on.
+// Matches the approved prototype layout — see
 // C:\Users\LENOVO\.claude\plans\melodic-dazzling-feather.md. The per-line collapsed/expand rows
 // (renderVoucherLines()) own everything else below this header.
 function renderVoucherHeader(voucherId, voucherDate, lines) {
@@ -454,7 +457,6 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
             <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
                 <span class="vh-icon-symbol">🔍</span>
             </span>
-            <button class="btn-save-header" id="saveBtn"><span class="btn-icon">💾</span> Save Progress</button>
             <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
         </div>
     `;
@@ -474,9 +476,6 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
             return;
         }
         if (typeof loadTransactionList === 'function') loadTransactionList(true);
-    });
-    document.getElementById('saveBtn')?.addEventListener('click', function() {
-        if (typeof saveAllVoucherLines === 'function') saveAllVoucherLines();
     });
     document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
         if (typeof exitSession === 'function') exitSession();
@@ -1317,10 +1316,11 @@ async function saveLineItems(detailId = currentDetailId) {
 }
 
 // ---------- SAVE ALL VOUCHER LINES (Phase 4) ----------
-// "Comments save per line ... called once per line instead of once per screen": saves every line
-// currently loaded in the voucher via the existing save_line_items endpoint, one call per line,
-// instead of a single call for just the active line. Wired to the Save Progress button and to the
-// pre-navigation auto-save so edits on any expanded line (not just the active one) aren't lost.
+// Saves every line currently loaded in the voucher via the existing save_line_items endpoint, one
+// call per line, instead of a single call for just the active line. Called automatically before
+// Prev/Next navigation, on complete, and on exit (see saveCurrentTransaction(),
+// completeTransaction(), exitSession()) so edits on any expanded line aren't lost — there is no
+// manual save button.
 async function saveAllVoucherLines() {
     const uids = Object.keys(voucherLineState);
     for (const uid of uids) {
@@ -1530,7 +1530,7 @@ if (exitCashbookLink) {
 // Phase 2: standalone transaction view removed — prevBtn/nextBtn/verifyBtn/saveProgressBtn/exitBtn
 // are no longer static DOM elements (nav controls are dynamically rendered in #voucherHeaderBar).
 // Navigation event wiring is handled by renderVoucherHeader() which binds #prevArrow/#nextArrow/
-// #saveBtn/#cashbookReturnBtn after each innerHTML write.
+// #cashbookReturnBtn after each innerHTML write.
 
 // Supporting modal
 if (supportingSearchBtn) supportingSearchBtn.addEventListener('click', searchSupportingDocuments);
