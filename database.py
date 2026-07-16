@@ -129,6 +129,60 @@ def diff_row_data(old_data, new_data):
     return changes
 
 
+VOUCHER_PREFIX_CATEGORIES = ("Cash", "Bank", "Journal")
+
+
+def get_client_voucher_prefixes(client_id):
+    """
+    Return a client's voucher prefix configuration as
+    {"Cash": [...], "Bank": [...], "Journal": [...]}. Categories with no
+    prefixes still appear as an empty list (a client may legitimately have none).
+    """
+    rows = execute_query(
+        "SELECT category, prefix FROM client_voucher_prefixes WHERE client_id = ? ORDER BY category, prefix",
+        (client_id,)
+    )
+    result = {category: [] for category in VOUCHER_PREFIX_CATEGORIES}
+    for row in rows:
+        result[row["category"]].append(row["prefix"])
+    return result
+
+
+def save_client_voucher_prefixes(client_id, prefixes, retries=5, delay=0.5):
+    """
+    Replace a client's entire voucher prefix configuration with `prefixes`
+    (dict of category -> list of prefix strings). Deletes existing rows for
+    the client and inserts the new set in one transaction so the replace is
+    atomic. Cross-category duplicate validation is the caller's responsibility
+    (routers/clients.py) - this function trusts its input.
+    """
+    last_exception = None
+    for attempt in range(retries):
+        conn = None
+        try:
+            conn = get_db()
+            conn.execute("DELETE FROM client_voucher_prefixes WHERE client_id = ?", (client_id,))
+            for category in VOUCHER_PREFIX_CATEGORIES:
+                for prefix in prefixes.get(category, []):
+                    conn.execute(
+                        "INSERT INTO client_voucher_prefixes (client_id, category, prefix) VALUES (?, ?, ?)",
+                        (client_id, category, prefix)
+                    )
+            conn.commit()
+            return
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e) and attempt < retries - 1:
+                time.sleep(delay * (attempt + 1))
+                last_exception = e
+                continue
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    if last_exception:
+        raise last_exception
+
+
 def create_index_with_retry(conn, sql, retries=5, delay=0.5):
     last_exception = None
     for attempt in range(retries):

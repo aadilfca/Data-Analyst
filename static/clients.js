@@ -174,8 +174,22 @@ function renderClients(clients) {
         delBtn.style.fontSize = '18px';
         delBtn.style.marginLeft = '8px';
 
+        // Client settings (cogwheel) — navigates to the (future) Client Settings page for this client
+        const settingsBtn = document.createElement('button');
+        settingsBtn.textContent = '⚙️';
+        settingsBtn.style.background = 'none';
+        settingsBtn.style.border = 'none';
+        settingsBtn.style.cursor = 'pointer';
+        settingsBtn.style.fontSize = '18px';
+        settingsBtn.style.marginLeft = '8px';
+        settingsBtn.title = 'Client settings';
+        settingsBtn.addEventListener('click', () => {
+            window.location.href = '/static/client_settings.html?client_id=' + client.id;
+        });
+
         tdActions.appendChild(editBtn);
         tdActions.appendChild(delBtn);
+        tdActions.appendChild(settingsBtn);
 
         tr.appendChild(tdId);
         tr.appendChild(tdCode);

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Client Settings</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .settings-group {
+            background: white;
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .settings-group h3 {
+            font-size: 16px;
+            color: #1a1a2e;
+            margin-bottom: 4px;
+        }
+
+        .settings-group .group-hint {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-bottom: 12px;
+        }
+
+        .prefix-chip-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 14px;
+            min-height: 32px;
+        }
+
+        .prefix-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px 5px 14px;
+            border: 1px solid #d0d5dd;
+            border-radius: 999px;
+            background: #f8fafc;
+            color: #1a1a2e;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .prefix-chip .prefix-chip-remove {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #94a3b8;
+            font-size: 14px;
+            line-height: 1;
+            padding: 0;
+        }
+
+        .prefix-chip .prefix-chip-remove:hover {
+            color: #dc2626;
+        }
+
+        .prefix-chip-empty {
+            font-size: 13px;
+            color: #94a3b8;
+            font-style: italic;
+        }
+
+        .prefix-input-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .prefix-input-row input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 14px;
+            max-width: 240px;
+        }
+
+        .prefix-add-btn {
+            padding: 8px 18px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .prefix-add-btn:hover {
+            background: #2563eb;
+        }
+
+        #prefixValidationMessage {
+            font-size: 13px;
+            color: #991b1b;
+            background: #fee2e2;
+            border: 1px solid #fecaca;
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-bottom: 16px;
+            display: none;
+        }
+
+        #saveSettingsBtn {
+            padding: 10px 28px;
+            background: #22c55e;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 15px;
+        }
+
+        #saveSettingsBtn:hover:not(:disabled) {
+            background: #16a34a;
+        }
+
+        #saveSettingsBtn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">🏢 System Analyst</div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user">
+                <span>👤 Welcome, Admin</span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <header class="module-header">
+            <a href="/static/clients.html" class="back-link">← Back to Manage Clients</a>
+            <h1>⚙️ Client Settings</h1>
+            <p id="clientNameHeading">Voucher prefix configuration</p>
+        </header>
+
+        <!-- Cash prefixes -->
+        <div class="settings-group">
+            <h3>💵 Cash</h3>
+            <p class="group-hint">Prefixes used to identify Cash vouchers (e.g. CPV, CRV).</p>
+            <div id="cashPrefixList" class="prefix-chip-list"></div>
+            <div class="prefix-input-row">
+                <input type="text" id="cashPrefixInput" placeholder="Add a prefix, e.g. CPV">
+                <button type="button" id="cashAddBtn" class="prefix-add-btn">Add</button>
+            </div>
+        </div>
+
+        <!-- Bank prefixes -->
+        <div class="settings-group">
+            <h3>🏦 Bank</h3>
+            <p class="group-hint">Prefixes used to identify Bank vouchers (e.g. BPV, BRV).</p>
+            <div id="bankPrefixList" class="prefix-chip-list"></div>
+            <div class="prefix-input-row">
+                <input type="text" id="bankPrefixInput" placeholder="Add a prefix, e.g. BPV">
+                <button type="button" id="bankAddBtn" class="prefix-add-btn">Add</button>
+            </div>
+        </div>
+
+        <!-- Journal prefixes -->
+        <div class="settings-group">
+            <h3>📘 Journal</h3>
+            <p class="group-hint">Prefixes used to identify Journal vouchers (e.g. JV).</p>
+            <div id="journalPrefixList" class="prefix-chip-list"></div>
+            <div class="prefix-input-row">
+                <input type="text" id="journalPrefixInput" placeholder="Add a prefix, e.g. JV">
+                <button type="button" id="journalAddBtn" class="prefix-add-btn">Add</button>
+            </div>
+        </div>
+
+        <div id="prefixValidationMessage"></div>
+
+        <button type="button" id="saveSettingsBtn">Save Settings</button>
+
+        <div id="settingsStatus" class="upload-status" style="margin-top:16px; display:none;"></div>
+    </div>
+
+    <script src="/static/client_context.js?v=2"></script>
+    <script src="/static/client_settings.js"></script>
+</body>
+
+</html>
