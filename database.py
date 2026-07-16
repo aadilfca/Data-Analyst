@@ -746,6 +746,44 @@ def init_db():
 
         print("✅ Created indexes on client_data")
 
+        # ---------- CLIENT VOUCHER PREFIXES (per-client voucher-type detection, Phase 1) ----------
+        # Stores each client's voucher-prefix list per category (Cash/Bank/Journal). Replaces the
+        # global hardcoded pattern list in routers/verification.py (removed in a later phase).
+        # Payment vs Receipt (CPV vs CRV etc.) is not stored here - it's derived from debit/credit
+        # sign at detection time, so each category is a single flat prefix list.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS client_voucher_prefixes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                category TEXT NOT NULL CHECK (category IN ('Cash', 'Bank', 'Journal')),
+                prefix TEXT NOT NULL COLLATE NOCASE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, category, prefix)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_client_voucher_prefixes_client ON client_voucher_prefixes (client_id)")
+        print("✅ Created client_voucher_prefixes table")
+
+        # Seed existing clients with the current hardcoded CPV/CRV prefixes into the Cash category,
+        # so nothing breaks once verification.py switches to per-client lookup in a later phase.
+        # Idempotent: skips any client that already has rows (covers re-running init_db and clients
+        # created after this migration ran).
+        existing_clients = conn.execute("SELECT id FROM clients").fetchall()
+        default_cash_prefixes = ["CPV", "CV", "CRV", "CR"]
+        for client_row in existing_clients:
+            cid = client_row[0]
+            has_rows = conn.execute(
+                "SELECT 1 FROM client_voucher_prefixes WHERE client_id = ? LIMIT 1", (cid,)
+            ).fetchone()
+            if not has_rows:
+                for prefix in default_cash_prefixes:
+                    conn.execute(
+                        "INSERT INTO client_voucher_prefixes (client_id, category, prefix) VALUES (?, ?, ?)",
+                        (cid, "Cash", prefix)
+                    )
+        print("✅ Seeded default Cash voucher prefixes for existing clients")
+
         conn.commit()
         print("✅ Database initialization complete")
 
