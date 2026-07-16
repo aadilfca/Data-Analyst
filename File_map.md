@@ -35,6 +35,7 @@
 | File | Purpose |
 |------|---------|
 | `clients.html` | UI for managing clients (add, edit, deactivate, restore). |
+| `client_settings.html` | Per-client voucher prefix configuration (Cash/Bank/Journal chip editors) reached via the ⚙️ icon on `clients.html`; also hosts a read-only explainer of the app's voucher-type identification logic. |
 | `columns.html` | UI for managing master columns (add, edit, delete). |
 | `databank.html` | Data Bank UI – date/template filters, availability table, preview modal, row history popover. |
 | `error_dashboard.html` | Error log dashboard with filtering, resolution, and detail modal. |
@@ -51,6 +52,7 @@
 |------|---------|
 | `clients.js` | Client CRUD logic, table rendering, sorting, filtering, and modal handling. |
 | `client_context.js` | Global client selection (dropdown/badge), localStorage persistence, and navbar updates. |
+| `client_settings.js` | Loads/saves a client's Cash/Bank/Journal voucher prefixes via `routers/clients.py`'s voucher-prefixes API; add/remove chip handling and cross-category duplicate validation. |
 | `columns.js` | Column CRUD logic, table rendering, category dropdown, and modal handling. |
 | `databank.js` | Availability fetching, template preview, row history popover, export/delete actions. |
 | `error_dashboard.js` | Error log loading, filtering, pagination, detail modal, resolution actions. |
