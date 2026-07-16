@@ -10,6 +10,34 @@ from datetime import datetime
 # ⭐ MUST HAVE THIS LINE
 router = APIRouter()
 
+# ---------- FLEXIBLE DATE PARSING (Phase 1 of the date-format requirement) ----------
+# Default date-import format. There is no UI to choose a different format yet
+# (that's a later phase), so these defaults reproduce today's DD/MM/YYYY-only
+# behavior exactly. A later phase will let the caller override these per
+# upload session instead of always using the default.
+DEFAULT_DATE_DELIMITER = "/"
+DEFAULT_DATE_ORDER = "DMY"  # one of DMY, MDY, YMD
+
+def parse_date_flexible(value, delimiter: str = DEFAULT_DATE_DELIMITER, order: str = DEFAULT_DATE_ORDER) -> datetime:
+    """
+    Parse a date string using an explicit delimiter + component order
+    (e.g. delimiter="/", order="DMY" -> "25/12/2025").
+    Raises ValueError with a clear message on a malformed string or an
+    out-of-range date (e.g. day=45) -- strptime itself enforces range checks.
+    """
+    order = order.upper()
+    format_map = {
+        "DMY": f"%d{delimiter}%m{delimiter}%Y",
+        "MDY": f"%m{delimiter}%d{delimiter}%Y",
+        "YMD": f"%Y{delimiter}%m{delimiter}%d",
+    }
+    if order not in format_map:
+        raise ValueError(f"Unsupported date order '{order}'")
+    try:
+        return datetime.strptime(str(value).strip(), format_map[order])
+    except ValueError:
+        raise ValueError(f"'{value}' is not a valid date for format {order} (delimiter '{delimiter}')")
+
 
 def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, template_cols: list, mapping_dict: dict):
     """Count rows that are new versus already present for the same client/template."""
@@ -266,19 +294,14 @@ def extract_columns_from_row(row_data: dict, template_cols: list) -> tuple:
                 pass
         elif col['data_type'] == 'Date':
             try:
-                # Try to parse various date formats
-                from datetime import datetime
                 if isinstance(value, datetime):
                     date_str = value.strftime('%Y-%m-%d')
                 elif isinstance(value, str):
-                    # Try common formats
-                    for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y'):
-                        try:
-                            dt = datetime.strptime(value, fmt)
-                            date_str = dt.strftime('%Y-%m-%d')
-                            break
-                        except:
-                            continue
+                    try:
+                        dt = parse_date_flexible(value)
+                        date_str = dt.strftime('%Y-%m-%d')
+                    except ValueError:
+                        pass
                 elif isinstance(value, (int, float)):
                     # Excel serial date?
                     try:
@@ -607,18 +630,18 @@ def validate_only(request: ImportRequest):
                 elif t_col['data_type'] == "Date":
                     try:
                         if isinstance(value, str):
-                            datetime.strptime(value, "%d/%m/%Y")
+                            parse_date_flexible(value)
                         elif isinstance(value, (int, float)):
                             # Excel serial date – will be handled on import, skip validation here
                             pass
-                    except:
+                    except (ValueError, TypeError):
                         row_errors.append({
                             "column": t_col['column_name'],
                             "excel_column": excel_col,
                             "error_type": "data_type",
                             "message": f"Expected Date (DD/MM/YYYY) but got '{value}'"
                         })
-        
+
         if row_errors:
             validation_errors.append({
                 "row_number": row_idx,
@@ -728,8 +751,8 @@ def validate_and_import(request: ImportRequest):
                 elif t_col['data_type'] == "Date":
                     try:
                         if isinstance(value, str):
-                            datetime.strptime(value, "%d/%m/%Y")
-                    except:
+                            parse_date_flexible(value)
+                    except (ValueError, TypeError):
                         row_errors.append({
                             "column": t_col['column_name'],
                             "excel_column": excel_col,
