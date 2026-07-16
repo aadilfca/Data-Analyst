@@ -66,6 +66,17 @@ def classify_date_cell(value) -> str:
     return 'text'
 
 
+def excel_serial_to_datetime(value) -> datetime:
+    """
+    Converts a bare Excel date serial number (classify_date_cell() == 'excel_serial')
+    to a datetime. Excel's epoch is 1899-12-30 (accounting for its 1900 leap-year bug).
+    Single source of truth for this conversion -- reused by extract_columns_from_row()
+    and the date-preview endpoint so they can never disagree.
+    """
+    from datetime import timedelta
+    return datetime(1899, 12, 30) + timedelta(days=value)
+
+
 def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, template_cols: list, mapping_dict: dict):
     """Count rows that are new versus already present for the same client/template."""
     existing_rows = execute_query(
@@ -287,6 +298,18 @@ class AutoMapRequest(BaseModel):
     template_id: int
     sheet_name: str = "Sheet1"
 
+# ---------- DATE PREVIEW MODELS (Phase 5 of the date-format requirement) ----------
+class DatePreviewMapping(BaseModel):
+    template_column_name: str
+    excel_column_name: str
+
+class DatePreviewRequest(BaseModel):
+    file_id: int
+    sheet_name: str = "Sheet1"
+    date_mappings: List[DatePreviewMapping]  # only the Date-typed columns currently mapped
+    date_delimiter: Optional[str] = None
+    date_order: Optional[str] = None
+
 # ---------- HELPER: Compute document_group_id from the first template column ----------
 def get_document_group_id(template_cols: list, row_data: dict, template_id: int) -> str:
     """
@@ -337,10 +360,8 @@ def extract_columns_from_row(row_data: dict, template_cols: list,
                     except ValueError:
                         pass
                 elif kind == 'excel_serial':
-                    # Excel serial date starts from 1900-01-01 (but with bug for 1900)
                     try:
-                        from datetime import timedelta
-                        dt = datetime(1899, 12, 30) + timedelta(days=value)
+                        dt = excel_serial_to_datetime(value)
                         date_str = dt.strftime('%Y-%m-%d')
                     except:
                         pass
@@ -558,6 +579,87 @@ def check_duplicates(request: ImportRequest):
         "duplicates": duplicates,
         "count": len(duplicates)
     }
+# ---------- DATE FORMAT LIVE PREVIEW (Phase 5 of the date-format requirement) ----------
+@router.post("/api/upload/date-preview")
+def preview_date_format(request: DatePreviewRequest):
+    """
+    Returns up to 3 sample values per mapped Date column, parsed under the
+    currently selected delimiter/order, so the user can sanity-check their
+    format choice before running full validation/import. Read-only -- no
+    DB writes. Reuses classify_date_cell()/parse_date_flexible() exactly as
+    validate_only()/validate_and_import() do, so the preview can never
+    disagree with what those endpoints will actually do.
+    """
+    file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
+    if not file_info:
+        raise HTTPException(404, "File not found")
+
+    if not request.date_mappings:
+        return {"samples": []}
+
+    effective_delimiter = request.date_delimiter if request.date_delimiter is not None else DEFAULT_DATE_DELIMITER
+    effective_order = request.date_order if request.date_order else DEFAULT_DATE_ORDER
+
+    try:
+        df = pd.read_excel(file_info[0]['file_path'], sheet_name=request.sheet_name)
+    except Exception as e:
+        raise HTTPException(400, f"Error reading Excel: {str(e)}")
+
+    samples = []
+    for mapping in request.date_mappings:
+        excel_col = mapping.excel_column_name
+        if excel_col not in df.columns:
+            continue
+        # First 3 non-empty values in this column.
+        col_values = [v for v in df[excel_col].tolist() if not (isinstance(v, float) and pd.isna(v)) and v is not None][:3]
+        for value in col_values:
+            kind = classify_date_cell(value)
+            if kind == 'native':
+                samples.append({
+                    "column_name": mapping.template_column_name,
+                    "raw": str(value),
+                    "parsed": value.strftime('%d %B %Y'),
+                    "valid": True
+                })
+            elif kind == 'excel_serial':
+                try:
+                    dt = excel_serial_to_datetime(value)
+                    samples.append({
+                        "column_name": mapping.template_column_name,
+                        "raw": str(value),
+                        "parsed": dt.strftime('%d %B %Y'),
+                        "valid": True
+                    })
+                except Exception as e:
+                    samples.append({
+                        "column_name": mapping.template_column_name,
+                        "raw": str(value),
+                        "parsed": None,
+                        "valid": False,
+                        "error": str(e)
+                    })
+            elif kind == 'text':
+                try:
+                    dt = parse_date_flexible(value, effective_delimiter, effective_order)
+                    samples.append({
+                        "column_name": mapping.template_column_name,
+                        "raw": str(value),
+                        "parsed": dt.strftime('%d %B %Y'),
+                        "valid": True
+                    })
+                except ValueError as e:
+                    samples.append({
+                        "column_name": mapping.template_column_name,
+                        "raw": str(value),
+                        "parsed": None,
+                        "valid": False,
+                        "error": str(e)
+                    })
+            # 'empty' cells produce no sample -- nothing meaningful to preview.
+
+    return {"samples": samples}
+
+
 # ---------- VALIDATE ONLY (NO IMPORT) ----------
 @router.post("/api/upload/validate")
 def validate_only(request: ImportRequest):

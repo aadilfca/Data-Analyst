@@ -163,6 +163,23 @@
             color: #991b1b;
         }
 
+        /* ---------- DATE FORMAT PREVIEW (Phase 5): small text lines, not a table -- a sanity check ---------- */
+        #dateFormatPreview {
+            flex-direction: column;
+            align-items: flex-start !important;
+            gap: 2px;
+        }
+
+        #dateFormatPreview .date-preview-line {
+            font-size: 11px;
+            color: #64748b;
+            white-space: nowrap;
+        }
+
+        #dateFormatPreview .date-preview-line.error {
+            color: #dc2626;
+        }
+
         /* ---------- PREVIEW BUTTON ---------- */
         .preview-btn {
             padding: 4px 16px;
@@ -918,6 +935,8 @@
                         <!-- Populated by JS based on the delimiter selection -->
                     </select>
                 </div>
+                <!-- Live sample-date preview (Phase 5): 2-3 raw -> parsed samples under the chosen format, or an error state. Populated by JS once mapping is known. -->
+                <div class="field" id="dateFormatPreview" style="display:none;"></div>
                 <button class="btn-download" id="downloadBtn" disabled>📥 Download Template</button>
                 <div class="field" id="sheetField" style="display:none;">
                     <label>📄 Sheet</label>

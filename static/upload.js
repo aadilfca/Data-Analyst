@@ -174,13 +174,87 @@ if (dateDelimiterDropdown) {
     dateDelimiterDropdown.addEventListener('change', function() {
         selectedDateDelimiter = this.value;
         populateDateOrderDropdown(selectedDateDelimiter);
+        refreshDateFormatPreview();
     });
 }
 
 if (dateOrderDropdown) {
     dateOrderDropdown.addEventListener('change', function() {
         selectedDateOrder = this.value;
+        refreshDateFormatPreview();
     });
+}
+
+// ---------- DATE FORMAT LIVE PREVIEW (Phase 5) ----------
+// Fetches 2-3 real sample dates from the uploaded file's mapped Date columns,
+// parsed under the currently selected delimiter/order, so a wrong format
+// choice is caught before running full validation/import. No-op until a
+// file is uploaded and template mapping is known (Date columns identified).
+async function refreshDateFormatPreview() {
+    const container = getElement('dateFormatPreview');
+    if (!container) return;
+
+    if (!fileId || !currentMappings || currentMappings.length === 0) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+    }
+
+    const dateMappings = currentMappings
+        .filter(m => m.data_type === 'Date' && m.excel_column)
+        .map(m => ({ template_column_name: m.column_name, excel_column_name: m.excel_column }));
+
+    if (dateMappings.length === 0) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+    }
+
+    try {
+        const res = await fetch(API_BASE + '/api/upload/date-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                file_id: fileId,
+                sheet_name: currentSheet || 'Sheet1',
+                date_mappings: dateMappings,
+                date_delimiter: selectedDateDelimiter,
+                date_order: selectedDateOrder
+            })
+        });
+        if (!res.ok) throw new Error('Preview request failed');
+        const data = await res.json();
+        renderDateFormatPreview(data.samples || []);
+    } catch (error) {
+        console.error('Date preview error:', error);
+        container.style.display = 'none';
+        container.innerHTML = '';
+    }
+}
+
+// Renders up to 3 sample lines as small text (not a table) -- a sanity check,
+// not a data grid. Invalid samples render in red with a clear error message.
+function renderDateFormatPreview(samples) {
+    const container = getElement('dateFormatPreview');
+    if (!container) return;
+
+    if (!samples || samples.length === 0) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+    }
+
+    const shown = samples.slice(0, 3);
+    let html = '<label>Preview</label>';
+    shown.forEach(s => {
+        if (s.valid) {
+            html += `<span class="date-preview-line">${s.raw} → ${s.parsed}</span>`;
+        } else {
+            html += `<span class="date-preview-line error">Could not parse "${s.raw}" as ${selectedDateOrder}</span>`;
+        }
+    });
+    container.innerHTML = html;
+    container.style.display = 'flex';
 }
 
 // ---------- LOAD TEMPLATES ----------
@@ -452,6 +526,13 @@ function resetUpload() {
         toggleBtn.style.display = 'none';
     }
     miniPreviewVisible = false;
+
+    // Clear the date format live preview (Phase 5) – no file/mapping left to sample from.
+    const dateFormatPreviewEl = getElement('dateFormatPreview');
+    if (dateFormatPreviewEl) {
+        dateFormatPreviewEl.style.display = 'none';
+        dateFormatPreviewEl.innerHTML = '';
+    }
     
     // Reset validation status
     validationStatus = 'idle';
@@ -511,6 +592,9 @@ async function autoMapColumns() {
         if (toggleBtn) toggleBtn.style.display = 'inline-block';
 
         updatePreviewButtonState();
+
+        // Date columns are now known via the mapping – show the live sample-date preview.
+        refreshDateFormatPreview();
 
     } catch (error) {
         console.error('Auto-map error:', error);
