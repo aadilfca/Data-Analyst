@@ -39,6 +39,33 @@ def parse_date_flexible(value, delimiter: str = DEFAULT_DATE_DELIMITER, order: s
         raise ValueError(f"'{value}' is not a valid date for format {order} (delimiter '{delimiter}')")
 
 
+def classify_date_cell(value) -> str:
+    """
+    Classify a raw cell value from an uploaded Excel file for a Date-typed
+    template column, so callers can decide whether to use it as-is or run
+    it through parse_date_flexible().
+    Returns one of:
+      'native'       - already a real date (pandas/openpyxl parsed the cell
+                        as a genuine Excel date, e.g. a datetime/Timestamp)
+                        -- must NOT be passed to parse_date_flexible().
+      'text'         - a non-empty string; needs parse_date_flexible().
+      'excel_serial' - a bare number that may be an Excel date serial,
+                        handled separately from the text parser.
+      'empty'        - no value to classify.
+    """
+    if value is None:
+        return 'empty'
+    if isinstance(value, datetime):
+        return 'native'
+    if isinstance(value, str):
+        return 'empty' if value.strip() == '' else 'text'
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and pd.isna(value):
+            return 'empty'
+        return 'excel_serial'
+    return 'text'
+
+
 def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, template_cols: list, mapping_dict: dict):
     """Count rows that are new versus already present for the same client/template."""
     existing_rows = execute_query(
@@ -294,19 +321,19 @@ def extract_columns_from_row(row_data: dict, template_cols: list) -> tuple:
                 pass
         elif col['data_type'] == 'Date':
             try:
-                if isinstance(value, datetime):
+                kind = classify_date_cell(value)
+                if kind == 'native':
                     date_str = value.strftime('%Y-%m-%d')
-                elif isinstance(value, str):
+                elif kind == 'text':
                     try:
                         dt = parse_date_flexible(value)
                         date_str = dt.strftime('%Y-%m-%d')
                     except ValueError:
                         pass
-                elif isinstance(value, (int, float)):
-                    # Excel serial date?
+                elif kind == 'excel_serial':
+                    # Excel serial date starts from 1900-01-01 (but with bug for 1900)
                     try:
-                        from datetime import datetime, timedelta
-                        # Excel serial date starts from 1900-01-01 (but with bug for 1900)
+                        from datetime import timedelta
                         dt = datetime(1899, 12, 30) + timedelta(days=value)
                         date_str = dt.strftime('%Y-%m-%d')
                     except:
@@ -628,19 +655,21 @@ def validate_only(request: ImportRequest):
                             "message": f"Expected Numeric but got '{value}'"
                         })
                 elif t_col['data_type'] == "Date":
-                    try:
-                        if isinstance(value, str):
+                    kind = classify_date_cell(value)
+                    if kind == 'native':
+                        pass  # genuine Excel date cell -- already correct, nothing to validate
+                    elif kind == 'excel_serial':
+                        pass  # Excel serial date – will be handled on import, skip validation here
+                    elif kind == 'text':
+                        try:
                             parse_date_flexible(value)
-                        elif isinstance(value, (int, float)):
-                            # Excel serial date – will be handled on import, skip validation here
-                            pass
-                    except (ValueError, TypeError):
-                        row_errors.append({
-                            "column": t_col['column_name'],
-                            "excel_column": excel_col,
-                            "error_type": "data_type",
-                            "message": f"Expected Date (DD/MM/YYYY) but got '{value}'"
-                        })
+                        except (ValueError, TypeError):
+                            row_errors.append({
+                                "column": t_col['column_name'],
+                                "excel_column": excel_col,
+                                "error_type": "data_type",
+                                "message": f"Expected Date (DD/MM/YYYY) but got '{value}'"
+                            })
 
         if row_errors:
             validation_errors.append({
@@ -749,16 +778,21 @@ def validate_and_import(request: ImportRequest):
                             "message": f"Expected Numeric but got '{value}'"
                         })
                 elif t_col['data_type'] == "Date":
-                    try:
-                        if isinstance(value, str):
+                    kind = classify_date_cell(value)
+                    if kind == 'native':
+                        pass  # genuine Excel date cell -- already correct, nothing to validate
+                    elif kind == 'excel_serial':
+                        pass  # Excel serial date – will be handled on import, skip validation here
+                    elif kind == 'text':
+                        try:
                             parse_date_flexible(value)
-                    except (ValueError, TypeError):
-                        row_errors.append({
-                            "column": t_col['column_name'],
-                            "excel_column": excel_col,
-                            "error_type": "data_type",
-                            "message": f"Expected Date (DD/MM/YYYY) but got '{value}'"
-                        })
+                        except (ValueError, TypeError):
+                            row_errors.append({
+                                "column": t_col['column_name'],
+                                "excel_column": excel_col,
+                                "error_type": "data_type",
+                                "message": f"Expected Date (DD/MM/YYYY) but got '{value}'"
+                            })
         if row_errors:
             validation_errors.append({"row_number": row_idx, "errors": row_errors})
 
