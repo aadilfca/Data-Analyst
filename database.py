@@ -730,7 +730,6 @@ def init_db():
             ('decimal_precision', '0', 'Default decimal places for amounts (0, 2, 4)'),
             ('default_date_range', 'Current Month', 'Default date range for dashboards'),
             ('materiality_threshold', '50000', 'Threshold for flagging high-value items'),
-            ('voucher_patterns', '{"CPV": ["CPV","CV"], "CRV": ["CRV","CR"], "BPV": ["BPV","BV"], "BRV": ["BRV","BR"], "JV": ["JV"]}', 'Voucher prefix patterns for cash, bank, journal vouchers'),
         ]
         for key, val, desc in default_settings:
             cur = conn.execute("SELECT id FROM app_settings WHERE key = ?", (key,))
