@@ -16,6 +16,8 @@ const modalTitle = document.getElementById('modalTitle');
 const templateName = document.getElementById('templateName');
 const searchInput = document.getElementById('columnSearchInput');
 const clearSearchBtn = document.getElementById('clearSearchBtn');
+const addColumnTriggerBtn = document.getElementById('addColumnTriggerBtn');
+const closeMatchHint = document.getElementById('closeMatchHint');
 const searchResults = document.getElementById('searchResults');
 const noColumnsMsg = document.getElementById('noColumnsMessage');
 const noSearchResults = document.getElementById('noSearchResults');
@@ -27,10 +29,23 @@ const cancelBtn = document.getElementById('cancelTemplateBtn');
 const closeModalBtn = document.getElementById('closeModalBtn');
 const modalStatus = document.getElementById('modalStatus');
 
+// Quick Add Column modal (Phase 3) refs
+const quickAddOverlay = document.getElementById('quickAddColumnOverlay');
+const quickAddModal = document.getElementById('quickAddColumnModal');
+const quickAddColName = document.getElementById('quickAddColName');
+const quickAddColType = document.getElementById('quickAddColType');
+const quickAddColCategory = document.getElementById('quickAddColCategory');
+const quickAddCategoryDropdown = document.getElementById('quickAddCategoryDropdown');
+const quickAddModalStatus = document.getElementById('quickAddModalStatus');
+const quickAddCancelBtn = document.getElementById('quickAddCancelBtn');
+const quickAddSaveBtn = document.getElementById('quickAddSaveBtn');
+const quickAddSaveAndNewBtn = document.getElementById('quickAddSaveAndNewBtn');
+
 let editingId = null;
 let allMasterColumns = [];
 window.allMasterColumns = [];
 let selectedColumns = [];
+let closeMatchDebounceTimer = null;
 
 // ---------- LOAD TEMPLATES ----------
 async function loadTemplates() {
@@ -257,6 +272,167 @@ function renderSearchResults(query) {
     });
 }
 
+// ---------- ADD COLUMN TRIGGER + CLOSE-MATCH HINT ----------
+// Shows the green "+ Add Column" button when typed text has no exact
+// (case-insensitive) match among master columns, and an advisory
+// "Did you mean ...?" hint from GET /api/columns/close-matches (Phase 1).
+function updateAddColumnUI(query) {
+    const trimmed = query.trim();
+    clearTimeout(closeMatchDebounceTimer);
+
+    if (!trimmed) {
+        addColumnTriggerBtn.style.display = 'none';
+        closeMatchHint.style.display = 'none';
+        return;
+    }
+
+    const lowerTrimmed = trimmed.toLowerCase();
+    const hasExactMatch = allMasterColumns.some(col => col.column_name.toLowerCase() === lowerTrimmed);
+    addColumnTriggerBtn.style.display = hasExactMatch ? 'none' : 'block';
+
+    closeMatchDebounceTimer = setTimeout(async () => {
+        try {
+            const res = await fetch(API_BASE + '/api/columns/close-matches?name=' + encodeURIComponent(trimmed));
+            if (!res.ok) throw new Error('Failed to fetch close matches');
+            const matches = await res.json();
+            // Guard against a fast typist having already changed the input
+            // by the time this debounced fetch resolves.
+            if (searchInput.value.trim() !== trimmed) return;
+            if (matches.length > 0) {
+                closeMatchHint.textContent = `Did you mean "${matches[0].column_name}"?`;
+                closeMatchHint.style.display = 'block';
+            } else {
+                closeMatchHint.style.display = 'none';
+            }
+        } catch (error) {
+            closeMatchHint.style.display = 'none';
+        }
+    }, 250);
+}
+
+// ---------- QUICK ADD COLUMN MODAL (Phase 3) ----------
+// Mirrors the Add New Column modal/behavior on Manage Columns (static/columns.js)
+// so a missing column can be created and simultaneously added to the template
+// under construction, without leaving this screen.
+
+function showQuickAddModalStatus(message, type) {
+    quickAddModalStatus.textContent = message;
+    quickAddModalStatus.style.display = 'block';
+    quickAddModalStatus.style.background = type === 'error' ? '#ffebee' : '#e8f5e9';
+    quickAddModalStatus.style.color = type === 'error' ? '#c62828' : '#2e7d32';
+    quickAddModalStatus.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
+}
+
+async function loadQuickAddCategoryDropdown() {
+    try {
+        const res = await fetch(API_BASE + '/api/columns/categories');
+        if (!res.ok) throw new Error('Failed to fetch categories');
+        const categories = await res.json();
+        quickAddCategoryDropdown.innerHTML = '<option value="">-- Select existing --</option>';
+        categories.forEach(cat => {
+            const opt = document.createElement('option');
+            opt.value = cat.category;
+            opt.textContent = cat.category;
+            quickAddCategoryDropdown.appendChild(opt);
+        });
+    } catch (error) {
+        // Advisory only -- leave the dropdown at its default option on failure.
+    }
+}
+
+quickAddCategoryDropdown.addEventListener('change', function() {
+    if (this.value) quickAddColCategory.value = this.value;
+});
+
+function openQuickAddColumnModal(prefillName) {
+    quickAddColName.value = prefillName || '';
+    quickAddColType.value = 'Text';
+    quickAddColCategory.value = '';
+    quickAddCategoryDropdown.value = '';
+    quickAddModalStatus.style.display = 'none';
+    quickAddOverlay.style.display = 'block';
+    quickAddModal.style.display = 'block';
+    loadQuickAddCategoryDropdown();
+    quickAddColName.focus();
+}
+
+function closeQuickAddColumnModal() {
+    quickAddOverlay.style.display = 'none';
+    quickAddModal.style.display = 'none';
+    quickAddModalStatus.style.display = 'none';
+}
+
+// Creates the column in the master table and appends it to the template's
+// selected-columns list in the same step. keepModalOpen === true is "Save and New".
+async function saveQuickAddColumn(keepModalOpen) {
+    const name = quickAddColName.value.trim();
+    const type = quickAddColType.value;
+    const category = quickAddColCategory.value.trim();
+
+    if (!name) {
+        showQuickAddModalStatus('⚠️ Column name is required.', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch(API_BASE + '/api/columns', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ column_name: name, data_type: type, category: category || 'General' })
+        });
+        const result = await res.json();
+
+        if (!res.ok) {
+            // Duplicate-name (or other) error from the Phase 1 backend check -- shown here, save blocked.
+            throw new Error(result.message || result.detail || 'Failed to create column');
+        }
+
+        // New column now exists in the master table -- reflect it locally so
+        // search/exact-match logic sees it immediately, then add it to the template.
+        const newCol = { id: result.column_id, column_name: name, data_type: type, category: category || 'General' };
+        allMasterColumns.push(newCol);
+        window.allMasterColumns = allMasterColumns;
+        addToSelected(newCol);
+
+        showQuickAddModalStatus('✅ ' + result.message, 'success');
+
+        if (keepModalOpen) {
+            quickAddColName.value = '';
+            quickAddColType.value = 'Text';
+            quickAddColCategory.value = '';
+            quickAddCategoryDropdown.value = '';
+            quickAddColName.focus();
+        } else {
+            setTimeout(closeQuickAddColumnModal, 800);
+        }
+
+        // Clear the search box now that the typed text has become a real, selected column.
+        searchInput.value = '';
+        clearSearchBtn.style.display = 'none';
+        searchResults.style.display = 'none';
+        noSearchResults.style.display = 'none';
+        updateAddColumnUI('');
+
+    } catch (error) {
+        showQuickAddModalStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+document.getElementById('quickAddColumnForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+});
+
+quickAddCancelBtn.addEventListener('click', closeQuickAddColumnModal);
+quickAddOverlay.addEventListener('click', closeQuickAddColumnModal);
+quickAddSaveBtn.addEventListener('click', function(e) {
+    e.preventDefault();
+    saveQuickAddColumn(false);
+});
+quickAddSaveAndNewBtn.addEventListener('click', function(e) {
+    e.preventDefault();
+    saveQuickAddColumn(true);
+});
+
 // ---------- ADD / REMOVE SELECTED ----------
 function addToSelected(col) {
     if (selectedColumns.some(c => c.id === col.id)) return;
@@ -347,6 +523,7 @@ async function openModal(title, templateData = null) {
     searchResults.style.display = 'none';
     noSearchResults.style.display = 'none';
     modalStatus.style.display = 'none';
+    updateAddColumnUI('');
 
     modalTitle.textContent = title;
     modalOverlay.style.display = 'block';
@@ -392,6 +569,8 @@ function closeModal() {
     searchInput.value = '';
     searchResults.style.display = 'none';
     noSearchResults.style.display = 'none';
+    updateAddColumnUI('');
+    closeQuickAddColumnModal();
 }
 
 // ---------- SEARCH INPUT ----------
@@ -405,6 +584,7 @@ searchInput.addEventListener('input', function() {
         searchResults.style.display = 'none';
         noSearchResults.style.display = 'none';
     }
+    updateAddColumnUI(val);
 });
 
 clearSearchBtn.addEventListener('click', function() {
@@ -413,6 +593,12 @@ clearSearchBtn.addEventListener('click', function() {
     this.style.display = 'none';
     searchResults.style.display = 'none';
     noSearchResults.style.display = 'none';
+    updateAddColumnUI('');
+});
+
+// Opens the quick-add modal pre-filled with whatever the user typed in the search box.
+addColumnTriggerBtn.addEventListener('click', function() {
+    openQuickAddColumnModal(searchInput.value.trim());
 });
 
 // ---------- MODAL CONTROLS ----------
@@ -569,6 +755,10 @@ function openPreviewModal(tpl) {
 // ---------- ESC KEY ----------
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
+        if (quickAddModal && quickAddModal.style.display === 'block') {
+            closeQuickAddColumnModal();
+            return;
+        }
         const templateModal = document.getElementById('templateModal');
         if (templateModal && templateModal.style.display === 'block') {
             closeModal();
