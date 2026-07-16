@@ -28,9 +28,13 @@ def get_all_columns():
 
 @router.post("/api/columns")
 def create_column(column: ColumnCreate):
-    existing = execute_query("SELECT id FROM master_columns WHERE column_name = ?", (column.column_name,))
+    # Case-insensitive duplicate check so "invoice date" is blocked against "Invoice Date"
+    existing = execute_query(
+        "SELECT id, column_name FROM master_columns WHERE LOWER(column_name) = LOWER(?)",
+        (column.column_name,)
+    )
     if existing:
-        raise HTTPException(400, "Column name already exists")
+        raise HTTPException(400, f"Column name already exists: '{existing[0]['column_name']}'")
     col_id = execute_write(
         "INSERT INTO master_columns (column_name, data_type, category) VALUES (?, ?, ?)",
         (column.column_name, column.data_type, column.category)
@@ -62,6 +66,26 @@ def delete_column(column_id: int):
 @router.get("/api/columns/categories")
 def get_categories():
     return execute_query("SELECT DISTINCT category FROM master_columns WHERE is_active = 1 ORDER BY category")
+
+@router.get("/api/columns/close-matches")
+def get_close_matches(name: str):
+    """
+    Advisory-only lookup: returns active master columns whose name contains,
+    or is contained by, the typed name (case-insensitive substring match).
+    Not a duplicate check -- the frontend uses this to show a
+    'Did you mean ...?' hint without blocking save.
+    """
+    typed = name.strip().lower()
+    if not typed:
+        return []
+    all_columns = execute_query(
+        "SELECT id, column_name, data_type, category FROM master_columns WHERE is_active = 1"
+    )
+    return [
+        col for col in all_columns
+        if col['column_name'].lower() != typed
+        and (typed in col['column_name'].lower() or col['column_name'].lower() in typed)
+    ]
 
 # ---------- TEMPLATES (with PIVOT table) ----------
 
