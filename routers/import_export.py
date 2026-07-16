@@ -276,6 +276,11 @@ class ImportRequest(BaseModel):
     unique_column_id: Optional[int] = None
     skip_validation: bool = False
     sheet_name: str = "Sheet1"
+    # Selected date format (Phase 4 of the date-format requirement). None means
+    # "not sent" and falls back to DEFAULT_DATE_DELIMITER/DEFAULT_DATE_ORDER --
+    # distinct from "" which is itself a valid delimiter (no delimiter).
+    date_delimiter: Optional[str] = None
+    date_order: Optional[str] = None
  
 class AutoMapRequest(BaseModel):
     file_id: int
@@ -301,7 +306,8 @@ def get_document_group_id(template_cols: list, row_data: dict, template_id: int)
 
 
 # ---------- HELPER: Extract numeric & date columns from row data ----------
-def extract_columns_from_row(row_data: dict, template_cols: list) -> tuple:
+def extract_columns_from_row(row_data: dict, template_cols: list,
+                              delimiter: str = DEFAULT_DATE_DELIMITER, order: str = DEFAULT_DATE_ORDER) -> tuple:
     """
     Extracts the first numeric and first date value from a row based on template column types.
     Returns (amount, date_str) where amount is float or None, date_str is ISO date or None.
@@ -326,7 +332,7 @@ def extract_columns_from_row(row_data: dict, template_cols: list) -> tuple:
                     date_str = value.strftime('%Y-%m-%d')
                 elif kind == 'text':
                     try:
-                        dt = parse_date_flexible(value)
+                        dt = parse_date_flexible(value, delimiter, order)
                         date_str = dt.strftime('%Y-%m-%d')
                     except ValueError:
                         pass
@@ -572,6 +578,11 @@ def validate_only(request: ImportRequest):
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
+    # Resolve the effective date format: use what the frontend sent, falling back
+    # to the module defaults if absent (delimiter checks None since "" is itself valid).
+    effective_delimiter = request.date_delimiter if request.date_delimiter is not None else DEFAULT_DATE_DELIMITER
+    effective_order = request.date_order if request.date_order else DEFAULT_DATE_ORDER
+
     # Get template columns with their types
     template_cols = execute_query(
         """
@@ -604,7 +615,7 @@ def validate_only(request: ImportRequest):
         raise HTTPException(400, f"Error reading Excel: {str(e)}")
 
     rows = df.to_dict('records')
-    
+
         # --- Validation (same logic as import but without inserting) ---
     validation_errors = []
     for row_idx, row in enumerate(rows, start=2):  # row 1 = headers, row 2 = first data
@@ -662,13 +673,13 @@ def validate_only(request: ImportRequest):
                         pass  # Excel serial date – will be handled on import, skip validation here
                     elif kind == 'text':
                         try:
-                            parse_date_flexible(value)
+                            parse_date_flexible(value, effective_delimiter, effective_order)
                         except (ValueError, TypeError):
                             row_errors.append({
                                 "column": t_col['column_name'],
                                 "excel_column": excel_col,
                                 "error_type": "data_type",
-                                "message": f"Expected Date (DD/MM/YYYY) but got '{value}'"
+                                "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
                             })
 
         if row_errors:
@@ -711,6 +722,11 @@ def validate_and_import(request: ImportRequest):
     client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
+
+    # Resolve the effective date format: use what the frontend sent, falling back
+    # to the module defaults if absent (delimiter checks None since "" is itself valid).
+    effective_delimiter = request.date_delimiter if request.date_delimiter is not None else DEFAULT_DATE_DELIMITER
+    effective_order = request.date_order if request.date_order else DEFAULT_DATE_ORDER
 
     # Get template columns with their types
     template_cols = execute_query(
@@ -785,13 +801,13 @@ def validate_and_import(request: ImportRequest):
                         pass  # Excel serial date – will be handled on import, skip validation here
                     elif kind == 'text':
                         try:
-                            parse_date_flexible(value)
+                            parse_date_flexible(value, effective_delimiter, effective_order)
                         except (ValueError, TypeError):
                             row_errors.append({
                                 "column": t_col['column_name'],
                                 "excel_column": excel_col,
                                 "error_type": "data_type",
-                                "message": f"Expected Date (DD/MM/YYYY) but got '{value}'"
+                                "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
                             })
         if row_errors:
             validation_errors.append({"row_number": row_idx, "errors": row_errors})
@@ -865,7 +881,7 @@ def validate_and_import(request: ImportRequest):
 
         # 3. New: insert fresh rows
         for new_row_data in change_detection["new"]:
-            amount, date_str = extract_columns_from_row(new_row_data, template_cols)
+            amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
             doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
             row_id = execute_write(
                 """
@@ -910,7 +926,7 @@ def validate_and_import(request: ImportRequest):
             doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)
 
             # Extract amount and date for indexing
-            amount, date_str = extract_columns_from_row(row_data, template_cols)
+            amount, date_str = extract_columns_from_row(row_data, template_cols, effective_delimiter, effective_order)
 
             # Insert every row as new
             row_id = execute_write(

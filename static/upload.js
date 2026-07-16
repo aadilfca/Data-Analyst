@@ -1169,7 +1169,10 @@ if (importBtn) {
             mappings: finalMappings,
             mode: 'create',
             unique_column_id: null,
-            sheet_name: currentSheet || 'Sheet1'
+            sheet_name: currentSheet || 'Sheet1',
+            // Selected date format (Phase 3 dropdowns) – drives Date validation/import parsing on the backend.
+            date_delimiter: selectedDateDelimiter,
+            date_order: selectedDateOrder
         };
 
         // ---- NEW LOGIC: Validation Flow ----
