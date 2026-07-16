@@ -77,6 +77,22 @@ def excel_serial_to_datetime(value) -> datetime:
     return datetime(1899, 12, 30) + timedelta(days=value)
 
 
+# ---------- ROW EXCLUSION (Phase 1 of the row-exclusion requirement) ----------
+def filter_excluded_rows(rows: list, excluded_rows: Optional[List[int]]) -> list:
+    """
+    Removes rows the user marked for exclusion before this upload session
+    (row_number matches validation_errors[].row_number: header row=1, first data row=2).
+    Excluded rows are session-only and never persisted -- this is the single point
+    where exclusion is applied, so callers downstream (validation, import,
+    document_group_id grouping) never see excluded rows at all. Returns a new
+    list; None/empty excluded_rows is a no-op (identical to today's behavior).
+    """
+    if not excluded_rows:
+        return rows
+    excluded_set = set(excluded_rows)
+    return [row for idx, row in enumerate(rows, start=2) if idx not in excluded_set]
+
+
 def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, template_cols: list, mapping_dict: dict):
     """Count rows that are new versus already present for the same client/template."""
     existing_rows = execute_query(
@@ -292,7 +308,11 @@ class ImportRequest(BaseModel):
     # distinct from "" which is itself a valid delimiter (no delimiter).
     date_delimiter: Optional[str] = None
     date_order: Optional[str] = None
- 
+    # Session-only row exclusion (Phase 1 of the row-exclusion requirement).
+    # Row numbers match validation_errors[].row_number (header=1, first data row=2).
+    # None/absent means "exclude nothing" -- identical to today's behavior.
+    excluded_rows: Optional[List[int]] = None
+
 class AutoMapRequest(BaseModel):
     file_id: int
     template_id: int
@@ -717,6 +737,8 @@ def validate_only(request: ImportRequest):
         raise HTTPException(400, f"Error reading Excel: {str(e)}")
 
     rows = df.to_dict('records')
+    # Drop user-excluded rows before anything else sees them (validation, counts).
+    rows = filter_excluded_rows(rows, request.excluded_rows)
 
         # --- Validation (same logic as import but without inserting) ---
     validation_errors = []
@@ -864,7 +886,10 @@ def validate_and_import(request: ImportRequest):
     print(f"🔍 DataFrame shape: {df.shape}")  # rows, columns
     print(f"🔍 DataFrame columns: {df.columns.tolist()}")
     rows = df.to_dict('records')
-    
+    # Drop user-excluded rows before validation, import, and document_group_id
+    # grouping (compare_transactions) ever see them.
+    rows = filter_excluded_rows(rows, request.excluded_rows)
+
     # --- Validation ---
     validation_errors = []
     for row_idx, row in enumerate(rows, start=2):
