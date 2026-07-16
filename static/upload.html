@@ -904,6 +904,20 @@
                         <option value="">-- Select --</option>
                     </select>
                 </div>
+                <div class="field">
+                    <label>📅 Date Delimiter</label>
+                    <select id="dateDelimiterDropdown">
+                        <option value="/">/ (Slash)</option>
+                        <option value="-">- (Dash)</option>
+                        <option value="">No delimiter</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Date Order</label>
+                    <select id="dateOrderDropdown">
+                        <!-- Populated by JS based on the delimiter selection -->
+                    </select>
+                </div>
                 <button class="btn-download" id="downloadBtn" disabled>📥 Download Template</button>
                 <div class="field" id="sheetField" style="display:none;">
                     <label>📄 Sheet</label>

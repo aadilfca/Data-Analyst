@@ -15,6 +15,8 @@ const templateDropdown = getElement('templateDropdown');
 const sheetSelector = getElement('sheetSelector');
 const sheetField = getElement('sheetField');
 const statusBadge = getElement('statusBadge');
+const dateDelimiterDropdown = getElement('dateDelimiterDropdown');
+const dateOrderDropdown = getElement('dateOrderDropdown');
 
 const uploadArea = getElement('uploadArea');
 const fileInput = getElement('fileInput');
@@ -45,8 +47,19 @@ const footerFile = getElement('footerFile');
 const footerRows = getElement('footerRows');
 const footerDate = getElement('footerDate');
 
+// ---------- DATE FORMAT OPTIONS ----------
+// Order codes (DMY/MDY/YMD) match the backend's parse_date_flexible() `order` param
+// (routers/import_export.py) so Phase 4 can wire these straight through.
+const DATE_ORDER_OPTIONS = {
+    '/': [['DMY', 'DD/MM/YYYY'], ['MDY', 'MM/DD/YYYY'], ['YMD', 'YYYY/MM/DD']],
+    '-': [['DMY', 'DD-MM-YYYY'], ['MDY', 'MM-DD-YYYY'], ['YMD', 'YYYY-MM-DD']],
+    '': [['DMY', 'DDMMYYYY'], ['MDY', 'MMDDYYYY'], ['YMD', 'YYYYMMDD']]
+};
+
 // ---------- STATE ----------
 let selectedTemplateId = null;
+let selectedDateDelimiter = '/';
+let selectedDateOrder = 'DMY';
 let selectedFile = null;
 let fileId = null;
 let currentMappings = [];
@@ -139,6 +152,35 @@ function updatePreviewButtonState() {
         previewBtn.style.display = 'inline-block';
         previewBtn.disabled = true;
     }
+}
+
+// ---------- DATE FORMAT DROPDOWNS ----------
+// Repopulates the Date Order dropdown based on the chosen delimiter, defaulting to DMY.
+function populateDateOrderDropdown(delimiter) {
+    if (!dateOrderDropdown) return;
+    const options = DATE_ORDER_OPTIONS[delimiter] || DATE_ORDER_OPTIONS['/'];
+    dateOrderDropdown.innerHTML = '';
+    options.forEach(([value, label]) => {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = label;
+        dateOrderDropdown.appendChild(opt);
+    });
+    selectedDateOrder = 'DMY';
+    dateOrderDropdown.value = selectedDateOrder;
+}
+
+if (dateDelimiterDropdown) {
+    dateDelimiterDropdown.addEventListener('change', function() {
+        selectedDateDelimiter = this.value;
+        populateDateOrderDropdown(selectedDateDelimiter);
+    });
+}
+
+if (dateOrderDropdown) {
+    dateOrderDropdown.addEventListener('change', function() {
+        selectedDateOrder = this.value;
+    });
 }
 
 // ---------- LOAD TEMPLATES ----------
@@ -1484,6 +1526,7 @@ if (previewBtn) {
 // ---------- INIT ----------
 window.onload = function() {
     loadTemplates();
+    populateDateOrderDropdown(selectedDateDelimiter);
     showStatus('Select a template and upload an Excel file to begin.', 'info');
     updatePreviewButtonState();
 
