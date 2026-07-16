@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
-from database import execute_query, execute_write, log_audit, get_raw_conn
+from database import execute_query, execute_write, log_audit, get_raw_conn, get_client_voucher_prefixes
 from datetime import datetime
 import json
 from typing import List, Optional, Dict, Any
@@ -24,18 +24,33 @@ router = APIRouter()
 # HELPER FUNCTIONS
 # ==============================================
 
-def get_voucher_patterns() -> dict:
-    """Hardcoded voucher pattern mappings (no database lookup)."""
-    return {"CPV": ["CPV","CV"], "CRV": ["CRV","CR"], "BPV": ["BPV","BV"], "BRV": ["BRV","BR"], "JV": ["JV"]}
-
-def get_voucher_type(voucher_id: str, patterns: dict) -> str:
+def match_voucher_category(voucher_id: str, client_prefixes: dict) -> Optional[str]:
+    """
+    Case-insensitive "starts with" match of voucher_id against the client's configured
+    per-category prefixes (Phase 1 assumption). Returns 'Cash'/'Bank'/'Journal', or None
+    if nothing matches (including a client with no prefixes configured for any category).
+    """
     if not voucher_id:
         return None
-    voucher_id = voucher_id.strip()
-    for vtype, prefixes in patterns.items():
-        for p in prefixes:
-            if voucher_id.startswith(p):
-                return vtype
+    voucher_id_lower = voucher_id.strip().lower()
+    for category, prefixes in client_prefixes.items():
+        for prefix in prefixes:
+            if voucher_id_lower.startswith(prefix.strip().lower()):
+                return category
+    return None
+
+def voucher_type_label(category: str, is_credit_side: bool) -> Optional[str]:
+    """
+    Map a category plus which side of the entry is populated to the voucher type label
+    (CPV/CRV/BPV/BRV/JV). Credit side -> Payment, debit side -> Receipt; Journal has no
+    payment/receipt split (is_credit_side is ignored for Journal).
+    """
+    if category == 'Journal':
+        return 'JV'
+    if category == 'Cash':
+        return 'CPV' if is_credit_side else 'CRV'
+    if category == 'Bank':
+        return 'BPV' if is_credit_side else 'BRV'
     return None
 
 def get_column_value(row_data: dict, aliases: list) -> Optional[str]:
@@ -50,7 +65,7 @@ def get_column_value(row_data: dict, aliases: list) -> Optional[str]:
                 return val
     return None
 
-def extract_cashbook_name(row_data: dict, patterns: dict) -> Optional[str]:
+def extract_cashbook_name(row_data: dict, client_prefixes: dict) -> Optional[str]:
     # Define aliases for required columns
     voucher_aliases = ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher', 'Invoice No', 'Invoice Number']
     account_aliases = ['Account Name', 'Account', 'Account Detail', 'Account Code', 'Ledger', 'Head']
@@ -71,10 +86,13 @@ def extract_cashbook_name(row_data: dict, patterns: dict) -> Optional[str]:
     except:
         return None
 
-    vtype = get_voucher_type(voucher_id, patterns)
-    if vtype == 'CPV' and credit > 0:
-        return account_name
-    elif vtype == 'CRV' and debit > 0:
+    category = match_voucher_category(voucher_id, client_prefixes)
+    if category not in ('Cash', 'Bank'):
+        return None
+    # Discovery (get_cashbooks) has no known cashbook name to match a row against yet, so both
+    # sides are accepted as candidates here (confirmed with user) - the analyst still manually
+    # picks the real cashbook from the discovered list.
+    if credit > 0 or debit > 0:
         return account_name
     return None
 
@@ -176,7 +194,7 @@ def get_cashbooks(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    patterns = get_voucher_patterns()
+    client_prefixes = get_client_voucher_prefixes(client_id)
 
     rows = execute_query(
         """
@@ -188,7 +206,7 @@ def get_cashbooks(
         """,
         (client_id, date_start, date_end)
     )
-    
+
     cashbooks = set()
     debug_info = []
     for row in rows:
@@ -197,15 +215,12 @@ def get_cashbooks(
             if not isinstance(row_data, dict):
                 continue
             voucher_id = row_data.get('Voucher ID')
-            vtype = get_voucher_type(voucher_id, patterns)
-            cb_name = None
-            if vtype in ['CPV', 'CRV']:
-                cb_name = extract_cashbook_name(row_data, patterns)
+            cb_name = extract_cashbook_name(row_data, client_prefixes)
             if debug:
                 debug_info.append({
                     "row_id": row['id'],
                     "voucher_id": voucher_id,
-                    "voucher_type": vtype,
+                    "category": match_voucher_category(voucher_id, client_prefixes),
                     "account_name": row_data.get('Account Name'),
                     "debit": row_data.get('Debit'),
                     "credit": row_data.get('Credit'),
@@ -217,14 +232,14 @@ def get_cashbooks(
             if debug:
                 debug_info.append({"row_id": row['id'], "error": str(e)})
             continue
-    
+
     if debug:
         return {
             "cashbooks": sorted(list(cashbooks)),
             "count": len(cashbooks),
             "debug": {
                 "total_rows": len(rows),
-                "patterns_used": patterns,
+                "patterns_used": client_prefixes,
                 "rows": debug_info
             }
         }
@@ -249,7 +264,7 @@ def start_verification_session(
     if period_start > period_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    patterns = get_voucher_patterns()
+    client_prefixes = get_client_voucher_prefixes(client_id)
     rows = execute_query(
         """
         SELECT id, row_data, extract_date, extract_amount
@@ -260,13 +275,13 @@ def start_verification_session(
         """,
         (client_id, period_start, period_end)
     )
-    
+
     # Aliases for flexible column matching
     voucher_aliases = ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher', 'Invoice No', 'Invoice Number']
     account_aliases = ['Account Name', 'Account', 'Account Detail', 'Account Code', 'Ledger', 'Head']
     debit_aliases = ['Debit', 'Debit Amount', 'Dr', 'Dr Amount', 'Debit (Dr)', 'Dr. Amount']
     credit_aliases = ['Credit', 'Credit Amount', 'Cr', 'Cr Amount', 'Credit (Cr)', 'Cr. Amount']
-    
+
     def get_col_value(row_data, aliases):
         for alias in aliases:
             if alias in row_data:
@@ -274,7 +289,7 @@ def start_verification_session(
                 if val is not None and val != '':
                     return val
         return None
-    
+
     vouchers = {}
     for row in rows:
         try:
@@ -284,8 +299,8 @@ def start_verification_session(
             voucher_id = get_col_value(rd, voucher_aliases)
             if not voucher_id:
                 continue
-            vtype = get_voucher_type(voucher_id, patterns)
-            if vtype not in ['CPV', 'CRV']:
+            category = match_voucher_category(voucher_id, client_prefixes)
+            if category not in ('Cash', 'Bank'):
                 continue
             debit_str = get_col_value(rd, debit_aliases)
             credit_str = get_col_value(rd, credit_aliases)
@@ -296,10 +311,8 @@ def start_verification_session(
                 continue
             if voucher_id not in vouchers:
                 vouchers[voucher_id] = {
-                    'vtype': vtype,
-                    'rows': [],
-                    'cashbook_account': None,
-                    'has_cashbook_line': False
+                    'category': category,
+                    'rows': []
                 }
             vouchers[voucher_id]['rows'].append({
                 'row_id': row['id'],
@@ -312,22 +325,23 @@ def start_verification_session(
             })
         except:
             continue
-    
+
     transactions_to_verify = []
     for vid, data in vouchers.items():
-        vtype = data['vtype']
-        cashbook_account = None
-        for row in data['rows']:
-            if vtype == 'CPV' and row['credit'] > 0:
-                cashbook_account = row['account_name']
-                break
-            elif vtype == 'CRV' and row['debit'] > 0:
-                cashbook_account = row['account_name']
-                break
-        if cashbook_account is None or cashbook_account != cashbook_name:
+        # Payment vs Receipt is derived from the debit/credit sign of the row that IS the
+        # selected cashbook (cashbook_name is already known here), not from a type-specific
+        # prefix - replaces the old CPV/CRV prefix-hint lookup.
+        cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name), None)
+        if cashbook_row is None:
+            continue
+        if cashbook_row['credit'] > 0:
+            vtype = voucher_type_label(data['category'], is_credit_side=True)
+        elif cashbook_row['debit'] > 0:
+            vtype = voucher_type_label(data['category'], is_credit_side=False)
+        else:
             continue
         for row in data['rows']:
-            if vtype == 'CPV' and row['debit'] > 0 and row['credit'] == 0:
+            if vtype in ('CPV', 'BPV') and row['debit'] > 0 and row['credit'] == 0:
                 transactions_to_verify.append({
                     'client_data_id': row['row_id'],
                     'row_data': row['row_data'],
@@ -335,7 +349,7 @@ def start_verification_session(
                     'extract_date': row['extract_date'],
                     'extract_amount': row['extract_amount']
                 })
-            elif vtype == 'CRV' and row['credit'] > 0 and row['debit'] == 0:
+            elif vtype in ('CRV', 'BRV') and row['credit'] > 0 and row['debit'] == 0:
                 transactions_to_verify.append({
                     'client_data_id': row['row_id'],
                     'row_data': row['row_data'],
@@ -807,8 +821,8 @@ def preview_cashbook(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    patterns = get_voucher_patterns()
-    
+    client_prefixes = get_client_voucher_prefixes(client_id)
+
     # Fetch rows
     rows = execute_query(
         """
@@ -820,14 +834,14 @@ def preview_cashbook(
         """,
         (client_id, date_start, date_end)
     )
-    
+
     # Group by voucher ID and filter cashbook
     vouchers = {}
     voucher_aliases = ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher', 'Invoice No', 'Invoice Number']
     account_aliases = ['Account Name', 'Account', 'Account Detail', 'Account Code', 'Ledger', 'Head']
     debit_aliases = ['Debit', 'Debit Amount', 'Dr', 'Dr Amount', 'Debit (Dr)', 'Dr. Amount']
     credit_aliases = ['Credit', 'Credit Amount', 'Cr', 'Cr Amount', 'Credit (Cr)', 'Cr. Amount']
-    
+
     def get_col_value(row_data, aliases):
         for alias in aliases:
             if alias in row_data:
@@ -835,7 +849,7 @@ def preview_cashbook(
                 if val is not None and val != '':
                     return val
         return None
-    
+
     for row in rows:
         try:
             rd = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
@@ -844,8 +858,8 @@ def preview_cashbook(
             voucher_id = get_col_value(rd, voucher_aliases)
             if not voucher_id:
                 continue
-            vtype = get_voucher_type(voucher_id, patterns)
-            if vtype not in ['CPV', 'CRV']:
+            category = match_voucher_category(voucher_id, client_prefixes)
+            if category not in ('Cash', 'Bank'):
                 continue
             debit_str = get_col_value(rd, debit_aliases)
             credit_str = get_col_value(rd, credit_aliases)
@@ -856,9 +870,8 @@ def preview_cashbook(
                 continue
             if voucher_id not in vouchers:
                 vouchers[voucher_id] = {
-                    'vtype': vtype,
-                    'rows': [],
-                    'cashbook_account': None
+                    'category': category,
+                    'rows': []
                 }
             vouchers[voucher_id]['rows'].append({
                 'row_id': row['id'],
@@ -871,23 +884,23 @@ def preview_cashbook(
             })
         except:
             continue
-    
+
     # Filter to only the selected cashbook and collect transaction rows
     transactions = []
     for vid, data in vouchers.items():
-        vtype = data['vtype']
-        cashbook_account = None
-        for row in data['rows']:
-            if vtype == 'CPV' and row['credit'] > 0:
-                cashbook_account = row['account_name']
-                break
-            elif vtype == 'CRV' and row['debit'] > 0:
-                cashbook_account = row['account_name']
-                break
-        if cashbook_account is None or cashbook_account != cashbook_name:
+        # Same cashbook-row-sign derivation as start_verification_session - cashbook_name is
+        # already known here, so no type-prefix hint is needed.
+        cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name), None)
+        if cashbook_row is None:
+            continue
+        if cashbook_row['credit'] > 0:
+            vtype = voucher_type_label(data['category'], is_credit_side=True)
+        elif cashbook_row['debit'] > 0:
+            vtype = voucher_type_label(data['category'], is_credit_side=False)
+        else:
             continue
         for row in data['rows']:
-            if vtype == 'CPV' and row['debit'] > 0 and row['credit'] == 0:
+            if vtype in ('CPV', 'BPV') and row['debit'] > 0 and row['credit'] == 0:
                 transactions.append({
                     'client_data_id': row['row_id'],
                     'row_data': row['row_data'],
@@ -895,7 +908,7 @@ def preview_cashbook(
                     'extract_date': row['extract_date'],
                     'extract_amount': row['extract_amount']
                 })
-            elif vtype == 'CRV' and row['credit'] > 0 and row['debit'] == 0:
+            elif vtype in ('CRV', 'BRV') and row['credit'] > 0 and row['debit'] == 0:
                 transactions.append({
                     'client_data_id': row['row_id'],
                     'row_data': row['row_data'],
