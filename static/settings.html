@@ -73,11 +73,12 @@
     </style>
 </head>
 
-<body>
+<body data-nav-module="App Settings" data-nav-parent="setup.html">
     <!-- Navbar -->
     <nav class="navbar">
         <div class="nav-container">
-            <div class="nav-brand">🏢 System Analyst</div>
+            <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
+            <div id="navLeft"></div>
             <div class="nav-client" id="clientControl">
                 <!-- Will be rendered by client_context.js -->
             </div>
