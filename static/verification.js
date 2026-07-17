@@ -350,13 +350,9 @@ async function startSessionFromCashbook() {
         // Remove padding from main container when verification session is active
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.add('verification-active');
-        if (typeof setNavStats === 'function') {
-            setNavStats(`Session ${currentSessionId} · Cashbook: ${selectedCashbook} · 0 / ${totalTransactions} verified`);
-        }
         // Load transaction list (without showing popover) to get indices and total
         await loadTransactionList(false);
         await loadNextTransaction();
-        await updateProgress();
     } catch (error) {
         console.error('Error starting session:', error);
         showStatus('❌ Error starting verification: ' + error.message, 'error');
@@ -422,7 +418,6 @@ async function loadNextTransaction(detailId = null) {
         renderVoucherHeader(data.voucher_id, data.voucher_date, voucherLines);
         seedVoucherLineState(voucherLines);
         renderVoucherLines(voucherLines);
-        await updateProgress();
         await updateProgressDisplay(); // update the new progress element
         // Removed "Loaded transaction" message
     } catch (e) {
@@ -910,29 +905,8 @@ function buildAuditGuidanceTable(data) {
 
 // buildAuditGuidanceTable()/escapeHtml() are now consumed only by showAuditGuidancePopover().
 
-// ---------- UPDATE PROGRESS ----------
-// ---------- UPDATE PROGRESS (lightweight) ----------
-async function updateProgress() {
-    if (!currentSessionId) return;
-    try {
-        // Use the lightweight progress endpoint
-        const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
-        if (!res.ok) throw new Error('Failed to fetch progress');
-        const data = await res.json();
-        if (typeof setNavStats === 'function') {
-            // We need the cashbook name; we can store it globally or retrieve from session data
-            // We'll store it in a variable when session starts.
-            const cashbook = window._currentCashbook || '';
-            setNavStats(`Session ${currentSessionId} · Cashbook: ${cashbook} · ${data.verified_count || 0} / ${data.total_transactions || 0} verified`);
-        }
-    } catch (e) {
-        console.error('Error updating progress:', e);
-    }
-}
-
 // Update the voucher position counter (small "· voucher n/total" suffix on the header subtitle,
-// written by renderVoucherHeader()) and navbar stats. Cashbook name is already shown in the
-// navbar stats below, so it's not repeated here.
+// written by renderVoucherHeader()).
 async function updateProgressDisplay() {
     const counterEl = document.getElementById('voucherPositionCounter');
     if (counterEl) {
@@ -970,22 +944,6 @@ async function updateProgressDisplay() {
                 counterEl.textContent = ` · voucher ${displayIndex}/${voucherTotal}`;
             }
         }
-    }
-
-    // Update navbar stats
-    if (!currentSessionId) return;
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
-        if (!res.ok) throw new Error('Failed to fetch progress');
-        const data = await res.json();
-        const total = data.total_transactions || 0;
-        const verified = data.verified_count || 0;
-        if (typeof setNavStats === 'function') {
-            const cashbook = window._currentCashbook || '';
-            setNavStats(`Session ${currentSessionId} · Cashbook: ${cashbook} · ${verified} / ${total} verified`);
-        }
-    } catch (e) {
-        console.error('Error updating progress:', e);
     }
 }
 // ---------- Phase 3: Build diff rows for change detection banner ----------
@@ -1709,7 +1667,6 @@ async function completeTransaction() {
         }
         // No status message – proceed silently
         await loadNextTransaction();
-        await updateProgress();
     } catch (e) {
         console.error('Error completing:', e);
         // Do not show status bar error – only log
@@ -2289,9 +2246,6 @@ window.onload = function() {
     if (cashbookContent) cashbookContent.style.display = 'none';
     if (typeof setNavModule === 'function') {
         setNavModule('Verification');
-    }
-    if (typeof setNavStats === 'function') {
-        setNavStats('');
     }
     loadVerificationStats();
 };
