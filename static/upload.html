@@ -119,38 +119,14 @@
             border: 1px solid #e2e8f0;
         }
 
-        .top-bar .breadcrumb-back {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            color: #3b82f6;
-            text-decoration: none;
-            font-weight: 600;
-            font-size: 14px;
-            white-space: nowrap;
-        }
-
-        .top-bar .breadcrumb-back:hover {
-            text-decoration: underline;
-        }
-
-        .top-bar .breadcrumb-sep {
-            color: #cbd5e1;
-            font-size: 14px;
-        }
-
-        .top-bar .breadcrumb-current {
-            color: #1a1a2e;
-            font-weight: 600;
-            font-size: 14px;
-            white-space: nowrap;
-        }
-
+        /* Sized to match .btn-upload-file's taller two-line height, so the two real action
+           buttons in this bar read as a consistent pair (per confirmed scope: only these two
+           buttons match height -- dropdowns/badges stay at their existing compact sizing). */
         .top-bar .btn-databank {
-            padding: 5px 14px;
+            padding: 9px 16px;
             border: none;
             border-radius: 6px;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 600;
             cursor: pointer;
             white-space: nowrap;
@@ -176,6 +152,55 @@
             opacity: 0.6;
             cursor: not-allowed;
         }
+
+        /* ---------- UPLOAD FILE BUTTON (Phase 2: replaces the removed drag-and-drop area) ----------
+           Two-line button (icon+title, small ".xlsx, .xls" subtext) -- click-to-upload only, no
+           drag/drop capability anymore (uploadFileBtn click listener in upload.js calls
+           fileInput.click(), reusing the same handleFile() flow the old drag-drop area used).
+           Sized to pair visually with .btn-databank, the bar's other real action button. */
+        .upload-file-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .top-bar .btn-upload-file {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1px;
+            padding: 6px 18px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }
+
+        .top-bar .btn-upload-file:hover {
+            background: #2563eb;
+        }
+
+        .upload-file-btn-main {
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1.3;
+        }
+
+        .upload-file-btn-sub {
+            font-size: 10px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.8);
+            line-height: 1.2;
+        }
+
+        /* Selected-file chip (filename + size + clear button) -- relocated here from the removed
+           drag-and-drop area; same #fileInfo/#fileName/#fileSize/#clearBtn ids, so resetUpload()/
+           handleFile()/clearBtn wiring in upload.js needed no changes. Reuses the existing
+           .file-detail styling unchanged, just sitting beside the button instead of stacked
+           inside a dashed box. */
 
         /* ---------- DOWNLOAD TEMPLATE (Phase 2 of the Upload header reorg) ----------
            Demoted from a filled coloured button to a small text-style link, as part of
@@ -1140,9 +1165,23 @@
 
             <!-- TOP BAR: breadcrumb (back link · template · download · sheet) + status badge + data bank shortcut -->
             <div class="top-bar">
-                <a href="/static/index.html" class="breadcrumb-back">← Dashboard</a>
-                <span class="breadcrumb-sep">/</span>
-                <span class="breadcrumb-current">Upload Client Data</span>
+                <!-- Replaces the old "← Dashboard / Upload Client Data" breadcrumb (redundant with
+                     the global navbar's back-arrow/home-icon) AND the old drag-and-drop area (removed
+                     entirely in Phase 2 -- click-to-upload only, no drag/drop). #fileInfo/#fileInput
+                     moved here verbatim from the old #uploadArea so resetUpload()/handleFile()/
+                     clearBtn wiring in upload.js keeps working unchanged. -->
+                <div class="upload-file-group" id="uploadFileGroup">
+                    <button class="btn-upload-file" id="uploadFileBtn" type="button">
+                        <span class="upload-file-btn-main">📤 Upload File</span>
+                        <span class="upload-file-btn-sub">.xlsx, .xls</span>
+                    </button>
+                    <div class="file-detail" id="fileInfo" style="display:none;">
+                        <span class="name" id="fileName">file.xlsx</span>
+                        <span class="size" id="fileSize">0 KB</span>
+                        <button class="clear" id="clearBtn" title="Remove file">✕</button>
+                    </div>
+                    <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
+                </div>
                 <div class="field">
                     <label>📋 Template</label>
                     <select id="templateDropdown">
@@ -1241,23 +1280,6 @@
 
                 <!-- RIGHT PANEL -->
                 <div class="right-panel">
-
-                    <!-- Upload Area -->
-                    <div class="upload-area" id="uploadArea">
-                        <div class="upload-left">
-                            <span class="icon">📂</span>
-                            <div class="info">
-                                <h3>Drag & Drop or Click to Upload</h3>
-                                <p>Supported: .xlsx, .xls</p>
-                            </div>
-                        </div>
-                        <div class="file-detail" id="fileInfo" style="display:none;">
-                            <span class="name" id="fileName">file.xlsx</span>
-                            <span class="size" id="fileSize">0 KB</span>
-                            <button class="clear" id="clearBtn" title="Remove file">✕</button>
-                        </div>
-                        <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
-                    </div>
 
                     <!-- Row Selection Grid (Phase 2 of row-exclusion): checkbox per row, paginated.
                          All rows are included by default -- unchecking a row excludes it from

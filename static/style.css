@@ -396,39 +396,10 @@ body {
     box-shadow: 0 2px 12px rgba(0,0,0,0.08);
 }
 
-.upload-area {
-    border: 2px dashed #cbd5e1;
-    border-radius: 12px;
-    padding: 50px 20px;
-    text-align: center;
-    cursor: pointer;
-    transition: all 0.3s ease;
-}
-
-.upload-area:hover {
-    border-color: #3b82f6;
-    background: #f8fafc;
-}
-
-.upload-area.dragover {
-    border-color: #3b82f6;
-    background: #eff6ff;
-}
-
 .upload-icon {
     font-size: 48px;
     display: block;
     margin-bottom: 12px;
-}
-
-.upload-area h3 {
-    color: #1a1a2e;
-    margin-bottom: 4px;
-}
-
-.upload-area p {
-    color: #94a3b8;
-    font-size: 14px;
 }
 
 .upload-btn {

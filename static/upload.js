@@ -22,7 +22,7 @@ const dateFormatTriggerBtn = getElement('dateFormatTriggerBtn');
 const dateFormatTriggerLabel = getElement('dateFormatTriggerLabel');
 const dateFormatPopover = getElement('dateFormatPopover');
 
-const uploadArea = getElement('uploadArea');
+const uploadFileBtn = getElement('uploadFileBtn');
 const fileInput = getElement('fileInput');
 if (!fileInput) {
     console.error('❌ File input element with id "fileInput" not found – upload will not work');
@@ -455,42 +455,19 @@ if (templateDropdown) {
 }
 
 // ---------- FILE UPLOAD ----------
-if (uploadArea) {
-    // Click to open file picker – with safety check
-    uploadArea.addEventListener('click', function(e) {
+// "Upload File" button (replaces the old breadcrumb AND the old drag-and-drop area, removed
+// entirely in Phase 2 — click-to-upload only, no drag/drop capability anymore). Reuses the
+// existing fileInput/handleFile() flow the drag-and-drop area used to call.
+if (uploadFileBtn) {
+    uploadFileBtn.addEventListener('click', function() {
         if (fileInput) {
             fileInput.click();
         } else {
             console.error('❌ fileInput element not found');
         }
     });
-    
-    // Drag and drop events
-    uploadArea.addEventListener('dragover', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        this.classList.add('dragover');
-    });
-    
-    uploadArea.addEventListener('dragleave', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        this.classList.remove('dragover');
-    });
-    
-    uploadArea.addEventListener('drop', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        this.classList.remove('dragover');
-        if (e.dataTransfer && e.dataTransfer.files.length) {
-            handleFile(e.dataTransfer.files[0]);
-        } else {
-            console.warn('⚠️ No file dropped');
-        }
-    });
-    
 } else {
-    console.error('❌ Upload area element not found');
+    console.error('❌ Upload File button element not found');
 }
 
 if (fileInput) {
@@ -515,7 +492,6 @@ async function handleFile(file) {
     if (fileName) fileName.textContent = file.name;
     if (fileSize) fileSize.textContent = formatFileSize(file.size);
     if (fileInfo) fileInfo.style.display = 'flex';
-    if (uploadArea) uploadArea.style.display = 'none';
     if (footerMeta) footerMeta.style.display = 'flex';
     if (footerFile) footerFile.textContent = '📄 ' + file.name;
 
@@ -617,7 +593,6 @@ function resetUpload() {
     selectedFile = null;
     fileId = null;
     if (fileInfo) fileInfo.style.display = 'none';
-    if (uploadArea) uploadArea.style.display = 'flex';
     if (fileInput) fileInput.value = '';
     if (mappingPanel) mappingPanel.style.display = 'none';
     if (modeActions) modeActions.style.display = 'none';
