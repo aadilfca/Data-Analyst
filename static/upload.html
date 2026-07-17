@@ -163,8 +163,18 @@
             margin-left: auto;
         }
 
-        .top-bar .btn-databank:hover {
+        .top-bar .btn-databank:hover:not(:disabled) {
             background: #2563eb;
+        }
+
+        /* ---------- GO TO DATA BANK disabled state (Phase 4) ----------
+           Greyed out/inert until Template -> Sheet -> mapping all resolve
+           (updateGoToDataBankState() in upload.js); reverts to the normal blue styling above
+           once enabled, so it reads as the clear final action at that point. */
+        .top-bar .btn-databank:disabled {
+            background: #94a3b8;
+            opacity: 0.6;
+            cursor: not-allowed;
         }
 
         /* ---------- DOWNLOAD TEMPLATE (Phase 2 of the Upload header reorg) ----------
@@ -1286,11 +1296,20 @@
                         <select id="sheetSelector">
                             <option value="">-- Select --</option>
                         </select>
-                        <button class="preview-btn" id="previewBtn">👁️ Preview</button>
                     </div>
                 </div>
-                <span class="badge" id="statusBadge">⏳ Select a template</span>
-                <button class="btn-databank" id="goToDataBankBtn">📊 Go to Data Bank</button>
+                <!-- Grouped (Phase 4): match badge + Preview button, revealed together once
+                     mapping resolves (setMatchPreviewGroupVisible() in upload.js), same reveal
+                     timing as the Date format group/row exclusion grid. Preview moved here from
+                     inside #sheetField -- same id/classes, only its parent changed. -->
+                <div class="field-group" id="matchPreviewGroup" style="display:none;">
+                    <span class="badge" id="statusBadge">⏳ Select a template</span>
+                    <button class="preview-btn" id="previewBtn">👁️ Preview</button>
+                </div>
+                <!-- Disabled by default (Phase 4): stays visually inert until Template -> Sheet ->
+                     mapping all resolve (updateGoToDataBankState() in upload.js); navigation
+                     behavior itself is unchanged. -->
+                <button class="btn-databank" id="goToDataBankBtn" disabled>📊 Go to Data Bank</button>
             </div>
 
             <!-- MAIN GRID -->

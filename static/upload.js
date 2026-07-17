@@ -108,6 +108,20 @@ function setSheetDownloadGroupVisible(visible) {
     if (group) group.style.display = visible ? 'flex' : 'none';
 }
 
+// Match badge + Preview button (Phase 4) -- revealed together once mapping resolves, same
+// reveal timing as the Date format group/row exclusion grid.
+function setMatchPreviewGroupVisible(visible) {
+    const group = document.getElementById('matchPreviewGroup');
+    if (group) group.style.display = visible ? 'flex' : 'none';
+}
+
+// Go to Data Bank (Phase 4) -- stays visually inert until Template -> Sheet -> mapping all
+// resolve; navigation behavior in the click handler (window.onload, further down) is unchanged.
+function updateGoToDataBankState(enabled) {
+    const btn = document.getElementById('goToDataBankBtn');
+    if (btn) btn.disabled = !enabled;
+}
+
 // Moves the step-indicator strip's .active class between step-items (data-step attribute,
 // added in Phase 1's markup). Only steps 1/2 are used this phase -- steps 3/4 stay neutral,
 // their activation is Phases 3-4.
@@ -399,6 +413,8 @@ if (templateDropdown) {
             setSheetDownloadGroupVisible(false); // Template cleared -- hide Sheet/Download again
             setDateFormatGroupVisible(false); // ...and the Date format trigger/popover too
             closeDateFormatPopover();
+            setMatchPreviewGroupVisible(false); // ...and the match badge/Preview group...
+            updateGoToDataBankState(false); // ...and disable Go to Data Bank again
             updateStepIndicator(1);
             updatePreviewButtonState();
             return;
@@ -642,6 +658,11 @@ function resetUpload() {
     setDateFormatGroupVisible(false);
     closeDateFormatPopover();
 
+    // Hide the match badge/Preview group and disable Go to Data Bank again (Phase 4) --
+    // no mapping left to base either on.
+    setMatchPreviewGroupVisible(false);
+    updateGoToDataBankState(false);
+
     // Hide the row selection grid and clear its state (Phase 2 of row-exclusion) –
     // no file/mapping left to build it from.
     const rowExclusionContainerEl = document.getElementById('rowExclusionContainer');
@@ -718,6 +739,12 @@ async function autoMapColumns() {
 
         // Mapping is complete – show the row selection grid (Phase 2 of row-exclusion).
         renderRowExclusionGrid();
+
+        // Mapping resolved (Phase 4) -- reveal the match badge/Preview group, enable Go to
+        // Data Bank, and advance the step strip to "Map columns".
+        setMatchPreviewGroupVisible(true);
+        updateGoToDataBankState(true);
+        updateStepIndicator(3);
 
     } catch (error) {
         console.error('Auto-map error:', error);
@@ -1444,6 +1471,10 @@ if (importBtn) {
             showStatus(statusMsg, 'success', extraMsg);
             setBadge('✅ Data valid, ready to upload');
             updatePreviewButtonState();
+            // Validation succeeded -- this is the genuine "ready to import" milestone the step
+            // strip's final step represents (confirmed with the user: mapping-resolved alone
+            // isn't distinct enough, since it fires at the same instant Import becomes enabled).
+            updateStepIndicator(4);
 
         } catch (error) {
             showStatus('❌ Validation error: ' + error.message, 'error');
