@@ -104,6 +104,13 @@
             background: #e2e8f0;
         }
 
+        /* Go to Data Bank now shares the step-indicator row (same X axis as the 1-2-3-4 strip)
+           instead of the top-bar. margin-left: auto pushes it to the far right of the row while
+           the step items keep their own centered layout in the remaining space. */
+        .step-indicator .btn-databank {
+            margin-left: auto;
+        }
+
         /* ---------- TOP BAR (breadcrumb-style: back link · template · sheet · actions) ---------- */
         .top-bar {
             display: flex;
@@ -120,9 +127,10 @@
         }
 
         /* Sized to match .btn-upload-file's taller two-line height, so the two real action
-           buttons in this bar read as a consistent pair (per confirmed scope: only these two
-           buttons match height -- dropdowns/badges stay at their existing compact sizing). */
-        .top-bar .btn-databank {
+           buttons read as a consistent pair (per confirmed scope: only these two buttons match
+           height -- dropdowns/badges stay at their existing compact sizing). Unscoped (was
+           .top-bar .btn-databank) since the button now lives in .step-indicator, not .top-bar. */
+        .btn-databank {
             padding: 9px 16px;
             border: none;
             border-radius: 6px;
@@ -131,15 +139,11 @@
             cursor: pointer;
             white-space: nowrap;
             transition: background 0.2s;
-        }
-
-        .top-bar .btn-databank {
             background: #3b82f6;
             color: white;
-            margin-left: auto;
         }
 
-        .top-bar .btn-databank:hover:not(:disabled) {
+        .btn-databank:hover:not(:disabled) {
             background: #2563eb;
         }
 
@@ -147,7 +151,7 @@
            Greyed out/inert until Template -> Sheet -> mapping all resolve
            (updateGoToDataBankState() in upload.js); reverts to the normal blue styling above
            once enabled, so it reads as the clear final action at that point. */
-        .top-bar .btn-databank:disabled {
+        .btn-databank:disabled {
             background: #94a3b8;
             opacity: 0.6;
             cursor: not-allowed;
@@ -416,6 +420,30 @@
             font-size: 12px;
             color: #64748b;
             margin-left: auto;
+        }
+
+        /* ---------- RESTORE PREVIEW (session-restore, grayed-out locked mapping preview) ----------
+           Shown by renderRestorePreview() (upload.js) between a silent session restore and the
+           user re-selecting their file -- a non-interactive read-only echo of the previous
+           mapping table + a one-line sheet/row-exclusion summary, so returning to the page
+           doesn't look like everything was lost. Dimming is scoped to #mappingPanel only (not
+           the whole #leftPanel) so the banner itself stays at full opacity/legibility as the
+           active "you need to act" element. Cleared by clearRestorePreview() the moment
+           autoMapColumns() succeeds with the real (re-uploaded) file's data. */
+        #leftPanel.restore-preview-locked #mappingPanel {
+            opacity: 0.55;
+            pointer-events: none;
+        }
+
+        .restore-preview-banner {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            color: #92400e;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-bottom: 12px;
         }
 
         /* ---------- MAPPING TABLE ---------- */
@@ -913,7 +941,7 @@
                 text-align: center;
             }
 
-            .top-bar .btn-databank {
+            .step-indicator .btn-databank {
                 margin-left: 0;
             }
 
@@ -1161,6 +1189,11 @@
                     <span class="step-circle">4</span>
                     <span class="step-label">Review and import</span>
                 </div>
+                <!-- Moved here from .top-bar so it sits on the same row as the step strip
+                     (margin-left: auto pushes it to the far right while the steps stay
+                     centered in the remaining space -- see .step-indicator .btn-databank
+                     below). Disabled state / updateGoToDataBankState() wiring unchanged. -->
+                <button class="btn-databank" id="goToDataBankBtn" disabled>📊 Go to Data Bank</button>
             </div>
 
             <!-- TOP BAR: breadcrumb (back link · template · download · sheet) + status badge + data bank shortcut -->
@@ -1172,7 +1205,7 @@
                      clearBtn wiring in upload.js keeps working unchanged. -->
                 <div class="upload-file-group" id="uploadFileGroup">
                     <button class="btn-upload-file" id="uploadFileBtn" type="button">
-                        <span class="upload-file-btn-main">📤 Upload File</span>
+                        <span class="upload-file-btn-main">Upload File</span>
                         <span class="upload-file-btn-sub">.xlsx, .xls</span>
                     </button>
                     <div class="file-detail" id="fileInfo" style="display:none;">
@@ -1234,17 +1267,18 @@
                     <span class="badge" id="statusBadge">⏳ Select a template</span>
                     <button class="preview-btn" id="previewBtn">👁️ Preview</button>
                 </div>
-                <!-- Disabled by default (Phase 4): stays visually inert until Template -> Sheet ->
-                     mapping all resolve (updateGoToDataBankState() in upload.js); navigation
-                     behavior itself is unchanged. -->
-                <button class="btn-databank" id="goToDataBankBtn" disabled>📊 Go to Data Bank</button>
             </div>
 
             <!-- MAIN GRID -->
             <div class="main-grid">
 
-                <!-- LEFT PANEL -->
-                <div class="left-panel">
+                <!-- LEFT PANEL: hidden by default (id="leftPanel") -- without this, the panel's
+                     own border/background/box-shadow rendered as an empty rectangle even before
+                     any file was loaded, since only its children (#mappingPanel/#modeActions)
+                     had a hidden default state. Shown/hidden in lockstep with #mappingPanel by
+                     upload.js (see the leftPanel toggles next to every mappingPanel.style.display
+                     assignment). -->
+                <div class="left-panel" id="leftPanel" style="display:none;">
 
                     <!-- Mapping Table -->
                     <div id="mappingPanel" style="display:none;">

@@ -32,6 +32,7 @@ const fileName = getElement('fileName');
 const fileSize = getElement('fileSize');
 const clearBtn = getElement('clearBtn');
 
+const leftPanel = getElement('leftPanel');
 const mappingPanel = getElement('mappingPanel');
 const mappingBody = getElement('mappingBody');
 const mappingCount = getElement('mappingCount');
@@ -98,6 +99,18 @@ const ROW_EXCLUSION_PAGE_SIZE = 10; // fixed page size for this compact inline g
 // (same {column, excel_column, error_type, message} shape showValidationErrors() renders).
 // Distinct from excludedRowNumbers -- a validation failure never auto-excludes a row.
 let validationFailedRows = new Map();
+
+// ---------- SESSION-RESTORE STATE (mid-upload navigate-away/back recovery) ----------
+// A browser <input type="file"> can never be repopulated by JS, so the raw file itself is not
+// restorable -- only Template/Sheet-name/Date-format/Row-exclusion selections are. These two
+// "pending" values hold a restored session's Sheet name and excluded-row numbers until the user
+// re-selects a file (handleFile()) and the mapping/row-exclusion grid rebuild for it, at which
+// point each is consumed once and cleared. See saveUploadSessionState()/restoreUploadSessionState()
+// further down.
+const UPLOAD_SESSION_STORAGE_KEY = 'uploadPageState';
+let pendingRestoreSheetName = null;
+let pendingExcludedRowNumbersToRestore = null;
+
 // ---------- STEP INDICATOR / SHEET-DOWNLOAD REVEAL (Phase 2 of the Upload header reorg) ----------
 // Download Template + Sheet selector are gated together behind Template selection instead of
 // Download always being visible (see #sheetDownloadGroup in upload.html). Single place both
@@ -128,6 +141,197 @@ function updateStepIndicator(step) {
     document.querySelectorAll('#uploadStepIndicator .step-item').forEach(item => {
         item.classList.toggle('active', item.dataset.step === String(step));
     });
+}
+
+// ---------- SESSION-RESTORE: SAVE / RESTORE / CLEAR ----------
+// Persists just enough of this page's in-memory state to sessionStorage (tab-scoped only, no
+// backend change) so that navigating away mid-upload (e.g. "Go to Data Bank") and back (e.g.
+// "Upload More") restores Template/Sheet/Date-format/Row-exclusion selections automatically and
+// silently on page load -- no confirmation dialog. The uploaded file's raw bytes cannot be
+// restored this way (browser <input type="file"> elements can't be repopulated by JS, and there
+// is no backend endpoint that serves the original file content back), so `selectedFile.name` is
+// saved purely to tell the user which file to re-select via the existing status bar.
+function saveUploadSessionState() {
+    // Nothing meaningful to persist until a template has been chosen.
+    if (!selectedTemplateId) return;
+    const state = {
+        templateId: selectedTemplateId,
+        sheetName: currentSheet,
+        fileName: selectedFile ? selectedFile.name : null,
+        dateDelimiter: selectedDateDelimiter,
+        dateOrder: selectedDateOrder,
+        excludedRowNumbers: Array.from(excludedRowNumbers),
+        // Lightweight snapshot for the read-only "locked preview" a restored session shows
+        // before the file is re-selected (renderRestorePreview()) -- just the column-name/type/
+        // matched-status fields the preview table needs, not the full mapping objects, and row
+        // counts rather than the raw rows themselves (which are never persisted -- too large,
+        // and only ever exist client-side after reading the actual file).
+        mappings: currentMappings.map(m => ({
+            column_name: m.column_name,
+            excel_column: m.excel_column,
+            data_type: m.data_type,
+            is_matched: m.is_matched
+        })),
+        totalRows: rowExclusionAllRows.length,
+        excludedCount: excludedRowNumbers.size
+    };
+    try {
+        sessionStorage.setItem(UPLOAD_SESSION_STORAGE_KEY, JSON.stringify(state));
+    } catch (error) {
+        console.warn('⚠️ Could not save upload session state:', error);
+    }
+}
+
+function clearUploadSessionState() {
+    sessionStorage.removeItem(UPLOAD_SESSION_STORAGE_KEY);
+    pendingRestoreSheetName = null;
+    pendingExcludedRowNumbersToRestore = null;
+}
+
+// Called once from window.onload, after loadTemplates() resolves (the Template dropdown's
+// <option>s must exist before its value can be set). Restores Date format immediately (it's
+// file-independent); Template selection is restored by awaiting selectTemplate() directly (the
+// same function the dropdown's own 'change' listener calls) rather than dispatching a synthetic
+// event, so the "resuming session" status message below is guaranteed to show only after
+// selectTemplate()'s own async status updates have settled, not raced/overwritten by them. Sheet
+// name and row-exclusion selections are stashed as "pending" until the user re-selects a file
+// (see handleFile()/renderRowExclusionGrid()).
+async function restoreUploadSessionState() {
+    let state;
+    try {
+        const raw = sessionStorage.getItem(UPLOAD_SESSION_STORAGE_KEY);
+        if (!raw) return;
+        state = JSON.parse(raw);
+    } catch (error) {
+        console.warn('⚠️ Could not read upload session state:', error);
+        sessionStorage.removeItem(UPLOAD_SESSION_STORAGE_KEY);
+        return;
+    }
+    if (!state || !state.templateId) return;
+
+    // Date format is file-independent -- restore it directly.
+    if (state.dateDelimiter !== undefined && dateDelimiterDropdown) {
+        selectedDateDelimiter = state.dateDelimiter;
+        dateDelimiterDropdown.value = selectedDateDelimiter;
+        populateDateOrderDropdown(selectedDateDelimiter);
+    }
+    if (state.dateOrder && dateOrderDropdown) {
+        selectedDateOrder = state.dateOrder;
+        dateOrderDropdown.value = selectedDateOrder;
+    }
+    updateDateFormatTriggerLabel();
+
+    // Stash Sheet/row-exclusion targets for when the user re-selects a file.
+    pendingRestoreSheetName = state.sheetName || null;
+    pendingExcludedRowNumbersToRestore = Array.isArray(state.excludedRowNumbers) ? state.excludedRowNumbers : null;
+
+    // Restore Template selection via selectTemplate() -- it fetches the template's columns and
+    // reveals the Sheet/Download group, but (correctly) stops short of mapping since no file is
+    // present yet, so the Column Mapping panel stays hidden (Fix 2) until the user re-selects a
+    // file.
+    if (templateDropdown) {
+        // isClientSelected() is a synchronous localStorage read (client_context.js), already
+        // populated by the time window.onload runs -- if genuinely no client is selected yet,
+        // there's nothing valid to restore into, so bail out rather than clear a session that
+        // may still be legitimately resumable once a client is picked.
+        if (!window.isClientSelected || !window.isClientSelected()) return;
+
+        templateDropdown.value = state.templateId;
+        if (templateDropdown.value === String(state.templateId)) {
+            await selectTemplate(state.templateId);
+            // Shown after selectTemplate() finishes so this message is the one the user sees,
+            // not overwritten by selectTemplate()'s own "Template loaded..." status text.
+            const templateLabel = templateDropdown.options[templateDropdown.selectedIndex]
+                ? templateDropdown.options[templateDropdown.selectedIndex].textContent
+                : 'your previous template';
+            const fileHint = state.fileName ? ` Please re-select "${state.fileName}" to continue.` : ' Please re-select your file to continue.';
+            showStatus(`📌 Resuming previous session for template "${templateLabel}".${fileHint}`, 'info');
+            // Show a grayed-out, read-only echo of the previous mapping/row-exclusion state so
+            // the page doesn't look like everything was lost -- just inert until the file returns.
+            renderRestorePreview(state);
+        } else {
+            // The saved template no longer exists (e.g. deleted) -- nothing to restore.
+            clearUploadSessionState();
+        }
+    }
+}
+
+// ---------- RESTORE PREVIEW (grayed-out, read-only echo of a restored session) ----------
+// Built entirely from the saved sessionStorage snapshot -- no live file data exists yet at this
+// point. Purely visual/non-interactive (dimmed + pointer-events:none via the
+// "restore-preview-locked" class on #leftPanel, see upload.html's <style> block): the Template
+// column/Excel column/Type/Matched columns mirror the live mapping table's shape but render as
+// plain text instead of <select> dropdowns, since there's no real Excel header list yet to
+// populate a dropdown from. Replaced by the real, interactive table (clearRestorePreview()) the
+// moment autoMapColumns() succeeds after the user re-selects their file.
+function renderRestorePreview(state) {
+    if (!leftPanel || !mappingPanel || !mappingBody) return;
+    if (!state.mappings || state.mappings.length === 0) return;
+
+    leftPanel.style.display = 'block';
+    mappingPanel.style.display = 'block';
+    leftPanel.classList.add('restore-preview-locked');
+
+    mappingBody.innerHTML = '';
+    state.mappings.forEach(m => {
+        const tr = document.createElement('tr');
+
+        const td1 = document.createElement('td');
+        td1.textContent = m.column_name;
+        td1.style.fontWeight = '500';
+        td1.style.whiteSpace = 'nowrap';
+        tr.appendChild(td1);
+
+        const td2 = document.createElement('td');
+        td2.textContent = m.excel_column || '(unmapped)';
+        tr.appendChild(td2);
+
+        const td3 = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = 'type-badge';
+        if (m.data_type === 'Numeric') badge.classList.add('numeric');
+        if (m.data_type === 'Date') badge.classList.add('date');
+        badge.textContent = m.data_type;
+        td3.appendChild(badge);
+        tr.appendChild(td3);
+
+        const td4 = document.createElement('td');
+        const icon = document.createElement('span');
+        icon.style.fontSize = '16px';
+        icon.textContent = m.is_matched ? '✅' : '❌';
+        icon.style.color = m.is_matched ? '#16a34a' : '#dc2626';
+        td4.appendChild(icon);
+        tr.appendChild(td4);
+
+        mappingBody.appendChild(tr);
+    });
+
+    const matched = state.mappings.filter(m => m.is_matched).length;
+    if (mappingCount) mappingCount.textContent = matched + ' / ' + state.mappings.length + ' matched (locked preview)';
+
+    // One-line locked banner above the mapping table, inserted directly into #leftPanel (not
+    // #mappingPanel) so it stays at full opacity while the table content below it is dimmed --
+    // it's the active "you need to act" element, not part of the inert preview.
+    let banner = document.getElementById('restorePreviewBanner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'restorePreviewBanner';
+        banner.className = 'restore-preview-banner';
+        leftPanel.insertBefore(banner, leftPanel.firstChild);
+    }
+    const sheetText = state.sheetName ? `sheet "${state.sheetName}"` : 'a previous sheet';
+    const rowsText = (typeof state.totalRows === 'number' && state.totalRows > 0)
+        ? `, ${state.totalRows - (state.excludedCount || 0)} of ${state.totalRows} rows were set to import`
+        : '';
+    banner.textContent = `🔒 Locked preview from ${sheetText}${rowsText} — re-select your file to reactivate.`;
+}
+
+// Removes the locked-preview dimming/banner once the real, interactive mapping table takes over
+// (called from autoMapColumns()'s success path). A no-op if no preview was ever shown.
+function clearRestorePreview() {
+    if (leftPanel) leftPanel.classList.remove('restore-preview-locked');
+    const banner = document.getElementById('restorePreviewBanner');
+    if (banner) banner.remove();
 }
 
 // ---------- RESET VALIDATION STATE ----------
@@ -228,6 +432,7 @@ if (dateDelimiterDropdown) {
         populateDateOrderDropdown(selectedDateDelimiter);
         refreshDateFormatPreview();
         updateDateFormatTriggerLabel();
+        saveUploadSessionState();
     });
 }
 
@@ -236,6 +441,7 @@ if (dateOrderDropdown) {
         selectedDateOrder = this.value;
         refreshDateFormatPreview();
         updateDateFormatTriggerLabel();
+        saveUploadSessionState();
     });
 }
 
@@ -403,6 +609,7 @@ if (templateDropdown) {
         if (!id) {
             selectedTemplateId = null;
             if (mappingPanel) mappingPanel.style.display = 'none';
+            if (leftPanel) leftPanel.style.display = 'none';
             if (modeActions) modeActions.style.display = 'none';
             if (sheetField) sheetField.style.display = 'none';
             if (importBtn) importBtn.disabled = true;
@@ -416,42 +623,57 @@ if (templateDropdown) {
             updateGoToDataBankState(false); // ...and disable Go to Data Bank again
             updateStepIndicator(1);
             updatePreviewButtonState();
+            // Template deliberately cleared -- any previously saved session (for the old
+            // template) is no longer relevant, so drop it rather than leave it to spuriously
+            // restore on a later page load.
+            clearUploadSessionState();
+            clearRestorePreview();
             return;
         }
-        selectedTemplateId = parseInt(id);
-        // A template is now chosen -- reveal Sheet/Download together and advance the step
-        // strip, regardless of whether the column-fetch below succeeds (Download only needs
-        // the template id, already known; Sheet is populated independently once a file loads).
-        setSheetDownloadGroupVisible(true);
-        updateStepIndicator(2);
-        setBadge('⏳ Loading template...', 'loading');
-
-        try {
-            const res = await fetch(API_BASE + `/api/templates/${id}/upload-columns`);
-            if (!res.ok) throw new Error('Failed to fetch template columns');
-            const data = await res.json();
-            templateColumns = data.columns;
-            if (downloadBtn) {
-                downloadBtn.dataset.templateId = id;
-                downloadBtn.disabled = false;
-            }
-            setBadge('✅ Template loaded: ' + data.total_columns + ' columns');
-
-            if (fileId && currentSheet) {
-                await autoMapColumns();
-            } else if (fileId && !currentSheet) {
-                showStatus('✅ Template loaded. Please select a sheet.', 'info');
-            } else {
-                showStatus('✅ Template loaded. Upload an Excel file to begin mapping.', 'success');
-            }
-        } catch (error) {
-            console.error('Error loading template columns:', error);
-            setBadge('❌ Failed to load columns', 'error');
-            showStatus('❌ Failed to load template columns: ' + error.message, 'error');
-        }
-                updatePreviewButtonState();
-        resetValidationState(); // New template means new data – reset validation
+        await selectTemplate(id);
     });
+}
+
+// Extracted from the dropdown's 'change' listener above so restoreUploadSessionState()
+// (session-restore) can await this exact logic directly instead of dispatching a synthetic
+// event -- dispatchEvent() can't be awaited, which would let restoreUploadSessionState()'s own
+// "resuming session" status message race ahead of (and get overwritten by) this function's own
+// later status updates. No behavior change for the normal dropdown-click path.
+async function selectTemplate(id) {
+    selectedTemplateId = parseInt(id);
+    saveUploadSessionState(); // Template chosen -- worth remembering even if the fetch below fails
+    // A template is now chosen -- reveal Sheet/Download together and advance the step
+    // strip, regardless of whether the column-fetch below succeeds (Download only needs
+    // the template id, already known; Sheet is populated independently once a file loads).
+    setSheetDownloadGroupVisible(true);
+    updateStepIndicator(2);
+    setBadge('⏳ Loading template...', 'loading');
+
+    try {
+        const res = await fetch(API_BASE + `/api/templates/${id}/upload-columns`);
+        if (!res.ok) throw new Error('Failed to fetch template columns');
+        const data = await res.json();
+        templateColumns = data.columns;
+        if (downloadBtn) {
+            downloadBtn.dataset.templateId = id;
+            downloadBtn.disabled = false;
+        }
+        setBadge('✅ Template loaded: ' + data.total_columns + ' columns');
+
+        if (fileId && currentSheet) {
+            await autoMapColumns();
+        } else if (fileId && !currentSheet) {
+            showStatus('✅ Template loaded. Please select a sheet.', 'info');
+        } else {
+            showStatus('✅ Template loaded. Upload an Excel file to begin mapping.', 'success');
+        }
+    } catch (error) {
+        console.error('Error loading template columns:', error);
+        setBadge('❌ Failed to load columns', 'error');
+        showStatus('❌ Failed to load template columns: ' + error.message, 'error');
+    }
+    updatePreviewButtonState();
+    resetValidationState(); // New template means new data – reset validation
 }
 
 // ---------- FILE UPLOAD ----------
@@ -509,7 +731,15 @@ async function handleFile(file) {
             }
 
             populateSheetSelector(sheetNames);
-            currentSheet = sheetNames[0];
+            // Prefer a restored session's previously-chosen sheet, if this file has a sheet by
+            // that name -- consumed once, then cleared either way (a non-matching sheet name
+            // just falls through to the normal default-to-first-sheet behavior below).
+            if (pendingRestoreSheetName && sheetNames.includes(pendingRestoreSheetName)) {
+                currentSheet = pendingRestoreSheetName;
+            } else {
+                currentSheet = sheetNames[0];
+            }
+            pendingRestoreSheetName = null;
             if (sheetSelector) sheetSelector.value = currentSheet;
             if (sheetField) sheetField.style.display = 'block';
             uploadFileToServer(file);
@@ -518,6 +748,7 @@ async function handleFile(file) {
             resetValidationState(); // Reset validation for new file
                     updatePreviewButtonState();
         resetValidationState(); // New mapping – reset validation
+        saveUploadSessionState(); // File selected -- remember its name and the resolved sheet
         } catch (err) {
             showStatus('❌ Error reading file: ' + err.message, 'error');
         }
@@ -551,6 +782,7 @@ if (sheetSelector) {
         }
         resetValidationState(); // Reset validation on sheet change
         updatePreviewButtonState();
+        saveUploadSessionState(); // Sheet changed -- remember the new selection
     });
 }
 
@@ -595,6 +827,7 @@ function resetUpload() {
     if (fileInfo) fileInfo.style.display = 'none';
     if (fileInput) fileInput.value = '';
     if (mappingPanel) mappingPanel.style.display = 'none';
+    if (leftPanel) leftPanel.style.display = 'none';
     if (modeActions) modeActions.style.display = 'none';
     if (sheetField) sheetField.style.display = 'none';
     setSheetDownloadGroupVisible(false); // Full reset -- collapse the Sheet/Download group too
@@ -647,6 +880,12 @@ function resetUpload() {
         importBtn.disabled = false;
     }
 
+    // Session-restore: a reset (explicit Reset button, or the Close/overlay-click handlers in
+    // showImportSummary() after a successful import) means there's nothing left to resume --
+    // drop any saved session state, any not-yet-consumed restore hints, and any locked preview
+    // still showing.
+    clearUploadSessionState();
+    clearRestorePreview();
 }
 
 // ---------- AUTO-MAP ----------
@@ -679,11 +918,13 @@ async function autoMapColumns() {
         currentMappings = data.mappings;
         excelHeaders = data.excel_headers;
 
+        clearRestorePreview(); // Real data has arrived -- drop any grayed-out restore preview first
           renderMapping(data.mappings);
         // populateUniqueIdDropdown() removed – no longer needed
 
         if (modeActions) modeActions.style.display = 'block';
         if (mappingPanel) mappingPanel.style.display = 'block';
+        if (leftPanel) leftPanel.style.display = 'block';
         if (importBtn) importBtn.disabled = false;
 
         const matched = data.mappings.filter(m => m.is_matched).length;
@@ -706,6 +947,7 @@ async function autoMapColumns() {
         setMatchPreviewGroupVisible(true);
         updateGoToDataBankState(true);
         updateStepIndicator(3);
+        saveUploadSessionState(); // Mapping resolved -- checkpoint the full session state
 
     } catch (error) {
         console.error('Auto-map error:', error);
@@ -720,6 +962,7 @@ function renderMapping(mappings) {
     mappingBody.innerHTML = '';
     if (!mappings || mappings.length === 0) {
         if (mappingPanel) mappingPanel.style.display = 'none';
+        if (leftPanel) leftPanel.style.display = 'none';
         return;
     }
 
@@ -1579,6 +1822,16 @@ function renderRowExclusionGrid() {
         validationFailedRows = new Map(); // new sheet/mapping -- any prior validation result is stale
         rowExclusionCurrentPage = 1;
 
+        // Re-apply a restored session's excluded rows (session-restore), bounds-checked against
+        // this file's actual row count -- consumed once, then cleared.
+        if (pendingExcludedRowNumbersToRestore) {
+            const maxRowNumber = rowExclusionAllRows.length + 1; // header=1, so last data row = length+1
+            excludedRowNumbers = new Set(
+                pendingExcludedRowNumbersToRestore.filter(n => n >= 2 && n <= maxRowNumber)
+            );
+            pendingExcludedRowNumbersToRestore = null;
+        }
+
         container.style.display = 'block';
         renderRowExclusionPage();
     } catch (error) {
@@ -1625,6 +1878,7 @@ function updateRowExclusionCounter() {
 function rowExclusionSelectAll() {
     excludedRowNumbers.clear();
     renderRowExclusionPage();
+    saveUploadSessionState();
 }
 
 function rowExclusionDeselectAll() {
@@ -1634,6 +1888,7 @@ function rowExclusionDeselectAll() {
         excludedRowNumbers.add(i + 2); // Excel row numbers: first data row = 2
     }
     renderRowExclusionPage();
+    saveUploadSessionState();
 }
 
 // ---------- RESET ON MAPPING CHANGE (Phase 4 of the row-exclusion requirement) ----------
@@ -1648,6 +1903,7 @@ function resetRowExclusionSelections() {
     validationFailedRows = new Map(); // mapping changed -- any prior validation result is stale
     rowExclusionCurrentPage = 1;
     renderRowExclusionPage();
+    saveUploadSessionState(); // Row-exclusion selections just cleared -- keep the saved session in sync
 }
 
 // ---------- VALIDATION-FAILED ROWS (Phase 4) ----------
@@ -1750,6 +2006,7 @@ function renderRowExclusionPage() {
                 tr.classList.add('row-excluded');
             }
             updateRowExclusionCounter();
+            saveUploadSessionState();
         });
         tdCheck.appendChild(checkbox);
         tr.appendChild(tdCheck);
@@ -1897,11 +2154,19 @@ if (previewBtn) {
 }
 
 // ---------- INIT ----------
-window.onload = function() {
-    loadTemplates();
+window.onload = async function() {
+    // Await so the Template dropdown's <option>s exist before restoreUploadSessionState()
+    // (session-restore) tries to set the dropdown's value.
+    await loadTemplates();
     populateDateOrderDropdown(selectedDateDelimiter);
     showStatus('Select a template and upload an Excel file to begin.', 'info');
     updatePreviewButtonState();
+
+    // Session-restore: silently reapply a previously in-progress upload (Template/Sheet/Date
+    // format/Row-exclusion selections) if the user navigated away mid-upload and back within
+    // this browser tab. No-ops if nothing was saved. Overwrites the default status message
+    // above with a "resuming..." message only when there's something to restore.
+    await restoreUploadSessionState();
 
     // Set initial button text
     if (importBtn) {
