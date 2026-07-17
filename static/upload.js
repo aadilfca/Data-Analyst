@@ -95,6 +95,24 @@ const ROW_EXCLUSION_PAGE_SIZE = 10; // fixed page size for this compact inline g
 // (same {column, excel_column, error_type, message} shape showValidationErrors() renders).
 // Distinct from excludedRowNumbers -- a validation failure never auto-excludes a row.
 let validationFailedRows = new Map();
+// ---------- STEP INDICATOR / SHEET-DOWNLOAD REVEAL (Phase 2 of the Upload header reorg) ----------
+// Download Template + Sheet selector are gated together behind Template selection instead of
+// Download always being visible (see #sheetDownloadGroup in upload.html). Single place both
+// reveal and hide go through.
+function setSheetDownloadGroupVisible(visible) {
+    const group = document.getElementById('sheetDownloadGroup');
+    if (group) group.style.display = visible ? 'flex' : 'none';
+}
+
+// Moves the step-indicator strip's .active class between step-items (data-step attribute,
+// added in Phase 1's markup). Only steps 1/2 are used this phase -- steps 3/4 stay neutral,
+// their activation is Phases 3-4.
+function updateStepIndicator(step) {
+    document.querySelectorAll('#uploadStepIndicator .step-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.step === String(step));
+    });
+}
+
 // ---------- RESET VALIDATION STATE ----------
 function resetValidationState() {
     validationStatus = 'idle';
@@ -319,10 +337,17 @@ if (templateDropdown) {
             setBadge('⏳ Select a template');
             showStatus('Select a template and upload an Excel file to begin.', 'info');
             resetValidationState(); // Reset validation when template is cleared
+            setSheetDownloadGroupVisible(false); // Template cleared -- hide Sheet/Download again
+            updateStepIndicator(1);
             updatePreviewButtonState();
             return;
         }
         selectedTemplateId = parseInt(id);
+        // A template is now chosen -- reveal Sheet/Download together and advance the step
+        // strip, regardless of whether the column-fetch below succeeds (Download only needs
+        // the template id, already known; Sheet is populated independently once a file loads).
+        setSheetDownloadGroupVisible(true);
+        updateStepIndicator(2);
         setBadge('⏳ Loading template...', 'loading');
 
         try {
@@ -521,6 +546,8 @@ function resetUpload() {
     if (mappingPanel) mappingPanel.style.display = 'none';
     if (modeActions) modeActions.style.display = 'none';
     if (sheetField) sheetField.style.display = 'none';
+    setSheetDownloadGroupVisible(false); // Full reset -- collapse the Sheet/Download group too
+    updateStepIndicator(1);
     if (sheetSelector) sheetSelector.innerHTML = '';
     currentSheet = null;
     sheetNames = [];

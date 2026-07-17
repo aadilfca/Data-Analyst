@@ -146,7 +146,6 @@
             white-space: nowrap;
         }
 
-        .top-bar .btn-download,
         .top-bar .btn-databank {
             padding: 5px 14px;
             border: none;
@@ -158,20 +157,6 @@
             transition: background 0.2s;
         }
 
-        .top-bar .btn-download {
-            background: #8b5cf6;
-            color: white;
-        }
-
-        .top-bar .btn-download:hover:not(:disabled) {
-            background: #7c3aed;
-        }
-
-        .top-bar .btn-download:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
         .top-bar .btn-databank {
             background: #3b82f6;
             color: white;
@@ -180,6 +165,41 @@
 
         .top-bar .btn-databank:hover {
             background: #2563eb;
+        }
+
+        /* ---------- DOWNLOAD TEMPLATE (Phase 2 of the Upload header reorg) ----------
+           Demoted from a filled coloured button to a small text-style link, as part of
+           regrouping it with the Sheet selector under one reveal gate (#sheetDownloadGroup
+           below). Stays a <button> element (id/disabled/dataset untouched) -- only its
+           visual styling changed, per the confirmed scope for this phase. */
+        .top-bar .download-template-link {
+            background: none;
+            border: none;
+            padding: 0;
+            color: #3b82f6;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            text-decoration: none;
+        }
+
+        .top-bar .download-template-link:hover:not(:disabled) {
+            text-decoration: underline;
+        }
+
+        .top-bar .download-template-link:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Wraps Download Template + Sheet selector so they reveal/hide together, gated on
+           Template selection (see setSheetDownloadGroupVisible() in upload.js). Hidden by
+           default -- matches "hidden before a Template is chosen". */
+        .field-group {
+            display: flex;
+            align-items: center;
+            gap: 16px;
         }
 
         .top-bar .field {
@@ -1146,22 +1166,22 @@
 
             <!-- STEP INDICATOR STRIP (Phase 1 of the Upload header reorg) -->
             <div class="step-indicator" id="uploadStepIndicator">
-                <div class="step-item active">
+                <div class="step-item active" data-step="1">
                     <span class="step-circle">1</span>
                     <span class="step-label">Template</span>
                 </div>
                 <div class="step-connector"></div>
-                <div class="step-item">
+                <div class="step-item" data-step="2">
                     <span class="step-circle">2</span>
                     <span class="step-label">Upload sheet</span>
                 </div>
                 <div class="step-connector"></div>
-                <div class="step-item">
+                <div class="step-item" data-step="3">
                     <span class="step-circle">3</span>
                     <span class="step-label">Map columns</span>
                 </div>
                 <div class="step-connector"></div>
-                <div class="step-item">
+                <div class="step-item" data-step="4">
                     <span class="step-circle">4</span>
                     <span class="step-label">Review and import</span>
                 </div>
@@ -1194,13 +1214,17 @@
                 </div>
                 <!-- Live sample-date preview (Phase 5): 2-3 raw -> parsed samples under the chosen format, or an error state. Populated by JS once mapping is known. -->
                 <div class="field" id="dateFormatPreview" style="display:none;"></div>
-                <button class="btn-download" id="downloadBtn" disabled>📥 Download Template</button>
-                <div class="field" id="sheetField" style="display:none;">
-                    <label>📄 Sheet</label>
-                    <select id="sheetSelector">
-                        <option value="">-- Select --</option>
-                    </select>
-                    <button class="preview-btn" id="previewBtn">👁️ Preview</button>
+                <!-- Regrouped (Phase 2): Download Template + Sheet selector are gated together
+                     behind Template selection, instead of Download always being visible. -->
+                <div class="field-group" id="sheetDownloadGroup" style="display:none;">
+                    <button class="download-template-link" id="downloadBtn" disabled>📥 Download Template</button>
+                    <div class="field" id="sheetField" style="display:none;">
+                        <label>📄 Sheet</label>
+                        <select id="sheetSelector">
+                            <option value="">-- Select --</option>
+                        </select>
+                        <button class="preview-btn" id="previewBtn">👁️ Preview</button>
+                    </div>
                 </div>
                 <span class="badge" id="statusBadge">⏳ Select a template</span>
                 <button class="btn-databank" id="goToDataBankBtn">📊 Go to Data Bank</button>
