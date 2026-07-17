@@ -298,6 +298,14 @@ function goToDashboard() {
 
 // ---------- INIT ----------
 function initClientContext() {
+    // Data-attribute source for the Area label (mirrors getBackTarget()'s data-nav-parent read) -
+    // lets a self-contained page declare its module name via <body data-nav-module="..."> instead
+    // of needing its own setNavModule() call. Read before the first render so it's correct on
+    // first paint; setNavModule() can still override it later (e.g. verification.js at runtime).
+    const moduleAttr = document.body.getAttribute('data-nav-module');
+    if (moduleAttr) {
+        window._appNav.module = moduleAttr;
+    }
     renderClientControl();
     renderNavLeft();
 }
