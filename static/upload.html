@@ -938,18 +938,12 @@
             white-space: nowrap;
         }
 
-        #rowExclusionContainer .btn-row-exclusion-action {
-            background: #f1f5f9;
-            border: 1px solid #d0d5dd;
-            border-radius: 4px;
-            padding: 3px 10px;
-            font-size: 11px;
+        /* Mother checkbox in the header row (replaces the old separate Select All /
+           Deselect All buttons) -- sized to stand out slightly in its narrow column. */
+        #rowExclusionContainer .row-exclusion-check-col input[type="checkbox"] {
+            width: 15px;
+            height: 15px;
             cursor: pointer;
-            white-space: nowrap;
-        }
-
-        #rowExclusionContainer .btn-row-exclusion-action:hover {
-            background: #e2e8f0;
         }
 
         #rowExclusionContainer table {
@@ -1010,11 +1004,13 @@
             text-align: center;
         }
 
-        /* Row is dimmed while its checkbox is unchecked (excluded) -- basic feedback for
-           this grid's own checkbox, distinct from Phase 4's planned validation-failed
-           visual treatment. */
+        /* Row is dimmed + struck through while its checkbox is unchecked (excluded) --
+           strikethrough plus a dimmed background (not colour alone), matching how
+           excluded/archived items read in familiar apps (Gmail, banking transaction
+           lists), so it's unambiguous which rows won't reach the database. */
         #rowExclusionContainer tr.row-excluded td {
             opacity: 0.45;
+            text-decoration: line-through;
         }
 
         /* Phase 3: soft auto-flag heuristic hint (blank/"total"/"subtotal" key column) --
@@ -1207,8 +1203,6 @@
                             <span class="row-exclusion-title">☑️ Row Selection</span>
                             <div class="row-exclusion-header-actions">
                                 <span class="row-exclusion-counter" id="rowExclusionCounter">0 of 0 rows will be imported</span>
-                                <button id="rowExclusionSelectAllBtn" class="btn-row-exclusion-action" type="button">Select All</button>
-                                <button id="rowExclusionDeselectAllBtn" class="btn-row-exclusion-action" type="button">Deselect All</button>
                             </div>
                         </div>
                         <div style="overflow-x:auto; max-height:300px; overflow-y:auto;">

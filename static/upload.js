@@ -1575,7 +1575,10 @@ function renderRowExclusionGrid() {
         const workbook = XLSX.read(workbookData, { type: 'array' });
         const sheetName = currentSheet || workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        // defval: '' -- same fix as showPreview(): avoids holes in the row array so
+        // renderRowExclusionPage()'s row.forEach() doesn't skip blank cells and shift
+        // later columns left.
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
         rowExclusionHeaders = jsonData[0] || [];
         rowExclusionAllRows = jsonData.slice(1);
@@ -1694,6 +1697,25 @@ function renderRowExclusionPage() {
     headRow.innerHTML = '';
     const thCheck = document.createElement('th');
     thCheck.className = 'row-exclusion-check-col';
+    // "Mother" checkbox (Fix 1): checked = all rows included, unchecked = all excluded,
+    // indeterminate = a partial selection -- standard select-all convention (e.g. Gmail).
+    // Reflects the whole dataset, not just the visible page, same scope as
+    // rowExclusionSelectAll()/rowExclusionDeselectAll() which it now triggers.
+    const masterCheckbox = document.createElement('input');
+    masterCheckbox.type = 'checkbox';
+    const totalForMaster = rowExclusionAllRows.length;
+    const excludedCount = excludedRowNumbers.size;
+    masterCheckbox.checked = totalForMaster > 0 && excludedCount === 0;
+    masterCheckbox.indeterminate = excludedCount > 0 && excludedCount < totalForMaster;
+    masterCheckbox.title = 'Select all / deselect all rows';
+    masterCheckbox.addEventListener('change', function() {
+        if (this.checked) {
+            rowExclusionSelectAll();
+        } else {
+            rowExclusionDeselectAll();
+        }
+    });
+    thCheck.appendChild(masterCheckbox);
     headRow.appendChild(thCheck);
     const thRowNum = document.createElement('th');
     thRowNum.className = 'row-exclusion-rownum-col';
@@ -1791,8 +1813,11 @@ function showPreview() {
         const workbook = XLSX.read(workbookData, { type: 'array' });
         const sheetName = currentSheet || workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-        
+        // defval: '' forces every column slot to exist even when a cell is blank --
+        // without it, SheetJS leaves a hole in the row array, which row.forEach() below
+        // silently skips, shifting every later value one column to the left.
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+
         previewHeaders = jsonData[0] || [];
         previewAllRows = jsonData.slice(1); // All rows, not limited
         previewCurrentPage = 1;
@@ -1959,20 +1984,7 @@ window.onload = function() {
         });
     }
 
-    // Select All / Deselect All controls (Phase 3 of row-exclusion)
-    const rowExclusionSelectAllBtn = document.getElementById('rowExclusionSelectAllBtn');
-    if (rowExclusionSelectAllBtn) {
-        rowExclusionSelectAllBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            rowExclusionSelectAll();
-        });
-    }
-
-    const rowExclusionDeselectAllBtn = document.getElementById('rowExclusionDeselectAllBtn');
-    if (rowExclusionDeselectAllBtn) {
-        rowExclusionDeselectAllBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            rowExclusionDeselectAll();
-        });
-    }
+    // Select All / Deselect All are now a single "mother" checkbox in the grid's own
+    // header row (built in renderRowExclusionPage()), not separate buttons -- no init
+    // wiring needed here.
 };
