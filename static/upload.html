@@ -910,14 +910,46 @@
             background: #f8fafc;
             border-bottom: 2px solid #e2e8f0;
             flex-shrink: 0;
+            flex-wrap: wrap;
+            gap: 8px;
         }
 
-        #rowExclusionContainer .row-exclusion-header span {
+        /* Scoped to the title only (was a bare "span" selector, which would otherwise
+           also style the Phase 3 counter/Select All/Deselect All controls below). */
+        #rowExclusionContainer .row-exclusion-header .row-exclusion-title {
             font-weight: 600;
             font-size: 12px;
             text-transform: uppercase;
             letter-spacing: 0.3px;
             color: #1a1a2e;
+        }
+
+        /* ---------- Phase 3: live counter + Select All/Deselect All ---------- */
+        #rowExclusionContainer .row-exclusion-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #rowExclusionContainer .row-exclusion-counter {
+            font-size: 11px;
+            font-weight: 500;
+            color: #64748b;
+            white-space: nowrap;
+        }
+
+        #rowExclusionContainer .btn-row-exclusion-action {
+            background: #f1f5f9;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            padding: 3px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        #rowExclusionContainer .btn-row-exclusion-action:hover {
+            background: #e2e8f0;
         }
 
         #rowExclusionContainer table {
@@ -983,6 +1015,17 @@
            visual treatment. */
         #rowExclusionContainer tr.row-excluded td {
             opacity: 0.45;
+        }
+
+        /* Phase 3: soft auto-flag heuristic hint (blank/"total"/"subtotal" key column) --
+           advisory only, coexists with .row-excluded (opacity) since they touch different
+           properties -- a flagged row that's also unchecked shows both. */
+        #rowExclusionContainer tr.row-flagged td {
+            background: #fffbeb;
+        }
+
+        #rowExclusionContainer tr.row-flagged:hover td {
+            background: #fef3c7;
         }
 
         #rowExclusionContainer .row-exclusion-footer {
@@ -1154,7 +1197,12 @@
                          validate/import (routers/import_export.py's excluded_rows, Phase 1). -->
                     <div id="rowExclusionContainer">
                         <div class="row-exclusion-header">
-                            <span>☑️ Row Selection</span>
+                            <span class="row-exclusion-title">☑️ Row Selection</span>
+                            <div class="row-exclusion-header-actions">
+                                <span class="row-exclusion-counter" id="rowExclusionCounter">0 of 0 rows will be imported</span>
+                                <button id="rowExclusionSelectAllBtn" class="btn-row-exclusion-action" type="button">Select All</button>
+                                <button id="rowExclusionDeselectAllBtn" class="btn-row-exclusion-action" type="button">Deselect All</button>
+                            </div>
                         </div>
                         <div style="overflow-x:auto; max-height:300px; overflow-y:auto;">
                             <table>

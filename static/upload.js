@@ -1573,6 +1573,55 @@ function renderRowExclusionGrid() {
     }
 }
 
+// ---------- AUTO-FLAG HEURISTIC (Phase 3 of the row-exclusion requirement) ----------
+// A visual hint only -- never unchecks a row automatically, the user always decides.
+// Key column = the first mapped template column (currentMappings[0]), mirroring the
+// app-wide convention that the first template column is the document's unique key
+// (see get_document_group_id() / the Conventions note in CLAUDE.md).
+function getRowExclusionKeyColumnIndex() {
+    if (!currentMappings || currentMappings.length === 0) return -1;
+    const keyMapping = currentMappings[0];
+    if (!keyMapping || !keyMapping.excel_column) return -1;
+    return (rowExclusionHeaders || []).indexOf(keyMapping.excel_column);
+}
+
+// Flags a row when the key column is blank, or its text contains "total" (case-insensitive) --
+// this single substring check also naturally catches "subtotal"/"grand total". Simple and
+// transparent by design, no fuzzy matching.
+function isRowExclusionFlagged(row, keyColIndex) {
+    if (keyColIndex < 0) return false;
+    const value = row[keyColIndex];
+    if (value === undefined || value === null || String(value).trim() === '') return true;
+    return String(value).toLowerCase().includes('total');
+}
+
+// ---------- LIVE "X of Y rows will be imported" COUNTER (Phase 3) ----------
+// Always reflects the whole dataset (not just the visible page).
+function updateRowExclusionCounter() {
+    const counterEl = document.getElementById('rowExclusionCounter');
+    if (!counterEl) return;
+    const total = rowExclusionAllRows.length;
+    const included = total - excludedRowNumbers.size;
+    counterEl.textContent = `${included} of ${total} rows will be imported`;
+}
+
+// ---------- SELECT ALL / DESELECT ALL (Phase 3) ----------
+// Operate on the full excludedRowNumbers Set, so they apply across all pages, not
+// just the currently visible one; a single re-render refreshes the visible page + counter.
+function rowExclusionSelectAll() {
+    excludedRowNumbers.clear();
+    renderRowExclusionPage();
+}
+
+function rowExclusionDeselectAll() {
+    const total = rowExclusionAllRows.length;
+    excludedRowNumbers = new Set();
+    for (let i = 0; i < total; i++) {
+        excludedRowNumbers.add(i + 2); // Excel row numbers: first data row = 2
+    }
+    renderRowExclusionPage();
+}
+
 function renderRowExclusionPage() {
     const headRow = document.getElementById('rowExclusionHeadRow');
     const body = document.getElementById('rowExclusionBody');
@@ -1591,6 +1640,9 @@ function renderRowExclusionPage() {
 
     const startIndex = (rowExclusionCurrentPage - 1) * ROW_EXCLUSION_PAGE_SIZE;
     const endIndex = Math.min(startIndex + ROW_EXCLUSION_PAGE_SIZE, totalRows);
+
+    // Auto-flag heuristic key column (Phase 3) -- computed once per page render
+    const keyColIndex = getRowExclusionKeyColumnIndex();
 
     // Build header: checkbox col + Row col + one <th> per Excel column
     headRow.innerHTML = '';
@@ -1618,6 +1670,8 @@ function renderRowExclusionPage() {
 
         const tr = document.createElement('tr');
         if (excludedRowNumbers.has(excelRowNumber)) tr.classList.add('row-excluded');
+        const flagged = isRowExclusionFlagged(row, keyColIndex);
+        if (flagged) tr.classList.add('row-flagged');
 
         const tdCheck = document.createElement('td');
         tdCheck.className = 'row-exclusion-check-col';
@@ -1632,13 +1686,15 @@ function renderRowExclusionPage() {
                 excludedRowNumbers.add(excelRowNumber);
                 tr.classList.add('row-excluded');
             }
+            updateRowExclusionCounter();
         });
         tdCheck.appendChild(checkbox);
         tr.appendChild(tdCheck);
 
         const tdRowNum = document.createElement('td');
         tdRowNum.className = 'row-exclusion-rownum-col';
-        tdRowNum.textContent = excelRowNumber;
+        tdRowNum.textContent = (flagged ? '⚠️ ' : '') + excelRowNumber;
+        if (flagged) tdRowNum.title = 'Possible junk row: blank or "total"/"subtotal" value in the key column';
         tr.appendChild(tdRowNum);
 
         row.forEach((cell, idx) => {
@@ -1660,6 +1716,8 @@ function renderRowExclusionPage() {
     }
     if (prevBtn) prevBtn.disabled = (rowExclusionCurrentPage === 1);
     if (nextBtn) nextBtn.disabled = (rowExclusionCurrentPage === totalPages);
+
+    updateRowExclusionCounter();
 }
 
 function showPreview() {
@@ -1840,6 +1898,23 @@ window.onload = function() {
                 rowExclusionCurrentPage++;
                 renderRowExclusionPage();
             }
+        });
+    }
+
+    // Select All / Deselect All controls (Phase 3 of row-exclusion)
+    const rowExclusionSelectAllBtn = document.getElementById('rowExclusionSelectAllBtn');
+    if (rowExclusionSelectAllBtn) {
+        rowExclusionSelectAllBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            rowExclusionSelectAll();
+        });
+    }
+
+    const rowExclusionDeselectAllBtn = document.getElementById('rowExclusionDeselectAllBtn');
+    if (rowExclusionDeselectAllBtn) {
+        rowExclusionDeselectAllBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            rowExclusionDeselectAll();
         });
     }
 };
