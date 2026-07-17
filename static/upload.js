@@ -78,6 +78,17 @@ let previewPageSize = 50;
 let previewTotalRows = 0;
 let previewAllRows = [];
 let previewHeaders = [];
+
+// ---------- ROW SELECTION GRID STATE (Phase 2 of the row-exclusion requirement) ----------
+// excludedRowNumbers holds Excel row numbers (header row=1, first data row=2 -- same
+// scheme routers/import_export.py's excluded_rows/validation_errors[].row_number use)
+// that the user has unchecked. Empty = nothing excluded (all rows included), matching
+// the "checked by default" requirement.
+let excludedRowNumbers = new Set();
+let rowExclusionAllRows = [];   // current sheet's data rows (raw arrays), same shape as previewAllRows
+let rowExclusionHeaders = [];
+let rowExclusionCurrentPage = 1;
+const ROW_EXCLUSION_PAGE_SIZE = 10; // fixed page size for this compact inline grid
 // ---------- RESET VALIDATION STATE ----------
 function resetValidationState() {
     validationStatus = 'idle';
@@ -533,7 +544,16 @@ function resetUpload() {
         dateFormatPreviewEl.style.display = 'none';
         dateFormatPreviewEl.innerHTML = '';
     }
-    
+
+    // Hide the row selection grid and clear its state (Phase 2 of row-exclusion) –
+    // no file/mapping left to build it from.
+    const rowExclusionContainerEl = document.getElementById('rowExclusionContainer');
+    if (rowExclusionContainerEl) rowExclusionContainerEl.style.display = 'none';
+    excludedRowNumbers = new Set();
+    rowExclusionAllRows = [];
+    rowExclusionHeaders = [];
+    rowExclusionCurrentPage = 1;
+
     // Reset validation status
     validationStatus = 'idle';
     if (importBtn) {
@@ -595,6 +615,9 @@ async function autoMapColumns() {
 
         // Date columns are now known via the mapping – show the live sample-date preview.
         refreshDateFormatPreview();
+
+        // Mapping is complete – show the row selection grid (Phase 2 of row-exclusion).
+        renderRowExclusionGrid();
 
     } catch (error) {
         console.error('Auto-map error:', error);
@@ -1256,7 +1279,10 @@ if (importBtn) {
             sheet_name: currentSheet || 'Sheet1',
             // Selected date format (Phase 3 dropdowns) – drives Date validation/import parsing on the backend.
             date_delimiter: selectedDateDelimiter,
-            date_order: selectedDateOrder
+            date_order: selectedDateOrder,
+            // Rows the user unchecked in the row selection grid (Phase 2 of row-exclusion) –
+            // Excel row numbers, matches routers/import_export.py's excluded_rows contract.
+            excluded_rows: Array.from(excludedRowNumbers)
         };
 
         // ---- NEW LOGIC: Validation Flow ----
@@ -1518,6 +1544,124 @@ function renderPreviewPage() {
     }
 }
 
+// ---------- ROW SELECTION GRID (Phase 2 of the row-exclusion requirement) ----------
+// Reads the current sheet's raw rows the same way showPreview()/getFirstDataRow() do,
+// and (re)builds the checkbox-per-row grid. Called once column mapping succeeds --
+// a fresh excludedRowNumbers Set here is the correct default (all included) for
+// whatever sheet/mapping just loaded; deliberate preservation/reset rules across a
+// later mapping or sheet change are Phase 4's concern, not this one.
+function renderRowExclusionGrid() {
+    const container = document.getElementById('rowExclusionContainer');
+    if (!container || !workbookData) return;
+
+    try {
+        const workbook = XLSX.read(workbookData, { type: 'array' });
+        const sheetName = currentSheet || workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        rowExclusionHeaders = jsonData[0] || [];
+        rowExclusionAllRows = jsonData.slice(1);
+        excludedRowNumbers = new Set();
+        rowExclusionCurrentPage = 1;
+
+        container.style.display = 'block';
+        renderRowExclusionPage();
+    } catch (error) {
+        console.error('Row selection grid error:', error);
+        container.style.display = 'none';
+    }
+}
+
+function renderRowExclusionPage() {
+    const headRow = document.getElementById('rowExclusionHeadRow');
+    const body = document.getElementById('rowExclusionBody');
+    const rangeEl = document.getElementById('rowExclusionRange');
+    const pageInfoEl = document.getElementById('rowExclusionPageInfo');
+    const prevBtn = document.getElementById('rowExclusionPrevPage');
+    const nextBtn = document.getElementById('rowExclusionNextPage');
+    if (!headRow || !body) return;
+
+    const headers = rowExclusionHeaders || [];
+    const totalRows = rowExclusionAllRows.length;
+
+    const totalPages = Math.ceil(totalRows / ROW_EXCLUSION_PAGE_SIZE) || 1;
+    if (rowExclusionCurrentPage > totalPages) rowExclusionCurrentPage = totalPages;
+    if (rowExclusionCurrentPage < 1) rowExclusionCurrentPage = 1;
+
+    const startIndex = (rowExclusionCurrentPage - 1) * ROW_EXCLUSION_PAGE_SIZE;
+    const endIndex = Math.min(startIndex + ROW_EXCLUSION_PAGE_SIZE, totalRows);
+
+    // Build header: checkbox col + Row col + one <th> per Excel column
+    headRow.innerHTML = '';
+    const thCheck = document.createElement('th');
+    thCheck.className = 'row-exclusion-check-col';
+    headRow.appendChild(thCheck);
+    const thRowNum = document.createElement('th');
+    thRowNum.className = 'row-exclusion-rownum-col';
+    thRowNum.textContent = 'Row';
+    headRow.appendChild(thRowNum);
+    headers.forEach(h => {
+        const th = document.createElement('th');
+        th.textContent = h || '—';
+        headRow.appendChild(th);
+    });
+
+    // Build body for current page
+    body.innerHTML = '';
+    const pageRows = rowExclusionAllRows.slice(startIndex, endIndex);
+    pageRows.forEach((row, index) => {
+        // jsonData[0] is the header (Excel row 1), jsonData[1] is the first data row
+        // (Excel row 2) -- so array index i (0-based, after slicing off the header) is
+        // Excel row i + 2. Matches routers/import_export.py's excluded_rows scheme.
+        const excelRowNumber = startIndex + index + 2;
+
+        const tr = document.createElement('tr');
+        if (excludedRowNumbers.has(excelRowNumber)) tr.classList.add('row-excluded');
+
+        const tdCheck = document.createElement('td');
+        tdCheck.className = 'row-exclusion-check-col';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = !excludedRowNumbers.has(excelRowNumber);
+        checkbox.addEventListener('change', function() {
+            if (this.checked) {
+                excludedRowNumbers.delete(excelRowNumber);
+                tr.classList.remove('row-excluded');
+            } else {
+                excludedRowNumbers.add(excelRowNumber);
+                tr.classList.add('row-excluded');
+            }
+        });
+        tdCheck.appendChild(checkbox);
+        tr.appendChild(tdCheck);
+
+        const tdRowNum = document.createElement('td');
+        tdRowNum.className = 'row-exclusion-rownum-col';
+        tdRowNum.textContent = excelRowNumber;
+        tr.appendChild(tdRowNum);
+
+        row.forEach((cell, idx) => {
+            const td = document.createElement('td');
+            td.textContent = cell !== undefined ? cell : '';
+            tr.appendChild(td);
+        });
+
+        body.appendChild(tr);
+    });
+
+    if (rangeEl) {
+        rangeEl.textContent = totalRows === 0
+            ? 'Showing 0-0 of 0 rows'
+            : `Showing ${startIndex + 1}-${endIndex} of ${totalRows} rows`;
+    }
+    if (pageInfoEl) {
+        pageInfoEl.textContent = `Page ${rowExclusionCurrentPage} of ${totalPages}`;
+    }
+    if (prevBtn) prevBtn.disabled = (rowExclusionCurrentPage === 1);
+    if (nextBtn) nextBtn.disabled = (rowExclusionCurrentPage === totalPages);
+}
+
 function showPreview() {
     const previewSheet = document.getElementById('previewSheet');
     const mainUploadPage = document.getElementById('mainUploadPage');
@@ -1671,6 +1815,30 @@ window.onload = function() {
             if (previewCurrentPage < totalPages) {
                 previewCurrentPage++;
                 renderPreviewPage();
+            }
+        });
+    }
+
+    // Row selection grid pagination controls (Phase 2 of row-exclusion)
+    const rowExclusionPrevPageBtn = document.getElementById('rowExclusionPrevPage');
+    if (rowExclusionPrevPageBtn) {
+        rowExclusionPrevPageBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (rowExclusionCurrentPage > 1) {
+                rowExclusionCurrentPage--;
+                renderRowExclusionPage();
+            }
+        });
+    }
+
+    const rowExclusionNextPageBtn = document.getElementById('rowExclusionNextPage');
+    if (rowExclusionNextPageBtn) {
+        rowExclusionNextPageBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            const totalPages = Math.ceil(rowExclusionAllRows.length / ROW_EXCLUSION_PAGE_SIZE) || 1;
+            if (rowExclusionCurrentPage < totalPages) {
+                rowExclusionCurrentPage++;
+                renderRowExclusionPage();
             }
         });
     }

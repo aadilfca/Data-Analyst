@@ -883,6 +883,125 @@
             color: #94a3b8;
             font-size: 13px;
         }
+
+        /* ---------- ROW SELECTION GRID (Phase 2 of the row-exclusion requirement) ----------
+           Checkbox-per-row, paginated grid so the user can exclude rows (subtotals, stray
+           text rows, etc.) before validate/import. Box/header/table visuals mirror
+           #miniPreviewContainer exactly for consistency; footer pagination reuses the
+           global .preview-pagination / .btn-pagination classes from style.css (already
+           used by the full-page Preview overlay below), with new locally-scoped IDs since
+           #previewRowRange / #previewPageInfo are already taken by that overlay. */
+        #rowExclusionContainer {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 0;
+            background: white;
+            margin-top: 16px;
+            overflow: hidden;
+            display: none;
+            /* shown by JS once column mapping is complete */
+        }
+
+        #rowExclusionContainer .row-exclusion-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 14px;
+            background: #f8fafc;
+            border-bottom: 2px solid #e2e8f0;
+            flex-shrink: 0;
+        }
+
+        #rowExclusionContainer .row-exclusion-header span {
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #1a1a2e;
+        }
+
+        #rowExclusionContainer table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            border: none;
+        }
+
+        #rowExclusionContainer table thead {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+
+        #rowExclusionContainer table th {
+            background: #f8fafc;
+            padding: 8px 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            border-bottom: 2px solid #e2e8f0;
+            color: #475569;
+            white-space: nowrap;
+        }
+
+        #rowExclusionContainer table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #f0f2f5;
+            vertical-align: middle;
+            font-size: 13px;
+            background: white;
+            white-space: nowrap;
+        }
+
+        #rowExclusionContainer table tr:last-child td {
+            border-bottom: none;
+        }
+
+        #rowExclusionContainer table tr:hover td {
+            background: #fafcff;
+        }
+
+        #rowExclusionContainer table tr:nth-child(even) td {
+            background: #fafcff;
+        }
+
+        #rowExclusionContainer table tr:nth-child(even):hover td {
+            background: #f0f4ff;
+        }
+
+        /* Checkbox and row-number columns stay narrow and centered */
+        #rowExclusionContainer .row-exclusion-check-col,
+        #rowExclusionContainer .row-exclusion-rownum-col {
+            width: 40px;
+            text-align: center;
+        }
+
+        /* Row is dimmed while its checkbox is unchecked (excluded) -- basic feedback for
+           this grid's own checkbox, distinct from Phase 4's planned validation-failed
+           visual treatment. */
+        #rowExclusionContainer tr.row-excluded td {
+            opacity: 0.45;
+        }
+
+        #rowExclusionContainer .row-exclusion-footer {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+            padding: 8px 14px;
+            border-top: 2px solid #e2e8f0;
+            background: #f8fafc;
+            flex-wrap: wrap;
+        }
+
+        #rowExclusionContainer .row-exclusion-range,
+        #rowExclusionContainer .row-exclusion-page-info {
+            font-size: 12px;
+            color: #64748b;
+            white-space: nowrap;
+        }
     </style>
 </head>
 
@@ -1027,6 +1146,35 @@
                                     <!-- Rows inserted by JavaScript -->
                                 </tbody>
                             </table>
+                        </div>
+                    </div>
+
+                    <!-- Row Selection Grid (Phase 2 of row-exclusion): checkbox per row, paginated.
+                         All rows are included by default -- unchecking a row excludes it from
+                         validate/import (routers/import_export.py's excluded_rows, Phase 1). -->
+                    <div id="rowExclusionContainer">
+                        <div class="row-exclusion-header">
+                            <span>☑️ Row Selection</span>
+                        </div>
+                        <div style="overflow-x:auto; max-height:300px; overflow-y:auto;">
+                            <table>
+                                <thead>
+                                    <tr id="rowExclusionHeadRow">
+                                        <!-- Checkbox/Row-number headers + one <th> per Excel column, built by JS -->
+                                    </tr>
+                                </thead>
+                                <tbody id="rowExclusionBody">
+                                    <!-- Rows inserted by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="row-exclusion-footer">
+                            <span class="row-exclusion-range" id="rowExclusionRange">Showing 0-0 of 0 rows</span>
+                            <div class="preview-pagination">
+                                <button id="rowExclusionPrevPage" class="btn-pagination" type="button">Previous</button>
+                                <span class="row-exclusion-page-info" id="rowExclusionPageInfo">Page 1 of 1</span>
+                                <button id="rowExclusionNextPage" class="btn-pagination" type="button">Next</button>
+                            </div>
                         </div>
                     </div>
 
