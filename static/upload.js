@@ -74,7 +74,6 @@ let currentSheet = null;
 let workbookData = null;
 let isProcessing = false;
 let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
-let miniPreviewVisible = false; // Tracks whether mini preview is shown
 
 // Pagination state variables
 let previewCurrentPage = 1;
@@ -638,15 +637,6 @@ function resetUpload() {
     setBadge('⏳ Select a template');
     if (mappingBody) mappingBody.innerHTML = '';
     updatePreviewButtonState();
-    // Hide mini preview and reset toggle
-    const container = document.getElementById('miniPreviewContainer');
-    const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
-    if (container) container.style.display = 'none';
-    if (toggleBtn) {
-        toggleBtn.textContent = '📋 Mini Preview';
-        toggleBtn.style.display = 'none';
-    }
-    miniPreviewVisible = false;
 
     // Clear the date format live preview (Phase 5) – no file/mapping left to sample from.
     const dateFormatPreviewEl = getElement('dateFormatPreview');
@@ -725,10 +715,6 @@ async function autoMapColumns() {
         if (mappingCount) mappingCount.textContent = matched + ' / ' + data.total_columns + ' matched';
         setBadge('✅ ' + matched + '/' + data.total_columns + ' matched');
         showStatus('✅ Auto‑mapped ' + matched + '/' + data.total_columns + ' columns', 'success');
-
-        // Show mini preview toggle button
-        const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
-        if (toggleBtn) toggleBtn.style.display = 'inline-block';
 
         updatePreviewButtonState();
 
@@ -834,8 +820,6 @@ function renderMapping(mappings) {
                     }
                 }
             }
-            // Update mini preview immediately
-            renderMiniPreview();
             // Column mapping changed -- reset row selection grid checkboxes/flags (Phase 4
             // of the row-exclusion requirement), since the key column basis may have shifted.
             resetRowExclusionSelections();
@@ -879,98 +863,6 @@ function renderMapping(mappings) {
         if (mappingCount) mappingCount.textContent = matched + ' / ' + currentMappings.length + ' matched';
         setBadge('✅ ' + matched + '/' + currentMappings.length + ' matched');
     }
-
-    // Update mini preview
-    renderMiniPreview();
-}
-
-// ---------- MINI PREVIEW ----------
-function getFirstDataRow() {
-    if (!workbookData) return [];
-    try {
-        const workbook = XLSX.read(workbookData, { type: 'array' });
-        const sheetName = currentSheet || workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-        // Row 0 = headers, row 1 = first data row (row 2 in Excel)
-        if (jsonData.length < 2) return [];
-        return jsonData[1] || [];
-    } catch (e) {
-        return [];
-    }
-}
-
-function renderMiniPreview() {
-    const tbody = document.getElementById('miniPreviewBody');
-    const container = document.getElementById('miniPreviewContainer');
-    if (!tbody || !container) return;
-
-    // If no mapping or no data, hide container
-    if (!currentMappings || currentMappings.length === 0 || !workbookData) {
-        container.style.display = 'none';
-        return;
-    }
-
-    const firstDataRow = getFirstDataRow();
-    if (!firstDataRow || firstDataRow.length === 0) {
-        container.style.display = 'none';
-        return;
-    }
-
-    // Build a map from excel column name to value
-    const headers = excelHeaders || [];
-    const valueMap = {};
-    headers.forEach((h, idx) => {
-        valueMap[h] = firstDataRow[idx] !== undefined ? firstDataRow[idx] : '';
-    });
-
-    // Build rows
-    let html = '';
-    currentMappings.forEach(m => {
-        const templateCol = m.column_name || '';
-        const excelCol = m.excel_column || '—';
-        const value = excelCol && excelCol !== '—' ? (valueMap[excelCol] !== undefined ? valueMap[excelCol] : '') : '—';
-        // Truncate long values
-        const displayValue = typeof value === 'string' ? (value.length > 30 ? value.substring(0, 30) + '…' : value) : value;
-        html += `<tr>
-            <td style="font-weight:500;">${templateCol}</td>
-            <td>${excelCol}</td>
-            <td>${displayValue}</td>
-        </tr>`;
-    });
-
-    tbody.innerHTML = html;
-    // Only show container if mini preview is supposed to be visible
-    if (miniPreviewVisible) {
-        container.style.display = 'block';
-    }
-    // Show the toggle button
-    const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
-    if (toggleBtn) toggleBtn.style.display = 'inline-block';
-}
-
-function toggleMiniPreview() {
-    const container = document.getElementById('miniPreviewContainer');
-    const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
-    if (!container || !toggleBtn) return;
-    if (!miniPreviewVisible) {
-        container.style.display = 'block';
-        toggleBtn.textContent = '📋 Hide Preview';
-        miniPreviewVisible = true;
-        renderMiniPreview(); // ensure it's up to date
-    } else {
-        container.style.display = 'none';
-        toggleBtn.textContent = '📋 Mini Preview';
-        miniPreviewVisible = false;
-    }
-}
-
-function closeMiniPreview() {
-    const container = document.getElementById('miniPreviewContainer');
-    const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
-    if (container) container.style.display = 'none';
-    if (toggleBtn) toggleBtn.textContent = '📋 Mini Preview';
-    miniPreviewVisible = false;
 }
 
 // ---------- UNIQUE ID DROPDOWN (removed – upsert is automatic) ----------
@@ -1688,7 +1580,7 @@ function renderPreviewPage() {
 }
 
 // ---------- ROW SELECTION GRID (Phase 2 of the row-exclusion requirement) ----------
-// Reads the current sheet's raw rows the same way showPreview()/getFirstDataRow() do,
+// Reads the current sheet's raw rows the same way showPreview() does,
 // and (re)builds the checkbox-per-row grid. Called once column mapping succeeds (including
 // on a sheet change, via autoMapColumns()'s success path) -- a fresh excludedRowNumbers Set
 // here is correct since the underlying rows genuinely differ. A per-column remap that
@@ -2041,16 +1933,6 @@ window.onload = function() {
         importBtn.innerHTML = 'Validate';
         importBtn.style.background = '';
         importBtn.style.color = '';
-    }
-
-    // Mini preview toggle button
-    const toggleBtn = document.getElementById('toggleMiniPreviewBtn');
-    if (toggleBtn) {
-        toggleBtn.addEventListener('click', toggleMiniPreview);
-    }
-    const closeBtn = document.getElementById('closeMiniPreviewBtn');
-    if (closeBtn) {
-        closeBtn.addEventListener('click', closeMiniPreview);
     }
 
     // Go to Data Bank shortcut (top bar)

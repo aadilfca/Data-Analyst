@@ -203,24 +203,61 @@ window.updateNavClientName = function(name) {
         clientSpan.textContent = name || 'No Client';
     }
 };
-// ---------- RENDER LEFT SECTION (brand + back arrow) ----------
+// ---------- BACK-ARROW PARENT-TARGET MECHANISM ----------
+// Page-filename -> parent-filename config map. Left empty in this foundation phase;
+// Phases 2-5 populate real entries as each page is wired (e.g. 'client_settings.html': 'clients.html').
+const NAV_PARENT_MAP = {
+    // 'somepage.html': 'parentpage.html',
+};
+
+/**
+ * Resolve the back arrow's destination for the current page.
+ * Priority: <body data-nav-parent="..."> override, then NAV_PARENT_MAP, then index.html.
+ */
+function getBackTarget() {
+    const override = document.body.getAttribute('data-nav-parent');
+    if (override) return '/static/' + override;
+
+    const currentFile = window.location.pathname.split('/').pop() || 'index.html';
+    const mapped = NAV_PARENT_MAP[currentFile];
+    if (mapped) return '/static/' + mapped;
+
+    return '/static/index.html';
+}
+
+// ---------- RENDER LEFT SECTION (brand + home icon + back arrow) ----------
 function renderNavLeft() {
     const container = document.getElementById('navLeft');
     if (!container) return;
 
     const isDash = isDashboardPage();
+    const homeIcon = `<a href="/static/index.html" class="nav-home-icon" title="Go to Dashboard">🏢</a>`;
 
     if (isDash) {
-        // Dashboard: show brand only (no arrow)
-        container.innerHTML = `<span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white;">🏢 System Analyst</span>`;
-    } else {
-        // Non-dashboard: show back arrow + brand
+        // Dashboard: home icon + brand, no back arrow (nothing above the dashboard)
         container.innerHTML = `
-            <a href="/static/index.html" style="color:#94a3b8; text-decoration:none; font-size:22px; line-height:1; margin-right:6px;">◄</a>
-            <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white;">System Analyst</span>
+            ${homeIcon}
+            <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
+        `;
+    } else {
+        // Non-dashboard: back arrow, then home icon, then brand
+        container.innerHTML = `
+            <a href="${getBackTarget()}" class="nav-back-arrow">←</a>
+            ${homeIcon}
+            <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
         `;
     }
 }
+
+// ---------- GLOBAL CLICK HANDLER: HOME ICON ----------
+// Delegated at document level so any current or future element carrying the
+// .nav-home-icon class navigates to the dashboard, even if a page doesn't wire its own href.
+document.addEventListener('click', function (e) {
+    const homeIcon = e.target.closest('.nav-home-icon');
+    if (homeIcon) {
+        window.location.href = '/static/index.html';
+    }
+});
 // ---------- RENDER CLIENT BADGE (read-only) ----------
 function renderClientBadge() {
     const container = document.getElementById('clientControl');
