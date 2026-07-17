@@ -44,6 +44,66 @@
             overflow: hidden;
         }
 
+        /* ---------- STEP INDICATOR STRIP (Phase 1 of the Upload header reorg) ----------
+           Visual-only strip above the top-bar: "1 Template · 2 Upload sheet · 3 Map columns ·
+           4 Review and import". No activation/advancement logic yet (Phases 2-4) -- step 1 is
+           marked .active as a static placeholder. Same zero-top-margin convention as .top-bar/
+           .client-warning below (margin-collapse: this can be the first visible child). */
+        .step-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 0 28px 16px 28px;
+            padding: 12px 20px;
+        }
+
+        .step-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .step-circle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border: 1px solid #cbd5e1;
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 600;
+            background: white;
+            flex-shrink: 0;
+        }
+
+        .step-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #94a3b8;
+            white-space: nowrap;
+        }
+
+        .step-item.active .step-circle {
+            background: #3b82f6;
+            border-color: #3b82f6;
+            color: white;
+        }
+
+        .step-item.active .step-label {
+            color: #1a1a2e;
+        }
+
+        .step-connector {
+            flex: 1 1 40px;
+            max-width: 80px;
+            height: 1px;
+            background: #e2e8f0;
+        }
+
         /* ---------- TOP BAR (breadcrumb-style: back link · template · sheet · actions) ---------- */
         .top-bar {
             display: flex;
@@ -738,6 +798,15 @@
                 flex: 1 1 auto;
             }
 
+            .step-indicator {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+
+            .step-connector {
+                flex: 1 1 20px;
+            }
+
             .top-bar {
                 flex-direction: column;
                 align-items: stretch;
@@ -1073,6 +1142,29 @@
             <div id="clientSelectionWarning" class="client-warning">
                 <span class="icon">⚠️</span>
                 <span><strong>Please select a client</strong> from the dropdown above before uploading data.</span>
+            </div>
+
+            <!-- STEP INDICATOR STRIP (Phase 1 of the Upload header reorg) -->
+            <div class="step-indicator" id="uploadStepIndicator">
+                <div class="step-item active">
+                    <span class="step-circle">1</span>
+                    <span class="step-label">Template</span>
+                </div>
+                <div class="step-connector"></div>
+                <div class="step-item">
+                    <span class="step-circle">2</span>
+                    <span class="step-label">Upload sheet</span>
+                </div>
+                <div class="step-connector"></div>
+                <div class="step-item">
+                    <span class="step-circle">3</span>
+                    <span class="step-label">Map columns</span>
+                </div>
+                <div class="step-connector"></div>
+                <div class="step-item">
+                    <span class="step-circle">4</span>
+                    <span class="step-label">Review and import</span>
+                </div>
             </div>
 
             <!-- TOP BAR: breadcrumb (back link · template · download · sheet) + status badge + data bank shortcut -->
