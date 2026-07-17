@@ -89,6 +89,11 @@ let rowExclusionAllRows = [];   // current sheet's data rows (raw arrays), same 
 let rowExclusionHeaders = [];
 let rowExclusionCurrentPage = 1;
 const ROW_EXCLUSION_PAGE_SIZE = 10; // fixed page size for this compact inline grid
+
+// validationFailedRows (Phase 4): Excel row number -> that row's validation `errors` array
+// (same {column, excel_column, error_type, message} shape showValidationErrors() renders).
+// Distinct from excludedRowNumbers -- a validation failure never auto-excludes a row.
+let validationFailedRows = new Map();
 // ---------- RESET VALIDATION STATE ----------
 function resetValidationState() {
     validationStatus = 'idle';
@@ -550,6 +555,7 @@ function resetUpload() {
     const rowExclusionContainerEl = document.getElementById('rowExclusionContainer');
     if (rowExclusionContainerEl) rowExclusionContainerEl.style.display = 'none';
     excludedRowNumbers = new Set();
+    validationFailedRows = new Map();
     rowExclusionAllRows = [];
     rowExclusionHeaders = [];
     rowExclusionCurrentPage = 1;
@@ -709,6 +715,9 @@ function renderMapping(mappings) {
             }
             // Update mini preview immediately
             renderMiniPreview();
+            // Column mapping changed -- reset row selection grid checkboxes/flags (Phase 4
+            // of the row-exclusion requirement), since the key column basis may have shifted.
+            resetRowExclusionSelections();
             requestAnimationFrame(() => {
                 renderMapping(currentMappings);
             });
@@ -1312,6 +1321,9 @@ if (importBtn) {
             if (result.has_errors) {
                 // Show validation errors
                 showValidationErrors(result);
+                // Mark the failing rows in the row selection grid (Phase 4) -- distinct from
+                // user-excluded rows, and does not auto-exclude them.
+                setValidationFailedRows(result.errors);
                 validationStatus = 'invalid';
                 // Reset button state
                 importBtn.innerHTML = 'Validate';
@@ -1322,7 +1334,9 @@ if (importBtn) {
                 return;
             }
 
-                                    // Validation passed – show simple success message
+                                    // Validation passed – clear any stale failed-row markers from a
+            // prior attempt (Phase 4), then show simple success message
+            setValidationFailedRows([]);
             const totalRows = result.total_rows || 0;
             const newRowsCount = result.new_rows_count || 0;
             const existingRowsCount = result.existing_rows_count || 0;
@@ -1404,6 +1418,9 @@ async function performImport(payload) {
 
         if (result.status === 'validation_failed') {
             showValidationErrors(result);
+            // Mark the failing rows in the row selection grid (Phase 4), same as the
+            // pre-import validate path -- does not auto-exclude them.
+            setValidationFailedRows(result.errors);
             showStatus('❌ Import validation errors found.', 'error');
             setBadge('❌ Import failed', 'error');
         } else {
@@ -1546,10 +1563,10 @@ function renderPreviewPage() {
 
 // ---------- ROW SELECTION GRID (Phase 2 of the row-exclusion requirement) ----------
 // Reads the current sheet's raw rows the same way showPreview()/getFirstDataRow() do,
-// and (re)builds the checkbox-per-row grid. Called once column mapping succeeds --
-// a fresh excludedRowNumbers Set here is the correct default (all included) for
-// whatever sheet/mapping just loaded; deliberate preservation/reset rules across a
-// later mapping or sheet change are Phase 4's concern, not this one.
+// and (re)builds the checkbox-per-row grid. Called once column mapping succeeds (including
+// on a sheet change, via autoMapColumns()'s success path) -- a fresh excludedRowNumbers Set
+// here is correct since the underlying rows genuinely differ. A per-column remap that
+// doesn't change sheets uses the lighter resetRowExclusionSelections() instead (Phase 4).
 function renderRowExclusionGrid() {
     const container = document.getElementById('rowExclusionContainer');
     if (!container || !workbookData) return;
@@ -1563,6 +1580,7 @@ function renderRowExclusionGrid() {
         rowExclusionHeaders = jsonData[0] || [];
         rowExclusionAllRows = jsonData.slice(1);
         excludedRowNumbers = new Set();
+        validationFailedRows = new Map(); // new sheet/mapping -- any prior validation result is stale
         rowExclusionCurrentPage = 1;
 
         container.style.display = 'block';
@@ -1622,6 +1640,34 @@ function rowExclusionDeselectAll() {
     renderRowExclusionPage();
 }
 
+// ---------- RESET ON MAPPING CHANGE (Phase 4 of the row-exclusion requirement) ----------
+// Sheet changes already reset the grid correctly via renderRowExclusionGrid() (called from
+// autoMapColumns()'s success path), since the underlying rows genuinely differ. A per-column
+// remap in the mapping table doesn't change the sheet's rows -- only which column feeds the
+// auto-flag heuristic/validation -- so this is a lighter reset: clear selections/flags and
+// re-render, without re-reading the file.
+function resetRowExclusionSelections() {
+    if (!rowExclusionAllRows.length) return; // grid not built yet, nothing to reset
+    excludedRowNumbers = new Set();
+    validationFailedRows = new Map(); // mapping changed -- any prior validation result is stale
+    rowExclusionCurrentPage = 1;
+    renderRowExclusionPage();
+}
+
+// ---------- VALIDATION-FAILED ROWS (Phase 4) ----------
+// Captures the validate/import response's errors[] (row_number + errors) so the grid can
+// show which rows failed, distinct from which rows the user chose to exclude. Never touches
+// excludedRowNumbers -- a validation failure must not auto-exclude a row.
+function setValidationFailedRows(errorsList) {
+    validationFailedRows = new Map();
+    (errorsList || []).forEach(e => {
+        validationFailedRows.set(e.row_number, e.errors || []);
+    });
+    if (document.getElementById('rowExclusionContainer') && rowExclusionAllRows.length) {
+        renderRowExclusionPage();
+    }
+}
+
 function renderRowExclusionPage() {
     const headRow = document.getElementById('rowExclusionHeadRow');
     const body = document.getElementById('rowExclusionBody');
@@ -1672,6 +1718,8 @@ function renderRowExclusionPage() {
         if (excludedRowNumbers.has(excelRowNumber)) tr.classList.add('row-excluded');
         const flagged = isRowExclusionFlagged(row, keyColIndex);
         if (flagged) tr.classList.add('row-flagged');
+        const failed = validationFailedRows.has(excelRowNumber);
+        if (failed) tr.classList.add('row-validation-failed');
 
         const tdCheck = document.createElement('td');
         tdCheck.className = 'row-exclusion-check-col';
@@ -1693,8 +1741,18 @@ function renderRowExclusionPage() {
 
         const tdRowNum = document.createElement('td');
         tdRowNum.className = 'row-exclusion-rownum-col';
-        tdRowNum.textContent = (flagged ? '⚠️ ' : '') + excelRowNumber;
-        if (flagged) tdRowNum.title = 'Possible junk row: blank or "total"/"subtotal" value in the key column';
+        // Prefixes concatenate rather than overwrite -- a row can be both auto-flagged and
+        // validation-failed at once, and both signals should stay visible (e.g. "⚠️❌ 5").
+        let prefix = (flagged ? '⚠️' : '') + (failed ? '❌' : '');
+        tdRowNum.textContent = (prefix ? prefix + ' ' : '') + excelRowNumber;
+        const titleParts = [];
+        if (flagged) titleParts.push('Possible junk row: blank or "total"/"subtotal" value in the key column');
+        if (failed) {
+            const rowErrors = validationFailedRows.get(excelRowNumber) || [];
+            const msg = rowErrors.map(e => `${e.column}: ${e.message}`).join('; ');
+            titleParts.push('Failed validation' + (msg ? ': ' + msg : ''));
+        }
+        if (titleParts.length) tdRowNum.title = titleParts.join(' | ');
         tr.appendChild(tdRowNum);
 
         row.forEach((cell, idx) => {

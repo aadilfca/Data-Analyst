@@ -1028,6 +1028,13 @@
             background: #fef3c7;
         }
 
+        /* Phase 4: validation-failed overlay -- a red edge stripe on the checkbox cell,
+           independent of .row-flagged (background tint) and .row-excluded (opacity), so
+           it stays visibly distinct however it combines with those two states. */
+        #rowExclusionContainer tr.row-validation-failed td.row-exclusion-check-col {
+            border-left: 3px solid #dc2626;
+        }
+
         #rowExclusionContainer .row-exclusion-footer {
             display: flex;
             align-items: center;
