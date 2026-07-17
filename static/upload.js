@@ -78,6 +78,7 @@ let previewPageSize = 50;
 let previewTotalRows = 0;
 let previewAllRows = [];
 let previewHeaders = [];
+let previewHiddenCount = 0; // rows hidden from the preview because the user excluded them
 
 // ---------- ROW SELECTION GRID STATE (Phase 2 of the row-exclusion requirement) ----------
 // excludedRowNumbers holds Excel row numbers (header row=1, first data row=2 -- same
@@ -1539,7 +1540,8 @@ function renderPreviewPage() {
 
     // Update displays
     if (previewInfo) {
-        previewInfo.textContent = `${totalRows} rows · ${headers.length} columns`;
+        previewInfo.textContent = `${totalRows} rows · ${headers.length} columns` +
+            (previewHiddenCount > 0 ? ` (${previewHiddenCount} excluded)` : '');
     }
     if (previewRowRange) {
         if (totalRows === 0) {
@@ -1819,7 +1821,15 @@ function showPreview() {
         const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
         previewHeaders = jsonData[0] || [];
-        previewAllRows = jsonData.slice(1); // All rows, not limited
+        const rawDataRows = jsonData.slice(1); // All rows, not limited
+        // Show only rows the user hasn't excluded in the Row Selection grid, so the
+        // preview reflects what will actually be imported. Same Excel row-number scheme
+        // as excludedRowNumbers / routers/import_export.py's excluded_rows (header=1,
+        // first data row=2). S.No is renumbered sequentially over the filtered set by
+        // renderPreviewPage() (unchanged) since excluded rows are gone entirely, not
+        // just hidden -- a clean list of what will be imported, not a gapped one.
+        previewAllRows = rawDataRows.filter((_, idx) => !excludedRowNumbers.has(idx + 2));
+        previewHiddenCount = rawDataRows.length - previewAllRows.length;
         previewCurrentPage = 1;
 
         // Render current page
