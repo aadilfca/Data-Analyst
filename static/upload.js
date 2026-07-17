@@ -17,6 +17,10 @@ const sheetField = getElement('sheetField');
 const statusBadge = getElement('statusBadge');
 const dateDelimiterDropdown = getElement('dateDelimiterDropdown');
 const dateOrderDropdown = getElement('dateOrderDropdown');
+const dateFormatGroup = getElement('dateFormatGroup');
+const dateFormatTriggerBtn = getElement('dateFormatTriggerBtn');
+const dateFormatTriggerLabel = getElement('dateFormatTriggerLabel');
+const dateFormatPopover = getElement('dateFormatPopover');
 
 const uploadArea = getElement('uploadArea');
 const fileInput = getElement('fileInput');
@@ -210,6 +214,7 @@ if (dateDelimiterDropdown) {
         selectedDateDelimiter = this.value;
         populateDateOrderDropdown(selectedDateDelimiter);
         refreshDateFormatPreview();
+        updateDateFormatTriggerLabel();
     });
 }
 
@@ -217,8 +222,62 @@ if (dateOrderDropdown) {
     dateOrderDropdown.addEventListener('change', function() {
         selectedDateOrder = this.value;
         refreshDateFormatPreview();
+        updateDateFormatTriggerLabel();
     });
 }
+
+// ---------- DATE FORMAT TRIGGER + POPOVER (Phase 3 of the Upload header reorg) ----------
+// Collapses the Date Delimiter/Order dropdowns behind one trigger button + popover. The
+// popover holds the real, listener-bound <select> elements (see upload.html) rather than
+// JS-rebuilt content, so nothing here needs to touch the change listeners above.
+let dateFormatPopoverOpen = false;
+
+function setDateFormatGroupVisible(visible) {
+    if (dateFormatGroup) dateFormatGroup.style.display = visible ? 'flex' : 'none';
+}
+
+// Reflects the current selectedDateDelimiter/selectedDateOrder on the trigger button, e.g.
+// "Date format: DD-MM-YYYY", using the same friendly labels DATE_ORDER_OPTIONS already holds.
+function updateDateFormatTriggerLabel() {
+    if (!dateFormatTriggerLabel) return;
+    const options = DATE_ORDER_OPTIONS[selectedDateDelimiter] || DATE_ORDER_OPTIONS['/'];
+    const match = options.find(([code]) => code === selectedDateOrder);
+    dateFormatTriggerLabel.textContent = match ? match[1] : '';
+}
+
+function openDateFormatPopover() {
+    if (!dateFormatPopover) return;
+    dateFormatPopover.style.display = 'flex';
+    dateFormatPopoverOpen = true;
+}
+
+function closeDateFormatPopover() {
+    if (!dateFormatPopover) return;
+    dateFormatPopover.style.display = 'none';
+    dateFormatPopoverOpen = false;
+}
+
+if (dateFormatTriggerBtn) {
+    dateFormatTriggerBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (dateFormatPopoverOpen) {
+            closeDateFormatPopover();
+        } else {
+            openDateFormatPopover();
+        }
+    });
+}
+
+// Close the popover on any click outside it (the trigger's own click is stopped from
+// propagating above, so this only fires for clicks elsewhere) -- same pattern as
+// verification.js's #voucherChangePopover outside-click listener.
+document.addEventListener('click', function(e) {
+    if (dateFormatPopoverOpen && dateFormatPopover && !dateFormatPopover.contains(e.target)) {
+        closeDateFormatPopover();
+    }
+});
+
+updateDateFormatTriggerLabel(); // Set the initial trigger label to match the defaults above
 
 // ---------- DATE FORMAT LIVE PREVIEW (Phase 5) ----------
 // Fetches 2-3 real sample dates from the uploaded file's mapped Date columns,
@@ -338,6 +397,8 @@ if (templateDropdown) {
             showStatus('Select a template and upload an Excel file to begin.', 'info');
             resetValidationState(); // Reset validation when template is cleared
             setSheetDownloadGroupVisible(false); // Template cleared -- hide Sheet/Download again
+            setDateFormatGroupVisible(false); // ...and the Date format trigger/popover too
+            closeDateFormatPopover();
             updateStepIndicator(1);
             updatePreviewButtonState();
             return;
@@ -577,6 +638,9 @@ function resetUpload() {
         dateFormatPreviewEl.style.display = 'none';
         dateFormatPreviewEl.innerHTML = '';
     }
+    // Hide the Date format trigger/popover too (Phase 3) -- no mapping left to base it on.
+    setDateFormatGroupVisible(false);
+    closeDateFormatPopover();
 
     // Hide the row selection grid and clear its state (Phase 2 of row-exclusion) –
     // no file/mapping left to build it from.
@@ -647,7 +711,9 @@ async function autoMapColumns() {
 
         updatePreviewButtonState();
 
-        // Date columns are now known via the mapping – show the live sample-date preview.
+        // Date columns are now known via the mapping – reveal the Date format trigger/popover
+        // and show the live sample-date preview inside it.
+        setDateFormatGroupVisible(true);
         refreshDateFormatPreview();
 
         // Mapping is complete – show the row selection grid (Phase 2 of row-exclusion).

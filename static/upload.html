@@ -260,6 +260,58 @@
             color: #dc2626;
         }
 
+        /* ---------- DATE FORMAT TRIGGER + POPOVER (Phase 3 of the Upload header reorg) ----------
+           Collapses Date Delimiter + Date Order (previously two always-visible dropdowns) into
+           one trigger button; the popover holds the actual <select> elements (not JS-rebuilt
+           content) so their existing change listeners keep working untouched. #dateFormatGroup
+           is hidden until mapping is known (same reveal timing as the mini preview/row exclusion
+           grid); #dateFormatPreview lives inside the popover so it's only ever visible while the
+           popover itself is open. */
+        #dateFormatGroup {
+            position: relative;
+        }
+
+        .date-format-trigger {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #1a1a2e;
+            background: white;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: border-color 0.2s;
+        }
+
+        .date-format-trigger:hover {
+            border-color: #3b82f6;
+        }
+
+        /* Same shadow/radius/border language as .voucher-change-popover (verification.js) for
+           visual consistency with the app's existing popover pattern. */
+        /* display:flex describes the "open" layout JS switches to (open/closeDateFormatPopover()
+           in upload.js); the closed default comes from the inline style="display:none" already
+           on the element in the markup below, same convention as #dateFormatPreview. */
+        .date-format-popover {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            z-index: 50;
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-width: 220px;
+        }
+
         /* ---------- PREVIEW BUTTON ---------- */
         .preview-btn {
             padding: 4px 16px;
@@ -1198,22 +1250,33 @@
                         <option value="">-- Select --</option>
                     </select>
                 </div>
-                <div class="field">
-                    <label>📅 Date Delimiter</label>
-                    <select id="dateDelimiterDropdown">
-                        <option value="/">/ (Slash)</option>
-                        <option value="-">- (Dash)</option>
-                        <option value="">No delimiter</option>
-                    </select>
+                <!-- Collapsed (Phase 3): Date Delimiter/Order (+ Phase 5's sample preview) now
+                     live inside a popover behind this trigger, instead of two always-visible
+                     dropdowns. Hidden until mapping is known (setDateFormatGroupVisible() in
+                     upload.js), matching the reveal timing of the mini preview/row exclusion grid. -->
+                <div class="field" id="dateFormatGroup" style="display:none;">
+                    <button class="date-format-trigger" id="dateFormatTriggerBtn" type="button">
+                        📅 Date format: <span id="dateFormatTriggerLabel">DD/MM/YYYY</span>
+                    </button>
+                    <div class="date-format-popover" id="dateFormatPopover" style="display:none;">
+                        <div class="field">
+                            <label>📅 Date Delimiter</label>
+                            <select id="dateDelimiterDropdown">
+                                <option value="/">/ (Slash)</option>
+                                <option value="-">- (Dash)</option>
+                                <option value="">No delimiter</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label>Date Order</label>
+                            <select id="dateOrderDropdown">
+                                <!-- Populated by JS based on the delimiter selection -->
+                            </select>
+                        </div>
+                        <!-- Live sample-date preview (Phase 5): 2-3 raw -> parsed samples under the chosen format, or an error state. Populated by JS once mapping is known. -->
+                        <div class="field" id="dateFormatPreview" style="display:none;"></div>
+                    </div>
                 </div>
-                <div class="field">
-                    <label>Date Order</label>
-                    <select id="dateOrderDropdown">
-                        <!-- Populated by JS based on the delimiter selection -->
-                    </select>
-                </div>
-                <!-- Live sample-date preview (Phase 5): 2-3 raw -> parsed samples under the chosen format, or an error state. Populated by JS once mapping is known. -->
-                <div class="field" id="dateFormatPreview" style="display:none;"></div>
                 <!-- Regrouped (Phase 2): Download Template + Sheet selector are gated together
                      behind Template selection, instead of Download always being visible. -->
                 <div class="field-group" id="sheetDownloadGroup" style="display:none;">
