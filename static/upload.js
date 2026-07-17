@@ -2179,7 +2179,12 @@ window.onload = async function() {
     const goToDataBankBtn = document.getElementById('goToDataBankBtn');
     if (goToDataBankBtn) {
         goToDataBankBtn.addEventListener('click', function() {
-            window.location.href = '/static/databank.html';
+            // Opens in a new tab (not window.location.href) so this Upload tab is never
+            // navigated away from -- the loaded file, mapping, and row-exclusion state stay
+            // alive in memory exactly as the user left them, no session-restore needed for
+            // this path. The session-restore/locked-preview logic elsewhere in this file still
+            // covers other ways of leaving the page (back button, closing the tab, navbar links).
+            window.open('/static/databank.html', '_blank');
         });
     }
 
