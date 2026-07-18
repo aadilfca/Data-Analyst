@@ -1,6 +1,8 @@
 import sqlite3
 import time
 import os
+import shutil
+from datetime import datetime
 
 DB_NAME = "test.db"
 # Print absolute path for verification
@@ -129,14 +131,29 @@ def diff_row_data(old_data, new_data):
     return changes
 
 
-VOUCHER_PREFIX_CATEGORIES = ("Cash", "Bank", "Journal")
+# 5-way category scheme (Payment/Receipt split explicitly, not derived from debit/credit
+# sign at detection time) - replaced the earlier 3-way Cash/Bank/Journal scheme, which had
+# no way to tell a Payment-type voucher from a Receipt-type voucher without already knowing
+# the cashbook account name. See routers/verification.py's extract_cashbook_name().
+VOUCHER_PREFIX_CATEGORIES = ("Cash Payment", "Cash Receipt", "Bank Payment", "Bank Receipt", "Journal")
+
+# Default single prefix seeded per category for a brand-new client (create_client() in
+# routers/clients.py) and used as the migration target for pre-existing 3-way rows.
+DEFAULT_VOUCHER_PREFIXES = {
+    "Cash Payment": ["CPV"],
+    "Cash Receipt": ["CRV"],
+    "Bank Payment": ["BPV"],
+    "Bank Receipt": ["BRV"],
+    "Journal": ["JV"],
+}
 
 
 def get_client_voucher_prefixes(client_id):
     """
     Return a client's voucher prefix configuration as
-    {"Cash": [...], "Bank": [...], "Journal": [...]}. Categories with no
-    prefixes still appear as an empty list (a client may legitimately have none).
+    {"Cash Payment": [...], "Cash Receipt": [...], "Bank Payment": [...],
+    "Bank Receipt": [...], "Journal": [...]}. Categories with no prefixes still
+    appear as an empty list (a client may legitimately have none).
     """
     rows = execute_query(
         "SELECT category, prefix FROM client_voucher_prefixes WHERE client_id = ? ORDER BY category, prefix",
@@ -799,43 +816,139 @@ def init_db():
 
         print("✅ Created indexes on client_data")
 
-        # ---------- CLIENT VOUCHER PREFIXES (per-client voucher-type detection, Phase 1) ----------
-        # Stores each client's voucher-prefix list per category (Cash/Bank/Journal). Replaces the
-        # global hardcoded pattern list in routers/verification.py (removed in a later phase).
-        # Payment vs Receipt (CPV vs CRV etc.) is not stored here - it's derived from debit/credit
-        # sign at detection time, so each category is a single flat prefix list.
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS client_voucher_prefixes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                client_id INTEGER NOT NULL,
-                category TEXT NOT NULL CHECK (category IN ('Cash', 'Bank', 'Journal')),
-                prefix TEXT NOT NULL COLLATE NOCASE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
-                UNIQUE(client_id, category, prefix)
-            )
-        ''')
-        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_client_voucher_prefixes_client ON client_voucher_prefixes (client_id)")
+        # ---------- CLIENT VOUCHER PREFIXES (per-client voucher-type detection) ----------
+        # Stores each client's voucher-prefix list per category. Categories are 5-way,
+        # splitting Payment vs Receipt explicitly (Cash Payment/Cash Receipt/Bank Payment/
+        # Bank Receipt/Journal) - see VOUCHER_PREFIX_CATEGORIES above. This replaced an
+        # earlier 3-way Cash/Bank/Journal scheme that derived Payment vs Receipt from
+        # debit/credit sign at detection time; that approach couldn't distinguish the two
+        # before a cashbook name was already known (see routers/verification.py's
+        # extract_cashbook_name()), so the distinction is now stored directly instead.
+        #
+        # SQLite can't ALTER a CHECK constraint in place, so upgrading a database that still
+        # has old-scheme (Cash/Bank/Journal) rows requires a full table rebuild: rename ->
+        # recreate with the new CHECK -> copy rows across (remapping old category+prefix to
+        # the correct new category) -> drop the renamed old table. This block detects that
+        # case and only runs the rebuild when old-scheme rows are actually found, so a fresh
+        # or already-migrated database is a cheap no-op on every subsequent startup.
+        old_category_rows = []
+        try:
+            old_category_rows = conn.execute(
+                "SELECT id, client_id, category, prefix FROM client_voucher_prefixes "
+                "WHERE category NOT IN (?, ?, ?, ?, ?)",
+                VOUCHER_PREFIX_CATEGORIES
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # Table doesn't exist yet on a brand-new database - nothing to migrate.
+            old_category_rows = []
+
+        if old_category_rows:
+            print(f"⚠️ Found {len(old_category_rows)} client_voucher_prefixes row(s) on the old "
+                  f"Cash/Bank/Journal scheme - migrating to the 5-way Payment/Receipt scheme.")
+
+            # Defense in depth: this app has previously had a real incident where touching
+            # live client data went wrong (see CLAUDE.md's "known pre-existing bug" note) -
+            # a cheap file-copy backup here makes this migration trivially reversible.
+            backup_path = f"{DB_NAME}.bak-premigrate-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            shutil.copy2(DB_NAME, backup_path)
+            print(f"✅ Backed up database to {backup_path} before migrating client_voucher_prefixes")
+
+            before_counts = dict(conn.execute(
+                "SELECT client_id, COUNT(*) FROM client_voucher_prefixes GROUP BY client_id"
+            ).fetchall())
+
+            conn.execute("DROP TABLE IF EXISTS client_voucher_prefixes_old")
+            conn.execute("ALTER TABLE client_voucher_prefixes RENAME TO client_voucher_prefixes_old")
+            conn.execute('''
+                CREATE TABLE client_voucher_prefixes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id INTEGER NOT NULL,
+                    category TEXT NOT NULL CHECK (category IN
+                        ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt', 'Journal')),
+                    prefix TEXT NOT NULL COLLATE NOCASE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                    UNIQUE(client_id, category, prefix)
+                )
+            ''')
+
+            def _remapped_category(old_category, prefix):
+                if old_category == 'Journal':
+                    return 'Journal'
+                # Old scheme's implicit convention (mirrors the pre-per-client hardcoded
+                # {"CPV": ["CPV","CV"], "CRV": ["CRV","CR"], ...} bucketing): a prefix
+                # containing 'R' is Receipt-type (CRV/CR/BRV/BR), anything else defaults to
+                # Payment-type (CPV/CV/BPV/BV).
+                is_receipt = 'R' in prefix.strip().upper()
+                if old_category == 'Cash':
+                    return 'Cash Receipt' if is_receipt else 'Cash Payment'
+                if old_category == 'Bank':
+                    return 'Bank Receipt' if is_receipt else 'Bank Payment'
+                return None  # unrecognised old category - drop rather than guess wrong
+
+            all_old_rows = conn.execute(
+                "SELECT client_id, category, prefix FROM client_voucher_prefixes_old"
+            ).fetchall()
+            migrated = 0
+            skipped = 0
+            for row in all_old_rows:
+                new_category = _remapped_category(row[1], row[2])
+                if new_category is None:
+                    skipped += 1
+                    continue
+                try:
+                    conn.execute(
+                        "INSERT INTO client_voucher_prefixes (client_id, category, prefix) VALUES (?, ?, ?)",
+                        (row[0], new_category, row[2])
+                    )
+                    migrated += 1
+                except sqlite3.IntegrityError:
+                    # Same prefix already inserted under this new category for this client
+                    # (e.g. a duplicate old row) - safe to skip, not a data loss.
+                    skipped += 1
+
+            conn.execute("DROP TABLE client_voucher_prefixes_old")
+            create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_client_voucher_prefixes_client ON client_voucher_prefixes (client_id)")
+
+            after_counts = dict(conn.execute(
+                "SELECT client_id, COUNT(*) FROM client_voucher_prefixes GROUP BY client_id"
+            ).fetchall())
+            print(f"✅ Migrated client_voucher_prefixes: {migrated} row(s) remapped, {skipped} skipped. "
+                  f"Per-client row counts before: {before_counts}, after: {after_counts}")
+        else:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS client_voucher_prefixes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id INTEGER NOT NULL,
+                    category TEXT NOT NULL CHECK (category IN
+                        ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt', 'Journal')),
+                    prefix TEXT NOT NULL COLLATE NOCASE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                    UNIQUE(client_id, category, prefix)
+                )
+            ''')
+            create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_client_voucher_prefixes_client ON client_voucher_prefixes (client_id)")
         print("✅ Created client_voucher_prefixes table")
 
-        # Seed existing clients with the current hardcoded CPV/CRV prefixes into the Cash category,
-        # so nothing breaks once verification.py switches to per-client lookup in a later phase.
-        # Idempotent: skips any client that already has rows (covers re-running init_db and clients
-        # created after this migration ran).
+        # Seed clients with zero voucher-prefix rows using the 5-way defaults (covers clients
+        # created before this migration ran; create_client() in routers/clients.py also seeds
+        # new clients directly at creation time, so this is a defensive backfill, not the
+        # primary seeding path for new clients going forward).
         existing_clients = conn.execute("SELECT id FROM clients").fetchall()
-        default_cash_prefixes = ["CPV", "CV", "CRV", "CR"]
         for client_row in existing_clients:
             cid = client_row[0]
             has_rows = conn.execute(
                 "SELECT 1 FROM client_voucher_prefixes WHERE client_id = ? LIMIT 1", (cid,)
             ).fetchone()
             if not has_rows:
-                for prefix in default_cash_prefixes:
-                    conn.execute(
-                        "INSERT INTO client_voucher_prefixes (client_id, category, prefix) VALUES (?, ?, ?)",
-                        (cid, "Cash", prefix)
-                    )
-        print("✅ Seeded default Cash voucher prefixes for existing clients")
+                for category, prefixes in DEFAULT_VOUCHER_PREFIXES.items():
+                    for prefix in prefixes:
+                        conn.execute(
+                            "INSERT INTO client_voucher_prefixes (client_id, category, prefix) VALUES (?, ?, ?)",
+                            (cid, category, prefix)
+                        )
+        print("✅ Seeded default voucher prefixes for clients with none configured")
 
         conn.commit()
         print("✅ Database initialization complete")

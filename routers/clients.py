@@ -5,7 +5,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
-from database import execute_query, execute_write, log_audit, get_client_voucher_prefixes, save_client_voucher_prefixes
+from database import execute_query, execute_write, log_audit, get_client_voucher_prefixes, save_client_voucher_prefixes, DEFAULT_VOUCHER_PREFIXES
 from datetime import datetime
 
 router = APIRouter()
@@ -29,9 +29,24 @@ class ClientUpdate(BaseModel):
     is_active: bool = True
 
 class VoucherPrefixesUpdate(BaseModel):
-    Cash: List[str] = []
-    Bank: List[str] = []
-    Journal: List[str] = []
+    # Field names are Python-identifier-safe versions of the 5 category names in
+    # database.VOUCHER_PREFIX_CATEGORIES (which contain spaces, e.g. "Cash Payment") -
+    # CATEGORY_FIELD_MAP below bridges between the two.
+    cash_payment: List[str] = []
+    cash_receipt: List[str] = []
+    bank_payment: List[str] = []
+    bank_receipt: List[str] = []
+    journal: List[str] = []
+
+# Maps each category name (as stored in client_voucher_prefixes.category / returned by
+# get_client_voucher_prefixes()) to its VoucherPrefixesUpdate field name.
+CATEGORY_FIELD_MAP = {
+    "Cash Payment": "cash_payment",
+    "Cash Receipt": "cash_receipt",
+    "Bank Payment": "bank_payment",
+    "Bank Receipt": "bank_receipt",
+    "Journal": "journal",
+}
 
 class ClientResponse(BaseModel):
     id: int
@@ -95,6 +110,11 @@ def create_client(client: ClientCreate):
         (client.client_code, client.client_name, client.industry,
          client.contact_person, client.email, client.phone)
     )
+    # Seed the new client with the default voucher prefixes (CPV/CRV/BPV/BRV/JV) so voucher
+    # detection works out of the box - previously a client had none until manually configured
+    # via the Client Settings page.
+    save_client_voucher_prefixes(client_id, DEFAULT_VOUCHER_PREFIXES)
+
     log_audit("Admin", "Create", "Clients", f"Created client: {client.client_code} - {client.client_name}")
     return {"message": f"Client '{client.client_name}' created successfully", "client_id": client_id}
 
@@ -149,8 +169,8 @@ def restore_client(client_id: int):
 @router.get("/api/clients/{client_id}/voucher-prefixes", response_model=dict)
 def get_voucher_prefixes(client_id: int):
     """
-    Get a client's voucher prefix configuration (Cash/Bank/Journal),
-    including seeded defaults.
+    Get a client's voucher prefix configuration (Cash Payment/Cash Receipt/Bank Payment/
+    Bank Receipt/Journal), including seeded defaults.
     """
     existing = execute_query("SELECT id FROM clients WHERE id = ?", (client_id,))
     if not existing:
@@ -172,10 +192,10 @@ def update_voucher_prefixes(client_id: int, payload: VoucherPrefixesUpdate):
     # occurrence wins) before validating - avoids a raw UNIQUE-constraint
     # IntegrityError surfacing as a generic 500 for an accidental duplicate.
     prefixes = {}
-    for category in ("Cash", "Bank", "Journal"):
+    for category, field in CATEGORY_FIELD_MAP.items():
         seen_in_category = set()
         cleaned = []
-        for raw in getattr(payload, category):
+        for raw in getattr(payload, field):
             prefix = raw.strip()
             if not prefix or prefix.lower() in seen_in_category:
                 continue

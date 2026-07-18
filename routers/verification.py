@@ -27,8 +27,9 @@ router = APIRouter()
 def match_voucher_category(voucher_id: str, client_prefixes: dict) -> Optional[str]:
     """
     Case-insensitive "starts with" match of voucher_id against the client's configured
-    per-category prefixes (Phase 1 assumption). Returns 'Cash'/'Bank'/'Journal', or None
-    if nothing matches (including a client with no prefixes configured for any category).
+    per-category prefixes. Returns one of 'Cash Payment'/'Cash Receipt'/'Bank Payment'/
+    'Bank Receipt'/'Journal', or None if nothing matches (including a client with no
+    prefixes configured for any category).
     """
     if not voucher_id:
         return None
@@ -39,19 +40,20 @@ def match_voucher_category(voucher_id: str, client_prefixes: dict) -> Optional[s
                 return category
     return None
 
-def voucher_type_label(category: str, is_credit_side: bool) -> Optional[str]:
+def voucher_type_label(category: str) -> Optional[str]:
     """
-    Map a category plus which side of the entry is populated to the voucher type label
-    (CPV/CRV/BPV/BRV/JV). Credit side -> Payment, debit side -> Receipt; Journal has no
-    payment/receipt split (is_credit_side is ignored for Journal).
+    Map a client_voucher_prefixes category directly to its voucher type label
+    (CPV/CRV/BPV/BRV/JV). The 5-way category scheme already encodes Payment vs Receipt
+    (Cash Payment/Cash Receipt/Bank Payment/Bank Receipt/Journal), so no separate
+    debit/credit-side input is needed here anymore.
     """
-    if category == 'Journal':
-        return 'JV'
-    if category == 'Cash':
-        return 'CPV' if is_credit_side else 'CRV'
-    if category == 'Bank':
-        return 'BPV' if is_credit_side else 'BRV'
-    return None
+    return {
+        'Cash Payment': 'CPV',
+        'Cash Receipt': 'CRV',
+        'Bank Payment': 'BPV',
+        'Bank Receipt': 'BRV',
+        'Journal': 'JV',
+    }.get(category)
 
 def get_column_value(row_data: dict, aliases: list) -> Optional[str]:
     """
@@ -87,12 +89,15 @@ def extract_cashbook_name(row_data: dict, client_prefixes: dict) -> Optional[str
         return None
 
     category = match_voucher_category(voucher_id, client_prefixes)
-    if category not in ('Cash', 'Bank'):
-        return None
-    # Discovery (get_cashbooks) has no known cashbook name to match a row against yet, so both
-    # sides are accepted as candidates here (confirmed with user) - the analyst still manually
-    # picks the real cashbook from the discovered list.
-    if credit > 0 or debit > 0:
+    # Type-specific side match: the 5-way category already tells us Payment vs Receipt, so
+    # (unlike the old 3-way Cash/Bank/Journal scheme) discovery no longer needs to already
+    # know the cashbook name to determine which side is correct - a Payment-type voucher's
+    # cashbook leg is always the credit side, a Receipt-type voucher's is always the debit
+    # side. This is what fixes expense/vendor accounts (the opposite leg of the same voucher)
+    # from being wrongly returned as cashbook candidates.
+    if category in ('Cash Payment', 'Bank Payment') and credit > 0:
+        return account_name
+    if category in ('Cash Receipt', 'Bank Receipt') and debit > 0:
         return account_name
     return None
 
@@ -300,7 +305,7 @@ def start_verification_session(
             if not voucher_id:
                 continue
             category = match_voucher_category(voucher_id, client_prefixes)
-            if category not in ('Cash', 'Bank'):
+            if category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
                 continue
             debit_str = get_col_value(rd, debit_aliases)
             credit_str = get_col_value(rd, credit_aliases)
@@ -328,17 +333,15 @@ def start_verification_session(
 
     transactions_to_verify = []
     for vid, data in vouchers.items():
-        # Payment vs Receipt is derived from the debit/credit sign of the row that IS the
-        # selected cashbook (cashbook_name is already known here), not from a type-specific
-        # prefix - replaces the old CPV/CRV prefix-hint lookup.
+        # The 5-way category already implies Payment vs Receipt, so vtype comes straight from
+        # it - no need to re-derive it from the cashbook row's debit/credit sign anymore.
+        # cashbook_row is still looked up as a sanity check that the named cashbook actually
+        # appears among this voucher's legs.
         cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name), None)
         if cashbook_row is None:
             continue
-        if cashbook_row['credit'] > 0:
-            vtype = voucher_type_label(data['category'], is_credit_side=True)
-        elif cashbook_row['debit'] > 0:
-            vtype = voucher_type_label(data['category'], is_credit_side=False)
-        else:
+        vtype = voucher_type_label(data['category'])
+        if vtype is None:
             continue
         for row in data['rows']:
             if vtype in ('CPV', 'BPV') and row['debit'] > 0 and row['credit'] == 0:
@@ -859,7 +862,7 @@ def preview_cashbook(
             if not voucher_id:
                 continue
             category = match_voucher_category(voucher_id, client_prefixes)
-            if category not in ('Cash', 'Bank'):
+            if category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
                 continue
             debit_str = get_col_value(rd, debit_aliases)
             credit_str = get_col_value(rd, credit_aliases)
@@ -888,16 +891,14 @@ def preview_cashbook(
     # Filter to only the selected cashbook and collect transaction rows
     transactions = []
     for vid, data in vouchers.items():
-        # Same cashbook-row-sign derivation as start_verification_session - cashbook_name is
-        # already known here, so no type-prefix hint is needed.
+        # Same category-implies-type derivation as start_verification_session - cashbook_row
+        # is looked up only as a sanity check that the named cashbook actually appears among
+        # this voucher's legs, not to derive vtype anymore.
         cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name), None)
         if cashbook_row is None:
             continue
-        if cashbook_row['credit'] > 0:
-            vtype = voucher_type_label(data['category'], is_credit_side=True)
-        elif cashbook_row['debit'] > 0:
-            vtype = voucher_type_label(data['category'], is_credit_side=False)
-        else:
+        vtype = voucher_type_label(data['category'])
+        if vtype is None:
             continue
         for row in data['rows']:
             if vtype in ('CPV', 'BPV') and row['debit'] > 0 and row['credit'] == 0:

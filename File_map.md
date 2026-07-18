@@ -21,7 +21,7 @@ This document lists all source files in the project, grouped by directory, with 
 
 | File | Purpose |
 |------|---------|
-| `clients.py` | Client management CRUD endpoints: create, read, update, soft‑delete, restore. Also provides GET/PUT for a client’s voucher prefix configuration (Cash/Bank/Journal) using the new `client_voucher_prefixes` table. |
+| `clients.py` | Client management CRUD endpoints: create, read, update, soft‑delete, restore. New clients are auto‑seeded with default voucher prefixes. Also provides GET/PUT for a client's voucher prefix configuration (Cash Payment/Cash Receipt/Bank Payment/Bank Receipt/Journal — 5‑way, Payment/Receipt split explicitly) using the `client_voucher_prefixes` table. |
 | `dashboard.py` | Root route, health check, and dashboard statistics endpoint (`/api/dashboard/stats`). |
 | `data.py` | Data Bank endpoints. Retrieves datasets, previews rows (with pagination, search, amount filters, Sunday‑only filter), row revision history, availability checklist per template, and delete/restore operations for datasets and templates. |
 | `error_log.py` | Error log management. Lists errors with filtering/pagination, fetches details, marks errors as resolved, and provides stats aggregation (total, pending, resolved, category breakdown). |
@@ -39,7 +39,7 @@ This document lists all source files in the project, grouped by directory, with 
 | File | Purpose |
 |------|---------|
 | `clients.html` | UI for managing clients. Lists clients with sorting, search, and actions (add, edit, deactivate, restore, and access client settings via cogwheel). |
-| `client_settings.html` | Per‑client voucher prefix configuration page. Uses chip‑based editors for Cash/Bank/Journal prefixes; also includes a read‑only explainer of how the app identifies voucher types. |
+| `client_settings.html` | Per‑client voucher prefix configuration page. Uses chip‑based editors for the 5 categories (Cash Payment/Cash Receipt/Bank Payment/Bank Receipt/Journal); also includes a read‑only explainer of how the app identifies voucher types. |
 | `columns.html` | Manage master columns. Add, edit, soft‑delete, search, and sort columns. Includes a category dropdown. |
 | `databank.html` | Client Data Bank. Displays template availability, date filters, preview modal with pagination and row history popovers, export to Excel, and delete/restore dataset actions. |
 | `error_dashboard.html` | Error log dashboard. Shows stats, filterable table, detail modal, resolution actions, and pagination. |
@@ -58,7 +58,7 @@ This document lists all source files in the project, grouped by directory, with 
 |------|---------|
 | `clients.js` | Client CRUD logic: load, render table with sorting/filtering, open add/edit modal, save (with Save & New), delete/restore. |
 | `client_context.js` | Global client context management. Handles client dropdown (dashboard) and badge (other pages), localStorage persistence, and provides functions to get selected client ID/name. Also manages module name and stats in the navbar. |
-| `client_settings.js` | Loads/saves client voucher prefixes. Implements chip‑based editors, add/remove prefixes, cross‑category duplicate validation, and save to API. |
+| `client_settings.js` | Loads/saves client voucher prefixes across the 5 categories. Implements chip‑based editors, add/remove prefixes, cross‑category duplicate validation, and save to API (bridges the 5 display category names to the API's Python‑identifier‑safe field names via `CATEGORIES`). |
 | `columns.js` | Master column management: load, render table, add/edit modal, delete, search/filter, and category dropdown. |
 | `databank.js` | Data Bank logic: fetch availability, render table, preview modal with pagination and filters, row history popover, export, and delete template data. |
 | `error_dashboard.js` | Error log dashboard: load stats, fetch errors with filters, render table, open detail modal, resolve/unresolve, delete, and pagination. |
@@ -98,7 +98,7 @@ This document lists all source files in the project, grouped by directory, with 
 - **Uploads** are stored in the `uploads/` directory (created at runtime).
 - **Change detection** uses the `document_group_id` and `change_detection_status` columns on `client_data`.
 - **Voucher grouping** in verification uses the `document_group_id` computed from the first template column (lowest `sort_order`).
-- **Client voucher prefixes** are stored per client in `client_voucher_prefixes` and are used by verification to identify Cash/Bank/Journal vouchers.
+- **Client voucher prefixes** are stored per client in `client_voucher_prefixes` (5‑way: Cash Payment/Cash Receipt/Bank Payment/Bank Receipt/Journal) and are used by verification to identify voucher categories, with Payment vs Receipt stored explicitly rather than derived from debit/credit sign.
 
 ---
 
