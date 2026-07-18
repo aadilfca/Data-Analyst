@@ -35,14 +35,11 @@ async function loadDashboardStats() {
     }
 }
 
-// ---------- VERIFICATION ENTRY POINTS (Cash / Bank) ----------
-// Replaces this card's former inline onclick with a proper listener; verification.html/
-// verification.js reads the ?type= param to decide Cash vs Bank mode (Phase 8).
-document.getElementById('cashVerificationCard').addEventListener('click', function() {
-    window.location.href = '/static/verification.html?type=cash';
-});
-document.getElementById('bankVerificationCard').addEventListener('click', function() {
-    window.location.href = '/static/verification.html?type=bank';
+// ---------- VERIFICATION ENTRY POINT ----------
+// Single Verification card (replaces the former Cash/Bank card pair) — lands on the
+// verification hub with no ?type= param; the hub itself is the Cash-vs-Bank chooser now.
+document.getElementById('verificationCard').addEventListener('click', function() {
+    window.location.href = '/static/verification.html';
 });
 
 // ---------- ADD CLICK FEEDBACK TO MODULE CARDS ----------

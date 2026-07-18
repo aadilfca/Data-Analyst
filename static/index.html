@@ -26,91 +26,105 @@
 
     <!-- Main Content -->
     <div class="main-container">
-        <!-- Module Buttons Grid -->
-        <div class="module-grid">
-            <!-- Module 1a: Cash Verification (navigation wired in script.js - no inline onclick) -->
-            <div class="module-card" id="cashVerificationCard">
-                <div class="module-icon">💵</div>
-                <h3>Cash Verification</h3>
-                <p>Verify cash vouchers</p>
-                <span class="module-status">Ready</span>
-            </div>
+        <!-- Module cards, grouped into three labelled sections (Phase 2 dashboard regrouping).
+             Reuses the .hub-group/.hub-group-title classes built for verification.html's hub —
+             same "labelled groups of module cards" concept, shared styling in style.css.
+             Existing inline onclick handlers on non-Verification cards are left as-is this
+             phase — converting them to addEventListener is Phase 3. -->
 
-            <!-- Module 1b: Bank Verification (navigation wired in script.js - no inline onclick) -->
-            <div class="module-card" id="bankVerificationCard">
-                <div class="module-icon">🏦</div>
-                <h3>Bank Verification</h3>
-                <p>Verify bank vouchers</p>
-                <span class="module-status">Ready</span>
-            </div>
+        <!-- Section 1: Audit work -->
+        <div class="hub-group">
+            <h2 class="hub-group-title">Audit work</h2>
+            <div class="module-grid">
+                <!-- Verification: single entry to the verification hub (replaces the former
+                     Cash/Bank card pair — the hub itself is the Cash-vs-Bank chooser now).
+                     Navigation wired in script.js, no inline onclick. -->
+                <div class="module-card" id="verificationCard">
+                    <div class="module-icon">✅</div>
+                    <h3>Verification</h3>
+                    <p>All voucher and process checks</p>
+                    <span class="module-status">Ready</span>
+                </div>
 
-            <!-- Module 2: Reports -->
-            <div class="module-card" onclick="alert('Reports module coming soon!')">
-                <div class="module-icon">📊</div>
-                <h3>Reports</h3>
-                <p>Generate analysis reports</p>
-                <span class="module-status coming">Coming Soon</span>
-            </div>
+                <!-- Reports -->
+                <div class="module-card coming-soon" onclick="alert('Reports module coming soon!')">
+                    <div class="module-icon">📊</div>
+                    <h3>Reports</h3>
+                    <p>Generate analysis reports</p>
+                    <span class="module-status coming">Coming Soon</span>
+                </div>
 
-            <!-- Module 3: Analysis -->
-            <div class="module-card" onclick="alert('Analysis module coming soon!')">
-                <div class="module-icon">🔍</div>
-                <h3>Analysis</h3>
-                <p>Deep dive analytics</p>
-                <span class="module-status coming">Coming Soon</span>
+                <!-- Analysis -->
+                <div class="module-card coming-soon" onclick="alert('Analysis module coming soon!')">
+                    <div class="module-icon">🔍</div>
+                    <h3>Analysis</h3>
+                    <p>Deep dive analytics</p>
+                    <span class="module-status coming">Coming Soon</span>
+                </div>
             </div>
+        </div>
 
-            <!-- Module 4: Settings -->
-            <div class="module-card" onclick="alert('Settings module coming soon!')">
-                <div class="module-icon">⚙️</div>
-                <h3>Settings</h3>
-                <p>Configure system preferences</p>
-                <span class="module-status coming">Coming Soon</span>
-            </div>
+        <!-- Section 2: Client data -->
+        <div class="hub-group">
+            <h2 class="hub-group-title">Client data</h2>
+            <div class="module-grid">
+                <!-- Upload Client Data -->
+                <div class="module-card" onclick="window.location.href='/static/upload.html'">
+                    <div class="module-icon">📤</div>
+                    <h3>Upload Client Data</h3>
+                    <p>Upload Excel/CSV files</p>
+                    <span class="module-status">Ready</span>
+                </div>
 
-            <!-- Module 5: Users -->
-            <div class="module-card" onclick="alert('Users module coming soon!')">
-                <div class="module-icon">👥</div>
-                <h3>Users</h3>
-                <p>Manage user access</p>
-                <span class="module-status coming">Coming Soon</span>
+                <!-- Client Data Bank -->
+                <div class="module-card" onclick="window.location.href='/static/databank.html'">
+                    <div class="module-icon">📊</div>
+                    <h3>Client Data Bank</h3>
+                    <p>View and manage all uploaded data sets</p>
+                    <span class="module-status">Ready</span>
+                </div>
             </div>
+        </div>
 
-            <!-- Module 6: Audit Log -->
-            <div class="module-card" onclick="alert('Audit Log module coming soon!')">
-                <div class="module-icon">📋</div>
-                <h3>Audit Log</h3>
-                <p>View system activity</p>
-                <span class="module-status coming">Coming Soon</span>
-            </div>
+        <!-- Section 3: Administration — configuration/utility cards. Deliberately quieter
+             styling (.admin-card) and no status badges, per the approved visual hierarchy. -->
+        <div class="hub-group">
+            <h2 class="hub-group-title">Administration</h2>
+            <div class="module-grid">
+                <!-- Setup -->
+                <div class="module-card admin-card" onclick="window.location.href='/static/setup.html'">
+                    <div class="module-icon">🔧</div>
+                    <h3>Setup</h3>
+                    <p>Manage columns and templates</p>
+                </div>
 
-            <!-- Module 7: Upload Client Data -->
-            <div class="module-card" onclick="window.location.href='/static/upload.html'">
-                <div class="module-icon">📤</div>
-                <h3>Upload Client Data</h3>
-                <p>Upload Excel/CSV files</p>
-                <span class="module-status">Ready</span>
-            </div>
-            <!-- Module 8: Setup -->
-            <div class="module-card" onclick="window.location.href='/static/setup.html'">
-                <div class="module-icon">🔧</div>
-                <h3>Setup</h3>
-                <p>Manage columns and templates</p>
-                <span class="module-status">Ready</span>
-            </div>
-            <!-- Module 9: Manage Clients -->
-            <div class="module-card" onclick="window.location.href='/static/clients.html'">
-                <div class="module-icon">🏢</div>
-                <h3>Manage Clients</h3>
-                <p>Add, edit, or delete client entities</p>
-                <span class="module-status">Ready</span>
-            </div>
-            <!-- Module 10: Data Bank -->
-            <div class="module-card" onclick="window.location.href='/static/databank.html'">
-                <div class="module-icon">📊</div>
-                <h3>Client Data Bank</h3>
-                <p>View and manage all uploaded data sets</p>
-                <span class="module-status">Ready</span>
+                <!-- Manage Clients -->
+                <div class="module-card admin-card" onclick="window.location.href='/static/clients.html'">
+                    <div class="module-icon">🏢</div>
+                    <h3>Manage Clients</h3>
+                    <p>Add, edit, or delete client entities</p>
+                </div>
+
+                <!-- Settings -->
+                <div class="module-card admin-card coming-soon" onclick="alert('Settings module coming soon!')">
+                    <div class="module-icon">⚙️</div>
+                    <h3>Settings</h3>
+                    <p>Configure system preferences</p>
+                </div>
+
+                <!-- Users -->
+                <div class="module-card admin-card coming-soon" onclick="alert('Users module coming soon!')">
+                    <div class="module-icon">👥</div>
+                    <h3>Users</h3>
+                    <p>Manage user access</p>
+                </div>
+
+                <!-- Audit Log (system activity viewer — a utility, not client audit work) -->
+                <div class="module-card admin-card coming-soon" onclick="alert('Audit Log module coming soon!')">
+                    <div class="module-icon">📋</div>
+                    <h3>Audit Log</h3>
+                    <p>View system activity</p>
+                </div>
             </div>
         </div>
 

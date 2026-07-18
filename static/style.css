@@ -311,14 +311,15 @@ body {
     color: #c62828;
 }
 
-/* ---------- VERIFICATION HUB (verification.html internal picker) ----------
-   Two labelled groups of .module-card tiles (Voucher verification / Process verification).
-   .module-grid/.module-card themselves are shared with index.html and stay untouched —
-   only these additive, hub-specific rules are new. */
+/* ---------- LABELLED CARD GROUPS (verification.html hub + index.html dashboard) ----------
+   Labelled groups of .module-card tiles. Built for verification.html's hub (Voucher/Process
+   verification groups), now also used by the dashboard's three sections (Audit work / Client
+   data / Administration) — edits here affect both pages. .module-grid/.module-card themselves
+   stay untouched; only these additive group rules are shared. */
 .hub-group .module-grid {
     /* The base .module-grid's 40px bottom margin is sized for a single grid followed by
-       Quick Stats; between two stacked hub groups it reads as a gap twice the size of the
-       gap between cards, so tighten it within the hub only. */
+       Quick Stats; between stacked groups it reads as a gap twice the size of the
+       gap between cards, so tighten it within groups only. */
     margin-bottom: 25px;
 }
 
@@ -345,6 +346,36 @@ body {
 }
 .module-card.coming-soon:active {
     transform: none;
+}
+
+/* Administration cards (index.html dashboard, Phase 2 regrouping): visually quieter than the
+   working Audit work/Client data rows — more compact, muted background, softer hover, and no
+   status badge (the badge span is simply omitted in the markup). Still fully clickable. */
+.module-card.admin-card {
+    padding: 20px 15px 18px;
+    background: #f8fafc;
+}
+.module-card.admin-card .module-icon {
+    font-size: 32px;
+    margin-bottom: 8px;
+}
+.module-card.admin-card h3 {
+    font-size: 16px;
+}
+.module-card.admin-card p {
+    margin-bottom: 0;
+}
+.module-card.admin-card:hover {
+    /* Softer lift than the base card's -6px + bright blue border. */
+    transform: translateY(-3px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+    border-color: #cbd5e1;
+}
+/* An admin card that is also coming-soon keeps the inert look (no lift at all). */
+.module-card.admin-card.coming-soon:hover {
+    transform: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    border-color: transparent;
 }
 
 /* ---------- QUICK STATS ---------- */
