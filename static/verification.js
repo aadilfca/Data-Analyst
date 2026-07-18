@@ -347,6 +347,9 @@ async function startSessionFromCashbook() {
         totalTransactions = data.total_transactions || 0;
         cashbookContent.style.display = 'none';
         sessionContent.style.display = 'block';
+        // Global navbar back-arrow should return to the Cashbook selection screen (not index.html)
+        // while a session is active — reuse the same exit flow as the "Cashbook" button.
+        if (typeof setBackOverride === 'function') setBackOverride(exitSession);
         // Remove padding from main container when verification session is active
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.add('verification-active');
@@ -1679,6 +1682,8 @@ function exitSession() {
         saveAllVoucherLines(); // Phase 4: saves every line, not just the active one
                 sessionContent.style.display = 'none';
         cashbookContent.style.display = 'block';
+        // Back to the Cashbook selection screen — restore the navbar back-arrow's default target.
+        if (typeof setBackOverride === 'function') setBackOverride(null);
         // Restore padding when session ends
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.remove('verification-active');

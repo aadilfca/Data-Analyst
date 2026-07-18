@@ -171,7 +171,10 @@ function renderClientControl() {
 }
 
 // ---------- GLOBAL NAVBAR UPDATE FUNCTIONS ----------
-window._appNav = window._appNav || { module: 'Dashboard', stats: '' };
+// backOverride: null (default, static getBackTarget() resolution) or a function invoked instead
+// of navigating — for single-page/multi-view modules (e.g. Verification) whose "back" destination
+// depends on in-page view state rather than a fixed URL.
+window._appNav = window._appNav || { module: 'Dashboard', stats: '', backOverride: null };
 
 /**
  * Set the module name displayed in the navbar (e.g., "Verification", "Upload")
@@ -202,6 +205,17 @@ window.updateNavClientName = function(name) {
     if (clientSpan) {
         clientSpan.textContent = name || 'No Client';
     }
+};
+
+/**
+ * Override the back arrow's behavior for pages with in-page view state (e.g. Verification's
+ * Cashbook-selection vs active-session views), where the destination isn't a fixed URL.
+ * Pass a function to intercept back-arrow clicks (called instead of navigating); pass null
+ * (or omit) to restore the page's static data-nav-parent/NAV_PARENT_MAP/index.html default.
+ * @param {Function|null} fn
+ */
+window.setBackOverride = function(fn) {
+    window._appNav.backOverride = (typeof fn === 'function') ? fn : null;
 };
 // ---------- BACK-ARROW PARENT-TARGET MECHANISM ----------
 // Page-filename -> parent-filename config map. Left empty in this foundation phase;
@@ -256,6 +270,17 @@ document.addEventListener('click', function (e) {
     const homeIcon = e.target.closest('.nav-home-icon');
     if (homeIcon) {
         window.location.href = '/static/index.html';
+    }
+});
+
+// ---------- GLOBAL CLICK HANDLER: BACK ARROW OVERRIDE ----------
+// When a page has registered a dynamic override via setBackOverride() (e.g. Verification's
+// in-page view switching), intercept the click and run that instead of following the static href.
+document.addEventListener('click', function (e) {
+    const backArrow = e.target.closest('.nav-back-arrow');
+    if (backArrow && typeof window._appNav.backOverride === 'function') {
+        e.preventDefault();
+        window._appNav.backOverride();
     }
 });
 // ---------- RENDER CLIENT BADGE (read-only) ----------
