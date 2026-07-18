@@ -104,32 +104,41 @@
             background: #e2e8f0;
         }
 
-        /* Go to Data Bank now shares the step-indicator row (same X axis as the 1-2-3-4 strip)
-           instead of the top-bar. margin-left: auto pushes it to the far right of the row while
-           the step items keep their own centered layout in the remaining space. */
-        .step-indicator .btn-databank {
-            margin-left: auto;
-        }
-
-        /* ---------- TOP BAR (breadcrumb-style: back link · template · sheet · actions) ---------- */
+        /* ---------- TOP BAR (breadcrumb-style: back link · template · sheet · actions) ----------
+           Light-grey boxed container (restored per direct request) wrapping two stacked rows
+           (.top-bar-row-1/-2) -- Row 1 is file-selection/action controls (Upload File, file chip,
+           Preview, Go to Data Bank); Row 2 is setup/config controls (Template, Download icon,
+           Sheet, Date format). See .top-bar-row below for the shared row layout. */
         .top-bar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 16px 24px;
             background: #f8fafc;
-            padding: 12px 20px;
+            border: 1px solid #e2e8f0;
             border-radius: 8px;
             /* No top margin: .container has no top border/padding, so a top margin
                here would collapse through it and leak out as a gap below the navbar. */
             margin: 0 28px 16px 28px;
+            padding: 12px 20px;
+        }
+
+        .top-bar-row {
+            display: flex;
+            flex-wrap: wrap;
             align-items: center;
-            border: 1px solid #e2e8f0;
+            gap: 16px 24px;
+        }
+
+        .top-bar-row + .top-bar-row {
+            margin-top: 10px;
+        }
+
+        /* Go to Data Bank sits at the far right of Row 1 -- margin-left: auto pushes it there
+           while the rest of the row's controls keep their normal left-to-right flow. */
+        .top-bar-row-1 .btn-databank {
+            margin-left: auto;
         }
 
         /* Sized to match .btn-upload-file's taller two-line height, so the two real action
            buttons read as a consistent pair (per confirmed scope: only these two buttons match
-           height -- dropdowns/badges stay at their existing compact sizing). Unscoped (was
-           .top-bar .btn-databank) since the button now lives in .step-indicator, not .top-bar. */
+           height -- dropdowns/badges stay at their existing compact sizing). */
         .btn-databank {
             padding: 9px 16px;
             border: none;
@@ -206,28 +215,32 @@
            .file-detail styling unchanged, just sitting beside the button instead of stacked
            inside a dashed box. */
 
-        /* ---------- DOWNLOAD TEMPLATE (Phase 2 of the Upload header reorg) ----------
-           Demoted from a filled coloured button to a small text-style link, as part of
-           regrouping it with the Sheet selector under one reveal gate (#sheetDownloadGroup
-           below). Stays a <button> element (id/disabled/dataset untouched) -- only its
-           visual styling changed, per the confirmed scope for this phase. */
-        .top-bar .download-template-link {
-            background: none;
-            border: none;
+        /* ---------- DOWNLOAD TEMPLATE ICON BUTTON ----------
+           Icon-only (no label -- the "Download selected template" tooltip via the title
+           attribute is sufficient), sitting immediately right of the Template field so Row 2
+           stays compact. Stays a <button> element (id/disabled/dataset untouched) -- only its
+           visual styling/content changed. */
+        .btn-download-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
             padding: 0;
-            color: #3b82f6;
-            font-size: 12px;
-            font-weight: 600;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            background: white;
+            font-size: 14px;
             cursor: pointer;
-            white-space: nowrap;
-            text-decoration: none;
+            transition: background 0.2s, border-color 0.2s;
         }
 
-        .top-bar .download-template-link:hover:not(:disabled) {
-            text-decoration: underline;
+        .btn-download-icon:hover:not(:disabled) {
+            background: #eff6ff;
+            border-color: #3b82f6;
         }
 
-        .top-bar .download-template-link:disabled {
+        .btn-download-icon:disabled {
             opacity: 0.5;
             cursor: not-allowed;
         }
@@ -261,25 +274,6 @@
             font-size: 12px;
             min-width: 140px;
             background: white;
-        }
-
-        .top-bar .badge {
-            font-size: 11px;
-            background: #e8f5e9;
-            color: #2e7d32;
-            padding: 2px 10px;
-            border-radius: 10px;
-            white-space: nowrap;
-        }
-
-        .top-bar .badge.loading {
-            background: #fef3c7;
-            color: #92400e;
-        }
-
-        .top-bar .badge.error {
-            background: #fee2e2;
-            color: #991b1b;
         }
 
         /* ---------- DATE FORMAT PREVIEW (Phase 5): small text lines, not a table -- a sanity check ---------- */
@@ -652,6 +646,14 @@
             margin-top: 2px;
         }
 
+        /* CSS animations (unlike transitions) auto-play whenever an element goes from
+           display:none to visible, so this fades the chip in the moment handleFile() reveals it
+           -- no JS change needed. */
+        @keyframes fadeInFileDetail {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
         .file-detail {
             display: flex;
             align-items: center;
@@ -660,6 +662,7 @@
             border: 1px solid #e2e8f0;
             padding: 4px 12px;
             border-radius: 6px;
+            animation: fadeInFileDetail 0.3s ease;
         }
 
         .file-detail .name {
@@ -931,17 +934,12 @@
                 flex: 1 1 20px;
             }
 
-            .top-bar {
+            .top-bar-row {
                 flex-direction: column;
                 align-items: stretch;
             }
 
-            .top-bar .badge {
-                margin-left: 0;
-                text-align: center;
-            }
-
-            .step-indicator .btn-databank {
+            .top-bar-row-1 .btn-databank {
                 margin-left: 0;
             }
 
@@ -1189,83 +1187,84 @@
                     <span class="step-circle">4</span>
                     <span class="step-label">Review and import</span>
                 </div>
-                <!-- Moved here from .top-bar so it sits on the same row as the step strip
-                     (margin-left: auto pushes it to the far right while the steps stay
-                     centered in the remaining space -- see .step-indicator .btn-databank
-                     below). Disabled state / updateGoToDataBankState() wiring unchanged. -->
-                <button class="btn-databank" id="goToDataBankBtn" disabled>📊 Go to Data Bank</button>
             </div>
 
-            <!-- TOP BAR: breadcrumb (back link · template · download · sheet) + status badge + data bank shortcut -->
+            <!-- TOP BAR: light-grey boxed container with two stacked rows -- Row 1 is
+                 file-selection/action controls, Row 2 is setup/config controls (see
+                 .top-bar-row below). -->
             <div class="top-bar">
                 <!-- Replaces the old "← Dashboard / Upload Client Data" breadcrumb (redundant with
                      the global navbar's back-arrow/home-icon) AND the old drag-and-drop area (removed
                      entirely in Phase 2 -- click-to-upload only, no drag/drop). #fileInfo/#fileInput
                      moved here verbatim from the old #uploadArea so resetUpload()/handleFile()/
                      clearBtn wiring in upload.js keeps working unchanged. -->
-                <div class="upload-file-group" id="uploadFileGroup">
-                    <button class="btn-upload-file" id="uploadFileBtn" type="button">
-                        <span class="upload-file-btn-main">Upload File</span>
-                        <span class="upload-file-btn-sub">.xlsx, .xls</span>
-                    </button>
-                    <div class="file-detail" id="fileInfo" style="display:none;">
-                        <span class="name" id="fileName">file.xlsx</span>
-                        <span class="size" id="fileSize">0 KB</span>
-                        <button class="clear" id="clearBtn" title="Remove file">✕</button>
-                    </div>
-                    <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
-                </div>
-                <div class="field">
-                    <label>📋 Template</label>
-                    <select id="templateDropdown">
-                        <option value="">-- Select --</option>
-                    </select>
-                </div>
-                <!-- Collapsed (Phase 3): Date Delimiter/Order (+ Phase 5's sample preview) now
-                     live inside a popover behind this trigger, instead of two always-visible
-                     dropdowns. Hidden until mapping is known (setDateFormatGroupVisible() in
-                     upload.js), matching the reveal timing of the mini preview/row exclusion grid. -->
-                <div class="field" id="dateFormatGroup" style="display:none;">
-                    <button class="date-format-trigger" id="dateFormatTriggerBtn" type="button">
-                        📅 Date format: <span id="dateFormatTriggerLabel">DD/MM/YYYY</span>
-                    </button>
-                    <div class="date-format-popover" id="dateFormatPopover" style="display:none;">
-                        <div class="field">
-                            <label>📅 Date Delimiter</label>
-                            <select id="dateDelimiterDropdown">
-                                <option value="/">/ (Slash)</option>
-                                <option value="-">- (Dash)</option>
-                                <option value="">No delimiter</option>
-                            </select>
+                <div class="top-bar-row top-bar-row-1">
+                    <div class="upload-file-group" id="uploadFileGroup">
+                        <button class="btn-upload-file" id="uploadFileBtn" type="button">
+                            <span class="upload-file-btn-main">Upload File</span>
+                            <span class="upload-file-btn-sub">.xlsx, .xls</span>
+                        </button>
+                        <div class="file-detail" id="fileInfo" style="display:none;">
+                            <span class="name" id="fileName">file.xlsx</span>
+                            <span class="size" id="fileSize">0 KB</span>
+                            <button class="clear" id="clearBtn" title="Remove file">✕</button>
                         </div>
-                        <div class="field">
-                            <label>Date Order</label>
-                            <select id="dateOrderDropdown">
-                                <!-- Populated by JS based on the delimiter selection -->
-                            </select>
-                        </div>
-                        <!-- Live sample-date preview (Phase 5): 2-3 raw -> parsed samples under the chosen format, or an error state. Populated by JS once mapping is known. -->
-                        <div class="field" id="dateFormatPreview" style="display:none;"></div>
+                        <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
                     </div>
+                    <!-- Preview button: visibility/enabled-state driven entirely by
+                         updatePreviewButtonState() in upload.js (unchanged) -- always present,
+                         just disabled until file+sheet+template+mapping+validation are ready. -->
+                    <button class="preview-btn" id="previewBtn">👁️ Preview</button>
+                    <!-- Go to Data Bank: margin-left: auto (.top-bar-row-1 .btn-databank) pushes
+                         it to the far right of this row. Disabled state /
+                         updateGoToDataBankState() wiring unchanged. -->
+                    <button class="btn-databank" id="goToDataBankBtn" disabled>📊 Go to Data Bank</button>
                 </div>
-                <!-- Regrouped (Phase 2): Download Template + Sheet selector are gated together
-                     behind Template selection, instead of Download always being visible. -->
-                <div class="field-group" id="sheetDownloadGroup" style="display:none;">
-                    <button class="download-template-link" id="downloadBtn" disabled>📥 Download Template</button>
-                    <div class="field" id="sheetField" style="display:none;">
-                        <label>📄 Sheet</label>
-                        <select id="sheetSelector">
+                <div class="top-bar-row top-bar-row-2">
+                    <div class="field">
+                        <label>📋 Template</label>
+                        <select id="templateDropdown">
                             <option value="">-- Select --</option>
                         </select>
                     </div>
-                </div>
-                <!-- Grouped (Phase 4): match badge + Preview button, revealed together once
-                     mapping resolves (setMatchPreviewGroupVisible() in upload.js), same reveal
-                     timing as the Date format group/row exclusion grid. Preview moved here from
-                     inside #sheetField -- same id/classes, only its parent changed. -->
-                <div class="field-group" id="matchPreviewGroup" style="display:none;">
-                    <span class="badge" id="statusBadge">⏳ Select a template</span>
-                    <button class="preview-btn" id="previewBtn">👁️ Preview</button>
+                    <!-- Regrouped (Phase 2): Download Template + Sheet selector are gated together
+                         behind Template selection, instead of Download always being visible. -->
+                    <div class="field-group" id="sheetDownloadGroup" style="display:none;">
+                        <button class="btn-download-icon" id="downloadBtn" type="button" title="Download selected template" disabled>⬇️</button>
+                        <div class="field" id="sheetField" style="display:none;">
+                            <label>📄 Sheet</label>
+                            <select id="sheetSelector">
+                                <option value="">-- Select --</option>
+                            </select>
+                        </div>
+                    </div>
+                    <!-- Collapsed (Phase 3): Date Delimiter/Order (+ Phase 5's sample preview) now
+                         live inside a popover behind this trigger, instead of two always-visible
+                         dropdowns. Hidden until mapping is known (setDateFormatGroupVisible() in
+                         upload.js), matching the reveal timing of the mini preview/row exclusion grid. -->
+                    <div class="field" id="dateFormatGroup" style="display:none;">
+                        <button class="date-format-trigger" id="dateFormatTriggerBtn" type="button">
+                            📅 Date format: <span id="dateFormatTriggerLabel">DD/MM/YYYY</span>
+                        </button>
+                        <div class="date-format-popover" id="dateFormatPopover" style="display:none;">
+                            <div class="field">
+                                <label>📅 Date Delimiter</label>
+                                <select id="dateDelimiterDropdown">
+                                    <option value="/">/ (Slash)</option>
+                                    <option value="-">- (Dash)</option>
+                                    <option value="">No delimiter</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label>Date Order</label>
+                                <select id="dateOrderDropdown">
+                                    <!-- Populated by JS based on the delimiter selection -->
+                                </select>
+                            </div>
+                            <!-- Live sample-date preview (Phase 5): 2-3 raw -> parsed samples under the chosen format, or an error state. Populated by JS once mapping is known. -->
+                            <div class="field" id="dateFormatPreview" style="display:none;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -1352,9 +1351,11 @@
             </div>
 
             <!-- STATUS BAR -->
-            <div class="status-bar info" id="statusBar">
+            <!-- Hidden by default -- no initial placeholder text; showStatus() (upload.js) reveals
+                 this the moment there's a real message to show (error, success, progress). -->
+            <div class="status-bar info" id="statusBar" style="display:none;">
                 <span class="icon">ℹ️</span>
-                <span id="statusMessage">Select a template and upload an Excel file to begin.</span>
+                <span id="statusMessage"></span>
                 <span class="spacer" id="statusExtra"></span>
             </div>
 

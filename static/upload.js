@@ -120,13 +120,6 @@ function setSheetDownloadGroupVisible(visible) {
     if (group) group.style.display = visible ? 'flex' : 'none';
 }
 
-// Match badge + Preview button (Phase 4) -- revealed together once mapping resolves, same
-// reveal timing as the Date format group/row exclusion grid.
-function setMatchPreviewGroupVisible(visible) {
-    const group = document.getElementById('matchPreviewGroup');
-    if (group) group.style.display = visible ? 'flex' : 'none';
-}
-
 // Go to Data Bank (Phase 4) -- stays visually inert until Template -> Sheet -> mapping all
 // resolve; navigation behavior in the click handler (window.onload, further down) is unchanged.
 function updateGoToDataBankState(enabled) {
@@ -401,11 +394,13 @@ function updatePreviewButtonState() {
 
     const isReady = isFileLoaded && isSheetSelected && isTemplateSelected && isMappingDone && isValidated;
 
+    // Only appears once the file is loaded AND validated -- hidden (not just disabled)
+    // beforehand, since it has nothing to preview yet.
     if (isReady) {
         previewBtn.style.display = 'inline-block';
         previewBtn.disabled = false;
     } else {
-        previewBtn.style.display = 'inline-block';
+        previewBtn.style.display = 'none';
         previewBtn.disabled = true;
     }
 }
@@ -619,7 +614,6 @@ if (templateDropdown) {
             setSheetDownloadGroupVisible(false); // Template cleared -- hide Sheet/Download again
             setDateFormatGroupVisible(false); // ...and the Date format trigger/popover too
             closeDateFormatPopover();
-            setMatchPreviewGroupVisible(false); // ...and the match badge/Preview group...
             updateGoToDataBankState(false); // ...and disable Go to Data Bank again
             updateStepIndicator(1);
             updatePreviewButtonState();
@@ -856,9 +850,7 @@ function resetUpload() {
     setDateFormatGroupVisible(false);
     closeDateFormatPopover();
 
-    // Hide the match badge/Preview group and disable Go to Data Bank again (Phase 4) --
-    // no mapping left to base either on.
-    setMatchPreviewGroupVisible(false);
+    // Disable Go to Data Bank again (Phase 4) -- no mapping left to base it on.
     updateGoToDataBankState(false);
 
     // Hide the row selection grid and clear its state (Phase 2 of row-exclusion) –
@@ -942,9 +934,9 @@ async function autoMapColumns() {
         // Mapping is complete – show the row selection grid (Phase 2 of row-exclusion).
         renderRowExclusionGrid();
 
-        // Mapping resolved (Phase 4) -- reveal the match badge/Preview group, enable Go to
-        // Data Bank, and advance the step strip to "Map columns".
-        setMatchPreviewGroupVisible(true);
+        // Mapping resolved (Phase 4) -- enable Go to Data Bank and advance the step strip to
+        // "Map columns". Preview's own visibility/enabled-state is driven by
+        // updatePreviewButtonState() (called just below), not this group any more.
         updateGoToDataBankState(true);
         updateStepIndicator(3);
         saveUploadSessionState(); // Mapping resolved -- checkpoint the full session state
@@ -2159,7 +2151,9 @@ window.onload = async function() {
     // (session-restore) tries to set the dropdown's value.
     await loadTemplates();
     populateDateOrderDropdown(selectedDateDelimiter);
-    showStatus('Select a template and upload an Excel file to begin.', 'info');
+    // No initial placeholder status message on page load -- redundant hand-holding text; the
+    // status bar stays hidden by default (#statusBar) and only appears once something actually
+    // happens (a real error, success, or progress message via showStatus()).
     updatePreviewButtonState();
 
     // Session-restore: silently reapply a previously in-progress upload (Template/Sheet/Date
