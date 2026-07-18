@@ -52,7 +52,6 @@ const cashbookNextPage = document.getElementById('cashbookNextPage');
 const cashbookPageInfo = document.getElementById('cashbookPageInfo');
 const cashbookRowCount = document.getElementById('cashbookRowCount');
 const startVerificationBtn = document.getElementById('startVerificationBtn');
-const exitCashbookLink = document.getElementById('exitCashbookLink');
 
 const supportingModal = document.getElementById('supportingModal');
 const supportingSearchInput = document.getElementById('supportingSearchInput');
@@ -203,6 +202,9 @@ async function openCashbook() {
     dashboardContent.style.display = 'none';
     sessionContent.style.display = 'none';
     cashbookContent.style.display = 'block';
+    // Global navbar back-arrow should return to the Verification module's entry view (not
+    // index.html) while viewing a cashbook's transactions.
+    if (typeof setBackOverride === 'function') setBackOverride(exitCashbookView);
     cashbookNameDisplay.textContent = cashbook;
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -210,6 +212,17 @@ async function openCashbook() {
     cashbookStartDate.value = formatDateInput(firstDay);
     cashbookEndDate.value = formatDateInput(lastDay);
     await fetchCashbookData();
+}
+
+// ---------- EXIT CASHBOOK VIEW (return to Verification module's entry view) ----------
+// Shared by the global navbar back-arrow override (set in openCashbook()/exitSession()) — there
+// is no separate in-body "Back to Verification" link/handler anymore, this is the single place
+// that logic lives.
+function exitCashbookView() {
+    cashbookContent.style.display = 'none';
+    dashboardContent.style.display = 'block';
+    selectedCashbook = null;
+    cashbookTableWrapper.innerHTML = '';
 }
 
 // ---------- CASHBOOK DATA FETCH ----------
@@ -1682,8 +1695,9 @@ function exitSession() {
         saveAllVoucherLines(); // Phase 4: saves every line, not just the active one
                 sessionContent.style.display = 'none';
         cashbookContent.style.display = 'block';
-        // Back to the Cashbook selection screen — restore the navbar back-arrow's default target.
-        if (typeof setBackOverride === 'function') setBackOverride(null);
+        // Back to the Cashbook view — navbar back-arrow should now go to the Verification
+        // module's entry view (same override openCashbook() sets), not straight to index.html.
+        if (typeof setBackOverride === 'function') setBackOverride(exitCashbookView);
         // Restore padding when session ends
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.remove('verification-active');
@@ -1807,15 +1821,6 @@ if (cashbookNextPage) {
     });
 }
 if (startVerificationBtn) startVerificationBtn.addEventListener('click', startSessionFromCashbook);
-if (exitCashbookLink) {
-    exitCashbookLink.addEventListener('click', function(e) {
-        e.preventDefault();
-        cashbookContent.style.display = 'none';
-        dashboardContent.style.display = 'block';
-        selectedCashbook = null;
-        cashbookTableWrapper.innerHTML = '';
-    });
-}
 
 // Phase 2: standalone transaction view removed — prevBtn/nextBtn/verifyBtn/saveProgressBtn/exitBtn
 // are no longer static DOM elements (nav controls are dynamically rendered in #voucherHeaderBar).
