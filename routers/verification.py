@@ -256,7 +256,10 @@ def start_verification_session(
     cashbook_name: str = Query(..., description="Cashbook name (as extracted)"),
     period_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
     period_end: str = Query(..., description="End date (YYYY-MM-DD)"),
-    created_by: str = "Analyst"
+    created_by: str = "Analyst",
+    # Distinguishes a Cash Verification session from a Bank Verification session (Phases
+    # 7-8 add the dashboard entry points/UI that will pass 'bank' - no caller does yet).
+    session_type: str = Query('cash', pattern="^(cash|bank)$", description="'cash' or 'bank'")
 ):
     client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
     if not client:
@@ -367,10 +370,10 @@ def start_verification_session(
         # Insert session header
     session_id = execute_write(
         """
-        INSERT INTO verification_sessions (client_id, cashbook_name, period_start, period_end, created_by, status, total_transactions)
-        VALUES (?, ?, ?, ?, ?, 'In Progress', ?)
+        INSERT INTO verification_sessions (client_id, cashbook_name, period_start, period_end, created_by, status, total_transactions, session_type)
+        VALUES (?, ?, ?, ?, ?, 'In Progress', ?, ?)
         """,
-        (client_id, cashbook_name, period_start, period_end, created_by, len(transactions_to_verify))
+        (client_id, cashbook_name, period_start, period_end, created_by, len(transactions_to_verify), session_type)
     )
     
     # Prepare parameters for all details in one batch

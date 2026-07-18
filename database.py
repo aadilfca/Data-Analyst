@@ -404,6 +404,22 @@ def init_db():
             )
         ''')
 
+        # Schema upgrade: add session_type column distinguishing Cash vs Bank verification
+        # sessions (prerequisite for the Bank Verification entry point/mode, Phases 7-8).
+        # No CHECK constraint exists on this table, so a plain ALTER TABLE ADD COLUMN is
+        # sufficient here - unlike client_voucher_prefixes' CHECK-constraint rebuild in an
+        # earlier migration. DEFAULT 'cash' both backfills every pre-existing session (Bank
+        # Verification didn't exist yet, so every session created so far is necessarily a
+        # Cash session) and covers any future insert that omits the column.
+        try:
+            cur = conn.execute("PRAGMA table_info(verification_sessions)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'session_type' not in columns:
+                conn.execute("ALTER TABLE verification_sessions ADD COLUMN session_type TEXT NOT NULL DEFAULT 'cash'")
+                print("✅ Added session_type column to verification_sessions (backfilled existing rows as 'cash')")
+        except Exception as e:
+            print("⚠️ Could not add session_type to verification_sessions:", e)
+
         conn.execute('''
             CREATE TABLE IF NOT EXISTS verification_details (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

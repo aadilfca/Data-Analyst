@@ -34,11 +34,19 @@
 
         <!-- Module Buttons Grid -->
         <div class="module-grid">
-            <!-- Module 1: Verification -->
-            <div class="module-card" onclick="window.location.href='/static/verification.html'">
-                <div class="module-icon">✅</div>
-                <h3>Verification</h3>
-                <p>Verify and approve items</p>
+            <!-- Module 1a: Cash Verification (navigation wired in script.js - no inline onclick) -->
+            <div class="module-card" id="cashVerificationCard">
+                <div class="module-icon">💵</div>
+                <h3>Cash Verification</h3>
+                <p>Verify cash vouchers</p>
+                <span class="module-status">Ready</span>
+            </div>
+
+            <!-- Module 1b: Bank Verification (navigation wired in script.js - no inline onclick) -->
+            <div class="module-card" id="bankVerificationCard">
+                <div class="module-icon">🏦</div>
+                <h3>Bank Verification</h3>
+                <p>Verify bank vouchers</p>
                 <span class="module-status">Ready</span>
             </div>
 
