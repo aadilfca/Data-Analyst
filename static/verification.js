@@ -1802,10 +1802,10 @@ async function searchSupportingDocuments() {
 
 // ---------- BANK VERIFICATION (Phase 8): OPEN SESSION POPUP ----------
 // Sets all book-type-specific popup text based on currentType, then opens it and loads
-// candidates. Factored out of the #cashVerificationBtn click handler so it can also be called
-// automatically on page load when a ?type= param is present (see window.onload below) - that
-// entry path skips the internal Module Grid entirely, since the dashboard's own Cash/Bank
-// Verification cards (static/index.html) already made this choice before this page even loaded.
+// candidates. Called automatically on page load when a ?type= param is present (see
+// window.onload below) - the only entry path now: both the dashboard's Cash/Bank cards
+// (static/index.html) and this page's own hub tiles (#cashVoucherTile/#bankVoucherTile)
+// navigate here with ?type= already chosen, so the hub grid is skipped on those loads.
 function openSessionPopup() {
     const title = document.getElementById('sessionPopupTitle');
     const subtitle = document.getElementById('sessionPopupSubtitle');
@@ -1826,9 +1826,30 @@ function openSessionPopup() {
 }
 
 // ---------- EVENT LISTENERS ----------
-const cashBtn = document.getElementById('cashVerificationBtn');
-if (cashBtn) {
-    cashBtn.addEventListener('click', openSessionPopup);
+// Verification hub tiles: Cash/Bank navigate with ?type=, deliberately re-entering this same
+// page through the existing window.onload auto-open path (openSessionPopup fires on load when
+// a type param is present) — no separate in-page open logic, one entry path for both the
+// dashboard's cards (index.html) and these hub tiles. "Coming soon" tiles have no handler.
+const cashVoucherTile = document.getElementById('cashVoucherTile');
+if (cashVoucherTile) {
+    cashVoucherTile.addEventListener('click', function() {
+        window.location.href = '/static/verification.html?type=cash';
+    });
+}
+const bankVoucherTile = document.getElementById('bankVoucherTile');
+if (bankVoucherTile) {
+    bankVoucherTile.addEventListener('click', function() {
+        window.location.href = '/static/verification.html?type=bank';
+    });
+}
+// Transaction Report moved from the old Module Grid into the Client Data Links section — same
+// preventDefault-on-anchor pattern as exitReportLink below.
+const transactionReportLink = document.getElementById('transactionReportLink');
+if (transactionReportLink) {
+    transactionReportLink.addEventListener('click', function(e) {
+        e.preventDefault();
+        openTransactionReport();
+    });
 }
 
 if (popupStartBtn) popupStartBtn.addEventListener('click', openCashbook);

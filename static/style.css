@@ -311,6 +311,42 @@ body {
     color: #c62828;
 }
 
+/* ---------- VERIFICATION HUB (verification.html internal picker) ----------
+   Two labelled groups of .module-card tiles (Voucher verification / Process verification).
+   .module-grid/.module-card themselves are shared with index.html and stay untouched —
+   only these additive, hub-specific rules are new. */
+.hub-group .module-grid {
+    /* The base .module-grid's 40px bottom margin is sized for a single grid followed by
+       Quick Stats; between two stacked hub groups it reads as a gap twice the size of the
+       gap between cards, so tighten it within the hub only. */
+    margin-bottom: 25px;
+}
+
+.hub-group-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 14px;
+}
+
+/* "Coming soon" tiles are display-only placeholders: dimmed, default cursor, and the base
+   card's hover lift/active shrink suppressed so they read as visibly inert (they have no
+   click handler either — see verification.html). */
+.module-card.coming-soon {
+    opacity: 0.55;
+    cursor: default;
+}
+.module-card.coming-soon:hover {
+    transform: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    border-color: transparent;
+}
+.module-card.coming-soon:active {
+    transform: none;
+}
+
 /* ---------- QUICK STATS ---------- */
 .quick-stats {
     background: white;

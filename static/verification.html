@@ -450,40 +450,85 @@
                 <p>Select a verification type to begin</p>
             </header>
 
-            <!-- Module Grid -->
-            <div class="module-grid">
-                <!-- Cash Verification -->
-                <div class="module-card" id="cashVerificationBtn">
-                    <div class="module-icon">💰</div>
-                    <h3>Cash Verification</h3>
-                    <p>Verify cash transactions and balances</p>
-                    <span class="module-status">Ready</span>
+            <!-- Verification Hub: two labelled groups replacing the old 4-card Module Grid.
+                 Only Cash/Bank voucher tiles are live (they navigate with ?type=, re-entering
+                 through the existing window.onload auto-open path in verification.js); every
+                 other tile is a display-only "Coming soon" placeholder — no id, no handler.
+                 Transaction Report moved down into the Client Data Links section (it's a data
+                 shortcut, not a verification type). -->
+            <section class="hub-group">
+                <h2 class="hub-group-title">Voucher verification</h2>
+                <div class="module-grid">
+                    <!-- Cash vouchers (live) — wired in verification.js to ?type=cash -->
+                    <div class="module-card" id="cashVoucherTile">
+                        <div class="module-icon">💰</div>
+                        <h3>Cash vouchers</h3>
+                        <p>Verify cash payment and receipt vouchers</p>
+                        <span class="module-status">Ready</span>
+                    </div>
+                    <!-- Bank vouchers (live) — wired in verification.js to ?type=bank -->
+                    <div class="module-card" id="bankVoucherTile">
+                        <div class="module-icon">🏦</div>
+                        <h3>Bank vouchers</h3>
+                        <p>Verify bank payment and receipt vouchers</p>
+                        <span class="module-status">Ready</span>
+                    </div>
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">🏪</div>
+                        <h3>Local vendor</h3>
+                        <p>Verify local vendor purchase vouchers</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">🚢</div>
+                        <h3>Import vendor</h3>
+                        <p>Verify import vendor vouchers</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">🌍</div>
+                        <h3>Export customer</h3>
+                        <p>Verify export customer vouchers</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">👥</div>
+                        <h3>Payroll</h3>
+                        <p>Verify payroll vouchers</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">🔧</div>
+                        <h3>Contractor</h3>
+                        <p>Verify contractor vouchers</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
                 </div>
+            </section>
 
-                <!-- Bank Verification -->
-                <div class="module-card" onclick="alert('Bank Verification coming soon!')">
-                    <div class="module-icon">🏦</div>
-                    <h3>Bank Verification</h3>
-                    <p>Verify bank transactions and reconciliations</p>
-                    <span class="module-status coming">Coming Soon</span>
+            <section class="hub-group">
+                <h2 class="hub-group-title">Process verification</h2>
+                <div class="module-grid">
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">📥</div>
+                        <h3>Store receiving vs vendor JV</h3>
+                        <p>Match store receiving against vendor JVs</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">🔁</div>
+                        <h3>PO vs gate receiving vs store receiving</h3>
+                        <p>Three-way match across the receiving cycle</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">🏭</div>
+                        <h3>Store issuance vs article manufactured</h3>
+                        <p>Match store issuance against production output</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
                 </div>
-
-                <!-- Journal Verification -->
-                <div class="module-card" onclick="alert('Journal Verification coming soon!')">
-                    <div class="module-icon">📓</div>
-                    <h3>Journal Verification</h3>
-                    <p>Verify journal entries and adjustments</p>
-                    <span class="module-status coming">Coming Soon</span>
-                </div>
-
-                <!-- Transaction Report -->
-                <div class="module-card" onclick="openTransactionReport()">
-                    <div class="module-icon">📊</div>
-                    <h3>Transaction Report</h3>
-                    <p>View transaction data</p>
-                    <span class="module-status">Ready</span>
-                </div>
-            </div>
+            </section>
 
             <!-- Quick Stats -->
             <section class="quick-stats">
@@ -508,6 +553,14 @@
             <div class="data-links">
                 <h2>📂 Client Data Links</h2>
                 <div class="link-grid">
+                    <!-- In-page report view (formerly a Module Grid card) — opens
+                         openTransactionReport() via an id-based listener in verification.js,
+                         unlike the databank template links below which navigate directly. -->
+                    <a href="#" class="link-item" id="transactionReportLink">
+                        <span class="icon">📊</span>
+                        <span class="label">Transaction Report</span>
+                        <span class="badge">Report view</span>
+                    </a>
                     <a href="/static/databank.html?template=1" class="link-item" target="_blank">
                         <span class="icon">📊</span>
                         <span class="label">Transaction Report</span>
