@@ -3,6 +3,13 @@
 // ==============================================
 
 // API_BASE defined in client_context.js
+
+// Bank Verification (Phase 8): read once at load, matching the existing ?client_id= precedent
+// in client_settings.js. Drives category filtering/labels/session_type for the rest of this
+// page load - never re-read after this point. Anything other than exactly 'bank' defaults to
+// 'cash', matching today's only-cash behavior for direct navigation with no ?type param.
+const currentType = (new URLSearchParams(window.location.search).get('type') === 'bank') ? 'bank' : 'cash';
+
 let currentSessionId = null;
 let currentDetailId = null;
 let currentClientDataId = null;
@@ -148,20 +155,26 @@ async function loadCashbooks() {
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     const start = formatDateInput(firstDay);
     const end = formatDateInput(lastDay);
+    // Bank Verification (Phase 8): book-type-specific copy, since this same function serves both
+    // Cash and Bank discovery now (only the category_group filter/wording differs).
+    const bookWord = currentType === 'bank' ? 'bankbook' : 'cashbook';
+    const bookWordCap = currentType === 'bank' ? 'Bankbook' : 'Cashbook';
+    const voucherHint = currentType === 'bank' ? 'BPV/BRV' : 'CPV/CRV';
     try {
         const params = new URLSearchParams({
             client_id: clientId,
             date_start: start,
-            date_end: end
+            date_end: end,
+            category_group: currentType
         });
         const res = await fetch(`${API_BASE}/api/verification/cashbooks?${params}`);
         if (!res.ok) {
             const err = await res.json();
-            throw new Error(err.detail || 'Failed to fetch cashbooks');
+            throw new Error(err.detail || `Failed to fetch ${bookWord}s`);
         }
         const data = await res.json();
         if (data.cashbooks && data.cashbooks.length > 0) {
-            popupCashbookSelect.innerHTML = '<option value="">-- Select Cashbook --</option>';
+            popupCashbookSelect.innerHTML = `<option value="">-- Select ${bookWordCap} --</option>`;
             data.cashbooks.forEach(cb => {
                 const opt = document.createElement('option');
                 opt.value = cb;
@@ -171,20 +184,20 @@ async function loadCashbooks() {
             popupCashbookSelect.disabled = false;
             popupStartBtn.disabled = false;
         } else {
-            popupCashbookSelect.innerHTML = '<option value="">⚠️ No cashbooks found</option>';
+            popupCashbookSelect.innerHTML = `<option value="">⚠️ No ${bookWord}s found</option>`;
             popupCashbookSelect.disabled = true;
             popupStartBtn.disabled = true;
             showPopupError(
-                'No cashbooks found for this client.\n' +
-                'Make sure you have uploaded data containing CPV/CRV vouchers.\n' +
+                `No ${bookWord}s found for this client.\n` +
+                `Make sure you have uploaded data containing ${voucherHint} vouchers.\n` +
                 'The column names must be exactly: "Voucher ID", "Account Name", "Debit", "Credit".'
             );
         }
     } catch (e) {
-        console.error('Error loading cashbooks:', e);
+        console.error(`Error loading ${bookWord}s:`, e);
         popupCashbookSelect.innerHTML = '<option value="">⚠️ Error loading</option>';
         popupCashbookSelect.disabled = true;
-        showPopupError('Failed to load cashbooks: ' + e.message);
+        showPopupError(`Failed to load ${bookWord}s: ` + e.message);
     }
 }
 
@@ -205,6 +218,9 @@ async function openCashbook() {
     // Global navbar back-arrow should return to the Verification module's entry view (not
     // index.html) while viewing a cashbook's transactions.
     if (typeof setBackOverride === 'function') setBackOverride(exitCashbookView);
+    // Bank Verification (Phase 8): relabel the page header to match currentType.
+    const headerLabel = document.getElementById('cashbookHeaderLabel');
+    if (headerLabel) headerLabel.textContent = currentType === 'bank' ? '🏦 Bankbook:' : '📒 Cashbook:';
     cashbookNameDisplay.textContent = cashbook;
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -346,7 +362,10 @@ async function startSessionFromCashbook() {
             cashbook_name: selectedCashbook,
             period_start: start,
             period_end: end,
-            created_by: 'Analyst'
+            created_by: 'Analyst',
+            // Bank Verification (Phase 8): stores which mode this session was started under
+            // (see the session_type column added to verification_sessions in Phase 6).
+            session_type: currentType
         });
         const res = await fetch(`${API_BASE}/api/verification/start_session?${params}`, {
             method: 'POST'
@@ -488,13 +507,16 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
     if (cashbookBar) {
         const cashbookName = window._currentCashbook || selectedCashbook || '—';
         const stats = computeVoucherStats();
+        // Bank Verification (Phase 8): "Cashbook"/📒 vs "Bankbook"/🏦 label, driven by currentType.
+        const bookLabel = currentType === 'bank' ? 'Bankbook' : 'Cashbook';
+        const bookIcon = currentType === 'bank' ? '🏦' : '📒';
         cashbookBar.innerHTML = `
             <div class="cashbook-stats">
-                <span class="cashbook-stat"><span class="cashbook-stat-label">Cashbook</span><span class="cashbook-stat-value">${cashbookName}</span></span>
+                <span class="cashbook-stat"><span class="cashbook-stat-label">${bookLabel}</span><span class="cashbook-stat-value">${cashbookName}</span></span>
                 <span class="cashbook-stat"><span class="cashbook-stat-label">Total Vouchers</span><span class="cashbook-stat-value">${stats.totalVouchers}</span></span>
                 <span class="cashbook-stat"><span class="cashbook-stat-label">Verified</span><span class="cashbook-stat-value">${stats.verifiedVouchers}</span></span>
             </div>
-            <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">📒</span> Cashbook</button>
+            <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">${bookIcon}</span> ${bookLabel}</button>
         `;
         document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
             if (typeof exitSession === 'function') exitSession();
@@ -1778,13 +1800,35 @@ async function searchSupportingDocuments() {
     }
 }
 
+// ---------- BANK VERIFICATION (Phase 8): OPEN SESSION POPUP ----------
+// Sets all book-type-specific popup text based on currentType, then opens it and loads
+// candidates. Factored out of the #cashVerificationBtn click handler so it can also be called
+// automatically on page load when a ?type= param is present (see window.onload below) - that
+// entry path skips the internal Module Grid entirely, since the dashboard's own Cash/Bank
+// Verification cards (static/index.html) already made this choice before this page even loaded.
+function openSessionPopup() {
+    const title = document.getElementById('sessionPopupTitle');
+    const subtitle = document.getElementById('sessionPopupSubtitle');
+    const label = document.getElementById('popupCashbookLabel');
+    if (currentType === 'bank') {
+        if (title) title.textContent = '📋 Start Bank Verification';
+        if (subtitle) subtitle.textContent = 'Select a bankbook to begin verification.';
+        if (label) label.textContent = '🏦 Bankbook';
+        if (popupStartBtn) popupStartBtn.textContent = '🚀 Open Bankbook';
+    } else {
+        if (title) title.textContent = '📋 Start Cash Verification';
+        if (subtitle) subtitle.textContent = 'Select a cashbook to begin verification.';
+        if (label) label.textContent = '📒 Cashbook';
+        if (popupStartBtn) popupStartBtn.textContent = '🚀 Open Cashbook';
+    }
+    popupOverlay.style.display = 'flex';
+    loadCashbooks();
+}
+
 // ---------- EVENT LISTENERS ----------
 const cashBtn = document.getElementById('cashVerificationBtn');
 if (cashBtn) {
-    cashBtn.addEventListener('click', function() {
-        popupOverlay.style.display = 'flex';
-        loadCashbooks();
-    });
+    cashBtn.addEventListener('click', openSessionPopup);
 }
 
 if (popupStartBtn) popupStartBtn.addEventListener('click', openCashbook);
@@ -2258,6 +2302,14 @@ window.onload = function() {
         setNavModule('Verification');
     }
     loadVerificationStats();
+    // Bank Verification (Phase 8): a ?type= param means the user already chose Cash or Bank on
+    // the dashboard (static/index.html) - skip this page's own internal Module Grid and open the
+    // session popup directly, instead of asking the user to pick a verification type a second
+    // time. Direct navigation to this page with no ?type param is unaffected (currentType
+    // defaults to 'cash', and the grid still shows normally for that entry path).
+    if (new URLSearchParams(window.location.search).has('type')) {
+        openSessionPopup();
+    }
 };
 
 async function loadVerificationStats() {

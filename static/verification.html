@@ -608,10 +608,13 @@
         <!-- ============================================= -->
         <div id="sessionPopupOverlay">
             <div id="sessionPopup">
-                <h2>📋 Start Cash Verification</h2>
-                <p style="color:#64748b; margin-bottom:16px;">Select a cashbook to begin verification.</p>
+                <!-- Text content set/overwritten by openSessionPopup() in verification.js based on
+                     currentType ('cash' or 'bank') - these ids exist only so JS can target them;
+                     the markup below is just the Cash-mode default shown before JS runs. -->
+                <h2 id="sessionPopupTitle">📋 Start Cash Verification</h2>
+                <p id="sessionPopupSubtitle" style="color:#64748b; margin-bottom:16px;">Select a cashbook to begin verification.</p>
                 <div class="field">
-                    <label>📒 Cashbook</label>
+                    <label id="popupCashbookLabel">📒 Cashbook</label>
                     <select id="popupCashbookSelect" disabled>
                         <option value="">-- Loading cashbooks... --</option>
                     </select>
@@ -631,7 +634,9 @@
             <div class="cashbook-header"
                 style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
                 <div>
-                    <h1 style="font-size:24px; margin:0; color:#1a1a2e;">📒 Cashbook: <span
+                    <!-- Prefix text overwritten by openSessionPopup()/openCashbook() flow in
+                         verification.js based on currentType - see the note on #sessionPopupTitle. -->
+                    <h1 style="font-size:24px; margin:0; color:#1a1a2e;"><span id="cashbookHeaderLabel">📒 Cashbook:</span> <span
                             id="cashbookNameDisplay"></span>
                     </h1>
                 </div>

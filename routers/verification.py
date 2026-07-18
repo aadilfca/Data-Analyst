@@ -186,7 +186,11 @@ def get_cashbooks(
     client_id: int = Query(..., description="Client ID"),
     date_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
     date_end: str = Query(..., description="End date (YYYY-MM-DD)"),
-    debug: bool = Query(False, description="If true, return detailed debug info")
+    debug: bool = Query(False, description="If true, return detailed debug info"),
+    # Bank Verification (Phase 8): restricts candidate accounts to just the Cash or Bank
+    # categories, so a client with both Cash and Bank prefixes configured doesn't get them
+    # mixed into one undifferentiated list. Omitted keeps today's unfiltered behavior.
+    category_group: Optional[str] = Query(None, pattern="^(cash|bank)$", description="'cash' or 'bank' - restricts discovery to that category group")
 ):
     client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
     if not client:
@@ -198,8 +202,12 @@ def get_cashbooks(
         raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
-    
+
     client_prefixes = get_client_voucher_prefixes(client_id)
+    if category_group == 'cash':
+        client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Cash Payment', 'Cash Receipt')}
+    elif category_group == 'bank':
+        client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Bank Payment', 'Bank Receipt')}
 
     rows = execute_query(
         """
