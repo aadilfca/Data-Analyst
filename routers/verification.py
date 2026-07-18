@@ -101,6 +101,24 @@ def extract_cashbook_name(row_data: dict, client_prefixes: dict) -> Optional[str
         return account_name
     return None
 
+def is_cashbook_leg_row(row: dict, category: Optional[str]) -> bool:
+    """
+    True only if `row` is structurally the cashbook/bankbook leg of its OWN voucher category
+    (Payment-type -> credit side, Receipt-type -> debit side), mirroring extract_cashbook_name()'s
+    side rule. Regression found during final Bank Verification testing: `cashbook_row` lookups in
+    start_verification_session()/preview_cashbook() previously matched on account_name alone,
+    with no side check - a voucher whose OTHER leg happened to share a name with an unrelated
+    cashbook (e.g. a real Bank Payment transfer voucher debiting "CASH IN HAND" while crediting a
+    bank account) could wrongly be pulled into that unrelated cashbook's transaction list. This
+    can only manifest once a client has both Cash and Bank prefixes configured (impossible before
+    Bank Verification existed), which is why it was dormant until now.
+    """
+    if category in ('Cash Payment', 'Bank Payment'):
+        return row['credit'] > 0
+    if category in ('Cash Receipt', 'Bank Receipt'):
+        return row['debit'] > 0
+    return False
+
 def get_row_data(client_data_id: int) -> dict:
     rows = execute_query("SELECT row_data FROM client_data WHERE id = ?", (client_data_id,))
     if not rows:
@@ -347,8 +365,10 @@ def start_verification_session(
         # The 5-way category already implies Payment vs Receipt, so vtype comes straight from
         # it - no need to re-derive it from the cashbook row's debit/credit sign anymore.
         # cashbook_row is still looked up as a sanity check that the named cashbook actually
-        # appears among this voucher's legs.
-        cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name), None)
+        # appears among this voucher's legs - must also be the structurally correct side for
+        # this voucher's OWN category (see is_cashbook_leg_row()), not just a name match, or a
+        # voucher whose other leg happens to share a name with an unrelated cashbook can leak in.
+        cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])), None)
         if cashbook_row is None:
             continue
         vtype = voucher_type_label(data['category'])
@@ -904,8 +924,9 @@ def preview_cashbook(
     for vid, data in vouchers.items():
         # Same category-implies-type derivation as start_verification_session - cashbook_row
         # is looked up only as a sanity check that the named cashbook actually appears among
-        # this voucher's legs, not to derive vtype anymore.
-        cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name), None)
+        # this voucher's legs (on the structurally correct side, see is_cashbook_leg_row()),
+        # not to derive vtype anymore.
+        cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])), None)
         if cashbook_row is None:
             continue
         vtype = voucher_type_label(data['category'])
