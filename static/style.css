@@ -276,6 +276,52 @@ body {
     font-size: 13px;
 }
 
+/* ---------- GLOBAL QUICK-NAVIGATION SEARCH (Phase 2) ----------
+   Sits right of the ⊞ icon. Results panel reuses .nav-menu-panel/.nav-menu-group/
+   .nav-menu-item as-is (see renderNavSearchResults() in client_context.js) so it looks
+   identical to the Phase 1 dropdown — only the wrapper/input/highlight/empty-state rules
+   below are new. */
+.nav-search-wrapper {
+    position: relative;
+    margin-left: 10px;
+}
+
+.nav-search-input {
+    width: 180px;
+    padding: 6px 12px;
+    border: 2px solid #334155;
+    border-radius: 6px;
+    background: #1e293b;
+    color: #f1f5f9;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+.nav-search-input::placeholder {
+    color: #94a3b8;
+}
+.nav-search-input:hover {
+    border-color: #475569;
+}
+.nav-search-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+/* Roving keyboard highlight (aria-activedescendant target) — distinct from :hover since
+   mouse and keyboard can point at different rows at once. Same soft-blue treatment as
+   .nav-menu-item.current for visual consistency, but a separate concept/class. */
+.nav-menu-item.highlighted {
+    background: #e0f2fe;
+}
+
+.nav-search-empty {
+    padding: 8px 18px;
+    font-size: 13px;
+    color: #94a3b8;
+    font-style: italic;
+}
+
 /* ---------- CLIENT SELECTION WARNING (upload page) ---------- */
 .client-warning {
     display: none;

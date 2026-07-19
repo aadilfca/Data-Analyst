@@ -50,6 +50,25 @@ const NAV_MANIFEST = [
     },
 ];
 
+/**
+ * Flatten NAV_MANIFEST into a single ordered array for search filtering. Pure data
+ * transform (no DOM) — recomputed fresh on every keystroke since the manifest is tiny.
+ * Each entry carries groupTitle/isChild so renderNavSearchResults() can re-group matches
+ * in the manifest's own order without a second, drift-prone copy of the group structure.
+ */
+function flattenNavManifest() {
+    const flat = [];
+    NAV_MANIFEST.forEach(group => {
+        group.items.forEach(item => {
+            flat.push({ label: item.label, url: item.url, state: item.state, groupTitle: group.title, isChild: false });
+            (item.children || []).forEach(child => {
+                flat.push({ label: child.label, url: child.url, state: child.state, groupTitle: group.title, isChild: true });
+            });
+        });
+    });
+    return flat;
+}
+
 // ---------- STATE ----------
 let clientList = [];
 let selectedClientId = null;
@@ -294,6 +313,19 @@ function renderNavLeft() {
         <button type="button" id="navMenuToggle" class="nav-menu-toggle" aria-haspopup="true" aria-expanded="false" title="Quick navigation">⊞</button>
         <div id="navMenuPanel" class="nav-menu-panel" role="menu" hidden></div>
     `;
+    // Phase 2: live-search field beside the ⊞ icon, same NAV_MANIFEST data source. Uses the
+    // ARIA combobox/listbox pattern — the input keeps real DOM focus the whole time; the
+    // "highlighted" result is tracked via aria-activedescendant, not by moving focus onto
+    // result rows (see initNavSearch()/renderNavSearchResults() below).
+    const navSearch = `
+        <div id="navSearchWrapper" class="nav-search-wrapper">
+            <input type="text" id="navSearchInput" class="nav-search-input"
+                   role="combobox" aria-expanded="false" aria-autocomplete="list"
+                   aria-controls="navSearchResults" aria-haspopup="listbox"
+                   placeholder="Search..." autocomplete="off">
+            <div id="navSearchResults" class="nav-menu-panel" role="listbox" hidden></div>
+        </div>
+    `;
 
     if (isDash) {
         // Dashboard: home icon + brand, no back arrow (nothing above the dashboard)
@@ -301,6 +333,7 @@ function renderNavLeft() {
             ${homeIcon}
             <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
             ${navMenu}
+            ${navSearch}
         `;
     } else {
         // Non-dashboard: back arrow, then home icon, then brand
@@ -309,10 +342,12 @@ function renderNavLeft() {
             ${homeIcon}
             <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
             ${navMenu}
+            ${navSearch}
         `;
     }
 
     initNavMenu();
+    initNavSearch();
 }
 
 // ---------- QUICK NAVIGATION MENU (⊞ icon + dropdown) ----------
@@ -428,6 +463,150 @@ function closeNavMenu(toggle, panel, returnFocus) {
     panel.hidden = true;
     toggle.setAttribute('aria-expanded', 'false');
     if (returnFocus) toggle.focus();
+}
+
+// ---------- QUICK NAVIGATION SEARCH (Phase 2) ----------
+// Index of the currently keyboard-highlighted result within the ready-only result set
+// (see getSearchFocusableResults()); -1 means "nothing explicitly highlighted yet", in
+// which case Enter falls back to the first ready result, per the confirmed spec.
+let searchHighlightIndex = -1;
+
+/**
+ * Re-bound on every renderNavLeft() call since the input/panel are rebuilt via innerHTML
+ * each time (same reasoning as initNavMenu()). Only the input's own listeners are (re)bound
+ * here; the outside-click listener is bound once at module load, below.
+ */
+function initNavSearch() {
+    const input = document.getElementById('navSearchInput');
+    const panel = document.getElementById('navSearchResults');
+    if (!input || !panel) return;
+
+    input.addEventListener('input', function () {
+        renderNavSearchResults(input.value);
+    });
+
+    input.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            input.value = '';
+            closeNavSearch(input, panel);
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            if (panel.hidden) return;
+            e.preventDefault();
+            const results = getSearchFocusableResults(panel);
+            if (!results.length) return;
+            if (e.key === 'ArrowDown') {
+                searchHighlightIndex = (searchHighlightIndex + 1) % results.length;
+            } else {
+                searchHighlightIndex = (searchHighlightIndex - 1 + results.length) % results.length;
+            }
+            applySearchHighlight(input, results);
+        } else if (e.key === 'Enter') {
+            if (panel.hidden) return;
+            e.preventDefault();
+            const results = getSearchFocusableResults(panel);
+            const target = results[searchHighlightIndex] || results[0];
+            if (target) {
+                window.location.href = target.getAttribute('href');
+            }
+        }
+    });
+}
+
+// Bound once at module load (mirrors the nav-menu outside-click listener's reasoning above)
+// so repeated renderNavLeft() calls never stack duplicate document-level listeners. Closes
+// the results panel without clearing the typed text — deliberately different from Escape.
+document.addEventListener('click', function (e) {
+    const wrapper = document.getElementById('navSearchWrapper');
+    const panel = document.getElementById('navSearchResults');
+    if (!wrapper || !panel || panel.hidden) return;
+    if (!wrapper.contains(e.target)) {
+        panel.hidden = true;
+        const input = document.getElementById('navSearchInput');
+        if (input) input.setAttribute('aria-expanded', 'false');
+    }
+});
+
+/**
+ * Filter NAV_MANIFEST (via flattenNavManifest()) by a case-insensitive substring match
+ * against each entry's label, and render the matches grouped exactly like Phase 1's
+ * dropdown (group order/titles come straight from NAV_MANIFEST, never duplicated).
+ * Reuses the .nav-menu-panel/.nav-menu-group/.nav-menu-item classes Phase 1 already
+ * built, so the two mechanisms share one visual language.
+ */
+function renderNavSearchResults(query) {
+    const input = document.getElementById('navSearchInput');
+    const panel = document.getElementById('navSearchResults');
+    if (!input || !panel) return;
+
+    const trimmed = query.trim();
+    searchHighlightIndex = -1;
+
+    if (!trimmed) {
+        panel.hidden = true;
+        panel.innerHTML = '';
+        input.setAttribute('aria-expanded', 'false');
+        input.removeAttribute('aria-activedescendant');
+        return;
+    }
+
+    const needle = trimmed.toLowerCase();
+    const matches = flattenNavManifest().filter(entry => entry.label.toLowerCase().includes(needle));
+
+    if (!matches.length) {
+        panel.innerHTML = '<div class="nav-search-empty">No matches found.</div>';
+    } else {
+        let optionIndex = 0;
+        const groupsHtml = NAV_MANIFEST.map(group => {
+            const groupMatches = matches.filter(m => m.groupTitle === group.title);
+            if (!groupMatches.length) return '';
+            const rowsHtml = groupMatches.map(entry => {
+                const classes = [
+                    'nav-menu-item',
+                    entry.state === 'coming-soon' ? 'coming-soon' : '',
+                    entry.isChild ? 'nav-menu-child' : '',
+                ].filter(Boolean).join(' ');
+                if (entry.state === 'ready') {
+                    const id = 'navSearchOpt-' + optionIndex;
+                    optionIndex += 1;
+                    return `<a href="${entry.url}" role="option" id="${id}" class="${classes}">${entry.label}</a>`;
+                }
+                return `<span role="option" aria-disabled="true" class="${classes}">${entry.label}</span>`;
+            }).join('');
+            return `<div class="nav-menu-group"><div class="nav-menu-group-title">${group.title}</div>${rowsHtml}</div>`;
+        }).join('');
+        panel.innerHTML = groupsHtml;
+    }
+
+    panel.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+}
+
+// Only ready (actionable) rows participate in keyboard highlighting/Enter — coming-soon
+// rows are visible but never targetable, matching Phase 1's dropdown convention exactly.
+function getSearchFocusableResults(panel) {
+    return Array.from(panel.querySelectorAll('a[role="option"]'));
+}
+
+function applySearchHighlight(input, results) {
+    results.forEach((el, i) => {
+        el.classList.toggle('highlighted', i === searchHighlightIndex);
+    });
+    const active = results[searchHighlightIndex];
+    if (active) {
+        input.setAttribute('aria-activedescendant', active.id);
+    } else {
+        input.removeAttribute('aria-activedescendant');
+    }
+}
+
+function closeNavSearch(input, panel) {
+    panel.hidden = true;
+    panel.innerHTML = '';
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+    searchHighlightIndex = -1;
+    input.focus();
 }
 
 // ---------- GLOBAL CLICK HANDLER: HOME ICON ----------
