@@ -170,6 +170,112 @@ body {
     color: #f1f5f9;
 }
 
+/* ---------- GLOBAL QUICK-NAVIGATION MENU (⊞ icon + dropdown, Phase 1) ----------
+   Reads from NAV_MANIFEST in client_context.js. Sits immediately right of the
+   "System Analyst" brand text on every page. #navLeft needs position:relative so the
+   absolutely-positioned dropdown panel anchors to it, not to a further-up ancestor. */
+#navLeft {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.nav-menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    background: none;
+    border: none;
+    color: white;
+    border-radius: 50%;
+    padding: 4px;
+    margin-left: 6px;
+    transition: background 0.2s ease, transform 0.2s ease;
+}
+.nav-menu-toggle:hover {
+    background: rgba(255, 255, 255, 0.12);
+    transform: scale(1.15);
+}
+.nav-menu-toggle:focus-visible {
+    outline: 2px solid #4fc3f7;
+    outline-offset: 2px;
+}
+
+.nav-menu-panel {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 8px;
+    min-width: 240px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    padding: 10px 0;
+    z-index: 1200;
+}
+
+.nav-menu-group {
+    padding: 6px 0;
+}
+.nav-menu-group:not(:last-child) {
+    border-bottom: 1px solid #f1f5f9;
+}
+
+.nav-menu-group-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 6px 18px 4px;
+}
+
+.nav-menu-item {
+    display: block;
+    padding: 8px 18px;
+    font-size: 14px;
+    color: #1a1a2e;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.nav-menu-item:hover {
+    background: #f1f5f9;
+}
+.nav-menu-item:focus-visible {
+    outline: 2px solid #4fc3f7;
+    outline-offset: -2px;
+    background: #f1f5f9;
+}
+
+/* "Coming soon" rows (and, this phase, every Verification sub-view child) are inert
+   placeholders — dimmed, default cursor, no hover/focus feedback since they carry no
+   href and no click handler. Mirrors .module-card.coming-soon's dimming convention. */
+.nav-menu-item.coming-soon {
+    opacity: 0.5;
+    cursor: default;
+}
+.nav-menu-item.coming-soon:hover,
+.nav-menu-item.coming-soon:focus-visible {
+    background: transparent;
+    outline: none;
+}
+
+/* "You are here" — the item matching the current page's data-nav-module. */
+.nav-menu-item.current {
+    font-weight: 700;
+    background: #e0f2fe;
+    color: #0369a1;
+}
+
+.nav-menu-item.nav-menu-child {
+    padding-left: 32px;
+    font-size: 13px;
+}
+
 /* ---------- CLIENT SELECTION WARNING (upload page) ---------- */
 .client-warning {
     display: none;

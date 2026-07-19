@@ -7,6 +7,49 @@ const STORAGE_KEY = 'selectedClientId';
 const STORAGE_NAME = 'selectedClientName';
 const STORAGE_CODE = 'selectedClientCode';
 
+// ---------- GLOBAL QUICK-NAVIGATION MANIFEST ----------
+// Hand-maintained tree describing every navigable destination, grouped exactly like the
+// dashboard's three sections (static/index.html). Not a live scrape of the DOM — whoever
+// edits either side must mirror changes into the other manually. Plain data (no rendering
+// logic) so Phase 2's search field can flatten/filter this same array directly.
+// `module` (when present) is matched against window._appNav.module to highlight the
+// current page as "you are here" (see getBackTarget()/data-nav-module below).
+// Verification's `children` (Cashbook/Bank book) are always coming-soon placeholders in
+// this phase — Phase 3 wires real navigation to them via a ?view= mechanism.
+const NAV_MANIFEST = [
+    {
+        title: 'Audit work',
+        items: [
+            {
+                label: 'Verification', url: '/static/verification.html', state: 'ready', module: 'Verification',
+                children: [
+                    { label: 'Cashbook', url: '#', state: 'coming-soon' },
+                    { label: 'Bank book', url: '#', state: 'coming-soon' },
+                ]
+            },
+            { label: 'Reports', url: null, state: 'coming-soon' },
+            { label: 'Analysis', url: null, state: 'coming-soon' },
+        ],
+    },
+    {
+        title: 'Client Data',
+        items: [
+            { label: 'Upload Client Data', url: '/static/upload.html', state: 'ready', module: 'Upload Data' },
+            { label: 'Client Data Bank', url: '/static/databank.html', state: 'ready', module: 'Data Bank' },
+        ],
+    },
+    {
+        title: 'Administration',
+        items: [
+            { label: 'Setup', url: '/static/setup.html', state: 'ready', module: 'Setup' },
+            { label: 'Manage Clients', url: '/static/clients.html', state: 'ready', module: 'Manage Clients' },
+            { label: 'Settings', url: null, state: 'coming-soon' },
+            { label: 'Users', url: null, state: 'coming-soon' },
+            { label: 'Audit Log', url: null, state: 'coming-soon' },
+        ],
+    },
+];
+
 // ---------- STATE ----------
 let clientList = [];
 let selectedClientId = null;
@@ -246,12 +289,18 @@ function renderNavLeft() {
 
     const isDash = isDashboardPage();
     const homeIcon = `<a href="/static/index.html" class="nav-home-icon" title="Go to Dashboard">🏢</a>`;
+    // Quick-navigation icon + panel, rendered immediately after the brand text on every page.
+    const navMenu = `
+        <button type="button" id="navMenuToggle" class="nav-menu-toggle" aria-haspopup="true" aria-expanded="false" title="Quick navigation">⊞</button>
+        <div id="navMenuPanel" class="nav-menu-panel" role="menu" hidden></div>
+    `;
 
     if (isDash) {
         // Dashboard: home icon + brand, no back arrow (nothing above the dashboard)
         container.innerHTML = `
             ${homeIcon}
             <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
+            ${navMenu}
         `;
     } else {
         // Non-dashboard: back arrow, then home icon, then brand
@@ -259,8 +308,126 @@ function renderNavLeft() {
             <a href="${getBackTarget()}" class="nav-back-arrow">←</a>
             ${homeIcon}
             <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
+            ${navMenu}
         `;
     }
+
+    initNavMenu();
+}
+
+// ---------- QUICK NAVIGATION MENU (⊞ icon + dropdown) ----------
+// Re-initialised on every renderNavLeft() call since the toggle/panel are rebuilt via
+// innerHTML each time (mirrors how renderClientControl() re-binds clientSelectElement
+// after its own innerHTML rebuild, above). Only the toggle/panel's own listeners are
+// (re)bound here, since those elements themselves are freshly created each call; the
+// document-level outside-click/Escape listeners are bound exactly once at module load
+// (below) and always look up the current toggle/panel fresh, so they never duplicate
+// across repeated renders (module switches, client changes, etc.).
+function initNavMenu() {
+    const toggle = document.getElementById('navMenuToggle');
+    const panel = document.getElementById('navMenuPanel');
+    if (!toggle || !panel) return;
+
+    panel.innerHTML = renderNavMenuPanel();
+
+    toggle.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (panel.hidden) {
+            openNavMenu(toggle, panel);
+        } else {
+            closeNavMenu(toggle, panel, false);
+        }
+    });
+}
+
+// Bound once at module load (not inside initNavMenu()) so repeated renderNavLeft() calls
+// never stack duplicate document-level listeners. Both look up the live toggle/panel by
+// id each time, since those elements are replaced on every render.
+document.addEventListener('click', function (e) {
+    const toggle = document.getElementById('navMenuToggle');
+    const panel = document.getElementById('navMenuPanel');
+    if (!toggle || !panel || panel.hidden) return;
+    if (!panel.contains(e.target) && e.target !== toggle) {
+        closeNavMenu(toggle, panel, false);
+    }
+});
+
+document.addEventListener('keydown', function (e) {
+    const toggle = document.getElementById('navMenuToggle');
+    const panel = document.getElementById('navMenuPanel');
+    if (!toggle || !panel || panel.hidden) return;
+
+    const items = getNavMenuFocusableItems(panel);
+    const currentIndex = items.indexOf(document.activeElement);
+
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        closeNavMenu(toggle, panel, true);
+    } else if (e.key === 'ArrowDown' && panel.contains(document.activeElement)) {
+        e.preventDefault();
+        const next = items[(currentIndex + 1) % items.length];
+        if (next) next.focus();
+    } else if (e.key === 'ArrowUp' && panel.contains(document.activeElement)) {
+        e.preventDefault();
+        const prev = items[(currentIndex - 1 + items.length) % items.length];
+        if (prev) prev.focus();
+    }
+});
+
+/**
+ * Build the dropdown's inner HTML from NAV_MANIFEST: one labelled group per section,
+ * one row per item (nested one indent level for Verification's Cashbook/Bank book
+ * children). Ready items render as real links; coming-soon items (and all sub-view
+ * children this phase) render as inert, non-focusable-via-click spans.
+ */
+function renderNavMenuPanel() {
+    const currentModule = window._appNav?.module || null;
+
+    function renderItem(item, isChild) {
+        const isCurrent = item.state === 'ready' && item.module && item.module === currentModule;
+        const classes = [
+            'nav-menu-item',
+            item.state === 'coming-soon' ? 'coming-soon' : '',
+            isCurrent ? 'current' : '',
+            isChild ? 'nav-menu-child' : '',
+        ].filter(Boolean).join(' ');
+
+        let html;
+        if (item.state === 'ready') {
+            html = `<a href="${item.url}" role="menuitem" class="${classes}">${item.label}</a>`;
+        } else {
+            html = `<span role="menuitem" aria-disabled="true" class="${classes}">${item.label}</span>`;
+        }
+
+        if (item.children && item.children.length) {
+            html += item.children.map(child => renderItem(child, true)).join('');
+        }
+        return html;
+    }
+
+    return NAV_MANIFEST.map(group => `
+        <div class="nav-menu-group">
+            <div class="nav-menu-group-title">${group.title}</div>
+            ${group.items.map(item => renderItem(item, false)).join('')}
+        </div>
+    `).join('');
+}
+
+function getNavMenuFocusableItems(panel) {
+    return Array.from(panel.querySelectorAll('[role="menuitem"]:not([aria-disabled])'));
+}
+
+function openNavMenu(toggle, panel) {
+    panel.hidden = false;
+    toggle.setAttribute('aria-expanded', 'true');
+    const items = getNavMenuFocusableItems(panel);
+    if (items.length) items[0].focus();
+}
+
+function closeNavMenu(toggle, panel, returnFocus) {
+    panel.hidden = true;
+    toggle.setAttribute('aria-expanded', 'false');
+    if (returnFocus) toggle.focus();
 }
 
 // ---------- GLOBAL CLICK HANDLER: HOME ICON ----------
