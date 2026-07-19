@@ -262,6 +262,26 @@ function exitCashbookView() {
     cashbookTableWrapper.innerHTML = '';
 }
 
+// ---------- CASHBOOK PREVIEW SELECTOR: APPLY ----------
+// Phase 2 of 3: the Cashbook/Bankbook dropdown (Phase 1) does nothing by itself - only
+// clicking Apply commits its currently selected value together with the current date range,
+// in one combined reload (mirroring how Apply already behaves for date-only changes). Updates
+// the single-source-of-truth `selectedCashbook` global (also read by startSessionFromCashbook(),
+// so starting a session after switching here correctly targets the newly selected account) and
+// the page header, then reuses fetchCashbookData() unchanged for the actual reload.
+function applyCashbookPreview() {
+    if (!cashbookSelector) {
+        fetchCashbookData();
+        return;
+    }
+    const chosen = cashbookSelector.value;
+    if (chosen && chosen !== selectedCashbook) {
+        selectedCashbook = chosen;
+        cashbookNameDisplay.textContent = chosen;
+    }
+    fetchCashbookData();
+}
+
 // ---------- CASHBOOK DATA FETCH ----------
 async function fetchCashbookData() {
     if (!selectedCashbook) return;
@@ -1881,7 +1901,10 @@ if (popupCancelBtn) {
 }
 
 // Cashbook page events
-if (cashbookFetchBtn) cashbookFetchBtn.addEventListener('click', fetchCashbookData);
+// Apply commits both the dropdown's currently selected cashbook/bankbook AND the date range
+// together (applyCashbookPreview) - the dropdown itself has no change listener, so picking a
+// different value does nothing until this button is clicked (Phase 2 of 3).
+if (cashbookFetchBtn) cashbookFetchBtn.addEventListener('click', applyCashbookPreview);
 if (cashbookPageSizeSelect) {
     cashbookPageSizeSelect.addEventListener('change', function() {
         cashbookPageSize = parseInt(this.value);
