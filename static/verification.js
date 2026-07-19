@@ -48,6 +48,10 @@ const statusDiv = document.getElementById('verificationStatus');
 // Their JS references and listener blocks have been removed alongside the old view.
 
 const cashbookNameDisplay = document.getElementById('cashbookNameDisplay');
+// Phase 1 of 3 (Cashbook Preview selector): label + dropdown in the date-range bar, populated
+// by openCashbook() below. UI + population only this phase - no change listener yet (Phase 2).
+const cashbookSelectorLabel = document.getElementById('cashbookSelectorLabel');
+const cashbookSelector = document.getElementById('cashbookSelector');
 const cashbookStartDate = document.getElementById('cashbookStartDate');
 const cashbookEndDate = document.getElementById('cashbookEndDate');
 const cashbookFetchBtn = document.getElementById('cashbookFetchBtn');
@@ -222,6 +226,23 @@ async function openCashbook() {
     const headerLabel = document.getElementById('cashbookHeaderLabel');
     if (headerLabel) headerLabel.textContent = currentType === 'bank' ? '🏦 Bankbook:' : '📒 Cashbook:';
     cashbookNameDisplay.textContent = cashbook;
+    // Cashbook Preview selector (Phase 1 of 3): relabel to match currentType, and populate the
+    // dropdown from the same account list already fetched into popupCashbookSelect for the
+    // Start-Verification popup - openCashbook() only runs after that list has loaded successfully
+    // (the Open button stays disabled otherwise), so no second network call is needed here.
+    if (cashbookSelectorLabel) cashbookSelectorLabel.textContent = currentType === 'bank' ? '🏦 Bankbook' : '📒 Cashbook';
+    if (cashbookSelector) {
+        cashbookSelector.innerHTML = '';
+        Array.from(popupCashbookSelect.options)
+            .filter(opt => opt.value)
+            .forEach(opt => {
+                const clone = document.createElement('option');
+                clone.value = opt.value;
+                clone.textContent = opt.textContent;
+                cashbookSelector.appendChild(clone);
+            });
+        cashbookSelector.value = cashbook;
+    }
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);

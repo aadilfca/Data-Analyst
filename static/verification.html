@@ -703,6 +703,18 @@
             <!-- Date Range Selector -->
             <div
                 style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; background:white; padding:12px 16px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.04); margin-bottom:16px;">
+                <!-- Cashbook/Bankbook selector (Phase 1 of 3): label + list populated by
+                     openCashbook() in verification.js based on currentType, reusing the same
+                     account list already fetched for the Start-Verification popup. UI + population
+                     only this phase - selecting a different account here does not yet reload the
+                     preview (Phase 2). -->
+                <div>
+                    <label id="cashbookSelectorLabel"
+                        style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">📒 Cashbook</label>
+                    <select id="cashbookSelector"
+                        style="padding:4px 8px; border:2px solid #e2e8f0; border-radius:6px; font-size:13px;">
+                    </select>
+                </div>
                 <div>
                     <label style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">Start Date</label>
                     <input type="date" id="cashbookStartDate"
