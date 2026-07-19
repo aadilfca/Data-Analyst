@@ -207,9 +207,19 @@ body {
 .nav-menu-panel {
     position: absolute;
     top: 100%;
+    /* left:0/top:100% are the default/fallback alignment only — positionNavPanel() in
+       client_context.js measures the real anchor position against window.innerWidth/innerHeight
+       at open time and overrides left/right/top/bottom/max-width/min-width/max-height/overflow-y
+       inline when the panel would otherwise render off-screen in either axis (shared by both the
+       Phase 1 dropdown and Phase 2 search results panels, which both use this class). The two
+       calc() values below are CSS-only baseline safeguards in case that JS doesn't run for some
+       reason — they are not the primary fix, just a backstop. */
     left: 0;
     margin-top: 8px;
     min-width: 240px;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
     background: white;
     border-radius: 10px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);

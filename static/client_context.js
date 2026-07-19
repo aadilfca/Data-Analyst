@@ -453,9 +453,133 @@ function getNavMenuFocusableItems(panel) {
     return Array.from(panel.querySelectorAll('[role="menuitem"]:not([aria-disabled])'));
 }
 
+// ---------- VIEWPORT-AWARE PANEL POSITIONING (shared by the Phase 1 dropdown and Phase 2 search
+// results — both use the .nav-menu-panel class/CSS, but anchor to different positioned ancestors:
+// #navLeft for the dropdown, #navSearchWrapper for search. Both call sites (openNavMenu() below,
+// renderNavSearchResults() further down) pass their own anchor into this one function so the fix
+// lives in exactly one place. ----------
+// Bug fixed (horizontal): the panel's CSS position (left:0, no width bound) let it render
+// partially/fully off-screen whenever its anchor sat close enough to the right edge that a
+// min-width:240px panel wouldn't fit. Fixed by measuring the anchor's real position via
+// getBoundingClientRect() against window.innerWidth at the moment the panel opens, then choosing
+// left- vs right-alignment and clamping width.
+// Bug fixed (vertical, follow-up): the panel always opened downward (top:100%, fixed in CSS) with
+// no max-height/overflow-y at all, so a tall item list (e.g. verification.html's full manifest)
+// could extend below the visible browser window/taskbar. Fixed the same way: measure against
+// window.innerHeight, flip to open upward when that has more room, and — per the user's confirmed
+// choice — clamp height and let the panel scroll internally if neither direction has enough room,
+// matching the existing max-height+overflow-y convention already used by .transaction-list-popover
+// and .voucher-change-popover/.audit-guidance-popover elsewhere in this app (verification.js/
+// style.css), rather than inventing a new pattern.
+// Neither axis re-runs on window resize while a panel is already open (not part of the confirmed
+// scope for either fix) — closing and reopening re-measures correctly.
+function positionNavPanel(anchorEl, panel) {
+    if (!anchorEl || !panel) return;
+
+    // Clear any inline overrides from a previous open (e.g. under a different viewport size)
+    // before measuring, so stale values from an earlier open can't leak into this one.
+    panel.style.left = '';
+    panel.style.right = '';
+    panel.style.maxWidth = '';
+    panel.style.minWidth = '';
+    panel.style.top = '';
+    panel.style.bottom = '';
+    panel.style.marginTop = '';
+    panel.style.marginBottom = '';
+    panel.style.maxHeight = '';
+    panel.style.overflowY = '';
+
+    const anchorRect = anchorEl.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const edgeMargin = 12; // small breathing room from the viewport edge, not flush against it
+    // Real rendered size now that panel.hidden is false and inline overrides were just cleared
+    // (must be called after unhiding — an element with display:none, which [hidden] sets, always
+    // measures 0 — and before re-applying max-height, or this would measure the clamped size
+    // instead of the panel's true natural size).
+    const naturalWidth = panel.offsetWidth;
+    const naturalHeight = panel.offsetHeight;
+
+    // ---- Horizontal (left/right) ----
+    const spaceRight = viewportWidth - anchorRect.left - edgeMargin;
+    const spaceLeft = anchorRect.right - edgeMargin;
+
+    let availableWidth;
+    if (naturalWidth <= spaceRight) {
+        // Default left-aligned anchor (CSS left:0) already fits — keep it, just cap max-width
+        // to the real available space as a safeguard against a future wider panel.
+        availableWidth = spaceRight;
+    } else if (naturalWidth <= spaceLeft) {
+        // Doesn't fit opening rightward from the anchor's left edge, but does fit opening
+        // leftward from the anchor's right edge — flip to right-aligned.
+        panel.style.left = 'auto';
+        panel.style.right = '0';
+        availableWidth = spaceLeft;
+    } else {
+        // Neither side has room for the panel's natural width (e.g. a very narrow viewport) —
+        // pick whichever side has more space and clamp hard so it still can't overflow.
+        if (spaceRight >= spaceLeft) {
+            availableWidth = spaceRight;
+        } else {
+            panel.style.left = 'auto';
+            panel.style.right = '0';
+            availableWidth = spaceLeft;
+        }
+    }
+
+    // Floor at a small usable width so an extreme viewport never collapses the panel to nothing.
+    const clampedWidth = Math.max(160, availableWidth);
+    panel.style.maxWidth = clampedWidth + 'px';
+    // The CSS min-width:240px would otherwise win over max-width when they conflict (min-width
+    // takes priority), forcing overflow right back in on a tight viewport — override it down to
+    // match whenever the clamp is tighter than that default.
+    panel.style.minWidth = Math.min(240, clampedWidth) + 'px';
+
+    // ---- Vertical (top/bottom) ----
+    // margin-top:8px on the default (downward) direction comes from CSS; mirrored manually as
+    // margin-bottom when flipped upward, so the same 8px gap from the anchor applies either way.
+    const spaceBelow = viewportHeight - anchorRect.bottom - edgeMargin - 8;
+    const spaceAbove = anchorRect.top - edgeMargin - 8;
+
+    let availableHeight;
+    if (naturalHeight <= spaceBelow) {
+        // Default downward open (CSS top:100%) already fits — keep it, just cap max-height as a
+        // safeguard against a future taller panel.
+        availableHeight = spaceBelow;
+    } else if (naturalHeight <= spaceAbove) {
+        // Doesn't fit opening downward, but does fit opening upward — flip above the anchor.
+        panel.style.top = 'auto';
+        panel.style.bottom = '100%';
+        panel.style.marginTop = '0';
+        panel.style.marginBottom = '8px';
+        availableHeight = spaceAbove;
+    } else {
+        // Neither direction has room for the panel's natural height (a tall item list on a short
+        // window) — open on whichever side has more space and let the panel scroll internally for
+        // the rest, per the confirmed choice and the existing popover convention in this app.
+        if (spaceBelow >= spaceAbove) {
+            availableHeight = spaceBelow;
+        } else {
+            panel.style.top = 'auto';
+            panel.style.bottom = '100%';
+            panel.style.marginTop = '0';
+            panel.style.marginBottom = '8px';
+            availableHeight = spaceAbove;
+        }
+    }
+
+    // Floor at a small usable height so an extreme viewport never collapses the panel to nothing;
+    // overflow-y is always set (not just in the "still doesn't fit" branch) so it's a harmless
+    // no-op when there's room and a real scroll fallback the moment there isn't.
+    const clampedHeight = Math.max(120, availableHeight);
+    panel.style.maxHeight = clampedHeight + 'px';
+    panel.style.overflowY = 'auto';
+}
+
 function openNavMenu(toggle, panel) {
     panel.hidden = false;
     toggle.setAttribute('aria-expanded', 'true');
+    positionNavPanel(document.getElementById('navLeft'), panel);
     const items = getNavMenuFocusableItems(panel);
     if (items.length) items[0].focus();
 }
@@ -580,6 +704,10 @@ function renderNavSearchResults(query) {
     }
 
     panel.hidden = false;
+    // Shared with the Phase 1 dropdown (see positionNavPanel() above) — anchored to
+    // #navSearchWrapper (the search input's own box) rather than #navLeft, since that's this
+    // panel's actual positioned ancestor.
+    positionNavPanel(document.getElementById('navSearchWrapper'), panel);
     input.setAttribute('aria-expanded', 'true');
 }
 
