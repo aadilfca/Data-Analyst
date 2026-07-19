@@ -8,7 +8,18 @@
 // in client_settings.js. Drives category filtering/labels/session_type for the rest of this
 // page load - never re-read after this point. Anything other than exactly 'bank' defaults to
 // 'cash', matching today's only-cash behavior for direct navigation with no ?type param.
-const currentType = (new URLSearchParams(window.location.search).get('type') === 'bank') ? 'bank' : 'cash';
+//
+// Global quick-nav deep-link (Phase 3): the Cashbook/Bank book manifest entries link here with
+// ?view=cashbook / ?view=bankbook instead of ?type=. ?view= is checked first and, when present
+// with a recognised value, wins over ?type= — per the confirmed spec, the two params shouldn't
+// both appear at once (the manifest only ever builds ?view= links), but if they somehow did,
+// ?view= targets a specific screen so it takes priority. Any other/missing ?view= value falls
+// through to the existing ?type= resolution unchanged.
+const urlSearchParamsForType = new URLSearchParams(window.location.search);
+const viewParam = urlSearchParamsForType.get('view');
+const currentType = (viewParam === 'bankbook') ? 'bank'
+    : (viewParam === 'cashbook') ? 'cash'
+    : (urlSearchParamsForType.get('type') === 'bank') ? 'bank' : 'cash';
 
 let currentSessionId = null;
 let currentDetailId = null;
@@ -2372,7 +2383,18 @@ window.onload = function() {
     // session popup directly, instead of asking the user to pick a verification type a second
     // time. Direct navigation to this page with no ?type param is unaffected (currentType
     // defaults to 'cash', and the grid still shows normally for that entry path).
-    if (new URLSearchParams(window.location.search).has('type')) {
+    //
+    // Global quick-nav deep-link (Phase 3): a ?view=cashbook/bankbook param (from the ⊞ dropdown
+    // or search field's Cashbook/Bank book entries) reuses this exact same entry path - there is
+    // no book name in the link, so the furthest this can jump straight to is the same pre-filled
+    // popup ?type= already opens; the user picks a specific book and clicks "Open
+    // Cashbook/Bankbook" from there (openCashbook()), same as today. No setBackOverride() call is
+    // needed here: openCashbook()/startSessionFromCashbook()/exitSession() already register the
+    // correct back-arrow override once the user actually reaches a real view.
+    const arrivalParams = new URLSearchParams(window.location.search);
+    const arrivalView = arrivalParams.get('view');
+    const isDeepLinkView = arrivalView === 'cashbook' || arrivalView === 'bankbook';
+    if (arrivalParams.has('type') || isDeepLinkView) {
         openSessionPopup();
     }
 };

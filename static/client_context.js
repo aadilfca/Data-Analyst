@@ -14,8 +14,9 @@ const STORAGE_CODE = 'selectedClientCode';
 // logic) so Phase 2's search field can flatten/filter this same array directly.
 // `module` (when present) is matched against window._appNav.module to highlight the
 // current page as "you are here" (see getBackTarget()/data-nav-module below).
-// Verification's `children` (Cashbook/Bank book) are always coming-soon placeholders in
-// this phase — Phase 3 wires real navigation to them via a ?view= mechanism.
+// Verification's `children` (Cashbook/Bank book) link to verification.html's own ?view=
+// deep-link arrival handler (Phase 3) — same page, no book name in the link, lands on the
+// pre-filled Start-Verification popup for that book type (see window.onload in verification.js).
 const NAV_MANIFEST = [
     {
         title: 'Audit work',
@@ -23,8 +24,8 @@ const NAV_MANIFEST = [
             {
                 label: 'Verification', url: '/static/verification.html', state: 'ready', module: 'Verification',
                 children: [
-                    { label: 'Cashbook', url: '#', state: 'coming-soon' },
-                    { label: 'Bank book', url: '#', state: 'coming-soon' },
+                    { label: 'Cashbook', url: '/static/verification.html?view=cashbook', state: 'ready' },
+                    { label: 'Bank book', url: '/static/verification.html?view=bankbook', state: 'ready' },
                 ]
             },
             { label: 'Reports', url: null, state: 'coming-soon' },
