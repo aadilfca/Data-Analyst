@@ -35,15 +35,27 @@ async function loadDashboardStats() {
     }
 }
 
-// ---------- VERIFICATION ENTRY POINT ----------
-// Single Verification card (replaces the former Cash/Bank card pair) — lands on the
-// verification hub with no ?type= param; the hub itself is the Cash-vs-Bank chooser now.
-document.getElementById('verificationCard').addEventListener('click', function() {
-    window.location.href = '/static/verification.html';
+// ---------- MODULE CARD NAVIGATION ----------
+// Every navigating dashboard card is wired here by id (no inline onclick in index.html).
+// Verification deliberately has no ?type= param — the verification hub itself is the
+// Cash-vs-Bank chooser. "Coming Soon" cards are inert by design: no entry in this map,
+// no listener at all.
+const MODULE_CARD_DESTINATIONS = {
+    verificationCard: '/static/verification.html',
+    uploadCard: '/static/upload.html',
+    dataBankCard: '/static/databank.html',
+    setupCard: '/static/setup.html',
+    manageClientsCard: '/static/clients.html'
+};
+Object.entries(MODULE_CARD_DESTINATIONS).forEach(([cardId, destination]) => {
+    document.getElementById(cardId).addEventListener('click', function() {
+        window.location.href = destination;
+    });
 });
 
 // ---------- ADD CLICK FEEDBACK TO MODULE CARDS ----------
-document.querySelectorAll('.module-card').forEach(card => {
+// Scoped to exclude .coming-soon cards — inert cards must not visibly react to clicks.
+document.querySelectorAll('.module-card:not(.coming-soon)').forEach(card => {
     card.addEventListener('click', function() {
         this.style.transform = 'scale(0.95)';
         setTimeout(() => {
