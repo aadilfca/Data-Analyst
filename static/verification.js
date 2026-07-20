@@ -618,16 +618,100 @@ function getVoucherLineAlias(row, aliases) {
     return '—';
 }
 
-// The five supporting-document procedures, shared between the Supporting column's text links
-// (renderVoucherLines()) and openProcedureModal()'s search/confirm flow — each column entry opens
-// the modal directly for its own procedure now, replacing the old intermediate card-picker popup.
-const VOUCHER_LINE_PROCEDURES = [
-    { key: 'purchase_demand', label: 'Purchase Demand', templateId: 2 },
-    { key: 'purchase_order', label: 'Purchase Order', templateId: 3 },
-    { key: 'gate_pass', label: 'Gate Pass', templateId: 4 },
-    { key: 'store_receiving', label: 'Store Receiving', templateId: 5 },
-    { key: 'vendor_bill', label: 'Vendor Bill', templateId: 6 }
-];
+// Phase 9 (Audit Rules): the Type dropdown's options and the Supporting column's document
+// links are now sourced live from Audit Rules Categories, replacing the old hardcoded
+// 7-option transaction-type list and the fixed 5-document VOUCHER_LINE_PROCEDURES constant.
+
+// Populated once by loadAuditCategories() (called from window.onload); list of active
+// { id, name, kb_overview, documents, cross_checks } Category objects.
+let auditCategories = [];
+
+async function loadAuditCategories() {
+    try {
+        const res = await fetch(`${API_BASE}/api/audit-rules/categories?include_inactive=false`);
+        if (!res.ok) throw new Error('Failed to fetch audit categories');
+        auditCategories = await res.json();
+    } catch (e) {
+        console.error('Failed to load audit categories:', e);
+        auditCategories = [];
+    }
+}
+
+// GET /api/verification/audit_guidance response, keyed by Category name (the same value the
+// Type dropdown stores) — shared between the "Guide" popover and the Supporting column so
+// selecting a category doesn't trigger two separate fetches for the same data. 404s cache as
+// null; a transient fetch error is deliberately NOT cached, so a later retry can succeed.
+let auditGuidanceCache = {};
+
+async function fetchAuditGuidanceData(type) {
+    if (Object.prototype.hasOwnProperty.call(auditGuidanceCache, type)) {
+        return auditGuidanceCache[type];
+    }
+    const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
+    if (res.status === 404) {
+        auditGuidanceCache[type] = null;
+        return null;
+    }
+    if (!res.ok) throw new Error('Failed to fetch audit guidance');
+    const data = await res.json();
+    auditGuidanceCache[type] = data;
+    return data;
+}
+
+// Renders the Supporting column's document links for one line, from its currently-selected
+// Category's attached Documents (data.documents[]) — replaces the old fixed VOUCHER_LINE_PROCEDURES
+// list. Async because the Category's guidance (and thus its Documents) is fetched on demand;
+// called both at initial render (for a line with an already-seeded type) and from the Type
+// dropdown's change listener. A Document with no template_id configured (Audit Rules module)
+// renders as plain muted text, not clickable — openProcedureModal() needs a real template_id to
+// search Data Bank evidence against.
+async function updateSupportingCellForLine(uid, type) {
+    const cell = document.querySelector(`.voucher-line-supporting-cell[data-detail-id="${uid}"]`);
+    if (!cell) return;
+    if (!type) {
+        cell.innerHTML = '';
+        return;
+    }
+    cell.innerHTML = '<span style="color:#94a3b8; font-size:12px;">Loading…</span>';
+    let data = null;
+    try {
+        data = await fetchAuditGuidanceData(type);
+    } catch (e) {
+        console.error('Failed to load Supporting documents:', e);
+    }
+    // Stale guard: the line may have moved on to a different type (or a new voucher entirely)
+    // while this fetch was in flight — don't clobber a newer selection.
+    if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+    const documents = (data && data.documents) || [];
+    if (!documents.length) {
+        cell.innerHTML = '<span style="color:#94a3b8; font-size:12px;">No documents for this category</span>';
+        return;
+    }
+    cell.innerHTML = documents.map(doc => {
+        const state = voucherLineState[uid];
+        const procKey = `doc_${doc.id}`;
+        const confirmed = state && state.procedureData && state.procedureData[procKey];
+        const hasTemplate = !!doc.template_id;
+        const muted = hasTemplate ? '' : ' style="color:#94a3b8; cursor:default; text-decoration:none;"';
+        const title = hasTemplate
+            ? (confirmed ? doc.name + ' — confirmed' : 'Search ' + doc.name)
+            : (doc.name + ' — no template linked (set one in Audit Rules)');
+        return `<span class="voucher-line-proc-link${confirmed ? ' confirmed' : ''}" data-uid="${uid}" data-proc="${procKey}" data-label="${escapeHtml(doc.name)}" data-template="${doc.template_id || ''}" title="${escapeHtml(title)}"${muted}>${escapeHtml(doc.name)}</span>`;
+    }).join('');
+    // This cell's links are created after the render's own batch event-wiring pass already ran
+    // (see renderVoucherLines()), so they're wired here instead.
+    cell.querySelectorAll('.voucher-line-proc-link').forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (!this.dataset.template) return; // no template configured for this Document yet
+            const uid2 = this.dataset.uid;
+            const procKey2 = this.dataset.proc;
+            const label2 = this.dataset.label;
+            const templateId2 = parseInt(this.dataset.template);
+            openProcedureModal(procKey2, label2, templateId2, uid2);
+        });
+    });
+}
 
 // Order matches .voucher-line-summary-grid's columns: Account Code, Type, Account Name, Amount,
 // Supporting, Observations, Status. User-resizable (see the drag handles in renderVoucherLines()'s
@@ -784,13 +868,7 @@ function renderVoucherLines(lines) {
                     <span class="voucher-line-type-cell">
                         <select class="vh-type-dropdown voucher-line-type-dropdown" data-uid="${uid}">
                             <option value="">-- Select --</option>
-                            <option value="Material Purchased">Material Purchased</option>
-                            <option value="Repair & Maintenance (In-house)">Repair & Maintenance (In-house)</option>
-                            <option value="Fuel Expense">Fuel Expense</option>
-                            <option value="Short Term Advance against Salary">Short Term Advance against Salary</option>
-                            <option value="Payment to Contractors">Payment to Contractors</option>
-                            <option value="Fixed Asset Purchased">Fixed Asset Purchased</option>
-                            <option value="Kitchen Expenses">Kitchen Expenses</option>
+                            ${auditCategories.map(cat => `<option value="${escapeHtml(cat.name)}">${escapeHtml(cat.name)}</option>`).join('')}
                         </select>
                         <span class="voucher-line-type-chips">
                             <button type="button" class="voucher-line-chip voucher-line-audit-icon" data-uid="${uid}" title="Audit guidance">📋 Guide</button>
@@ -802,13 +880,7 @@ function renderVoucherLines(lines) {
                         <span class="voucher-line-desc">${description}</span>
                     </span>
                     <span class="voucher-line-amount">${amount}</span>
-                    <span class="voucher-line-supporting-cell">
-                        ${VOUCHER_LINE_PROCEDURES.map(proc => {
-                            const state = voucherLineState[uid];
-                            const confirmed = state && state.procedureData && state.procedureData[proc.key];
-                            return `<span class="voucher-line-proc-link${confirmed ? ' confirmed' : ''}" data-uid="${uid}" data-proc="${proc.key}" data-label="${proc.label}" data-template="${proc.templateId}" title="${confirmed ? proc.label + ' — confirmed' : 'Search ' + proc.label}">${proc.label}</span>`;
-                        }).join('')}
-                    </span>
+                    <span class="voucher-line-supporting-cell" data-detail-id="${uid}"></span>
                     <span class="voucher-line-observations-cell"></span>
                     <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
                 </div>
@@ -837,11 +909,15 @@ function renderVoucherLines(lines) {
 
     container.innerHTML = html;
 
-    // Sync each line's type dropdown with its seeded state.
+    // Sync each line's type dropdown with its seeded state, and populate the Supporting
+    // column for any line that already has a Category selected (e.g. from a prior save).
     container.querySelectorAll('.voucher-line-type-dropdown').forEach(select => {
         const uid = select.dataset.uid;
         const state = voucherLineState[uid];
-        if (state && state.transactionType) select.value = state.transactionType;
+        if (state && state.transactionType) {
+            select.value = state.transactionType;
+            updateSupportingCellForLine(uid, state.transactionType);
+        }
     });
 
     // Phase 4: attach each line's change-alert icon (only present for lines flagged 'updated').
@@ -863,7 +939,8 @@ function renderVoucherLines(lines) {
         });
     });
 
-    // Transaction type dropdown, scoped per line.
+    // Transaction type (Category) dropdown, scoped per line. Changing it also refreshes this
+    // line's Supporting column, since each Category has its own attached Documents.
     container.querySelectorAll('.voucher-line-type-dropdown').forEach(select => {
         select.addEventListener('click', function(e) { e.stopPropagation(); });
         select.addEventListener('change', function() {
@@ -872,6 +949,7 @@ function renderVoucherLines(lines) {
             if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
             voucherLineState[uid].transactionType = type;
             voucherLineState[uid].procedureData.transaction_type = type;
+            updateSupportingCellForLine(uid, type);
         });
     });
 
@@ -899,19 +977,10 @@ function renderVoucherLines(lines) {
         });
     });
 
-    // Supporting column — each procedure name is a plain bold text link (no button/card, to save
-    // space); clicking one opens the procedure modal directly for that specific procedure, instead
-    // of an intermediate card-picker popup.
-    container.querySelectorAll('.voucher-line-proc-link').forEach(link => {
-        link.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const uid = this.dataset.uid;
-            const procKey = this.dataset.proc;
-            const label = this.dataset.label;
-            const templateId = parseInt(this.dataset.template);
-            openProcedureModal(procKey, label, templateId, uid);
-        });
-    });
+    // Supporting column — populated asynchronously per line (updateSupportingCellForLine(), see
+    // above), since it depends on a fetch of the line's currently-selected Category. That
+    // function wires each of its own links' click listeners once its content lands, since this
+    // batch pass runs before any of those async fetches resolve.
 
     // Column drag-to-resize handles (header row only). Excel/Sheets-style: dragging a column's
     // border only resizes that column — the table's total width changes with it (no neighbor
@@ -968,26 +1037,37 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+// Phase 9 (Audit Rules): guidance content now comes from a Category's kb_overview, attached
+// Documents, and attached Cross-checks (GET /api/verification/audit_guidance), replacing the old
+// three-column management_controls/audit_risks/audit_procedures text. Cross-checks are shown as
+// read-only guidance text only — no automated comparison against real voucher data (deferred,
+// separate future requirement).
 function buildAuditGuidanceTable(data) {
-    const toItems = (text) => (text || '')
-        .split(';')
-        .map(s => s.trim())
-        .filter(Boolean)
-        .map(s => `<li>${escapeHtml(s)}</li>`)
-        .join('');
+    const overviewHtml = data.kb_overview
+        ? `<div style="margin-bottom:10px; padding:8px 10px; background:#f8fafc; border-radius:6px; font-size:13px; color:#334155; white-space:pre-line;">${escapeHtml(data.kb_overview)}</div>`
+        : '';
+    const documentsHtml = (data.documents && data.documents.length)
+        ? data.documents.map(doc => {
+            const roles = (doc.auth_roles || []).join(', ');
+            return `<li><strong>${escapeHtml(doc.name)}</strong>${roles ? ` <span style="color:#94a3b8; font-size:12px;">(${escapeHtml(roles)})</span>` : ''}</li>`;
+        }).join('')
+        : '<li style="color:#94a3b8;">No documents attached to this category yet.</li>';
+    const crossChecksHtml = (data.cross_checks && data.cross_checks.length)
+        ? data.cross_checks.map(cc => {
+            const chain = (cc.documents || []).join(' → ');
+            return `<li>Check: ${escapeHtml(cc.compare_field)} — ${escapeHtml(cc.comparison_type)}${chain ? ` across ${escapeHtml(chain)}` : ''}</li>`;
+        }).join('')
+        : '<li style="color:#94a3b8;">No cross-checks attached to this category yet.</li>';
     return `
+        ${overviewHtml}
         <div class="audit-guidance-columns">
             <div class="audit-guidance-col">
-                <div class="audit-guidance-col-header">Management Controls</div>
-                <ul>${toItems(data.management_controls)}</ul>
+                <div class="audit-guidance-col-header">Documents</div>
+                <ul>${documentsHtml}</ul>
             </div>
             <div class="audit-guidance-col">
-                <div class="audit-guidance-col-header">Audit Risks</div>
-                <ul>${toItems(data.audit_risks)}</ul>
-            </div>
-            <div class="audit-guidance-col">
-                <div class="audit-guidance-col-header">Audit Procedures</div>
-                <ul>${toItems(data.audit_procedures)}</ul>
+                <div class="audit-guidance-col-header">Cross-checks</div>
+                <ul>${crossChecksHtml}</ul>
             </div>
         </div>
     `;
@@ -1189,16 +1269,14 @@ async function showAuditGuidancePopover(icon, uid) {
 
     const body = popover.querySelector('.popover-body');
     try {
-        const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
+        const data = await fetchAuditGuidanceData(type);
         // Discard a stale response if the popover was closed or switched to another line/type
         // while the fetch was in flight.
         if (auditGuidancePopoverUid !== uid) return;
-        if (res.status === 404) {
-            if (body) body.innerHTML = '<p class="segment2-placeholder-text">No guidance available for this transaction type yet.</p>';
+        if (!data) {
+            if (body) body.innerHTML = '<p class="segment2-placeholder-text">No guidance available for this category yet.</p>';
             return;
         }
-        if (!res.ok) throw new Error('Failed to fetch audit guidance');
-        const data = await res.json();
         if (body) body.innerHTML = buildAuditGuidanceTable(data);
     } catch (e) {
         if (auditGuidancePopoverUid !== uid) return;
@@ -2378,6 +2456,7 @@ window.onload = function() {
         setNavModule('Verification');
     }
     loadVerificationStats();
+    loadAuditCategories();
     // Bank Verification (Phase 8): a ?type= param means the user already chose Cash or Bank on
     // the dashboard (static/index.html) - skip this page's own internal Module Grid and open the
     // session popup directly, instead of asking the user to pick a verification type a second

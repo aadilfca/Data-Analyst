@@ -987,8 +987,10 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 kb_note TEXT,
+                template_id INTEGER,
                 is_active INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (template_id) REFERENCES templates(id)
             )
         ''')
         # Schema upgrade: a database that already ran the Phase 1 CREATE TABLE (with no
@@ -1003,6 +1005,18 @@ def init_db():
                 print("✅ Added is_active column to audit_rule_documents")
         except Exception as e:
             print("⚠️ Could not add is_active to audit_rule_documents:", e)
+        # Phase 9 addition: template_id links a Document to the Data Bank template its
+        # supporting evidence should be searched in (verification.js's Supporting column
+        # needs this to call openProcedureModal() for any Category's Documents, not just
+        # the old hardcoded five). Same upgrade-block treatment as is_active above.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'template_id' not in columns:
+                conn.execute("ALTER TABLE audit_rule_documents ADD COLUMN template_id INTEGER")
+                print("✅ Added template_id column to audit_rule_documents")
+        except Exception as e:
+            print("⚠️ Could not add template_id to audit_rule_documents:", e)
 
         # Fields on a Document available for cross-checks (e.g. Quantity, Amount, Date) -
         # stored here so they're a controlled per-document list, not free-typed elsewhere.
@@ -1132,6 +1146,71 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_category ON audit_rule_category_cross_checks (category_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_crosscheck ON audit_rule_category_cross_checks (cross_check_id)")
         print("✅ Created Audit Rules module tables (Phase 1 of 9: schema foundation)")
+
+        # ---------- AUDIT RULES MODULE (Phase 9 of 9: migrate legacy transaction types) ----------
+        # One-time, idempotent: copies the 7 hardcoded transaction types (that verification.js's
+        # Type dropdown used to list, matched against audit_procedure_library) into real
+        # audit_rule_categories rows, so nothing is lost when the dropdown switches to sourcing
+        # live Categories instead. Only kb_overview text is migrated - Documents/Cross-checks are
+        # deliberately left unattached (no structured document list existed in the old data) for
+        # manual setup via the Audit Rules UI. Checked by name before insert, so reruns are a
+        # no-op - same idempotent-migration convention as the client_voucher_prefixes rebuild.
+        legacy_category_kb = {
+            "Material Purchased": (
+                "Management Controls: Authorized Purchase demand; Approved Purchase order; "
+                "Signed Gate pass; Inspection note; Store receiving; Vendor bill\n\n"
+                "Audit Risks: Unauthorized purchases; Inflated quantities; Unapproved vendors; Missing GRN\n\n"
+                "Audit Procedures: Verify purchase demand authorization; Check PO approval; Inspect gate pass; "
+                "Review inspection note; Match GRN with PO; Compare vendor bill with PO/GRN; Reconcile quantities and amounts"
+            ),
+            "Repair & Maintenance (In-house)": (
+                "Management Controls: Authorized Purchase demand; Signature of relevant supervisor on bill; Vendor bill\n\n"
+                "Audit Risks: Unapproved repairs; Overcharging; Duplicate bills\n\n"
+                "Audit Procedures: Check purchase demand authorization; Verify supervisor signature on bill; "
+                "Review vendor bill for reasonableness; Compare with maintenance log if available"
+            ),
+            "Fuel Expense": (
+                "Management Controls: Vehicle log; Fuel receipts; Mileage records\n\n"
+                "Audit Risks: Unexplained fuel consumption; Theft; Unauthorized vehicles\n\n"
+                "Audit Procedures: Reconcile fuel receipts with vehicle log; Check mileage against fuel consumption; "
+                "Verify authorized vehicles"
+            ),
+            "Short Term Advance against Salary": (
+                "Management Controls: Approved advance request; Employee acknowledgment; Payroll deduction schedule\n\n"
+                "Audit Risks: Unauthorized advances; Non-recovery; Duplicate advances\n\n"
+                "Audit Procedures: Verify approved advance request; Check employee acknowledgment; "
+                "Review deduction schedule; Confirm with payroll records"
+            ),
+            "Payment to Contractors": (
+                "Management Controls: Signed contract; Work completion certificate; Tax deduction certificate; Vendor bill\n\n"
+                "Audit Risks: Fake contractors; Unauthorized work; Overpayment; Non-deduction of tax\n\n"
+                "Audit Procedures: Review contract; Inspect work completion certificate; Verify tax deduction; "
+                "Match vendor bill with contract"
+            ),
+            "Fixed Asset Purchased": (
+                "Management Controls: Capital budget approval; Purchase order; Gate pass; Inspection note; Asset tagging\n\n"
+                "Audit Risks: Unauthorized purchase; Misclassification as expense; Incorrect valuation; Missing asset\n\n"
+                "Audit Procedures: Check capital budget approval; Verify PO; Inspect gate pass; Review inspection note; "
+                "Ensure asset tagged and entered in fixed asset register"
+            ),
+            "Kitchen Expenses": (
+                "Management Controls: Daily consumption report; Purchase invoices; Inventory count\n\n"
+                "Audit Risks: Theft; Over-purchasing; Unauthorized items; Missing invoices\n\n"
+                "Audit Procedures: Reconcile purchase invoices with consumption report; Verify inventory count; "
+                "Check for approved purchase; Review daily consumption logs"
+            ),
+        }
+        migrated_count = 0
+        for cat_name, kb_overview in legacy_category_kb.items():
+            existing = conn.execute("SELECT id FROM audit_rule_categories WHERE name = ?", (cat_name,)).fetchone()
+            if not existing:
+                conn.execute(
+                    "INSERT INTO audit_rule_categories (name, kb_overview) VALUES (?, ?)",
+                    (cat_name, kb_overview)
+                )
+                migrated_count += 1
+        if migrated_count:
+            print(f"✅ Migrated {migrated_count} legacy transaction type(s) into Audit Rules Categories")
 
         conn.commit()
         print("✅ Database initialization complete")

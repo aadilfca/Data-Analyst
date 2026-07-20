@@ -30,6 +30,7 @@ const arDetailForm = document.getElementById('arDetailForm');
 const arEditingIdInput = document.getElementById('arEditingId');
 const arNameInput = document.getElementById('arNameInput');
 const arKbNoteInput = document.getElementById('arKbNoteInput');
+const arTemplateSelect = document.getElementById('arTemplateSelect');
 const arRolesChipList = document.getElementById('arRolesChipList');
 const arRolesInput = document.getElementById('arRolesInput');
 const arRolesAddBtn = document.getElementById('arRolesAddBtn');
@@ -175,6 +176,23 @@ function removeField(value) {
     renderFieldChips();
 }
 
+// ---------- TEMPLATES (Phase 9: Document -> Data Bank template link) ----------
+// Populated once at init (see INIT below), mirrors templates.js's own GET /api/templates
+// fetch. Only active templates are offered, matching how the rest of the app treats
+// is_active=0 templates as retired.
+async function loadTemplatesForDocuments() {
+    try {
+        const res = await fetch(API_BASE + '/api/templates');
+        if (!res.ok) throw new Error('Failed to fetch templates');
+        const templates = await res.json();
+        arTemplateSelect.innerHTML = '<option value="">-- None --</option>' +
+            templates.filter(t => t.is_active).map(t => `<option value="${t.id}">${t.template_name}</option>`).join('');
+    } catch (error) {
+        // Non-fatal: the Template field just stays at its "-- None --" default if this fails.
+        console.error('Failed to load templates for Documents:', error);
+    }
+}
+
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectDocument(id) {
     try {
@@ -186,6 +204,7 @@ async function selectDocument(id) {
         arEditingIdInput.value = doc.id;
         arNameInput.value = doc.name;
         arKbNoteInput.value = doc.kb_note || '';
+        arTemplateSelect.value = doc.template_id || '';
         rolesState = (doc.auth_roles || []).slice();
         fieldsState = (doc.cross_check_fields || []).slice();
         renderRoleChips();
@@ -217,6 +236,7 @@ function startNewDocument() {
     arEditingIdInput.value = '';
     arNameInput.value = '';
     arKbNoteInput.value = '';
+    arTemplateSelect.value = '';
     rolesState = [];
     fieldsState = [];
     renderRoleChips();
@@ -242,6 +262,7 @@ async function saveDocument() {
     const payload = {
         name: name,
         kb_note: arKbNoteInput.value.trim() || null,
+        template_id: arTemplateSelect.value ? parseInt(arTemplateSelect.value) : null,
         auth_roles: rolesState,
         cross_check_fields: fieldsState
     };
@@ -1258,4 +1279,5 @@ arCategoryRestoreBtn.addEventListener('click', restoreCategory);
 // ---------- INIT ----------
 window.onload = function() {
     loadDocuments();
+    loadTemplatesForDocuments();
 };

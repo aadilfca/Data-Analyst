@@ -17,6 +17,9 @@ from openpyxl.styles import Font, Alignment, Border, Side
 # Reused for voucher/line grouping in get_next_transaction (Phase 1) — same document-key
 # logic already used by import's compare_transactions, applied at query time.
 from routers.import_export import get_document_group_id
+# Phase 9 (Audit Rules): audit guidance now sources from Audit Rules Categories instead of
+# the old hardcoded audit_procedure_library table — same cross-router import pattern as above.
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks
 
 router = APIRouter()
 
@@ -1214,27 +1217,34 @@ def export_audited_cashbook_excel(session_id: int):
     )
 
 # ==============================================
-# PHASE 3 (SEGMENT 2) ENDPOINT – Audit Guidance Lookup
+# AUDIT GUIDANCE LOOKUP (Phase 9: sourced from Audit Rules Categories)
 # ==============================================
 
 @router.get("/api/verification/audit_guidance")
 def get_audit_guidance(
-    transaction_type: str = Query(..., description="Transaction type to look up (must match dropdown values)")
+    # Same query param name/URL as before this phase (kept for frontend-contract stability) -
+    # the value is now a Category name, matched against the live Type dropdown built from
+    # GET /api/audit-rules/categories, not a fixed transaction_type string against the old
+    # audit_procedure_library table (left in place, unused - see database.py's migration
+    # note and 2. Python App/CLAUDE.md's Conventions entry for this phase).
+    transaction_type: str = Query(..., description="Category name to look up (must match the Type dropdown's values)")
 ):
     """
-    Look up audit guidance (management controls, risks, procedures) for a transaction type.
-    Read-only lookup against audit_procedure_library; used by the Segment 2 AUDIT tab.
+    Look up audit guidance (KB overview, attached Documents, attached Cross-checks) for a
+    Category. Cross-checks are surfaced as read-only guidance text only in this phase -
+    automated comparison against real voucher data is a separate, deferred requirement.
     """
     rows = execute_query(
-        "SELECT management_controls, audit_risks, audit_procedures FROM audit_procedure_library WHERE transaction_type = ?",
+        "SELECT id, kb_overview FROM audit_rule_categories WHERE name = ? AND is_active = 1",
         (transaction_type,)
     )
     if not rows:
-        raise HTTPException(404, f"No audit guidance found for transaction type '{transaction_type}'.")
-    r = rows[0]
+        raise HTTPException(404, f"No audit guidance found for category '{transaction_type}'.")
+    category_id = rows[0]['id']
     return {
         "transaction_type": transaction_type,
-        "management_controls": r['management_controls'],
-        "audit_risks": r['audit_risks'],
-        "audit_procedures": r['audit_procedures']
+        "category_id": category_id,
+        "kb_overview": rows[0]['kb_overview'],
+        "documents": get_category_guidance_documents(category_id),
+        "cross_checks": get_category_guidance_cross_checks(category_id)
     }

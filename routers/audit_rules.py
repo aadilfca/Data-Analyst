@@ -17,12 +17,16 @@ router = APIRouter()
 class DocumentCreate(BaseModel):
     name: str
     kb_note: Optional[str] = None
+    # Phase 9: which Data Bank template this Document's supporting evidence should be
+    # searched in (verification.js's Supporting column needs this per-Document).
+    template_id: Optional[int] = None
     auth_roles: List[str] = []
     cross_check_fields: List[str] = []
 
 class DocumentUpdate(BaseModel):
     name: str
     kb_note: Optional[str] = None
+    template_id: Optional[int] = None
     auth_roles: List[str] = []
     cross_check_fields: List[str] = []
 
@@ -54,12 +58,21 @@ def row_to_document(row: dict) -> dict:
         "id": document_id,
         "name": row["name"],
         "kb_note": row.get("kb_note"),
+        "template_id": row.get("template_id"),
         "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
         "auth_roles": get_document_auth_roles(document_id),
         "cross_check_fields": get_document_cross_check_fields(document_id),
         "used_by_categories_count": get_document_used_by_count(document_id)
     }
+
+def validate_document_template_id(template_id: Optional[int]):
+    """Raises HTTPException(400) if template_id is set but doesn't reference an active template."""
+    if template_id is None:
+        return
+    rows = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (template_id,))
+    if not rows:
+        raise HTTPException(400, f"Template ID {template_id} not found or inactive")
 
 def save_document_auth_roles(document_id: int, auth_roles: List[str]):
     """Replace a Document's authorisation-roles list (delete-then-reinsert)."""
@@ -103,9 +116,10 @@ def get_document(document_id: int):
 
 @router.post("/api/audit-rules/documents")
 def create_document(document: DocumentCreate):
+    validate_document_template_id(document.template_id)
     document_id = execute_write(
-        "INSERT INTO audit_rule_documents (name, kb_note) VALUES (?, ?)",
-        (document.name, document.kb_note)
+        "INSERT INTO audit_rule_documents (name, kb_note, template_id) VALUES (?, ?, ?)",
+        (document.name, document.kb_note, document.template_id)
     )
     save_document_auth_roles(document_id, document.auth_roles)
     save_document_cross_check_fields(document_id, document.cross_check_fields)
@@ -118,10 +132,11 @@ def update_document(document_id: int, document: DocumentUpdate):
     existing = execute_query("SELECT id FROM audit_rule_documents WHERE id = ?", (document_id,))
     if not existing:
         raise HTTPException(404, "Document not found")
+    validate_document_template_id(document.template_id)
 
     execute_write(
-        "UPDATE audit_rule_documents SET name = ?, kb_note = ? WHERE id = ?",
-        (document.name, document.kb_note, document_id)
+        "UPDATE audit_rule_documents SET name = ?, kb_note = ?, template_id = ? WHERE id = ?",
+        (document.name, document.kb_note, document.template_id, document_id)
     )
     save_document_auth_roles(document_id, document.auth_roles)
     save_document_cross_check_fields(document_id, document.cross_check_fields)
@@ -364,6 +379,67 @@ def get_category_cross_checks(category_id: int) -> List[dict]:
         (category_id,)
     )
     return [{"cross_check_id": r["cross_check_id"], "name": r["name"]} for r in rows]
+
+# Phase 9: fuller Document/Cross-check shapes for verification.js's audit-guidance panel and
+# Supporting column - the Categories CRUD response only needs id/name (above), but the
+# verification module needs template_id/kb_note/roles/fields per Document and
+# compare_field/comparison_type/document-names per Cross-check. New, additive functions -
+# get_category_documents()/get_category_cross_checks() above (used by the Categories CRUD
+# response) are untouched.
+def get_category_guidance_documents(category_id: int) -> List[dict]:
+    rows = execute_query(
+        """
+        SELECT d.id as document_id, d.name, d.kb_note, d.template_id
+        FROM audit_rule_category_documents cd
+        JOIN audit_rule_documents d ON cd.document_id = d.id
+        WHERE cd.category_id = ?
+        ORDER BY cd.sort_order
+        """,
+        (category_id,)
+    )
+    return [
+        {
+            "id": r["document_id"],
+            "name": r["name"],
+            "kb_note": r["kb_note"],
+            "template_id": r["template_id"],
+            "auth_roles": get_document_auth_roles(r["document_id"]),
+            "cross_check_fields": get_document_cross_check_fields(r["document_id"])
+        }
+        for r in rows
+    ]
+
+def get_category_guidance_cross_checks(category_id: int) -> List[dict]:
+    rows = execute_query(
+        """
+        SELECT c.id as cross_check_id, c.name, c.compare_field, c.comparison_type
+        FROM audit_rule_category_cross_checks cc
+        JOIN audit_rule_cross_checks c ON cc.cross_check_id = c.id
+        WHERE cc.category_id = ?
+        ORDER BY cc.sort_order
+        """,
+        (category_id,)
+    )
+    result = []
+    for r in rows:
+        doc_rows = execute_query(
+            """
+            SELECT d.name
+            FROM audit_rule_cross_check_documents ccd
+            JOIN audit_rule_documents d ON ccd.document_id = d.id
+            WHERE ccd.cross_check_id = ?
+            ORDER BY ccd.sort_order
+            """,
+            (r["cross_check_id"],)
+        )
+        result.append({
+            "id": r["cross_check_id"],
+            "name": r["name"],
+            "compare_field": r["compare_field"],
+            "comparison_type": r["comparison_type"],
+            "documents": [dr["name"] for dr in doc_rows]
+        })
+    return result
 
 def get_category_used_by_vouchers_count(category_id: int) -> int:
     """
