@@ -187,8 +187,10 @@ function renderClients(clients) {
             window.location.href = '/static/client_settings.html?client_id=' + client.id;
         });
 
-        // Audit rules — navigates to the (generic, not yet per-client-filtered) Audit Rules
-        // module. This is now the confirmed real entry point, replacing the earlier Setup hub card.
+        // Audit rules (placeholder) — inert again per user decision: audit_rules.html is a
+        // single global config page with no per-client scoping, so linking it from a specific
+        // client row would misleadingly imply client-specific rules. The dashboard's
+        // "Audit Rules" card (static/index.html) is the sole confirmed entry point for now.
         const auditRulesBtn = document.createElement('button');
         auditRulesBtn.textContent = '📐';
         auditRulesBtn.style.background = 'none';
@@ -196,10 +198,7 @@ function renderClients(clients) {
         auditRulesBtn.style.cursor = 'pointer';
         auditRulesBtn.style.fontSize = '18px';
         auditRulesBtn.style.marginLeft = '8px';
-        auditRulesBtn.title = 'Audit rules';
-        auditRulesBtn.addEventListener('click', () => {
-            window.location.href = '/static/audit_rules.html';
-        });
+        auditRulesBtn.title = 'Audit rules (coming soon)';
 
         tdActions.appendChild(editBtn);
         tdActions.appendChild(delBtn);
