@@ -3031,3 +3031,76 @@ body {
     background: #dcfce7;
     border-color: #86efac;
 }
+
+/* ----- Cross-checks: ordered documents list + select fields (Phase 6 of 9) -----
+   Additive only — no rule above this point was changed. */
+
+/* Standalone rule for the three new <select> elements (Compare Field, Comparison Type,
+   Add Document) rather than extending .ar-field's existing input/textarea selector, so
+   that existing rule is left untouched per this phase's "no unrelated code changes" scope. */
+.ar-field select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    font-size: 14px;
+    background: white;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+.ar-field select:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.ar-ordered-doc-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+.ar-ordered-doc-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #1a1a2e;
+}
+.ar-move-btn,
+.ar-remove-doc-btn {
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 3px 6px;
+    line-height: 1;
+    border-radius: 4px;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.ar-move-btn:hover:not(:disabled) {
+    background: #e2e8f0;
+    color: #1a1a2e;
+}
+.ar-move-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+.ar-remove-doc-btn:hover {
+    background: #fee2e2;
+    color: #dc2626;
+}
+
+/* Add-document row — same visual rhythm as .ar-chip-input-row (select instead of input). */
+.ar-add-doc-row {
+    display: flex;
+    gap: 8px;
+}
+.ar-add-doc-row select {
+    flex: 1;
+}
