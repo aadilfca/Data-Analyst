@@ -975,6 +975,10 @@ def init_db():
         # module (migration confirmed for Phase 9, not a parallel system).
         # All tables use the audit_rule_ prefix to stay distinct from the pre-existing,
         # unrelated audit_log/audit_procedure_library tables.
+        # Phase 2 addition: audit_rule_documents gained is_active (soft-delete/restore for
+        # the Documents CRUD API, matching the clients table convention) - added directly to
+        # the CREATE TABLE below rather than an ALTER TABLE upgrade block, since this table
+        # has no real pre-existing data to migrate (unlike verification_sessions.session_type).
 
         # Documents: name, one KB note, and (via child tables below) a list of
         # cross-checkable fields and a list of authorisation roles.
@@ -983,9 +987,22 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 kb_note TEXT,
+                is_active INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        # Schema upgrade: a database that already ran the Phase 1 CREATE TABLE (with no
+        # is_active column) needs this column added explicitly - CREATE TABLE IF NOT EXISTS
+        # above is a no-op once the table exists, same reasoning as verification_sessions'
+        # session_type upgrade block.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'is_active' not in columns:
+                conn.execute("ALTER TABLE audit_rule_documents ADD COLUMN is_active INTEGER DEFAULT 1")
+                print("✅ Added is_active column to audit_rule_documents")
+        except Exception as e:
+            print("⚠️ Could not add is_active to audit_rule_documents:", e)
 
         # Fields on a Document available for cross-checks (e.g. Quantity, Amount, Date) -
         # stored here so they're a controlled per-document list, not free-typed elsewhere.
