@@ -187,8 +187,8 @@ function renderClients(clients) {
             window.location.href = '/static/client_settings.html?client_id=' + client.id;
         });
 
-        // Audit rules (placeholder) — future entry point for assigning audit rules to this
-        // client; inert for now, no click handler, per the confirmed 2-phase Audit Rules brief.
+        // Audit rules — navigates to the (generic, not yet per-client-filtered) Audit Rules
+        // module. This is now the confirmed real entry point, replacing the earlier Setup hub card.
         const auditRulesBtn = document.createElement('button');
         auditRulesBtn.textContent = '📐';
         auditRulesBtn.style.background = 'none';
@@ -196,7 +196,10 @@ function renderClients(clients) {
         auditRulesBtn.style.cursor = 'pointer';
         auditRulesBtn.style.fontSize = '18px';
         auditRulesBtn.style.marginLeft = '8px';
-        auditRulesBtn.title = 'Audit rules (coming soon)';
+        auditRulesBtn.title = 'Audit rules';
+        auditRulesBtn.addEventListener('click', () => {
+            window.location.href = '/static/audit_rules.html';
+        });
 
         tdActions.appendChild(editBtn);
         tdActions.appendChild(delBtn);

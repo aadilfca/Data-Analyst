@@ -45,7 +45,8 @@ const MODULE_CARD_DESTINATIONS = {
     uploadCard: '/static/upload.html',
     dataBankCard: '/static/databank.html',
     setupCard: '/static/setup.html',
-    manageClientsCard: '/static/clients.html'
+    manageClientsCard: '/static/clients.html',
+    auditRulesCard: '/static/audit_rules.html'
 };
 Object.entries(MODULE_CARD_DESTINATIONS).forEach(([cardId, destination]) => {
     document.getElementById(cardId).addEventListener('click', function() {
