@@ -340,32 +340,43 @@ arRestoreBtn.addEventListener('click', restoreDocument);
 // columns.js/client_settings.js rather than importing them).
 
 // ---------- RAIL / VIEW SWITCHING ----------
-// 'documents' or 'cross-checks' — which entity type's list/detail sections are visible.
+// 'documents', 'cross-checks', or 'categories' — which entity type's list/detail
+// sections are visible.
 let currentEntityType = 'documents';
 
 const arRailDocuments = document.getElementById('arRailDocuments');
 const arRailCrossChecks = document.getElementById('arRailCrossChecks');
+const arRailCategories = document.getElementById('arRailCategories');
 const arDocumentsListSection = document.getElementById('arDocumentsListSection');
 const arDocumentsDetailSection = document.getElementById('arDocumentsDetailSection');
 const arCrossChecksListSection = document.getElementById('arCrossChecksListSection');
 const arCrossChecksDetailSection = document.getElementById('arCrossChecksDetailSection');
+const arCategoriesListSection = document.getElementById('arCategoriesListSection');
+const arCategoriesDetailSection = document.getElementById('arCategoriesDetailSection');
 
 function switchEntityType(type) {
     currentEntityType = type;
 
     arRailDocuments.classList.toggle('active', type === 'documents');
     arRailCrossChecks.classList.toggle('active', type === 'cross-checks');
+    arRailCategories.classList.toggle('active', type === 'categories');
 
     arDocumentsListSection.style.display = (type === 'documents') ? 'flex' : 'none';
     arDocumentsDetailSection.style.display = (type === 'documents') ? 'block' : 'none';
     arCrossChecksListSection.style.display = (type === 'cross-checks') ? 'flex' : 'none';
     arCrossChecksDetailSection.style.display = (type === 'cross-checks') ? 'block' : 'none';
+    arCategoriesListSection.style.display = (type === 'categories') ? 'flex' : 'none';
+    arCategoriesDetailSection.style.display = (type === 'categories') ? 'block' : 'none';
 
     if (type === 'cross-checks') {
         // Refresh the Documents cache every time this view is opened, so the "add
         // document" picker and field-eligibility logic reflect any Documents-side
         // edits made since the last visit.
         loadAllDocumentsForCrossChecks().then(loadCrossChecks);
+    } else if (type === 'categories') {
+        // Refresh both caches every time this view is opened, so the Documents/
+        // Cross-checks pickers and the eligibility check reflect the latest state.
+        Promise.all([loadAllDocumentsForCrossChecks(), loadAllCrossChecksForCategories()]).then(loadCategories);
     }
 }
 
@@ -786,6 +797,7 @@ async function restoreCrossCheck() {
 // ---------- WIRE UP EVENT LISTENERS ----------
 arRailDocuments.addEventListener('click', () => switchEntityType('documents'));
 arRailCrossChecks.addEventListener('click', () => switchEntityType('cross-checks'));
+arRailCategories.addEventListener('click', () => switchEntityType('categories'));
 
 arCrossCheckAddNewBtn.addEventListener('click', startNewCrossCheck);
 arCrossCheckShowInactiveCheckbox.addEventListener('change', loadCrossChecks);
@@ -795,6 +807,453 @@ arAddDocumentBtn.addEventListener('click', addDocumentToCrossCheck);
 arCrossCheckSaveBtn.addEventListener('click', saveCrossCheck);
 arCrossCheckDeleteBtn.addEventListener('click', deleteCrossCheck);
 arCrossCheckRestoreBtn.addEventListener('click', restoreCrossCheck);
+
+// ==============================================
+// 🗂️ AUDIT RULES — CATEGORIES SHELL LOGIC (Phase 7 of 9, final entity view)
+// ==============================================
+// Same rail → list → detail pattern as Documents/Cross-checks above, with its own fully
+// separate markup/state/functions (same "full duplication per entity type" convention
+// documented in CLAUDE.md's Phase 6 note — this phase follows it, not generalizes it).
+// Documents/Cross-checks tag lists here are flat (add/remove only, no reorder), unlike
+// Cross-checks' own *ordered* document list — a Category's document/cross-check order has
+// no meaning, per the confirmed brief ("tag-style list").
+
+// ---------- DOM REFS ----------
+const arCategoryListBody = document.getElementById('arCategoryListBody');
+const arCategoryListEmptyMessage = document.getElementById('arCategoryListEmptyMessage');
+const arCategoryShowInactiveCheckbox = document.getElementById('arCategoryShowInactiveCheckbox');
+const arCategoryAddNewBtn = document.getElementById('arCategoryAddNewBtn');
+
+const arCategoryDetailEmpty = document.getElementById('arCategoryDetailEmpty');
+const arCategoryDetailForm = document.getElementById('arCategoryDetailForm');
+const arCategoryEditingIdInput = document.getElementById('arCategoryEditingId');
+const arCategoryNameInput = document.getElementById('arCategoryNameInput');
+const arCategoryKbOverviewInput = document.getElementById('arCategoryKbOverviewInput');
+const arCategoryDocsChipList = document.getElementById('arCategoryDocsChipList');
+const arCategoryAddDocumentSelect = document.getElementById('arCategoryAddDocumentSelect');
+const arCategoryAddDocumentBtn = document.getElementById('arCategoryAddDocumentBtn');
+const arCategoryCrossChecksChipList = document.getElementById('arCategoryCrossChecksChipList');
+const arCategoryAddCrossCheckSelect = document.getElementById('arCategoryAddCrossCheckSelect');
+const arCategoryAddCrossCheckBtn = document.getElementById('arCategoryAddCrossCheckBtn');
+const arCategoryUsedByRow = document.getElementById('arCategoryUsedByRow');
+const arCategoryUsedByCount = document.getElementById('arCategoryUsedByCount');
+const arCategoryDetailStatus = document.getElementById('arCategoryDetailStatus');
+const arCategorySaveBtn = document.getElementById('arCategorySaveBtn');
+const arCategoryDeleteBtn = document.getElementById('arCategoryDeleteBtn');
+const arCategoryRestoreBtn = document.getElementById('arCategoryRestoreBtn');
+
+// ---------- STATE ----------
+// null while creating a new Category; set to its id while editing an existing one.
+let editingCategoryId = null;
+// Flat arrays (insertion order only, no reorder) of the ids currently attached.
+let categoryDocIds = [];
+let categoryCrossCheckIds = [];
+// Cache of all active Cross-checks ({id, name, documents: [{document_id, name}], ...}),
+// mirroring Phase 6's allDocuments cache — used for the "add cross-check" picker's
+// eligibility check and the document-removal warning. No reusable "all cross-checks"
+// fetch existed before this phase (loadCrossChecks() is tied to the Cross-checks view's
+// own show-inactive filter), so this is a new, Categories-scoped cache.
+let allCrossChecks = [];
+
+// ---------- STATUS MESSAGES ----------
+// Standalone duplicate of showDetailStatus()/showCrossCheckDetailStatus() above, scoped
+// to the Categories detail panel's own status div.
+function showCategoryDetailStatus(message, type) {
+    arCategoryDetailStatus.textContent = message;
+    arCategoryDetailStatus.className = 'upload-status ' + type;
+    arCategoryDetailStatus.style.display = 'block';
+    clearTimeout(window.arCategoryDetailStatusTimeout);
+    window.arCategoryDetailStatusTimeout = setTimeout(() => {
+        arCategoryDetailStatus.style.display = 'none';
+    }, 5000);
+}
+
+// ---------- CROSS-CHECK CACHE (for the add-cross-check picker + removal warning) ----------
+async function loadAllCrossChecksForCategories() {
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=false');
+        if (!res.ok) throw new Error('Failed to load cross-checks');
+        allCrossChecks = await res.json();
+    } catch (error) {
+        allCrossChecks = [];
+        showCategoryDetailStatus('❌ Error loading cross-checks: ' + error.message, 'error');
+    }
+}
+
+function getCrossCheckById(id) {
+    return allCrossChecks.find(cc => cc.id === id);
+}
+
+// ---------- LOAD & RENDER LIST ----------
+async function loadCategories() {
+    const includeInactive = arCategoryShowInactiveCheckbox.checked;
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive);
+        if (!res.ok) throw new Error('Failed to load categories');
+        const categories = await res.json();
+        renderCategoryList(categories);
+    } catch (error) {
+        arCategoryListBody.innerHTML = '';
+        arCategoryListEmptyMessage.textContent = '❌ Error loading categories: ' + error.message;
+        arCategoryListEmptyMessage.style.display = 'block';
+    }
+}
+
+function renderCategoryList(categories) {
+    arCategoryListBody.innerHTML = '';
+
+    if (categories.length === 0) {
+        arCategoryListEmptyMessage.textContent = 'No categories found.';
+        arCategoryListEmptyMessage.style.display = 'block';
+        return;
+    }
+    arCategoryListEmptyMessage.style.display = 'none';
+
+    categories.forEach(cat => {
+        const row = document.createElement('div');
+        row.className = 'ar-list-row' + (cat.is_active ? '' : ' ar-list-row-inactive');
+        if (cat.id === editingCategoryId) row.classList.add('ar-list-row-selected');
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'ar-list-row-name';
+        nameSpan.textContent = cat.name;
+        row.appendChild(nameSpan);
+
+        if (!cat.is_active) {
+            const badge = document.createElement('span');
+            badge.className = 'ar-list-row-badge';
+            badge.textContent = 'Inactive';
+            row.appendChild(badge);
+        }
+
+        row.addEventListener('click', () => selectCategory(cat.id));
+        arCategoryListBody.appendChild(row);
+    });
+}
+
+// ---------- DOCUMENTS TAG LIST (add / remove, with a removal warning) ----------
+function renderCategoryDocChips() {
+    arCategoryDocsChipList.innerHTML = '';
+
+    if (categoryDocIds.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ar-chip-empty';
+        empty.textContent = 'None added.';
+        arCategoryDocsChipList.appendChild(empty);
+    } else {
+        categoryDocIds.forEach(docId => {
+            const doc = getDocumentById(docId);
+            const chip = document.createElement('span');
+            chip.className = 'ar-chip';
+
+            const label = document.createElement('span');
+            label.textContent = doc ? doc.name : ('Document #' + docId);
+            chip.appendChild(label);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'ar-chip-remove';
+            removeBtn.textContent = '✕';
+            removeBtn.title = 'Remove';
+            removeBtn.addEventListener('click', () => removeCategoryDocument(docId));
+            chip.appendChild(removeBtn);
+
+            arCategoryDocsChipList.appendChild(chip);
+        });
+    }
+
+    // Rebuild the "add document" picker to exclude documents already attached.
+    arCategoryAddDocumentSelect.innerHTML = '';
+    const available = allDocuments.filter(d => !categoryDocIds.includes(d.id));
+    if (available.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.disabled = true;
+        opt.selected = true;
+        opt.textContent = allDocuments.length === 0 ? 'No documents exist yet' : 'All documents added';
+        arCategoryAddDocumentSelect.appendChild(opt);
+        arCategoryAddDocumentBtn.disabled = true;
+    } else {
+        available.forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d.id;
+            opt.textContent = d.name;
+            arCategoryAddDocumentSelect.appendChild(opt);
+        });
+        arCategoryAddDocumentBtn.disabled = false;
+    }
+}
+
+function addCategoryDocument() {
+    const value = arCategoryAddDocumentSelect.value;
+    if (!value) return;
+    categoryDocIds.push(parseInt(value, 10));
+    renderCategoryDocChips();
+    // A newly-added document may make a previously-ineligible cross-check selectable.
+    renderCategoryCrossCheckChips();
+}
+
+// Which currently-attached Cross-checks (by name) reference the given Document —
+// used both by the removal warning below and could be reused if this check is ever
+// needed elsewhere in this view.
+function computeAffectedCrossChecks(docId) {
+    return categoryCrossCheckIds
+        .map(ccId => getCrossCheckById(ccId))
+        .filter(cc => cc && (cc.documents || []).some(d => d.document_id === docId))
+        .map(cc => cc.name);
+}
+
+function removeCategoryDocument(docId) {
+    const doc = getDocumentById(docId);
+    const affected = computeAffectedCrossChecks(docId);
+    if (affected.length > 0) {
+        const proceed = confirm(
+            'Removing "' + (doc ? doc.name : 'this document') + '" will leave the following ' +
+            'attached Cross-check(s) referencing a document no longer in this Category: ' +
+            affected.join(', ') + '. Remove anyway?'
+        );
+        if (!proceed) return;
+    }
+    categoryDocIds = categoryDocIds.filter(id => id !== docId);
+    renderCategoryDocChips();
+    // Removing a document can make an already-attached cross-check ineligible again —
+    // re-render so the picker's disabled/hint state (and the chip list) stay accurate.
+    renderCategoryCrossCheckChips();
+}
+
+// ---------- CROSS-CHECKS TAG LIST (add / remove, eligibility-gated picker) ----------
+function renderCategoryCrossCheckChips() {
+    arCategoryCrossChecksChipList.innerHTML = '';
+
+    if (categoryCrossCheckIds.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ar-chip-empty';
+        empty.textContent = 'None added.';
+        arCategoryCrossChecksChipList.appendChild(empty);
+    } else {
+        categoryCrossCheckIds.forEach(ccId => {
+            const cc = getCrossCheckById(ccId);
+            const chip = document.createElement('span');
+            chip.className = 'ar-chip';
+
+            const label = document.createElement('span');
+            label.textContent = cc ? cc.name : ('Cross-check #' + ccId);
+            chip.appendChild(label);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'ar-chip-remove';
+            removeBtn.textContent = '✕';
+            removeBtn.title = 'Remove';
+            removeBtn.addEventListener('click', () => removeCategoryCrossCheck(ccId));
+            chip.appendChild(removeBtn);
+
+            arCategoryCrossChecksChipList.appendChild(chip);
+        });
+    }
+
+    // Rebuild the "add cross-check" picker. A cross-check is only selectable once every
+    // one of its own documents is already in this Category's Documents list (mirrors
+    // validate_category_payload()'s server-side containment rule, routers/audit_rules.py)
+    // — ineligible ones stay visible but disabled with a hint, rather than hidden, so the
+    // user can see what's blocking them.
+    arCategoryAddCrossCheckSelect.innerHTML = '';
+    const available = allCrossChecks.filter(cc => !categoryCrossCheckIds.includes(cc.id));
+
+    if (available.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.disabled = true;
+        opt.selected = true;
+        opt.textContent = allCrossChecks.length === 0 ? 'No cross-checks exist yet' : 'All cross-checks added';
+        arCategoryAddCrossCheckSelect.appendChild(opt);
+        arCategoryAddCrossCheckBtn.disabled = true;
+        return;
+    }
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    placeholder.textContent = 'Select a cross-check';
+    arCategoryAddCrossCheckSelect.appendChild(placeholder);
+
+    available.forEach(cc => {
+        const missingDocs = (cc.documents || [])
+            .filter(d => !categoryDocIds.includes(d.document_id))
+            .map(d => d.name);
+        const opt = document.createElement('option');
+        opt.value = cc.id;
+        opt.disabled = missingDocs.length > 0;
+        opt.textContent = missingDocs.length > 0
+            ? cc.name + ' (needs: ' + missingDocs.join(', ') + ')'
+            : cc.name;
+        arCategoryAddCrossCheckSelect.appendChild(opt);
+    });
+
+    arCategoryAddCrossCheckBtn.disabled = false;
+}
+
+function addCategoryCrossCheck() {
+    const value = arCategoryAddCrossCheckSelect.value;
+    if (!value) return;
+    categoryCrossCheckIds.push(parseInt(value, 10));
+    renderCategoryCrossCheckChips();
+}
+
+function removeCategoryCrossCheck(ccId) {
+    categoryCrossCheckIds = categoryCrossCheckIds.filter(id => id !== ccId);
+    renderCategoryCrossCheckChips();
+}
+
+// ---------- SELECT / NEW / RESET DETAIL PANEL ----------
+async function selectCategory(id) {
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/categories/' + id);
+        if (!res.ok) throw new Error('Category not found');
+        const cat = await res.json();
+
+        editingCategoryId = cat.id;
+        arCategoryEditingIdInput.value = cat.id;
+        arCategoryNameInput.value = cat.name;
+        arCategoryKbOverviewInput.value = cat.kb_overview || '';
+        categoryDocIds = (cat.documents || []).map(d => d.document_id);
+        categoryCrossCheckIds = (cat.cross_checks || []).map(c => c.cross_check_id);
+        renderCategoryDocChips();
+        renderCategoryCrossCheckChips();
+
+        arCategoryUsedByRow.style.display = 'block';
+        arCategoryUsedByCount.textContent = cat.used_by_vouchers_count;
+
+        if (cat.is_active) {
+            arCategoryDeleteBtn.style.display = 'inline-block';
+            arCategoryRestoreBtn.style.display = 'none';
+        } else {
+            arCategoryDeleteBtn.style.display = 'none';
+            arCategoryRestoreBtn.style.display = 'inline-block';
+        }
+
+        arCategoryDetailEmpty.style.display = 'none';
+        arCategoryDetailForm.style.display = 'block';
+
+        // Re-render the list so the selected row highlight moves without a full re-fetch.
+        loadCategories();
+    } catch (error) {
+        showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+function startNewCategory() {
+    editingCategoryId = null;
+    arCategoryEditingIdInput.value = '';
+    arCategoryNameInput.value = '';
+    arCategoryKbOverviewInput.value = '';
+    categoryDocIds = [];
+    categoryCrossCheckIds = [];
+    renderCategoryDocChips();
+    renderCategoryCrossCheckChips();
+
+    arCategoryUsedByRow.style.display = 'none';
+    arCategoryDeleteBtn.style.display = 'none';
+    arCategoryRestoreBtn.style.display = 'none';
+
+    arCategoryDetailEmpty.style.display = 'none';
+    arCategoryDetailForm.style.display = 'block';
+    arCategoryNameInput.focus();
+}
+
+// ---------- SAVE ----------
+async function saveCategory() {
+    const name = arCategoryNameInput.value.trim();
+    if (!name) {
+        showCategoryDetailStatus('❌ Name is required.', 'error');
+        return;
+    }
+
+    const payload = {
+        name: name,
+        kb_overview: arCategoryKbOverviewInput.value.trim() || null,
+        document_ids: categoryDocIds,
+        cross_check_ids: categoryCrossCheckIds
+    };
+
+    try {
+        let url = API_BASE + '/api/audit-rules/categories';
+        let method = 'POST';
+        if (editingCategoryId) {
+            url += '/' + editingCategoryId;
+            method = 'PUT';
+        }
+
+        const res = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        // The server's validation error already names the specific conflicting
+        // Cross-check and Document ID(s) (validate_category_payload(), routers/
+        // audit_rules.py) — surfacing result.detail as-is already satisfies "a clear
+        // inline error naming which Cross-check/Document conflicts", no extra parsing
+        // needed here.
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save category');
+
+        showCategoryDetailStatus('✅ ' + result.message, 'success');
+
+        // POST doesn't echo back the full row, so re-fetch the list, then re-select
+        // to refresh the detail panel's is_active/used_by state from the server.
+        const savedId = editingCategoryId || result.category_id;
+        await loadCategories();
+        await selectCategory(savedId);
+    } catch (error) {
+        showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+// ---------- DELETE / RESTORE ----------
+async function deleteCategory() {
+    if (!editingCategoryId) return;
+    if (!confirm('Are you sure you want to delete "' + arCategoryNameInput.value + '"? This will soft-delete it.')) return;
+
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/categories/' + editingCategoryId, { method: 'DELETE' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to delete category');
+
+        showCategoryDetailStatus('✅ ' + result.message, 'success');
+        await loadCategories();
+        await selectCategory(editingCategoryId);
+    } catch (error) {
+        showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+async function restoreCategory() {
+    if (!editingCategoryId) return;
+
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/categories/' + editingCategoryId + '/restore', { method: 'POST' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to restore category');
+
+        showCategoryDetailStatus('✅ ' + result.message, 'success');
+        await loadCategories();
+        await selectCategory(editingCategoryId);
+    } catch (error) {
+        showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+// ---------- WIRE UP EVENT LISTENERS ----------
+arCategoryAddNewBtn.addEventListener('click', startNewCategory);
+arCategoryShowInactiveCheckbox.addEventListener('change', loadCategories);
+
+arCategoryAddDocumentBtn.addEventListener('click', addCategoryDocument);
+arCategoryAddCrossCheckBtn.addEventListener('click', addCategoryCrossCheck);
+
+arCategorySaveBtn.addEventListener('click', saveCategory);
+arCategoryDeleteBtn.addEventListener('click', deleteCategory);
+arCategoryRestoreBtn.addEventListener('click', restoreCategory);
 
 // ---------- INIT ----------
 window.onload = function() {

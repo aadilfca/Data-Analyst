@@ -30,8 +30,8 @@
         <!-- Three-pane shell: entity rail | list panel | detail panel -->
         <div class="audit-rules-shell">
 
-            <!-- LEFT RAIL: entity type selector. Documents and Cross-checks are functional;
-                 Categories is still a visible-but-inert placeholder (Phase 7). -->
+            <!-- LEFT RAIL: entity type selector. All three entity types are now functional
+                 (Phase 7 completes the set: Documents Phase 5, Cross-checks Phase 6). -->
             <div class="ar-rail">
                 <button type="button" id="arRailDocuments" class="ar-rail-item active">
                     <span class="ar-rail-icon">📄</span>
@@ -41,10 +41,10 @@
                     <span class="ar-rail-icon">🔗</span>
                     <span class="ar-rail-label">Cross-checks</span>
                 </button>
-                <div class="ar-rail-item coming-soon" title="Coming soon">
+                <button type="button" id="arRailCategories" class="ar-rail-item">
                     <span class="ar-rail-icon">🗂️</span>
                     <span class="ar-rail-label">Categories</span>
-                </div>
+                </button>
             </div>
 
             <!-- MIDDLE: list panel. Each entity type gets its own section, toggled by
@@ -77,6 +77,20 @@
                 </label>
                 <div id="arCrossCheckListBody" class="ar-list-body"></div>
                 <div id="arCrossCheckListEmptyMessage" class="ar-list-empty" style="display:none;">No cross-checks found.</div>
+            </div>
+
+            <!-- Categories list section (Phase 7, new). -->
+            <div id="arCategoriesListSection" class="ar-list-panel" style="display:none;">
+                <div class="ar-list-panel-header">
+                    <span class="ar-list-panel-title">Categories</span>
+                    <button type="button" id="arCategoryAddNewBtn" class="ar-btn-add-new">+ Add New</button>
+                </div>
+                <label class="ar-show-inactive-toggle">
+                    <input type="checkbox" id="arCategoryShowInactiveCheckbox">
+                    <span>Show inactive</span>
+                </label>
+                <div id="arCategoryListBody" class="ar-list-body"></div>
+                <div id="arCategoryListEmptyMessage" class="ar-list-empty" style="display:none;">No categories found.</div>
             </div>
 
             <!-- RIGHT: detail / edit panel. Same one-section-per-entity-type toggle pattern
@@ -189,6 +203,63 @@
                         <button type="button" id="arCrossCheckSaveBtn" class="ar-btn-save">Save</button>
                         <button type="button" id="arCrossCheckDeleteBtn" class="ar-btn-delete" style="display:none;">Delete</button>
                         <button type="button" id="arCrossCheckRestoreBtn" class="ar-btn-restore" style="display:none;">Restore</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Categories detail section (Phase 7, new). -->
+            <div id="arCategoriesDetailSection" class="ar-detail-panel" style="display:none;">
+                <div id="arCategoryDetailEmpty" class="ar-detail-empty">
+                    <p>Select a category from the list, or click "+ Add New" to create one.</p>
+                </div>
+
+                <form id="arCategoryDetailForm" class="ar-detail-form" style="display:none;">
+                    <input type="hidden" id="arCategoryEditingId" value="">
+
+                    <div class="ar-field">
+                        <label for="arCategoryNameInput">Name</label>
+                        <input type="text" id="arCategoryNameInput" required>
+                    </div>
+
+                    <div class="ar-field">
+                        <label for="arCategoryKbOverviewInput">KB Overview</label>
+                        <textarea id="arCategoryKbOverviewInput" rows="3"></textarea>
+                    </div>
+
+                    <!-- Documents tag list. Removing a document that an already-attached
+                         Cross-check depends on warns first (see removeCategoryDocument() in
+                         audit_rules.js) — a client-side mirror of the server's containment rule. -->
+                    <div class="ar-field">
+                        <label>Documents</label>
+                        <div class="ar-chip-list" id="arCategoryDocsChipList"></div>
+                        <div class="ar-add-doc-row">
+                            <select id="arCategoryAddDocumentSelect"></select>
+                            <button type="button" id="arCategoryAddDocumentBtn" class="ar-btn-chip-add">Add</button>
+                        </div>
+                    </div>
+
+                    <!-- Cross-checks tag list. The add-picker only enables a cross-check once
+                         every one of its documents is already in the list above — ineligible
+                         ones appear disabled with a "(needs: ...)" hint instead of being hidden. -->
+                    <div class="ar-field">
+                        <label>Cross-checks</label>
+                        <div class="ar-chip-list" id="arCategoryCrossChecksChipList"></div>
+                        <div class="ar-add-doc-row">
+                            <select id="arCategoryAddCrossCheckSelect"></select>
+                            <button type="button" id="arCategoryAddCrossCheckBtn" class="ar-btn-chip-add">Add</button>
+                        </div>
+                    </div>
+
+                    <div class="ar-field" id="arCategoryUsedByRow" style="display:none;">
+                        <span class="ar-used-by-label">Used by <span id="arCategoryUsedByCount">0</span> vouchers</span>
+                    </div>
+
+                    <div id="arCategoryDetailStatus" class="upload-status" style="display:none;"></div>
+
+                    <div class="ar-detail-actions">
+                        <button type="button" id="arCategorySaveBtn" class="ar-btn-save">Save</button>
+                        <button type="button" id="arCategoryDeleteBtn" class="ar-btn-delete" style="display:none;">Delete</button>
+                        <button type="button" id="arCategoryRestoreBtn" class="ar-btn-restore" style="display:none;">Restore</button>
                     </div>
                 </form>
             </div>
