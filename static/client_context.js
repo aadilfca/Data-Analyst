@@ -14,9 +14,17 @@ const STORAGE_CODE = 'selectedClientCode';
 // logic) so Phase 2's search field can flatten/filter this same array directly.
 // `module` (when present) is matched against window._appNav.module to highlight the
 // current page as "you are here" (see getBackTarget()/data-nav-module below).
-// Verification's `children` (Cashbook/Bank book) link to verification.html's own ?view=
-// deep-link arrival handler (Phase 3) — same page, no book name in the link, lands on the
-// pre-filled Start-Verification popup for that book type (see window.onload in verification.js).
+// `children` mirror a module's own internal card/hub grid one level deep (no further nesting
+// supported by renderNavMenuPanel()/renderNavSearchResults()) — so far Verification (its hub's
+// Voucher/Process verification tiles) and Setup (its own 5-card grid, minus Manage Clients since
+// that's already a distinct top-level entry above) have real sub-pages worth listing this way.
+// Verification's Cash vouchers/Bank vouchers children use the same ?type=cash/?type=bank URLs as
+// verification.html's own hub tiles (#cashVoucherTile/#bankVoucherTile in verification.js) — an
+// earlier session added `?view=cashbook`/`?view=bankbook` as separate "Cashbook"/"Bank book"
+// entries before realising both resolve to the exact same currentType/openSessionPopup() call as
+// ?type=; consolidated down to one entry per destination, matching the hub's own wording exactly.
+// (window.onload in verification.js still recognises ?view= too — harmless unused code path now
+// that nothing links to it, left as-is since removing it isn't needed for this manifest change.)
 const NAV_MANIFEST = [
     {
         title: 'Audit work',
@@ -24,8 +32,16 @@ const NAV_MANIFEST = [
             {
                 label: 'Verification', url: '/static/verification.html', state: 'ready', module: 'Verification',
                 children: [
-                    { label: 'Cashbook', url: '/static/verification.html?view=cashbook', state: 'ready' },
-                    { label: 'Bank book', url: '/static/verification.html?view=bankbook', state: 'ready' },
+                    { label: 'Cash vouchers', url: '/static/verification.html?type=cash', state: 'ready' },
+                    { label: 'Bank vouchers', url: '/static/verification.html?type=bank', state: 'ready' },
+                    { label: 'Local vendor', url: null, state: 'coming-soon' },
+                    { label: 'Import vendor', url: null, state: 'coming-soon' },
+                    { label: 'Export customer', url: null, state: 'coming-soon' },
+                    { label: 'Payroll', url: null, state: 'coming-soon' },
+                    { label: 'Contractor', url: null, state: 'coming-soon' },
+                    { label: 'Store receiving vs vendor JV', url: null, state: 'coming-soon' },
+                    { label: 'PO vs gate receiving vs store receiving', url: null, state: 'coming-soon' },
+                    { label: 'Store issuance vs article manufactured', url: null, state: 'coming-soon' },
                 ]
             },
             { label: 'Reports', url: null, state: 'coming-soon' },
@@ -42,7 +58,15 @@ const NAV_MANIFEST = [
     {
         title: 'Administration',
         items: [
-            { label: 'Setup', url: '/static/setup.html', state: 'ready', module: 'Setup' },
+            {
+                label: 'Setup', url: '/static/setup.html', state: 'ready', module: 'Setup',
+                children: [
+                    { label: 'Manage Columns', url: '/static/columns.html', state: 'ready' },
+                    { label: 'Manage Templates', url: '/static/templates.html', state: 'ready' },
+                    { label: 'Error Dashboard', url: '/static/error_dashboard.html', state: 'ready' },
+                    { label: 'App Settings', url: '/static/settings.html', state: 'ready' },
+                ]
+            },
             { label: 'Manage Clients', url: '/static/clients.html', state: 'ready', module: 'Manage Clients' },
             { label: 'Settings', url: null, state: 'coming-soon' },
             { label: 'Users', url: null, state: 'coming-soon' },
@@ -323,7 +347,7 @@ function renderNavLeft() {
             <input type="text" id="navSearchInput" class="nav-search-input"
                    role="combobox" aria-expanded="false" aria-autocomplete="list"
                    aria-controls="navSearchResults" aria-haspopup="listbox"
-                   placeholder="Search..." autocomplete="off">
+                   placeholder="Search... ( / )" autocomplete="off">
             <div id="navSearchResults" class="nav-menu-panel" role="listbox" hidden></div>
         </div>
     `;
@@ -737,6 +761,27 @@ function closeNavSearch(input, panel) {
     searchHighlightIndex = -1;
     input.focus();
 }
+
+// ---------- GLOBAL KEYBOARD SHORTCUT: "/" FOCUSES SEARCH ----------
+// Bound once at module load (same reasoning as the other document-level listeners in this file —
+// #navSearchInput is rebuilt via innerHTML on every renderNavLeft() call, so this looks it up fresh
+// by id each time rather than caching a reference). Guards on the currently focused element so
+// typing a literal "/" into any other input/textarea/contenteditable field anywhere in the app is
+// never intercepted — the app's existing global keydown handlers (e.g. script.js's "R"-to-refresh)
+// have no such guard, which is a gap this shortcut deliberately avoids repeating.
+document.addEventListener('keydown', function (e) {
+    if (e.key !== '/') return;
+    const active = document.activeElement;
+    const isEditable = active && (
+        active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable
+    );
+    if (isEditable) return;
+    const input = document.getElementById('navSearchInput');
+    if (!input) return;
+    e.preventDefault();
+    input.focus();
+    input.select();
+});
 
 // ---------- GLOBAL CLICK HANDLER: HOME ICON ----------
 // Delegated at document level so any current or future element carrying the
