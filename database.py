@@ -966,6 +966,129 @@ def init_db():
                         )
         print("✅ Seeded default voucher prefixes for clients with none configured")
 
+        # ---------- AUDIT RULES MODULE (Phase 1 of 9: schema foundation) ----------
+        # Three reusable entities assembled by reference (not duplicated per-category):
+        # Documents, Cross-checks, and Categories. A Category is the thing a voucher will
+        # eventually reference (wired up in Phase 9) - this phase is schema only, no
+        # voucher/client_data changes, no API, no UI. This is intended to eventually
+        # replace the hardcoded audit_procedure_library lookup used by the verification
+        # module (migration confirmed for Phase 9, not a parallel system).
+        # All tables use the audit_rule_ prefix to stay distinct from the pre-existing,
+        # unrelated audit_log/audit_procedure_library tables.
+
+        # Documents: name, one KB note, and (via child tables below) a list of
+        # cross-checkable fields and a list of authorisation roles.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                kb_note TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Fields on a Document available for cross-checks (e.g. Quantity, Amount, Date) -
+        # stored here so they're a controlled per-document list, not free-typed elsewhere.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_document_fields (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                field_name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+                UNIQUE(document_id, field_name)
+            )
+        ''')
+
+        # Authorisation roles required on a Document (e.g. "Approved by") - modelled as a
+        # list from the start so more roles can be added later with no schema change.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_document_auth_roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                role_name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+                UNIQUE(document_id, role_name)
+            )
+        ''')
+
+        # Cross-checks: name, the field being compared, and a comparison type from a fixed
+        # set. compare_field is free text (not FK'd to audit_rule_document_fields) since
+        # different documents attached to the same cross-check may use differently-named
+        # but equivalent fields.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_cross_checks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                compare_field TEXT NOT NULL,
+                comparison_type TEXT NOT NULL CHECK (comparison_type IN
+                    ('All equal', 'Sequential increasing', 'Sequential decreasing', 'Within tolerance %')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Ordered list of Documents a Cross-check applies to.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_cross_check_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cross_check_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (cross_check_id) REFERENCES audit_rule_cross_checks(id) ON DELETE CASCADE,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+                UNIQUE(cross_check_id, document_id)
+            )
+        ''')
+
+        # Categories: name, one KB overview note, and (via junction tables below) the
+        # Documents it uses and the Cross-checks it applies. This is the entity a voucher
+        # will eventually reference (Phase 9).
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                kb_overview TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Documents a Category uses.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_category_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (category_id) REFERENCES audit_rule_categories(id) ON DELETE CASCADE,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+                UNIQUE(category_id, document_id)
+            )
+        ''')
+
+        # Cross-checks a Category applies.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_category_cross_checks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL,
+                cross_check_id INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (category_id) REFERENCES audit_rule_categories(id) ON DELETE CASCADE,
+                FOREIGN KEY (cross_check_id) REFERENCES audit_rule_cross_checks(id) ON DELETE CASCADE,
+                UNIQUE(category_id, cross_check_id)
+            )
+        ''')
+
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_document_fields_document ON audit_rule_document_fields (document_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_document_auth_roles_document ON audit_rule_document_auth_roles (document_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_documents_crosscheck ON audit_rule_cross_check_documents (cross_check_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_documents_document ON audit_rule_cross_check_documents (document_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_documents_category ON audit_rule_category_documents (category_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_documents_document ON audit_rule_category_documents (document_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_category ON audit_rule_category_cross_checks (category_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_crosscheck ON audit_rule_category_cross_checks (cross_check_id)")
+        print("✅ Created Audit Rules module tables (Phase 1 of 9: schema foundation)")
+
         conn.commit()
         print("✅ Database initialization complete")
 
