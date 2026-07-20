@@ -1079,9 +1079,23 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 kb_overview TEXT,
+                is_active INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        # Schema upgrade: same reasoning as audit_rule_documents/audit_rule_cross_checks'
+        # is_active upgrades above - a database that already ran the Phase 1 CREATE TABLE
+        # (with no is_active column) needs it added explicitly. Added in Phase 4 to support
+        # Categories soft-delete/restore - the third and final audit_rule_* entity table to
+        # need this treatment.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_categories)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'is_active' not in columns:
+                conn.execute("ALTER TABLE audit_rule_categories ADD COLUMN is_active INTEGER DEFAULT 1")
+                print("✅ Added is_active column to audit_rule_categories")
+        except Exception as e:
+            print("⚠️ Could not add is_active to audit_rule_categories:", e)
 
         # Documents a Category uses.
         conn.execute('''

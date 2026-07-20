@@ -1,10 +1,10 @@
 # ==============================================
 # 📐 AUDIT RULES ROUTER
 # ==============================================
-# Phase 2 of 9 added Documents CRUD; Phase 3 of 9 added Cross-checks CRUD - the first
-# two of the three reusable entity types (Documents / Cross-checks / Categories) in
-# the Audit Rules module. Categories get their own CRUD in Phase 4; its junction
-# tables exist from Phase 1 but stay unused until then.
+# Phase 2 of 9 added Documents CRUD; Phase 3 of 9 added Cross-checks CRUD; Phase 4 of 9
+# added Categories CRUD - all three reusable entity types (Documents / Cross-checks /
+# Categories) in the Audit Rules module now have CRUD. Categories is the entity a
+# voucher will eventually reference (wired up in Phase 9).
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -316,3 +316,200 @@ def restore_cross_check(cross_check_id: int):
     execute_write("UPDATE audit_rule_cross_checks SET is_active = 1 WHERE id = ?", (cross_check_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Cross-check: {existing[0]['name']} (ID: {cross_check_id})")
     return {"message": "Cross-check restored successfully"}
+
+
+# ==============================================
+# CATEGORIES
+# ==============================================
+# Phase 4 of 9: the third and final reusable entity type. A Category assembles a list
+# of Documents and a list of Cross-checks by reference. This is the entity a voucher
+# will eventually reference (wired up in Phase 9).
+
+# ---------- DATA MODELS ----------
+class CategoryCreate(BaseModel):
+    name: str
+    kb_overview: Optional[str] = None
+    document_ids: List[int] = []
+    cross_check_ids: List[int] = []
+
+class CategoryUpdate(BaseModel):
+    name: str
+    kb_overview: Optional[str] = None
+    document_ids: List[int] = []
+    cross_check_ids: List[int] = []
+
+# ---------- HELPERS ----------
+def get_category_documents(category_id: int) -> List[dict]:
+    rows = execute_query(
+        """
+        SELECT d.id as document_id, d.name
+        FROM audit_rule_category_documents cd
+        JOIN audit_rule_documents d ON cd.document_id = d.id
+        WHERE cd.category_id = ?
+        ORDER BY cd.sort_order
+        """,
+        (category_id,)
+    )
+    return [{"document_id": r["document_id"], "name": r["name"]} for r in rows]
+
+def get_category_cross_checks(category_id: int) -> List[dict]:
+    rows = execute_query(
+        """
+        SELECT c.id as cross_check_id, c.name
+        FROM audit_rule_category_cross_checks cc
+        JOIN audit_rule_cross_checks c ON cc.cross_check_id = c.id
+        WHERE cc.category_id = ?
+        ORDER BY cc.sort_order
+        """,
+        (category_id,)
+    )
+    return [{"cross_check_id": r["cross_check_id"], "name": r["name"]} for r in rows]
+
+def get_category_used_by_vouchers_count(category_id: int) -> int:
+    """
+    Placeholder - no voucher/client_data column references a Category yet (that link is
+    Phase 9's job). Returns 0 unconditionally so the response shape is stable now and the
+    frontend (Phase 7) doesn't need a later API contract change; replace with a real
+    COUNT(*) query once Phase 9 adds the voucher-side category reference.
+    """
+    return 0
+
+def row_to_category(row: dict) -> dict:
+    category_id = row["id"]
+    return {
+        "id": category_id,
+        "name": row["name"],
+        "kb_overview": row.get("kb_overview"),
+        "is_active": bool(row["is_active"]),
+        "created_at": row["created_at"],
+        "documents": get_category_documents(category_id),
+        "cross_checks": get_category_cross_checks(category_id),
+        "used_by_vouchers_count": get_category_used_by_vouchers_count(category_id)
+    }
+
+def save_category_documents(category_id: int, document_ids: List[int]):
+    """Replace a Category's Document list (delete-then-reinsert)."""
+    execute_write("DELETE FROM audit_rule_category_documents WHERE category_id = ?", (category_id,))
+    for idx, document_id in enumerate(document_ids):
+        execute_write(
+            "INSERT INTO audit_rule_category_documents (category_id, document_id, sort_order) VALUES (?, ?, ?)",
+            (category_id, document_id, idx)
+        )
+
+def save_category_cross_checks(category_id: int, cross_check_ids: List[int]):
+    """Replace a Category's Cross-check list (delete-then-reinsert)."""
+    execute_write("DELETE FROM audit_rule_category_cross_checks WHERE category_id = ?", (category_id,))
+    for idx, cross_check_id in enumerate(cross_check_ids):
+        execute_write(
+            "INSERT INTO audit_rule_category_cross_checks (category_id, cross_check_id, sort_order) VALUES (?, ?, ?)",
+            (category_id, cross_check_id, idx)
+        )
+
+def validate_category_payload(document_ids: List[int], cross_check_ids: List[int]):
+    """
+    Raises HTTPException(400) if any document_id/cross_check_id doesn't exist (SQLite
+    foreign keys aren't enforced on this app's connections, see get_db()), or if any
+    selected Cross-check references a Document that isn't also in this Category's own
+    document_ids list.
+    """
+    doc_id_set = set()
+    for document_id in document_ids:
+        rows = execute_query("SELECT id FROM audit_rule_documents WHERE id = ?", (document_id,))
+        if not rows:
+            raise HTTPException(400, f"Document ID {document_id} not found")
+        doc_id_set.add(document_id)
+
+    for cross_check_id in cross_check_ids:
+        cc_rows = execute_query("SELECT name FROM audit_rule_cross_checks WHERE id = ?", (cross_check_id,))
+        if not cc_rows:
+            raise HTTPException(400, f"Cross-check ID {cross_check_id} not found")
+        cc_doc_rows = execute_query(
+            "SELECT document_id FROM audit_rule_cross_check_documents WHERE cross_check_id = ?",
+            (cross_check_id,)
+        )
+        cc_doc_ids = [r["document_id"] for r in cc_doc_rows]
+        missing = [d for d in cc_doc_ids if d not in doc_id_set]
+        if missing:
+            raise HTTPException(
+                400,
+                f"Cross-check '{cc_rows[0]['name']}' (ID {cross_check_id}) references Document ID(s) "
+                f"{missing} that are not included in this Category's Document list"
+            )
+
+# ---------- ENDPOINTS ----------
+
+@router.get("/api/audit-rules/categories")
+def get_categories(include_inactive: bool = False):
+    """
+    Get all Categories. By default, only active Categories are returned.
+    Set include_inactive=True to get all.
+    """
+    query = "SELECT * FROM audit_rule_categories"
+    if not include_inactive:
+        query += " WHERE is_active = 1"
+    query += " ORDER BY name"
+    rows = execute_query(query)
+    return [row_to_category(r) for r in rows]
+
+@router.get("/api/audit-rules/categories/{category_id}")
+def get_category(category_id: int):
+    rows = execute_query("SELECT * FROM audit_rule_categories WHERE id = ?", (category_id,))
+    if not rows:
+        raise HTTPException(404, "Category not found")
+    return row_to_category(rows[0])
+
+@router.post("/api/audit-rules/categories")
+def create_category(category: CategoryCreate):
+    validate_category_payload(category.document_ids, category.cross_check_ids)
+
+    category_id = execute_write(
+        "INSERT INTO audit_rule_categories (name, kb_overview) VALUES (?, ?)",
+        (category.name, category.kb_overview)
+    )
+    save_category_documents(category_id, category.document_ids)
+    save_category_cross_checks(category_id, category.cross_check_ids)
+
+    log_audit("Admin", "Create", "AuditRules", f"Created Category: {category.name}")
+    return {"message": f"Category '{category.name}' created successfully", "category_id": category_id}
+
+@router.put("/api/audit-rules/categories/{category_id}")
+def update_category(category_id: int, category: CategoryUpdate):
+    existing = execute_query("SELECT id FROM audit_rule_categories WHERE id = ?", (category_id,))
+    if not existing:
+        raise HTTPException(404, "Category not found")
+
+    validate_category_payload(category.document_ids, category.cross_check_ids)
+
+    execute_write(
+        "UPDATE audit_rule_categories SET name = ?, kb_overview = ? WHERE id = ?",
+        (category.name, category.kb_overview, category_id)
+    )
+    save_category_documents(category_id, category.document_ids)
+    save_category_cross_checks(category_id, category.cross_check_ids)
+
+    log_audit("Admin", "Update", "AuditRules", f"Updated Category ID {category_id}")
+    return {"message": "Category updated successfully"}
+
+@router.delete("/api/audit-rules/categories/{category_id}")
+def delete_category(category_id: int):
+    """
+    Soft-delete a Category (set is_active = 0).
+    """
+    existing = execute_query("SELECT name FROM audit_rule_categories WHERE id = ? AND is_active = 1", (category_id,))
+    if not existing:
+        raise HTTPException(404, "Active Category not found")
+    execute_write("UPDATE audit_rule_categories SET is_active = 0 WHERE id = ?", (category_id,))
+    log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Category: {existing[0]['name']} (ID: {category_id})")
+    return {"message": "Category deleted (soft-delete) successfully"}
+
+@router.post("/api/audit-rules/categories/{category_id}/restore")
+def restore_category(category_id: int):
+    """
+    Restore a soft-deleted Category.
+    """
+    existing = execute_query("SELECT name FROM audit_rule_categories WHERE id = ? AND is_active = 0", (category_id,))
+    if not existing:
+        raise HTTPException(404, "Inactive Category not found")
+    execute_write("UPDATE audit_rule_categories SET is_active = 1 WHERE id = ?", (category_id,))
+    log_audit("Admin", "Restore", "AuditRules", f"Restored Category: {existing[0]['name']} (ID: {category_id})")
+    return {"message": "Category restored successfully"}
