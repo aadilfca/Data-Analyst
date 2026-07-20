@@ -187,9 +187,21 @@ function renderClients(clients) {
             window.location.href = '/static/client_settings.html?client_id=' + client.id;
         });
 
+        // Audit rules (placeholder) — future entry point for assigning audit rules to this
+        // client; inert for now, no click handler, per the confirmed 2-phase Audit Rules brief.
+        const auditRulesBtn = document.createElement('button');
+        auditRulesBtn.textContent = '📐';
+        auditRulesBtn.style.background = 'none';
+        auditRulesBtn.style.border = 'none';
+        auditRulesBtn.style.cursor = 'pointer';
+        auditRulesBtn.style.fontSize = '18px';
+        auditRulesBtn.style.marginLeft = '8px';
+        auditRulesBtn.title = 'Audit rules (coming soon)';
+
         tdActions.appendChild(editBtn);
         tdActions.appendChild(delBtn);
         tdActions.appendChild(settingsBtn);
+        tdActions.appendChild(auditRulesBtn);
 
         tr.appendChild(tdId);
         tr.appendChild(tdCode);
