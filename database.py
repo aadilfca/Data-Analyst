@@ -1041,9 +1041,22 @@ def init_db():
                 compare_field TEXT NOT NULL,
                 comparison_type TEXT NOT NULL CHECK (comparison_type IN
                     ('All equal', 'Sequential increasing', 'Sequential decreasing', 'Within tolerance %')),
+                is_active INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        # Schema upgrade: same reasoning as audit_rule_documents' is_active upgrade above -
+        # a database that already ran the Phase 1 CREATE TABLE (with no is_active column)
+        # needs it added explicitly, since CREATE TABLE IF NOT EXISTS is a no-op once the
+        # table exists. Added in Phase 3 to support Cross-checks soft-delete/restore.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_cross_checks)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'is_active' not in columns:
+                conn.execute("ALTER TABLE audit_rule_cross_checks ADD COLUMN is_active INTEGER DEFAULT 1")
+                print("✅ Added is_active column to audit_rule_cross_checks")
+        except Exception as e:
+            print("⚠️ Could not add is_active to audit_rule_cross_checks:", e)
 
         # Ordered list of Documents a Cross-check applies to.
         conn.execute('''
