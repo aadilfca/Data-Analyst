@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Audit Rules - Internal Audit App</title>
+    <link rel="stylesheet" href="/static/style.css?v=2">
+</head>
+<body data-nav-module="Audit Rules" data-nav-parent="index.html">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user">
+                <span>👤 Welcome, Admin</span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <header class="module-header">
+            <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
+            <h1>📋 Audit Rules</h1>
+            <p>Manage reusable Documents, Cross-checks, and Categories for audit rule assignment</p>
+        </header>
+
+        <!-- Three-pane shell: entity rail | list panel | detail panel -->
+        <div class="audit-rules-shell">
+
+            <!-- LEFT RAIL: entity type selector. Only Documents is functional this phase;
+                 Cross-checks/Categories are visible-but-inert placeholders (Phases 6-7). -->
+            <div class="ar-rail">
+                <button type="button" id="arRailDocuments" class="ar-rail-item active">
+                    <span class="ar-rail-icon">📄</span>
+                    <span class="ar-rail-label">Documents</span>
+                </button>
+                <div class="ar-rail-item coming-soon" title="Coming soon">
+                    <span class="ar-rail-icon">🔗</span>
+                    <span class="ar-rail-label">Cross-checks</span>
+                </div>
+                <div class="ar-rail-item coming-soon" title="Coming soon">
+                    <span class="ar-rail-icon">🗂️</span>
+                    <span class="ar-rail-label">Categories</span>
+                </div>
+            </div>
+
+            <!-- MIDDLE: list of Documents -->
+            <div class="ar-list-panel">
+                <div class="ar-list-panel-header">
+                    <span class="ar-list-panel-title">Documents</span>
+                    <button type="button" id="arAddNewBtn" class="ar-btn-add-new">+ Add New</button>
+                </div>
+                <label class="ar-show-inactive-toggle">
+                    <input type="checkbox" id="arShowInactiveCheckbox">
+                    <span>Show inactive</span>
+                </label>
+                <div id="arListBody" class="ar-list-body"></div>
+                <div id="arListEmptyMessage" class="ar-list-empty" style="display:none;">No documents found.</div>
+            </div>
+
+            <!-- RIGHT: detail / edit panel for the selected (or new) Document -->
+            <div class="ar-detail-panel">
+                <div id="arDetailEmpty" class="ar-detail-empty">
+                    <p>Select a document from the list, or click "+ Add New" to create one.</p>
+                </div>
+
+                <form id="arDetailForm" class="ar-detail-form" style="display:none;">
+                    <input type="hidden" id="arEditingId" value="">
+
+                    <div class="ar-field">
+                        <label for="arNameInput">Name</label>
+                        <input type="text" id="arNameInput" required>
+                    </div>
+
+                    <div class="ar-field">
+                        <label for="arKbNoteInput">KB Note</label>
+                        <textarea id="arKbNoteInput" rows="3"></textarea>
+                    </div>
+
+                    <!-- Authorisation Roles chip editor -->
+                    <div class="ar-field">
+                        <label>Authorisation Roles</label>
+                        <div class="ar-chip-list" id="arRolesChipList"></div>
+                        <div class="ar-chip-input-row">
+                            <input type="text" id="arRolesInput" placeholder="e.g. Approved by">
+                            <button type="button" id="arRolesAddBtn" class="ar-btn-chip-add">Add</button>
+                        </div>
+                    </div>
+
+                    <!-- Cross-check-eligible Fields chip editor -->
+                    <div class="ar-field">
+                        <label>Cross-check-eligible Fields</label>
+                        <div class="ar-chip-list" id="arFieldsChipList"></div>
+                        <div class="ar-chip-input-row">
+                            <input type="text" id="arFieldsInput" placeholder="e.g. Quantity">
+                            <button type="button" id="arFieldsAddBtn" class="ar-btn-chip-add">Add</button>
+                        </div>
+                    </div>
+
+                    <div class="ar-field" id="arUsedByRow" style="display:none;">
+                        <span class="ar-used-by-label">Used by <span id="arUsedByCount">0</span> categories</span>
+                    </div>
+
+                    <div id="arDetailStatus" class="upload-status" style="display:none;"></div>
+
+                    <div class="ar-detail-actions">
+                        <button type="button" id="arSaveBtn" class="ar-btn-save">Save</button>
+                        <button type="button" id="arDeleteBtn" class="ar-btn-delete" style="display:none;">Delete</button>
+                        <button type="button" id="arRestoreBtn" class="ar-btn-restore" style="display:none;">Restore</button>
+                    </div>
+                </form>
+            </div>
+
+        </div>
+    </div>
+
+    <script src="/static/client_context.js?v=2"></script>
+    <script src="/static/audit_rules.js?v=2"></script>
+</body>
+</html>

@@ -2696,3 +2696,338 @@ body {
     background: #f8fafc;
     color: #94a3b8;
 }
+
+/* =============================================
+   AUDIT RULES MODULE (Phase 5 of 9 — frontend shell)
+   ============================================= */
+
+/* Three-pane shell: entity rail | list panel | detail panel. */
+.audit-rules-shell {
+    display: flex;
+    gap: 0;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    overflow: hidden;
+    min-height: 600px;
+    align-items: stretch;
+}
+
+/* ----- Left rail: entity type selector ----- */
+.ar-rail {
+    width: 200px;
+    flex-shrink: 0;
+    background: #f8fafc;
+    border-right: 1px solid #e2e8f0;
+    padding: 16px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.ar-rail-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #475569;
+    background: none;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.ar-rail-item:hover:not(.coming-soon) {
+    background: #eef2f6;
+}
+.ar-rail-item.active {
+    background: #dbeafe;
+    color: #1e40af;
+    border-right: 3px solid #3b82f6;
+}
+.ar-rail-icon {
+    font-size: 18px;
+    line-height: 1;
+}
+
+/* Cross-checks/Categories placeholders reuse the app's existing coming-soon dimming
+   convention (see .module-card.coming-soon) — inert, no click handler, no hover feedback. */
+.ar-rail-item.coming-soon {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* ----- Middle: Documents list panel ----- */
+.ar-list-panel {
+    width: 320px;
+    flex-shrink: 0;
+    border-right: 1px solid #e2e8f0;
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    overflow-y: auto;
+}
+
+.ar-list-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+.ar-list-panel-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1a1a2e;
+}
+
+.ar-btn-add-new {
+    padding: 6px 14px;
+    background: #22c55e;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.ar-btn-add-new:hover {
+    background: #16a34a;
+}
+
+.ar-show-inactive-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #64748b;
+    cursor: pointer;
+    margin-bottom: 12px;
+}
+.ar-show-inactive-toggle input {
+    cursor: pointer;
+}
+
+.ar-list-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ar-list-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    color: #1a1a2e;
+    transition: background 0.15s ease;
+}
+.ar-list-row:hover {
+    background: #f1f5f9;
+}
+.ar-list-row-selected {
+    background: #dbeafe;
+    color: #1e40af;
+    font-weight: 600;
+}
+.ar-list-row-inactive {
+    opacity: 0.55;
+}
+.ar-list-row-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ar-list-row-badge {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #94a3b8;
+    background: #f1f5f9;
+    padding: 2px 8px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    margin-left: 8px;
+}
+
+.ar-list-empty {
+    color: #94a3b8;
+    font-size: 13px;
+    font-style: italic;
+    padding: 12px 4px;
+}
+
+/* ----- Right: Document detail/edit panel ----- */
+.ar-detail-panel {
+    flex: 1;
+    padding: 24px 30px;
+    overflow-y: auto;
+}
+
+.ar-detail-empty {
+    color: #94a3b8;
+    font-size: 14px;
+    font-style: italic;
+    padding: 40px 0;
+    text-align: center;
+}
+
+.ar-detail-form {
+    max-width: 560px;
+}
+
+.ar-field {
+    margin-bottom: 18px;
+}
+.ar-field label {
+    display: block;
+    font-weight: 600;
+    font-size: 13px;
+    color: #475569;
+    margin-bottom: 6px;
+}
+.ar-field input[type="text"],
+.ar-field textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.2s;
+}
+.ar-field input[type="text"]:focus,
+.ar-field textarea:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+.ar-field textarea {
+    resize: vertical;
+}
+
+.ar-used-by-label {
+    font-size: 13px;
+    color: #64748b;
+    font-weight: 500;
+}
+
+/* ----- Chip editors (Authorisation Roles / Cross-check-eligible Fields) -----
+   Independent copy of client_settings.html's inline prefix-chip-* styling — that page's
+   rules live in its own <style> block, unreachable from a different page, so redefined
+   here under ar-chip* names rather than introducing a cross-page dependency. */
+.ar-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+    min-height: 20px;
+}
+.ar-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px 4px 10px;
+    background: #eef2f6;
+    border: 1px solid #d0d5dd;
+    border-radius: 999px;
+    font-size: 12px;
+    color: #1a1a2e;
+}
+.ar-chip-remove {
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 4px;
+    line-height: 1;
+    border-radius: 50%;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.ar-chip-remove:hover {
+    background: #fee2e2;
+    color: #dc2626;
+}
+.ar-chip-empty {
+    font-size: 12px;
+    color: #94a3b8;
+    font-style: italic;
+}
+
+.ar-chip-input-row {
+    display: flex;
+    gap: 8px;
+}
+.ar-chip-input-row input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    font-size: 13px;
+}
+.ar-btn-chip-add {
+    padding: 6px 14px;
+    background: #f1f5f9;
+    color: #1e293b;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.ar-btn-chip-add:hover {
+    background: #e2e8f0;
+}
+
+/* ----- Detail panel action buttons ----- */
+.ar-detail-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+.ar-btn-save {
+    padding: 9px 28px;
+    background: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.ar-btn-save:hover {
+    background: #2563eb;
+}
+.ar-btn-delete,
+.ar-btn-restore {
+    padding: 9px 20px;
+    border: 1px solid #d0d5dd;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    background: white;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.ar-btn-delete {
+    color: #dc2626;
+}
+.ar-btn-delete:hover {
+    background: #fee2e2;
+    border-color: #fca5a5;
+}
+.ar-btn-restore {
+    color: #16a34a;
+}
+.ar-btn-restore:hover {
+    background: #dcfce7;
+    border-color: #86efac;
+}
