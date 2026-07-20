@@ -149,6 +149,11 @@ window.onload = function() {
         document.getElementById('importFileInput').click();
     });
     document.getElementById('importFileInput').addEventListener('change', handleImportFile);
+
+    // Audit Rules card navigation (no inline onclick, per app convention)
+    document.getElementById('auditRulesCard').addEventListener('click', function() {
+        window.location.href = '/static/audit_rules.html';
+    });
 };
 
 // Reload stats when page becomes visible again (e.g., after navigating back from columns/templates)
