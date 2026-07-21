@@ -672,24 +672,31 @@
            the Phase 3 endpoint's "missing" days (Sundays/holidays already
            excluded upstream, so every date here is a genuine gap). Rendered
            from the same data fetchCoverageCalendar() already retrieves for
-           the Phase 4 calendars — no separate network call. ===== */
+           the Phase 4 calendars — no separate network call.
+           Redesign Phase 4: restyled from a plain top-divider block into a
+           red-tinted warning callout (icon+heading, danger background),
+           matching the prototype — grouping/text logic (databank.js) and
+           per-row status colors (name/count/list/complete) are unchanged,
+           only the container/heading/divider treatment changed. ===== */
         .missing-dates-report {
-            margin-top: 24px;
-            padding-top: 16px;
-            border-top: 1px solid #e2e8f0;
+            margin-top: 20px;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 10px;
+            padding: 16px 20px;
         }
 
         .missing-dates-report-heading {
             margin: 0 0 10px 0;
             font-size: 15px;
-            color: #1a1a2e;
+            color: #991b1b;
         }
 
         .missing-dates-template-row {
             font-size: 13px;
             color: #475569;
             padding: 6px 0;
-            border-bottom: 1px solid #f0f2f5;
+            border-bottom: 1px solid #fecaca;
         }
 
         .missing-dates-template-row:last-child {
@@ -968,7 +975,7 @@
                  rendered by renderMissingDatesReport(), called from the end
                  of renderCoverageCalendars(). -->
             <div class="missing-dates-report" id="missingDatesReport">
-                <h3 class="missing-dates-report-heading">📋 Missing Dates Report</h3>
+                <h3 class="missing-dates-report-heading">⚠️ Missing Dates Report</h3>
                 <div id="missingDatesReportBody">
                     <!-- One .missing-dates-template-row per selected template -->
                 </div>
