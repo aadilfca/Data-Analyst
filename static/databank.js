@@ -19,42 +19,50 @@ let previewTemplateName = '';
 let isPreviewOpen = false;
 let isPreviewLoading = false;
 
-// Coverage Calendar (Phase 4) state — independent of the shared date range
-// (see sharedRangeFromInput/sharedRangeToInput below); this widget has its
-// own template multi-select and its own month/year navigation.
+// Coverage Calendar state — independent of the shared date range (see
+// sharedRangeFromInput/sharedRangeToInput below). As of the Coverage
+// Calendar → per-template popover fix, this is scoped to whichever single
+// template's modal is currently open (calendarYear/calendarMonth reset to
+// the current month each time it opens; currentPopoverTemplateId/Name track
+// which template that is) — there is no more multi-template selection.
 let calendarYear = new Date().getFullYear();
 let calendarMonth = new Date().getMonth() + 1; // 1-12
+let currentPopoverTemplateId = null;
+let currentPopoverTemplateName = '';
 
-// Template picker (Redesign Phase 2 — chips + search) state. Chips (unlike
-// <option> elements) don't carry selection in the DOM themselves, so the
-// selection lives here explicitly. calendarTemplatesList is the full
-// fetched set (for the search filter to work against); calendarSelectedTemplateIds
-// is the actual selection, unaffected by what the search box currently hides.
-let calendarTemplatesList = [];
-let calendarSelectedTemplateIds = new Set();
+// "Your Datasets" search (Coverage Calendar → per-template popover fix):
+// filters the unified template list by name, replacing the old chip
+// picker's search. See renderFilteredYourDatasetsTable().
+let yourDatasetsSearchTerm = '';
 
 // ---------- DOM REFS ----------
 const statusDiv = document.getElementById('statusMessage');
 
 // Redesign Phase 5: "Your datasets" table — fed by fetchAvailability() data,
 // never a second fetch. See renderYourDatasetsTable()/resetDatasetTables().
+// Coverage Calendar → per-template popover fix: this is now also the single
+// unified template list, with its own search input and the relocated
+// Upload More button in a header row above it.
 const yourDatasetsBody = document.getElementById('yourDatasetsBody');
 const yourDatasetsNoData = document.getElementById('yourDatasetsNoData');
+const yourDatasetsSearchInput = document.getElementById('yourDatasetsSearch');
 
 // Redesign Phase 1: header's Upload More button (moved off an inline onclick).
 const uploadMoreBtn = document.getElementById('uploadMoreBtn');
 
-// Coverage Calendar (Phase 4) DOM refs
-// Redesign Phase 2: the old <select multiple> is replaced by a search input
-// + a chip container (calendarTemplateSelect no longer exists in the DOM).
-const calendarTemplateSearchInput = document.getElementById('calendarTemplateSearch');
-const calendarTemplateChipsContainer = document.getElementById('calendarTemplateChips');
+// Template calendar modal DOM refs (Coverage Calendar → per-template popover
+// fix). #calendarPrevMonthBtn/#calendarNextMonthBtn/#calendarMonthLabel/
+// #coverageCalendarsContainer/#missingDatesReportBody are the same elements
+// the old page-level widget used, just relocated into this modal.
+const templateCalendarModal = document.getElementById('templateCalendarModal');
+const templateCalendarModalTitle = document.getElementById('templateCalendarModalTitle');
+const closeTemplateCalendarBtn = document.getElementById('closeTemplateCalendarBtn');
 const calendarPrevMonthBtn = document.getElementById('calendarPrevMonthBtn');
 const calendarNextMonthBtn = document.getElementById('calendarNextMonthBtn');
 const calendarMonthLabel = document.getElementById('calendarMonthLabel');
 const coverageCalendarsContainer = document.getElementById('coverageCalendarsContainer');
 
-// Missing Dates Report (Phase 5) DOM ref
+// Missing Dates Report DOM ref
 const missingDatesReportBody = document.getElementById('missingDatesReportBody');
 
 const statsTotalRecords = document.getElementById('totalRecords');
@@ -329,11 +337,12 @@ async function confirmSharedRangePopover() {
     }
 }
 
-// ---------- COVERAGE CALENDAR (Phase 4) ----------
-// Independent widget — its own template multi-select and its own month/year
-// state (calendarYear/calendarMonth above). Does not read or write the
+// ---------- TEMPLATE CALENDAR MODAL (Coverage Calendar → per-template
+// popover fix) ----------
+// Shows one template's coverage calendar/legend/missing-dates report at a
+// time, opened from a "Your Datasets" row's 📅 icon. Independent of the
 // shared date range (sharedRangeFromInput/sharedRangeToInput), which stays
-// dedicated to the "Your Datasets" table/Preview/Export flow below.
+// dedicated to the "Your Datasets" table/Preview/Export flow.
 
 const CALENDAR_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
@@ -342,89 +351,35 @@ const CALENDAR_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'J
 // no change itself to pick up the longer labels.
 const CALENDAR_DAY_HEADERS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-// Populated via its own GET /api/templates call — independent of the old
-// filter bar's template dropdown, which was removed in Redesign Phase 6
-// (previously this was a deliberate small duplication of that dropdown's
-// fetch, to avoid touching its then-still-working code).
-// Redesign Phase 2: renamed from loadCalendarTemplateOptions() (no <option>
-// elements anymore) — stores the fetched list, then renders it as chips.
-async function loadCalendarTemplates() {
-    try {
-        const res = await fetch(API_BASE + '/api/templates');
-        if (!res.ok) throw new Error('Failed to fetch templates');
-        calendarTemplatesList = await res.json();
-        renderCalendarTemplateChips('');
-    } catch (error) {
-        console.error('Error loading calendar templates:', error);
-        calendarTemplatesList = [];
-        calendarTemplateChipsContainer.innerHTML = '<div class="calendar-chip-list-empty">⚠️ Failed to load templates</div>';
-    }
-}
-
-// Rebuilds the chip list from calendarTemplatesList, filtered by a
-// case-insensitive substring match on filterText — selection itself
-// (calendarSelectedTemplateIds) is untouched by filtering, only which chips
-// are currently visible. Built with document.createElement, matching this
-// section's existing buildCalendarDayGrid()/buildCalendarLegend() convention.
-function renderCalendarTemplateChips(filterText) {
-    calendarTemplateChipsContainer.innerHTML = '';
-
-    const needle = (filterText || '').trim().toLowerCase();
-    const visibleTemplates = needle
-        ? calendarTemplatesList.filter(tpl => tpl.template_name.toLowerCase().includes(needle))
-        : calendarTemplatesList;
-
-    if (visibleTemplates.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'calendar-chip-list-empty';
-        empty.textContent = calendarTemplatesList.length === 0
-            ? 'No templates available.'
-            : 'No templates match your search.';
-        calendarTemplateChipsContainer.appendChild(empty);
-        return;
-    }
-
-    visibleTemplates.forEach(tpl => {
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'calendar-template-chip';
-        chip.textContent = tpl.template_name;
-        chip.dataset.templateId = tpl.id;
-        if (calendarSelectedTemplateIds.has(tpl.id)) {
-            chip.classList.add('selected');
-        }
-        // Toggle selection, reflect it immediately on this chip (no full
-        // re-render needed), then feed the existing, unchanged calendar fetch —
-        // same effect the old <select>'s "change" listener had.
-        chip.addEventListener('click', () => {
-            if (calendarSelectedTemplateIds.has(tpl.id)) {
-                calendarSelectedTemplateIds.delete(tpl.id);
-                chip.classList.remove('selected');
-            } else {
-                calendarSelectedTemplateIds.add(tpl.id);
-                chip.classList.add('selected');
-            }
-            fetchCoverageCalendar();
-        });
-        calendarTemplateChipsContainer.appendChild(chip);
-    });
-}
-
-// Same name/return shape as before this phase (array of numeric template
-// ids) — fetchCoverageCalendar() and everything downstream of it needed no
-// changes as a result.
-function getCalendarSelectedTemplateIds() {
-    return Array.from(calendarSelectedTemplateIds);
-}
-
 function updateCalendarMonthLabel() {
     calendarMonthLabel.textContent = `${CALENDAR_MONTH_NAMES[calendarMonth - 1]} ${calendarYear}`;
 }
 
-// Fetches Phase 3's per-day coverage endpoint for every currently-selected
-// template in one call (template_ids sent as repeated query params) and
-// renders one calendar block per template.
-async function fetchCoverageCalendar() {
+// Opens the modal for exactly one template — resets to the current month
+// each time (a stale month carried over from a previously-viewed template
+// would be confusing), sets the title, and fetches.
+function openTemplateCalendarPopover(templateId, templateName) {
+    currentPopoverTemplateId = templateId;
+    currentPopoverTemplateName = templateName;
+    calendarYear = new Date().getFullYear();
+    calendarMonth = new Date().getMonth() + 1;
+    templateCalendarModalTitle.textContent = `📅 ${templateName} — Coverage Calendar`;
+    templateCalendarModal.style.display = 'flex';
+    fetchTemplateCalendar();
+}
+
+function closeTemplateCalendarPopover() {
+    templateCalendarModal.style.display = 'none';
+    currentPopoverTemplateId = null;
+    currentPopoverTemplateName = '';
+}
+
+// Fetches Phase 3's per-day coverage endpoint for the single template the
+// modal is currently open for, and renders it — renderCoverageCalendars()/
+// renderMissingDatesReport() are unchanged, since both already handle
+// data.templates generically as an array (a 1-item array needs no
+// special-casing).
+async function fetchTemplateCalendar() {
     updateCalendarMonthLabel();
 
     const clientId = getSelectedClientId();
@@ -433,9 +388,7 @@ async function fetchCoverageCalendar() {
         return;
     }
 
-    const templateIds = getCalendarSelectedTemplateIds();
-    if (templateIds.length === 0) {
-        coverageCalendarsContainer.innerHTML = '<div class="calendar-empty-state">Select one or more templates above to view their coverage calendar.</div>';
+    if (!currentPopoverTemplateId) {
         return;
     }
 
@@ -444,7 +397,7 @@ async function fetchCoverageCalendar() {
         year: calendarYear,
         month: calendarMonth
     });
-    templateIds.forEach(id => params.append('template_ids', id));
+    params.append('template_ids', currentPopoverTemplateId);
 
     coverageCalendarsContainer.innerHTML = '<div class="calendar-empty-state">⏳ Loading calendar...</div>';
 
@@ -528,7 +481,7 @@ function buildCalendarLegend() {
 function renderCoverageCalendars(data) {
     coverageCalendarsContainer.innerHTML = '';
     if (!data.templates || data.templates.length === 0) {
-        coverageCalendarsContainer.innerHTML = '<div class="calendar-empty-state">No templates found.</div>';
+        coverageCalendarsContainer.innerHTML = '<div class="calendar-empty-state">No data found for this template.</div>';
         renderMissingDatesReport(data);
         return;
     }
@@ -551,12 +504,14 @@ function renderCoverageCalendars(data) {
     renderMissingDatesReport(data);
 }
 
-// ---------- MISSING DATES REPORT (Phase 5) ----------
-// Grouped-by-template, plain-language summary of missing days — reuses the
-// exact same "data" object renderCoverageCalendars() already received from
-// fetchCoverageCalendar(), so no separate network call is made. Sundays and
-// holidays are already excluded from "missing" by the Phase 3 endpoint, so
-// every date rendered here is a genuine gap.
+// ---------- MISSING DATES REPORT ----------
+// Plain-language summary of missing days for the template the modal is open
+// for — reuses the exact same "data" object renderCoverageCalendars() already
+// received from fetchTemplateCalendar(), so no separate network call is
+// made. Sundays and holidays are already excluded from "missing" by the
+// underlying endpoint, so every date rendered here is a genuine gap. Still
+// iterates data.templates generically (unchanged), even though it's always a
+// 1-item array now.
 
 // "2026-07-12" -> "12 Jul". Reuses CALENDAR_MONTH_NAMES (already defined
 // above for the calendar heading) sliced to 3 letters, rather than a second
@@ -572,7 +527,7 @@ function renderMissingDatesReport(data) {
     missingDatesReportBody.innerHTML = '';
 
     if (!data.templates || data.templates.length === 0) {
-        missingDatesReportBody.innerHTML = '<div class="calendar-empty-state">Select one or more templates above to view their missing dates report.</div>';
+        missingDatesReportBody.innerHTML = '<div class="calendar-empty-state">No data found for this template.</div>';
         return;
     }
 
@@ -614,7 +569,7 @@ function goToPrevMonth() {
         calendarMonth = 12;
         calendarYear--;
     }
-    fetchCoverageCalendar();
+    fetchTemplateCalendar();
 }
 
 function goToNextMonth() {
@@ -623,7 +578,7 @@ function goToNextMonth() {
         calendarMonth = 1;
         calendarYear++;
     }
-    fetchCoverageCalendar();
+    fetchTemplateCalendar();
 }
 
 // ---------- SET DEFAULT DATE RANGE (Current Month) ----------
@@ -649,10 +604,15 @@ function setDefaultDateRange() {
 // state (was shared with the now-removed old Availability Table, which had
 // its own #availabilityBody/#noDataMessage — those are gone, so this now
 // only resets the one remaining table).
+// Coverage Calendar → per-template popover fix: also clears the "Your
+// Datasets" search term/input, so a stale search doesn't linger visually
+// across a client switch or error state.
 function resetDatasetTables(message) {
     yourDatasetsBody.innerHTML = '';
     yourDatasetsNoData.style.display = 'block';
     yourDatasetsNoData.innerHTML = message;
+    yourDatasetsSearchTerm = '';
+    yourDatasetsSearchInput.value = '';
 }
 
 // ---------- FETCH AVAILABILITY DATA ----------
@@ -704,7 +664,10 @@ async function fetchAvailability() {
         // Redesign Phase 5: new "Your datasets" table reflects the exact
         // same fetch/data — no separate network call. (The old Availability
         // Table's own renderAvailabilityTable() was removed in Phase 6.)
-        renderYourDatasetsTable(data);
+        // Coverage Calendar → per-template popover fix: goes through the
+        // search-aware helper so a re-fetch (e.g. date range change) re-applies
+        // whatever search text is currently active instead of discarding it.
+        renderFilteredYourDatasetsTable();
 
         if (totalTemplates === 0) {
             showStatus('ℹ️ No templates found for the selected criteria.', 'info');
@@ -739,6 +702,20 @@ function buildDatasetActionButtons(item) {
     tdActions.style.textAlign = 'center';
     tdActions.style.whiteSpace = 'nowrap';
 
+    // Coverage calendar icon (Coverage Calendar → per-template popover fix):
+    // always shown, even for a template with zero rows — a missing-days
+    // calendar is exactly the useful thing to see for a template with no
+    // data yet, unlike Preview/Export/Delete below which need real data.
+    const calendarBtn = document.createElement('button');
+    calendarBtn.className = 'action-btn calendar';
+    calendarBtn.textContent = '📅';
+    calendarBtn.title = 'Coverage calendar';
+    calendarBtn.setAttribute('data-tooltip', 'View coverage calendar & missing dates');
+    calendarBtn.addEventListener('click', () => {
+        openTemplateCalendarPopover(item.template_id, item.template_name);
+    });
+    tdActions.appendChild(calendarBtn);
+
     // Preview button - enabled if there's ANY data (total_row_count > 0)
     if (item.total_row_count > 0) {
         const previewBtn = document.createElement('button');
@@ -746,6 +723,7 @@ function buildDatasetActionButtons(item) {
         previewBtn.textContent = '👁️';
         previewBtn.title = 'Preview Data';
         previewBtn.setAttribute('data-tooltip', 'Preview data for this template');
+        previewBtn.style.marginLeft = '6px';
         // Phase 2 (Unified date range): the 👁️ icon always opens the shared
         // date-range popover first (gate mode) — the preview itself only
         // opens once a range is confirmed there.
@@ -780,8 +758,13 @@ function buildDatasetActionButtons(item) {
         });
         tdActions.appendChild(deleteBtn);
     } else {
-        tdActions.textContent = '—';
-        tdActions.style.color = '#94a3b8';
+        // Coverage calendar icon (above) stays clickable even with zero rows —
+        // this must append a sibling span, not overwrite tdActions.textContent,
+        // or it would silently wipe out the calendar button just appended.
+        const emptyLabel = document.createElement('span');
+        emptyLabel.textContent = ' —';
+        emptyLabel.style.color = '#94a3b8';
+        tdActions.appendChild(emptyLabel);
     }
 
     return tdActions;
@@ -792,12 +775,14 @@ function buildDatasetActionButtons(item) {
 // Actions) fed by the exact same data fetchAvailability() already retrieves.
 // The old Availability Table this used to coexist with (with its extra "#"/
 // Filtered Rows/Sunday columns) was removed in Redesign Phase 6 — this is
-// now the sole datasets table on the page.
-function renderYourDatasetsTable(data) {
+// now the sole datasets table on the page, and (Coverage Calendar →
+// per-template popover fix) also the single unified template list, filtered
+// by renderFilteredYourDatasetsTable() below.
+function renderYourDatasetsTable(data, emptyMessage = 'No templates found for the selected criteria.') {
     yourDatasetsBody.innerHTML = '';
     if (!data || data.length === 0) {
         yourDatasetsNoData.style.display = 'block';
-        yourDatasetsNoData.innerHTML = 'No templates found for the selected criteria.';
+        yourDatasetsNoData.innerHTML = emptyMessage;
         return;
     }
     yourDatasetsNoData.style.display = 'none';
@@ -849,6 +834,23 @@ function renderYourDatasetsTable(data) {
 
         yourDatasetsBody.appendChild(tr);
     });
+}
+
+// Coverage Calendar → per-template popover fix: filters the full fetched
+// set (availabilityData, from fetchAvailability()) by template-name
+// substring and renders through the unchanged renderYourDatasetsTable() —
+// used both by the search input's own listener and in place of
+// fetchAvailability()'s direct render call, so a re-fetch (e.g. a date range
+// change) re-applies whatever search text is currently active rather than
+// silently discarding it.
+function renderFilteredYourDatasetsTable() {
+    const filtered = yourDatasetsSearchTerm
+        ? availabilityData.filter(item => item.template_name.toLowerCase().includes(yourDatasetsSearchTerm))
+        : availabilityData;
+    const emptyMessage = (yourDatasetsSearchTerm && availabilityData.length > 0)
+        ? 'No templates match your search.'
+        : 'No templates found for the selected criteria.';
+    renderYourDatasetsTable(filtered, emptyMessage);
 }
 
 async function deleteTemplateData(templateId, templateName, rowCount) {
@@ -1164,10 +1166,12 @@ async function exportDataset(templateId, templateName) {
     showStatus('⏳ Preparing export...', 'loading');
     
     try {
-        // Fetch all rows in batches
+        // Fetch all rows in batches. Capped at 200 to match GET /api/data/preview's
+        // own server-side limit (Query(..., le=200)) — a higher value here gets
+        // rejected outright with a 422 before the request is even processed.
         let allRows = [];
         let page = 1;
-        const limit = 500;
+        const limit = 200;
         let totalFetched = 0;
         const maxRows = 10000;
         
@@ -1236,15 +1240,27 @@ async function exportDataset(templateId, templateName) {
     }
 }
 
-// ---------- COVERAGE CALENDAR EVENT LISTENERS (Phase 4) ----------
-// Redesign Phase 2: search only re-filters which chips are visible (no
-// fetch) — a chip's own click listener (see renderCalendarTemplateChips())
-// is what now triggers fetchCoverageCalendar() on a selection change.
-calendarTemplateSearchInput.addEventListener('input', () => {
-    renderCalendarTemplateChips(calendarTemplateSearchInput.value);
-});
+// ---------- TEMPLATE CALENDAR MODAL EVENT LISTENERS ----------
+// Coverage Calendar → per-template popover fix: month nav now drives
+// fetchTemplateCalendar() for whichever single template the modal is open
+// for; the old chip search listener is gone (see yourDatasetsSearchInput's
+// listener further below for its replacement).
 calendarPrevMonthBtn.addEventListener('click', goToPrevMonth);
 calendarNextMonthBtn.addEventListener('click', goToNextMonth);
+closeTemplateCalendarBtn.addEventListener('click', closeTemplateCalendarPopover);
+templateCalendarModal.addEventListener('click', (e) => {
+    if (e.target === templateCalendarModal) {
+        closeTemplateCalendarPopover();
+    }
+});
+
+// "Your Datasets" search (Coverage Calendar → per-template popover fix):
+// pure client-side filter over the already-fetched availabilityData, no
+// network call — replaces the old chip picker's search box.
+yourDatasetsSearchInput.addEventListener('input', () => {
+    yourDatasetsSearchTerm = yourDatasetsSearchInput.value.trim().toLowerCase();
+    renderFilteredYourDatasetsTable();
+});
 
 // ---------- EVENT LISTENERS (Main) ----------
 // Redesign Phase 1: same destination/behavior as the old inline onclick.
@@ -1369,10 +1385,15 @@ document.addEventListener('click', (e) => {
     }
 });
 
-// ESC key closes preview (or just the shared range popover, if that's open)
+// ESC key closes preview (or just the shared range popover / template
+// calendar modal, if either is open)
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && sharedRangePopover.style.display === 'block') {
         closeSharedRangePopover();
+        return;
+    }
+    if (e.key === 'Escape' && templateCalendarModal.style.display === 'flex') {
+        closeTemplateCalendarPopover();
         return;
     }
     if (e.key === 'Escape' && isPreviewOpen) {
@@ -1405,9 +1426,13 @@ window.onClientChange = function(clientId) {
                 previewModal.style.display = 'none';
                 isPreviewOpen = false;
             }
-            // Coverage Calendar (Phase 4): refresh for the new client, same
-            // template/month selection — presence data is per-client.
-            fetchCoverageCalendar();
+            // Coverage Calendar → per-template popover fix: presence data is
+            // per-client, so a stale calendar for the previous client's
+            // template shouldn't stay open — close it rather than refetching,
+            // matching the preview-modal-close branch just above.
+            if (templateCalendarModal.style.display === 'flex') {
+                closeTemplateCalendarPopover();
+            }
         }
     }, 300);
 };
@@ -1418,10 +1443,8 @@ window.onload = async function() {
     if (typeof initUtils === 'function') {
         await initUtils();
     }
-    
+
     setDefaultDateRange();
-    await loadCalendarTemplates();
-    updateCalendarMonthLabel();
 
     const clientId = getSelectedClientId();
     if (!clientId) {

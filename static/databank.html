@@ -79,6 +79,14 @@
             color: #16a34a;
         }
 
+        /* New 📅 coverage-calendar icon (Coverage Calendar → per-template
+           popover fix) — matches the purple already used for the "holiday"
+           day-status color in the calendar grid below, for visual
+           consistency between the trigger and what it opens. */
+        .action-btn.calendar {
+            color: #6d28d9;
+        }
+
         .no-data {
             padding: 40px;
             text-align: center;
@@ -348,97 +356,38 @@
             white-space: nowrap;
         }
 
-        /* ===== COVERAGE CALENDAR (Phase 4 — Client Data Availability &
-           Coverage Redesign). Independent widget: its own template
-           multi-select and its own month/year state, separate from the
-           shared date range (see #sharedRangeFrom/#sharedRangeTo) that
-           drives Preview/Export/Delete and "Your Datasets" below. ===== */
-        .coverage-calendar-section {
+        /* ===== TEMPLATE CALENDAR MODAL (Coverage Calendar → per-template
+           popover fix). The old page-level Coverage Calendar widget (chip
+           multi-select + stacked inline calendars for every selected
+           template) is gone — "Your Datasets" below is now the single
+           unified template list, and its new 📅 icon opens this modal for
+           exactly one template at a time. Shell follows #previewModal's own
+           convention (scoped .modal-content/.modal-header, not shared base
+           classes, per this file's established rule). The calendar/legend/
+           missing-dates content nested inside is unchanged from before —
+           only its wrapper and trigger changed. */
+        .template-calendar-modal .modal-content {
             background: white;
-            padding: 16px 20px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-            margin-bottom: 20px;
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 95%;
+            max-height: 90%;
+            overflow: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            width: 760px;
         }
 
-        .calendar-controls {
+        .template-calendar-modal .modal-header {
             display: flex;
-            flex-wrap: wrap;
-            gap: 16px 24px;
-            align-items: flex-end;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 16px;
         }
 
-        /* ===== TEMPLATE PICKER: CHIPS + SEARCH (Redesign Phase 2) =====
-           Replaces the old <select multiple> — a click-to-toggle chip list
-           with its own search box, so the picker stays usable as the number
-           of templates grows. Feeds the same fetchCoverageCalendar() logic
-           underneath via getCalendarSelectedTemplateIds() (see databank.js),
-           which is otherwise completely untouched this phase. */
-        .calendar-template-picker {
-            min-width: 280px;
-            max-width: 420px;
-        }
-
-        #calendarTemplateSearch {
-            padding: 8px 12px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            font-size: 14px;
-            width: 100%;
-            box-sizing: border-box;
-            background: white;
-            transition: border-color 0.2s;
-        }
-
-        #calendarTemplateSearch:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-        }
-
-        .calendar-chip-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-top: 8px;
-            max-height: 120px;
-            overflow-y: auto;
-            padding: 2px;
-        }
-
-        .calendar-template-chip {
-            padding: 6px 14px;
-            border-radius: 20px;
-            border: 2px solid #cbd5e1;
-            background: white;
+        .template-calendar-modal .modal-header h2 {
+            margin: 0;
+            font-size: 18px;
             color: #1a1a2e;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background 0.15s, border-color 0.15s, color 0.15s;
-            white-space: nowrap;
-        }
-
-        .calendar-template-chip:hover {
-            border-color: #3b82f6;
-        }
-
-        .calendar-template-chip.selected {
-            background: #3b82f6;
-            border-color: #3b82f6;
-            color: white;
-        }
-
-        .calendar-template-chip.selected:hover {
-            background: #2563eb;
-            border-color: #2563eb;
-        }
-
-        .calendar-chip-list-empty {
-            font-size: 13px;
-            color: #94a3b8;
-            padding: 4px 2px;
         }
 
         .calendar-month-nav {
@@ -701,36 +650,6 @@
             background: #cbd5e1;
         }
 
-        /* ===== HEADER & STEP FRAMING (Redesign Phase 1) =====
-           Card-style header wrapper (matches the visual weight of
-           .coverage-calendar-section below it) plus static Step 1/Step 2
-           labels and an info banner around the existing Coverage Calendar
-           widget. Structural/visual only — no logic changes this phase. */
-        .databank-header-card {
-            background: white;
-            padding: 20px 24px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-            margin-bottom: 20px;
-        }
-
-        .databank-header-card .header-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-
-        .databank-header-card h1 {
-            margin: 6px 0 4px 0;
-        }
-
-        .databank-header-card p {
-            margin: 0;
-            color: #64748b;
-        }
-
         .btn-upload-more {
             padding: 8px 20px;
             background: #22c55e;
@@ -740,35 +659,12 @@
             font-weight: 600;
             cursor: pointer;
             font-size: 14px;
-            margin-top: 4px;
             white-space: nowrap;
             transition: background 0.2s;
         }
 
         .btn-upload-more:hover {
             background: #16a34a;
-        }
-
-        .databank-info-banner {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            background: #eff6ff;
-            border: 1px solid #bfdbfe;
-            color: #1e40af;
-            border-radius: 8px;
-            padding: 10px 16px;
-            font-size: 13px;
-            margin-bottom: 16px;
-        }
-
-        .databank-step-label {
-            font-size: 13px;
-            font-weight: 700;
-            color: #1a1a2e;
-            margin: 0 0 8px 0;
-            text-transform: uppercase;
-            letter-spacing: 0.4px;
         }
 
         /* ===== "YOUR DATASETS" TABLE (Redesign Phase 5) =====
@@ -781,10 +677,47 @@
             margin-bottom: 20px;
         }
 
+        /* Header row above the table — search (left) + Upload More (right).
+           Both were relocated here from the removed Coverage Calendar widget
+           per the confirmed layout choice for this fix. */
+        .your-datasets-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
         .your-datasets-heading {
-            margin: 0 0 12px 0;
+            margin: 0;
             font-size: 18px;
             color: #1a1a2e;
+        }
+
+        .your-datasets-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        #yourDatasetsSearch {
+            padding: 8px 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            width: 240px;
+            max-width: 100%;
+            box-sizing: border-box;
+            background: white;
+            transition: border-color 0.2s;
+        }
+
+        #yourDatasetsSearch:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
         }
 
         /* ===== METRIC TILES (Redesign Phase 6, FINAL) =====
@@ -863,80 +796,27 @@
 
     <!-- Main Content -->
     <div class="main-container">
-        <header class="databank-header-card">
-            <div class="header-row">
-                <div>
-                    <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
-                    <h1>📊 Client Data Bank</h1>
-                    <p>View and manage all uploaded data sets for the selected client</p>
-                </div>
-                <button id="uploadMoreBtn" class="btn-upload-more">📤 Upload More</button>
-            </div>
-        </header>
-
-        <!-- ===== COVERAGE CALENDAR (Phase 4) =====
-             Independent widget: its own template multi-select + its own
-             month/year navigation. Does not read/write the shared date range
-             (#sharedRangeFrom/#sharedRangeTo) used by "Your Datasets" below. -->
-        <div class="coverage-calendar-section" id="coverageCalendarSection">
-            <!-- Redesign Phase 1: static info tip banner — no dismiss/persistence logic. -->
-            <div class="databank-info-banner">
-                📌 Pick a template below, then check the calendar for any red days — those are missing dates that need attention.
-            </div>
-
-            <!-- Redesign Phase 1: Step 1 label — attaches to this widget's own
-                 template multi-select. -->
-            <p class="databank-step-label">① Step 1 — choose a template</p>
-            <div class="calendar-controls">
-                <!-- Redesign Phase 2: chip-style picker, replacing the old
-                     <select multiple>. Search filters which chips are visible;
-                     selection state lives in JS (calendarSelectedTemplateIds),
-                     not in the DOM, since chips (unlike <option>s) don't carry
-                     selection themselves. -->
-                <div class="filter-group calendar-template-picker">
-                    <label for="calendarTemplateSearch">📋 Templates (click to select)</label>
-                    <input type="text" id="calendarTemplateSearch" autocomplete="off"
-                        placeholder="🔍 Search templates...">
-                    <div class="calendar-chip-list" id="calendarTemplateChips">
-                        <!-- Chip buttons rendered by renderCalendarTemplateChips() -->
-                    </div>
-                </div>
-                <div class="calendar-month-nav">
-                    <button type="button" id="calendarPrevMonthBtn">‹ Prev</button>
-                    <span id="calendarMonthLabel">—</span>
-                    <button type="button" id="calendarNextMonthBtn">Next ›</button>
-                </div>
-            </div>
-
-            <!-- Redesign Phase 1: Step 2 label — attaches to the calendar grid below. -->
-            <p class="databank-step-label">② Step 2 — check the calendar</p>
-            <div id="coverageCalendarsContainer">
-                <!-- One .coverage-calendar-block per selected template, rendered by renderCoverageCalendars() -->
-                <div class="calendar-empty-state">Select one or more templates above to view their coverage calendar.</div>
-            </div>
-
-            <!-- ===== MISSING DATES REPORT (Phase 5) =====
-                 Grouped-by-template plain-language summary of missing days,
-                 derived from the same data the calendars above already use —
-                 rendered by renderMissingDatesReport(), called from the end
-                 of renderCoverageCalendars(). -->
-            <div class="missing-dates-report" id="missingDatesReport">
-                <h3 class="missing-dates-report-heading">⚠️ Missing Dates Report</h3>
-                <div id="missingDatesReportBody">
-                    <!-- One .missing-dates-template-row per selected template -->
-                </div>
-            </div>
-        </div>
-
         <!-- ===== "YOUR DATASETS" TABLE (Redesign Phase 5) =====
              Simplified table, fed by fetchAvailability() data — reuses
              buildDatasetActionButtons() for Actions, so Preview/Export/Delete
              behavior (incl. the shared date-range-popover gate and confirm-
              before-delete) is identical, not reimplemented. The old
              Availability Table this used to coexist with was removed in
-             Redesign Phase 6 (FINAL) — this is now the sole datasets table. -->
+             Redesign Phase 6 (FINAL) — this is now the sole datasets table.
+             Coverage Calendar → per-template popover fix: this is also now
+             the single unified template list (the old chip picker is gone),
+             with its own search box + the relocated Upload More button in a
+             header row above the table, and a new 📅 Actions icon opening
+             #templateCalendarModal for that one row's template. -->
         <div class="your-datasets-section">
-            <h2 class="your-datasets-heading">📁 Your Datasets</h2>
+            <div class="your-datasets-header-row">
+                <h2 class="your-datasets-heading">📁 Your Datasets</h2>
+                <div class="your-datasets-controls">
+                    <input type="text" id="yourDatasetsSearch" autocomplete="off"
+                        placeholder="🔍 Search templates...">
+                    <button id="uploadMoreBtn" class="btn-upload-more">📤 Upload More</button>
+                </div>
+            </div>
             <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
                 <table class="availability-table">
                     <thead>
@@ -1068,6 +948,47 @@
                         style="padding:4px 16px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;">Next</button>
                 </div>
                 <div id="previewCountInfo" style="font-size:13px; color:#64748b;">0 rows</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================= -->
+    <!-- TEMPLATE CALENDAR MODAL                       -->
+    <!-- Coverage Calendar → per-template popover fix: opened from a single -->
+    <!-- "Your Datasets" row's 📅 icon (openTemplateCalendarPopover()), one  -->
+    <!-- template at a time. Same calendar/legend/missing-dates content     -->
+    <!-- that used to render inline on the page for every selected         -->
+    <!-- template — same ids, so renderCoverageCalendars()/                -->
+    <!-- renderMissingDatesReport() needed no changes beyond being fed a   -->
+    <!-- single-template response.                                        -->
+    <!-- ============================================= -->
+    <div id="templateCalendarModal" class="template-calendar-modal"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="templateCalendarModalTitle">📅 Coverage Calendar</h2>
+                <button class="modal-close" id="closeTemplateCalendarBtn"
+                    style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+            </div>
+
+            <div class="calendar-month-nav">
+                <button type="button" id="calendarPrevMonthBtn">‹ Prev</button>
+                <span id="calendarMonthLabel">—</span>
+                <button type="button" id="calendarNextMonthBtn">Next ›</button>
+            </div>
+
+            <div id="coverageCalendarsContainer">
+                <!-- One .coverage-calendar-block for the open template, rendered by renderCoverageCalendars() -->
+            </div>
+
+            <!-- Grouped-by-template (always exactly one here) plain-language
+                 summary of missing days, rendered by renderMissingDatesReport(),
+                 called from the end of renderCoverageCalendars(). -->
+            <div class="missing-dates-report" id="missingDatesReport">
+                <h3 class="missing-dates-report-heading">⚠️ Missing Dates Report</h3>
+                <div id="missingDatesReportBody">
+                    <!-- One .missing-dates-template-row for the open template -->
+                </div>
             </div>
         </div>
     </div>
