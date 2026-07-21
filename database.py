@@ -1251,6 +1251,26 @@ def init_db():
         if migrated_count:
             print(f"✅ Migrated {migrated_count} legacy transaction type(s) into Audit Rules Categories")
 
+        # ---------- HOLIDAYS (Phase 1 of 6: Client Data Availability & Coverage Redesign) ----------
+        # Firm-wide (not per-client) holiday list, so later phases can exclude these dates -
+        # alongside Sundays, which stay separate hardcoded day-of-week logic, not stored here -
+        # from "missing data" detection in the Client Data module. repeats_yearly distinguishes
+        # fixed-date holidays (e.g. Pakistan Day - recurs every year) from lunar/one-off holidays
+        # (e.g. Eid, Muharram - re-added as a new dated row each year). Brand-new table, no prior
+        # data to reconcile, so a plain CREATE TABLE IF NOT EXISTS is sufficient (no ALTER TABLE
+        # upgrade block needed, unlike the is_active-column gaps hit repeatedly in Audit Rules).
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS holidays (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                holiday_date TEXT NOT NULL,
+                label TEXT NOT NULL,
+                repeats_yearly INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays (holiday_date)")
+        print("✅ Created holidays table")
+
         conn.commit()
         print("✅ Database initialization complete")
 
