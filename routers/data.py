@@ -156,7 +156,9 @@ def get_preview_rows(
     amount_min: Optional[float] = Query(None, description="Minimum extract_amount"),
     amount_max: Optional[float] = Query(None, description="Maximum extract_amount"),
     sunday_only: bool = Query(False, description="If true, only show rows with extract_date on Sunday"),
-    data_quality: Optional[str] = Query(None, description="Filter by data_quality_flag: 'complete' (flag is null) or 'incomplete'")
+    data_quality: Optional[str] = Query(None, description="Filter by data_quality_flag: 'complete' (flag is null) or 'incomplete'"),
+    date_from: Optional[str] = Query(None, description="Optional additional narrowing filter: only rows on/after this date (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="Optional additional narrowing filter: only rows on/before this date (YYYY-MM-DD)")
 ):
     """
     Get paginated rows for a specific client, template, and date range.
@@ -182,7 +184,23 @@ def get_preview_rows(
     
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
-    
+
+    # Validate the optional date_from/date_to narrowing filter, if supplied.
+    # These are independent of date_start/date_end (which remain mandatory and
+    # unchanged) -- either bound can be given alone, or both, or neither.
+    if date_from is not None:
+        try:
+            datetime.fromisoformat(date_from)
+        except ValueError:
+            raise HTTPException(400, "Invalid date_from format. Use YYYY-MM-DD.")
+    if date_to is not None:
+        try:
+            datetime.fromisoformat(date_to)
+        except ValueError:
+            raise HTTPException(400, "Invalid date_to format. Use YYYY-MM-DD.")
+    if date_from is not None and date_to is not None and date_from > date_to:
+        raise HTTPException(400, "date_from must be before or equal to date_to.")
+
     # Build WHERE clause dynamically (base filters, excluding sunday_only)
     base_where = [
         "cd.client_id = ?",
@@ -204,6 +222,18 @@ def get_preview_rows(
     if amount_max is not None:
         base_where.append("cd.extract_amount <= ?")
         base_params.append(amount_max)
+
+    # Optional date_from/date_to narrowing filter -- additive on top of the
+    # mandatory date_start/date_end range above (same AND-combining pattern
+    # as amount_min/amount_max). Filters on cd.extract_date, the template's
+    # primary Date column already populated at import time (see
+    # extract_columns_from_row() in routers/import_export.py).
+    if date_from is not None:
+        base_where.append("cd.extract_date >= ?")
+        base_params.append(date_from)
+    if date_to is not None:
+        base_where.append("cd.extract_date <= ?")
+        base_params.append(date_to)
 
     # Data quality flag ('incomplete' = force-imported with a blank critical
     # field, see Phase 4; 'complete' = flag is null). Omitted/other = no filter.
