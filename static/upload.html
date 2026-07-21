@@ -1121,6 +1121,42 @@
             border-left: 3px solid #dc2626;
         }
 
+        /* ---------- BLANK-CELL INLINE EDITING (Phase 3 of Upload reliability & blank-field
+           handling) ---------- A blank cell (other than the mandatory Document ID/key column)
+           renders as a small inline input instead of empty text. Dashed blue border + light-blue
+           tint keeps this visually distinct from .row-flagged's amber tint and
+           .row-validation-failed's red edge stripe -- and it's an actual input field, not a
+           colored span, so it's unmistakable at a glance even where states overlap. UI-only:
+           the typed value is not yet sent to validation/import (see editedCellValues in
+           upload.js) -- that wiring is Phase 4. */
+        #rowExclusionContainer td.row-exclusion-editable-cell {
+            background: #eff6ff;
+            padding: 4px 8px;
+        }
+
+        #rowExclusionContainer .row-exclusion-edit-input {
+            width: 100%;
+            min-width: 90px;
+            padding: 3px 6px;
+            border: 1px dashed #93c5fd;
+            border-radius: 4px;
+            background: white;
+            font-size: 12px;
+            font-family: inherit;
+        }
+
+        #rowExclusionContainer .row-exclusion-edit-input:focus {
+            outline: none;
+            border-style: solid;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+        }
+
+        #rowExclusionContainer .row-exclusion-edit-input::placeholder {
+            color: #94a3b8;
+            font-style: italic;
+        }
+
         #rowExclusionContainer .row-exclusion-footer {
             display: flex;
             align-items: center;

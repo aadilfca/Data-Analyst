@@ -100,6 +100,13 @@ const ROW_EXCLUSION_PAGE_SIZE = 10; // fixed page size for this compact inline g
 // Distinct from excludedRowNumbers -- a validation failure never auto-excludes a row.
 let validationFailedRows = new Map();
 
+// editedCellValues (Phase 3 of Upload reliability & blank-field handling): holds values the
+// user types into a blank, non-key-column cell in the Row Selection grid. Keyed by
+// "<excelRowNumber>::<columnIndex>" so the typed value survives pagination/re-render within the
+// same loaded file. UI-only this phase -- deliberately never read by the validate/import
+// payload builder; wiring edited values through to the actual import is Phase 4.
+let editedCellValues = new Map();
+
 // ---------- SESSION-RESTORE STATE (mid-upload navigate-away/back recovery) ----------
 // A browser <input type="file"> can never be repopulated by JS, so the raw file itself is not
 // restorable -- only Template/Sheet-name/Date-format/Row-exclusion selections are. These two
@@ -859,6 +866,7 @@ function resetUpload() {
     if (rowExclusionContainerEl) rowExclusionContainerEl.style.display = 'none';
     excludedRowNumbers = new Set();
     validationFailedRows = new Map();
+    editedCellValues = new Map();
     rowExclusionAllRows = [];
     rowExclusionHeaders = [];
     rowExclusionCurrentPage = 1;
@@ -1812,6 +1820,7 @@ function renderRowExclusionGrid() {
         rowExclusionAllRows = jsonData.slice(1);
         excludedRowNumbers = new Set();
         validationFailedRows = new Map(); // new sheet/mapping -- any prior validation result is stale
+        editedCellValues = new Map(); // new sheet's rows -- any prior typed values no longer apply
         rowExclusionCurrentPage = 1;
 
         // Re-apply a restored session's excluded rows (session-restore), bounds-checked against
@@ -1854,6 +1863,12 @@ function isRowExclusionFlagged(row, keyColIndex) {
     return String(value).toLowerCase().includes('total');
 }
 
+// ---------- BLANK-CELL INLINE EDITING (Phase 3 of Upload reliability & blank-field handling) ----------
+// "Blank" means an empty cell only -- 0 or any other populated value is never treated as blank.
+function isCellBlank(value) {
+    return value === undefined || value === null || String(value).trim() === '';
+}
+
 // ---------- LIVE "X of Y rows will be imported" COUNTER (Phase 3) ----------
 // Always reflects the whole dataset (not just the visible page).
 function updateRowExclusionCounter() {
@@ -1893,6 +1908,7 @@ function resetRowExclusionSelections() {
     if (!rowExclusionAllRows.length) return; // grid not built yet, nothing to reset
     excludedRowNumbers = new Set();
     validationFailedRows = new Map(); // mapping changed -- any prior validation result is stale
+    editedCellValues = new Map(); // key column may have shifted -- typed values no longer line up
     rowExclusionCurrentPage = 1;
     renderRowExclusionPage();
     saveUploadSessionState(); // Row-exclusion selections just cleared -- keep the saved session in sync
@@ -2021,7 +2037,29 @@ function renderRowExclusionPage() {
 
         row.forEach((cell, idx) => {
             const td = document.createElement('td');
-            td.textContent = cell !== undefined ? cell : '';
+            // Document ID (the key column) stays mandatory -- never made editable, even blank.
+            // Existing "Document ID required" validation continues to catch/flag it as-is.
+            if (idx !== keyColIndex && isCellBlank(cell)) {
+                td.classList.add('row-exclusion-editable-cell');
+                const editKey = excelRowNumber + '::' + idx;
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'row-exclusion-edit-input';
+                input.placeholder = 'Click to enter value';
+                input.value = editedCellValues.has(editKey) ? editedCellValues.get(editKey) : '';
+                // Stored locally only this phase -- not read by the validate/import payload
+                // builder. Wiring typed values through to the actual import is Phase 4.
+                input.addEventListener('input', function() {
+                    if (this.value === '') {
+                        editedCellValues.delete(editKey);
+                    } else {
+                        editedCellValues.set(editKey, this.value);
+                    }
+                });
+                td.appendChild(input);
+            } else {
+                td.textContent = cell !== undefined ? cell : '';
+            }
             tr.appendChild(td);
         });
 
