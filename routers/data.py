@@ -7,6 +7,7 @@ from database import execute_query, execute_write, log_audit, log_data_audit, ge
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
+import calendar
 import json
 
 router = APIRouter()
@@ -683,5 +684,143 @@ def get_availability(
             "status": status,                        # based on total data
             "filtered_status": filtered_status       # based on filtered data
         })
-    
+
     return result
+
+# ==============================================
+# 📊 AVAILABILITY CALENDAR ENDPOINT (Phase 3 of 6:
+# Client Data Availability & Coverage Redesign)
+# ==============================================
+
+def _resolve_holidays_for_month(year: int, month: int) -> dict:
+    """
+    Build a {date_str: label} lookup of firm-wide holidays (holidays table,
+    routers/settings.py CRUD) that fall within the given year/month.
+    - Non-repeating holidays: kept only if their stored date is in this exact
+      year/month.
+    - Repeating holidays (repeats_yearly=1): their month/day is projected onto
+      the requested year, so a holiday configured in any past year still
+      resolves correctly for a future month/year request.
+    Sundays are NOT part of this lookup - they stay separate, hardcoded
+    day-of-week logic, per the confirmed Phase 1 design.
+    """
+    month_prefix = f"{year:04d}-{month:02d}"
+    holiday_rows = execute_query("SELECT holiday_date, label, repeats_yearly FROM holidays")
+
+    resolved = {}
+    for h in holiday_rows:
+        if h["repeats_yearly"]:
+            # Project this holiday's month/day onto the requested year.
+            try:
+                original = datetime.fromisoformat(h["holiday_date"])
+            except ValueError:
+                continue  # skip a malformed stored date rather than fail the whole request
+            if original.month != month:
+                continue
+            date_str = f"{year:04d}-{month:02d}-{original.day:02d}"
+        else:
+            if not h["holiday_date"].startswith(month_prefix):
+                continue
+            date_str = h["holiday_date"]
+        resolved[date_str] = h["label"]
+
+    return resolved
+
+
+@router.get("/api/data/availability/calendar")
+def get_availability_calendar(
+    client_id: int = Query(..., description="Client ID"),
+    template_ids: List[int] = Query(..., description="One or more template IDs"),
+    year: int = Query(..., description="Calendar year, e.g. 2026"),
+    month: int = Query(..., ge=1, le=12, description="Calendar month (1-12)")
+):
+    """
+    Per-day coverage status for one or more templates over a single month, for
+    the Data Bank availability calendar (Phase 4). For each requested template,
+    every day of the month is classified as exactly one of:
+      - present: client_data exists for that template/date (highest priority -
+        real data on a Sunday/holiday still counts as present)
+      - sunday:  no data, and the day is a Sunday (hardcoded day-of-week check)
+      - holiday: no data, not a Sunday, and the day matches a firm-wide holiday
+        (see _resolve_holidays_for_month)
+      - missing: none of the above
+    This is intentionally separate from /api/data/availability, which answers a
+    coarser "does this template have any data in this range" question for the
+    still-in-use date-picker/buttons UI - that endpoint is unchanged.
+    """
+    # Validate client exists (same convention as every other Data Bank endpoint)
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    # Validate every requested template exists and is active
+    templates_by_id = {}
+    for tid in template_ids:
+        tpl = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (tid,))
+        if not tpl:
+            raise HTTPException(404, f"Template not found or inactive: {tid}")
+        templates_by_id[tid] = tpl[0]["template_name"]
+
+    # Build the list of YYYY-MM-DD strings for every day in the requested month
+    days_in_month = calendar.monthrange(year, month)[1]
+    month_start = f"{year:04d}-{month:02d}-01"
+    month_end = f"{year:04d}-{month:02d}-{days_in_month:02d}"
+    all_dates = [f"{year:04d}-{month:02d}-{day:02d}" for day in range(1, days_in_month + 1)]
+
+    # Holiday lookup is shared across all requested templates (firm-wide, not per-template)
+    holiday_lookup = _resolve_holidays_for_month(year, month)
+
+    templates_result = []
+    for tid in template_ids:
+        # Distinct dates this template actually has data for, within the month
+        present_rows = execute_query(
+            """
+            SELECT DISTINCT extract_date FROM client_data
+            WHERE client_id = ? AND template_id = ? AND is_deleted = 0
+              AND extract_date BETWEEN ? AND ?
+            """,
+            (client_id, tid, month_start, month_end)
+        )
+        present_dates = {r["extract_date"] for r in present_rows}
+
+        days = []
+        present_count = missing_count = sunday_count = holiday_count = 0
+        for date_str in all_dates:
+            if date_str in present_dates:
+                status = "present"
+                present_count += 1
+                days.append({"date": date_str, "status": status})
+                continue
+
+            is_sunday = datetime.fromisoformat(date_str).strftime('%w') == '0'
+            if is_sunday:
+                status = "sunday"
+                sunday_count += 1
+                days.append({"date": date_str, "status": status})
+                continue
+
+            if date_str in holiday_lookup:
+                status = "holiday"
+                holiday_count += 1
+                days.append({"date": date_str, "status": status, "label": holiday_lookup[date_str]})
+                continue
+
+            status = "missing"
+            missing_count += 1
+            days.append({"date": date_str, "status": status})
+
+        templates_result.append({
+            "template_id": tid,
+            "template_name": templates_by_id[tid],
+            "present_count": present_count,
+            "missing_count": missing_count,
+            "sunday_count": sunday_count,
+            "holiday_count": holiday_count,
+            "days": days
+        })
+
+    return {
+        "year": year,
+        "month": month,
+        "templates": templates_result
+    }
