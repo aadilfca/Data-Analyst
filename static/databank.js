@@ -45,6 +45,7 @@ const previewTableHead = document.getElementById('previewTableHead');
 const previewTableBody = document.getElementById('previewTableBody');
 const pageSizeSelect = document.getElementById('pageSizeSelect');
 const sundayOnlyCheckbox = document.getElementById('sundayOnlyCheckbox');
+const dataQualityFilter = document.getElementById('dataQualityFilter');
 const sundayCountBadge = document.getElementById('sundayCountBadge');
 const searchInput = document.getElementById('searchInput');
 const amountMin = document.getElementById('amountMin');
@@ -562,6 +563,7 @@ function openPreview(templateId, templateName) {
     searchInput.value = '';
     amountMin.value = '';
     amountMax.value = '';
+    dataQualityFilter.value = '';
     sundayCountBadge.textContent = 'Sunday rows: 0';
     
     // Fetch data
@@ -610,7 +612,10 @@ async function fetchPreviewData() {
     if (sundayOnlyCheckbox.checked) {
         params.append('sunday_only', 'true');
     }
-    
+    if (dataQualityFilter.value) {
+        params.append('data_quality', dataQualityFilter.value);
+    }
+
     try {
         const res = await fetch(`${API_BASE}/api/data/preview?${params.toString()}`);
         if (!res.ok) {
@@ -728,6 +733,16 @@ function renderPreviewRows(rows) {
             tdSerial.appendChild(historyIcon);
         }
 
+        // Data quality flag icon: only shown for rows force-imported with a
+        // blank Document ID/Amount/Date (via the Upload page's override).
+        if (row.data_quality_flag === 'incomplete') {
+            const qualityIcon = document.createElement('span');
+            qualityIcon.className = 'quality-flag-icon';
+            qualityIcon.textContent = '🚩';
+            qualityIcon.title = 'Imported with missing data (blank Document ID/Amount/Date)';
+            tdSerial.appendChild(qualityIcon);
+        }
+
         tr.appendChild(tdSerial);
         
         headers.forEach(h => {
@@ -766,6 +781,7 @@ function clearPreviewFilters() {
     amountMin.value = '';
     amountMax.value = '';
     sundayOnlyCheckbox.checked = false;
+    dataQualityFilter.value = '';
     currentPage = 1;
     fetchPreviewData();
 }
@@ -918,6 +934,14 @@ if (modalClearBtn) {
 
 // Sunday checkbox
 sundayOnlyCheckbox.addEventListener('change', function() {
+    if (isPreviewOpen) {
+        currentPage = 1;
+        fetchPreviewData();
+    }
+});
+
+// Data quality filter (All / Complete / Incomplete)
+dataQualityFilter.addEventListener('change', function() {
     if (isPreviewOpen) {
         currentPage = 1;
         fetchPreviewData();

@@ -155,7 +155,8 @@ def get_preview_rows(
     search: Optional[str] = Query(None, description="Search text across all columns"),
     amount_min: Optional[float] = Query(None, description="Minimum extract_amount"),
     amount_max: Optional[float] = Query(None, description="Maximum extract_amount"),
-    sunday_only: bool = Query(False, description="If true, only show rows with extract_date on Sunday")
+    sunday_only: bool = Query(False, description="If true, only show rows with extract_date on Sunday"),
+    data_quality: Optional[str] = Query(None, description="Filter by data_quality_flag: 'complete' (flag is null) or 'incomplete'")
 ):
     """
     Get paginated rows for a specific client, template, and date range.
@@ -204,6 +205,13 @@ def get_preview_rows(
         base_where.append("cd.extract_amount <= ?")
         base_params.append(amount_max)
 
+    # Data quality flag ('incomplete' = force-imported with a blank critical
+    # field, see Phase 4; 'complete' = flag is null). Omitted/other = no filter.
+    if data_quality == 'incomplete':
+        base_where.append("cd.data_quality_flag = 'incomplete'")
+    elif data_quality == 'complete':
+        base_where.append("cd.data_quality_flag IS NULL")
+
     # Final filters add sunday_only on top of the base filters (used for the
     # count/data queries); the Sunday-count query below intentionally uses
     # base_where only, so it always reflects the full filtered range.
@@ -240,7 +248,7 @@ def get_preview_rows(
     # Pagination
     offset = (page - 1) * limit
     data_sql = f"""
-        SELECT cd.id, cd.row_data, cd.extract_amount, cd.extract_date, cd.created_at
+        SELECT cd.id, cd.row_data, cd.extract_amount, cd.extract_date, cd.created_at, cd.data_quality_flag
         FROM client_data cd
         WHERE {where_sql}
         ORDER BY cd.extract_date DESC, cd.id
@@ -261,7 +269,8 @@ def get_preview_rows(
             "row_data": row_dict,
             "extract_amount": r["extract_amount"],
             "extract_date": r["extract_date"],
-            "created_at": format_datetime(r["created_at"])
+            "created_at": format_datetime(r["created_at"]),
+            "data_quality_flag": r["data_quality_flag"]
         })
 
     # Batch-flag rows that have revision history (one query for the whole page)
