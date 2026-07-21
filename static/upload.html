@@ -1138,6 +1138,95 @@
             color: #64748b;
             white-space: nowrap;
         }
+
+        /* ---------- EXCEPTIONS LIST (Phase 3 of the row-level blank-field-rejection requirement) ----------
+           Rows rejected by the backend (routers/import_export.py's rejected_rows -- blank Document
+           ID/Amount/Date) get their own distinct panel here, separate from #rowExclusionContainer's
+           checkbox grid -- deliberately NOT reusing .row-flagged/.row-validation-failed/.row-excluded,
+           since a rejected-for-blank-critical-field row is its own category (dropped from import
+           entirely unless overridden), not a variant of the grid's advisory/error states. Hidden by
+           default; shown/hidden by renderRejectedRowsList() in upload.js. */
+        .row-rejection-container {
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            background: #fff5f5;
+            margin-top: 16px;
+            overflow: hidden;
+            display: none;
+        }
+
+        .row-rejection-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 14px;
+            background: #fee2e2;
+            border-bottom: 2px solid #fecaca;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .row-rejection-header .row-rejection-title {
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #991b1b;
+        }
+
+        .row-rejection-header .row-rejection-count {
+            font-size: 11px;
+            font-weight: 500;
+            color: #b91c1c;
+            white-space: nowrap;
+        }
+
+        .row-rejection-list {
+            max-height: 260px;
+            overflow-y: auto;
+        }
+
+        .row-rejection-item {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px 14px;
+            padding: 10px 14px;
+            border-bottom: 1px solid #fecaca;
+            font-size: 13px;
+        }
+
+        .row-rejection-item:last-child {
+            border-bottom: none;
+        }
+
+        .row-rejection-rownum {
+            font-weight: 600;
+            color: #991b1b;
+            white-space: nowrap;
+        }
+
+        .row-rejection-reason {
+            color: #7f1d1d;
+            flex: 1 1 auto;
+            min-width: 160px;
+        }
+
+        .row-rejection-override-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #475569;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .row-rejection-override-label input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+        }
     </style>
 </head>
 
@@ -1343,6 +1432,22 @@
                                 <span class="row-exclusion-page-info" id="rowExclusionPageInfo">Page 1 of 1</span>
                                 <button id="rowExclusionNextPage" class="btn-pagination" type="button">Next</button>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- Exceptions list (Phase 3 of the row-level blank-field-rejection requirement):
+                         rows the backend rejected for a blank Document ID/Amount/Date, each with its
+                         own "Import anyway" toggle. Distinct panel from the Row Selection grid above --
+                         shown/hidden and populated by setRejectedRows()/renderRejectedRowsList() in
+                         upload.js. Toggling the checkbox is state-only this phase; it does not yet
+                         change what's sent to the backend (Phase 4). -->
+                    <div id="rowRejectionContainer" class="row-rejection-container">
+                        <div class="row-rejection-header">
+                            <span class="row-rejection-title">🚫 Exceptions — Rejected Rows</span>
+                            <span class="row-rejection-count" id="rowRejectionCount">0 row(s) rejected</span>
+                        </div>
+                        <div class="row-rejection-list" id="rowRejectionList">
+                            <!-- Exception rows inserted by JavaScript -->
                         </div>
                     </div>
 

@@ -100,6 +100,18 @@ const ROW_EXCLUSION_PAGE_SIZE = 10; // fixed page size for this compact inline g
 // Distinct from excludedRowNumbers -- a validation failure never auto-excludes a row.
 let validationFailedRows = new Map();
 
+// ---------- REJECTED-ROWS EXCEPTIONS STATE (Phase 3 of the row-level blank-field-rejection
+// requirement) ----------
+// rejectedRowsData: Excel row number -> that row's `reasons` array (routers/import_export.py's
+// rejected_rows[].reasons -- {role, column, excel_column, message}), for rows the backend
+// rejected because a Document ID/Amount/Date was blank. Kept separate from validationFailedRows
+// (which covers genuine data-type mismatches) -- a rejected-for-blank-critical-field row is its
+// own category, not a validation error.
+let rejectedRowsData = new Map();
+// rejectedRowOverrides: Excel row numbers the user has explicitly toggled "Import anyway" for.
+// This phase is state-only -- toggling does not yet change what's sent to the backend (Phase 4).
+let rejectedRowOverrides = new Set();
+
 // ---------- SESSION-RESTORE STATE (mid-upload navigate-away/back recovery) ----------
 // A browser <input type="file"> can never be repopulated by JS, so the raw file itself is not
 // restorable -- only Template/Sheet-name/Date-format/Row-exclusion selections are. These two
@@ -863,6 +875,15 @@ function resetUpload() {
     rowExclusionHeaders = [];
     rowExclusionCurrentPage = 1;
 
+    // Hide/clear the exceptions list (Phase 3 of the row-level blank-field-rejection
+    // requirement) -- no file/mapping left to base it on.
+    rejectedRowsData = new Map();
+    rejectedRowOverrides = new Set();
+    const rowRejectionContainerEl = document.getElementById('rowRejectionContainer');
+    if (rowRejectionContainerEl) rowRejectionContainerEl.style.display = 'none';
+    const rowRejectionListEl = document.getElementById('rowRejectionList');
+    if (rowRejectionListEl) rowRejectionListEl.innerHTML = '';
+
     // Reset validation status
     validationStatus = 'idle';
     if (importBtn) {
@@ -1541,6 +1562,11 @@ if (importBtn) {
             const result = await res.json();
             if (!res.ok) throw new Error(result.message || 'Validation failed');
 
+            // Rejected-rows exceptions list (Phase 3 of the row-level blank-field-rejection
+            // requirement) -- populated regardless of has_errors, since a row can be rejected
+            // for a blank Document ID/Amount/Date independently of other rows' validation errors.
+            setRejectedRows(result.rejected_rows);
+
             if (result.has_errors) {
                 // Show validation errors
                 showValidationErrors(result);
@@ -1642,6 +1668,10 @@ async function performImport(payload) {
                 };
             }
         }
+
+        // Rejected-rows exceptions list (Phase 3), same reasoning as the validate-response
+        // handler above -- populated regardless of status, kept in sync with the latest response.
+        setRejectedRows(result.rejected_rows);
 
         if (result.status === 'validation_failed') {
             showValidationErrors(result);
@@ -1812,6 +1842,9 @@ function renderRowExclusionGrid() {
         rowExclusionAllRows = jsonData.slice(1);
         excludedRowNumbers = new Set();
         validationFailedRows = new Map(); // new sheet/mapping -- any prior validation result is stale
+        rejectedRowsData = new Map(); // new sheet/mapping -- any prior rejected-rows result is stale
+        rejectedRowOverrides = new Set();
+        renderRejectedRowsList();
         rowExclusionCurrentPage = 1;
 
         // Re-apply a restored session's excluded rows (session-restore), bounds-checked against
@@ -1893,6 +1926,9 @@ function resetRowExclusionSelections() {
     if (!rowExclusionAllRows.length) return; // grid not built yet, nothing to reset
     excludedRowNumbers = new Set();
     validationFailedRows = new Map(); // mapping changed -- any prior validation result is stale
+    rejectedRowsData = new Map(); // mapping changed -- any prior rejected-rows result is stale
+    rejectedRowOverrides = new Set();
+    renderRejectedRowsList();
     rowExclusionCurrentPage = 1;
     renderRowExclusionPage();
     saveUploadSessionState(); // Row-exclusion selections just cleared -- keep the saved session in sync
@@ -1910,6 +1946,89 @@ function setValidationFailedRows(errorsList) {
     if (document.getElementById('rowExclusionContainer') && rowExclusionAllRows.length) {
         renderRowExclusionPage();
     }
+}
+
+// ---------- EXCEPTIONS LIST -- REJECTED ROWS (Phase 3 of the row-level blank-field-rejection
+// requirement) ----------
+// Captures a validate/import response's rejected_rows[] (rows the backend excluded because a
+// Document ID/Amount/Date was blank -- routers/import_export.py's find_critical_blank_reasons()).
+// Called from both the validate-response and import-response handlers, same as
+// setValidationFailedRows() above.
+function setRejectedRows(rejectedRowsList) {
+    rejectedRowsData = new Map();
+    (rejectedRowsList || []).forEach(r => {
+        rejectedRowsData.set(r.row_number, r.reasons || []);
+    });
+    // An override for a row that's no longer rejected (e.g. the file was fixed and re-validated)
+    // is meaningless -- prune it so a stale override can't silently resurface later.
+    rejectedRowOverrides.forEach(rowNum => {
+        if (!rejectedRowsData.has(rowNum)) rejectedRowOverrides.delete(rowNum);
+    });
+    renderRejectedRowsList();
+}
+
+// Renders one item per rejected row into #rowRejectionContainer -- deliberately a separate,
+// distinctly-styled panel from the Row Selection grid (see .row-rejection-* in upload.html),
+// not folded into that grid's own excluded/flagged/validation-failed states. Toggling a row's
+// checkbox only updates rejectedRowOverrides this phase -- wiring it into the actual
+// validate/import payload is Phase 4.
+function renderRejectedRowsList() {
+    const container = document.getElementById('rowRejectionContainer');
+    const listEl = document.getElementById('rowRejectionList');
+    const countEl = document.getElementById('rowRejectionCount');
+    if (!container || !listEl) return;
+
+    if (rejectedRowsData.size === 0) {
+        container.style.display = 'none';
+        listEl.innerHTML = '';
+        if (countEl) countEl.textContent = '0 row(s) rejected';
+        return;
+    }
+
+    container.style.display = 'block';
+    if (countEl) countEl.textContent = `${rejectedRowsData.size} row(s) rejected`;
+
+    listEl.innerHTML = '';
+    // Sort by row number so the list reads top-to-bottom in file order.
+    const sortedRowNumbers = Array.from(rejectedRowsData.keys()).sort((a, b) => a - b);
+    sortedRowNumbers.forEach(rowNum => {
+        const reasons = rejectedRowsData.get(rowNum) || [];
+
+        const item = document.createElement('div');
+        item.className = 'row-rejection-item';
+
+        const rowNumEl = document.createElement('span');
+        rowNumEl.className = 'row-rejection-rownum';
+        rowNumEl.textContent = `Row ${rowNum}`;
+        item.appendChild(rowNumEl);
+
+        const reasonEl = document.createElement('span');
+        reasonEl.className = 'row-rejection-reason';
+        // Reuses the backend's own wording verbatim -- no re-derivation of the message.
+        reasonEl.textContent = reasons.map(r => r.message).join('; ');
+        item.appendChild(reasonEl);
+
+        const label = document.createElement('label');
+        label.className = 'row-rejection-override-label';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = rejectedRowOverrides.has(rowNum);
+        checkbox.addEventListener('change', function() {
+            if (this.checked) {
+                rejectedRowOverrides.add(rowNum);
+            } else {
+                rejectedRowOverrides.delete(rowNum);
+            }
+        });
+        const fieldNames = reasons.map(r => r.column).join(', ');
+        const labelText = document.createElement('span');
+        labelText.textContent = `Import anyway (with blank in ${fieldNames})`;
+        label.appendChild(checkbox);
+        label.appendChild(labelText);
+        item.appendChild(label);
+
+        listEl.appendChild(item);
+    });
 }
 
 function renderRowExclusionPage() {
