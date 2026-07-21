@@ -5,7 +5,7 @@ from io import BytesIO
 from database import execute_query, execute_write, log_audit, get_raw_conn, log_data_audit
 from typing import List, Optional
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, time
 
 # ⭐ MUST HAVE THIS LINE
 router = APIRouter()
@@ -77,6 +77,34 @@ def excel_serial_to_datetime(value) -> datetime:
     return datetime(1899, 12, 30) + timedelta(days=value)
 
 
+# ---------- JSON-SAFE CELL COERCION (Phase 2 of the upload-reliability requirement) ----------
+def json_safe_cell_value(value, date_fmt: str = '%d/%m/%Y'):
+    """
+    Coerces a raw cell value (as read by pandas/openpyxl) into something safe to
+    store in a row_data dict and pass straight to json.dumps(). Single source of
+    truth for this coercion -- every place in this file that builds a row_data
+    dict from a raw Excel row should go through this instead of repeating the
+    isna/isinstance checks inline.
+
+    This is the actual root-cause fix for a real crash (ERR-UNK-001 "Object of
+    type time is not JSON serializable", seen repeatedly against /api/upload/import
+    and /api/upload/validate): a Date-typed column's cell can come back from
+    pandas as a bare datetime.time (e.g. a trailing totals/subtotal row's Date
+    cell with odd/time-only formatting) rather than a full datetime.datetime or
+    NaN/NaT. datetime.time is neither caught by pd.isna() nor by
+    isinstance(value, datetime) (datetime.time does not subclass datetime.datetime),
+    so it was falling through untouched into a raw row_data dict and then blowing
+    up the first time json.dumps() saw it, with no error handling around it.
+    """
+    if pd.isna(value):
+        return None
+    if isinstance(value, datetime):
+        return value.strftime(date_fmt)
+    if isinstance(value, time):
+        return value.strftime('%H:%M:%S')
+    return value
+
+
 # ---------- ROW EXCLUSION (Phase 1 of the row-exclusion requirement) ----------
 def filter_excluded_rows(rows: list, excluded_rows: Optional[List[int]]) -> list:
     """
@@ -118,23 +146,24 @@ def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, te
     existing_count = 0
 
     for row in rows:
-        row_data = {}
-        for t_col in template_cols:
-            mapping = mapping_dict.get(t_col["id"])
-            if mapping and mapping.excel_column_name and mapping.excel_column_name in row:
-                value = row[mapping.excel_column_name]
-                if pd.isna(value):
-                    value = None
-                if isinstance(value, datetime):
-                    value = value.strftime("%d/%m/%Y")
-                row_data[t_col["column_name"]] = value
+        try:
+            row_data = {}
+            for t_col in template_cols:
+                mapping = mapping_dict.get(t_col["id"])
+                if mapping and mapping.excel_column_name and mapping.excel_column_name in row:
+                    row_data[t_col["column_name"]] = json_safe_cell_value(row[mapping.excel_column_name])
 
-        row_json = json.dumps(row_data, sort_keys=True, ensure_ascii=False)
-        if row_json in seen_existing:
-            existing_count += 1
-        else:
-            new_count += 1
-            seen_existing.add(row_json)
+            row_json = json.dumps(row_data, sort_keys=True, ensure_ascii=False)
+            if row_json in seen_existing:
+                existing_count += 1
+            else:
+                new_count += 1
+                seen_existing.add(row_json)
+        except Exception:
+            # A row that can't be parsed/serialized is already going to be
+            # flagged by the main validation loop -- don't let it crash the
+            # whole /validate request just to compute this count.
+            continue
 
     return new_count, existing_count
 
@@ -204,12 +233,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         row_data = {}
         for t_col_name, excel_col in col_mapping.items():
             if excel_col in raw_row:
-                value = raw_row[excel_col]
-                if pd.isna(value):
-                    value = None
-                if isinstance(value, datetime):
-                    value = value.strftime('%d/%m/%Y')
-                row_data[t_col_name] = value
+                row_data[t_col_name] = json_safe_cell_value(raw_row[excel_col])
 
         # Compute document_group_id for this incoming row
         doc_group_id = get_document_group_id(template_cols, row_data, template_id)
@@ -744,67 +768,73 @@ def validate_only(request: ImportRequest):
     validation_errors = []
     for row_idx, row in enumerate(rows, start=2):  # row 1 = headers, row 2 = first data
         row_errors = []
-        # Build a full row data dict (template column names -> values)
         row_data_full = {}
-        for t_col in template_cols:
-            mapping = mapping_dict.get(t_col['id'])
-            if mapping and mapping.excel_column_name:
+        try:
+            # Build a full row data dict (template column names -> values)
+            for t_col in template_cols:
+                mapping = mapping_dict.get(t_col['id'])
+                if mapping and mapping.excel_column_name:
+                    excel_col = mapping.excel_column_name
+                    if excel_col in row:
+                        row_data_full[t_col['column_name']] = json_safe_cell_value(row[excel_col])
+                    else:
+                        row_data_full[t_col['column_name']] = None
+            # Now check each column for errors
+            for t_col in template_cols:
+                mapping = mapping_dict.get(t_col['id'])
+                if not mapping or not mapping.excel_column_name:
+                    continue
                 excel_col = mapping.excel_column_name
-                if excel_col in row:
-                    value = row[excel_col]
-                    if pd.isna(value):
-                        value = None
-                    if isinstance(value, datetime):
-                        value = value.strftime('%d/%m/%Y')
-                    row_data_full[t_col['column_name']] = value
+                if excel_col not in row:
+                    continue
+                value = row[excel_col]
+
+                # Required field check
+                if pd.isna(value):
+                    row_errors.append({
+                        "column": t_col['column_name'],
+                        "excel_column": excel_col,
+                        "error_type": "required",
+                        "message": f"Required field '{t_col['column_name']}' is empty"
+                    })
                 else:
-                    row_data_full[t_col['column_name']] = None
-        # Now check each column for errors
-        for t_col in template_cols:
-            mapping = mapping_dict.get(t_col['id'])
-            if not mapping or not mapping.excel_column_name:
-                continue
-            excel_col = mapping.excel_column_name
-            if excel_col not in row:
-                continue
-            value = row[excel_col]
-            
-            # Required field check
-            if pd.isna(value):
-                row_errors.append({
-                    "column": t_col['column_name'],
-                    "excel_column": excel_col,
-                    "error_type": "required",
-                    "message": f"Required field '{t_col['column_name']}' is empty"
-                })
-            else:
-                # Data type checks
-                if t_col['data_type'] == "Numeric":
-                    try:
-                        float(value)
-                    except:
-                        row_errors.append({
-                            "column": t_col['column_name'],
-                            "excel_column": excel_col,
-                            "error_type": "data_type",
-                            "message": f"Expected Numeric but got '{value}'"
-                        })
-                elif t_col['data_type'] == "Date":
-                    kind = classify_date_cell(value)
-                    if kind == 'native':
-                        pass  # genuine Excel date cell -- already correct, nothing to validate
-                    elif kind == 'excel_serial':
-                        pass  # Excel serial date – will be handled on import, skip validation here
-                    elif kind == 'text':
+                    # Data type checks
+                    if t_col['data_type'] == "Numeric":
                         try:
-                            parse_date_flexible(value, effective_delimiter, effective_order)
-                        except (ValueError, TypeError):
+                            float(value)
+                        except:
                             row_errors.append({
                                 "column": t_col['column_name'],
                                 "excel_column": excel_col,
                                 "error_type": "data_type",
-                                "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
+                                "message": f"Expected Numeric but got '{value}'"
                             })
+                    elif t_col['data_type'] == "Date":
+                        kind = classify_date_cell(value)
+                        if kind == 'native':
+                            pass  # genuine Excel date cell -- already correct, nothing to validate
+                        elif kind == 'excel_serial':
+                            pass  # Excel serial date – will be handled on import, skip validation here
+                        elif kind == 'text':
+                            try:
+                                parse_date_flexible(value, effective_delimiter, effective_order)
+                            except (ValueError, TypeError):
+                                row_errors.append({
+                                    "column": t_col['column_name'],
+                                    "excel_column": excel_col,
+                                    "error_type": "data_type",
+                                    "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
+                                })
+        except Exception as e:
+            # A row that fails to parse for any unforeseen reason (e.g. an
+            # unexpected cell type) must not crash the whole /validate request --
+            # surface it as a graceful per-row error instead of a 500.
+            row_errors = [{
+                "column": None,
+                "excel_column": None,
+                "error_type": "parse_error",
+                "message": f"Row could not be parsed: {e}"
+            }]
 
         if row_errors:
             validation_errors.append({
@@ -894,48 +924,58 @@ def validate_and_import(request: ImportRequest):
     validation_errors = []
     for row_idx, row in enumerate(rows, start=2):
         row_errors = []
-        for t_col in template_cols:
-            mapping = mapping_dict.get(t_col['id'])
-            if not mapping or not mapping.excel_column_name:
-                continue
-            excel_col = mapping.excel_column_name
-            if excel_col not in row:
-                continue
-            value = row[excel_col]
-            if pd.isna(value):
-                row_errors.append({
-                    "column": t_col['column_name'],
-                    "excel_column": excel_col,
-                    "error_type": "required",
-                    "message": f"Required field '{t_col['column_name']}' is empty"
-                })
-            else:
-                if t_col['data_type'] == "Numeric":
-                    try:
-                        float(value)
-                    except:
-                        row_errors.append({
-                            "column": t_col['column_name'],
-                            "excel_column": excel_col,
-                            "error_type": "data_type",
-                            "message": f"Expected Numeric but got '{value}'"
-                        })
-                elif t_col['data_type'] == "Date":
-                    kind = classify_date_cell(value)
-                    if kind == 'native':
-                        pass  # genuine Excel date cell -- already correct, nothing to validate
-                    elif kind == 'excel_serial':
-                        pass  # Excel serial date – will be handled on import, skip validation here
-                    elif kind == 'text':
+        try:
+            for t_col in template_cols:
+                mapping = mapping_dict.get(t_col['id'])
+                if not mapping or not mapping.excel_column_name:
+                    continue
+                excel_col = mapping.excel_column_name
+                if excel_col not in row:
+                    continue
+                value = row[excel_col]
+                if pd.isna(value):
+                    row_errors.append({
+                        "column": t_col['column_name'],
+                        "excel_column": excel_col,
+                        "error_type": "required",
+                        "message": f"Required field '{t_col['column_name']}' is empty"
+                    })
+                else:
+                    if t_col['data_type'] == "Numeric":
                         try:
-                            parse_date_flexible(value, effective_delimiter, effective_order)
-                        except (ValueError, TypeError):
+                            float(value)
+                        except:
                             row_errors.append({
                                 "column": t_col['column_name'],
                                 "excel_column": excel_col,
                                 "error_type": "data_type",
-                                "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
+                                "message": f"Expected Numeric but got '{value}'"
                             })
+                    elif t_col['data_type'] == "Date":
+                        kind = classify_date_cell(value)
+                        if kind == 'native':
+                            pass  # genuine Excel date cell -- already correct, nothing to validate
+                        elif kind == 'excel_serial':
+                            pass  # Excel serial date – will be handled on import, skip validation here
+                        elif kind == 'text':
+                            try:
+                                parse_date_flexible(value, effective_delimiter, effective_order)
+                            except (ValueError, TypeError):
+                                row_errors.append({
+                                    "column": t_col['column_name'],
+                                    "excel_column": excel_col,
+                                    "error_type": "data_type",
+                                    "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
+                                })
+        except Exception as e:
+            # Same graceful-degradation guarantee as validate_only(): a row that
+            # fails to parse must not crash the whole /import request.
+            row_errors = [{
+                "column": None,
+                "excel_column": None,
+                "error_type": "parse_error",
+                "message": f"Row could not be parsed: {e}"
+            }]
         if row_errors:
             validation_errors.append({"row_number": row_idx, "errors": row_errors})
 
@@ -1042,12 +1082,7 @@ def validate_and_import(request: ImportRequest):
             row_data = {}
             for t_col_name, excel_col in col_mapping.items():
                 if excel_col in row:
-                    value = row[excel_col]
-                    if pd.isna(value):
-                        value = None
-                    if isinstance(value, datetime):
-                        value = value.strftime('%d/%m/%Y')
-                    row_data[t_col_name] = value
+                    row_data[t_col_name] = json_safe_cell_value(row[excel_col])
 
             # Compute document_group_id from the first column value
             doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)
