@@ -18,11 +18,10 @@ let previewTemplateId = null;
 let previewTemplateName = '';
 let isPreviewOpen = false;
 let isPreviewLoading = false;
-let isAvailabilityLoading = false;
 
-// Coverage Calendar (Phase 4) state — independent of dateStart/dateEnd/
-// filterTemplate above; this widget has its own template multi-select and
-// its own month/year navigation.
+// Coverage Calendar (Phase 4) state — independent of the shared date range
+// (see sharedRangeFromInput/sharedRangeToInput below); this widget has its
+// own template multi-select and its own month/year navigation.
 let calendarYear = new Date().getFullYear();
 let calendarMonth = new Date().getMonth() + 1; // 1-12
 
@@ -35,19 +34,10 @@ let calendarTemplatesList = [];
 let calendarSelectedTemplateIds = new Set();
 
 // ---------- DOM REFS ----------
-const filterTemplate = document.getElementById('templateFilter');
-const filterDateStart = document.getElementById('dateStart');
-const filterDateEnd = document.getElementById('dateEnd');
-const checkBtn = document.getElementById('checkAvailabilityBtn');
-const clearFiltersBtn = document.getElementById('clearFiltersBtn');
-const refreshBtn = document.getElementById('refreshBtn');
-const availabilityBody = document.getElementById('availabilityBody');
-const noDataMessage = document.getElementById('noDataMessage');
 const statusDiv = document.getElementById('statusMessage');
 
-// Redesign Phase 5: "Your datasets" table — fed by the exact same
-// fetchAvailability() data as availabilityBody/noDataMessage above, never a
-// second fetch. See renderYourDatasetsTable()/resetDatasetTables().
+// Redesign Phase 5: "Your datasets" table — fed by fetchAvailability() data,
+// never a second fetch. See renderYourDatasetsTable()/resetDatasetTables().
 const yourDatasetsBody = document.getElementById('yourDatasetsBody');
 const yourDatasetsNoData = document.getElementById('yourDatasetsNoData');
 
@@ -99,7 +89,6 @@ const searchInput = document.getElementById('searchInput');
 const amountMin = document.getElementById('amountMin');
 const amountMax = document.getElementById('amountMax');
 const applyFiltersBtn = document.getElementById('applyFiltersBtn');
-const clearPreviewFiltersBtn = document.getElementById('clearFiltersBtn');
 const prevPageBtn = document.getElementById('prevPageBtn');
 const nextPageBtn = document.getElementById('nextPageBtn');
 const pageInfo = document.getElementById('pageInfo');
@@ -144,8 +133,11 @@ function formatDateForDisplay(dateStr) {
 }
 
 function getDateRangeFromFilter() {
-    const start = filterDateStart.value;
-    const end = filterDateEnd.value;
+    // Redesign Phase 6: sharedRangeFrom/sharedRangeTo (the popover's own
+    // inputs) are now the persisted date-range state itself, not a copy of
+    // the removed #dateStart/#dateEnd filter-bar inputs.
+    const start = sharedRangeFromInput.value;
+    const end = sharedRangeToInput.value;
     if (start && end) {
         if (start <= end) {
             return { start, end };
@@ -258,9 +250,10 @@ async function showRowHistoryPopover(icon, clientDataId) {
 }
 
 // ---------- SHARED DATE RANGE POPOVER (Phase 2 — Unified date range) ----------
-// One popover backs both entry points; #dateStart/#dateEnd (the main sheet's
-// own inputs) remain the single source of truth for the range — this popover
-// only ever reads/writes those two fields, never a duplicated copy.
+// One popover backs both entry points. As of Redesign Phase 6 (FINAL), this
+// popover's own #sharedRangeFrom/#sharedRangeTo inputs ARE the single source
+// of truth for the range (the old #dateStart/#dateEnd filter-bar inputs they
+// used to mirror were removed along with the rest of the old filter bar).
 
 // Positions the popover near an anchor element, clamped to the viewport and
 // flipped above the anchor when there isn't enough room below — same
@@ -290,8 +283,8 @@ function positionSharedRangePopover(anchorEl) {
 // exists — confirming will open it) or 'live' (opened from inside the
 // already-open modal — confirming just refreshes in place).
 function openSharedRangePopover(anchorEl, mode, templateId, templateName) {
-    sharedRangeFromInput.value = filterDateStart.value || '';
-    sharedRangeToInput.value = filterDateEnd.value || '';
+    // Redesign Phase 6: sharedRangeFrom/sharedRangeTo already hold the
+    // persisted range themselves (no more #dateStart/#dateEnd to copy from).
     pendingPreviewOpen = (mode === 'gate') ? { templateId, templateName } : null;
     sharedRangeConfirmBtn.textContent = (mode === 'gate') ? 'Open Preview' : 'Apply';
     positionSharedRangePopover(anchorEl);
@@ -303,9 +296,9 @@ function closeSharedRangePopover() {
     pendingPreviewOpen = null;
 }
 
-// Validates and writes the popover's From/To into the shared #dateStart/
-// #dateEnd inputs, then propagates the change to whichever views need it.
-// fetchAvailability() (awaited) is the single point that also refreshes an
+// Validates the popover's From/To (already the persisted shared range — see
+// getDateRangeFromFilter()), then propagates the change to whichever views
+// need it. fetchAvailability() (awaited) is the single point that also refreshes an
 // already-open preview (see its own trailing isPreviewOpen check) — awaiting
 // it here before opening a pending (gate-mode) preview means that check runs
 // while isPreviewOpen is still false, so openPreview()'s own fetch is the
@@ -322,9 +315,8 @@ async function confirmSharedRangePopover() {
         return;
     }
 
-    filterDateStart.value = start;
-    filterDateEnd.value = end;
-
+    // Redesign Phase 6: start/end already came straight from
+    // sharedRangeFromInput/sharedRangeToInput — nothing to write back.
     const gateTarget = pendingPreviewOpen;
     closeSharedRangePopover();
 
@@ -337,31 +329,11 @@ async function confirmSharedRangePopover() {
     }
 }
 
-// ---------- LOAD TEMPLATES INTO DROPDOWN ----------
-async function loadTemplateDropdown() {
-    try {
-        const res = await fetch(API_BASE + '/api/templates');
-        if (!res.ok) throw new Error('Failed to fetch templates');
-        const templates = await res.json();
-        
-        filterTemplate.innerHTML = '<option value="">All Templates</option>';
-        templates.forEach(tpl => {
-            const opt = document.createElement('option');
-            opt.value = tpl.id;
-            opt.textContent = tpl.template_name;
-            filterTemplate.appendChild(opt);
-        });
-    } catch (error) {
-        console.error('Error loading templates:', error);
-        filterTemplate.innerHTML = '<option value="">⚠️ Failed to load</option>';
-    }
-}
-
 // ---------- COVERAGE CALENDAR (Phase 4) ----------
 // Independent widget — its own template multi-select and its own month/year
-// state (calendarYear/calendarMonth above). Does not read or write
-// #dateStart/#dateEnd/#templateFilter, which stay dedicated to the existing
-// Availability Table/Preview/Export flow below, left untouched.
+// state (calendarYear/calendarMonth above). Does not read or write the
+// shared date range (sharedRangeFromInput/sharedRangeToInput), which stays
+// dedicated to the "Your Datasets" table/Preview/Export flow below.
 
 const CALENDAR_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
@@ -370,11 +342,10 @@ const CALENDAR_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'J
 // no change itself to pick up the longer labels.
 const CALENDAR_DAY_HEADERS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-// Populated via its own GET /api/templates call (deliberately not sharing
-// loadTemplateDropdown()'s fetch/element, to avoid touching that existing,
-// working code — same small-duplication-over-refactor-risk tradeoff already
-// used elsewhere in this codebase, e.g. the Audit Rules Cross-checks/
-// Categories views).
+// Populated via its own GET /api/templates call — independent of the old
+// filter bar's template dropdown, which was removed in Redesign Phase 6
+// (previously this was a deliberate small duplication of that dropdown's
+// fetch, to avoid touching its then-still-working code).
 // Redesign Phase 2: renamed from loadCalendarTemplateOptions() (no <option>
 // elements anymore) — stores the fetched list, then renders it as chips.
 async function loadCalendarTemplates() {
@@ -668,43 +639,20 @@ function setDefaultDateRange() {
         return `${y}-${m}-${day}`;
     };
     
-    filterDateStart.value = formatDate(firstDay);
-    filterDateEnd.value = formatDate(lastDay);
+    // Redesign Phase 6: writes into the popover's own inputs, which are now
+    // the persisted date-range state (see getDateRangeFromFilter()).
+    sharedRangeFromInput.value = formatDate(firstDay);
+    sharedRangeToInput.value = formatDate(lastDay);
 }
 
-// Redesign Phase 5: resets both the old Availability Table and the new
-// "Your datasets" table to the same empty/error message in one call — they
-// always share one fetch/dataset, so every place that used to reset only
-// the old table's empty state now resets both here instead of duplicating
-// the same reset lines a second time.
+// Redesign Phase 6: reset helper for the "Your datasets" table's empty/error
+// state (was shared with the now-removed old Availability Table, which had
+// its own #availabilityBody/#noDataMessage — those are gone, so this now
+// only resets the one remaining table).
 function resetDatasetTables(message) {
-    availabilityBody.innerHTML = '';
-    noDataMessage.style.display = 'block';
-    noDataMessage.innerHTML = message;
-
     yourDatasetsBody.innerHTML = '';
     yourDatasetsNoData.style.display = 'block';
     yourDatasetsNoData.innerHTML = message;
-}
-
-// ---------- CLEAR ALL FILTERS (Main Page) ----------
-function clearAllFilters() {
-    // 1. Reset filter fields to empty
-    filterTemplate.value = '';
-    filterDateStart.value = '';
-    filterDateEnd.value = '';
-
-    // 2. Clear both tables and stats
-    availabilityData = [];
-    resetDatasetTables('Filters cleared. Select a new date range and click "Check Availability".');
-
-    statsTotalRecords.textContent = '0';
-    statsTotalTemplates.textContent = '0';
-    statsMissingTemplates.textContent = '0';
-    statsSundayRows.textContent = '0';
-    
-    // 3. Show status message
-    showStatus('🧹 Filters cleared. Please select a new date range and click "Check Availability".', 'info');
 }
 
 // ---------- FETCH AVAILABILITY DATA ----------
@@ -722,21 +670,15 @@ async function fetchAvailability() {
         return;
     }
     
-    const templateId = filterTemplate.value || null;
+    // Redesign Phase 6: no per-template filter anymore — "Your datasets"
+    // always lists every template, matching the removed old filter bar's
+    // "All Templates" default behavior with no way to narrow it further.
     const params = new URLSearchParams({
         client_id: clientId,
         date_start: dateRange.start,
         date_end: dateRange.end
     });
-    if (templateId) {
-        params.append('template_id', templateId);
-    }
-    
-    // Disable button and show loading
-    isAvailabilityLoading = true;
-    checkBtn.disabled = true;
-    checkBtn.textContent = '⏳ Loading...';
-    refreshBtn.disabled = true;
+
     showStatus('⏳ Fetching availability data...', 'loading');
     
     try {
@@ -759,9 +701,9 @@ async function fetchAvailability() {
         statsMissingTemplates.textContent = missing;
         statsSundayRows.textContent = sundayRows;
         
-        renderAvailabilityTable(data);
         // Redesign Phase 5: new "Your datasets" table reflects the exact
-        // same fetch/data — no separate network call.
+        // same fetch/data — no separate network call. (The old Availability
+        // Table's own renderAvailabilityTable() was removed in Phase 6.)
         renderYourDatasetsTable(data);
 
         if (totalTemplates === 0) {
@@ -786,126 +728,12 @@ async function fetchAvailability() {
         statsTotalTemplates.textContent = '0';
         statsMissingTemplates.textContent = '0';
         statsSundayRows.textContent = '0';
-    } finally {
-        isAvailabilityLoading = false;
-        checkBtn.disabled = false;
-        checkBtn.textContent = '🔍 Check Availability';
-        refreshBtn.disabled = false;
     }
 }
 
-// ---------- RENDER AVAILABILITY TABLE ----------
-function renderAvailabilityTable(data) {
-    availabilityBody.innerHTML = '';
-    if (!data || data.length === 0) {
-        noDataMessage.style.display = 'block';
-        noDataMessage.innerHTML = 'No templates found for the selected criteria.';
-        return;
-    }
-    noDataMessage.style.display = 'none';
-    
-    data.forEach((item, index) => {
-        const tr = document.createElement('tr');
-        
-        // # (row number)
-        const tdNum = document.createElement('td');
-        tdNum.textContent = index + 1;
-        tdNum.style.textAlign = 'center';
-        tdNum.style.color = '#94a3b8';
-        tr.appendChild(tdNum);
-        
-        // Template Name
-        const tdName = document.createElement('td');
-        tdName.textContent = item.template_name;
-        tdName.style.fontWeight = '500';
-        tr.appendChild(tdName);
-        
-        // Date Range - FULL range (unfiltered)
-        const tdDate = document.createElement('td');
-        if (item.date_min && item.date_max) {
-            tdDate.textContent = `${formatDateForDisplay(item.date_min)} – ${formatDateForDisplay(item.date_max)}`;
-        } else {
-            tdDate.textContent = '—';
-            tdDate.style.color = '#94a3b8';
-        }
-        // Add a small note if filtered range is narrower
-        tr.appendChild(tdDate);
-        
-        // Total Rows (all data, unfiltered)
-        const tdTotalRows = document.createElement('td');
-        tdTotalRows.textContent = item.total_row_count || 0;
-        tdTotalRows.style.textAlign = 'center';
-        tdTotalRows.style.fontWeight = '600';
-        tdTotalRows.setAttribute('data-tooltip', 'Total rows across all dates for this template');
-        tr.appendChild(tdTotalRows);
-        
-        // Filtered Rows (matching the selected date range)
-        const tdFilteredRows = document.createElement('td');
-        tdFilteredRows.textContent = item.filtered_row_count || 0;
-        tdFilteredRows.style.textAlign = 'center';
-        tdFilteredRows.style.color = '#3b82f6';
-        tdFilteredRows.style.fontWeight = '500';
-        tdFilteredRows.setAttribute('data-tooltip', 'Rows matching the selected date filter');
-        tr.appendChild(tdFilteredRows);
-        
-        // Sunday Rows (filtered)
-        const tdSunday = document.createElement('td');
-        tdSunday.textContent = item.filtered_sunday_count || 0;
-        tdSunday.style.textAlign = 'center';
-        if (item.filtered_sunday_count > 0) {
-            tdSunday.style.color = '#f59e0b';
-            tdSunday.style.fontWeight = '600';
-        }
-        tdSunday.setAttribute('data-tooltip', 'Sunday rows within the selected date range');
-        tr.appendChild(tdSunday);
-        
-        // Status (based on total data)
-        const tdStatus = document.createElement('td');
-        tdStatus.style.textAlign = 'center';
-        const statusSpan = document.createElement('span');
-        // Use status from API ('complete' if total_row_count > 0, else 'missing')
-        const status = item.status || 'missing';
-        statusSpan.className = `status-badge ${status}`;
-        const statusMap = {
-            'complete': '✅ Complete',
-            'missing': '❌ Missing',
-            'partial': '⚠️ Partial'
-        };
-        statusSpan.textContent = statusMap[status] || status;
-        tdStatus.appendChild(statusSpan);
-        // Add a tooltip showing filtered status
-        if (item.filtered_status === 'missing' && status === 'complete') {
-            statusSpan.style.cursor = 'help';
-            statusSpan.setAttribute('data-tooltip', 'Data exists but outside the selected date range');
-        }
-        tr.appendChild(tdStatus);
-
-        // Redesign Phase 5: Actions cell extracted into a shared helper so
-        // the new "Your datasets" table below can trigger the exact same
-        // Preview/Export/Delete behavior instead of duplicating it.
-        tr.appendChild(buildDatasetActionButtons(item));
-        availabilityBody.appendChild(tr);
-    });
-    
-    // Update stats using the new fields
-    const totalAllRows = data.reduce((sum, item) => sum + (item.total_row_count || 0), 0);
-    const totalFilteredRows = data.reduce((sum, item) => sum + (item.filtered_row_count || 0), 0);
-    const totalTemplates = data.length;
-    const missing = data.filter(item => item.status === 'missing').length;
-    const sundayRows = data.reduce((sum, item) => sum + (item.filtered_sunday_count || 0), 0);
-    
-    statsTotalRecords.textContent = totalAllRows;  // Show total rows, not filtered
-    statsTotalTemplates.textContent = totalTemplates;
-    statsMissingTemplates.textContent = missing;
-    statsSundayRows.textContent = sundayRows;
-}
-
-// Redesign Phase 5: builds the Preview/Export/Delete Actions cell — extracted
-// from renderAvailabilityTable()'s own inline block (behavior unchanged) so
-// renderYourDatasetsTable() below can reuse the exact same buttons/click
-// handlers (including the shared date-range-popover gate on Preview and the
-// confirm-before-delete already inside deleteTemplateData()) instead of a
-// second, duplicated implementation.
+// Redesign Phase 5: builds the Preview/Export/Delete Actions cell, shared by
+// "Your datasets" table (the old Availability Table that originally also used
+// this helper was removed in Redesign Phase 6).
 function buildDatasetActionButtons(item) {
     const tdActions = document.createElement('td');
     tdActions.style.textAlign = 'center';
@@ -961,11 +789,10 @@ function buildDatasetActionButtons(item) {
 
 // ---------- RENDER "YOUR DATASETS" TABLE (Redesign Phase 5) ----------
 // New, simplified table (Template / Full Date Range / Total Rows / Status /
-// Actions) fed by the exact same data fetchAvailability() already retrieves
-// for the old Availability Table above — no separate fetch. Coexists with
-// that table until Phase 6 removes it; the "#" (row number)/Filtered Rows/
-// Sunday columns are intentionally not carried over, per the confirmed
-// column list for this new table.
+// Actions) fed by the exact same data fetchAvailability() already retrieves.
+// The old Availability Table this used to coexist with (with its extra "#"/
+// Filtered Rows/Sunday columns) was removed in Redesign Phase 6 — this is
+// now the sole datasets table on the page.
 function renderYourDatasetsTable(data) {
     yourDatasetsBody.innerHTML = '';
     if (!data || data.length === 0) {
@@ -1063,9 +890,9 @@ async function deleteTemplateData(templateId, templateName, rowCount) {
 
 // ---------- OPEN PREVIEW ----------
 function openPreview(templateId, templateName) {
-    // The shared #dateStart/#dateEnd inputs (already validated by whichever
-    // caller reached this point — confirmSharedRangePopover()) are the single
-    // source of truth; this is a defensive fallback only, not a copy.
+    // The shared range (already validated by whichever caller reached this
+    // point — confirmSharedRangePopover()) is read fresh here as a defensive
+    // fallback, not a copy — see getDateRangeFromFilter().
     const dateRange = getDateRangeFromFilter();
     if (!dateRange) {
         showStatus('⚠️ Please select a date range.', 'error');
@@ -1424,13 +1251,11 @@ calendarNextMonthBtn.addEventListener('click', goToNextMonth);
 uploadMoreBtn.addEventListener('click', () => {
     window.location.href = '/static/upload.html';
 });
-checkBtn.addEventListener('click', fetchAvailability);
-clearFiltersBtn.addEventListener('click', clearAllFilters);
-refreshBtn.addEventListener('click', fetchAvailability);
-
-filterDateStart.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchAvailability(); });
-filterDateEnd.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchAvailability(); });
-filterTemplate.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchAvailability(); });
+// Redesign Phase 6: the old filter bar's Check Availability/Clear Filters/
+// Refresh buttons and their keydown-to-Enter shortcuts are gone — the shared
+// date range popover's own confirm button (see confirmSharedRangePopover())
+// is now the sole way to change the range and refresh, alongside automatic
+// refreshes on client change and popover confirm.
 
 // Preview modal events
 closePreviewBtn.addEventListener('click', () => {
@@ -1567,7 +1392,9 @@ window.onClientChange = function(clientId) {
     clearTimeout(clientChangeTimeout);
     clientChangeTimeout = setTimeout(() => {
         if (clientId) {
-            if (filterDateStart.value && filterDateEnd.value) {
+            // Redesign Phase 6: reads the popover's own inputs, now the
+            // persisted date-range state (see getDateRangeFromFilter()).
+            if (sharedRangeFromInput.value && sharedRangeToInput.value) {
                 fetchAvailability();
             } else {
                 setDefaultDateRange();
@@ -1593,7 +1420,6 @@ window.onload = async function() {
     }
     
     setDefaultDateRange();
-    await loadTemplateDropdown();
     await loadCalendarTemplates();
     updateCalendarMonthLabel();
 

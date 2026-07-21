@@ -9,101 +9,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js?v=2"></script>
     <style>
         /* ===== NEW STYLES FOR DATA BANK ===== */
-        .filter-bar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px 20px;
-            background: white;
-            padding: 16px 20px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-            margin-bottom: 20px;
-            align-items: flex-end;
-        }
-
-        .filter-bar .filter-group {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .filter-bar .filter-group label {
-            font-size: 12px;
-            font-weight: 600;
-            color: #475569;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .filter-bar .filter-group input,
-        .filter-bar .filter-group select {
-            padding: 8px 12px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            font-size: 14px;
-            min-width: 160px;
-            background: white;
-            transition: border-color 0.2s;
-        }
-
-        .filter-bar .filter-group input:focus,
-        .filter-bar .filter-group select:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-        }
-
-        .filter-bar .filter-group input[type="date"] {
-            min-width: 150px;
-        }
-
-        .filter-bar .btn-check {
-            padding: 8px 28px;
-            background: #3b82f6;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 14px;
-            cursor: pointer;
-            transition: background 0.2s;
-            height: 40px;
-            align-self: flex-end;
-        }
-
-        .filter-bar .btn-check:hover {
-            background: #2563eb;
-        }
-
-        .filter-bar .btn-check:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        /* Stats bar */
-        .stats-bar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 20px 40px;
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 10px;
-            padding: 14px 24px;
-            margin-bottom: 20px;
-        }
-
-        .stats-bar .stat-item {
-            display: flex;
-            align-items: baseline;
-            gap: 6px;
-            font-size: 14px;
-            color: #475569;
-        }
-
-        .stats-bar .stat-item strong {
-            font-size: 20px;
-            color: #1a1a2e;
-        }
 
         /* Availability table */
         .availability-table {
@@ -374,7 +279,12 @@
            with position:fixed + JS-computed coordinates (see
            positionSharedRangePopover() in databank.js), same viewport-clamp
            approach as #rowHistoryPopover, since this must anchor to either
-           a table row icon or a modal toolbar button. */
+           a table row icon or a modal toolbar button.
+           Redesign Phase 6 (FINAL): #sharedRangeFrom/#sharedRangeTo are now
+           the actual persisted date-range state (the old #dateStart/#dateEnd
+           filter-bar inputs they used to mirror were removed this phase along
+           with the rest of the old filter bar) — a hidden input still holds
+           its .value, so this works correctly while the popover is closed. */
         .shared-range-popover {
             position: fixed;
             z-index: 1200;
@@ -441,9 +351,8 @@
         /* ===== COVERAGE CALENDAR (Phase 4 — Client Data Availability &
            Coverage Redesign). Independent widget: its own template
            multi-select and its own month/year state, separate from the
-           existing filter-bar/#dateStart/#dateEnd/Availability Table below,
-           which are kept fully functional and untouched (still drive
-           Preview/Export/Delete and the shared date-range popover). ===== */
+           shared date range (see #sharedRangeFrom/#sharedRangeTo) that
+           drives Preview/Export/Delete and "Your Datasets" below. ===== */
         .coverage-calendar-section {
             background: white;
             padding: 16px 20px;
@@ -863,12 +772,11 @@
         }
 
         /* ===== "YOUR DATASETS" TABLE (Redesign Phase 5) =====
-           New, simplified table (Template / Full Date Range / Total Rows /
-           Status / Actions), fed by the exact same fetchAvailability() data
-           that already powers the old Availability Table below (no new
-           endpoint) — reuses .availability-table/.no-data as-is, since both
-           are already generic and not tied to the old table's column count.
-           Coexists with the old table until Phase 6 removes it. ===== */
+           Simplified table (Template / Full Date Range / Total Rows /
+           Status / Actions), fed by fetchAvailability() data — reuses
+           .availability-table/.no-data as-is. The old Availability Table
+           this used to coexist with (extra "#"/Filtered Rows/Sunday columns)
+           was removed in Redesign Phase 6 (FINAL). ===== */
         .your-datasets-section {
             margin-bottom: 20px;
         }
@@ -879,25 +787,47 @@
             color: #1a1a2e;
         }
 
+        /* ===== METRIC TILES (Redesign Phase 6, FINAL) =====
+           Replaces the old .stats-bar row. Same 4 stat ids (#totalRecords/
+           #totalTemplates/#missingTemplates/#totalSundayRows) carried forward
+           unchanged, so every existing .textContent write in databank.js
+           still works with no JS changes to the stat-writing logic itself —
+           only the surrounding markup/CSS changed. Positioned at the bottom
+           of the page, per the prototype. */
+        .metric-tiles-section {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-top: 4px;
+            margin-bottom: 20px;
+        }
+
+        .metric-tile {
+            flex: 1;
+            min-width: 180px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 16px 20px;
+        }
+
+        .metric-tile-label {
+            font-size: 13px;
+            color: #64748b;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .metric-tile-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #1a1a2e;
+        }
+
         /* Responsive tweaks */
         @media (max-width: 768px) {
-            .filter-bar {
+            .metric-tiles-section {
                 flex-direction: column;
-                align-items: stretch;
-            }
-
-            .filter-bar .filter-group input,
-            .filter-bar .filter-group select {
-                min-width: 100%;
-            }
-
-            .filter-bar .btn-check {
-                align-self: stretch;
-            }
-
-            .stats-bar {
-                flex-direction: column;
-                gap: 8px;
             }
 
             .availability-table {
@@ -946,8 +876,8 @@
 
         <!-- ===== COVERAGE CALENDAR (Phase 4) =====
              Independent widget: its own template multi-select + its own
-             month/year navigation. Does not read/write #dateStart/#dateEnd —
-             the Availability Table below keeps those working unchanged. -->
+             month/year navigation. Does not read/write the shared date range
+             (#sharedRangeFrom/#sharedRangeTo) used by "Your Datasets" below. -->
         <div class="coverage-calendar-section" id="coverageCalendarSection">
             <!-- Redesign Phase 1: static info tip banner — no dismiss/persistence logic. -->
             <div class="databank-info-banner">
@@ -955,8 +885,7 @@
             </div>
 
             <!-- Redesign Phase 1: Step 1 label — attaches to this widget's own
-                 template multi-select (not the older #templateFilter below,
-                 which stays untouched until Phase 6). -->
+                 template multi-select. -->
             <p class="databank-step-label">① Step 1 — choose a template</p>
             <div class="calendar-controls">
                 <!-- Redesign Phase 2: chip-style picker, replacing the old
@@ -999,43 +928,13 @@
             </div>
         </div>
 
-        <!-- ===== FILTER BAR ===== -->
-        <div class="filter-bar" id="filterBar">
-            <div class="filter-group">
-                <label for="templateFilter">📋 Template</label>
-                <select id="templateFilter">
-                    <option value="">All Templates</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label for="dateStart">📅 Date From</label>
-                <input type="date" id="dateStart">
-            </div>
-            <div class="filter-group">
-                <label for="dateEnd">📅 Date To</label>
-                <input type="date" id="dateEnd">
-            </div>
-            <button class="btn-check" id="checkAvailabilityBtn">🔍 Check Availability</button>
-            <button class="btn-check" id="clearFiltersBtn" style="background:#94a3b8; padding:8px 20px;">✕ Clear
-                Filters</button>
-            <button class="btn-check" id="refreshBtn" style="background:#22c55e; padding:8px 20px;">🔄 Refresh</button>
-        </div>
-
-        <!-- ===== STATS BAR ===== -->
-        <div class="stats-bar" id="statsBar">
-            <div class="stat-item">📦 Total Records: <strong id="totalRecords">0</strong></div>
-            <div class="stat-item">📁 Templates Available: <strong id="totalTemplates">0</strong></div>
-            <div class="stat-item">⚠️ Missing Templates: <strong id="missingTemplates">0</strong></div>
-            <div class="stat-item">📅 Sunday Rows: <strong id="totalSundayRows">0</strong></div>
-        </div>
-
         <!-- ===== "YOUR DATASETS" TABLE (Redesign Phase 5) =====
-             New simplified table, fed by the exact same fetchAvailability()
-             data as the old Availability Table directly below it — reuses
+             Simplified table, fed by fetchAvailability() data — reuses
              buildDatasetActionButtons() for Actions, so Preview/Export/Delete
              behavior (incl. the shared date-range-popover gate and confirm-
-             before-delete) is identical, not reimplemented. Coexists with
-             the old table until Phase 6 removes it. -->
+             before-delete) is identical, not reimplemented. The old
+             Availability Table this used to coexist with was removed in
+             Redesign Phase 6 (FINAL) — this is now the sole datasets table. -->
         <div class="your-datasets-section">
             <h2 class="your-datasets-heading">📁 Your Datasets</h2>
             <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
@@ -1059,30 +958,25 @@
             </div>
         </div>
 
-        <!-- ===== AVAILABILITY TABLE ===== -->
-        <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
-            <table class="availability-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Template</th>
-                        <th style="min-width:160px;">Full Date Range</th>
-                        <th style="text-align:center;" data-tooltip="All rows for this template (all dates)">Total Rows
-                        </th>
-                        <th style="text-align:center;" data-tooltip="Rows matching the selected date filter">Filtered
-                            Rows</th>
-                        <th style="text-align:center;" data-tooltip="Sunday rows within the selected date range">Sunday
-                        </th>
-                        <th style="text-align:center;">Status</th>
-                        <th style="text-align:center;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="availabilityBody">
-                    <!-- Rows inserted by JavaScript -->
-                </tbody>
-            </table>
-            <div id="noDataMessage" class="no-data" style="display:none;">
-                No data found for the selected criteria. Please adjust filters and try again.
+        <!-- ===== METRIC TILES (Redesign Phase 6, FINAL) =====
+             Same 4 stat ids as the old .stats-bar — see the CSS comment above
+             for why no JS changes were needed for the numbers themselves. -->
+        <div class="metric-tiles-section">
+            <div class="metric-tile">
+                <div class="metric-tile-label">📦 Total Records</div>
+                <div class="metric-tile-value" id="totalRecords">0</div>
+            </div>
+            <div class="metric-tile">
+                <div class="metric-tile-label">📁 Templates Available</div>
+                <div class="metric-tile-value" id="totalTemplates">0</div>
+            </div>
+            <div class="metric-tile">
+                <div class="metric-tile-label">⚠️ Missing Templates</div>
+                <div class="metric-tile-value" id="missingTemplates">0</div>
+            </div>
+            <div class="metric-tile">
+                <div class="metric-tile-label">📅 Sunday Rows</div>
+                <div class="metric-tile-value" id="totalSundayRows">0</div>
             </div>
         </div>
 
