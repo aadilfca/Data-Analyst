@@ -595,6 +595,53 @@
             background: transparent;
         }
 
+        /* ===== MISSING DATES REPORT (Phase 5 — Client Data Availability &
+           Coverage Redesign). Grouped-by-template, plain-language summary of
+           the Phase 3 endpoint's "missing" days (Sundays/holidays already
+           excluded upstream, so every date here is a genuine gap). Rendered
+           from the same data fetchCoverageCalendar() already retrieves for
+           the Phase 4 calendars — no separate network call. ===== */
+        .missing-dates-report {
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .missing-dates-report-heading {
+            margin: 0 0 10px 0;
+            font-size: 15px;
+            color: #1a1a2e;
+        }
+
+        .missing-dates-template-row {
+            font-size: 13px;
+            color: #475569;
+            padding: 6px 0;
+            border-bottom: 1px solid #f0f2f5;
+        }
+
+        .missing-dates-template-row:last-child {
+            border-bottom: none;
+        }
+
+        .missing-dates-template-name {
+            font-weight: 700;
+            color: #1a1a2e;
+        }
+
+        .missing-dates-count {
+            color: #991b1b;
+            font-weight: 600;
+        }
+
+        .missing-dates-list {
+            color: #475569;
+        }
+
+        .missing-dates-complete {
+            color: #166534;
+        }
+
         /* Responsive tweaks */
         @media (max-width: 768px) {
             .filter-bar {
@@ -685,6 +732,18 @@
             <div id="coverageCalendarsContainer">
                 <!-- One .coverage-calendar-block per selected template, rendered by renderCoverageCalendars() -->
                 <div class="calendar-empty-state">Select one or more templates above to view their coverage calendar.</div>
+            </div>
+
+            <!-- ===== MISSING DATES REPORT (Phase 5) =====
+                 Grouped-by-template plain-language summary of missing days,
+                 derived from the same data the calendars above already use —
+                 rendered by renderMissingDatesReport(), called from the end
+                 of renderCoverageCalendars(). -->
+            <div class="missing-dates-report" id="missingDatesReport">
+                <h3 class="missing-dates-report-heading">📋 Missing Dates Report</h3>
+                <div id="missingDatesReportBody">
+                    <!-- One .missing-dates-template-row per selected template -->
+                </div>
             </div>
         </div>
 

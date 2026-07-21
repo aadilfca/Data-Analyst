@@ -44,6 +44,9 @@ const calendarNextMonthBtn = document.getElementById('calendarNextMonthBtn');
 const calendarMonthLabel = document.getElementById('calendarMonthLabel');
 const coverageCalendarsContainer = document.getElementById('coverageCalendarsContainer');
 
+// Missing Dates Report (Phase 5) DOM ref
+const missingDatesReportBody = document.getElementById('missingDatesReportBody');
+
 const statsTotalRecords = document.getElementById('totalRecords');
 const statsTotalTemplates = document.getElementById('totalTemplates');
 const statsMissingTemplates = document.getElementById('missingTemplates');
@@ -486,6 +489,7 @@ function renderCoverageCalendars(data) {
     coverageCalendarsContainer.innerHTML = '';
     if (!data.templates || data.templates.length === 0) {
         coverageCalendarsContainer.innerHTML = '<div class="calendar-empty-state">No templates found.</div>';
+        renderMissingDatesReport(data);
         return;
     }
 
@@ -502,6 +506,65 @@ function renderCoverageCalendars(data) {
         block.appendChild(buildCalendarDayGrid(tpl.days, data.year, data.month));
 
         coverageCalendarsContainer.appendChild(block);
+    });
+
+    renderMissingDatesReport(data);
+}
+
+// ---------- MISSING DATES REPORT (Phase 5) ----------
+// Grouped-by-template, plain-language summary of missing days — reuses the
+// exact same "data" object renderCoverageCalendars() already received from
+// fetchCoverageCalendar(), so no separate network call is made. Sundays and
+// holidays are already excluded from "missing" by the Phase 3 endpoint, so
+// every date rendered here is a genuine gap.
+
+// "2026-07-12" -> "12 Jul". Reuses CALENDAR_MONTH_NAMES (already defined
+// above for the calendar heading) sliced to 3 letters, rather than a second
+// month-name list.
+function formatShortDate(isoDateStr) {
+    const parts = isoDateStr.split('-'); // [year, month, day]
+    const day = parseInt(parts[2], 10);
+    const monthName = CALENDAR_MONTH_NAMES[parseInt(parts[1], 10) - 1].slice(0, 3);
+    return `${day} ${monthName}`;
+}
+
+function renderMissingDatesReport(data) {
+    missingDatesReportBody.innerHTML = '';
+
+    if (!data.templates || data.templates.length === 0) {
+        missingDatesReportBody.innerHTML = '<div class="calendar-empty-state">Select one or more templates above to view their missing dates report.</div>';
+        return;
+    }
+
+    data.templates.forEach(tpl => {
+        const missingDays = tpl.days.filter(d => d.status === 'missing');
+        const row = document.createElement('div');
+        row.className = 'missing-dates-template-row';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'missing-dates-template-name';
+        nameSpan.textContent = tpl.template_name;
+        row.appendChild(nameSpan);
+
+        if (missingDays.length === 0) {
+            const okSpan = document.createElement('span');
+            okSpan.className = 'missing-dates-complete';
+            okSpan.textContent = ': ✅ No missing days this month';
+            row.appendChild(okSpan);
+        } else {
+            const dayWord = missingDays.length === 1 ? 'day' : 'days';
+            const countSpan = document.createElement('span');
+            countSpan.className = 'missing-dates-count';
+            countSpan.textContent = `: missing ${missingDays.length} ${dayWord} — `;
+            row.appendChild(countSpan);
+
+            const listSpan = document.createElement('span');
+            listSpan.className = 'missing-dates-list';
+            listSpan.textContent = missingDays.map(d => formatShortDate(d.date)).join(', ');
+            row.appendChild(listSpan);
+        }
+
+        missingDatesReportBody.appendChild(row);
     });
 }
 
