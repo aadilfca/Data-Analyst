@@ -581,24 +581,28 @@
             color: #1a1a2e;
         }
 
+        /* Redesign Phase 3: margin-bottom tightened (was 10px) so the legend
+           reads as directly attached to the grid immediately below it,
+           rather than two independent blocks; swatch/label sized up slightly
+           to stay proportionate to the now-larger grid. Colors unchanged. */
         .calendar-legend {
             display: flex;
             flex-wrap: wrap;
             gap: 16px;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
         }
 
         .calendar-legend-item {
             display: flex;
             align-items: center;
             gap: 6px;
-            font-size: 12px;
+            font-size: 13px;
             color: #475569;
         }
 
         .calendar-legend-swatch {
-            width: 14px;
-            height: 14px;
+            width: 16px;
+            height: 16px;
             border-radius: 4px;
             display: inline-block;
         }
@@ -623,16 +627,21 @@
             background: #ede9fe;
         }
 
+        /* Redesign Phase 3: max-width widened (was 560px) — since columns are
+           `1fr` and cells are `aspect-ratio: 1/1`, a wider grid alone makes
+           every cell visibly larger with no other rule changes needed; gap
+           bumped slightly to match. Also gives full weekday names (see
+           CALENDAR_DAY_HEADERS in databank.js) room to sit on one line. */
         .coverage-calendar-grid {
             display: grid;
             grid-template-columns: repeat(7, 1fr);
-            gap: 4px;
-            max-width: 560px;
+            gap: 6px;
+            max-width: 700px;
         }
 
         .calendar-day-header {
             text-align: center;
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 700;
             color: #64748b;
             text-transform: uppercase;
@@ -645,7 +654,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 13px;
+            font-size: 16px;
             color: #1a1a2e;
         }
 

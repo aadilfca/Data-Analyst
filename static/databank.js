@@ -359,7 +359,10 @@ async function loadTemplateDropdown() {
 
 const CALENDAR_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
-const CALENDAR_DAY_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// Redesign Phase 3: full weekday names (was 3-letter abbreviations), per the
+// prototype — buildCalendarDayGrid() just iterates this array, so it needed
+// no change itself to pick up the longer labels.
+const CALENDAR_DAY_HEADERS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 // Populated via its own GET /api/templates call (deliberately not sharing
 // loadTemplateDropdown()'s fetch/element, to avoid touching that existing,
