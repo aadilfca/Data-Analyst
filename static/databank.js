@@ -26,6 +26,14 @@ let isAvailabilityLoading = false;
 let calendarYear = new Date().getFullYear();
 let calendarMonth = new Date().getMonth() + 1; // 1-12
 
+// Template picker (Redesign Phase 2 — chips + search) state. Chips (unlike
+// <option> elements) don't carry selection in the DOM themselves, so the
+// selection lives here explicitly. calendarTemplatesList is the full
+// fetched set (for the search filter to work against); calendarSelectedTemplateIds
+// is the actual selection, unaffected by what the search box currently hides.
+let calendarTemplatesList = [];
+let calendarSelectedTemplateIds = new Set();
+
 // ---------- DOM REFS ----------
 const filterTemplate = document.getElementById('templateFilter');
 const filterDateStart = document.getElementById('dateStart');
@@ -41,7 +49,10 @@ const statusDiv = document.getElementById('statusMessage');
 const uploadMoreBtn = document.getElementById('uploadMoreBtn');
 
 // Coverage Calendar (Phase 4) DOM refs
-const calendarTemplateSelect = document.getElementById('calendarTemplateSelect');
+// Redesign Phase 2: the old <select multiple> is replaced by a search input
+// + a chip container (calendarTemplateSelect no longer exists in the DOM).
+const calendarTemplateSearchInput = document.getElementById('calendarTemplateSearch');
+const calendarTemplateChipsContainer = document.getElementById('calendarTemplateChips');
 const calendarPrevMonthBtn = document.getElementById('calendarPrevMonthBtn');
 const calendarNextMonthBtn = document.getElementById('calendarNextMonthBtn');
 const calendarMonthLabel = document.getElementById('calendarMonthLabel');
@@ -355,29 +366,75 @@ const CALENDAR_DAY_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // working code — same small-duplication-over-refactor-risk tradeoff already
 // used elsewhere in this codebase, e.g. the Audit Rules Cross-checks/
 // Categories views).
-async function loadCalendarTemplateOptions() {
+// Redesign Phase 2: renamed from loadCalendarTemplateOptions() (no <option>
+// elements anymore) — stores the fetched list, then renders it as chips.
+async function loadCalendarTemplates() {
     try {
         const res = await fetch(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to fetch templates');
-        const templates = await res.json();
-
-        calendarTemplateSelect.innerHTML = '';
-        templates.forEach(tpl => {
-            const opt = document.createElement('option');
-            opt.value = tpl.id;
-            opt.textContent = tpl.template_name;
-            calendarTemplateSelect.appendChild(opt);
-        });
+        calendarTemplatesList = await res.json();
+        renderCalendarTemplateChips('');
     } catch (error) {
-        console.error('Error loading calendar template options:', error);
-        calendarTemplateSelect.innerHTML = '<option value="">⚠️ Failed to load</option>';
+        console.error('Error loading calendar templates:', error);
+        calendarTemplatesList = [];
+        calendarTemplateChipsContainer.innerHTML = '<div class="calendar-chip-list-empty">⚠️ Failed to load templates</div>';
     }
 }
 
+// Rebuilds the chip list from calendarTemplatesList, filtered by a
+// case-insensitive substring match on filterText — selection itself
+// (calendarSelectedTemplateIds) is untouched by filtering, only which chips
+// are currently visible. Built with document.createElement, matching this
+// section's existing buildCalendarDayGrid()/buildCalendarLegend() convention.
+function renderCalendarTemplateChips(filterText) {
+    calendarTemplateChipsContainer.innerHTML = '';
+
+    const needle = (filterText || '').trim().toLowerCase();
+    const visibleTemplates = needle
+        ? calendarTemplatesList.filter(tpl => tpl.template_name.toLowerCase().includes(needle))
+        : calendarTemplatesList;
+
+    if (visibleTemplates.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'calendar-chip-list-empty';
+        empty.textContent = calendarTemplatesList.length === 0
+            ? 'No templates available.'
+            : 'No templates match your search.';
+        calendarTemplateChipsContainer.appendChild(empty);
+        return;
+    }
+
+    visibleTemplates.forEach(tpl => {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'calendar-template-chip';
+        chip.textContent = tpl.template_name;
+        chip.dataset.templateId = tpl.id;
+        if (calendarSelectedTemplateIds.has(tpl.id)) {
+            chip.classList.add('selected');
+        }
+        // Toggle selection, reflect it immediately on this chip (no full
+        // re-render needed), then feed the existing, unchanged calendar fetch —
+        // same effect the old <select>'s "change" listener had.
+        chip.addEventListener('click', () => {
+            if (calendarSelectedTemplateIds.has(tpl.id)) {
+                calendarSelectedTemplateIds.delete(tpl.id);
+                chip.classList.remove('selected');
+            } else {
+                calendarSelectedTemplateIds.add(tpl.id);
+                chip.classList.add('selected');
+            }
+            fetchCoverageCalendar();
+        });
+        calendarTemplateChipsContainer.appendChild(chip);
+    });
+}
+
+// Same name/return shape as before this phase (array of numeric template
+// ids) — fetchCoverageCalendar() and everything downstream of it needed no
+// changes as a result.
 function getCalendarSelectedTemplateIds() {
-    return Array.from(calendarTemplateSelect.selectedOptions)
-        .map(opt => parseInt(opt.value, 10))
-        .filter(id => !isNaN(id));
+    return Array.from(calendarSelectedTemplateIds);
 }
 
 function updateCalendarMonthLabel() {
@@ -1254,7 +1311,12 @@ async function exportDataset(templateId, templateName) {
 }
 
 // ---------- COVERAGE CALENDAR EVENT LISTENERS (Phase 4) ----------
-calendarTemplateSelect.addEventListener('change', fetchCoverageCalendar);
+// Redesign Phase 2: search only re-filters which chips are visible (no
+// fetch) — a chip's own click listener (see renderCalendarTemplateChips())
+// is what now triggers fetchCoverageCalendar() on a selection change.
+calendarTemplateSearchInput.addEventListener('input', () => {
+    renderCalendarTemplateChips(calendarTemplateSearchInput.value);
+});
 calendarPrevMonthBtn.addEventListener('click', goToPrevMonth);
 calendarNextMonthBtn.addEventListener('click', goToNextMonth);
 
@@ -1433,7 +1495,7 @@ window.onload = async function() {
     
     setDefaultDateRange();
     await loadTemplateDropdown();
-    await loadCalendarTemplateOptions();
+    await loadCalendarTemplates();
     updateCalendarMonthLabel();
 
     const clientId = getSelectedClientId();
