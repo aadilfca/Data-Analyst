@@ -141,6 +141,101 @@ function showStatus(msg, type) {
     }, 5000);
 }
 
+// ==============================================
+// 🗓️ FIRM-WIDE HOLIDAYS (Phase 2 of the Client Data Availability & Coverage Redesign)
+// Uses Phase 1's /api/settings/holidays CRUD as-is. Kept fully separate from the
+// key-value SETTINGS_DEF/renderSettings()/saveSettings() logic above, since holidays
+// are a list of dated entries, not a flat setting.
+// ==============================================
+
+let currentHolidays = [];
+
+async function loadHolidays() {
+    try {
+        const res = await fetch(`${API_BASE}/api/settings/holidays`);
+        if (!res.ok) throw new Error('Failed to load holidays');
+        currentHolidays = await res.json();
+        renderHolidayList();
+    } catch (error) {
+        showStatus('❌ Error loading holidays: ' + error.message, 'error');
+    }
+}
+
+function renderHolidayList() {
+    const container = document.getElementById('holidayListContainer');
+    if (!container) return;
+
+    if (currentHolidays.length === 0) {
+        container.innerHTML = '<div class="holiday-empty-hint">No holidays added yet.</div>';
+        return;
+    }
+
+    container.innerHTML = currentHolidays.map(h => `
+        <div class="holiday-row">
+            <span class="holiday-date">${h.date}</span>
+            <span class="holiday-label">${h.label}</span>
+            ${h.repeats_yearly ? '<span class="holiday-yearly-badge">🔁 Yearly</span>' : ''}
+            <button class="delete-holiday-btn" data-id="${h.id}" title="Delete holiday">🗑️</button>
+        </div>
+    `).join('');
+}
+
+async function addHoliday() {
+    const dateInput = document.getElementById('holidayDateInput');
+    const labelInput = document.getElementById('holidayLabelInput');
+    const repeatsYearlyInput = document.getElementById('holidayRepeatsYearly');
+
+    const date = dateInput.value;
+    const label = labelInput.value.trim();
+
+    // Fast client-side check before hitting the network - the backend re-validates
+    // the same rules regardless, this is just a friendlier first pass.
+    if (!date || !label) {
+        showStatus('⚠️ Please enter both a date and a label.', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/api/settings/holidays`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date, label, repeats_yearly: repeatsYearlyInput.checked })
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || 'Failed to add holiday');
+
+        // Clear label/checkbox only - date is kept, since holidays are often added
+        // in date-adjacent batches (e.g. multiple Eid days in a row).
+        labelInput.value = '';
+        repeatsYearlyInput.checked = false;
+        showStatus(`✅ Added holiday: ${result.label}`, 'success');
+        loadHolidays();
+    } catch (error) {
+        showStatus('❌ Error adding holiday: ' + error.message, 'error');
+    }
+}
+
+async function deleteHoliday(id) {
+    if (!confirm('Delete this holiday?')) return;
+    try {
+        const res = await fetch(`${API_BASE}/api/settings/holidays/${id}`, { method: 'DELETE' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || 'Failed to delete holiday');
+        showStatus('✅ Holiday deleted.', 'success');
+        loadHolidays();
+    } catch (error) {
+        showStatus('❌ Error deleting holiday: ' + error.message, 'error');
+    }
+}
+
 window.onload = function() {
     loadSettings();
+    loadHolidays();
+    document.getElementById('addHolidayBtn')?.addEventListener('click', addHoliday);
+    // Event delegation for delete buttons - #holidayListContainer's rows are rebuilt
+    // on every loadHolidays(), so a single listener here avoids rebinding per row.
+    document.getElementById('holidayListContainer')?.addEventListener('click', (event) => {
+        const btn = event.target.closest('.delete-holiday-btn');
+        if (btn) deleteHoliday(btn.dataset.id);
+    });
 };
