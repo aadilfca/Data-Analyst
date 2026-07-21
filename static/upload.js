@@ -103,8 +103,8 @@ let validationFailedRows = new Map();
 // editedCellValues (Phase 3 of Upload reliability & blank-field handling): holds values the
 // user types into a blank, non-key-column cell in the Row Selection grid. Keyed by
 // "<excelRowNumber>::<columnIndex>" so the typed value survives pagination/re-render within the
-// same loaded file. UI-only this phase -- deliberately never read by the validate/import
-// payload builder; wiring edited values through to the actual import is Phase 4.
+// same loaded file. Wired through to the validate/import payload as of Phase 4 --
+// see buildEditedCellsPayload() below.
 let editedCellValues = new Map();
 
 // ---------- SESSION-RESTORE STATE (mid-upload navigate-away/back recovery) ----------
@@ -1522,7 +1522,11 @@ if (importBtn) {
             date_order: selectedDateOrder,
             // Rows the user unchecked in the row selection grid (Phase 2 of row-exclusion) –
             // Excel row numbers, matches routers/import_export.py's excluded_rows contract.
-            excluded_rows: Array.from(excludedRowNumbers)
+            excluded_rows: Array.from(excludedRowNumbers),
+            // Values typed into blank cells in the row selection grid (Phase 4 of the
+            // upload-reliability requirement) – matches routers/import_export.py's
+            // EditedCellValue/edited_cells contract.
+            edited_cells: buildEditedCellsPayload()
         };
 
         // ---- NEW LOGIC: Validation Flow ----
@@ -1867,6 +1871,25 @@ function isRowExclusionFlagged(row, keyColIndex) {
 // "Blank" means an empty cell only -- 0 or any other populated value is never treated as blank.
 function isCellBlank(value) {
     return value === undefined || value === null || String(value).trim() === '';
+}
+
+// ---------- WIRE EDITED CELLS INTO THE VALIDATE/IMPORT PAYLOAD (Phase 4) ----------
+// Converts editedCellValues ("<excelRowNumber>::<columnIndex>" -> typed string) into the
+// {row_number, excel_column, value} shape routers/import_export.py's EditedCellValue model
+// expects, resolving columnIndex to a real Excel header via rowExclusionHeaders (the same
+// array the grid renderer already indexes into).
+function buildEditedCellsPayload() {
+    const headers = rowExclusionHeaders || [];
+    const result = [];
+    editedCellValues.forEach((value, key) => {
+        const [rowNumberStr, colIndexStr] = key.split('::');
+        const rowNumber = parseInt(rowNumberStr, 10);
+        const colIndex = parseInt(colIndexStr, 10);
+        const excelColumn = headers[colIndex];
+        if (!excelColumn) return; // defensive -- shouldn't happen
+        result.push({ row_number: rowNumber, excel_column: excelColumn, value: value });
+    });
+    return result;
 }
 
 // ---------- LIVE "X of Y rows will be imported" COUNTER (Phase 3) ----------

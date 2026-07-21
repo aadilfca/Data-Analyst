@@ -105,6 +105,41 @@ def json_safe_cell_value(value, date_fmt: str = '%d/%m/%Y'):
     return value
 
 
+# ---------- EDITED BLANK-CELL VALUES (Phase 4 of the upload-reliability requirement) ----------
+def apply_edited_cell_values(rows: list, edited_cells) -> list:
+    """
+    Applies values the user typed into blank cells in the Row Selection grid
+    (static/upload.js's editedCellValues, Phase 3) before the row is validated/imported.
+    row_number matches the same scheme as filter_excluded_rows()/validation_errors[].row_number
+    (header=1, first data row=2), so this MUST run before filter_excluded_rows() -- that
+    function returns a plain filtered list with no memory of original position, and anything
+    enumerating rows after it renumbers from scratch, which would misalign edited_cells against
+    the wrong rows once any row is excluded.
+
+    Only overwrites a cell that is CURRENTLY blank -- a stray/stale edit can never clobber real
+    data, even though the frontend already restricts editing to blank, non-key-column cells.
+    A cell the user never edited is left exactly as read from the sheet (still blank), per the
+    locked "no default value is auto-inserted" requirement.
+    """
+    if not edited_cells:
+        return rows
+    edits_by_row = {}
+    for edit in edited_cells:
+        edits_by_row.setdefault(edit.row_number, {})[edit.excel_column] = edit.value
+    for row_idx, row in enumerate(rows, start=2):
+        row_edits = edits_by_row.get(row_idx)
+        if not row_edits:
+            continue
+        for excel_column, value in row_edits.items():
+            if excel_column not in row:
+                continue  # not a real mapped Excel column -- ignore
+            current = row[excel_column]
+            is_blank = pd.isna(current) if not isinstance(current, str) else current.strip() == ''
+            if is_blank:
+                row[excel_column] = value
+    return rows
+
+
 # ---------- ROW EXCLUSION (Phase 1 of the row-exclusion requirement) ----------
 def filter_excluded_rows(rows: list, excluded_rows: Optional[List[int]]) -> list:
     """
@@ -318,6 +353,14 @@ class ColumnMapping(BaseModel):
     matched: bool = False
     mapping_status: str = "unmatched"
 
+class EditedCellValue(BaseModel):
+    # A value the user typed into a blank cell in the Row Selection grid (Phase 3/4 of the
+    # upload-reliability requirement). row_number matches validation_errors[].row_number
+    # (header=1, first data row=2); excel_column is the raw Excel header text.
+    row_number: int
+    excel_column: str
+    value: str
+
 class ImportRequest(BaseModel):
     template_id: int
     file_id: int
@@ -336,6 +379,9 @@ class ImportRequest(BaseModel):
     # Row numbers match validation_errors[].row_number (header=1, first data row=2).
     # None/absent means "exclude nothing" -- identical to today's behavior.
     excluded_rows: Optional[List[int]] = None
+    # Values typed into blank cells (Phase 4 of the upload-reliability requirement).
+    # None/absent means "no edits" -- identical to today's behavior (genuine blanks stay blank).
+    edited_cells: Optional[List[EditedCellValue]] = None
 
 class AutoMapRequest(BaseModel):
     file_id: int
@@ -761,6 +807,9 @@ def validate_only(request: ImportRequest):
         raise HTTPException(400, f"Error reading Excel: {str(e)}")
 
     rows = df.to_dict('records')
+    # Apply any typed blank-cell values before exclusion filtering (see
+    # apply_edited_cell_values()'s docstring for why the ordering matters).
+    rows = apply_edited_cell_values(rows, request.edited_cells)
     # Drop user-excluded rows before anything else sees them (validation, counts).
     rows = filter_excluded_rows(rows, request.excluded_rows)
 
@@ -916,6 +965,9 @@ def validate_and_import(request: ImportRequest):
     print(f"🔍 DataFrame shape: {df.shape}")  # rows, columns
     print(f"🔍 DataFrame columns: {df.columns.tolist()}")
     rows = df.to_dict('records')
+    # Apply any typed blank-cell values before exclusion filtering (see
+    # apply_edited_cell_values()'s docstring for why the ordering matters).
+    rows = apply_edited_cell_values(rows, request.edited_cells)
     # Drop user-excluded rows before validation, import, and document_group_id
     # grouping (compare_transactions) ever see them.
     rows = filter_excluded_rows(rows, request.excluded_rows)
