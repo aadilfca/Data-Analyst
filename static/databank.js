@@ -46,6 +46,8 @@ const statusDiv = document.getElementById('statusMessage');
 const yourDatasetsBody = document.getElementById('yourDatasetsBody');
 const yourDatasetsNoData = document.getElementById('yourDatasetsNoData');
 const yourDatasetsSearchInput = document.getElementById('yourDatasetsSearch');
+// 3-fix: clear (✕) icon, only visible once the field has text.
+const yourDatasetsSearchClearBtn = document.getElementById('yourDatasetsSearchClear');
 
 // Redesign Phase 1: header's Upload More button (moved off an inline onclick).
 const uploadMoreBtn = document.getElementById('uploadMoreBtn');
@@ -80,11 +82,14 @@ const sundayOnlyCheckbox = document.getElementById('sundayOnlyCheckbox');
 const dataQualityFilter = document.getElementById('dataQualityFilter');
 const sundayCountBadge = document.getElementById('sundayCountBadge');
 
-// Shared date range popover elements (Phase 2 — Unified date range). One
-// popover, two entry points: the row 👁️ icon (gate mode, before the preview
-// opens) and this modal's own trigger button (live mode, while it's open).
+// Shared date range modal elements (Phase 2 — Unified date range; restyled
+// from a small anchored popover to a centred overlay modal per the 3-fix).
+// One modal, two entry points: the row 👁️ icon (gate mode, before the
+// preview opens) and this modal's own trigger button (live mode, while it's
+// open).
 const modalDateRangeBtn = document.getElementById('modalDateRangeBtn');
 const sharedRangePopover = document.getElementById('sharedRangePopover');
+const closeSharedRangeBtn = document.getElementById('closeSharedRangeBtn');
 const sharedRangeFromInput = document.getElementById('sharedRangeFrom');
 const sharedRangeToInput = document.getElementById('sharedRangeTo');
 const sharedRangeConfirmBtn = document.getElementById('sharedRangeConfirmBtn');
@@ -257,46 +262,24 @@ async function showRowHistoryPopover(icon, clientDataId) {
     }
 }
 
-// ---------- SHARED DATE RANGE POPOVER (Phase 2 — Unified date range) ----------
-// One popover backs both entry points. As of Redesign Phase 6 (FINAL), this
-// popover's own #sharedRangeFrom/#sharedRangeTo inputs ARE the single source
+// ---------- SHARED DATE RANGE MODAL (Phase 2 — Unified date range) ----------
+// One modal backs both entry points. As of Redesign Phase 6 (FINAL), this
+// modal's own #sharedRangeFrom/#sharedRangeTo inputs ARE the single source
 // of truth for the range (the old #dateStart/#dateEnd filter-bar inputs they
 // used to mirror were removed along with the rest of the old filter bar).
-
-// Positions the popover near an anchor element, clamped to the viewport and
-// flipped above the anchor when there isn't enough room below — same
-// approach as showRowHistoryPopover()'s positioning, written separately
-// here since that function is unrelated/already-working code.
-function positionSharedRangePopover(anchorEl) {
-    const rect = anchorEl.getBoundingClientRect();
-    const popoverWidth = 220;
-    let left = rect.left;
-    if (left + popoverWidth > window.innerWidth) {
-        left = Math.max(8, window.innerWidth - popoverWidth - 8);
-    }
-    sharedRangePopover.style.left = left + 'px';
-
-    const popoverEstimatedHeight = 140;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    if (spaceBelow >= popoverEstimatedHeight + 6) {
-        sharedRangePopover.style.top = (rect.bottom + 6) + 'px';
-        sharedRangePopover.style.bottom = 'auto';
-    } else {
-        sharedRangePopover.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
-        sharedRangePopover.style.top = 'auto';
-    }
-}
+// 3-fix: restyled from a small anchored popover (positioned via JS-computed
+// coordinates) to a centred overlay modal — positionSharedRangePopover() is
+// gone, and openSharedRangePopover() no longer takes an anchor element.
 
 // mode: 'gate' (opened from a row's 👁️ icon, before the preview modal
 // exists — confirming will open it) or 'live' (opened from inside the
 // already-open modal — confirming just refreshes in place).
-function openSharedRangePopover(anchorEl, mode, templateId, templateName) {
+function openSharedRangePopover(mode, templateId, templateName) {
     // Redesign Phase 6: sharedRangeFrom/sharedRangeTo already hold the
     // persisted range themselves (no more #dateStart/#dateEnd to copy from).
     pendingPreviewOpen = (mode === 'gate') ? { templateId, templateName } : null;
     sharedRangeConfirmBtn.textContent = (mode === 'gate') ? 'Open Preview' : 'Apply';
-    positionSharedRangePopover(anchorEl);
-    sharedRangePopover.style.display = 'block';
+    sharedRangePopover.style.display = 'flex';
 }
 
 function closeSharedRangePopover() {
@@ -613,6 +596,7 @@ function resetDatasetTables(message) {
     yourDatasetsNoData.innerHTML = message;
     yourDatasetsSearchTerm = '';
     yourDatasetsSearchInput.value = '';
+    yourDatasetsSearchClearBtn.style.display = 'none';
 }
 
 // ---------- FETCH AVAILABILITY DATA ----------
@@ -725,11 +709,11 @@ function buildDatasetActionButtons(item) {
         previewBtn.setAttribute('data-tooltip', 'Preview data for this template');
         previewBtn.style.marginLeft = '6px';
         // Phase 2 (Unified date range): the 👁️ icon always opens the shared
-        // date-range popover first (gate mode) — the preview itself only
+        // date-range modal first (gate mode) — the preview itself only
         // opens once a range is confirmed there.
         previewBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            openSharedRangePopover(previewBtn, 'gate', item.template_id, item.template_name);
+            openSharedRangePopover('gate', item.template_id, item.template_name);
         });
         tdActions.appendChild(previewBtn);
 
@@ -1257,9 +1241,22 @@ templateCalendarModal.addEventListener('click', (e) => {
 // "Your Datasets" search (Coverage Calendar → per-template popover fix):
 // pure client-side filter over the already-fetched availabilityData, no
 // network call — replaces the old chip picker's search box.
+// 3-fix: also toggles the ✕ clear icon's visibility based on whether the
+// field currently has text.
 yourDatasetsSearchInput.addEventListener('input', () => {
     yourDatasetsSearchTerm = yourDatasetsSearchInput.value.trim().toLowerCase();
+    yourDatasetsSearchClearBtn.style.display = yourDatasetsSearchInput.value ? 'block' : 'none';
     renderFilteredYourDatasetsTable();
+});
+
+// 3-fix: clicking ✕ clears instantly (no confirm), same interaction pattern
+// as this app's other clear/✕ icons — restores the full unfiltered list.
+yourDatasetsSearchClearBtn.addEventListener('click', () => {
+    yourDatasetsSearchInput.value = '';
+    yourDatasetsSearchTerm = '';
+    yourDatasetsSearchClearBtn.style.display = 'none';
+    renderFilteredYourDatasetsTable();
+    yourDatasetsSearchInput.focus();
 });
 
 // ---------- EVENT LISTENERS (Main) ----------
@@ -1355,14 +1352,26 @@ searchInput.addEventListener('input', function() {
 amountMin.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
 amountMax.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
 
-// Shared date range popover (Phase 2 — Unified date range): the modal's own
-// trigger opens it in "live" mode (no pending template, no anchor template
-// info needed — confirming just re-fetches the currently open preview).
+// Shared date range modal (Phase 2 — Unified date range): the preview
+// modal's own trigger opens it in "live" mode (no pending template —
+// confirming just re-fetches the currently open preview).
 modalDateRangeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    openSharedRangePopover(modalDateRangeBtn, 'live');
+    openSharedRangePopover('live');
 });
 sharedRangeConfirmBtn.addEventListener('click', confirmSharedRangePopover);
+// 3-fix: close (×) button, matching #previewModal/#templateCalendarModal's
+// own close-button pattern.
+closeSharedRangeBtn.addEventListener('click', closeSharedRangePopover);
+// Clicking the overlay backdrop itself (not the .modal-content inside it)
+// closes the modal — same self-click pattern already used by
+// previewModal/templateCalendarModal below, replacing the old anchored-
+// popover's document-level "click outside" check (see further down).
+sharedRangePopover.addEventListener('click', (e) => {
+    if (e.target === sharedRangePopover) {
+        closeSharedRangePopover();
+    }
+});
 // Enter-to-confirm from either date field, same convention as amountMin/amountMax.
 sharedRangeFromInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') confirmSharedRangePopover();
@@ -1373,22 +1382,20 @@ sharedRangeToInput.addEventListener('keydown', (e) => {
 
 // Close the row history popover when clicking anywhere outside it (the icon's
 // own click is stopped from propagating here, so this only fires for clicks
-// elsewhere on the page). Also closes the shared date range popover on the
-// same outside-click check — both of its trigger buttons already stop
-// propagation, so a click on either is never treated as "outside".
+// elsewhere on the page). The shared date range modal is no longer handled
+// here — as a centred overlay it has its own self-click-to-close listener
+// (see sharedRangePopover.addEventListener('click', ...) above), matching
+// previewModal/templateCalendarModal's own pattern.
 document.addEventListener('click', (e) => {
     if (rowHistoryPopover.style.display === 'block' && !rowHistoryPopover.contains(e.target)) {
         hideRowHistoryPopover();
     }
-    if (sharedRangePopover.style.display === 'block' && !sharedRangePopover.contains(e.target)) {
-        closeSharedRangePopover();
-    }
 });
 
-// ESC key closes preview (or just the shared range popover / template
+// ESC key closes preview (or just the shared range modal / template
 // calendar modal, if either is open)
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && sharedRangePopover.style.display === 'block') {
+    if (e.key === 'Escape' && sharedRangePopover.style.display === 'flex') {
         closeSharedRangePopover();
         return;
     }

@@ -278,31 +278,56 @@
             margin-left: 4px;
         }
 
-        /* ===== SHARED DATE RANGE POPOVER (Phase 2 — Unified date range) =====
+        /* ===== SHARED DATE RANGE MODAL (Phase 2 — Unified date range) =====
            Single control for the one shared date_start/date_end range used
            by both the main availability sheet and the preview modal. Opened
            either from a row's 👁️ preview icon (gate, before the preview
            opens) or from the "📅 Date Range" button inside the preview
-           modal's toolbar (live edit while the preview is open). Positioned
-           with position:fixed + JS-computed coordinates (see
-           positionSharedRangePopover() in databank.js), same viewport-clamp
-           approach as #rowHistoryPopover, since this must anchor to either
-           a table row icon or a modal toolbar button.
+           modal's toolbar (live edit while the preview is open).
+           3-fix restyle: was a small anchored popover positioned via
+           JS-computed coordinates (positionSharedRangePopover(), now
+           removed) — now a centred, full-viewport overlay modal, same shell
+           pattern as #previewModal/#templateCalendarModal elsewhere in this
+           file (own scoped .modal-content/.modal-header, per this file's
+           "not shared base classes" convention). Logic (still writes the
+           shared date range, still calls openPreview() on confirm) is
+           unchanged — presentation only.
            Redesign Phase 6 (FINAL): #sharedRangeFrom/#sharedRangeTo are now
            the actual persisted date-range state (the old #dateStart/#dateEnd
            filter-bar inputs they used to mirror were removed this phase along
            with the rest of the old filter bar) — a hidden input still holds
-           its .value, so this works correctly while the popover is closed. */
+           its .value, so this works correctly while the modal is closed. */
         .shared-range-popover {
             position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
             z-index: 1200;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .shared-range-popover .modal-content {
             background: white;
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
-            padding: 12px;
-            width: 220px;
-            font-size: 12px;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            width: 300px;
+        }
+
+        .shared-range-popover .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .shared-range-popover .modal-header h2 {
+            margin: 0;
+            font-size: 16px;
+            color: #1a1a2e;
         }
 
         .shared-range-popover .filter-group-popover {
@@ -689,21 +714,15 @@
             margin-bottom: 12px;
         }
 
-        .your-datasets-heading {
-            margin: 0;
-            font-size: 18px;
-            color: #1a1a2e;
-        }
-
-        .your-datasets-controls {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
+        /* Wraps the search input so the clear (✕) icon can be positioned
+           inside its right edge — see #yourDatasetsSearchClear below. */
+        .search-input-wrapper {
+            position: relative;
+            display: inline-block;
         }
 
         #yourDatasetsSearch {
-            padding: 8px 12px;
+            padding: 8px 32px 8px 12px;
             border: 2px solid #e2e8f0;
             border-radius: 8px;
             font-size: 14px;
@@ -718,6 +737,27 @@
             outline: none;
             border-color: #3b82f6;
             box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        /* Clear (✕) icon — transparent background, only shown once the field
+           has text (toggled in databank.js), click clears instantly with no
+           confirm, matching this app's other clear/✕ icon conventions. */
+        .search-clear-btn {
+            position: absolute;
+            top: 50%;
+            right: 8px;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #94a3b8;
+            font-size: 13px;
+            line-height: 1;
+            padding: 2px 4px;
+        }
+
+        .search-clear-btn:hover {
+            color: #475569;
         }
 
         /* ===== METRIC TILES (Redesign Phase 6, FINAL) =====
@@ -810,12 +850,15 @@
              #templateCalendarModal for that one row's template. -->
         <div class="your-datasets-section">
             <div class="your-datasets-header-row">
-                <h2 class="your-datasets-heading">📁 Your Datasets</h2>
-                <div class="your-datasets-controls">
+                <!-- Search field takes the old "📁 Your Datasets" heading's
+                     layout slot (removed) — see the 3-fix note above. -->
+                <div class="search-input-wrapper">
                     <input type="text" id="yourDatasetsSearch" autocomplete="off"
                         placeholder="🔍 Search templates...">
-                    <button id="uploadMoreBtn" class="btn-upload-more">📤 Upload More</button>
+                    <button type="button" id="yourDatasetsSearchClear" class="search-clear-btn"
+                        style="display:none;" aria-label="Clear search">✕</button>
                 </div>
+                <button id="uploadMoreBtn" class="btn-upload-more">📤 Upload More</button>
             </div>
             <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
                 <table class="availability-table">
@@ -1004,21 +1047,31 @@
     </div>
 
     <!-- ============================================= -->
-    <!-- SHARED DATE RANGE POPOVER (Phase 2)           -->
-    <!-- Sibling of previewModal so it isn't clipped by the modal's -->
-    <!-- overflow:auto — it must also be usable before the modal opens -->
-    <!-- (gate mode, triggered from a row's 👁️ icon). -->
+    <!-- SHARED DATE RANGE MODAL (Phase 2, restyled per 3-fix) -->
+    <!-- Centred overlay modal (was a small anchored popover) — usable  -->
+    <!-- before the preview modal exists (gate mode, from a row's 👁️     -->
+    <!-- icon) or while it's already open (live mode, from its own       -->
+    <!-- "📅 Date Range" button). Same shell pattern as #previewModal/    -->
+    <!-- #templateCalendarModal. -->
     <!-- ============================================= -->
-    <div id="sharedRangePopover" class="shared-range-popover" style="display:none;">
-        <div class="filter-group-popover">
-            <label for="sharedRangeFrom">From</label>
-            <input type="date" id="sharedRangeFrom">
+    <div id="sharedRangePopover" class="shared-range-popover"
+        style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1200; justify-content:center; align-items:center;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📅 Select Date Range</h2>
+                <button class="modal-close" id="closeSharedRangeBtn"
+                    style="background:none; border:none; font-size:24px; cursor:pointer; color:#94a3b8;">&times;</button>
+            </div>
+            <div class="filter-group-popover">
+                <label for="sharedRangeFrom">From</label>
+                <input type="date" id="sharedRangeFrom">
+            </div>
+            <div class="filter-group-popover">
+                <label for="sharedRangeTo">To</label>
+                <input type="date" id="sharedRangeTo">
+            </div>
+            <button type="button" id="sharedRangeConfirmBtn" class="btn-confirm-date-range">Apply</button>
         </div>
-        <div class="filter-group-popover">
-            <label for="sharedRangeTo">To</label>
-            <input type="date" id="sharedRangeTo">
-        </div>
-        <button type="button" id="sharedRangeConfirmBtn" class="btn-confirm-date-range">Apply</button>
     </div>
 
     <script src="/static/client_context.js?v=2"></script>
