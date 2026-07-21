@@ -334,6 +334,7 @@ def init_db():
                 created_by TEXT DEFAULT 'Analyst',
                 is_deleted INTEGER DEFAULT 0,
                 version INTEGER DEFAULT 1,
+                data_quality_flag TEXT DEFAULT NULL,
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
                 FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
                 FOREIGN KEY (upload_id) REFERENCES uploaded_files(id) ON DELETE CASCADE
@@ -829,6 +830,18 @@ def init_db():
                 print("✅ Added change_detection_status column to client_data")
         except Exception as e:
             print("⚠️ Could not add change_detection_status to client_data:", e)
+
+        # Schema upgrade: add data_quality_flag column (Phase 4 of the row-level
+        # blank-field-rejection requirement) -- marks a row 'incomplete' when it was
+        # force-imported with a blank Document ID/Amount/Date via the Exceptions override.
+        try:
+            cur = conn.execute("PRAGMA table_info(client_data)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'data_quality_flag' not in columns:
+                conn.execute("ALTER TABLE client_data ADD COLUMN data_quality_flag TEXT DEFAULT NULL")
+                print("✅ Added data_quality_flag column to client_data")
+        except Exception as e:
+            print("⚠️ Could not add data_quality_flag to client_data:", e)
 
         print("✅ Created indexes on client_data")
 

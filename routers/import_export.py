@@ -382,6 +382,12 @@ class ImportRequest(BaseModel):
     # Values typed into blank cells (Phase 4 of the upload-reliability requirement).
     # None/absent means "no edits" -- identical to today's behavior (genuine blanks stay blank).
     edited_cells: Optional[List[EditedCellValue]] = None
+    # Rows explicitly ticked "Import anyway" in the Exceptions -- Rejected Rows list
+    # (Phase 4 of the blank-field-rejection requirement). Same row-number scheme as
+    # excluded_rows/rejected_rows[].row_number (header=1, first data row=2).
+    # None/absent means "force-include nothing" -- identical to today's behavior
+    # (every rejected row stays excluded).
+    force_include_rows: Optional[List[int]] = None
 
 class AutoMapRequest(BaseModel):
     file_id: int
@@ -520,6 +526,27 @@ def find_critical_blank_reasons(row: dict, critical_cols: dict, mapping_dict: di
                 "message": f"{CRITICAL_FIELD_LABELS[role]} ('{t_col['column_name']}') is blank"
             })
     return reasons
+
+
+def compute_data_quality_flag(row_data: dict, critical_cols: dict) -> Optional[str]:
+    """
+    Returns 'incomplete' if any critical field (Document ID/Amount/Date) is blank in
+    the final row_data (template column names -> values), else None.
+
+    A blank critical field can only reach this point (insert/update time) if the row
+    was rejected by find_critical_blank_reasons() and then explicitly force-included
+    via the Exceptions -- Rejected Rows override (Phase 4) -- normal validation never
+    lets a blank-critical-field row survive to insertion otherwise. Computing the flag
+    here, from the final row_data, avoids having to thread a "force-included" marker
+    through compare_transactions()'s own row_data reconstruction.
+    """
+    for t_col in critical_cols.values():
+        if not t_col:
+            continue
+        value = row_data.get(t_col['column_name'])
+        if value is None or value == '':
+            return 'incomplete'
+    return None
 
 
 # ---------- EXISTING UPLOAD ENDPOINT ----------
@@ -1151,12 +1178,16 @@ def validate_and_import(request: ImportRequest):
     # just what actually got inserted.
     total_rows_attempted = len(rows)
 
-    # Exclude rows rejected for a blank critical field from insertion -- every
-    # other row still imports normally. Reuses filter_excluded_rows() as-is: the
-    # row-number scheme already matches, since both are computed via the same
-    # enumerate(rows, start=2) over this same already-filtered `rows` list.
-    if rejected_rows:
-        rows = filter_excluded_rows(rows, [r["row_number"] for r in rejected_rows])
+    # Exclude rows rejected for a blank critical field from insertion -- EXCEPT rows
+    # the user explicitly ticked "Import anyway" for in the Exceptions -- Rejected Rows
+    # list (Phase 4 of the blank-field-rejection requirement). A force-included row
+    # stays in `rows` unchanged, still carrying its genuinely blank critical-field
+    # cell -- no default/placeholder value is ever inserted in its place.
+    force_include_set = set(request.force_include_rows or [])
+    force_included_count = sum(1 for r in rejected_rows if r["row_number"] in force_include_set)
+    rows_to_exclude = [r["row_number"] for r in rejected_rows if r["row_number"] not in force_include_set]
+    if rows_to_exclude:
+        rows = filter_excluded_rows(rows, rows_to_exclude)
 
     # ---- CHANGE DETECTION (Phase 2): Compare incoming rows with existing data ----
     # Change detection always runs; it groups rows by Document ID and identifies
@@ -1196,13 +1227,17 @@ def validate_and_import(request: ImportRequest):
             doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
 
             # Update the existing row_data, increment version, update document_group_id, set change_detection_status='updated'
+            # data_quality_flag (Phase 4 of the blank-field-rejection requirement) is
+            # recomputed from the new row_data -- a force-included row with a still-blank
+            # critical field is flagged 'incomplete', otherwise cleared back to NULL.
+            data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
             execute_write(
                 """
                 UPDATE client_data
-                SET row_data = ?, version = ?, document_group_id = ?, change_detection_status = 'updated'
+                SET row_data = ?, version = ?, document_group_id = ?, change_detection_status = 'updated', data_quality_flag = ?
                 WHERE id = ?
                 """,
-                (json.dumps(new_row_data), new_version, doc_group_id, cid)
+                (json.dumps(new_row_data), new_version, doc_group_id, data_quality_flag, cid)
             )
 
             # Log the old values for audit trail
@@ -1221,13 +1256,16 @@ def validate_and_import(request: ImportRequest):
         for new_row_data in change_detection["new"]:
             amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
             doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
+            # data_quality_flag (Phase 4 of the blank-field-rejection requirement) --
+            # 'incomplete' for a force-included row still carrying a blank critical field.
+            data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
             row_id = execute_write(
                 """
-                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added', ?)
+                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added', ?, ?)
                 """,
                 (request.client_id, request.template_id, request.file_id,
-                 json.dumps(new_row_data), amount, date_str, "Analyst", 1, doc_group_id)
+                 json.dumps(new_row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag)
             )
             inserted_count += 1
             log_data_audit(row_id, "Analyst", "INSERT", None, new_row_data)
@@ -1261,14 +1299,18 @@ def validate_and_import(request: ImportRequest):
             # Extract amount and date for indexing
             amount, date_str = extract_columns_from_row(row_data, template_cols, effective_delimiter, effective_order)
 
+            # data_quality_flag (Phase 4 of the blank-field-rejection requirement) --
+            # 'incomplete' for a force-included row still carrying a blank critical field.
+            data_quality_flag = compute_data_quality_flag(row_data, critical_cols)
+
             # Insert every row as new
             row_id = execute_write(
                 """
-                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
                 """,
                 (request.client_id, request.template_id, request.file_id,
-                 json.dumps(row_data), amount, date_str, "Analyst", 1, doc_group_id)
+                 json.dumps(row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag)
             )
             inserted_count += 1
             log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
@@ -1286,6 +1328,11 @@ def validate_and_import(request: ImportRequest):
         "validation_errors": [],
         "rejected_rows": rejected_rows,  # Phase 2 of the blank-field-rejection requirement
         "rejected_count": len(rejected_rows),
+        # Phase 4: of the rows above, how many were force-included via the Exceptions
+        # override (imported with the critical field genuinely blank, flagged
+        # 'incomplete') -- the frontend derives "truly rejected/excluded" as
+        # rejected_count - force_included_count.
+        "force_included_count": force_included_count,
         "change_detection": change_detection  # Phase 2: detailed breakdown of unchanged/changed/new/missing
     }
 # ---------- DOWNLOAD TEMPLATE ----------

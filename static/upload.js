@@ -1206,6 +1206,36 @@ function showImportSummary(result) {
         `;
     }
 
+    // Row Exceptions summary (Phase 4 of the blank-field-rejection requirement) --
+    // deliberately kept as two DISTINCT counts, not lumped together: rows truly
+    // excluded from import vs. rows force-included with a genuinely blank critical
+    // field (Document ID/Amount/Date). Only rendered when at least one row was
+    // identified as rejected this run.
+    const rejectedCount = result.rejected_count || 0;
+    const forceIncludedCount = result.force_included_count || 0;
+    let rejectionSummary = '';
+    if (rejectedCount > 0) {
+        const excludedCount = rejectedCount - forceIncludedCount;
+        rejectionSummary = `
+            <div style="margin-top:20px;">
+                <div style="font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:#94a3b8; margin-bottom:8px;">Row Exceptions</div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                    <div style="background:#f8fafc; border-left:3px solid #dc2626; border-radius:6px; padding:8px 10px;">
+                        <div style="font-size:18px; font-weight:700; color:#334155;">${excludedCount}</div>
+                        <div style="font-size:11px; color:#64748b;">Rejected (excluded)</div>
+                    </div>
+                    <div style="background:#f8fafc; border-left:3px solid #f59e0b; border-radius:6px; padding:8px 10px;">
+                        <div style="font-size:18px; font-weight:700; color:#334155;">${forceIncludedCount}</div>
+                        <div style="font-size:11px; color:#64748b;">Imported with missing data</div>
+                    </div>
+                </div>
+                <div style="font-size:11px; color:#94a3b8; margin-top:8px;">
+                    Rows imported with missing data have a blank Document ID, Amount, or Date and are flagged for follow-up.
+                </div>
+            </div>
+        `;
+    }
+
     // Explanatory note about debit/credit lines, styled as a plain muted info box.
     const note = `<div style="font-size:12px; color:#64748b; background:#f8fafc; padding:10px 12px; border-radius:6px; margin-top:16px;">
         <strong style="color:#475569;">Note:</strong> Each voucher may appear twice in the file (debit and credit).
@@ -1233,6 +1263,7 @@ function showImportSummary(result) {
             </div>
         </div>
         ${changeSummary}
+        ${rejectionSummary}
         ${note}
         ${errorCount > 0 ? `
             <div style="background:#fef2f2; border:1px solid #fecaca; padding:12px; border-radius:8px; margin-top:16px; max-height:150px; overflow-y:auto;">
@@ -1535,7 +1566,11 @@ if (importBtn) {
             date_order: selectedDateOrder,
             // Rows the user unchecked in the row selection grid (Phase 2 of row-exclusion) –
             // Excel row numbers, matches routers/import_export.py's excluded_rows contract.
-            excluded_rows: Array.from(excludedRowNumbers)
+            excluded_rows: Array.from(excludedRowNumbers),
+            // Rows explicitly ticked "Import anyway" in the Exceptions -- Rejected Rows list
+            // (Phase 4 of the blank-field-rejection requirement) -- rebuilt fresh on every
+            // click, so overrides ticked before or after the Validate call are both picked up.
+            force_include_rows: Array.from(rejectedRowOverrides)
         };
 
         // ---- NEW LOGIC: Validation Flow ----
