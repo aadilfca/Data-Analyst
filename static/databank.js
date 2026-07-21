@@ -678,18 +678,15 @@ async function fetchAvailability() {
     }
 }
 
-// Redesign Phase 5: builds the Preview/Export/Delete Actions cell, shared by
-// "Your datasets" table (the old Availability Table that originally also used
-// this helper was removed in Redesign Phase 6).
-function buildDatasetActionButtons(item) {
-    const tdActions = document.createElement('td');
-    tdActions.style.textAlign = 'center';
-    tdActions.style.whiteSpace = 'nowrap';
+// Status column removal fix: builds the Coverage cell — just the 📅 icon,
+// now in its own column (previously shared the Actions cell with
+// Preview/Export/Delete). Always shown, even for a template with zero rows —
+// a missing-days calendar is exactly the useful thing to see for a template
+// with no data yet.
+function buildCoverageCell(item) {
+    const tdCoverage = document.createElement('td');
+    tdCoverage.style.textAlign = 'center';
 
-    // Coverage calendar icon (Coverage Calendar → per-template popover fix):
-    // always shown, even for a template with zero rows — a missing-days
-    // calendar is exactly the useful thing to see for a template with no
-    // data yet, unlike Preview/Export/Delete below which need real data.
     const calendarBtn = document.createElement('button');
     calendarBtn.className = 'action-btn calendar';
     calendarBtn.textContent = '📅';
@@ -698,7 +695,18 @@ function buildDatasetActionButtons(item) {
     calendarBtn.addEventListener('click', () => {
         openTemplateCalendarPopover(item.template_id, item.template_name);
     });
-    tdActions.appendChild(calendarBtn);
+    tdCoverage.appendChild(calendarBtn);
+
+    return tdCoverage;
+}
+
+// Redesign Phase 5: builds the Preview/Export/Delete Actions cell, shared by
+// "Your datasets" table (the old Availability Table that originally also used
+// this helper was removed in Redesign Phase 6).
+function buildDatasetActionButtons(item) {
+    const tdActions = document.createElement('td');
+    tdActions.style.textAlign = 'center';
+    tdActions.style.whiteSpace = 'nowrap';
 
     // Preview button - enabled if there's ANY data (total_row_count > 0)
     if (item.total_row_count > 0) {
@@ -707,7 +715,6 @@ function buildDatasetActionButtons(item) {
         previewBtn.textContent = '👁️';
         previewBtn.title = 'Preview Data';
         previewBtn.setAttribute('data-tooltip', 'Preview data for this template');
-        previewBtn.style.marginLeft = '6px';
         // Phase 2 (Unified date range): the 👁️ icon always opens the shared
         // date-range modal first (gate mode) — the preview itself only
         // opens once a range is confirmed there.
@@ -742,21 +749,17 @@ function buildDatasetActionButtons(item) {
         });
         tdActions.appendChild(deleteBtn);
     } else {
-        // Coverage calendar icon (above) stays clickable even with zero rows —
-        // this must append a sibling span, not overwrite tdActions.textContent,
-        // or it would silently wipe out the calendar button just appended.
-        const emptyLabel = document.createElement('span');
-        emptyLabel.textContent = ' —';
-        emptyLabel.style.color = '#94a3b8';
-        tdActions.appendChild(emptyLabel);
+        tdActions.textContent = '—';
+        tdActions.style.color = '#94a3b8';
     }
 
     return tdActions;
 }
 
 // ---------- RENDER "YOUR DATASETS" TABLE (Redesign Phase 5) ----------
-// New, simplified table (Template / Full Date Range / Total Rows / Status /
-// Actions) fed by the exact same data fetchAvailability() already retrieves.
+// New, simplified table (Template / Full Date Range / Total Rows / Coverage /
+// Actions — Status replaced by Coverage per the Status column removal fix)
+// fed by the exact same data fetchAvailability() already retrieves.
 // The old Availability Table this used to coexist with (with its extra "#"/
 // Filtered Rows/Sunday columns) was removed in Redesign Phase 6 — this is
 // now the sole datasets table on the page, and (Coverage Calendar →
@@ -798,20 +801,9 @@ function renderYourDatasetsTable(data, emptyMessage = 'No templates found for th
         tdTotalRows.setAttribute('data-tooltip', 'Total rows across all dates for this template');
         tr.appendChild(tdTotalRows);
 
-        // Status (based on total data) — same badge/status-map as the old table.
-        const tdStatus = document.createElement('td');
-        tdStatus.style.textAlign = 'center';
-        const statusSpan = document.createElement('span');
-        const status = item.status || 'missing';
-        statusSpan.className = `status-badge ${status}`;
-        const statusMap = {
-            'complete': '✅ Complete',
-            'missing': '❌ Missing',
-            'partial': '⚠️ Partial'
-        };
-        statusSpan.textContent = statusMap[status] || status;
-        tdStatus.appendChild(statusSpan);
-        tr.appendChild(tdStatus);
+        // Coverage — the 📅 icon, now its own column (was previously part of
+        // the Actions cell; see buildCoverageCell()).
+        tr.appendChild(buildCoverageCell(item));
 
         // Actions — same shared buttons/click handlers as the old table.
         tr.appendChild(buildDatasetActionButtons(item));
