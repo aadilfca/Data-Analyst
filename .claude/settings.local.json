@@ -1,6 +1,13 @@
 {
   "permissions": {
-    "allow": ["Bash(git:*)", "Bash(npm:*)", "Bash(python:*)", "Bash(pytest:*)"],
+    "allow": [
+      "Bash(git:*)",
+      "Bash(npm:*)",
+      "Bash(pytest:*)",
+      "Bash(python:*)",
+      "Bash(curl:*)",
+      "Bash(grep:*)"
+    ],
     "deny": ["Bash(rm -rf:*)", "Bash(sudo:*)"],
     "defaultMode": "acceptEdits"
   }

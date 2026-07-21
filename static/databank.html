@@ -365,6 +365,86 @@
             margin-left: 4px;
         }
 
+        /* ===== DATE RANGE FILTER POPOVER (Phase B2) =====
+           Additive narrowing filter (date_from/date_to) on top of the
+           mandatory date_start/date_end range already controlling the
+           preview load. Anchored with position:absolute to its own
+           position:relative wrapper, same simpler-than-fixed approach
+           upload.js used for .date-format-popover, since this trigger
+           sits in a fixed toolbar row rather than a scrolling list. */
+        .date-range-filter-wrapper {
+            position: relative;
+        }
+
+        .date-range-filter-btn {
+            padding: 4px 12px;
+            background: white;
+            color: #1a1a2e;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .date-range-filter-btn.active {
+            border-color: #3b82f6;
+            background: #eff6ff;
+            color: #1e40af;
+            font-weight: 600;
+        }
+
+        .date-range-filter-popover {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            z-index: 1100;
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+            padding: 12px;
+            width: 220px;
+            font-size: 12px;
+        }
+
+        .date-range-filter-popover .filter-group-popover {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: 10px;
+        }
+
+        .date-range-filter-popover .filter-group-popover label {
+            font-size: 11px;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+
+        .date-range-filter-popover .filter-group-popover input[type="date"] {
+            padding: 5px 8px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .btn-clear-date-range {
+            width: 100%;
+            padding: 5px 0;
+            background: #e2e8f0;
+            color: #1a1a2e;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .btn-clear-date-range:hover {
+            background: #cbd5e1;
+        }
+
         /* Responsive tweaks */
         @media (max-width: 768px) {
             .filter-bar {
@@ -530,7 +610,7 @@
             <div
                 style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; padding:8px 0; border-bottom:1px solid #e2e8f0;">
                 <input type="text" id="searchInput" placeholder="🔍 Search in all columns..."
-                    style="flex:2; min-width:150px; padding:6px 12px; border:1px solid #d0d5dd; border-radius:6px; font-size:13px;">
+                    style="flex:1.5; min-width:150px; padding:6px 12px; border:1px solid #d0d5dd; border-radius:6px; font-size:13px;">
                 <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
                     <label style="font-size:12px; color:#64748b;">Amount:</label>
                     <input type="number" id="amountMin" placeholder="Min"
@@ -547,6 +627,24 @@
                         <option value="complete">Complete</option>
                         <option value="incomplete">Incomplete</option>
                     </select>
+                </div>
+                <!-- Date range filter (Phase B2): additive narrowing on top of the
+                     mandatory date_start/date_end range, applied via the same
+                     Apply/Clear buttons as the other preview filters. -->
+                <div class="date-range-filter-wrapper">
+                    <button type="button" id="dateRangeFilterBtn" class="date-range-filter-btn"
+                        data-tooltip="Narrow preview to a specific date range">📅 Date Range</button>
+                    <div id="dateRangeFilterPopover" class="date-range-filter-popover" style="display:none;">
+                        <div class="filter-group-popover">
+                            <label for="previewDateFrom">From</label>
+                            <input type="date" id="previewDateFrom">
+                        </div>
+                        <div class="filter-group-popover">
+                            <label for="previewDateTo">To</label>
+                            <input type="date" id="previewDateTo">
+                        </div>
+                        <button type="button" id="clearDateRangeFilterBtn" class="btn-clear-date-range">Clear</button>
+                    </div>
                 </div>
                 <button id="applyFiltersBtn"
                     style="padding:4px 16px; background:#3b82f6; color:white; border:none; border-radius:6px; cursor:pointer; font-size:13px;">Apply</button>

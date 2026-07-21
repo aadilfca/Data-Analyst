@@ -47,6 +47,15 @@ const pageSizeSelect = document.getElementById('pageSizeSelect');
 const sundayOnlyCheckbox = document.getElementById('sundayOnlyCheckbox');
 const dataQualityFilter = document.getElementById('dataQualityFilter');
 const sundayCountBadge = document.getElementById('sundayCountBadge');
+
+// Date range filter popover elements (Phase B2) — additive narrowing filter
+// on top of the mandatory date_start/date_end range, same manual-entry
+// pattern as amountMin/amountMax below.
+const dateRangeFilterBtn = document.getElementById('dateRangeFilterBtn');
+const dateRangeFilterPopover = document.getElementById('dateRangeFilterPopover');
+const previewDateFromInput = document.getElementById('previewDateFrom');
+const previewDateToInput = document.getElementById('previewDateTo');
+const clearDateRangeFilterBtn = document.getElementById('clearDateRangeFilterBtn');
 const searchInput = document.getElementById('searchInput');
 const amountMin = document.getElementById('amountMin');
 const amountMax = document.getElementById('amountMax');
@@ -207,6 +216,30 @@ async function showRowHistoryPopover(icon, clientDataId) {
     } catch (error) {
         rowHistoryBody.innerHTML = '<div style="color:#b91c1c;">Failed to load history.</div>';
     }
+}
+
+// ---------- DATE RANGE FILTER POPOVER (Phase B2) ----------
+function openDateRangeFilterPopover() {
+    dateRangeFilterPopover.style.display = 'block';
+}
+
+function closeDateRangeFilterPopover() {
+    dateRangeFilterPopover.style.display = 'none';
+}
+
+function toggleDateRangeFilterPopover() {
+    if (dateRangeFilterPopover.style.display === 'block') {
+        closeDateRangeFilterPopover();
+    } else {
+        openDateRangeFilterPopover();
+    }
+}
+
+// Reflects whether a From/To value is currently set on the trigger button,
+// mirroring upload.js's active-state treatment for its Date Format popover.
+function updateDateRangeButtonState() {
+    const hasValue = !!(previewDateFromInput.value || previewDateToInput.value);
+    dateRangeFilterBtn.classList.toggle('active', hasValue);
 }
 
 // ---------- LOAD TEMPLATES INTO DROPDOWN ----------
@@ -564,6 +597,10 @@ function openPreview(templateId, templateName) {
     amountMin.value = '';
     amountMax.value = '';
     dataQualityFilter.value = '';
+    previewDateFromInput.value = '';
+    previewDateToInput.value = '';
+    updateDateRangeButtonState();
+    closeDateRangeFilterPopover();
     sundayCountBadge.textContent = 'Sunday rows: 0';
     
     // Fetch data
@@ -614,6 +651,14 @@ async function fetchPreviewData() {
     }
     if (dataQualityFilter.value) {
         params.append('data_quality', dataQualityFilter.value);
+    }
+    // Date range filter (Phase B2): additive narrowing on top of the
+    // mandatory date_start/date_end range already in params above.
+    if (previewDateFromInput.value) {
+        params.append('date_from', previewDateFromInput.value);
+    }
+    if (previewDateToInput.value) {
+        params.append('date_to', previewDateToInput.value);
     }
 
     try {
@@ -770,6 +815,14 @@ function updatePagination() {
 // ---------- APPLY PREVIEW FILTERS ----------
 function applyPreviewFilters() {
     if (!isPreviewOpen) return;
+    // Client-side guard mirroring getDateRangeFromFilter()'s start<=end check
+    // for the mandatory range — gives a clearer message than waiting on the
+    // backend's own 400 for date_from > date_to.
+    if (previewDateFromInput.value && previewDateToInput.value &&
+        previewDateFromInput.value > previewDateToInput.value) {
+        showStatus('⚠️ "From" date must be before or equal to "To" date.', 'error');
+        return;
+    }
     currentPage = 1;
     fetchPreviewData();
 }
@@ -782,6 +835,10 @@ function clearPreviewFilters() {
     amountMax.value = '';
     sundayOnlyCheckbox.checked = false;
     dataQualityFilter.value = '';
+    previewDateFromInput.value = '';
+    previewDateToInput.value = '';
+    updateDateRangeButtonState();
+    closeDateRangeFilterPopover();
     currentPage = 1;
     fetchPreviewData();
 }
@@ -964,17 +1021,60 @@ searchInput.addEventListener('input', function() {
 amountMin.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
 amountMax.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
 
+// Date range filter popover (Phase B2)
+dateRangeFilterBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleDateRangeFilterPopover();
+});
+clearDateRangeFilterBtn.addEventListener('click', () => {
+    previewDateFromInput.value = '';
+    previewDateToInput.value = '';
+    updateDateRangeButtonState();
+    closeDateRangeFilterPopover();
+    if (isPreviewOpen) {
+        currentPage = 1;
+        fetchPreviewData();
+    }
+});
+// Enter-to-apply, same convention as amountMin/amountMax above.
+previewDateFromInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && isPreviewOpen) {
+        applyPreviewFilters();
+        updateDateRangeButtonState();
+        closeDateRangeFilterPopover();
+    }
+});
+previewDateToInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && isPreviewOpen) {
+        applyPreviewFilters();
+        updateDateRangeButtonState();
+        closeDateRangeFilterPopover();
+    }
+});
+// Apply button also picks up date_from/date_to via fetchPreviewData(), so
+// its own click should refresh the trigger's active-state styling too.
+applyFiltersBtn.addEventListener('click', updateDateRangeButtonState);
+
 // Close the row history popover when clicking anywhere outside it (the icon's
 // own click is stopped from propagating here, so this only fires for clicks
-// elsewhere on the page).
+// elsewhere on the page). Also closes the date-range filter popover (Phase B2)
+// on the same outside-click check — its trigger button's own click already
+// stops propagation, so a click on it is never treated as "outside".
 document.addEventListener('click', (e) => {
     if (rowHistoryPopover.style.display === 'block' && !rowHistoryPopover.contains(e.target)) {
         hideRowHistoryPopover();
     }
+    if (dateRangeFilterPopover.style.display === 'block' && !dateRangeFilterPopover.contains(e.target)) {
+        closeDateRangeFilterPopover();
+    }
 });
 
-// ESC key closes preview
+// ESC key closes preview (or just the date-range popover, if that's open)
 document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && dateRangeFilterPopover.style.display === 'block') {
+        closeDateRangeFilterPopover();
+        return;
+    }
     if (e.key === 'Escape' && isPreviewOpen) {
         previewModal.style.display = 'none';
         isPreviewOpen = false;
