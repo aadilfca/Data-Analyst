@@ -37,6 +37,7 @@ const mappingPanel = getElement('mappingPanel');
 const mappingBody = getElement('mappingBody');
 const mappingCount = getElement('mappingCount');
 const saveMappingBtn = getElement('saveMappingBtn');
+const clearMappingBtn = getElement('clearMappingBtn');
 
 const modeActions = getElement('modeActions');
 
@@ -959,6 +960,48 @@ if (saveMappingBtn) {
             showStatus('❌ Failed to save mapping: ' + error.message, 'error');
         } finally {
             saveMappingBtn.disabled = false;
+        }
+    });
+}
+
+// ---------- CLEAR SAVED COLUMN MAPPING (Phase A3 of 3, final phase) ----------
+// Removes the persisted saved mapping for this client+template via the new DELETE endpoint --
+// "edit" is already covered by Save Mapping's own overwrite behavior (Phase A2), so this is the
+// one remaining action: an explicit way to remove a saved mapping entirely. Deliberately does not
+// touch the currently-displayed mapping table/currentMappings -- only the saved copy is removed,
+// so a later reload/re-select for this client+template no longer auto-applies anything.
+if (clearMappingBtn) {
+    clearMappingBtn.addEventListener('click', async function() {
+        const clientId = getCurrentClientId();
+        if (!clientId) {
+            showStatus('⚠️ Please select a client first from the Dashboard.', 'error');
+            return;
+        }
+        if (!selectedTemplateId) {
+            showStatus('⚠️ Select a template first.', 'error');
+            return;
+        }
+
+        const confirmed = window.confirm('Remove the saved column mapping for this client + template? Future uploads will fall back to auto-mapping until you save a new one.');
+        if (!confirmed) return;
+
+        clearMappingBtn.disabled = true;
+        try {
+            const res = await fetch(API_BASE + `/api/upload/saved-mapping?client_id=${clientId}&template_id=${selectedTemplateId}`, {
+                method: 'DELETE'
+            });
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.detail || result.message || 'Clear failed');
+            if (result.deleted_count > 0) {
+                showStatus(`🗑️ Saved mapping cleared (${result.deleted_count} column${result.deleted_count === 1 ? '' : 's'}). Future uploads will auto-map instead.`, 'success');
+            } else {
+                showStatus('ℹ️ No saved mapping existed for this client/template.', 'info');
+            }
+        } catch (error) {
+            console.error('Clear saved mapping error:', error);
+            showStatus('❌ Failed to clear saved mapping: ' + error.message, 'error');
+        } finally {
+            clearMappingBtn.disabled = false;
         }
     });
 }

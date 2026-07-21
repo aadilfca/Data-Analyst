@@ -717,6 +717,31 @@ def get_saved_column_mapping(client_id: int, template_id: int):
     }
 
 
+@router.delete("/api/upload/saved-mapping")
+def delete_saved_column_mapping(client_id: int, template_id: int):
+    """
+    Removes the saved mapping for a client+template (Phase A3, final phase). No client/template
+    existence checks -- same leniency as the GET endpoint above, since "nothing was saved" is a
+    normal outcome, not an error. After this, the next auto-apply check (applySavedMapping() in
+    upload.js) sees has_saved_mapping: false and falls back to ordinary auto-mapping, identical to
+    a client+template that never had a saved mapping.
+    """
+    existing = execute_query(
+        "SELECT COUNT(*) AS cnt FROM saved_column_mappings WHERE client_id = ? AND template_id = ?",
+        (client_id, template_id)
+    )
+    deleted_count = existing[0]["cnt"] if existing else 0
+
+    execute_write(
+        "DELETE FROM saved_column_mappings WHERE client_id = ? AND template_id = ?",
+        (client_id, template_id)
+    )
+
+    log_audit("Analyst", "Delete", "Upload",
+              f"Cleared saved column mapping for client {client_id}, template {template_id} ({deleted_count} columns)")
+    return {"message": "Saved column mapping cleared", "deleted_count": deleted_count}
+
+
 # ---------- CHECK DUPLICATES ----------
 @router.post("/api/upload/check-duplicates")
 def check_duplicates(request: ImportRequest):

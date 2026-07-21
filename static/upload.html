@@ -274,6 +274,34 @@
             cursor: not-allowed;
         }
 
+        /* ---------- CLEAR SAVED MAPPING BUTTON (Phase A3, final phase) ----------
+           Same small icon-button sizing as .btn-save-mapping, sitting right next to it -- a red
+           hover treatment (matching this app's existing destructive-action color, .file-detail
+           .clear) signals it removes the persisted saved mapping, not the on-screen table. */
+        .btn-clear-mapping {
+            padding: 4px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            background: white;
+            color: #64748b;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.2s, border-color 0.2s, color 0.2s;
+        }
+
+        .btn-clear-mapping:hover:not(:disabled) {
+            background: #fef2f2;
+            border-color: #dc2626;
+            color: #dc2626;
+        }
+
+        .btn-clear-mapping:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         /* Wraps Download Template + Sheet selector so they reveal/hide together, gated on
            Template selection (see setSheetDownloadGroupVisible() in upload.js). Hidden by
            default -- matches "hidden before a Template is chosen". */
@@ -1404,6 +1432,8 @@
                             <span class="count" id="mappingCount">0 / 0 matched</span>
                             <button class="btn-save-mapping" id="saveMappingBtn" type="button"
                                     title="Save this mapping for future uploads of this template/client">💾 Save Mapping</button>
+                            <button class="btn-clear-mapping" id="clearMappingBtn" type="button"
+                                    title="Remove the saved mapping for this template/client">🗑️ Clear Saved Mapping</button>
                         </div>
                         <div style="overflow-x:auto;">
                             <table class="mapping-table">
