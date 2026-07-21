@@ -459,6 +459,69 @@ def extract_columns_from_row(row_data: dict, template_cols: list,
             except:
                 pass
     return amount, date_str
+
+
+# ---------- ROW-LEVEL CRITICAL FIELD REJECTION (Phase 2 of the blank-field-rejection requirement) ----------
+def get_critical_field_columns(template_cols: list) -> dict:
+    """
+    Identifies which template columns fill the 3 "critical" roles used for
+    row-level blank rejection -- Document ID / Amount / Date -- using the SAME
+    positional conventions already established elsewhere in this file, since
+    this schema has no explicit "Document ID"/"Amount"/"Date" column names:
+      - document_id = the first template column by sort_order (matches
+        get_document_group_id()'s "first column = unique document key" rule)
+      - amount      = the first Numeric-typed column (matches
+        extract_columns_from_row()'s "take first numeric" rule)
+      - date        = the first Date-typed column (matches
+        extract_columns_from_row()'s "take first date" rule)
+    A role is None if this template has no column filling it (e.g. no Date column).
+    """
+    return {
+        'document_id': template_cols[0] if template_cols else None,
+        'amount': next((c for c in template_cols if c['data_type'] == 'Numeric'), None),
+        'date': next((c for c in template_cols if c['data_type'] == 'Date'), None),
+    }
+
+
+CRITICAL_FIELD_LABELS = {
+    'document_id': 'Document ID',
+    'amount': 'Amount',
+    'date': 'Date',
+}
+
+
+def find_critical_blank_reasons(row: dict, critical_cols: dict, mapping_dict: dict) -> list:
+    """
+    Returns a reason dict for each critical role (Document ID/Amount/Date) that is
+    both mapped in this upload session and blank in this raw Excel row. A role with
+    no column in this template, or whose column isn't mapped to an Excel header
+    this session, is skipped -- nothing to check.
+
+    "Blank" uses the same test as apply_edited_cell_values() (pd.isna() for
+    non-strings, stripped-empty for strings) for consistency within this file.
+    """
+    reasons = []
+    for role, t_col in critical_cols.items():
+        if not t_col:
+            continue
+        mapping = mapping_dict.get(t_col['id'])
+        if not mapping or not mapping.excel_column_name:
+            continue
+        excel_col = mapping.excel_column_name
+        if excel_col not in row:
+            continue
+        value = row[excel_col]
+        is_blank = pd.isna(value) if not isinstance(value, str) else value.strip() == ''
+        if is_blank:
+            reasons.append({
+                "role": role,
+                "column": t_col['column_name'],
+                "excel_column": excel_col,
+                "message": f"{CRITICAL_FIELD_LABELS[role]} ('{t_col['column_name']}') is blank"
+            })
+    return reasons
+
+
 # ---------- EXISTING UPLOAD ENDPOINT ----------
 @router.post("/api/import-excel")
 async def import_excel(file: UploadFile = File(...)):
@@ -813,10 +876,17 @@ def validate_only(request: ImportRequest):
     # Drop user-excluded rows before anything else sees them (validation, counts).
     rows = filter_excluded_rows(rows, request.excluded_rows)
 
+    # Which columns fill the 3 "critical" roles (Document ID/Amount/Date) for this
+    # template -- computed once, reused for every row (Phase 2 of the
+    # blank-field-rejection requirement).
+    critical_cols = get_critical_field_columns(template_cols)
+
         # --- Validation (same logic as import but without inserting) ---
     validation_errors = []
+    rejected_rows = []
     for row_idx, row in enumerate(rows, start=2):  # row 1 = headers, row 2 = first data
         row_errors = []
+        row_reasons = []
         row_data_full = {}
         try:
             # Build a full row data dict (template column names -> values)
@@ -838,42 +908,45 @@ def validate_only(request: ImportRequest):
                     continue
                 value = row[excel_col]
 
-                # Required field check
-                if pd.isna(value):
-                    row_errors.append({
-                        "column": t_col['column_name'],
-                        "excel_column": excel_col,
-                        "error_type": "required",
-                        "message": f"Required field '{t_col['column_name']}' is empty"
-                    })
-                else:
-                    # Data type checks
-                    if t_col['data_type'] == "Numeric":
+                # A blank value is only a problem for the 3 critical fields
+                # (handled separately below via find_critical_blank_reasons) --
+                # a blank in any other column imports fine, nothing to check here.
+                is_blank = pd.isna(value) if not isinstance(value, str) else value.strip() == ''
+                if is_blank:
+                    continue
+
+                # Data type checks (non-blank values only)
+                if t_col['data_type'] == "Numeric":
+                    try:
+                        float(value)
+                    except:
+                        row_errors.append({
+                            "column": t_col['column_name'],
+                            "excel_column": excel_col,
+                            "error_type": "data_type",
+                            "message": f"Expected Numeric but got '{value}'"
+                        })
+                elif t_col['data_type'] == "Date":
+                    kind = classify_date_cell(value)
+                    if kind == 'native':
+                        pass  # genuine Excel date cell -- already correct, nothing to validate
+                    elif kind == 'excel_serial':
+                        pass  # Excel serial date – will be handled on import, skip validation here
+                    elif kind == 'text':
                         try:
-                            float(value)
-                        except:
+                            parse_date_flexible(value, effective_delimiter, effective_order)
+                        except (ValueError, TypeError):
                             row_errors.append({
                                 "column": t_col['column_name'],
                                 "excel_column": excel_col,
                                 "error_type": "data_type",
-                                "message": f"Expected Numeric but got '{value}'"
+                                "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
                             })
-                    elif t_col['data_type'] == "Date":
-                        kind = classify_date_cell(value)
-                        if kind == 'native':
-                            pass  # genuine Excel date cell -- already correct, nothing to validate
-                        elif kind == 'excel_serial':
-                            pass  # Excel serial date – will be handled on import, skip validation here
-                        elif kind == 'text':
-                            try:
-                                parse_date_flexible(value, effective_delimiter, effective_order)
-                            except (ValueError, TypeError):
-                                row_errors.append({
-                                    "column": t_col['column_name'],
-                                    "excel_column": excel_col,
-                                    "error_type": "data_type",
-                                    "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
-                                })
+
+            # Row-level rejection: blank Document ID/Amount/Date (Phase 2 of the
+            # blank-field-rejection requirement) -- distinct from the generic
+            # data-type errors above, reported separately, does not add to row_errors.
+            row_reasons = find_critical_blank_reasons(row, critical_cols, mapping_dict)
         except Exception as e:
             # A row that fails to parse for any unforeseen reason (e.g. an
             # unexpected cell type) must not crash the whole /validate request --
@@ -891,6 +964,12 @@ def validate_only(request: ImportRequest):
                 "row_data": row_data_full,  # <-- NEW: full row data
                 "errors": row_errors
             })
+        if row_reasons:
+            rejected_rows.append({
+                "row_number": row_idx,
+                "row_data": row_data_full,
+                "reasons": row_reasons
+            })
 
     new_count, existing_count = count_new_and_existing_rows(
         request.client_id,
@@ -900,13 +979,21 @@ def validate_only(request: ImportRequest):
         mapping_dict,
     )
 
+    # A row can appear in both lists (e.g. a real Numeric format error in one
+    # column plus a blank Date in another) -- union by row_number so it's only
+    # subtracted once from valid_rows.
+    bad_row_numbers = {r["row_number"] for r in validation_errors} | {r["row_number"] for r in rejected_rows}
+
     return {
         "status": "validation_complete",
         "has_errors": len(validation_errors) > 0,
         "error_count": len(validation_errors),
+        "has_rejections": len(rejected_rows) > 0,
+        "rejected_count": len(rejected_rows),
+        "rejected_rows": rejected_rows,
         "total_rows": len(rows),
         "errors": validation_errors,
-        "valid_rows": len(rows) - len(validation_errors),
+        "valid_rows": len(rows) - len(bad_row_numbers),
         "new_rows_count": new_count,
         "existing_rows_count": existing_count,
     }
@@ -972,10 +1059,17 @@ def validate_and_import(request: ImportRequest):
     # grouping (compare_transactions) ever see them.
     rows = filter_excluded_rows(rows, request.excluded_rows)
 
+    # Which columns fill the 3 "critical" roles (Document ID/Amount/Date) for this
+    # template -- computed once, reused for every row (Phase 2 of the
+    # blank-field-rejection requirement).
+    critical_cols = get_critical_field_columns(template_cols)
+
     # --- Validation ---
     validation_errors = []
+    rejected_rows = []
     for row_idx, row in enumerate(rows, start=2):
         row_errors = []
+        row_reasons = []
         try:
             for t_col in template_cols:
                 mapping = mapping_dict.get(t_col['id'])
@@ -985,40 +1079,45 @@ def validate_and_import(request: ImportRequest):
                 if excel_col not in row:
                     continue
                 value = row[excel_col]
-                if pd.isna(value):
-                    row_errors.append({
-                        "column": t_col['column_name'],
-                        "excel_column": excel_col,
-                        "error_type": "required",
-                        "message": f"Required field '{t_col['column_name']}' is empty"
-                    })
-                else:
-                    if t_col['data_type'] == "Numeric":
+
+                # A blank value is only a problem for the 3 critical fields
+                # (handled separately below via find_critical_blank_reasons) --
+                # a blank in any other column imports fine, nothing to check here.
+                is_blank = pd.isna(value) if not isinstance(value, str) else value.strip() == ''
+                if is_blank:
+                    continue
+
+                if t_col['data_type'] == "Numeric":
+                    try:
+                        float(value)
+                    except:
+                        row_errors.append({
+                            "column": t_col['column_name'],
+                            "excel_column": excel_col,
+                            "error_type": "data_type",
+                            "message": f"Expected Numeric but got '{value}'"
+                        })
+                elif t_col['data_type'] == "Date":
+                    kind = classify_date_cell(value)
+                    if kind == 'native':
+                        pass  # genuine Excel date cell -- already correct, nothing to validate
+                    elif kind == 'excel_serial':
+                        pass  # Excel serial date – will be handled on import, skip validation here
+                    elif kind == 'text':
                         try:
-                            float(value)
-                        except:
+                            parse_date_flexible(value, effective_delimiter, effective_order)
+                        except (ValueError, TypeError):
                             row_errors.append({
                                 "column": t_col['column_name'],
                                 "excel_column": excel_col,
                                 "error_type": "data_type",
-                                "message": f"Expected Numeric but got '{value}'"
+                                "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
                             })
-                    elif t_col['data_type'] == "Date":
-                        kind = classify_date_cell(value)
-                        if kind == 'native':
-                            pass  # genuine Excel date cell -- already correct, nothing to validate
-                        elif kind == 'excel_serial':
-                            pass  # Excel serial date – will be handled on import, skip validation here
-                        elif kind == 'text':
-                            try:
-                                parse_date_flexible(value, effective_delimiter, effective_order)
-                            except (ValueError, TypeError):
-                                row_errors.append({
-                                    "column": t_col['column_name'],
-                                    "excel_column": excel_col,
-                                    "error_type": "data_type",
-                                    "message": f"Expected Date ({effective_order}, delimiter '{effective_delimiter}') but got '{value}'"
-                                })
+
+            # Row-level rejection: blank Document ID/Amount/Date (Phase 2 of the
+            # blank-field-rejection requirement) -- distinct from the generic
+            # data-type errors above, reported separately, does not add to row_errors.
+            row_reasons = find_critical_blank_reasons(row, critical_cols, mapping_dict)
         except Exception as e:
             # Same graceful-degradation guarantee as validate_only(): a row that
             # fails to parse must not crash the whole /import request.
@@ -1030,14 +1129,34 @@ def validate_and_import(request: ImportRequest):
             }]
         if row_errors:
             validation_errors.append({"row_number": row_idx, "errors": row_errors})
+        if row_reasons:
+            rejected_rows.append({"row_number": row_idx, "reasons": row_reasons})
 
     if validation_errors:
+        # Generic validation errors (bad Numeric/Date format on a non-blank value)
+        # are unaffected by row-level rejection -- they still block the entire
+        # import, same as before. rejected_rows is included here too, purely for
+        # visibility, since a row can independently appear in both lists.
         return {
             "status": "validation_failed",
             "errors": validation_errors,
             "total_rows": len(rows),
-            "error_count": len(validation_errors)
+            "error_count": len(validation_errors),
+            "rejected_rows": rejected_rows,
+            "rejected_count": len(rejected_rows),
         }
+
+    # Total attempted rows, captured before rejected rows are excluded below --
+    # the success response's total_rows should reflect what was attempted, not
+    # just what actually got inserted.
+    total_rows_attempted = len(rows)
+
+    # Exclude rows rejected for a blank critical field from insertion -- every
+    # other row still imports normally. Reuses filter_excluded_rows() as-is: the
+    # row-number scheme already matches, since both are computed via the same
+    # enumerate(rows, start=2) over this same already-filtered `rows` list.
+    if rejected_rows:
+        rows = filter_excluded_rows(rows, [r["row_number"] for r in rejected_rows])
 
     # ---- CHANGE DETECTION (Phase 2): Compare incoming rows with existing data ----
     # Change detection always runs; it groups rows by Document ID and identifies
@@ -1160,11 +1279,13 @@ def validate_and_import(request: ImportRequest):
     return {
         "status": "success",
         "message": f"Successfully imported: {inserted_count} new, {updated_count} updated, {deleted_count} flagged missing",
-        "total_rows": len(rows),
+        "total_rows": total_rows_attempted,
         "imported_count": inserted_count,
         "updated_count": updated_count,
         "deleted_count": deleted_count,
         "validation_errors": [],
+        "rejected_rows": rejected_rows,  # Phase 2 of the blank-field-rejection requirement
+        "rejected_count": len(rejected_rows),
         "change_detection": change_detection  # Phase 2: detailed breakdown of unchanged/changed/new/missing
     }
 # ---------- DOWNLOAD TEMPLATE ----------
