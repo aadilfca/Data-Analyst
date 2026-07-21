@@ -394,6 +394,16 @@ class AutoMapRequest(BaseModel):
     template_id: int
     sheet_name: str = "Sheet1"
 
+# ---------- SAVED COLUMN MAPPING MODELS (Phase A1 of 3: save column mapping feature) ----------
+class SavedMappingEntry(BaseModel):
+    template_column_id: int
+    excel_column: str
+
+class SaveMappingRequest(BaseModel):
+    client_id: int
+    template_id: int
+    mappings: List[SavedMappingEntry]
+
 # ---------- DATE PREVIEW MODELS (Phase 5 of the date-format requirement) ----------
 class DatePreviewMapping(BaseModel):
     template_column_name: str
@@ -649,6 +659,63 @@ def auto_map_headers(request: AutoMapRequest):
         "auto_mapped_count": len([m for m in mappings if m['is_matched']]),
         "total_columns": len(mappings)
     }
+
+# ---------- SAVE / LOAD COLUMN MAPPING (Phase A1 of 3: save column mapping feature) ----------
+@router.post("/api/upload/save-mapping")
+def save_column_mapping(request: SaveMappingRequest):
+    """
+    Saves (or overwrites) the confirmed Excel-column -> template-column mapping for a
+    client+template, so it can be auto-applied on a later upload (Phase A2). Upsert via
+    delete-then-reinsert, same pattern used elsewhere in this app for replacing an
+    ordered/child row set (e.g. update_template() in routers/templates.py).
+    """
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+    template = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    if not template:
+        raise HTTPException(404, "Template not found")
+
+    execute_write(
+        "DELETE FROM saved_column_mappings WHERE client_id = ? AND template_id = ?",
+        (request.client_id, request.template_id)
+    )
+
+    saved_count = 0
+    for entry in request.mappings:
+        # Nothing meaningful to save for a column that wasn't matched to an Excel header.
+        if not entry.excel_column or not entry.excel_column.strip():
+            continue
+        execute_write(
+            """
+            INSERT INTO saved_column_mappings (client_id, template_id, template_column_id, excel_column)
+            VALUES (?, ?, ?, ?)
+            """,
+            (request.client_id, request.template_id, entry.template_column_id, entry.excel_column)
+        )
+        saved_count += 1
+
+    log_audit("Analyst", "Save", "Upload",
+              f"Saved column mapping for client {request.client_id}, template {request.template_id} ({saved_count} columns)")
+    return {"message": "Column mapping saved successfully", "saved_count": saved_count}
+
+
+@router.get("/api/upload/saved-mapping")
+def get_saved_column_mapping(client_id: int, template_id: int):
+    """
+    Returns the previously saved mapping for a client+template, if any. Returns an empty/false
+    result rather than 404 when nothing is saved yet -- Phase A2's auto-apply-on-load only needs
+    to check has_saved_mapping, no special-case error handling required on the frontend.
+    """
+    rows = execute_query(
+        "SELECT template_column_id, excel_column FROM saved_column_mappings WHERE client_id = ? AND template_id = ?",
+        (client_id, template_id)
+    )
+    return {
+        "has_saved_mapping": len(rows) > 0,
+        "mappings": [{"template_column_id": r["template_column_id"], "excel_column": r["excel_column"]} for r in rows]
+    }
+
 
 # ---------- CHECK DUPLICATES ----------
 @router.post("/api/upload/check-duplicates")

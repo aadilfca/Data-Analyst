@@ -979,6 +979,32 @@ def init_db():
                         )
         print("✅ Seeded default voucher prefixes for clients with none configured")
 
+        # ---------- SAVED COLUMN MAPPINGS (Phase A1 of 3: save column mapping feature) ----------
+        # Remembers the Excel-column -> template-column mapping a user confirmed for a given
+        # client+template, so the Upload page can auto-apply it next time instead of the user
+        # re-mapping from scratch. Keyed by client_id+template_id (not template_id alone) since
+        # different clients may export the same template with differently worded Excel headers.
+        # One row per mapped template column (not one JSON blob) - mirrors how
+        # template_column_mappings itself is stored, and keeps a future single-column
+        # edit/delete (Phase A3) simple. Only created/updated when explicitly saved by the user
+        # (Phase A2) - no automatic saving happens in this phase.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS saved_column_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                template_column_id INTEGER NOT NULL,
+                excel_column TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+                UNIQUE(client_id, template_id, template_column_id)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_saved_column_mappings_client_template ON saved_column_mappings (client_id, template_id)")
+        print("✅ Created saved_column_mappings table")
+
         # ---------- AUDIT RULES MODULE (Phase 1 of 9: schema foundation) ----------
         # Three reusable entities assembled by reference (not duplicated per-category):
         # Documents, Cross-checks, and Categories. A Category is the thing a voucher will
