@@ -862,6 +862,23 @@
             letter-spacing: 0.4px;
         }
 
+        /* ===== "YOUR DATASETS" TABLE (Redesign Phase 5) =====
+           New, simplified table (Template / Full Date Range / Total Rows /
+           Status / Actions), fed by the exact same fetchAvailability() data
+           that already powers the old Availability Table below (no new
+           endpoint) — reuses .availability-table/.no-data as-is, since both
+           are already generic and not tied to the old table's column count.
+           Coexists with the old table until Phase 6 removes it. ===== */
+        .your-datasets-section {
+            margin-bottom: 20px;
+        }
+
+        .your-datasets-heading {
+            margin: 0 0 12px 0;
+            font-size: 18px;
+            color: #1a1a2e;
+        }
+
         /* Responsive tweaks */
         @media (max-width: 768px) {
             .filter-bar {
@@ -1010,6 +1027,36 @@
             <div class="stat-item">📁 Templates Available: <strong id="totalTemplates">0</strong></div>
             <div class="stat-item">⚠️ Missing Templates: <strong id="missingTemplates">0</strong></div>
             <div class="stat-item">📅 Sunday Rows: <strong id="totalSundayRows">0</strong></div>
+        </div>
+
+        <!-- ===== "YOUR DATASETS" TABLE (Redesign Phase 5) =====
+             New simplified table, fed by the exact same fetchAvailability()
+             data as the old Availability Table directly below it — reuses
+             buildDatasetActionButtons() for Actions, so Preview/Export/Delete
+             behavior (incl. the shared date-range-popover gate and confirm-
+             before-delete) is identical, not reimplemented. Coexists with
+             the old table until Phase 6 removes it. -->
+        <div class="your-datasets-section">
+            <h2 class="your-datasets-heading">📁 Your Datasets</h2>
+            <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+                <table class="availability-table">
+                    <thead>
+                        <tr>
+                            <th>Template</th>
+                            <th style="min-width:160px;">Full Date Range</th>
+                            <th style="text-align:center;">Total Rows</th>
+                            <th style="text-align:center;">Status</th>
+                            <th style="text-align:center;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="yourDatasetsBody">
+                        <!-- Rows inserted by renderYourDatasetsTable() -->
+                    </tbody>
+                </table>
+                <div id="yourDatasetsNoData" class="no-data" style="display:none;">
+                    No data found for the selected criteria. Please adjust filters and try again.
+                </div>
+            </div>
         </div>
 
         <!-- ===== AVAILABILITY TABLE ===== -->

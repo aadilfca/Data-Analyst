@@ -45,6 +45,12 @@ const availabilityBody = document.getElementById('availabilityBody');
 const noDataMessage = document.getElementById('noDataMessage');
 const statusDiv = document.getElementById('statusMessage');
 
+// Redesign Phase 5: "Your datasets" table — fed by the exact same
+// fetchAvailability() data as availabilityBody/noDataMessage above, never a
+// second fetch. See renderYourDatasetsTable()/resetDatasetTables().
+const yourDatasetsBody = document.getElementById('yourDatasetsBody');
+const yourDatasetsNoData = document.getElementById('yourDatasetsNoData');
+
 // Redesign Phase 1: header's Upload More button (moved off an inline onclick).
 const uploadMoreBtn = document.getElementById('uploadMoreBtn');
 
@@ -666,19 +672,32 @@ function setDefaultDateRange() {
     filterDateEnd.value = formatDate(lastDay);
 }
 
+// Redesign Phase 5: resets both the old Availability Table and the new
+// "Your datasets" table to the same empty/error message in one call — they
+// always share one fetch/dataset, so every place that used to reset only
+// the old table's empty state now resets both here instead of duplicating
+// the same reset lines a second time.
+function resetDatasetTables(message) {
+    availabilityBody.innerHTML = '';
+    noDataMessage.style.display = 'block';
+    noDataMessage.innerHTML = message;
+
+    yourDatasetsBody.innerHTML = '';
+    yourDatasetsNoData.style.display = 'block';
+    yourDatasetsNoData.innerHTML = message;
+}
+
 // ---------- CLEAR ALL FILTERS (Main Page) ----------
 function clearAllFilters() {
     // 1. Reset filter fields to empty
     filterTemplate.value = '';
     filterDateStart.value = '';
     filterDateEnd.value = '';
-    
-    // 2. Clear the table and stats
+
+    // 2. Clear both tables and stats
     availabilityData = [];
-    availabilityBody.innerHTML = '';
-    noDataMessage.style.display = 'block';
-    noDataMessage.innerHTML = 'Filters cleared. Select a new date range and click "Check Availability".';
-    
+    resetDatasetTables('Filters cleared. Select a new date range and click "Check Availability".');
+
     statsTotalRecords.textContent = '0';
     statsTotalTemplates.textContent = '0';
     statsMissingTemplates.textContent = '0';
@@ -693,12 +712,10 @@ async function fetchAvailability() {
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ Please select a client from the Dashboard first.', 'error');
-        availabilityBody.innerHTML = '';
-        noDataMessage.style.display = 'block';
-        noDataMessage.innerHTML = '⚠️ No client selected. Please go to the Dashboard and select a client.';
+        resetDatasetTables('⚠️ No client selected. Please go to the Dashboard and select a client.');
         return;
     }
-    
+
     const dateRange = getDateRangeFromFilter();
     if (!dateRange) {
         showStatus('⚠️ Please select a valid date range (start ≤ end).', 'error');
@@ -743,6 +760,9 @@ async function fetchAvailability() {
         statsSundayRows.textContent = sundayRows;
         
         renderAvailabilityTable(data);
+        // Redesign Phase 5: new "Your datasets" table reflects the exact
+        // same fetch/data — no separate network call.
+        renderYourDatasetsTable(data);
 
         if (totalTemplates === 0) {
             showStatus('ℹ️ No templates found for the selected criteria.', 'info');
@@ -761,9 +781,7 @@ async function fetchAvailability() {
     } catch (error) {
         console.error('Fetch availability error:', error);
         showStatus('❌ Error: ' + error.message, 'error');
-        availabilityBody.innerHTML = '';
-        noDataMessage.style.display = 'block';
-        noDataMessage.innerHTML = '❌ Error loading data. Please try again.';
+        resetDatasetTables('❌ Error loading data. Please try again.');
         statsTotalRecords.textContent = '0';
         statsTotalTemplates.textContent = '0';
         statsMissingTemplates.textContent = '0';
@@ -861,58 +879,11 @@ function renderAvailabilityTable(data) {
             statusSpan.setAttribute('data-tooltip', 'Data exists but outside the selected date range');
         }
         tr.appendChild(tdStatus);
-        
-                // Actions
-        const tdActions = document.createElement('td');
-        tdActions.style.textAlign = 'center';
-        tdActions.style.whiteSpace = 'nowrap';
-        
-        // Preview button - enabled if there's ANY data (total_row_count > 0)
-        if (item.total_row_count > 0) {
-            const previewBtn = document.createElement('button');
-            previewBtn.className = 'action-btn preview';
-            previewBtn.textContent = '👁️';
-            previewBtn.title = 'Preview Data';
-            previewBtn.setAttribute('data-tooltip', 'Preview data for this template');
-            // Phase 2 (Unified date range): the 👁️ icon always opens the shared
-            // date-range popover first (gate mode) — the preview itself only
-            // opens once a range is confirmed there.
-            previewBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                openSharedRangePopover(previewBtn, 'gate', item.template_id, item.template_name);
-            });
-            tdActions.appendChild(previewBtn);
-            
-            // Export button
-            const exportBtn = document.createElement('button');
-            exportBtn.className = 'action-btn export';
-            exportBtn.textContent = '📥';
-            exportBtn.title = 'Export to Excel';
-            exportBtn.setAttribute('data-tooltip', 'Export all data for this template');
-            exportBtn.style.marginLeft = '6px';
-            exportBtn.addEventListener('click', () => {
-                exportDataset(item.template_id, item.template_name);
-            });
-            tdActions.appendChild(exportBtn);
 
-            // Delete button
-            const deleteBtn = document.createElement('button');
-            deleteBtn.className = 'action-btn delete';
-            deleteBtn.textContent = '🗑️';
-            deleteBtn.title = 'Delete all data for this template';
-            deleteBtn.setAttribute('data-tooltip', 'Delete all imported data for this template');
-            deleteBtn.style.marginLeft = '6px';
-            deleteBtn.style.color = '#dc2626';
-            deleteBtn.addEventListener('click', () => {
-                deleteTemplateData(item.template_id, item.template_name, item.total_row_count);
-            });
-            tdActions.appendChild(deleteBtn);
-        } else {
-            tdActions.textContent = '—';
-            tdActions.style.color = '#94a3b8';
-        }
-        
-        tr.appendChild(tdActions);
+        // Redesign Phase 5: Actions cell extracted into a shared helper so
+        // the new "Your datasets" table below can trigger the exact same
+        // Preview/Export/Delete behavior instead of duplicating it.
+        tr.appendChild(buildDatasetActionButtons(item));
         availabilityBody.appendChild(tr);
     });
     
@@ -928,6 +899,131 @@ function renderAvailabilityTable(data) {
     statsMissingTemplates.textContent = missing;
     statsSundayRows.textContent = sundayRows;
 }
+
+// Redesign Phase 5: builds the Preview/Export/Delete Actions cell — extracted
+// from renderAvailabilityTable()'s own inline block (behavior unchanged) so
+// renderYourDatasetsTable() below can reuse the exact same buttons/click
+// handlers (including the shared date-range-popover gate on Preview and the
+// confirm-before-delete already inside deleteTemplateData()) instead of a
+// second, duplicated implementation.
+function buildDatasetActionButtons(item) {
+    const tdActions = document.createElement('td');
+    tdActions.style.textAlign = 'center';
+    tdActions.style.whiteSpace = 'nowrap';
+
+    // Preview button - enabled if there's ANY data (total_row_count > 0)
+    if (item.total_row_count > 0) {
+        const previewBtn = document.createElement('button');
+        previewBtn.className = 'action-btn preview';
+        previewBtn.textContent = '👁️';
+        previewBtn.title = 'Preview Data';
+        previewBtn.setAttribute('data-tooltip', 'Preview data for this template');
+        // Phase 2 (Unified date range): the 👁️ icon always opens the shared
+        // date-range popover first (gate mode) — the preview itself only
+        // opens once a range is confirmed there.
+        previewBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openSharedRangePopover(previewBtn, 'gate', item.template_id, item.template_name);
+        });
+        tdActions.appendChild(previewBtn);
+
+        // Export button
+        const exportBtn = document.createElement('button');
+        exportBtn.className = 'action-btn export';
+        exportBtn.textContent = '📥';
+        exportBtn.title = 'Export to Excel';
+        exportBtn.setAttribute('data-tooltip', 'Export all data for this template');
+        exportBtn.style.marginLeft = '6px';
+        exportBtn.addEventListener('click', () => {
+            exportDataset(item.template_id, item.template_name);
+        });
+        tdActions.appendChild(exportBtn);
+
+        // Delete button
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'action-btn delete';
+        deleteBtn.textContent = '🗑️';
+        deleteBtn.title = 'Delete all data for this template';
+        deleteBtn.setAttribute('data-tooltip', 'Delete all imported data for this template');
+        deleteBtn.style.marginLeft = '6px';
+        deleteBtn.style.color = '#dc2626';
+        deleteBtn.addEventListener('click', () => {
+            deleteTemplateData(item.template_id, item.template_name, item.total_row_count);
+        });
+        tdActions.appendChild(deleteBtn);
+    } else {
+        tdActions.textContent = '—';
+        tdActions.style.color = '#94a3b8';
+    }
+
+    return tdActions;
+}
+
+// ---------- RENDER "YOUR DATASETS" TABLE (Redesign Phase 5) ----------
+// New, simplified table (Template / Full Date Range / Total Rows / Status /
+// Actions) fed by the exact same data fetchAvailability() already retrieves
+// for the old Availability Table above — no separate fetch. Coexists with
+// that table until Phase 6 removes it; the "#" (row number)/Filtered Rows/
+// Sunday columns are intentionally not carried over, per the confirmed
+// column list for this new table.
+function renderYourDatasetsTable(data) {
+    yourDatasetsBody.innerHTML = '';
+    if (!data || data.length === 0) {
+        yourDatasetsNoData.style.display = 'block';
+        yourDatasetsNoData.innerHTML = 'No templates found for the selected criteria.';
+        return;
+    }
+    yourDatasetsNoData.style.display = 'none';
+
+    data.forEach(item => {
+        const tr = document.createElement('tr');
+
+        // Template Name
+        const tdName = document.createElement('td');
+        tdName.textContent = item.template_name;
+        tdName.style.fontWeight = '500';
+        tr.appendChild(tdName);
+
+        // Full Date Range (unfiltered) — same fallback logic as the old table.
+        const tdDate = document.createElement('td');
+        if (item.date_min && item.date_max) {
+            tdDate.textContent = `${formatDateForDisplay(item.date_min)} – ${formatDateForDisplay(item.date_max)}`;
+        } else {
+            tdDate.textContent = '—';
+            tdDate.style.color = '#94a3b8';
+        }
+        tr.appendChild(tdDate);
+
+        // Total Rows (all data, unfiltered)
+        const tdTotalRows = document.createElement('td');
+        tdTotalRows.textContent = item.total_row_count || 0;
+        tdTotalRows.style.textAlign = 'center';
+        tdTotalRows.style.fontWeight = '600';
+        tdTotalRows.setAttribute('data-tooltip', 'Total rows across all dates for this template');
+        tr.appendChild(tdTotalRows);
+
+        // Status (based on total data) — same badge/status-map as the old table.
+        const tdStatus = document.createElement('td');
+        tdStatus.style.textAlign = 'center';
+        const statusSpan = document.createElement('span');
+        const status = item.status || 'missing';
+        statusSpan.className = `status-badge ${status}`;
+        const statusMap = {
+            'complete': '✅ Complete',
+            'missing': '❌ Missing',
+            'partial': '⚠️ Partial'
+        };
+        statusSpan.textContent = statusMap[status] || status;
+        tdStatus.appendChild(statusSpan);
+        tr.appendChild(tdStatus);
+
+        // Actions — same shared buttons/click handlers as the old table.
+        tr.appendChild(buildDatasetActionButtons(item));
+
+        yourDatasetsBody.appendChild(tr);
+    });
+}
+
 async function deleteTemplateData(templateId, templateName, rowCount) {
     const clientId = getSelectedClientId();
     if (!clientId) {
@@ -1504,9 +1600,7 @@ window.onload = async function() {
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ Please select a client from the Dashboard first.', 'error');
-        availabilityBody.innerHTML = '';
-        noDataMessage.style.display = 'block';
-        noDataMessage.innerHTML = '⚠️ No client selected. Please go to the Dashboard and select a client.';
+        resetDatasetTables('⚠️ No client selected. Please go to the Dashboard and select a client.');
         setTimeout(() => {
             window.location.href = '/static/index.html';
         }, 3000);
