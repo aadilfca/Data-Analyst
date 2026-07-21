@@ -20,6 +20,12 @@ let isPreviewOpen = false;
 let isPreviewLoading = false;
 let isAvailabilityLoading = false;
 
+// Coverage Calendar (Phase 4) state — independent of dateStart/dateEnd/
+// filterTemplate above; this widget has its own template multi-select and
+// its own month/year navigation.
+let calendarYear = new Date().getFullYear();
+let calendarMonth = new Date().getMonth() + 1; // 1-12
+
 // ---------- DOM REFS ----------
 const filterTemplate = document.getElementById('templateFilter');
 const filterDateStart = document.getElementById('dateStart');
@@ -30,6 +36,13 @@ const refreshBtn = document.getElementById('refreshBtn');
 const availabilityBody = document.getElementById('availabilityBody');
 const noDataMessage = document.getElementById('noDataMessage');
 const statusDiv = document.getElementById('statusMessage');
+
+// Coverage Calendar (Phase 4) DOM refs
+const calendarTemplateSelect = document.getElementById('calendarTemplateSelect');
+const calendarPrevMonthBtn = document.getElementById('calendarPrevMonthBtn');
+const calendarNextMonthBtn = document.getElementById('calendarNextMonthBtn');
+const calendarMonthLabel = document.getElementById('calendarMonthLabel');
+const coverageCalendarsContainer = document.getElementById('coverageCalendarsContainer');
 
 const statsTotalRecords = document.getElementById('totalRecords');
 const statsTotalTemplates = document.getElementById('totalTemplates');
@@ -319,6 +332,195 @@ async function loadTemplateDropdown() {
         console.error('Error loading templates:', error);
         filterTemplate.innerHTML = '<option value="">⚠️ Failed to load</option>';
     }
+}
+
+// ---------- COVERAGE CALENDAR (Phase 4) ----------
+// Independent widget — its own template multi-select and its own month/year
+// state (calendarYear/calendarMonth above). Does not read or write
+// #dateStart/#dateEnd/#templateFilter, which stay dedicated to the existing
+// Availability Table/Preview/Export flow below, left untouched.
+
+const CALENDAR_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+const CALENDAR_DAY_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// Populated via its own GET /api/templates call (deliberately not sharing
+// loadTemplateDropdown()'s fetch/element, to avoid touching that existing,
+// working code — same small-duplication-over-refactor-risk tradeoff already
+// used elsewhere in this codebase, e.g. the Audit Rules Cross-checks/
+// Categories views).
+async function loadCalendarTemplateOptions() {
+    try {
+        const res = await fetch(API_BASE + '/api/templates');
+        if (!res.ok) throw new Error('Failed to fetch templates');
+        const templates = await res.json();
+
+        calendarTemplateSelect.innerHTML = '';
+        templates.forEach(tpl => {
+            const opt = document.createElement('option');
+            opt.value = tpl.id;
+            opt.textContent = tpl.template_name;
+            calendarTemplateSelect.appendChild(opt);
+        });
+    } catch (error) {
+        console.error('Error loading calendar template options:', error);
+        calendarTemplateSelect.innerHTML = '<option value="">⚠️ Failed to load</option>';
+    }
+}
+
+function getCalendarSelectedTemplateIds() {
+    return Array.from(calendarTemplateSelect.selectedOptions)
+        .map(opt => parseInt(opt.value, 10))
+        .filter(id => !isNaN(id));
+}
+
+function updateCalendarMonthLabel() {
+    calendarMonthLabel.textContent = `${CALENDAR_MONTH_NAMES[calendarMonth - 1]} ${calendarYear}`;
+}
+
+// Fetches Phase 3's per-day coverage endpoint for every currently-selected
+// template in one call (template_ids sent as repeated query params) and
+// renders one calendar block per template.
+async function fetchCoverageCalendar() {
+    updateCalendarMonthLabel();
+
+    const clientId = getSelectedClientId();
+    if (!clientId) {
+        coverageCalendarsContainer.innerHTML = '<div class="calendar-empty-state">⚠️ No client selected. Please select a client from the Dashboard.</div>';
+        return;
+    }
+
+    const templateIds = getCalendarSelectedTemplateIds();
+    if (templateIds.length === 0) {
+        coverageCalendarsContainer.innerHTML = '<div class="calendar-empty-state">Select one or more templates above to view their coverage calendar.</div>';
+        return;
+    }
+
+    const params = new URLSearchParams({
+        client_id: clientId,
+        year: calendarYear,
+        month: calendarMonth
+    });
+    templateIds.forEach(id => params.append('template_ids', id));
+
+    coverageCalendarsContainer.innerHTML = '<div class="calendar-empty-state">⏳ Loading calendar...</div>';
+
+    try {
+        const res = await fetch(`${API_BASE}/api/data/availability/calendar?${params.toString()}`);
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Failed to fetch coverage calendar');
+        }
+        const data = await res.json();
+        renderCoverageCalendars(data);
+    } catch (error) {
+        console.error('Coverage calendar fetch error:', error);
+        coverageCalendarsContainer.innerHTML = `<div class="calendar-empty-state">❌ Error loading calendar: ${escapeHtml(error.message)}</div>`;
+    }
+}
+
+// Builds the 7-column day grid for one template's "days" array, with leading/
+// trailing blank cells so the grid stays calendar-shaped. 0=Sunday matches
+// both JS's Date.getDay() and the backend's own strftime('%w') convention.
+function buildCalendarDayGrid(days, year, month) {
+    const grid = document.createElement('div');
+    grid.className = 'coverage-calendar-grid';
+
+    CALENDAR_DAY_HEADERS.forEach(label => {
+        const th = document.createElement('div');
+        th.className = 'calendar-day-header';
+        th.textContent = label;
+        grid.appendChild(th);
+    });
+
+    const leadingBlanks = new Date(year, month - 1, 1).getDay();
+    for (let i = 0; i < leadingBlanks; i++) {
+        const blank = document.createElement('div');
+        blank.className = 'calendar-day-cell empty';
+        grid.appendChild(blank);
+    }
+
+    days.forEach(day => {
+        const cell = document.createElement('div');
+        cell.className = `calendar-day-cell ${day.status}`;
+        cell.textContent = String(parseInt(day.date.slice(-2), 10));
+        if (day.status === 'holiday' && day.label) {
+            cell.title = day.label;
+        }
+        grid.appendChild(cell);
+    });
+
+    const totalCells = leadingBlanks + days.length;
+    const trailingBlanks = (7 - (totalCells % 7)) % 7;
+    for (let i = 0; i < trailingBlanks; i++) {
+        const blank = document.createElement('div');
+        blank.className = 'calendar-day-cell empty';
+        grid.appendChild(blank);
+    }
+
+    return grid;
+}
+
+function buildCalendarLegend() {
+    const legend = document.createElement('div');
+    legend.className = 'calendar-legend';
+    const items = [
+        { cls: 'present', label: 'Present' },
+        { cls: 'missing', label: 'Missing' },
+        { cls: 'sunday', label: 'Sunday' },
+        { cls: 'holiday', label: 'Holiday' }
+    ];
+    items.forEach(item => {
+        const el = document.createElement('div');
+        el.className = 'calendar-legend-item';
+        const swatch = document.createElement('span');
+        swatch.className = `calendar-legend-swatch ${item.cls}`;
+        el.appendChild(swatch);
+        el.appendChild(document.createTextNode(item.label));
+        legend.appendChild(el);
+    });
+    return legend;
+}
+
+function renderCoverageCalendars(data) {
+    coverageCalendarsContainer.innerHTML = '';
+    if (!data.templates || data.templates.length === 0) {
+        coverageCalendarsContainer.innerHTML = '<div class="calendar-empty-state">No templates found.</div>';
+        return;
+    }
+
+    data.templates.forEach(tpl => {
+        const block = document.createElement('div');
+        block.className = 'coverage-calendar-block';
+
+        const heading = document.createElement('h3');
+        heading.className = 'coverage-calendar-heading';
+        heading.textContent = tpl.template_name;
+        block.appendChild(heading);
+
+        block.appendChild(buildCalendarLegend());
+        block.appendChild(buildCalendarDayGrid(tpl.days, data.year, data.month));
+
+        coverageCalendarsContainer.appendChild(block);
+    });
+}
+
+function goToPrevMonth() {
+    calendarMonth--;
+    if (calendarMonth < 1) {
+        calendarMonth = 12;
+        calendarYear--;
+    }
+    fetchCoverageCalendar();
+}
+
+function goToNextMonth() {
+    calendarMonth++;
+    if (calendarMonth > 12) {
+        calendarMonth = 1;
+        calendarYear++;
+    }
+    fetchCoverageCalendar();
 }
 
 // ---------- SET DEFAULT DATE RANGE (Current Month) ----------
@@ -985,6 +1187,11 @@ async function exportDataset(templateId, templateName) {
     }
 }
 
+// ---------- COVERAGE CALENDAR EVENT LISTENERS (Phase 4) ----------
+calendarTemplateSelect.addEventListener('change', fetchCoverageCalendar);
+calendarPrevMonthBtn.addEventListener('click', goToPrevMonth);
+calendarNextMonthBtn.addEventListener('click', goToNextMonth);
+
 // ---------- EVENT LISTENERS (Main) ----------
 checkBtn.addEventListener('click', fetchAvailability);
 clearFiltersBtn.addEventListener('click', clearAllFilters);
@@ -1140,6 +1347,9 @@ window.onClientChange = function(clientId) {
                 previewModal.style.display = 'none';
                 isPreviewOpen = false;
             }
+            // Coverage Calendar (Phase 4): refresh for the new client, same
+            // template/month selection — presence data is per-client.
+            fetchCoverageCalendar();
         }
     }, 300);
 };
@@ -1153,7 +1363,9 @@ window.onload = async function() {
     
     setDefaultDateRange();
     await loadTemplateDropdown();
-    
+    await loadCalendarTemplateOptions();
+    updateCalendarMonthLabel();
+
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ Please select a client from the Dashboard first.', 'error');
@@ -1165,6 +1377,6 @@ window.onload = async function() {
         }, 3000);
         return;
     }
-    
+
     fetchAvailability();
 };

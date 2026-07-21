@@ -438,6 +438,163 @@
             white-space: nowrap;
         }
 
+        /* ===== COVERAGE CALENDAR (Phase 4 — Client Data Availability &
+           Coverage Redesign). Independent widget: its own template
+           multi-select and its own month/year state, separate from the
+           existing filter-bar/#dateStart/#dateEnd/Availability Table below,
+           which are kept fully functional and untouched (still drive
+           Preview/Export/Delete and the shared date-range popover). ===== */
+        .coverage-calendar-section {
+            background: white;
+            padding: 16px 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            margin-bottom: 20px;
+        }
+
+        .calendar-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px 24px;
+            align-items: flex-end;
+            margin-bottom: 16px;
+        }
+
+        .calendar-controls select[multiple] {
+            padding: 6px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+            min-width: 220px;
+            background: white;
+        }
+
+        .calendar-month-nav {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .calendar-month-nav button {
+            padding: 6px 16px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            color: #1a1a2e;
+        }
+
+        .calendar-month-nav button:hover {
+            background: #eef2ff;
+        }
+
+        .calendar-month-nav span {
+            font-size: 15px;
+            font-weight: 700;
+            color: #1a1a2e;
+            min-width: 130px;
+            text-align: center;
+        }
+
+        .calendar-empty-state {
+            padding: 32px;
+            text-align: center;
+            color: #94a3b8;
+        }
+
+        .coverage-calendar-block {
+            margin-bottom: 28px;
+        }
+
+        .coverage-calendar-block:last-child {
+            margin-bottom: 0;
+        }
+
+        .coverage-calendar-heading {
+            margin: 0 0 8px 0;
+            font-size: 16px;
+            color: #1a1a2e;
+        }
+
+        .calendar-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 10px;
+        }
+
+        .calendar-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #475569;
+        }
+
+        .calendar-legend-swatch {
+            width: 14px;
+            height: 14px;
+            border-radius: 4px;
+            display: inline-block;
+        }
+
+        .calendar-legend-swatch.present,
+        .calendar-day-cell.present {
+            background: #dcfce7;
+        }
+
+        .calendar-legend-swatch.missing,
+        .calendar-day-cell.missing {
+            background: #fee2e2;
+        }
+
+        .calendar-legend-swatch.sunday,
+        .calendar-day-cell.sunday {
+            background: #fef3c7;
+        }
+
+        .calendar-legend-swatch.holiday,
+        .calendar-day-cell.holiday {
+            background: #ede9fe;
+        }
+
+        .coverage-calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 4px;
+            max-width: 560px;
+        }
+
+        .calendar-day-header {
+            text-align: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            padding: 4px 0;
+        }
+
+        .calendar-day-cell {
+            aspect-ratio: 1 / 1;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            color: #1a1a2e;
+        }
+
+        .calendar-day-cell.present { color: #166534; font-weight: 600; }
+        .calendar-day-cell.missing { color: #991b1b; }
+        .calendar-day-cell.sunday { color: #92400e; }
+        .calendar-day-cell.holiday { color: #6d28d9; cursor: help; }
+
+        .calendar-day-cell.empty {
+            background: transparent;
+        }
+
         /* Responsive tweaks */
         @media (max-width: 768px) {
             .filter-bar {
@@ -466,6 +623,10 @@
             .availability-table th,
             .availability-table td {
                 padding: 8px 10px;
+            }
+
+            .coverage-calendar-grid {
+                max-width: 100%;
             }
         }
     </style>
@@ -502,6 +663,30 @@
                 </button>
             </div>
         </header>
+
+        <!-- ===== COVERAGE CALENDAR (Phase 4) =====
+             Independent widget: its own template multi-select + its own
+             month/year navigation. Does not read/write #dateStart/#dateEnd —
+             the Availability Table below keeps those working unchanged. -->
+        <div class="coverage-calendar-section" id="coverageCalendarSection">
+            <div class="calendar-controls">
+                <div class="filter-group">
+                    <label for="calendarTemplateSelect">📋 Templates (select one or more)</label>
+                    <select id="calendarTemplateSelect" multiple size="5">
+                        <!-- Options populated by loadCalendarTemplateOptions() -->
+                    </select>
+                </div>
+                <div class="calendar-month-nav">
+                    <button type="button" id="calendarPrevMonthBtn">‹ Prev</button>
+                    <span id="calendarMonthLabel">—</span>
+                    <button type="button" id="calendarNextMonthBtn">Next ›</button>
+                </div>
+            </div>
+            <div id="coverageCalendarsContainer">
+                <!-- One .coverage-calendar-block per selected template, rendered by renderCoverageCalendars() -->
+                <div class="calendar-empty-state">Select one or more templates above to view their coverage calendar.</div>
+            </div>
+        </div>
 
         <!-- ===== FILTER BAR ===== -->
         <div class="filter-bar" id="filterBar">
