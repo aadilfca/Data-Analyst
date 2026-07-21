@@ -135,6 +135,50 @@ def get_error_logs(
     # Optionally, we could add X-Total-Count header. But for simplicity, return full objects.
     return result
 
+# ---------- STATS ENDPOINT ----------
+# Must be registered before /api/error-logs/{error_id} below -- FastAPI matches
+# routes top-to-bottom, and {error_id} is typed int, so "stats" was being matched
+# against it as an invalid numeric ID (422) instead of reaching this route.
+@router.get("/api/error-logs/stats")
+def get_error_stats():
+    """
+    Get summary statistics: total, resolved, pending, breakdown by category.
+    """
+    total = execute_query("SELECT COUNT(*) as count FROM error_log")[0]['count']
+    resolved = execute_query("SELECT COUNT(*) as count FROM error_log WHERE is_resolved = 1")[0]['count']
+    pending = total - resolved
+
+    # Breakdown by category
+    categories = execute_query(
+        """
+        SELECT error_category, COUNT(*) as count
+        FROM error_log
+        GROUP BY error_category
+        ORDER BY count DESC
+        """
+    )
+    category_breakdown = {row['error_category']: row['count'] for row in categories}
+
+    # Last 7 days activity
+    last_7_days = execute_query(
+        """
+        SELECT date(created_at) as day, COUNT(*) as count
+        FROM error_log
+        WHERE created_at >= date('now', '-7 days')
+        GROUP BY date(created_at)
+        ORDER BY day DESC
+        """
+    )
+    daily_counts = {row['day']: row['count'] for row in last_7_days}
+
+    return {
+        "total": total,
+        "resolved": resolved,
+        "pending": pending,
+        "category_breakdown": category_breakdown,
+        "daily_counts": daily_counts
+    }
+
 @router.get("/api/error-logs/{error_id}", response_model=ErrorLogResponse)
 def get_error_log(error_id: int):
     """
@@ -187,44 +231,3 @@ def delete_error_log(error_id: int):
     execute_write("DELETE FROM error_log WHERE id = ?", (error_id,))
     log_audit("Admin", "Delete", "ErrorLog", f"Deleted error log {error_id}")
     return {"message": "Error log deleted successfully"}
-
-# ---------- STATS ENDPOINT ----------
-@router.get("/api/error-logs/stats")
-def get_error_stats():
-    """
-    Get summary statistics: total, resolved, pending, breakdown by category.
-    """
-    total = execute_query("SELECT COUNT(*) as count FROM error_log")[0]['count']
-    resolved = execute_query("SELECT COUNT(*) as count FROM error_log WHERE is_resolved = 1")[0]['count']
-    pending = total - resolved
-    
-    # Breakdown by category
-    categories = execute_query(
-        """
-        SELECT error_category, COUNT(*) as count
-        FROM error_log
-        GROUP BY error_category
-        ORDER BY count DESC
-        """
-    )
-    category_breakdown = {row['error_category']: row['count'] for row in categories}
-    
-    # Last 7 days activity
-    last_7_days = execute_query(
-        """
-        SELECT date(created_at) as day, COUNT(*) as count
-        FROM error_log
-        WHERE created_at >= date('now', '-7 days')
-        GROUP BY date(created_at)
-        ORDER BY day DESC
-        """
-    )
-    daily_counts = {row['day']: row['count'] for row in last_7_days}
-    
-    return {
-        "total": total,
-        "resolved": resolved,
-        "pending": pending,
-        "category_breakdown": category_breakdown,
-        "daily_counts": daily_counts
-    }
