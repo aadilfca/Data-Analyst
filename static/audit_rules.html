@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <title>Audit Rules - Internal Audit App</title>
     <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
+
 <body data-nav-module="Audit Rules" data-nav-parent="index.html">
     <!-- Top Navigation Bar -->
     <nav class="navbar">
@@ -21,11 +23,7 @@
     </nav>
 
     <div class="main-container">
-        <header class="module-header">
-            <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
-            <h1>📋 Audit Rules</h1>
-            <p>Manage reusable Documents, Cross-checks, and Categories for audit rule assignment</p>
-        </header>
+
 
         <!-- Three-pane shell: entity rail | list panel | detail panel -->
         <div class="audit-rules-shell">
@@ -76,7 +74,8 @@
                     <span>Show inactive</span>
                 </label>
                 <div id="arCrossCheckListBody" class="ar-list-body"></div>
-                <div id="arCrossCheckListEmptyMessage" class="ar-list-empty" style="display:none;">No cross-checks found.</div>
+                <div id="arCrossCheckListEmptyMessage" class="ar-list-empty" style="display:none;">No cross-checks
+                    found.</div>
             </div>
 
             <!-- Categories list section (Phase 7, new). -->
@@ -90,7 +89,8 @@
                     <span>Show inactive</span>
                 </label>
                 <div id="arCategoryListBody" class="ar-list-body"></div>
-                <div id="arCategoryListEmptyMessage" class="ar-list-empty" style="display:none;">No categories found.</div>
+                <div id="arCategoryListEmptyMessage" class="ar-list-empty" style="display:none;">No categories found.
+                </div>
             </div>
 
             <!-- RIGHT: detail / edit panel. Same one-section-per-entity-type toggle pattern
@@ -111,7 +111,7 @@
                     </div>
 
                     <div class="ar-field">
-                        <label for="arKbNoteInput">KB Note</label>
+                        <label for="arKbNoteInput">Knowledge Base</label>
                         <textarea id="arKbNoteInput" rows="3"></textarea>
                     </div>
 
@@ -152,8 +152,10 @@
 
                     <div class="ar-detail-actions">
                         <button type="button" id="arSaveBtn" class="ar-btn-save">Save</button>
-                        <button type="button" id="arDeleteBtn" class="ar-btn-delete" style="display:none;">Delete</button>
-                        <button type="button" id="arRestoreBtn" class="ar-btn-restore" style="display:none;">Restore</button>
+                        <button type="button" id="arDeleteBtn" class="ar-btn-delete"
+                            style="display:none;">Delete</button>
+                        <button type="button" id="arRestoreBtn" class="ar-btn-restore"
+                            style="display:none;">Restore</button>
                     </div>
                 </form>
             </div>
@@ -203,15 +205,18 @@
                     </div>
 
                     <div class="ar-field" id="arCrossCheckUsedByRow" style="display:none;">
-                        <span class="ar-used-by-label">Used by <span id="arCrossCheckUsedByCount">0</span> categories</span>
+                        <span class="ar-used-by-label">Used by <span id="arCrossCheckUsedByCount">0</span>
+                            categories</span>
                     </div>
 
                     <div id="arCrossCheckDetailStatus" class="upload-status" style="display:none;"></div>
 
                     <div class="ar-detail-actions">
                         <button type="button" id="arCrossCheckSaveBtn" class="ar-btn-save">Save</button>
-                        <button type="button" id="arCrossCheckDeleteBtn" class="ar-btn-delete" style="display:none;">Delete</button>
-                        <button type="button" id="arCrossCheckRestoreBtn" class="ar-btn-restore" style="display:none;">Restore</button>
+                        <button type="button" id="arCrossCheckDeleteBtn" class="ar-btn-delete"
+                            style="display:none;">Delete</button>
+                        <button type="button" id="arCrossCheckRestoreBtn" class="ar-btn-restore"
+                            style="display:none;">Restore</button>
                     </div>
                 </form>
             </div>
@@ -267,8 +272,10 @@
 
                     <div class="ar-detail-actions">
                         <button type="button" id="arCategorySaveBtn" class="ar-btn-save">Save</button>
-                        <button type="button" id="arCategoryDeleteBtn" class="ar-btn-delete" style="display:none;">Delete</button>
-                        <button type="button" id="arCategoryRestoreBtn" class="ar-btn-restore" style="display:none;">Restore</button>
+                        <button type="button" id="arCategoryDeleteBtn" class="ar-btn-delete"
+                            style="display:none;">Delete</button>
+                        <button type="button" id="arCategoryRestoreBtn" class="ar-btn-restore"
+                            style="display:none;">Restore</button>
                     </div>
                 </form>
             </div>
@@ -279,4 +286,5 @@
     <script src="/static/client_context.js?v=2"></script>
     <script src="/static/audit_rules.js?v=2"></script>
 </body>
+
 </html>

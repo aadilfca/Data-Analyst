@@ -2,9 +2,7 @@
 // 📋 ERROR DASHBOARD LOGIC
 // ==============================================
 
-// API_BASE is defined in client_context.js
-
-const STORAGE_KEY = 'selectedClientId';
+// API_BASE and STORAGE_KEY are defined in client_context.js (loaded before this file)
 
 let currentPage = 1;
 let totalPages = 1;
