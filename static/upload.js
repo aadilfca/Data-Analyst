@@ -36,6 +36,7 @@ const leftPanel = getElement('leftPanel');
 const mappingPanel = getElement('mappingPanel');
 const mappingBody = getElement('mappingBody');
 const mappingCount = getElement('mappingCount');
+const saveMappingBtn = getElement('saveMappingBtn');
 
 const modeActions = getElement('modeActions');
 
@@ -391,6 +392,16 @@ function formatFileSize(bytes) {
 function formatDate(d) {
     const date = new Date(d);
     return date.toLocaleDateString('en-GB') + ' ' + date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+
+// Resolves the current client id -- same isClientSelected()/getSelectedClientId()/localStorage
+// fallback pattern already used inline in the importBtn handler, pulled out here so the Save
+// Mapping action and the saved-mapping auto-apply check (Phase A2) don't duplicate it.
+function getCurrentClientId() {
+    if (typeof window.isClientSelected === 'function' && window.isClientSelected()) {
+        return window.getSelectedClientId();
+    }
+    return localStorage.getItem('selectedClientId');
 }
 
 // ---------- PREVIEW BUTTON STATE ----------
@@ -901,6 +912,93 @@ function resetUpload() {
     clearRestorePreview();
 }
 
+// ---------- SAVE COLUMN MAPPING (Phase A2 of 3) ----------
+// Persists the currently matched columns for this client+template via Phase A1's
+// POST /api/upload/save-mapping. Always a full overwrite (backend upserts via delete-then-
+// reinsert) -- there's no separate edit/delete UI this phase (Phase A3).
+if (saveMappingBtn) {
+    saveMappingBtn.addEventListener('click', async function() {
+        const clientId = getCurrentClientId();
+        if (!clientId) {
+            showStatus('⚠️ Please select a client first from the Dashboard.', 'error');
+            return;
+        }
+        if (!selectedTemplateId || !currentMappings || currentMappings.length === 0) {
+            showStatus('⚠️ Map at least one column before saving.', 'error');
+            return;
+        }
+
+        // SavedMappingEntry.excel_column (routers/import_export.py) is a required str, so
+        // unmatched (null excel_column) rows must be filtered out here, not left for the
+        // endpoint's own blank-skip to handle.
+        const mappingsToSave = currentMappings
+            .filter(m => m.excel_column)
+            .map(m => ({ template_column_id: m.column_id, excel_column: m.excel_column }));
+
+        if (mappingsToSave.length === 0) {
+            showStatus('⚠️ Map at least one column before saving.', 'error');
+            return;
+        }
+
+        saveMappingBtn.disabled = true;
+        try {
+            const res = await fetch(API_BASE + '/api/upload/save-mapping', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    client_id: parseInt(clientId),
+                    template_id: selectedTemplateId,
+                    mappings: mappingsToSave
+                })
+            });
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.detail || result.message || 'Save failed');
+            showStatus(`💾 Mapping saved (${result.saved_count} column${result.saved_count === 1 ? '' : 's'}) — it will auto-fill next time you upload this template for this client.`, 'success');
+        } catch (error) {
+            console.error('Save mapping error:', error);
+            showStatus('❌ Failed to save mapping: ' + error.message, 'error');
+        } finally {
+            saveMappingBtn.disabled = false;
+        }
+    });
+}
+
+// ---------- AUTO-APPLY SAVED MAPPING (Phase A2 of 3) ----------
+// Called from autoMapColumns() right after the backend's own auto-map guess is in hand. Overrides
+// a currentMappings entry with its saved excel_column ONLY when that exact header still exists on
+// the current sheet (excelHeaders) -- so a saved mapping can never force a mismatch onto a sheet
+// with different headers; anything that doesn't match keeps auto-mapping's own result untouched.
+// Returns the number of columns actually applied (0 if none/no saved mapping/lookup failed).
+async function applySavedMapping() {
+    const clientId = getCurrentClientId();
+    if (!clientId || !selectedTemplateId) return 0;
+
+    let data;
+    try {
+        const res = await fetch(API_BASE + `/api/upload/saved-mapping?client_id=${clientId}&template_id=${selectedTemplateId}`);
+        if (!res.ok) return 0;
+        data = await res.json();
+    } catch (error) {
+        console.warn('⚠️ Could not check for a saved column mapping:', error);
+        return 0;
+    }
+
+    if (!data || !data.has_saved_mapping || !Array.isArray(data.mappings) || data.mappings.length === 0) {
+        return 0;
+    }
+
+    let appliedCount = 0;
+    data.mappings.forEach(saved => {
+        if (!saved.excel_column || !excelHeaders.includes(saved.excel_column)) return; // header no longer present -- fall back to auto-mapping
+        const target = currentMappings.find(m => m.column_id === saved.template_column_id);
+        if (!target) return;
+        target.excel_column = saved.excel_column;
+        target.is_matched = true;
+        appliedCount++;
+    });
+    return appliedCount;
+}
+
 // ---------- AUTO-MAP ----------
 async function autoMapColumns() {
     if (!selectedTemplateId || !currentSheet || !fileId) {
@@ -932,7 +1030,13 @@ async function autoMapColumns() {
         excelHeaders = data.excel_headers;
 
         clearRestorePreview(); // Real data has arrived -- drop any grayed-out restore preview first
-          renderMapping(data.mappings);
+
+        // Auto-apply a previously saved mapping (Phase A2) on top of the backend's own auto-map
+        // guess -- only overrides columns whose saved Excel header still exists on this sheet, so
+        // it can never force a mismatch; anything else keeps auto-mapping's own result untouched.
+        const savedMappingAppliedCount = await applySavedMapping();
+
+        renderMapping(currentMappings);
         // populateUniqueIdDropdown() removed – no longer needed
 
         if (modeActions) modeActions.style.display = 'block';
@@ -940,10 +1044,14 @@ async function autoMapColumns() {
         if (leftPanel) leftPanel.style.display = 'block';
         if (importBtn) importBtn.disabled = false;
 
-        const matched = data.mappings.filter(m => m.is_matched).length;
+        const matched = currentMappings.filter(m => m.is_matched).length;
         if (mappingCount) mappingCount.textContent = matched + ' / ' + data.total_columns + ' matched';
         setBadge('✅ ' + matched + '/' + data.total_columns + ' matched');
-        showStatus('✅ Auto‑mapped ' + matched + '/' + data.total_columns + ' columns', 'success');
+        let mapStatusMsg = '✅ Auto‑mapped ' + matched + '/' + data.total_columns + ' columns';
+        if (savedMappingAppliedCount > 0) {
+            mapStatusMsg += ` (${savedMappingAppliedCount} from your saved mapping)`;
+        }
+        showStatus(mapStatusMsg, 'success');
 
         updatePreviewButtonState();
 

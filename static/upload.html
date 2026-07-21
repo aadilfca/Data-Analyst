@@ -245,6 +245,35 @@
             cursor: not-allowed;
         }
 
+        /* ---------- SAVE MAPPING BUTTON (Phase A2 of the Save Column Mapping feature) ----------
+           Small icon+text button, same visual language as .btn-download-icon -- sits in the
+           mapping panel's own section-title row (next to the match count), not the action-bar
+           below (that bar is for the Upload/Reset import actions, this is a mapping-table-scoped
+           action). Always upserts (overwrites) on click -- no separate edit/delete UI this phase
+           (Phase A3). */
+        .btn-save-mapping {
+            padding: 4px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            background: white;
+            color: #1a1a2e;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .btn-save-mapping:hover:not(:disabled) {
+            background: #eff6ff;
+            border-color: #3b82f6;
+        }
+
+        .btn-save-mapping:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         /* Wraps Download Template + Sheet selector so they reveal/hide together, gated on
            Template selection (see setSheetDownloadGroupVisible() in upload.js). Hidden by
            default -- matches "hidden before a Template is chosen". */
@@ -1373,6 +1402,8 @@
                         <div class="section-title">
                             🔗 Column Mapping
                             <span class="count" id="mappingCount">0 / 0 matched</span>
+                            <button class="btn-save-mapping" id="saveMappingBtn" type="button"
+                                    title="Save this mapping for future uploads of this template/client">💾 Save Mapping</button>
                         </div>
                         <div style="overflow-x:auto;">
                             <table class="mapping-table">
