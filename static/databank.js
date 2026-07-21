@@ -16,8 +16,6 @@ let previewTotalRows = 0;
 let previewSundayCount = 0;
 let previewTemplateId = null;
 let previewTemplateName = '';
-let previewDateStart = null;
-let previewDateEnd = null;
 let isPreviewOpen = false;
 let isPreviewLoading = false;
 let isAvailabilityLoading = false;
@@ -48,14 +46,19 @@ const sundayOnlyCheckbox = document.getElementById('sundayOnlyCheckbox');
 const dataQualityFilter = document.getElementById('dataQualityFilter');
 const sundayCountBadge = document.getElementById('sundayCountBadge');
 
-// Date range filter popover elements (Phase B2) — additive narrowing filter
-// on top of the mandatory date_start/date_end range, same manual-entry
-// pattern as amountMin/amountMax below.
-const dateRangeFilterBtn = document.getElementById('dateRangeFilterBtn');
-const dateRangeFilterPopover = document.getElementById('dateRangeFilterPopover');
-const previewDateFromInput = document.getElementById('previewDateFrom');
-const previewDateToInput = document.getElementById('previewDateTo');
-const clearDateRangeFilterBtn = document.getElementById('clearDateRangeFilterBtn');
+// Shared date range popover elements (Phase 2 — Unified date range). One
+// popover, two entry points: the row 👁️ icon (gate mode, before the preview
+// opens) and this modal's own trigger button (live mode, while it's open).
+const modalDateRangeBtn = document.getElementById('modalDateRangeBtn');
+const sharedRangePopover = document.getElementById('sharedRangePopover');
+const sharedRangeFromInput = document.getElementById('sharedRangeFrom');
+const sharedRangeToInput = document.getElementById('sharedRangeTo');
+const sharedRangeConfirmBtn = document.getElementById('sharedRangeConfirmBtn');
+// Set only while the popover is in "gate" mode (opened from a row's preview
+// icon, before the modal exists) — holds which template to open once the
+// range is confirmed. Null in "live" mode (popover opened from inside an
+// already-open modal), where confirming just refreshes in place.
+let pendingPreviewOpen = null;
 const searchInput = document.getElementById('searchInput');
 const amountMin = document.getElementById('amountMin');
 const amountMax = document.getElementById('amountMax');
@@ -218,28 +221,84 @@ async function showRowHistoryPopover(icon, clientDataId) {
     }
 }
 
-// ---------- DATE RANGE FILTER POPOVER (Phase B2) ----------
-function openDateRangeFilterPopover() {
-    dateRangeFilterPopover.style.display = 'block';
-}
+// ---------- SHARED DATE RANGE POPOVER (Phase 2 — Unified date range) ----------
+// One popover backs both entry points; #dateStart/#dateEnd (the main sheet's
+// own inputs) remain the single source of truth for the range — this popover
+// only ever reads/writes those two fields, never a duplicated copy.
 
-function closeDateRangeFilterPopover() {
-    dateRangeFilterPopover.style.display = 'none';
-}
+// Positions the popover near an anchor element, clamped to the viewport and
+// flipped above the anchor when there isn't enough room below — same
+// approach as showRowHistoryPopover()'s positioning, written separately
+// here since that function is unrelated/already-working code.
+function positionSharedRangePopover(anchorEl) {
+    const rect = anchorEl.getBoundingClientRect();
+    const popoverWidth = 220;
+    let left = rect.left;
+    if (left + popoverWidth > window.innerWidth) {
+        left = Math.max(8, window.innerWidth - popoverWidth - 8);
+    }
+    sharedRangePopover.style.left = left + 'px';
 
-function toggleDateRangeFilterPopover() {
-    if (dateRangeFilterPopover.style.display === 'block') {
-        closeDateRangeFilterPopover();
+    const popoverEstimatedHeight = 140;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow >= popoverEstimatedHeight + 6) {
+        sharedRangePopover.style.top = (rect.bottom + 6) + 'px';
+        sharedRangePopover.style.bottom = 'auto';
     } else {
-        openDateRangeFilterPopover();
+        sharedRangePopover.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+        sharedRangePopover.style.top = 'auto';
     }
 }
 
-// Reflects whether a From/To value is currently set on the trigger button,
-// mirroring upload.js's active-state treatment for its Date Format popover.
-function updateDateRangeButtonState() {
-    const hasValue = !!(previewDateFromInput.value || previewDateToInput.value);
-    dateRangeFilterBtn.classList.toggle('active', hasValue);
+// mode: 'gate' (opened from a row's 👁️ icon, before the preview modal
+// exists — confirming will open it) or 'live' (opened from inside the
+// already-open modal — confirming just refreshes in place).
+function openSharedRangePopover(anchorEl, mode, templateId, templateName) {
+    sharedRangeFromInput.value = filterDateStart.value || '';
+    sharedRangeToInput.value = filterDateEnd.value || '';
+    pendingPreviewOpen = (mode === 'gate') ? { templateId, templateName } : null;
+    sharedRangeConfirmBtn.textContent = (mode === 'gate') ? 'Open Preview' : 'Apply';
+    positionSharedRangePopover(anchorEl);
+    sharedRangePopover.style.display = 'block';
+}
+
+function closeSharedRangePopover() {
+    sharedRangePopover.style.display = 'none';
+    pendingPreviewOpen = null;
+}
+
+// Validates and writes the popover's From/To into the shared #dateStart/
+// #dateEnd inputs, then propagates the change to whichever views need it.
+// fetchAvailability() (awaited) is the single point that also refreshes an
+// already-open preview (see its own trailing isPreviewOpen check) — awaiting
+// it here before opening a pending (gate-mode) preview means that check runs
+// while isPreviewOpen is still false, so openPreview()'s own fetch is the
+// only preview fetch that happens, avoiding a redundant duplicate call.
+async function confirmSharedRangePopover() {
+    const start = sharedRangeFromInput.value;
+    const end = sharedRangeToInput.value;
+    if (!start || !end) {
+        showStatus('⚠️ Please select both a start and end date.', 'error');
+        return;
+    }
+    if (start > end) {
+        showStatus('⚠️ Start date must be before or equal to end date.', 'error');
+        return;
+    }
+
+    filterDateStart.value = start;
+    filterDateEnd.value = end;
+
+    const gateTarget = pendingPreviewOpen;
+    closeSharedRangePopover();
+
+    if (getSelectedClientId()) {
+        await fetchAvailability();
+    }
+
+    if (gateTarget) {
+        openPreview(gateTarget.templateId, gateTarget.templateName);
+    }
 }
 
 // ---------- LOAD TEMPLATES INTO DROPDOWN ----------
@@ -356,13 +415,21 @@ async function fetchAvailability() {
         statsSundayRows.textContent = sundayRows;
         
         renderAvailabilityTable(data);
-        
+
         if (totalTemplates === 0) {
             showStatus('ℹ️ No templates found for the selected criteria.', 'info');
         } else {
             showStatus(`✅ Found ${totalTemplates} template(s) with ${totalRows} total rows.`, 'success');
         }
-        
+
+        // Phase 2 (Unified date range): the shared range may have just changed
+        // (this is the main-sheet side of the two-way sync) — keep an open
+        // preview in step with it immediately, rather than only on next open.
+        if (isPreviewOpen) {
+            currentPage = 1;
+            fetchPreviewData();
+        }
+
     } catch (error) {
         console.error('Fetch availability error:', error);
         showStatus('❌ Error: ' + error.message, 'error');
@@ -479,8 +546,12 @@ function renderAvailabilityTable(data) {
             previewBtn.textContent = '👁️';
             previewBtn.title = 'Preview Data';
             previewBtn.setAttribute('data-tooltip', 'Preview data for this template');
-            previewBtn.addEventListener('click', () => {
-                openPreview(item.template_id, item.template_name);
+            // Phase 2 (Unified date range): the 👁️ icon always opens the shared
+            // date-range popover first (gate mode) — the preview itself only
+            // opens once a range is confirmed there.
+            previewBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openSharedRangePopover(previewBtn, 'gate', item.template_id, item.template_name);
             });
             tdActions.appendChild(previewBtn);
             
@@ -568,27 +639,28 @@ async function deleteTemplateData(templateId, templateName, rowCount) {
 
 // ---------- OPEN PREVIEW ----------
 function openPreview(templateId, templateName) {
+    // The shared #dateStart/#dateEnd inputs (already validated by whichever
+    // caller reached this point — confirmSharedRangePopover()) are the single
+    // source of truth; this is a defensive fallback only, not a copy.
     const dateRange = getDateRangeFromFilter();
     if (!dateRange) {
         showStatus('⚠️ Please select a date range.', 'error');
         return;
     }
-    
+
     // Check if client is still selected
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ No client selected. Please select a client from the Dashboard.', 'error');
         return;
     }
-    
+
     previewTemplateId = templateId;
     previewTemplateName = templateName;
-    previewDateStart = dateRange.start;
-    previewDateEnd = dateRange.end;
     previewLimit = parseInt(pageSizeSelect.value) || 50;
     currentPage = 1;
     isPreviewOpen = true;
-    
+
     // Show modal
     previewModal.style.display = 'flex';
     previewTitle.textContent = `📋 ${templateName} – Preview (${getSelectedClientName()})`;
@@ -597,12 +669,8 @@ function openPreview(templateId, templateName) {
     amountMin.value = '';
     amountMax.value = '';
     dataQualityFilter.value = '';
-    previewDateFromInput.value = '';
-    previewDateToInput.value = '';
-    updateDateRangeButtonState();
-    closeDateRangeFilterPopover();
     sundayCountBadge.textContent = 'Sunday rows: 0';
-    
+
     // Fetch data
     fetchPreviewData();
 }
@@ -615,27 +683,32 @@ async function fetchPreviewData() {
         return;
     }
     
-    if (!previewTemplateId || !previewDateStart || !previewDateEnd) {
+    // Read the shared date range fresh on every call (rather than a cached
+    // copy) — this is what lets a range change made elsewhere (main sheet
+    // or the in-modal popover) take effect the next time data is fetched,
+    // with no separate preview-only range to keep in sync.
+    const dateRange = getDateRangeFromFilter();
+    if (!previewTemplateId || !dateRange) {
         showStatus('⚠️ Missing preview parameters.', 'error');
         return;
     }
-    
+
     isPreviewLoading = true;
     previewTableBody.innerHTML = `<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">
         <span class="spinner"></span> Loading data...
     </td></tr>`;
     previewTableHead.innerHTML = '';
     previewCountInfo.textContent = 'Loading...';
-    
+
     const params = new URLSearchParams({
         client_id: clientId,
         template_id: previewTemplateId,
-        date_start: previewDateStart,
-        date_end: previewDateEnd,
+        date_start: dateRange.start,
+        date_end: dateRange.end,
         page: currentPage,
         limit: previewLimit
     });
-    
+
     // Add filters
     if (searchInput.value.trim()) {
         params.append('search', searchInput.value.trim());
@@ -651,14 +724,6 @@ async function fetchPreviewData() {
     }
     if (dataQualityFilter.value) {
         params.append('data_quality', dataQualityFilter.value);
-    }
-    // Date range filter (Phase B2): additive narrowing on top of the
-    // mandatory date_start/date_end range already in params above.
-    if (previewDateFromInput.value) {
-        params.append('date_from', previewDateFromInput.value);
-    }
-    if (previewDateToInput.value) {
-        params.append('date_to', previewDateToInput.value);
     }
 
     try {
@@ -815,14 +880,6 @@ function updatePagination() {
 // ---------- APPLY PREVIEW FILTERS ----------
 function applyPreviewFilters() {
     if (!isPreviewOpen) return;
-    // Client-side guard mirroring getDateRangeFromFilter()'s start<=end check
-    // for the mandatory range — gives a clearer message than waiting on the
-    // backend's own 400 for date_from > date_to.
-    if (previewDateFromInput.value && previewDateToInput.value &&
-        previewDateFromInput.value > previewDateToInput.value) {
-        showStatus('⚠️ "From" date must be before or equal to "To" date.', 'error');
-        return;
-    }
     currentPage = 1;
     fetchPreviewData();
 }
@@ -835,10 +892,6 @@ function clearPreviewFilters() {
     amountMax.value = '';
     sundayOnlyCheckbox.checked = false;
     dataQualityFilter.value = '';
-    previewDateFromInput.value = '';
-    previewDateToInput.value = '';
-    updateDateRangeButtonState();
-    closeDateRangeFilterPopover();
     currentPage = 1;
     fetchPreviewData();
 }
@@ -946,12 +999,14 @@ closePreviewBtn.addEventListener('click', () => {
     previewModal.style.display = 'none';
     isPreviewOpen = false;
     hideRowHistoryPopover();
+    closeSharedRangePopover();
 });
 previewModal.addEventListener('click', (e) => {
     if (e.target === previewModal) {
         previewModal.style.display = 'none';
         isPreviewOpen = false;
         hideRowHistoryPopover();
+        closeSharedRangePopover();
     }
 });
 
@@ -1021,58 +1076,40 @@ searchInput.addEventListener('input', function() {
 amountMin.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
 amountMax.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isPreviewOpen) applyPreviewFilters(); });
 
-// Date range filter popover (Phase B2)
-dateRangeFilterBtn.addEventListener('click', (e) => {
+// Shared date range popover (Phase 2 — Unified date range): the modal's own
+// trigger opens it in "live" mode (no pending template, no anchor template
+// info needed — confirming just re-fetches the currently open preview).
+modalDateRangeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    toggleDateRangeFilterPopover();
+    openSharedRangePopover(modalDateRangeBtn, 'live');
 });
-clearDateRangeFilterBtn.addEventListener('click', () => {
-    previewDateFromInput.value = '';
-    previewDateToInput.value = '';
-    updateDateRangeButtonState();
-    closeDateRangeFilterPopover();
-    if (isPreviewOpen) {
-        currentPage = 1;
-        fetchPreviewData();
-    }
+sharedRangeConfirmBtn.addEventListener('click', confirmSharedRangePopover);
+// Enter-to-confirm from either date field, same convention as amountMin/amountMax.
+sharedRangeFromInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') confirmSharedRangePopover();
 });
-// Enter-to-apply, same convention as amountMin/amountMax above.
-previewDateFromInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && isPreviewOpen) {
-        applyPreviewFilters();
-        updateDateRangeButtonState();
-        closeDateRangeFilterPopover();
-    }
+sharedRangeToInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') confirmSharedRangePopover();
 });
-previewDateToInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && isPreviewOpen) {
-        applyPreviewFilters();
-        updateDateRangeButtonState();
-        closeDateRangeFilterPopover();
-    }
-});
-// Apply button also picks up date_from/date_to via fetchPreviewData(), so
-// its own click should refresh the trigger's active-state styling too.
-applyFiltersBtn.addEventListener('click', updateDateRangeButtonState);
 
 // Close the row history popover when clicking anywhere outside it (the icon's
 // own click is stopped from propagating here, so this only fires for clicks
-// elsewhere on the page). Also closes the date-range filter popover (Phase B2)
-// on the same outside-click check — its trigger button's own click already
-// stops propagation, so a click on it is never treated as "outside".
+// elsewhere on the page). Also closes the shared date range popover on the
+// same outside-click check — both of its trigger buttons already stop
+// propagation, so a click on either is never treated as "outside".
 document.addEventListener('click', (e) => {
     if (rowHistoryPopover.style.display === 'block' && !rowHistoryPopover.contains(e.target)) {
         hideRowHistoryPopover();
     }
-    if (dateRangeFilterPopover.style.display === 'block' && !dateRangeFilterPopover.contains(e.target)) {
-        closeDateRangeFilterPopover();
+    if (sharedRangePopover.style.display === 'block' && !sharedRangePopover.contains(e.target)) {
+        closeSharedRangePopover();
     }
 });
 
-// ESC key closes preview (or just the date-range popover, if that's open)
+// ESC key closes preview (or just the shared range popover, if that's open)
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && dateRangeFilterPopover.style.display === 'block') {
-        closeDateRangeFilterPopover();
+    if (e.key === 'Escape' && sharedRangePopover.style.display === 'block') {
+        closeSharedRangePopover();
         return;
     }
     if (e.key === 'Escape' && isPreviewOpen) {
