@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": ["Bash(git:*)", "Bash(npm:*)", "Bash(python:*)", "Bash(pytest:*)"],
+    "deny": ["Bash(rm -rf:*)", "Bash(sudo:*)"],
+    "defaultMode": "acceptEdits"
+  }
+}

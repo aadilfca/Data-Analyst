@@ -5,6 +5,7 @@
         "venv": true,
         "__pycache__": true,
    ".vscode": true,
+   ".claude": true,
         "requirements.txt": true,
         "run.bat": true,
         "test.db": true,
