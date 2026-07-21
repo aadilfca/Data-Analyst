@@ -713,6 +713,76 @@
             background: #cbd5e1;
         }
 
+        /* ===== HEADER & STEP FRAMING (Redesign Phase 1) =====
+           Card-style header wrapper (matches the visual weight of
+           .coverage-calendar-section below it) plus static Step 1/Step 2
+           labels and an info banner around the existing Coverage Calendar
+           widget. Structural/visual only — no logic changes this phase. */
+        .databank-header-card {
+            background: white;
+            padding: 20px 24px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            margin-bottom: 20px;
+        }
+
+        .databank-header-card .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .databank-header-card h1 {
+            margin: 6px 0 4px 0;
+        }
+
+        .databank-header-card p {
+            margin: 0;
+            color: #64748b;
+        }
+
+        .btn-upload-more {
+            padding: 8px 20px;
+            background: #22c55e;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 4px;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }
+
+        .btn-upload-more:hover {
+            background: #16a34a;
+        }
+
+        .databank-info-banner {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            color: #1e40af;
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-size: 13px;
+            margin-bottom: 16px;
+        }
+
+        .databank-step-label {
+            font-size: 13px;
+            font-weight: 700;
+            color: #1a1a2e;
+            margin: 0 0 8px 0;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+
         /* Responsive tweaks */
         @media (max-width: 768px) {
             .filter-bar {
@@ -767,18 +837,14 @@
 
     <!-- Main Content -->
     <div class="main-container">
-        <header class="module-header">
-            <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">
+        <header class="databank-header-card">
+            <div class="header-row">
                 <div>
                     <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
                     <h1>📊 Client Data Bank</h1>
                     <p>View and manage all uploaded data sets for the selected client</p>
                 </div>
-                <button onclick="window.location.href='/static/upload.html'"
-                    style="padding:8px 20px; background:#22c55e; color:white; border:none; border-radius:8px; font-weight:600; cursor:pointer; font-size:14px; margin-top:4px; white-space:nowrap; transition:background 0.2s;"
-                    onmouseover="this.style.background='#16a34a'" onmouseout="this.style.background='#22c55e'">
-                    📤 Upload More
-                </button>
+                <button id="uploadMoreBtn" class="btn-upload-more">📤 Upload More</button>
             </div>
         </header>
 
@@ -787,6 +853,15 @@
              month/year navigation. Does not read/write #dateStart/#dateEnd —
              the Availability Table below keeps those working unchanged. -->
         <div class="coverage-calendar-section" id="coverageCalendarSection">
+            <!-- Redesign Phase 1: static info tip banner — no dismiss/persistence logic. -->
+            <div class="databank-info-banner">
+                📌 Pick a template below, then check the calendar for any red days — those are missing dates that need attention.
+            </div>
+
+            <!-- Redesign Phase 1: Step 1 label — attaches to this widget's own
+                 template multi-select (not the older #templateFilter below,
+                 which stays untouched until Phase 6). -->
+            <p class="databank-step-label">① Step 1 — choose a template</p>
             <div class="calendar-controls">
                 <div class="filter-group">
                     <label for="calendarTemplateSelect">📋 Templates (select one or more)</label>
@@ -800,6 +875,9 @@
                     <button type="button" id="calendarNextMonthBtn">Next ›</button>
                 </div>
             </div>
+
+            <!-- Redesign Phase 1: Step 2 label — attaches to the calendar grid below. -->
+            <p class="databank-step-label">② Step 2 — check the calendar</p>
             <div id="coverageCalendarsContainer">
                 <!-- One .coverage-calendar-block per selected template, rendered by renderCoverageCalendars() -->
                 <div class="calendar-empty-state">Select one or more templates above to view their coverage calendar.</div>

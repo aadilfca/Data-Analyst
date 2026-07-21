@@ -37,6 +37,9 @@ const availabilityBody = document.getElementById('availabilityBody');
 const noDataMessage = document.getElementById('noDataMessage');
 const statusDiv = document.getElementById('statusMessage');
 
+// Redesign Phase 1: header's Upload More button (moved off an inline onclick).
+const uploadMoreBtn = document.getElementById('uploadMoreBtn');
+
 // Coverage Calendar (Phase 4) DOM refs
 const calendarTemplateSelect = document.getElementById('calendarTemplateSelect');
 const calendarPrevMonthBtn = document.getElementById('calendarPrevMonthBtn');
@@ -1256,6 +1259,10 @@ calendarPrevMonthBtn.addEventListener('click', goToPrevMonth);
 calendarNextMonthBtn.addEventListener('click', goToNextMonth);
 
 // ---------- EVENT LISTENERS (Main) ----------
+// Redesign Phase 1: same destination/behavior as the old inline onclick.
+uploadMoreBtn.addEventListener('click', () => {
+    window.location.href = '/static/upload.html';
+});
 checkBtn.addEventListener('click', fetchAvailability);
 clearFiltersBtn.addEventListener('click', clearAllFilters);
 refreshBtn.addEventListener('click', fetchAvailability);
