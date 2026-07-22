@@ -14,6 +14,17 @@ let totalPages = 1;
 let previewLimit = 50;
 let previewTotalRows = 0;
 let previewSundayCount = 0;
+// Document grouping / subtotal support: identify which columns are the
+// document key / date / amount(s) for the current preview, sourced straight
+// from GET /api/data/preview's response so the frontend never re-derives the
+// grouping key itself. previewAmountColumns drives the subtotal row in
+// renderPreviewRows(); previewDocumentKeyColumn/previewDateColumn are no
+// longer used to blank cells (continuation lines show Document No./Date on
+// every line per a later fix) - kept here since they're still part of the
+// API response and the grouping key it backs.
+let previewDocumentKeyColumn = null;
+let previewDateColumn = null;
+let previewAmountColumns = [];
 let previewTemplateId = null;
 let previewTemplateName = '';
 let isPreviewOpen = false;
@@ -969,6 +980,9 @@ async function fetchPreviewData() {
         
         previewTotalRows = data.total_rows;
         previewSundayCount = data.sunday_count;
+        previewDocumentKeyColumn = data.document_key_column || null;
+        previewDateColumn = data.date_column || null;
+        previewAmountColumns = data.amount_columns || [];
         const rows = data.rows || [];
         
         // Update Sunday badge
@@ -1041,6 +1055,16 @@ function renderPreviewRows(rows) {
     // Render body rows with serial numbers
     previewTableBody.innerHTML = '';
     const startSerial = (currentPage - 1) * previewLimit + 1;
+
+    // Document grouping / subtotal state: consecutive rows sharing the same
+    // document_group_id (same document key + date, computed backend-side)
+    // are treated as one document's lines - grouping is purely per-page, per
+    // the confirmed brief (a voucher split across a page boundary is not
+    // stitched back together). groupSums accumulates each amount column's
+    // running total across the current group's rows, reset whenever a new
+    // group starts.
+    let groupSums = {};
+
     rows.forEach((row, index) => {
         const tr = document.createElement('tr');
         // Check if this row's extract_date is Sunday
@@ -1048,14 +1072,32 @@ function renderPreviewRows(rows) {
         if (isSun) {
             tr.className = 'sunday-highlight';
         }
-        
-        // Serial number column
+
+        const prevGroupId = index > 0 ? rows[index - 1].document_group_id : undefined;
+        const nextGroupId = index < rows.length - 1 ? rows[index + 1].document_group_id : undefined;
+        const isFirstInGroup = row.document_group_id !== prevGroupId;
+        const isLastInGroup = row.document_group_id !== nextGroupId;
+
+        if (isFirstInGroup) {
+            groupSums = {};
+            previewAmountColumns.forEach(col => { groupSums[col] = 0; });
+        }
+        previewAmountColumns.forEach(col => {
+            const num = parseFloat(row.row_data[col]);
+            if (!isNaN(num)) groupSums[col] += num;
+        });
+
+        // Serial number column - number shown only on the first line of each
+        // document's group; blank on subsequent lines of the same document.
+        // History/quality-flag icons are still appended per-row below
+        // regardless of group position, since they're facts about that
+        // specific client_data row, not the document as a whole.
         const tdSerial = document.createElement('td');
         tdSerial.style.padding = '6px 12px';
         tdSerial.style.borderBottom = '1px solid #f0f2f5';
         tdSerial.style.textAlign = 'center';
         tdSerial.style.color = '#64748b';
-        tdSerial.textContent = startSerial + index;
+        tdSerial.textContent = isFirstInGroup ? (startSerial + index) : '';
 
         // Revision history icon: only shown for rows overwritten during a re-upload.
         if (row.has_history) {
@@ -1087,18 +1129,48 @@ function renderPreviewRows(rows) {
         }
 
         tr.appendChild(tdSerial);
-        
+
         headers.forEach(h => {
             const td = document.createElement('td');
             td.style.padding = '6px 12px';
             td.style.borderBottom = '1px solid #f0f2f5';
+            // Document No. and Date are shown on every line, including
+            // continuation lines - only the S.No cell above is blanked for
+            // grouping. Every column always shows that specific line's own
+            // value.
             const value = row.row_data[h] !== undefined ? row.row_data[h] : '';
             td.textContent = formatCellValue(value, h);
             tr.appendChild(td);
         });
         previewTableBody.appendChild(tr);
+
+        // Subtotal row: inserted after the last line of each document,
+        // summing only the Amount column(s) - every other cell stays blank.
+        // Boxed via the .preview-subtotal-row CSS (top+bottom border) so
+        // each document's block reads as visually closed off. Skipped
+        // entirely when the template has no Amount (Numeric) column, since
+        // there's nothing meaningful to subtotal.
+        if (isLastInGroup && previewAmountColumns.length > 0) {
+            const subtotalTr = document.createElement('tr');
+            subtotalTr.className = 'preview-subtotal-row';
+
+            const tdSubSerial = document.createElement('td');
+            tdSubSerial.style.padding = '6px 12px';
+            subtotalTr.appendChild(tdSubSerial);
+
+            headers.forEach(h => {
+                const td = document.createElement('td');
+                td.style.padding = '6px 12px';
+                if (previewAmountColumns.includes(h)) {
+                    td.textContent = formatCellValue(groupSums[h], h);
+                }
+                subtotalTr.appendChild(td);
+            });
+
+            previewTableBody.appendChild(subtotalTr);
+        }
     });
-    
+
     previewCountInfo.textContent = `Showing ${rows.length} of ${previewTotalRows} rows`;
 }
 

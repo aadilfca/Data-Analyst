@@ -64,6 +64,18 @@
             color: #6d28d9;
         }
 
+        /* Preview modal document-grouping subtotal row (single-phase
+           requirement): inserted after each document's last line, summing
+           only its Amount column(s). Top+bottom border "boxes" the row so
+           each document's block reads as visually closed off before the
+           next document's serial no. begins. */
+        .preview-subtotal-row td {
+            border-top: 2px solid #1a1a2e;
+            border-bottom: 2px solid #1a1a2e;
+            background: #f8fafc;
+            font-weight: 600;
+        }
+
         .no-data {
             padding: 40px;
             text-align: center;

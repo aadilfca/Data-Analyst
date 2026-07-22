@@ -184,6 +184,16 @@ def get_preview_rows(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
 
+    # Document grouping / subtotal support: resolve the document-key column
+    # (first template column), the Date column, and all Amount (Numeric)
+    # columns once per request - reused for both the empty-result early
+    # return and the main response below, and to compute each row's
+    # document_group_id.
+    template_cols = get_template_columns_ordered(template_id)
+    doc_key_column = template_cols[0]["column_name"] if template_cols else None
+    date_column = next((c["column_name"] for c in template_cols if c["data_type"] == "Date"), None)
+    amount_columns = [c["column_name"] for c in template_cols if c["data_type"] == "Numeric"]
+
     # Build WHERE clause dynamically (base filters, excluding sunday_only)
     base_where = [
         "cd.client_id = ?",
@@ -236,6 +246,9 @@ def get_preview_rows(
             "sunday_count": 0,
             "page": page,
             "limit": limit,
+            "document_key_column": doc_key_column,
+            "date_column": date_column,
+            "amount_columns": amount_columns,
             "rows": []
         }
 
@@ -271,7 +284,8 @@ def get_preview_rows(
             "extract_amount": r["extract_amount"],
             "extract_date": r["extract_date"],
             "created_at": format_datetime(r["created_at"]),
-            "data_quality_flag": r["data_quality_flag"]
+            "data_quality_flag": r["data_quality_flag"],
+            "document_group_id": compute_preview_document_group_id(row_dict, r["extract_date"], doc_key_column, r["id"])
         })
 
     # Batch-flag rows that have revision history (one query for the whole page)
@@ -284,6 +298,9 @@ def get_preview_rows(
         "sunday_count": sunday_count,
         "page": page,
         "limit": limit,
+        "document_key_column": doc_key_column,
+        "date_column": date_column,
+        "amount_columns": amount_columns,
         "rows": result_rows
     }
 @router.get("/api/data/datasets/{upload_id}/rows")
@@ -566,6 +583,44 @@ def get_row_history(client_data_id: int):
 # ==============================================
 # 📊 AVAILABILITY CHECKLIST ENDPOINT
 # ==============================================
+
+def get_template_columns_ordered(template_id: int) -> list:
+    """
+    Returns every active column for a template, ordered by sort_order ASC, as
+    {"column_name", "data_type"} dicts - same JOIN shape as
+    get_template_document_key_column() below, just selecting data_type too.
+    Used by the Data Bank preview's document-grouping/subtotal feature to
+    identify the document-key column, the Date column, and all Amount
+    (Numeric) columns in one query, mirroring the template_cols convention
+    already used by get_document_group_id()/get_critical_field_columns() in
+    routers/import_export.py.
+    """
+    return execute_query(
+        """
+        SELECT m.column_name, m.data_type
+        FROM template_column_mappings p
+        JOIN master_columns m ON p.column_id = m.id
+        WHERE p.template_id = ? AND m.is_active = 1
+        ORDER BY p.sort_order ASC
+        """,
+        (template_id,)
+    )
+
+
+def compute_preview_document_group_id(row_data: dict, extract_date: Optional[str], doc_key_column: Optional[str], row_id: int) -> str:
+    """
+    Groups Data Bank preview rows into documents: same document key (first
+    template column, same convention as get_document_group_id() in
+    routers/import_export.py) + same date. Falls back to a per-row-unique id
+    when there's no key column or the key value is blank, so such rows are
+    never silently grouped together with unrelated rows.
+    """
+    if doc_key_column:
+        doc_value = row_data.get(doc_key_column)
+        if doc_value is not None and str(doc_value).strip() != '':
+            return f"{str(doc_value).strip()}||{extract_date}"
+    return f"__row_{row_id}"
+
 
 def get_template_document_key_column(template_id: int) -> Optional[str]:
     """
