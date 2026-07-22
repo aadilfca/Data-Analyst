@@ -31,6 +31,7 @@ from typing import Optional
 
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from database import execute_query, execute_write, get_raw_conn, log_audit
@@ -98,6 +99,18 @@ MAPPING_ROLE_LABELS = {
     "closing_dr_column": "Closing Dr",
     "closing_cr_column": "Closing Cr",
 }
+
+# Section 1, Phase 3: header row (in mapping order) for the downloadable standard
+# template - the escape hatch for a source file too irregular to map cleanly. Only
+# the 8 required fields (Type is optional and not part of the "standard" shape).
+# No versioning: if the 8-field standard changes again, this list is simply updated
+# and the template is regenerated - there's no "v2" concept, per the locked scope.
+STANDARD_TEMPLATE_HEADERS = [
+    "Account Code", "Account Name",
+    "Opening Dr", "Opening Cr",
+    "Period Dr", "Period Cr",
+    "Closing Dr", "Closing Cr",
+]
 
 
 def clean_header(text) -> str:
@@ -463,6 +476,29 @@ async def suggest_trial_balance_mapping(file: UploadFile = File(...)):
         "headers": headers,
         "suggestions": suggest_column_mapping(headers),
     }
+
+
+@router.get("/api/trial-balance/download-template")
+def download_trial_balance_template():
+    """
+    Section 1, Phase 3: escape-hatch downloadable standard template for a source
+    file too irregular for the mapping window to handle cleanly (e.g. ambiguous
+    repeated headers). Just the 8 standard headers, no sample/data rows, no
+    per-client scoping - a file built from this still goes through the exact
+    same suggest-mapping/upload flow as any other file (no separate "trusted
+    format" path), per the locked scope.
+    """
+    output = BytesIO()
+    df = pd.DataFrame(columns=STANDARD_TEMPLATE_HEADERS)
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Trial Balance')
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=trial_balance_standard_template.xlsx"}
+    )
 
 
 def _require_upload(upload_id: int):

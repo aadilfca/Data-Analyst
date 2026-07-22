@@ -98,6 +98,7 @@ const mappingValidationText = getElement('mappingValidationText');
 const mappingTableBody = getElement('mappingTableBody');
 const mappingPreviewHead = getElement('mappingPreviewHead');
 const mappingPreviewBody = getElement('mappingPreviewBody');
+const downloadStandardTemplateBtn = getElement('downloadStandardTemplateBtn');
 
 // ---------- STATUS BAR ----------
 // Same show/hide + color-coded classes convention as upload.js's showStatus().
@@ -203,6 +204,16 @@ if (asOfDateInput) {
 }
 
 // ---------- COLUMN MAPPING (Section 1, Phase 2) ----------
+
+// Section 1, Phase 3: escape-hatch standard-template download -- opens the new
+// backend endpoint in a new tab (same window.open() pattern static/upload.js's
+// own Download Template button already uses), so it never disturbs whatever
+// file/mapping state is already in progress on this page.
+if (downloadStandardTemplateBtn) {
+    downloadStandardTemplateBtn.addEventListener('click', function () {
+        window.open(API_BASE + '/api/trial-balance/download-template', '_blank');
+    });
+}
 
 // POSTs the raw file to Phase 1's suggest-mapping endpoint and returns its
 // {headers, suggestions} shape. Same throw-with-detail convention as every other

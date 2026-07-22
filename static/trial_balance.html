@@ -325,6 +325,28 @@
             width: 100%;
             max-width: 280px;
         }
+
+        /* ---------- STANDARD TEMPLATE DOWNLOAD (Section 1, Phase 3) ---------- */
+        /* Escape-hatch link, styled as plain inline text (not a prominent button)
+           since it's a fallback for a rare case, not the primary mapping flow. */
+        .tb-escape-hatch {
+            margin-bottom: 16px;
+        }
+
+        .tb-inline-link-btn {
+            background: none;
+            border: none;
+            padding: 0;
+            color: #2563eb;
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+
+        .tb-inline-link-btn:hover {
+            color: #1d4ed8;
+        }
     </style>
 </head>
 
@@ -384,6 +406,15 @@
         <div class="tb-form-group" id="mappingSection" style="display:none;">
             <h3>🔗 Column Mapping</h3>
             <p class="group-hint">Confirm which column in the file is which field. Suggested matches are pre-filled below -- review and correct before uploading.</p>
+
+            <!-- Section 1, Phase 3: escape hatch for a source file too irregular to
+                 map cleanly (e.g. ambiguous repeated headers). A file built from this
+                 template still goes through this exact same mapping window on upload. -->
+            <p class="group-hint tb-escape-hatch">
+                File too irregular to map cleanly?
+                <button type="button" id="downloadStandardTemplateBtn" class="tb-inline-link-btn">Download the standard template</button>
+                instead, and re-upload using that format.
+            </p>
 
             <div id="mappingValidationMessage" class="status-bar error" style="display:none;">
                 <span class="icon">⚠️</span>
