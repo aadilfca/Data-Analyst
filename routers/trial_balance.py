@@ -20,6 +20,7 @@ import json
 import re
 from datetime import datetime
 from io import BytesIO
+from typing import Optional
 
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -303,3 +304,87 @@ async def upload_trial_balance(
             (str(e), upload_id)
         )
         raise HTTPException(400, f"Trial balance parsing failed: {e}")
+
+
+def _require_upload(upload_id: int):
+    """
+    Shared existence check for the two read endpoints below - 404s if the
+    given upload_id doesn't exist in trial_balance_uploads at all. An upload
+    that exists but has zero accounts (e.g. it errored during Phase 2, or
+    genuinely had none) is NOT an error here - it just returns an empty
+    list / all-zero counts, since that's a legitimate state, not a bad request.
+    """
+    upload_rows = execute_query("SELECT id FROM trial_balance_uploads WHERE id = ?", (upload_id,))
+    if not upload_rows:
+        raise HTTPException(404, "Trial balance upload not found")
+
+
+# ---------- RETRIEVAL ENDPOINTS (Phase 3 of 5: store + retrieve classified accounts) ----------
+# Read-only - no editing/override logic yet (that's Phase 5). Both endpoints
+# are scoped to a single upload_id at a time, matching the classification
+# engine's own one-upload-at-a-time scope (no cross-period comparison).
+
+@router.get("/api/trial-balance/accounts")
+def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
+    """
+    List one upload's classified accounts, in original file order. Optional
+    is_leaf filter narrows to ledger-only (true) or roll-up-only (false)
+    accounts, so the Upload UI (Phase 4) and Review screen (Phase 5) can
+    show either the full hierarchy or a ledger-only view.
+    """
+    _require_upload(upload_id)
+
+    query = "SELECT * FROM trial_balance_accounts WHERE upload_id = ?"
+    params = [upload_id]
+    if is_leaf is not None:
+        # classification is stored as the text 'leaf'/'parent' (Phase 1/2) -
+        # is_leaf is the boolean shape the brief asks the response to expose.
+        query += " AND classification = ?"
+        params.append('leaf' if is_leaf else 'parent')
+    query += " ORDER BY sort_order"
+
+    rows = execute_query(query, tuple(params))
+
+    accounts = [
+        {
+            "id": r["id"],
+            "account_code": r["account_code"],
+            "account_name": r["account_name"],
+            "parent_account_code": r["parent_account_code"],
+            "level": r["level"],
+            "is_leaf": r["classification"] == "leaf",
+            "debit_amount": r["debit_amount"],
+            "credit_amount": r["credit_amount"],
+            "source_account_type": r["source_account_type"],
+            "manually_overridden": bool(r["manually_overridden"]),
+        }
+        for r in rows
+    ]
+
+    return {"upload_id": upload_id, "accounts": accounts}
+
+
+@router.get("/api/trial-balance/summary")
+def get_trial_balance_summary(upload_id: int):
+    """
+    Counts only (total/leaf/parent) for one upload - no ambiguity-detection
+    logic here, since the classification engine (Phase 2) doesn't flag any
+    row as ambiguous; that would be a separate, not-yet-confirmed scope
+    addition, not something to assume in this phase.
+    """
+    _require_upload(upload_id)
+
+    rows = execute_query(
+        "SELECT classification, COUNT(*) as count FROM trial_balance_accounts WHERE upload_id = ? GROUP BY classification",
+        (upload_id,)
+    )
+    counts = {r["classification"]: r["count"] for r in rows}
+    leaf_count = counts.get("leaf", 0)
+    parent_count = counts.get("parent", 0)
+
+    return {
+        "upload_id": upload_id,
+        "total_count": leaf_count + parent_count,
+        "leaf_count": leaf_count,
+        "parent_count": parent_count,
+    }
