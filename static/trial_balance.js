@@ -7,11 +7,12 @@
 // account so the auditor can flip a misclassified row between
 // Leaf/Parent via the new per-row override endpoint.
 //
-// Column mapping & standard template, Section 1, Phase 2: once a file is
-// selected, suggest-mapping (Phase 1 backend) is called to pre-fill a
-// dropdown-per-field mapping table (Account Code/Name/Debit/Credit), with a
-// small live preview of the file's first few rows alongside it so the
-// reviewer can visually confirm each column choice before uploading.
+// Column mapping & standard template, Section 1, Phase 2 (standard 8-field fix):
+// once a file is selected, suggest-mapping (Phase 1 backend) is called to
+// pre-fill a dropdown-per-field mapping table -- Account Code/Name plus the
+// standard 3 Dr/Cr pairs (Opening, Period, Closing) -- with a small live
+// preview of the file's first few rows alongside it so the reviewer can
+// visually confirm each column choice before uploading.
 // ============================================================
 
 // Client selection is entirely handled by client_context.js: it reads/writes
@@ -25,16 +26,21 @@ let selectedFile = null;
 // row-toggle handler knows which upload's summary tiles to refresh after a flip.
 let currentUploadId = null;
 
-// ---------- COLUMN MAPPING STATE (Section 1, Phase 2) ----------
-// The 4 required mapping fields this UI surfaces -- Type/Opening Balance/Closing
-// Balance are supported by Phase 1's backend as optional roles, but the brief only
-// asks for a mapping window over these 4, so they're simply never sent (the backend
-// treats them as Optional[str] = Form(None), so omitting them is a no-op).
+// ---------- COLUMN MAPPING STATE (Section 1, Phase 2 -- standard 8-field fix) ----------
+// The 8 required mapping fields this UI surfaces, matching the standard trial
+// balance shape (Opening/Period/Closing Dr+Cr pairs). Type is supported by the
+// backend as an optional role but isn't part of the standard 8, so it's simply
+// never sent (the backend treats it as Optional[str] = Form(None), so omitting
+// it is a no-op).
 const TB_MAPPING_FIELDS = [
     { role: 'account_code_column', label: 'Account Code' },
     { role: 'account_name_column', label: 'Account Name' },
-    { role: 'debit_column', label: 'Debit' },
-    { role: 'credit_column', label: 'Credit' },
+    { role: 'opening_dr_column', label: 'Opening Dr' },
+    { role: 'opening_cr_column', label: 'Opening Cr' },
+    { role: 'period_dr_column', label: 'Period Dr' },
+    { role: 'period_cr_column', label: 'Period Cr' },
+    { role: 'closing_dr_column', label: 'Closing Dr' },
+    { role: 'closing_cr_column', label: 'Closing Cr' },
 ];
 
 // The file's real header list, from suggest-mapping's response -- this is the single
@@ -48,7 +54,12 @@ let filePreviewRows = [];
 
 // Current mapping selection, keyed by role -- seeded from suggest-mapping's
 // suggestions, then mutated in place by each dropdown's change listener.
-let tbColumnMapping = { account_code_column: null, account_name_column: null, debit_column: null, credit_column: null };
+let tbColumnMapping = {
+    account_code_column: null, account_name_column: null,
+    opening_dr_column: null, opening_cr_column: null,
+    period_dr_column: null, period_cr_column: null,
+    closing_dr_column: null, closing_cr_column: null,
+};
 
 // Bumped on every new file selection so a fast re-select can't let a slower, stale
 // suggest-mapping/preview-parse response overwrite state from the newer file
@@ -166,7 +177,12 @@ function handleFileSelected(file) {
 function resetColumnMapping() {
     fileHeaders = [];
     filePreviewRows = [];
-    tbColumnMapping = { account_code_column: null, account_name_column: null, debit_column: null, credit_column: null };
+    tbColumnMapping = {
+        account_code_column: null, account_name_column: null,
+        opening_dr_column: null, opening_cr_column: null,
+        period_dr_column: null, period_cr_column: null,
+        closing_dr_column: null, closing_cr_column: null,
+    };
     if (mappingSection) mappingSection.style.display = 'none';
     if (mappingValidationMessage) mappingValidationMessage.style.display = 'none';
 }
@@ -256,8 +272,12 @@ async function loadColumnMappingForFile(file) {
         tbColumnMapping = {
             account_code_column: suggestResult.suggestions.account_code_column || null,
             account_name_column: suggestResult.suggestions.account_name_column || null,
-            debit_column: suggestResult.suggestions.debit_column || null,
-            credit_column: suggestResult.suggestions.credit_column || null,
+            opening_dr_column: suggestResult.suggestions.opening_dr_column || null,
+            opening_cr_column: suggestResult.suggestions.opening_cr_column || null,
+            period_dr_column: suggestResult.suggestions.period_dr_column || null,
+            period_cr_column: suggestResult.suggestions.period_cr_column || null,
+            closing_dr_column: suggestResult.suggestions.closing_dr_column || null,
+            closing_cr_column: suggestResult.suggestions.closing_cr_column || null,
         };
 
         renderMappingDropdowns();

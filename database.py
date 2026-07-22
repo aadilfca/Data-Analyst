@@ -1306,6 +1306,11 @@ def init_db():
         # schema change. No redundant client_id column - reached via upload_id, matching
         # how verification_details reaches client_id via its session rather than a
         # direct column.
+        # debit_amount/credit_amount are the original (now-legacy) single amount pair -
+        # superseded by the standard 8-field mapping fix below (period_dr/period_cr is
+        # their direct successor), but kept in the CREATE TABLE rather than dropped,
+        # since this table already has live data and this app's convention is
+        # additive-only schema changes, never a column drop/rename.
         conn.execute('''
             CREATE TABLE IF NOT EXISTS trial_balance_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1317,6 +1322,12 @@ def init_db():
                 classification TEXT NOT NULL CHECK (classification IN ('parent', 'leaf')),
                 debit_amount REAL,
                 credit_amount REAL,
+                opening_dr REAL,
+                opening_cr REAL,
+                period_dr REAL,
+                period_cr REAL,
+                closing_dr REAL,
+                closing_cr REAL,
                 source_account_type TEXT,
                 manually_overridden INTEGER NOT NULL DEFAULT 0,
                 sort_order INTEGER NOT NULL DEFAULT 0,
@@ -1326,6 +1337,22 @@ def init_db():
                 UNIQUE(upload_id, account_code)
             )
         ''')
+
+        # Schema upgrade: Trial Balance mapping fix - expand the single debit_amount/
+        # credit_amount pair into the standard 3-pair Dr/Cr shape (Opening, Period,
+        # Closing). This table already existed with data from the completed 5-phase
+        # build, so a plain CREATE TABLE IF NOT EXISTS column addition alone would be a
+        # no-op there - same ALTER TABLE ADD COLUMN upgrade-block pattern already used
+        # for verification_sessions.session_type/client_data.data_quality_flag.
+        try:
+            cur = conn.execute("PRAGMA table_info(trial_balance_accounts)")
+            existing_columns = [row[1] for row in cur.fetchall()]
+            for new_col in ('opening_dr', 'opening_cr', 'period_dr', 'period_cr', 'closing_dr', 'closing_cr'):
+                if new_col not in existing_columns:
+                    conn.execute(f"ALTER TABLE trial_balance_accounts ADD COLUMN {new_col} REAL")
+            print("✅ Added opening_dr/opening_cr/period_dr/period_cr/closing_dr/closing_cr columns to trial_balance_accounts")
+        except Exception as e:
+            print("⚠️ Could not add new amount columns to trial_balance_accounts:", e)
 
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_uploads_client ON trial_balance_uploads (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_upload ON trial_balance_accounts (upload_id)")

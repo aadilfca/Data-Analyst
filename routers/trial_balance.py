@@ -9,12 +9,13 @@ templates.py (those handle generic template-mapped imports; TB needs
 hierarchy-aware parent/leaf classification derived from the account code
 structure, not client-specific text markers). As of Section 1/Phase 1,
 columns are identified by an explicit column-mapping payload the caller
-supplies (which real Excel column is Account Code/Name/Debit/Credit, plus
-optional Type/Opening Balance/Closing Balance) rather than hardcoded
-header-name matching - see validate_column_mapping() below. The normalized
-synonym lists (clean_header(), MAPPING_ROLES) are kept and reused only for
-suggest_column_mapping()'s best-guess pre-fill, not for auto-driving the
-upload itself.
+supplies (which real Excel column is which field) rather than hardcoded
+header-name matching - see validate_column_mapping() below. The standard
+mapping is 8 required fields (Account Code, Account Name, Opening Dr/Cr,
+Period Dr/Cr, Closing Dr/Cr), plus one optional field (Type, a cross-check-only
+display value). The normalized synonym lists (clean_header(), MAPPING_ROLES)
+are kept and reused only for suggest_column_mapping()'s best-guess pre-fill,
+not for auto-driving the upload itself.
 
 Endpoints: mapping suggestion (POST /suggest-mapping), upload+classify
 (POST /upload), read-only list/summary (GET /accounts, GET /summary), and a
@@ -51,34 +52,51 @@ class AccountOverrideRequest(BaseModel):
 CODE_SYNONYMS = {"code", "accountcode", "ledgercode", "accode", "glcode", "accountno", "acno"}
 NAME_SYNONYMS = {"name", "accountname", "particulars", "description", "accounttitle", "title"}
 TYPE_SYNONYMS = {"type", "mastersub", "accounttype", "classification"}
-DEBIT_SYNONYMS = {"debit", "dr", "debitamount"}
-CREDIT_SYNONYMS = {"credit", "cr", "creditamount"}
-OPENING_BALANCE_SYNONYMS = {"openingbalance", "opening", "obalance", "openingbal"}
-CLOSING_BALANCE_SYNONYMS = {"closingbalance", "closing", "cbalance", "closingbal"}
+# Standard 8-field trial balance mapping fix: the original single Debit/Credit pair
+# is replaced by 3 Dr/Cr pairs (Opening, Period, Closing) - Period Dr/Cr is the
+# direct successor of the old Debit/Credit synonyms (bare "debit"/"dr"/"credit"/"cr"
+# only ever mean the current-period movement on a real trial balance), Opening/
+# Closing are new pairs alongside it.
+OPENING_DR_SYNONYMS = {"openingdr", "openingdebit", "openingbalancedr", "openingbaldr", "obdr", "openingdramount"}
+OPENING_CR_SYNONYMS = {"openingcr", "openingcredit", "openingbalancecr", "openingbalcr", "obcr", "openingcramount"}
+PERIOD_DR_SYNONYMS = {"perioddr", "perioddebit", "debit", "dr", "debitamount", "duringperioddebit", "movementdr", "transactiondebit"}
+PERIOD_CR_SYNONYMS = {"periodcr", "periodcredit", "credit", "cr", "creditamount", "duringperiodcredit", "movementcr", "transactioncredit"}
+CLOSING_DR_SYNONYMS = {"closingdr", "closingdebit", "closingbalancedr", "closingbaldr", "cbdr", "closingdramount"}
+CLOSING_CR_SYNONYMS = {"closingcr", "closingcredit", "closingbalancecr", "closingbalcr", "cbcr", "closingcramount"}
 
 # Priority order shared by both suggest_column_mapping() and the required-field
-# list in validate_column_mapping() - code/name/debit/credit first (required),
-# then the optional roles, so no header is ever claimed by two roles at once.
+# list in validate_column_mapping() - code/name first (required), then the 6
+# amount roles (all required, standard 8-field mapping fix), then the one
+# optional role (type_column), so no header is ever claimed by two roles at once.
 MAPPING_ROLES = [
     ("account_code_column", CODE_SYNONYMS),
     ("account_name_column", NAME_SYNONYMS),
     ("type_column", TYPE_SYNONYMS),
-    ("debit_column", DEBIT_SYNONYMS),
-    ("credit_column", CREDIT_SYNONYMS),
-    ("opening_balance_column", OPENING_BALANCE_SYNONYMS),
-    ("closing_balance_column", CLOSING_BALANCE_SYNONYMS),
+    ("opening_dr_column", OPENING_DR_SYNONYMS),
+    ("opening_cr_column", OPENING_CR_SYNONYMS),
+    ("period_dr_column", PERIOD_DR_SYNONYMS),
+    ("period_cr_column", PERIOD_CR_SYNONYMS),
+    ("closing_dr_column", CLOSING_DR_SYNONYMS),
+    ("closing_cr_column", CLOSING_CR_SYNONYMS),
 ]
-REQUIRED_MAPPING_ROLES = ["account_code_column", "account_name_column", "debit_column", "credit_column"]
+REQUIRED_MAPPING_ROLES = [
+    "account_code_column", "account_name_column",
+    "opening_dr_column", "opening_cr_column",
+    "period_dr_column", "period_cr_column",
+    "closing_dr_column", "closing_cr_column",
+]
 
 # Human-readable labels for validation error messages.
 MAPPING_ROLE_LABELS = {
     "account_code_column": "Account Code",
     "account_name_column": "Account Name",
     "type_column": "Type",
-    "debit_column": "Debit",
-    "credit_column": "Credit",
-    "opening_balance_column": "Opening Balance",
-    "closing_balance_column": "Closing Balance",
+    "opening_dr_column": "Opening Dr",
+    "opening_cr_column": "Opening Cr",
+    "period_dr_column": "Period Dr",
+    "period_cr_column": "Period Cr",
+    "closing_dr_column": "Closing Dr",
+    "closing_cr_column": "Closing Cr",
 }
 
 
@@ -236,11 +254,13 @@ async def upload_trial_balance(
     # once, rather than FastAPI's generic 422 on the first missing field.
     account_code_column: Optional[str] = Form(None),
     account_name_column: Optional[str] = Form(None),
-    debit_column: Optional[str] = Form(None),
-    credit_column: Optional[str] = Form(None),
     type_column: Optional[str] = Form(None),
-    opening_balance_column: Optional[str] = Form(None),
-    closing_balance_column: Optional[str] = Form(None),
+    opening_dr_column: Optional[str] = Form(None),
+    opening_cr_column: Optional[str] = Form(None),
+    period_dr_column: Optional[str] = Form(None),
+    period_cr_column: Optional[str] = Form(None),
+    closing_dr_column: Optional[str] = Form(None),
+    closing_cr_column: Optional[str] = Form(None),
 ):
     """
     Upload a client's Trial Balance Excel file, classify every account as
@@ -283,10 +303,12 @@ async def upload_trial_balance(
             "account_code_column": account_code_column,
             "account_name_column": account_name_column,
             "type_column": type_column,
-            "debit_column": debit_column,
-            "credit_column": credit_column,
-            "opening_balance_column": opening_balance_column,
-            "closing_balance_column": closing_balance_column,
+            "opening_dr_column": opening_dr_column,
+            "opening_cr_column": opening_cr_column,
+            "period_dr_column": period_dr_column,
+            "period_cr_column": period_cr_column,
+            "closing_dr_column": closing_dr_column,
+            "closing_cr_column": closing_cr_column,
         }
         validate_column_mapping(mapping, df.columns.tolist())
         rows = df.to_dict('records')
@@ -312,15 +334,23 @@ async def upload_trial_balance(
 
             name_value = str(row.get(account_name_column, '')).strip() if account_name_column else ''
             type_value = str(row.get(type_column, '')).strip() if type_column else ''
-            debit_value = parse_amount(row.get(debit_column)) if debit_column else None
-            credit_value = parse_amount(row.get(credit_column)) if credit_column else None
+            opening_dr_value = parse_amount(row.get(opening_dr_column)) if opening_dr_column else None
+            opening_cr_value = parse_amount(row.get(opening_cr_column)) if opening_cr_column else None
+            period_dr_value = parse_amount(row.get(period_dr_column)) if period_dr_column else None
+            period_cr_value = parse_amount(row.get(period_cr_column)) if period_cr_column else None
+            closing_dr_value = parse_amount(row.get(closing_dr_column)) if closing_dr_column else None
+            closing_cr_value = parse_amount(row.get(closing_cr_column)) if closing_cr_column else None
 
             accounts.append({
                 "account_code": code,
                 "account_name": name_value or None,
                 "source_account_type": type_value or None,
-                "debit_amount": debit_value,
-                "credit_amount": credit_value,
+                "opening_dr": opening_dr_value,
+                "opening_cr": opening_cr_value,
+                "period_dr": period_dr_value,
+                "period_cr": period_cr_value,
+                "closing_dr": closing_dr_value,
+                "closing_cr": closing_cr_value,
                 "sort_order": row_number,
                 # raw_row_data is a JSON safety net (mirrors client_data.row_data's
                 # existing convention) since TB formats vary across clients -
@@ -350,14 +380,15 @@ async def upload_trial_balance(
                     """
                     INSERT INTO trial_balance_accounts
                         (upload_id, account_code, account_name, parent_account_code, level,
-                         classification, debit_amount, credit_amount, source_account_type,
-                         sort_order, raw_row_data)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         classification, opening_dr, opening_cr, period_dr, period_cr,
+                         closing_dr, closing_cr, source_account_type, sort_order, raw_row_data)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         upload_id, account["account_code"], account["account_name"],
                         account["parent_account_code"], account["level"], account["classification"],
-                        account["debit_amount"], account["credit_amount"], account["source_account_type"],
+                        account["opening_dr"], account["opening_cr"], account["period_dr"], account["period_cr"],
+                        account["closing_dr"], account["closing_cr"], account["source_account_type"],
                         account["sort_order"], account["raw_row_data"]
                     )
                 )
@@ -481,8 +512,12 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
             "parent_account_code": r["parent_account_code"],
             "level": r["level"],
             "is_leaf": r["classification"] == "leaf",
-            "debit_amount": r["debit_amount"],
-            "credit_amount": r["credit_amount"],
+            "opening_dr": r["opening_dr"],
+            "opening_cr": r["opening_cr"],
+            "period_dr": r["period_dr"],
+            "period_cr": r["period_cr"],
+            "closing_dr": r["closing_dr"],
+            "closing_cr": r["closing_cr"],
             "source_account_type": r["source_account_type"],
             "manually_overridden": bool(r["manually_overridden"]),
         }
@@ -556,8 +591,12 @@ def override_account_classification(account_id: int, payload: AccountOverrideReq
         "parent_account_code": r["parent_account_code"],
         "level": r["level"],
         "is_leaf": r["classification"] == "leaf",
-        "debit_amount": r["debit_amount"],
-        "credit_amount": r["credit_amount"],
+        "opening_dr": r["opening_dr"],
+        "opening_cr": r["opening_cr"],
+        "period_dr": r["period_dr"],
+        "period_cr": r["period_cr"],
+        "closing_dr": r["closing_dr"],
+        "closing_cr": r["closing_cr"],
         "source_account_type": r["source_account_type"],
         "manually_overridden": bool(r["manually_overridden"]),
     }
