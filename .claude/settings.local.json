@@ -6,7 +6,8 @@
       "Bash(pytest:*)",
       "Bash(python:*)",
       "Bash(curl:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(cd:*)"
     ],
     "deny": ["Bash(rm -rf:*)", "Bash(sudo:*)"],
     "defaultMode": "acceptEdits"
