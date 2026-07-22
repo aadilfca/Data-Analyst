@@ -1271,6 +1271,67 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays (holiday_date)")
         print("✅ Created holidays table")
 
+        # ---------- TRIAL BALANCE MODULE (Phase 1 of 5: schema foundation) ----------
+        # New, dedicated feature - deliberately not an extension of import_export.py/
+        # templates.py (those handle generic template-mapped imports; TB needs
+        # hierarchy-aware parent/leaf classification derived from the account code
+        # structure itself, not client-specific text markers like "+"/"»"). Schema only
+        # this phase - no parsing/classification logic, API, or UI yet (Phases 2-5).
+        # Brand-new tables, no prior data to reconcile, so plain CREATE TABLE IF NOT
+        # EXISTS is sufficient (no ALTER TABLE upgrade block needed, unlike the
+        # is_active-column gaps hit repeatedly in Audit Rules).
+
+        # One row per upload event. Re-uploads for the same client/period intentionally
+        # do NOT overwrite a prior upload - each becomes its own row, so history isn't
+        # silently lost.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS trial_balance_uploads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                as_of_date TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'parsed', 'error')),
+                row_count INTEGER DEFAULT 0,
+                notes TEXT,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+            )
+        ''')
+
+        # One row per account line, per upload. classification (parent vs leaf) is
+        # derived from account_code's dash-delimited hierarchy at parse time (Phase 2) -
+        # source_account_type is a cross-check only, never authoritative for
+        # classification. manually_overridden is added now (unused until Phase 5) so the
+        # later review/correction screen has a column to write to without a further
+        # schema change. No redundant client_id column - reached via upload_id, matching
+        # how verification_details reaches client_id via its session rather than a
+        # direct column.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS trial_balance_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                upload_id INTEGER NOT NULL,
+                account_code TEXT NOT NULL,
+                account_name TEXT,
+                parent_account_code TEXT,
+                level INTEGER NOT NULL DEFAULT 1,
+                classification TEXT NOT NULL CHECK (classification IN ('parent', 'leaf')),
+                debit_amount REAL,
+                credit_amount REAL,
+                source_account_type TEXT,
+                manually_overridden INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                raw_row_data TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (upload_id) REFERENCES trial_balance_uploads(id) ON DELETE CASCADE,
+                UNIQUE(upload_id, account_code)
+            )
+        ''')
+
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_uploads_client ON trial_balance_uploads (client_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_upload ON trial_balance_accounts (upload_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_parent ON trial_balance_accounts (upload_id, parent_account_code)")
+        print("✅ Created Trial Balance module tables (Phase 1 of 5: schema foundation)")
+
         conn.commit()
         print("✅ Database initialization complete")
 
