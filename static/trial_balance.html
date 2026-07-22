@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trial Balance</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        /* ---------- FORM AREA ---------- */
+        .tb-form-group {
+            background: white;
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .tb-form-group h3 {
+            font-size: 16px;
+            color: #1a1a2e;
+            margin-bottom: 4px;
+        }
+
+        .tb-form-group .group-hint {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-bottom: 16px;
+        }
+
+        .tb-field-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+
+        .tb-field-row label {
+            font-weight: 600;
+            font-size: 13px;
+            color: #1e293b;
+            white-space: nowrap;
+        }
+
+        .tb-field-row input[type="date"] {
+            padding: 6px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        /* ---------- UPLOAD FILE BUTTON (same visual language as upload.html's .btn-upload-file) ---------- */
+        .btn-upload-file {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1px;
+            padding: 6px 18px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }
+
+        .btn-upload-file:hover {
+            background: #2563eb;
+        }
+
+        .upload-file-btn-main {
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1.3;
+        }
+
+        .upload-file-btn-sub {
+            font-size: 10px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.8);
+            line-height: 1.2;
+        }
+
+        /* Selected-file chip (filename + size + clear button) -- reused verbatim from
+           upload.html's .file-detail styling. */
+        .file-detail {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            padding: 4px 12px;
+            border-radius: 6px;
+        }
+
+        .file-detail .name {
+            font-weight: 500;
+            font-size: 13px;
+        }
+
+        .file-detail .size {
+            color: #94a3b8;
+            font-size: 11px;
+        }
+
+        .file-detail .clear {
+            background: none;
+            border: none;
+            color: #dc2626;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+
+        .file-detail .clear:hover {
+            color: #b91c1c;
+        }
+
+        .btn-primary-action {
+            padding: 8px 20px;
+            background: #16a34a;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-primary-action:hover:not(:disabled) {
+            background: #15803d;
+        }
+
+        .btn-primary-action:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+        }
+
+        /* ---------- CLIENT SELECTION WARNING (same as upload.html's .client-warning) ---------- */
+        .client-warning {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 8px;
+            padding: 10px 16px;
+            margin-bottom: 16px;
+            color: #92400e;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .client-warning .icon {
+            font-size: 20px;
+        }
+
+        .client-warning strong {
+            color: #78350f;
+        }
+
+        /* ---------- STATUS BAR (same as upload.html's .status-bar) ---------- */
+        .status-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 20px;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            align-items: center;
+            border: 1px solid #e2e8f0;
+            margin-bottom: 16px;
+        }
+
+        .status-bar.success {
+            background: #dcfce7;
+            border-color: #bbf7d0;
+            color: #166534;
+        }
+
+        .status-bar.info {
+            background: #eff6ff;
+            border-color: #bfdbfe;
+            color: #1e40af;
+        }
+
+        .status-bar.error {
+            background: #fee2e2;
+            border-color: #fecaca;
+            color: #991b1b;
+        }
+
+        .status-bar.loading {
+            background: #fef3c7;
+            border-color: #fde68a;
+            color: #92400e;
+        }
+
+        /* ---------- SUMMARY DISPLAY (Phase 3's summary endpoint rendered as simple tiles) ---------- */
+        .tb-summary-tiles {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .tb-summary-tile {
+            flex: 1;
+            min-width: 120px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 14px 16px;
+            text-align: center;
+        }
+
+        .tb-summary-tile .tile-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 4px;
+        }
+
+        .tb-summary-tile .tile-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a2e;
+        }
+    </style>
+</head>
+
+<body data-nav-module="Trial Balance" data-nav-parent="index.html">
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user">
+                <span>👤 Welcome, Analyst</span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <header class="module-header">
+            <h1>📊 Trial Balance</h1>
+            <p>Upload a client's Trial Balance and classify accounts as parent or leaf</p>
+        </header>
+
+        <div id="clientSelectionWarning" class="client-warning">
+            <span class="icon">⚠️</span>
+            <span><strong>Please select a client</strong> from the dashboard before uploading a Trial Balance.</span>
+        </div>
+
+        <div class="tb-form-group">
+            <h3>📤 Upload Trial Balance</h3>
+            <p class="group-hint">Select the as-of date and the Excel file (.xlsx or .xls) to classify.</p>
+
+            <div class="tb-field-row">
+                <label for="asOfDateInput">As of Date</label>
+                <input type="date" id="asOfDateInput">
+            </div>
+
+            <div class="tb-field-row">
+                <button class="btn-upload-file" id="uploadFileBtn" type="button">
+                    <span class="upload-file-btn-main">Choose File</span>
+                    <span class="upload-file-btn-sub">.xlsx, .xls</span>
+                </button>
+                <div class="file-detail" id="fileInfo" style="display:none;">
+                    <span class="name" id="fileName"></span>
+                    <span class="size" id="fileSize"></span>
+                    <button class="clear" id="clearBtn" title="Remove file" type="button">✕</button>
+                </div>
+                <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
+            </div>
+
+            <div class="tb-field-row">
+                <button class="btn-primary-action" id="uploadTrialBalanceBtn" type="button" disabled>Upload &amp; Classify</button>
+            </div>
+        </div>
+
+        <div class="status-bar info" id="statusBar" style="display:none;">
+            <span class="icon" id="statusIcon">ℹ️</span>
+            <span id="statusMessage"></span>
+        </div>
+
+        <div class="tb-form-group" id="summaryContainer" style="display:none;">
+            <h3>✅ Classification Summary</h3>
+            <p class="group-hint">From the stored upload, via the read-only summary endpoint.</p>
+            <div class="tb-summary-tiles">
+                <div class="tb-summary-tile">
+                    <div class="tile-label">Total Accounts</div>
+                    <div class="tile-value" id="summaryTotalCount">0</div>
+                </div>
+                <div class="tb-summary-tile">
+                    <div class="tile-label">Leaf Accounts</div>
+                    <div class="tile-value" id="summaryLeafCount">0</div>
+                </div>
+                <div class="tb-summary-tile">
+                    <div class="tile-label">Parent Accounts</div>
+                    <div class="tile-value" id="summaryParentCount">0</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/client_context.js?v=2"></script>
+    <script src="/static/trial_balance.js?v=2"></script>
+</body>
+
+</html>
