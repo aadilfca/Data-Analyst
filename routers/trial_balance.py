@@ -1,5 +1,6 @@
 """
-Trial Balance module backend (Phase 2 of 5: parsing & classification engine).
+Trial Balance module backend (schema/parsing/classification/retrieval/review
+all complete - Phase 5 of 5, FINAL).
 
 New, dedicated feature - deliberately not an extension of import_export.py/
 templates.py (those handle generic template-mapped imports; TB needs
@@ -9,11 +10,10 @@ for this feature, so columns are identified by header-name matching against
 a normalized synonym list per role (Code/Name/Type/Debit/Credit) instead of
 a fixed position - see clean_header()/identify_columns() below.
 
-This phase implements a single upload endpoint: read the file -> classify
-every account as parent/leaf from its code hierarchy -> store the result in
-trial_balance_uploads/trial_balance_accounts (Phase 1 schema). There is no
-"list accounts" retrieval endpoint (Phase 3) or review/correction UI
-(Phase 5) yet.
+Endpoints: upload+classify (POST /upload), read-only list/summary
+(GET /accounts, GET /summary), and a row-level manual classification
+override (PUT /accounts/{id}/override) for correcting a misclassified
+account after review.
 """
 
 import json
@@ -24,10 +24,16 @@ from typing import Optional
 
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from database import execute_query, execute_write, get_raw_conn, log_audit
 
 router = APIRouter()
+
+
+class AccountOverrideRequest(BaseModel):
+    """Body for the Phase 5 row-level classification override endpoint."""
+    is_leaf: bool
 
 # ---------- COLUMN IDENTIFICATION ----------
 # No column-mapping UI exists for Trial Balance (unlike import_export.py's
@@ -387,4 +393,49 @@ def get_trial_balance_summary(upload_id: int):
         "total_count": leaf_count + parent_count,
         "leaf_count": leaf_count,
         "parent_count": parent_count,
+    }
+
+
+# ---------- REVIEW / OVERRIDE ENDPOINT (Phase 5 of 5: review screen + dashboard link) ----------
+# The classification engine (Phase 2) is automatic and can occasionally be wrong on an
+# ambiguous code hierarchy - this is the one write endpoint that lets an auditor correct
+# a single row after reviewing it. One row at a time, per the locked "keep it simple" scope
+# (no bulk-edit/bulk-approve endpoint).
+
+@router.put("/api/trial-balance/accounts/{account_id}/override")
+def override_account_classification(account_id: int, payload: AccountOverrideRequest):
+    """
+    Manually flip one account's classification (leaf <-> parent) and mark it as
+    manually_overridden. Returns the updated row in the same shape
+    list_trial_balance_accounts() already uses, so the frontend can splice the
+    response straight into its rendered row with no reshaping.
+    """
+    account_rows = execute_query("SELECT id FROM trial_balance_accounts WHERE id = ?", (account_id,))
+    if not account_rows:
+        raise HTTPException(404, "Trial balance account not found")
+
+    new_classification = 'leaf' if payload.is_leaf else 'parent'
+    execute_write(
+        "UPDATE trial_balance_accounts SET classification = ?, manually_overridden = 1 WHERE id = ?",
+        (new_classification, account_id)
+    )
+
+    updated_rows = execute_query("SELECT * FROM trial_balance_accounts WHERE id = ?", (account_id,))
+    r = updated_rows[0]
+
+    log_audit("Analyst", "Update", "TrialBalance",
+               f"Manually reclassified account {r['account_code']} as {new_classification} "
+               f"(upload_id={r['upload_id']})")
+
+    return {
+        "id": r["id"],
+        "account_code": r["account_code"],
+        "account_name": r["account_name"],
+        "parent_account_code": r["parent_account_code"],
+        "level": r["level"],
+        "is_leaf": r["classification"] == "leaf",
+        "debit_amount": r["debit_amount"],
+        "credit_amount": r["credit_amount"],
+        "source_account_type": r["source_account_type"],
+        "manually_overridden": bool(r["manually_overridden"]),
     }

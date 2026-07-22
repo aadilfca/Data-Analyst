@@ -1,10 +1,11 @@
 // ============================================================
-// Trial Balance module — Phase 4: Upload UI
+// Trial Balance module — Phase 5 of 5, FINAL: Review screen
 // Lets the auditor upload a client's Trial Balance Excel file
 // (with an as-of date), triggers the backend's upload+classify
-// endpoint (Phase 2), then fetches and displays the classification
-// summary (Phase 3). No per-account list/corrections here — that's
-// a later phase.
+// endpoint (Phase 2), fetches and displays the classification
+// summary (Phase 3), and now (Phase 5) lists every classified
+// account so the auditor can flip a misclassified row between
+// Leaf/Parent via the new per-row override endpoint.
 // ============================================================
 
 // Client selection is entirely handled by client_context.js: it reads/writes
@@ -13,6 +14,10 @@
 // ever reads the current client id via window.getSelectedClientId().
 
 let selectedFile = null;
+
+// Which upload's accounts are currently on screen in the review table -- needed so the
+// row-toggle handler knows which upload's summary tiles to refresh after a flip.
+let currentUploadId = null;
 
 // ---------- DOM HELPERS ----------
 function getElement(id) {
@@ -37,6 +42,8 @@ const summaryContainer = getElement('summaryContainer');
 const summaryTotalCount = getElement('summaryTotalCount');
 const summaryLeafCount = getElement('summaryLeafCount');
 const summaryParentCount = getElement('summaryParentCount');
+const reviewContainer = getElement('reviewContainer');
+const reviewTableBody = getElement('reviewTableBody');
 
 // ---------- STATUS BAR ----------
 // Same show/hide + color-coded classes convention as upload.js's showStatus().
@@ -135,6 +142,7 @@ async function uploadTrialBalance() {
     }
 
     if (summaryContainer) summaryContainer.style.display = 'none';
+    if (reviewContainer) reviewContainer.style.display = 'none';
     showStatus('Uploading and classifying...', 'loading');
     uploadTrialBalanceBtn.disabled = true;
 
@@ -156,6 +164,7 @@ async function uploadTrialBalance() {
 
         showStatus('✅ Uploaded and classified successfully', 'success');
         await loadSummary(result.upload_id);
+        await loadAccounts(result.upload_id);
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
     } finally {
@@ -181,6 +190,138 @@ async function loadSummary(uploadId) {
         // Don't overwrite the earlier upload-success status message -- the upload itself
         // already succeeded, only the summary re-fetch failed.
         console.warn('⚠️ Could not load Trial Balance summary:', error.message);
+    }
+}
+
+// ---------- REVIEW TABLE (Phase 5: list + manual classification override) ----------
+
+// Fetches every classified account for an upload (Phase 3's read-only list endpoint)
+// and renders the review table. Same non-fatal-on-error convention as loadSummary() --
+// the upload itself already succeeded, so a failure here shouldn't overwrite that status.
+async function loadAccounts(uploadId) {
+    try {
+        const res = await fetch(API_BASE + '/api/trial-balance/accounts?upload_id=' + uploadId);
+        const result = await res.json();
+
+        if (!res.ok) {
+            throw new Error(result.detail || 'Failed to load accounts');
+        }
+
+        currentUploadId = uploadId;
+        renderReviewTable(result.accounts);
+        if (reviewContainer) reviewContainer.style.display = 'block';
+    } catch (error) {
+        console.warn('⚠️ Could not load Trial Balance accounts:', error.message);
+    }
+}
+
+// Builds one <tr> per account. Uses createElement/textContent throughout (no innerHTML)
+// since account codes/names come from the uploaded file, not from this app's own control.
+function renderReviewTable(accounts) {
+    if (!reviewTableBody) return;
+    reviewTableBody.innerHTML = '';
+
+    accounts.forEach(function (account) {
+        const tr = document.createElement('tr');
+        tr.dataset.accountId = account.id;
+
+        const tdCode = document.createElement('td');
+        tdCode.textContent = account.account_code;
+        tr.appendChild(tdCode);
+
+        const tdName = document.createElement('td');
+        tdName.textContent = account.account_name || '—';
+        tr.appendChild(tdName);
+
+        const tdLevel = document.createElement('td');
+        tdLevel.textContent = account.level;
+        tr.appendChild(tdLevel);
+
+        const tdClassification = document.createElement('td');
+        tdClassification.appendChild(buildClassificationCellContent(account));
+        tr.appendChild(tdClassification);
+
+        const tdAction = document.createElement('td');
+        tdAction.appendChild(buildToggleButton(account));
+        tr.appendChild(tdAction);
+
+        reviewTableBody.appendChild(tr);
+    });
+}
+
+// Badge + optional "overridden" tag, grouped in one fragment so both the initial render
+// and the in-place row update (after a toggle) can build/replace this cell's content identically.
+function buildClassificationCellContent(account) {
+    const fragment = document.createDocumentFragment();
+
+    const badge = document.createElement('span');
+    badge.className = 'tb-classification-badge ' + (account.is_leaf ? 'leaf' : 'parent');
+    badge.textContent = account.is_leaf ? 'Leaf' : 'Parent';
+    fragment.appendChild(badge);
+
+    if (account.manually_overridden) {
+        const tag = document.createElement('span');
+        tag.className = 'tb-overridden-tag';
+        tag.textContent = 'Overridden';
+        fragment.appendChild(tag);
+    }
+
+    return fragment;
+}
+
+function buildToggleButton(account) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tb-toggle-btn';
+    btn.dataset.accountId = account.id;
+    btn.dataset.currentIsLeaf = account.is_leaf;
+    btn.textContent = account.is_leaf ? 'Flip to Parent' : 'Flip to Leaf';
+    return btn;
+}
+
+// Single delegated click listener on the table body (added once, not per-row) -- reads the
+// clicked button's data attributes rather than each row carrying its own listener.
+if (reviewTableBody) {
+    reviewTableBody.addEventListener('click', function (event) {
+        const btn = event.target.closest('.tb-toggle-btn');
+        if (!btn) return;
+
+        const accountId = btn.dataset.accountId;
+        const currentIsLeaf = btn.dataset.currentIsLeaf === 'true';
+        toggleAccountClassification(accountId, !currentIsLeaf);
+    });
+}
+
+// PUTs the new classification to the Phase 5 override endpoint, then updates just that
+// row in place (no full table re-render) and refreshes the summary tiles so the
+// Leaf/Parent counts stay correct after the flip.
+async function toggleAccountClassification(accountId, newIsLeaf) {
+    try {
+        const res = await fetch(API_BASE + '/api/trial-balance/accounts/' + accountId + '/override', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_leaf: newIsLeaf })
+        });
+        const result = await res.json();
+
+        if (!res.ok) {
+            throw new Error(result.detail || 'Failed to update classification');
+        }
+
+        const row = reviewTableBody.querySelector('tr[data-account-id="' + accountId + '"]');
+        if (row) {
+            const tdClassification = row.children[3];
+            tdClassification.innerHTML = '';
+            tdClassification.appendChild(buildClassificationCellContent(result));
+
+            const tdAction = row.children[4];
+            tdAction.innerHTML = '';
+            tdAction.appendChild(buildToggleButton(result));
+        }
+
+        if (currentUploadId) await loadSummary(currentUploadId);
+    } catch (error) {
+        showStatus('❌ ' + error.message, 'error');
     }
 }
 

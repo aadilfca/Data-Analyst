@@ -44,6 +44,7 @@ const MODULE_CARD_DESTINATIONS = {
     verificationCard: '/static/verification.html',
     uploadCard: '/static/upload.html',
     dataBankCard: '/static/databank.html',
+    trialBalanceCard: '/static/trial_balance.html',
     setupCard: '/static/setup.html',
     manageClientsCard: '/static/clients.html',
     auditRulesCard: '/static/audit_rules.html'
