@@ -1,19 +1,25 @@
 """
-Trial Balance module backend (schema/parsing/classification/retrieval/review
-all complete - Phase 5 of 5, FINAL).
+Trial Balance module backend (original 5-phase build complete; now under a
+new Column mapping & standard template requirement - Section 1, Phase 1 of
+this file's own changes is done: explicit mapping payload + suggest-mapping
+endpoint).
 
 New, dedicated feature - deliberately not an extension of import_export.py/
 templates.py (those handle generic template-mapped imports; TB needs
 hierarchy-aware parent/leaf classification derived from the account code
-structure, not client-specific text markers). There is no column-mapping UI
-for this feature, so columns are identified by header-name matching against
-a normalized synonym list per role (Code/Name/Type/Debit/Credit) instead of
-a fixed position - see clean_header()/identify_columns() below.
+structure, not client-specific text markers). As of Section 1/Phase 1,
+columns are identified by an explicit column-mapping payload the caller
+supplies (which real Excel column is Account Code/Name/Debit/Credit, plus
+optional Type/Opening Balance/Closing Balance) rather than hardcoded
+header-name matching - see validate_column_mapping() below. The normalized
+synonym lists (clean_header(), MAPPING_ROLES) are kept and reused only for
+suggest_column_mapping()'s best-guess pre-fill, not for auto-driving the
+upload itself.
 
-Endpoints: upload+classify (POST /upload), read-only list/summary
-(GET /accounts, GET /summary), and a row-level manual classification
-override (PUT /accounts/{id}/override) for correcting a misclassified
-account after review.
+Endpoints: mapping suggestion (POST /suggest-mapping), upload+classify
+(POST /upload), read-only list/summary (GET /accounts, GET /summary), and a
+row-level manual classification override (PUT /accounts/{id}/override) for
+correcting a misclassified account after review.
 """
 
 import json
@@ -36,17 +42,44 @@ class AccountOverrideRequest(BaseModel):
     is_leaf: bool
 
 # ---------- COLUMN IDENTIFICATION ----------
-# No column-mapping UI exists for Trial Balance (unlike import_export.py's
-# template system), so the source file's own headers are matched against a
-# normalized synonym list per role. Matching is exact (post-normalization),
-# not substring, and processed in this priority order so a header can never
-# be claimed by two roles at once. Only "code" is required - a file with no
-# recognizable Code-like header is rejected with a clear error.
+# Trial Balance columns are now identified via an explicit column-mapping
+# payload supplied by the caller (Section 1, Phase 1) rather than hardcoded
+# header-name matching alone. The synonym sets/clean_header() below are kept
+# and reused for suggest_column_mapping() - a best-guess suggestion endpoint
+# the frontend mapping window (Phase 2) uses to pre-fill likely matches; they
+# no longer drive the upload endpoint's own column identification directly.
 CODE_SYNONYMS = {"code", "accountcode", "ledgercode", "accode", "glcode", "accountno", "acno"}
 NAME_SYNONYMS = {"name", "accountname", "particulars", "description", "accounttitle", "title"}
 TYPE_SYNONYMS = {"type", "mastersub", "accounttype", "classification"}
 DEBIT_SYNONYMS = {"debit", "dr", "debitamount"}
 CREDIT_SYNONYMS = {"credit", "cr", "creditamount"}
+OPENING_BALANCE_SYNONYMS = {"openingbalance", "opening", "obalance", "openingbal"}
+CLOSING_BALANCE_SYNONYMS = {"closingbalance", "closing", "cbalance", "closingbal"}
+
+# Priority order shared by both suggest_column_mapping() and the required-field
+# list in validate_column_mapping() - code/name/debit/credit first (required),
+# then the optional roles, so no header is ever claimed by two roles at once.
+MAPPING_ROLES = [
+    ("account_code_column", CODE_SYNONYMS),
+    ("account_name_column", NAME_SYNONYMS),
+    ("type_column", TYPE_SYNONYMS),
+    ("debit_column", DEBIT_SYNONYMS),
+    ("credit_column", CREDIT_SYNONYMS),
+    ("opening_balance_column", OPENING_BALANCE_SYNONYMS),
+    ("closing_balance_column", CLOSING_BALANCE_SYNONYMS),
+]
+REQUIRED_MAPPING_ROLES = ["account_code_column", "account_name_column", "debit_column", "credit_column"]
+
+# Human-readable labels for validation error messages.
+MAPPING_ROLE_LABELS = {
+    "account_code_column": "Account Code",
+    "account_name_column": "Account Name",
+    "type_column": "Type",
+    "debit_column": "Debit",
+    "credit_column": "Credit",
+    "opening_balance_column": "Opening Balance",
+    "closing_balance_column": "Closing Balance",
+}
 
 
 def clean_header(text) -> str:
@@ -56,41 +89,90 @@ def clean_header(text) -> str:
     return re.sub(r'[^a-z0-9]', '', str(text).lower())
 
 
-def identify_columns(columns) -> dict:
+def read_trial_balance_excel(contents: bytes, filename: str) -> pd.DataFrame:
     """
-    Match the source file's own headers against the role synonym sets above.
-    Returns a dict of role -> actual column name (None for an unmatched
-    optional role). Raises ValueError if no Code-like column is found -
-    the caller turns this into a clean 400 + an 'error'-status upload row,
-    rather than a raw crash.
+    Shared file-reading helper used by both the upload endpoint and the
+    suggest-mapping endpoint, so the two can never disagree on how a sheet is
+    read. dtype=str forces the ENTIRE sheet to raw strings at the pandas layer
+    itself - not just the code column - which is the only way to guarantee
+    Excel's date/number auto-conversion (the exact bug that corrupted a code
+    like 10-10-25-10 in the Leather Crop sample file) can never happen.
+    keep_default_na=False turns blank cells into '' instead of NaN, so blank
+    checks are plain string checks.
     """
-    role_synonyms = [
-        ("code", CODE_SYNONYMS),
-        ("name", NAME_SYNONYMS),
-        ("type", TYPE_SYNONYMS),
-        ("debit", DEBIT_SYNONYMS),
-        ("credit", CREDIT_SYNONYMS),
-    ]
-    used_columns = set()
-    result = {}
-    for role, synonyms in role_synonyms:
-        match = None
-        for col in columns:
-            if col in used_columns:
-                continue
-            if clean_header(col) in synonyms:
-                match = col
-                break
-        result[role] = match
-        if match is not None:
-            used_columns.add(match)
+    engine = "xlrd" if filename.lower().endswith('.xls') else "openpyxl"
+    try:
+        return pd.read_excel(BytesIO(contents), dtype=str, keep_default_na=False, engine=engine)
+    except Exception as e:
+        raise ValueError(f"Could not read the Excel file: {e}")
 
-    if result["code"] is None:
-        raise ValueError(
-            "Could not find an Account Code column in the uploaded file. "
-            "Expected a header like 'Code' or 'Account Code'."
-        )
-    return result
+
+def suggest_column_mapping(headers: list) -> dict:
+    """
+    Best-guess suggestion for every mapping role, for the frontend mapping
+    window (Phase 2) to pre-fill. For each role (in MAPPING_ROLES priority
+    order, so no header is claimed by two roles): first try an exact
+    normalized-synonym match (same precision as the old identify_columns()),
+    then fall back to a bidirectional substring match between the normalized
+    header and any synonym - mirroring templates.py's get_close_matches()
+    ("typed in x or x in typed"), not a fuzzy-matching library. Returns
+    {role: header_name_or_None} for every role - purely a suggestion, never
+    used to silently drive the upload itself.
+    """
+    used_headers = set()
+    suggestions = {}
+    for role, synonyms in MAPPING_ROLES:
+        match = None
+        # Pass 1: exact normalized match.
+        for header in headers:
+            if header in used_headers:
+                continue
+            if clean_header(header) in synonyms:
+                match = header
+                break
+        # Pass 2: bidirectional substring fallback.
+        if match is None:
+            for header in headers:
+                if header in used_headers:
+                    continue
+                normalized = clean_header(header)
+                if any(normalized in syn or syn in normalized for syn in synonyms):
+                    match = header
+                    break
+        suggestions[role] = match
+        if match is not None:
+            used_headers.add(match)
+    return suggestions
+
+
+def validate_column_mapping(mapping: dict, headers: list) -> None:
+    """
+    Validate a caller-supplied column mapping against the file's actual
+    headers. Raises ValueError naming every problem at once (not just the
+    first one hit) if: a required role (Account Code/Name/Debit/Credit) is
+    missing/blank, or any provided mapped column name (required or optional)
+    doesn't exactly match a real header in the file. The caller's outer
+    except Exception block turns this into a clean 400 + an 'error'-status
+    upload row, rather than a raw crash deeper in the classification pipeline.
+    """
+    problems = []
+    header_set = set(headers)
+
+    for role in REQUIRED_MAPPING_ROLES:
+        value = mapping.get(role)
+        if not value or not str(value).strip():
+            problems.append(f"{MAPPING_ROLE_LABELS[role]} column mapping is required.")
+
+    for role, _synonyms in MAPPING_ROLES:
+        value = mapping.get(role)
+        if value and value not in header_set:
+            problems.append(
+                f"{MAPPING_ROLE_LABELS[role]} is mapped to '{value}', which is not "
+                f"a column in the uploaded file."
+            )
+
+    if problems:
+        raise ValueError(" ".join(problems))
 
 
 def parse_amount(raw_value):
@@ -146,7 +228,19 @@ def classify_accounts(codes: set) -> dict:
 async def upload_trial_balance(
     client_id: int = Form(...),
     as_of_date: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    # Column mapping (Section 1, Phase 1) - which real Excel column is which
+    # field. Required-by-business-rule fields are still Optional[str] at the
+    # FastAPI layer (not Form(...)) so validate_column_mapping() below can
+    # produce one combined, clear 400 naming every missing/invalid field at
+    # once, rather than FastAPI's generic 422 on the first missing field.
+    account_code_column: Optional[str] = Form(None),
+    account_name_column: Optional[str] = Form(None),
+    debit_column: Optional[str] = Form(None),
+    credit_column: Optional[str] = Form(None),
+    type_column: Optional[str] = Form(None),
+    opening_balance_column: Optional[str] = Form(None),
+    closing_balance_column: Optional[str] = Form(None),
 ):
     """
     Upload a client's Trial Balance Excel file, classify every account as
@@ -178,20 +272,23 @@ async def upload_trial_balance(
 
     try:
         contents = await file.read()
+        df = read_trial_balance_excel(contents, file.filename)
 
-        # dtype=str forces the ENTIRE sheet to raw strings at the pandas
-        # layer itself - not just the code column - which is the only way
-        # to guarantee Excel's date/number auto-conversion (the exact bug
-        # that corrupted a code like 10-10-25-10 in the Leather Crop sample
-        # file) can never happen. keep_default_na=False turns blank cells
-        # into '' instead of NaN, so blank checks are plain string checks.
-        engine = "xlrd" if file.filename.lower().endswith('.xls') else "openpyxl"
-        try:
-            df = pd.read_excel(BytesIO(contents), dtype=str, keep_default_na=False, engine=engine)
-        except Exception as e:
-            raise ValueError(f"Could not read the Excel file: {e}")
-
-        columns = identify_columns(df.columns.tolist())
+        # Validate the caller-supplied mapping against the file's real headers
+        # (Section 1, Phase 1) - replaces the old hardcoded identify_columns()
+        # auto-detection. A ValueError here (missing required role, or a
+        # mapped column that isn't a real header) is caught by the except
+        # block below, same as any other parsing failure.
+        mapping = {
+            "account_code_column": account_code_column,
+            "account_name_column": account_name_column,
+            "type_column": type_column,
+            "debit_column": debit_column,
+            "credit_column": credit_column,
+            "opening_balance_column": opening_balance_column,
+            "closing_balance_column": closing_balance_column,
+        }
+        validate_column_mapping(mapping, df.columns.tolist())
         rows = df.to_dict('records')
 
         # Walk every row once: skip blanks/duplicates, capture the rest.
@@ -204,7 +301,7 @@ async def upload_trial_balance(
 
         for idx, row in enumerate(rows):
             row_number = idx + 2
-            code = str(row.get(columns["code"], '')).strip()
+            code = str(row.get(account_code_column, '')).strip()
             if code == '':
                 skipped_blank_count += 1
                 continue
@@ -213,10 +310,10 @@ async def upload_trial_balance(
                 continue
             seen_codes.add(code)
 
-            name_value = str(row.get(columns["name"], '')).strip() if columns["name"] else ''
-            type_value = str(row.get(columns["type"], '')).strip() if columns["type"] else ''
-            debit_value = parse_amount(row.get(columns["debit"])) if columns["debit"] else None
-            credit_value = parse_amount(row.get(columns["credit"])) if columns["credit"] else None
+            name_value = str(row.get(account_name_column, '')).strip() if account_name_column else ''
+            type_value = str(row.get(type_column, '')).strip() if type_column else ''
+            debit_value = parse_amount(row.get(debit_column)) if debit_column else None
+            credit_value = parse_amount(row.get(credit_column)) if credit_column else None
 
             accounts.append({
                 "account_code": code,
@@ -310,6 +407,31 @@ async def upload_trial_balance(
             (str(e), upload_id)
         )
         raise HTTPException(400, f"Trial balance parsing failed: {e}")
+
+
+@router.post("/api/trial-balance/suggest-mapping")
+async def suggest_trial_balance_mapping(file: UploadFile = File(...)):
+    """
+    Section 1, Phase 1: stateless read-only endpoint for the frontend mapping
+    window (Phase 2) - takes the same raw Excel file the user is about to
+    upload, reads its headers, and returns a best-guess suggestion per
+    mapping role so the UI can pre-fill likely matches. Nothing is stored;
+    this never touches trial_balance_uploads/trial_balance_accounts.
+    """
+    if not file.filename or not file.filename.lower().endswith(('.xlsx', '.xls')):
+        raise HTTPException(400, "Only .xlsx and .xls files are supported")
+
+    try:
+        contents = await file.read()
+        df = read_trial_balance_excel(contents, file.filename)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    headers = df.columns.tolist()
+    return {
+        "headers": headers,
+        "suggestions": suggest_column_mapping(headers),
+    }
 
 
 def _require_upload(upload_id: int):
