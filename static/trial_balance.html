@@ -6,6 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trial Balance</title>
     <link rel="stylesheet" href="/static/style.css">
+    <!-- SheetJS: reads the selected file client-side (same CDN version upload.html already
+         uses) to build the small mapping-window preview table's row data. -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         /* ---------- FORM AREA ---------- */
         .tb-form-group {
@@ -309,6 +312,19 @@
             border: 1px solid #e2e8f0;
             border-radius: 8px;
         }
+
+        /* ---------- COLUMN MAPPING (Section 1, Phase 2) ---------- */
+        /* Reuses .tb-review-table/.tb-review-table-wrapper as-is for both the mapping
+           table and the preview table; this is the one style addition needed since
+           .tb-review-table never previously held a <select>. */
+        .tb-review-table select {
+            padding: 6px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 13px;
+            width: 100%;
+            max-width: 280px;
+        }
     </style>
 </head>
 
@@ -359,8 +375,50 @@
                 </div>
                 <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
             </div>
+        </div>
 
-            <div class="tb-field-row">
+        <!-- Column Mapping (Section 1, Phase 2) -- hidden until a file is selected and
+             suggest-mapping/preview parsing complete. Upload & Classify lives at the
+             bottom of this section so the natural flow reads: pick file -> review/correct
+             mapping -> click Upload & Classify. -->
+        <div class="tb-form-group" id="mappingSection" style="display:none;">
+            <h3>🔗 Column Mapping</h3>
+            <p class="group-hint">Confirm which column in the file is which field. Suggested matches are pre-filled below -- review and correct before uploading.</p>
+
+            <div id="mappingValidationMessage" class="status-bar error" style="display:none;">
+                <span class="icon">⚠️</span>
+                <span id="mappingValidationText"></span>
+            </div>
+
+            <div class="tb-review-table-wrapper">
+                <table class="tb-review-table">
+                    <thead>
+                        <tr>
+                            <th>Field</th>
+                            <th>Excel Column</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="mappingTableBody">
+                        <!-- Populated by renderMappingDropdowns() in trial_balance.js -->
+                    </tbody>
+                </table>
+            </div>
+
+            <h3 style="margin-top:20px;">👁️ Preview (first 5 rows)</h3>
+            <p class="group-hint">A quick look at the file's actual data, so you can visually confirm each column choice above.</p>
+            <div class="tb-review-table-wrapper">
+                <table class="tb-review-table">
+                    <thead id="mappingPreviewHead">
+                        <!-- Populated by renderMappingPreviewTable() in trial_balance.js -->
+                    </thead>
+                    <tbody id="mappingPreviewBody">
+                        <!-- Populated by renderMappingPreviewTable() in trial_balance.js -->
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="tb-field-row" style="margin-top:20px; margin-bottom:0;">
                 <button class="btn-primary-action" id="uploadTrialBalanceBtn" type="button" disabled>Upload &amp; Classify</button>
             </div>
         </div>
@@ -412,7 +470,7 @@
     </div>
 
     <script src="/static/client_context.js?v=2"></script>
-    <script src="/static/trial_balance.js?v=3"></script>
+    <script src="/static/trial_balance.js?v=4"></script>
 </body>
 
 </html>

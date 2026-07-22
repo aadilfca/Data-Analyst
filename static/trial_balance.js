@@ -6,6 +6,12 @@
 // summary (Phase 3), and now (Phase 5) lists every classified
 // account so the auditor can flip a misclassified row between
 // Leaf/Parent via the new per-row override endpoint.
+//
+// Column mapping & standard template, Section 1, Phase 2: once a file is
+// selected, suggest-mapping (Phase 1 backend) is called to pre-fill a
+// dropdown-per-field mapping table (Account Code/Name/Debit/Credit), with a
+// small live preview of the file's first few rows alongside it so the
+// reviewer can visually confirm each column choice before uploading.
 // ============================================================
 
 // Client selection is entirely handled by client_context.js: it reads/writes
@@ -18,6 +24,37 @@ let selectedFile = null;
 // Which upload's accounts are currently on screen in the review table -- needed so the
 // row-toggle handler knows which upload's summary tiles to refresh after a flip.
 let currentUploadId = null;
+
+// ---------- COLUMN MAPPING STATE (Section 1, Phase 2) ----------
+// The 4 required mapping fields this UI surfaces -- Type/Opening Balance/Closing
+// Balance are supported by Phase 1's backend as optional roles, but the brief only
+// asks for a mapping window over these 4, so they're simply never sent (the backend
+// treats them as Optional[str] = Form(None), so omitting them is a no-op).
+const TB_MAPPING_FIELDS = [
+    { role: 'account_code_column', label: 'Account Code' },
+    { role: 'account_name_column', label: 'Account Name' },
+    { role: 'debit_column', label: 'Debit' },
+    { role: 'credit_column', label: 'Credit' },
+];
+
+// The file's real header list, from suggest-mapping's response -- this is the single
+// source of truth for both the mapping dropdowns' options and the preview table's
+// column labels, since it's exactly what the upload endpoint will validate against.
+let fileHeaders = [];
+
+// First 5 data rows (arrays, header row already dropped), from a client-side SheetJS
+// parse of the same file -- matched to fileHeaders purely by column index.
+let filePreviewRows = [];
+
+// Current mapping selection, keyed by role -- seeded from suggest-mapping's
+// suggestions, then mutated in place by each dropdown's change listener.
+let tbColumnMapping = { account_code_column: null, account_name_column: null, debit_column: null, credit_column: null };
+
+// Bumped on every new file selection so a fast re-select can't let a slower, stale
+// suggest-mapping/preview-parse response overwrite state from the newer file
+// (same stale-response-guard convention used elsewhere in this app, e.g.
+// Verification's audit guidance panel).
+let mappingRequestToken = 0;
 
 // ---------- DOM HELPERS ----------
 function getElement(id) {
@@ -44,6 +81,12 @@ const summaryLeafCount = getElement('summaryLeafCount');
 const summaryParentCount = getElement('summaryParentCount');
 const reviewContainer = getElement('reviewContainer');
 const reviewTableBody = getElement('reviewTableBody');
+const mappingSection = getElement('mappingSection');
+const mappingValidationMessage = getElement('mappingValidationMessage');
+const mappingValidationText = getElement('mappingValidationText');
+const mappingTableBody = getElement('mappingTableBody');
+const mappingPreviewHead = getElement('mappingPreviewHead');
+const mappingPreviewBody = getElement('mappingPreviewBody');
 
 // ---------- STATUS BAR ----------
 // Same show/hide + color-coded classes convention as upload.js's showStatus().
@@ -77,9 +120,13 @@ function updateClientDependentUI() {
 
     const hasFile = !!selectedFile;
     const hasDate = !!(asOfDateInput && asOfDateInput.value);
+    // A file with no headers yet (still loading, or suggest-mapping failed) can never
+    // be considered mapped -- checkMappingComplete() alone would incorrectly pass on
+    // an all-null tbColumnMapping before fileHeaders has ever been populated.
+    const hasMapping = fileHeaders.length > 0 && checkMappingComplete();
 
     if (uploadTrialBalanceBtn) {
-        uploadTrialBalanceBtn.disabled = !(hasClient && hasFile && hasDate);
+        uploadTrialBalanceBtn.disabled = !(hasClient && hasFile && hasDate && hasMapping);
     }
 }
 
@@ -110,6 +157,18 @@ function handleFileSelected(file) {
     if (fileSize) fileSize.textContent = formatFileSize(file.size);
     if (fileInfo) fileInfo.style.display = 'flex';
     updateClientDependentUI();
+    loadColumnMappingForFile(file);
+}
+
+// Resets the 3 column-mapping state vars and hides the mapping section -- shared by
+// the Clear button and by loadColumnMappingForFile()'s own error path, so a failed
+// suggest-mapping call never leaves stale mapping state visible for the wrong file.
+function resetColumnMapping() {
+    fileHeaders = [];
+    filePreviewRows = [];
+    tbColumnMapping = { account_code_column: null, account_name_column: null, debit_column: null, credit_column: null };
+    if (mappingSection) mappingSection.style.display = 'none';
+    if (mappingValidationMessage) mappingValidationMessage.style.display = 'none';
 }
 
 if (clearBtn) {
@@ -118,12 +177,210 @@ if (clearBtn) {
         if (fileInfo) fileInfo.style.display = 'none';
         if (fileName) fileName.textContent = '';
         if (fileSize) fileSize.textContent = '';
+        resetColumnMapping();
         updateClientDependentUI();
     });
 }
 
 if (asOfDateInput) {
     asOfDateInput.addEventListener('change', updateClientDependentUI);
+}
+
+// ---------- COLUMN MAPPING (Section 1, Phase 2) ----------
+
+// POSTs the raw file to Phase 1's suggest-mapping endpoint and returns its
+// {headers, suggestions} shape. Same throw-with-detail convention as every other
+// fetch call in this file.
+async function suggestColumnMapping(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await fetch(API_BASE + '/api/trial-balance/suggest-mapping', {
+        method: 'POST',
+        body: formData
+    });
+    const result = await res.json();
+
+    if (!res.ok) {
+        throw new Error(result.detail || 'Failed to read file for mapping suggestions');
+    }
+    return result;
+}
+
+// Reads the selected file client-side via SheetJS to get its first sheet's raw rows
+// (array of arrays, header row included at index 0) -- used only for the preview
+// table's cell values; the header labels themselves come from suggestColumnMapping()
+// instead (see the Header list authority design note in this phase's plan).
+function readFileRowsForPreview(file) {
+    return new Promise(function (resolve, reject) {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+                resolve(rows);
+            } catch (err) {
+                reject(err);
+            }
+        };
+        reader.onerror = function () {
+            reject(new Error('Could not read the file'));
+        };
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+// Runs suggest-mapping and the client-side preview parse in parallel for a newly
+// selected file, seeds tbColumnMapping from the suggestions, and renders both the
+// mapping dropdowns and the preview table. Guarded by mappingRequestToken so a fast
+// re-select of a different file can't let this call's (now stale) result overwrite
+// state belonging to the newer file.
+async function loadColumnMappingForFile(file) {
+    const token = ++mappingRequestToken;
+    showStatus('Reading file and suggesting column mapping...', 'loading');
+
+    try {
+        const results = await Promise.all([
+            suggestColumnMapping(file),
+            readFileRowsForPreview(file)
+        ]);
+        if (token !== mappingRequestToken) return; // a newer file was selected meanwhile
+
+        const suggestResult = results[0];
+        const rawRows = results[1];
+
+        fileHeaders = suggestResult.headers || [];
+        filePreviewRows = rawRows.slice(1, 6); // first 5 data rows, header row dropped
+        tbColumnMapping = {
+            account_code_column: suggestResult.suggestions.account_code_column || null,
+            account_name_column: suggestResult.suggestions.account_name_column || null,
+            debit_column: suggestResult.suggestions.debit_column || null,
+            credit_column: suggestResult.suggestions.credit_column || null,
+        };
+
+        renderMappingDropdowns();
+        renderMappingPreviewTable();
+        checkMappingComplete();
+        if (mappingSection) mappingSection.style.display = 'block';
+        showStatus('✅ Column mapping suggested -- review and correct below if needed.', 'success');
+    } catch (error) {
+        if (token !== mappingRequestToken) return;
+        showStatus('❌ Could not read file for column mapping: ' + error.message, 'error');
+        resetColumnMapping();
+    } finally {
+        if (token === mappingRequestToken) {
+            updateClientDependentUI();
+        }
+    }
+}
+
+// Builds one <tr> per TB_MAPPING_FIELDS entry: field label, a <select> of fileHeaders
+// (excluding whatever's already chosen by another role), and a ✅/❌ status cell.
+// Same interaction pattern as the generic Upload module's mapping table
+// (static/upload.js's renderMapping()) -- full re-render on any change so every row's
+// exclusion list and status stay in sync.
+function renderMappingDropdowns() {
+    if (!mappingTableBody) return;
+    mappingTableBody.innerHTML = '';
+
+    TB_MAPPING_FIELDS.forEach(function (field) {
+        const tr = document.createElement('tr');
+
+        const tdLabel = document.createElement('td');
+        tdLabel.textContent = field.label;
+        tr.appendChild(tdLabel);
+
+        const tdSelect = document.createElement('td');
+        const select = document.createElement('select');
+        select.dataset.role = field.role;
+
+        const blankOption = document.createElement('option');
+        blankOption.value = '';
+        blankOption.textContent = '— Select column —';
+        select.appendChild(blankOption);
+
+        const selectedElsewhere = TB_MAPPING_FIELDS
+            .filter(function (f) { return f.role !== field.role; })
+            .map(function (f) { return tbColumnMapping[f.role]; })
+            .filter(Boolean);
+
+        fileHeaders.forEach(function (header) {
+            if (selectedElsewhere.indexOf(header) !== -1 && header !== tbColumnMapping[field.role]) {
+                return; // already claimed by another field's dropdown
+            }
+            const option = document.createElement('option');
+            option.value = header;
+            option.textContent = header;
+            if (header === tbColumnMapping[field.role]) option.selected = true;
+            select.appendChild(option);
+        });
+
+        select.addEventListener('change', function () {
+            tbColumnMapping[field.role] = this.value || null;
+            renderMappingDropdowns(); // full re-render so other rows' exclusions/status update
+            checkMappingComplete();
+            updateClientDependentUI();
+        });
+
+        tdSelect.appendChild(select);
+        tr.appendChild(tdSelect);
+
+        const tdStatus = document.createElement('td');
+        tdStatus.textContent = tbColumnMapping[field.role] ? '✅' : '❌';
+        tr.appendChild(tdStatus);
+
+        mappingTableBody.appendChild(tr);
+    });
+}
+
+// Renders the small "first 5 rows" preview: column labels from fileHeaders (the same
+// list the mapping dropdowns use), cell values from filePreviewRows indexed by
+// column position -- not by re-matching header text.
+function renderMappingPreviewTable() {
+    if (!mappingPreviewHead || !mappingPreviewBody) return;
+    mappingPreviewHead.innerHTML = '';
+    mappingPreviewBody.innerHTML = '';
+
+    const headerRow = document.createElement('tr');
+    fileHeaders.forEach(function (header) {
+        const th = document.createElement('th');
+        th.textContent = header;
+        headerRow.appendChild(th);
+    });
+    mappingPreviewHead.appendChild(headerRow);
+
+    filePreviewRows.forEach(function (rowArray) {
+        const tr = document.createElement('tr');
+        fileHeaders.forEach(function (_header, idx) {
+            const td = document.createElement('td');
+            const value = rowArray[idx];
+            td.textContent = value !== undefined ? String(value) : '';
+            tr.appendChild(td);
+        });
+        mappingPreviewBody.appendChild(tr);
+    });
+}
+
+// Checks all 4 required fields are mapped; shows/hides the inline validation message
+// naming every still-missing field (a frontend mirror of Phase 1's backend
+// validate_column_mapping() -- the backend remains the authoritative check on the
+// actual upload call, this is just an earlier, clearer signal to the user).
+function checkMappingComplete() {
+    const missing = TB_MAPPING_FIELDS
+        .filter(function (field) { return !tbColumnMapping[field.role]; })
+        .map(function (field) { return field.label; });
+
+    if (mappingValidationMessage && mappingValidationText) {
+        if (missing.length === 0) {
+            mappingValidationMessage.style.display = 'none';
+        } else {
+            mappingValidationText.textContent = 'Please map the following required field(s) before uploading: ' + missing.join(', ') + '.';
+            mappingValidationMessage.style.display = 'flex';
+        }
+    }
+    return missing.length === 0;
 }
 
 // ---------- UPLOAD & CLASSIFY ----------
@@ -140,6 +397,12 @@ async function uploadTrialBalance() {
         showStatus('⚠️ Select a client, an as-of date, and a file first.', 'error');
         return;
     }
+    // Defensive re-check of the column mapping too, same reasoning as the guard above --
+    // the button is disabled unless mapping is complete, but re-verify directly in case
+    // of a race (e.g. a stale click event from before the last dropdown change).
+    if (!checkMappingComplete()) {
+        return;
+    }
 
     if (summaryContainer) summaryContainer.style.display = 'none';
     if (reviewContainer) reviewContainer.style.display = 'none';
@@ -151,6 +414,11 @@ async function uploadTrialBalance() {
         formData.append('client_id', clientId);
         formData.append('as_of_date', asOfDate);
         formData.append('file', selectedFile);
+        // Section 1, Phase 2: send the confirmed column mapping alongside the file --
+        // the backend (Phase 1) validates this same payload again on its own.
+        TB_MAPPING_FIELDS.forEach(function (field) {
+            formData.append(field.role, tbColumnMapping[field.role]);
+        });
 
         const res = await fetch(API_BASE + '/api/trial-balance/upload', {
             method: 'POST',
