@@ -757,9 +757,10 @@ function buildDatasetActionButtons(item) {
 }
 
 // ---------- RENDER "YOUR DATASETS" TABLE (Redesign Phase 5) ----------
-// New, simplified table (Template / Full Date Range / Total Rows / Coverage /
-// Actions — Status replaced by Coverage per the Status column removal fix)
-// fed by the exact same data fetchAvailability() already retrieves.
+// New, simplified table (Template / Full Date Range / No of Documents /
+// Coverage / Actions — Status replaced by Coverage per the Status column
+// removal fix; Total Rows renamed to No of Documents per the unique-document
+// count fix) fed by the exact same data fetchAvailability() already retrieves.
 // The old Availability Table this used to coexist with (with its extra "#"/
 // Filtered Rows/Sunday columns) was removed in Redesign Phase 6 — this is
 // now the sole datasets table on the page, and (Coverage Calendar →
@@ -793,13 +794,16 @@ function renderYourDatasetsTable(data, emptyMessage = 'No templates found for th
         }
         tr.appendChild(tdDate);
 
-        // Total Rows (all data, unfiltered)
-        const tdTotalRows = document.createElement('td');
-        tdTotalRows.textContent = item.total_row_count || 0;
-        tdTotalRows.style.textAlign = 'center';
-        tdTotalRows.style.fontWeight = '600';
-        tdTotalRows.setAttribute('data-tooltip', 'Total rows across all dates for this template');
-        tr.appendChild(tdTotalRows);
+        // No of Documents (all data, unfiltered) — unique documents/vouchers,
+        // not raw rows: a multi-line voucher counts once. Sourced from the
+        // API's document_count field (total_row_count itself is untouched,
+        // still used by the metric tile/Preview-gate/delete-count elsewhere).
+        const tdDocCount = document.createElement('td');
+        tdDocCount.textContent = item.document_count || 0;
+        tdDocCount.style.textAlign = 'center';
+        tdDocCount.style.fontWeight = '600';
+        tdDocCount.setAttribute('data-tooltip', 'Unique documents across all dates for this template');
+        tr.appendChild(tdDocCount);
 
         // Coverage — the 📅 icon, now its own column (was previously part of
         // the Actions cell; see buildCoverageCell()).

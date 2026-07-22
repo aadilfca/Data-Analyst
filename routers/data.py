@@ -567,6 +567,28 @@ def get_row_history(client_data_id: int):
 # 📊 AVAILABILITY CHECKLIST ENDPOINT
 # ==============================================
 
+def get_template_document_key_column(template_id: int) -> Optional[str]:
+    """
+    Returns the column_name of a template's unique document key: the first
+    column by sort_order, mirroring get_document_group_id()'s (routers/
+    import_export.py) "first template column = unique document key"
+    convention used elsewhere for voucher/document grouping. Returns None if
+    the template has no active columns configured.
+    """
+    row = execute_query(
+        """
+        SELECT m.column_name
+        FROM template_column_mappings p
+        JOIN master_columns m ON p.column_id = m.id
+        WHERE p.template_id = ? AND m.is_active = 1
+        ORDER BY p.sort_order ASC
+        LIMIT 1
+        """,
+        (template_id,)
+    )
+    return row[0]["column_name"] if row else None
+
+
 @router.get("/api/data/availability")
 def get_availability(
     client_id: int = Query(..., description="Client ID"),
@@ -579,6 +601,14 @@ def get_availability(
     Returns:
     - filtered_row_count: rows matching the date filter
     - total_row_count: ALL rows for this template (unfiltered)
+    - document_count: unique documents among ALL rows (unfiltered) - counts
+      distinct values of the template's document-key column (first column by
+      sort_order, same convention get_document_group_id() uses), so a
+      multi-line voucher counts once regardless of how many lines it has.
+      Used only by the "Your Datasets" table's "No of Documents" column -
+      total_row_count itself is unchanged and still backs the Total Records
+      metric tile, the Preview-button data-exists check, and the delete
+      confirmation's row count.
     - date_min / date_max: FULL date range of all data for this template
     - sunday_count: Sunday rows matching the filter (for preview context)
     - status: 'complete' if any data exists (unfiltered), else 'missing'
@@ -651,7 +681,32 @@ def get_availability(
     total_query += " GROUP BY t.id ORDER BY t.template_name"
     
     total_rows = execute_query(total_query, total_params)
-    
+
+    # ------------------------------------------------------------
+    # 2b. Unique document counts per template (for "No of Documents") -
+    # counts distinct document-key values instead of raw rows, since several
+    # lines can belong to one voucher/document. Uses each template's own
+    # document-key column (first column by sort_order), same convention
+    # get_document_group_id() (routers/import_export.py) already uses.
+    # ------------------------------------------------------------
+    document_count_lookup = {}
+    for row in total_rows:
+        tid = row["template_id"]
+        key_column = get_template_document_key_column(tid)
+        if key_column:
+            doc_count_result = execute_query(
+                """
+                SELECT COUNT(DISTINCT json_extract(cd.row_data, ?)) as doc_count
+                FROM client_data cd
+                WHERE cd.client_id = ? AND cd.template_id = ? AND cd.is_deleted = 0
+                """,
+                (f'$."{key_column}"', client_id, tid)
+            )
+            document_count_lookup[tid] = doc_count_result[0]["doc_count"] if doc_count_result else 0
+        else:
+            # Template has no configured columns - fall back to the raw row count
+            document_count_lookup[tid] = row["total_row_count"]
+
     # ------------------------------------------------------------
     # 3. Merge results
     # ------------------------------------------------------------
@@ -678,6 +733,7 @@ def get_availability(
             "template_name": filtered["template_name"] if filtered["template_name"] != "Unknown" else total.get("template_name", f"Template {tid}"),
             "filtered_row_count": filtered["filtered_row_count"],
             "total_row_count": total["total_row_count"],
+            "document_count": document_count_lookup.get(tid, total["total_row_count"]),
             "date_min": total["date_min"],           # FULL date range (unfiltered)
             "date_max": total["date_max"],           # FULL date range (unfiltered)
             "filtered_sunday_count": filtered["filtered_sunday_count"],

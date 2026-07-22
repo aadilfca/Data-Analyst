@@ -670,12 +670,14 @@
         }
 
         /* ===== "YOUR DATASETS" TABLE (Redesign Phase 5) =====
-           Simplified table (Template / Full Date Range / Total Rows /
+           Simplified table (Template / Full Date Range / No of Documents /
            Coverage / Actions — Status replaced by Coverage per the Status
-           column removal fix), fed by fetchAvailability() data — reuses
-           .availability-table/.no-data as-is. The old Availability Table
-           this used to coexist with (extra "#"/Filtered Rows/Sunday columns)
-           was removed in Redesign Phase 6 (FINAL). ===== */
+           column removal fix; Total Rows renamed to No of Documents per the
+           unique-document count fix, sourced from the API's document_count
+           field, not total_row_count), fed by fetchAvailability() data —
+           reuses .availability-table/.no-data as-is. The old Availability
+           Table this used to coexist with (extra "#"/Filtered Rows/Sunday
+           columns) was removed in Redesign Phase 6 (FINAL). ===== */
         .your-datasets-section {
             margin-bottom: 20px;
         }
@@ -847,7 +849,7 @@
                         <tr>
                             <th>Template</th>
                             <th style="min-width:160px;">Full Date Range</th>
-                            <th style="text-align:center;">Total Rows</th>
+                            <th style="text-align:center;">No of Documents</th>
                             <th style="text-align:center;">Coverage</th>
                             <th style="text-align:center;">Actions</th>
                         </tr>
