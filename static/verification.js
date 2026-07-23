@@ -168,6 +168,10 @@ function formatDateInput(d) {
 function setVerificationUrl(view, id) {
     const url = new URL(window.location.href);
     url.searchParams.delete('view');
+    // A fresh view transition (dashboard/cashbook/a newly-entered session) should never carry
+    // over a stale voucher id left from a previous session — the session case re-populates this
+    // immediately afterward via setVerificationUrlVoucher() (see loadNextTransaction()).
+    url.searchParams.delete('voucher');
     if (view === 'dashboard') {
         url.searchParams.delete('state');
         url.searchParams.delete('id');
@@ -176,6 +180,24 @@ function setVerificationUrl(view, id) {
         url.searchParams.set('state', view);
         url.searchParams.set('id', String(id));
         url.searchParams.set('type', currentType);
+    }
+    history.replaceState(null, '', url);
+}
+
+// Keeps the URL's `voucher` param in sync with whichever voucher is currently on screen, so a
+// hard refresh mid-session can restore to that exact voucher (see activateSessionView() below)
+// instead of always defaulting to the session's earliest-Pending voucher. A dedicated function
+// rather than folded into setVerificationUrl() above, since this fires on every voucher-to-voucher
+// move (Prev/Next, the search popover, auto-advance after completing a voucher) and shouldn't
+// re-touch state/id/type each time. No-op outside an active session, where a voucher id has no
+// meaning.
+function setVerificationUrlVoucher(voucherId) {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('state') !== 'session') return;
+    if (voucherId) {
+        url.searchParams.set('voucher', String(voucherId));
+    } else {
+        url.searchParams.delete('voucher');
     }
     history.replaceState(null, '', url);
 }
@@ -508,7 +530,10 @@ async function startSessionFromCashbook() {
 // (new session, just started) and restoreSessionView() (hard-refresh URL restore, below), so both
 // paths land on the exact same view/state instead of two parallel implementations that could
 // drift apart.
-async function activateSessionView(sessionId) {
+// targetVoucherId (optional): when set, restore directly to that voucher instead of the default
+// earliest-Pending jump — used by restoreSessionView()'s hard-refresh restore (see below).
+// startSessionFromCashbook() (a freshly-started session) omits this, so its behavior is unchanged.
+async function activateSessionView(sessionId, targetVoucherId = null) {
     currentSessionId = sessionId;
     // Explicitly hide the dashboard/module-selection view here too (not just cashbookContent) -
     // matches activateCashbookView()'s own hide of dashboardContent. Previously this only ever ran
@@ -528,7 +553,21 @@ async function activateSessionView(sessionId) {
     setVerificationUrl('session', sessionId);
     // Load transaction list (without showing popover) to get indices and total
     await loadTransactionList(false);
-    await loadNextTransaction();
+    // Restore to the specific voucher the auditor was on (targetVoucherId), reusing
+    // navigateToTransaction()'s existing synchronous render from the just-loaded
+    // sessionTransactions — falls back to the default earliest-Pending jump if no target was
+    // given, or if that voucher is no longer present in this session (e.g. session data changed).
+    let restoredToTarget = false;
+    if (targetVoucherId) {
+        const targetLine = sessionTransactions.find(t => t.voucher_id === targetVoucherId);
+        if (targetLine) {
+            navigateToTransaction(targetLine.detail_id);
+            restoredToTarget = true;
+        }
+    }
+    if (!restoredToTarget) {
+        await loadNextTransaction();
+    }
 }
 
 // ---------- HARD-REFRESH VIEW PERSISTENCE: SESSION VIEW ----------
@@ -555,7 +594,10 @@ async function restoreSessionView(sessionId) {
         selectedCashbook = (data.session && data.session.cashbook_name) || null;
         sessionTransactions = data.transactions || [];
         totalTransactions = sessionTransactions.length;
-        await activateSessionView(sessionId);
+        // Voucher hard-refresh restore: a `voucher` param means the auditor was on a specific
+        // voucher (not necessarily the session's earliest-Pending one) when they refreshed.
+        const targetVoucherId = new URLSearchParams(window.location.search).get('voucher');
+        await activateSessionView(sessionId, targetVoucherId);
     } catch (e) {
         console.error('Error restoring verification session:', e);
         showDashboardWithMessage('Could not restore this verification session.');
@@ -599,6 +641,7 @@ async function loadNextTransaction(detailId = null) {
         currentDetailId = activeLine.detail_id;
         currentClientDataId = activeLine.client_data_id;
         currentVoucherId = data.voucher_id;
+        setVerificationUrlVoucher(currentVoucherId);
         currentTransactionType = activeLine.transaction_type || '';
         lineItems = activeLine.line_items || [];
         procedureData = activeLine.procedure_data || {};
@@ -1657,6 +1700,7 @@ function navigateToTransaction(detailId) {
     currentDetailId = detailId;
     currentClientDataId = transaction.client_data_id;
     currentVoucherId = transaction.voucher_id;
+    setVerificationUrlVoucher(currentVoucherId);
     currentTransactionType = transaction.transaction_type || '';
     lineItems = transaction.line_items || [];
     procedureData = transaction.procedure_flags ? transaction.procedure_flags : {};
@@ -1783,6 +1827,7 @@ async function moveToAdjacentVoucher(direction) {
         currentDetailId = activeLine.detail_id;
         currentClientDataId = activeLine.client_data_id;
         currentVoucherId = data.voucher_id;
+        setVerificationUrlVoucher(currentVoucherId);
         currentTransactionType = activeLine.transaction_type || '';
         lineItems = activeLine.line_items || [];
         procedureData = activeLine.procedure_data || {};

@@ -1385,6 +1385,14 @@ async function loadAssignCategoriesData() {
 
         renderAssignCategoriesTable();
         arAssignCategoriesTable.style.display = 'table';
+
+        // Confirmed fix: re-apply the deep-link highlight on every load of this view (in-app
+        // button reopen, Reset), not just the initial arrival — highlightAssignCategoriesRow()
+        // itself re-checks the account's current assignment status against this fresh data on
+        // every call, so it only shows for as long as the account remains unassigned.
+        if (deepLinkAccountCode) {
+            highlightAssignCategoriesRow(deepLinkAccountCode);
+        }
     } catch (error) {
         assignCategoriesAccounts = [];
         arAssignCategoriesEmpty.textContent = '❌ Error loading data: ' + error.message;
@@ -1580,13 +1588,23 @@ async function resetAssignCategories() {
 // tab changing the active client in the brief window before this tab finishes loading, and in
 // that rare case the account code simply won't be found below (a harmless no-op, not a crash).
 
+// Confirmed fix: the account code carried by the URL, remembered for the entire life of this
+// page load (not just the initial arrival) — so the highlight below can be re-evaluated and
+// re-applied every time the Assign Categories view (re)loads (in-app button reopen, Reset), not
+// only on the very first "just arrived via URL param" check.
+let deepLinkAccountCode = null;
+
 // Scrolls the row matching accountCode into view and outlines it in light red (cleared by the
-// row's own Category-select change listener below). A no-op if the code isn't in the currently
-// loaded (client-scoped) account list — covers "no parsed TB for this client", "code not in the
-// latest TB", and the rare client-mismatch edge case described above.
+// row's own Category-select change listener below) — but only while that account is still
+// unassigned. Re-checked fresh against assignCategoriesAccounts (always just-reloaded by
+// loadAssignCategoriesData()) on every call, so this naturally stops applying once the account
+// is actually assigned, and naturally reapplies if a Reset clears it back to unassigned. A no-op
+// if the code isn't in the currently loaded (client-scoped) account list — covers "no parsed TB
+// for this client", "code not in the latest TB", and the rare client-mismatch edge case described
+// above (see the earlier design-decision comment on client scoping).
 function highlightAssignCategoriesRow(accountCode) {
     const account = assignCategoriesAccounts.find(a => a.account_code === accountCode);
-    if (!account) return;
+    if (!account || account.category_id) return; // not found, or already assigned - nothing to flag
     const row = arAssignCategoriesTableBody.querySelector('tr[data-account-id="' + account.id + '"]');
     if (!row) return;
     row.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1594,17 +1612,21 @@ function highlightAssignCategoriesRow(accountCode) {
 }
 
 // Reads client_id + account_code from the page URL; if both are present this is a deep link, so
-// it opens the Assign Categories view directly (bypassing the normal Documents-rail default) and
-// highlights the matching row once accounts have loaded. Returns false (no side effects) for a
-// normal, non-deep-link page load, so window.onload's existing default entry stays unaffected.
+// it remembers the account code (deepLinkAccountCode, above) and opens the Assign Categories view
+// directly (bypassing the normal Documents-rail default) instead of the plain in-app entry.
+// Returns false (no side effects) for a normal, non-deep-link page load, so window.onload's
+// existing default entry stays unaffected. This is legitimately a one-time check (window.onload
+// only fires once) — it only decides how the page is *entered*; the highlight itself is
+// re-evaluated on every load inside loadAssignCategoriesData(), not here, which is what makes it
+// reapply correctly on a later reopen within the same page life.
 async function checkAssignCategoriesDeepLink() {
     const params = new URLSearchParams(window.location.search);
     const clientId = params.get('client_id');
     const accountCode = params.get('account_code');
     if (!clientId || !accountCode) return false;
 
+    deepLinkAccountCode = accountCode;
     await openAssignCategoriesView();
-    highlightAssignCategoriesRow(accountCode);
     return true;
 }
 
