@@ -230,6 +230,67 @@ def parse_amount(raw_value):
     return -value if negative else value
 
 
+def find_conflicting_uploads(client_id: int, period_start: str, period_end: str) -> list:
+    """
+    Section 2, Phase 5: shared exact-period conflict lookup, used by both the
+    standalone check endpoint and the upload endpoint's own confirm_overwrite
+    gate below - single source of truth so the two can never disagree.
+
+    Exact match only on client_id + period_start + period_end (NOT an overlap
+    check) - a different-but-overlapping period, e.g. a monthly TB inside an
+    already-uploaded quarterly one, is never a conflict, per the locked scope.
+    Matches an existing upload regardless of its status (parsed/error/pending)
+    - the schema draws no distinction, and "an upload already exists for this
+    exact period" is a simpler, more predictable rule than special-casing a
+    prior failed attempt. Returns the raw row list (most recent first) since
+    more than one conflicting row can exist (e.g. repeated failed attempts at
+    the same period).
+    """
+    return execute_query(
+        """
+        SELECT * FROM trial_balance_uploads
+        WHERE client_id = ? AND period_start = ? AND period_end = ?
+        ORDER BY uploaded_at DESC
+        """,
+        (client_id, period_start, period_end)
+    )
+
+
+def _validate_period_dates(period_start: str, period_end: str) -> None:
+    """
+    Shared ISO-date + ordering validation for period_start/period_end, used
+    by both the check endpoint and the upload endpoint - same strptime
+    pattern already used for as_of_date elsewhere in this file.
+    """
+    try:
+        start_dt = datetime.strptime(period_start, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"'{period_start}' is not a valid period_start date (expected YYYY-MM-DD)")
+    try:
+        end_dt = datetime.strptime(period_end, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"'{period_end}' is not a valid period_end date (expected YYYY-MM-DD)")
+    if end_dt < start_dt:
+        raise ValueError(f"period_end ({period_end}) cannot be before period_start ({period_start})")
+
+
+def _serialize_conflicting_upload(row) -> dict:
+    """Shared response shape for a conflicting upload row, reused by both the
+    check endpoint's 'existing_upload' and the upload endpoint's 409 detail,
+    so the frontend (Phase 6) can render both with one function."""
+    return {
+        "upload_id": row["id"],
+        "as_of_date": row["as_of_date"],
+        "period_start": row["period_start"],
+        "period_end": row["period_end"],
+        "period_type": row["period_type"],
+        "file_name": row["file_name"],
+        "status": row["status"],
+        "row_count": row["row_count"],
+        "uploaded_at": row["uploaded_at"],
+    }
+
+
 def classify_accounts(codes: set) -> dict:
     """
     Classify every code as 'parent' or 'leaf' per the locked rule: a code is
@@ -274,6 +335,14 @@ async def upload_trial_balance(
     period_cr_column: Optional[str] = Form(None),
     closing_dr_column: Optional[str] = Form(None),
     closing_cr_column: Optional[str] = Form(None),
+    # Section 2, Phase 5: optional period tracking + overwrite confirmation.
+    # All optional and backward-compatible - omitting period_start/period_end
+    # entirely reproduces this endpoint's exact pre-Phase-5 behavior (no
+    # conflict check runs at all).
+    period_start: Optional[str] = Form(None),
+    period_end: Optional[str] = Form(None),
+    period_type: Optional[str] = Form(None),
+    confirm_overwrite: bool = Form(False),
 ):
     """
     Upload a client's Trial Balance Excel file, classify every account as
@@ -295,12 +364,58 @@ async def upload_trial_balance(
     if not file.filename or not file.filename.lower().endswith(('.xlsx', '.xls')):
         raise HTTPException(400, "Only .xlsx and .xls files are supported")
 
+    # 3b. Section 2, Phase 5: period validation + exact-period overwrite gate.
+    # Both period_start/period_end must be given together, or neither.
+    if bool(period_start) != bool(period_end):
+        raise HTTPException(400, "period_start and period_end must both be provided together, or neither.")
+
+    if period_start and period_end:
+        try:
+            _validate_period_dates(period_start, period_end)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+        conflicts = find_conflicting_uploads(client_id, period_start, period_end)
+        if conflicts:
+            if not confirm_overwrite:
+                # Reject before anything is created or touched - this is what
+                # protects against Phase 6's UI being skipped or a stray API
+                # call proceeding blindly, per the confirmed brief.
+                raise HTTPException(409, detail={
+                    "conflict": True,
+                    "message": (
+                        f"An upload already exists for this client for the exact period "
+                        f"{period_start} to {period_end}. Re-upload with confirm_overwrite=true "
+                        f"to replace it."
+                    ),
+                    "existing_upload": _serialize_conflicting_upload(conflicts[0]),
+                    "conflicting_upload_count": len(conflicts),
+                })
+
+            # Confirmed overwrite: true delete, not just superseding by
+            # convention - the prior exact-period upload(s) and their
+            # accounts are removed before the new one is created. Explicit
+            # two-step delete rather than relying on ON DELETE CASCADE, since
+            # this app's connections don't enable PRAGMA foreign_keys = ON
+            # (documented elsewhere in this codebase's own conventions), so a
+            # bare parent-row delete would silently leave orphaned account rows.
+            for old_upload in conflicts:
+                execute_write("DELETE FROM trial_balance_accounts WHERE upload_id = ?", (old_upload["id"],))
+                execute_write("DELETE FROM trial_balance_uploads WHERE id = ?", (old_upload["id"],))
+            log_audit("Analyst", "Delete", "TrialBalance",
+                       f"Overwrote {len(conflicts)} prior trial balance upload(s) for client "
+                       f"{client_id}, exact period {period_start} to {period_end}")
+
     # 4. Create the upload row immediately (status='pending') so even a
     # failed parse below leaves a visible, queryable record rather than
     # silently vanishing.
     upload_id = execute_write(
-        "INSERT INTO trial_balance_uploads (client_id, as_of_date, file_name, status) VALUES (?, ?, ?, 'pending')",
-        (client_id, as_of_date, file.filename)
+        """
+        INSERT INTO trial_balance_uploads
+            (client_id, as_of_date, file_name, status, period_start, period_end, period_type)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?)
+        """,
+        (client_id, as_of_date, file.filename, period_start, period_end, period_type)
     )
 
     try:
@@ -451,6 +566,32 @@ async def upload_trial_balance(
             (str(e), upload_id)
         )
         raise HTTPException(400, f"Trial balance parsing failed: {e}")
+
+
+@router.get("/api/trial-balance/check-period-conflict")
+def check_period_conflict(client_id: int, period_start: str, period_end: str):
+    """
+    Section 2, Phase 5: read-only "step 1" of the two-step overwrite flow -
+    tells the frontend (Phase 6) whether an exact-period upload already
+    exists for this client, before the user commits to an actual upload
+    call. Touches no data. Exact match only (client_id + period_start +
+    period_end) - see find_conflicting_uploads()'s own docstring for why an
+    overlapping-but-different period is never flagged.
+    """
+    try:
+        _validate_period_dates(period_start, period_end)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    conflicts = find_conflicting_uploads(client_id, period_start, period_end)
+    if not conflicts:
+        return {"conflict": False, "existing_upload": None}
+
+    return {
+        "conflict": True,
+        "existing_upload": _serialize_conflicting_upload(conflicts[0]),
+        "conflicting_upload_count": len(conflicts),
+    }
 
 
 @router.post("/api/trial-balance/suggest-mapping")
