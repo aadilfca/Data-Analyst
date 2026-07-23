@@ -43,6 +43,16 @@ class AccountOverrideRequest(BaseModel):
     """Body for the Phase 5 row-level classification override endpoint."""
     is_leaf: bool
 
+
+class CategoryAssignmentRequest(BaseModel):
+    """Body for the Assign Categories cascade-assignment endpoint (Section 2,
+    Phase 4). force_apply defaults to False (smart-fill) - True (force-apply)
+    is only ever sent via the explicit UI icon in Phase 5, never the default
+    path."""
+    account_id: int
+    category_id: int
+    force_apply: bool = False
+
 # ---------- COLUMN IDENTIFICATION ----------
 # Trial Balance columns are now identified via an explicit column-mapping
 # payload supplied by the caller (Section 1, Phase 1) rather than hardcoded
@@ -823,4 +833,173 @@ def override_account_classification(account_id: int, payload: AccountOverrideReq
         "closing_cr": r["closing_cr"],
         "source_account_type": r["source_account_type"],
         "manually_overridden": bool(r["manually_overridden"]),
+    }
+
+
+# ---------- ASSIGN CATEGORIES (Section 2, Phase 4: latest-TB lookup + cascade assignment) ----------
+# Lets an auditor tag trial_balance_accounts rows with an Audit Rules Category
+# (audit_rule_categories, see routers/audit_rules.py). category_id already
+# exists on trial_balance_accounts (Phase 3 schema) - this phase is backend
+# logic only, no new schema.
+
+def _validate_active_category(category_id: int) -> None:
+    """Category must exist and be active before any write - mirrors this
+    file's existing _require_upload() style. audit_rule_categories has no
+    dedicated getter helper in database.py, so this queries it directly."""
+    rows = execute_query(
+        "SELECT id FROM audit_rule_categories WHERE id = ? AND is_active = 1",
+        (category_id,)
+    )
+    if not rows:
+        raise HTTPException(400, f"Category {category_id} not found or inactive")
+
+
+@router.get("/api/trial-balance/latest-accounts")
+def get_latest_trial_balance_accounts(client_id: int):
+    """
+    Latest Trial Balance for a client - the most recent upload (by
+    period_end, falling back to uploaded_at as tiebreaker for uploads made
+    before period tracking existed) with status='parsed'. Returns every
+    account with its current category assignment (if any), for the Assign
+    Categories page (Phase 5).
+    """
+    client_rows = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client_rows:
+        raise HTTPException(404, "Client not found")
+
+    upload_rows = execute_query(
+        """
+        SELECT id, period_start, period_end, period_type, as_of_date
+        FROM trial_balance_uploads
+        WHERE client_id = ? AND status = 'parsed'
+        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
+        LIMIT 1
+        """,
+        (client_id,)
+    )
+    if not upload_rows:
+        raise HTTPException(404, "No parsed trial balance found for this client")
+    upload = upload_rows[0]
+
+    rows = execute_query(
+        """
+        SELECT a.*, c.name AS category_name, c.is_active AS category_is_active
+        FROM trial_balance_accounts a
+        LEFT JOIN audit_rule_categories c ON a.category_id = c.id
+        WHERE a.upload_id = ?
+        ORDER BY a.sort_order
+        """,
+        (upload["id"],)
+    )
+
+    accounts = [
+        {
+            "id": r["id"],
+            "account_code": r["account_code"],
+            "account_name": r["account_name"],
+            "parent_account_code": r["parent_account_code"],
+            "level": r["level"],
+            "is_leaf": r["classification"] == "leaf",
+            "category_id": r["category_id"],
+            "category_name": r["category_name"],
+        }
+        for r in rows
+    ]
+
+    return {
+        "upload_id": upload["id"],
+        "period_start": upload["period_start"],
+        "period_end": upload["period_end"],
+        "period_type": upload["period_type"],
+        "as_of_date": upload["as_of_date"],
+        "accounts": accounts,
+    }
+
+
+@router.put("/api/trial-balance/assign-category")
+def assign_trial_balance_category(payload: CategoryAssignmentRequest):
+    """
+    Assign an Audit Rules Category to one trial balance account, with
+    parent-to-child cascade. The target account's own category_id is always
+    set. If the target is a leaf, that's the whole operation (force_apply is
+    a no-op for a leaf - there's nothing to cascade into).
+
+    If the target is a parent, every descendant (recursively, via the
+    parent_account_code hierarchy already persisted by the classification
+    engine - no new hierarchy logic here) is cascaded into:
+      - smart-fill (force_apply=False, default): only descendants whose
+        category_id is currently NULL are updated: any descendant that
+        already carries a category (user-set or previously cascaded) is
+        left alone.
+      - force-apply (force_apply=True): every descendant is overwritten
+        regardless of its current value. Only reached via an explicit UI
+        action (Phase 5), never the default path.
+    """
+    account_rows = execute_query("SELECT * FROM trial_balance_accounts WHERE id = ?", (payload.account_id,))
+    if not account_rows:
+        raise HTTPException(404, "Trial balance account not found")
+    target = account_rows[0]
+
+    _validate_active_category(payload.category_id)
+
+    # Target account's own assignment is unconditional - this is the explicit
+    # action requested, regardless of force_apply or its current value.
+    execute_write(
+        "UPDATE trial_balance_accounts SET category_id = ? WHERE id = ?",
+        (payload.category_id, payload.account_id)
+    )
+
+    is_leaf = target["classification"] == "leaf"
+    descendants_updated = []
+    descendants_skipped = []
+
+    if not is_leaf:
+        # Fetch every account in this upload once, build a parent_code ->
+        # [child rows] map, then walk down from the target's own code to
+        # collect every descendant (parents and leaves alike), not just
+        # direct children.
+        sibling_rows = execute_query(
+            "SELECT id, account_code, parent_account_code, category_id FROM trial_balance_accounts WHERE upload_id = ?",
+            (target["upload_id"],)
+        )
+        children_by_parent_code = {}
+        for row in sibling_rows:
+            parent_code = row["parent_account_code"]
+            if parent_code:
+                children_by_parent_code.setdefault(parent_code, []).append(row)
+
+        descendants = []
+        stack = list(children_by_parent_code.get(target["account_code"], []))
+        while stack:
+            row = stack.pop()
+            descendants.append(row)
+            stack.extend(children_by_parent_code.get(row["account_code"], []))
+
+        for row in descendants:
+            if payload.force_apply or row["category_id"] is None:
+                descendants_updated.append(row["id"])
+            else:
+                descendants_skipped.append(row["id"])
+
+        if descendants_updated:
+            placeholders = ",".join("?" for _ in descendants_updated)
+            execute_write(
+                f"UPDATE trial_balance_accounts SET category_id = ? WHERE id IN ({placeholders})",
+                tuple([payload.category_id] + descendants_updated)
+            )
+
+    log_audit("Analyst", "Update", "TrialBalance",
+               f"Assigned category {payload.category_id} to account {target['account_code']} "
+               f"(id={payload.account_id}, force_apply={payload.force_apply}); "
+               f"{len(descendants_updated)} descendant(s) updated, {len(descendants_skipped)} skipped")
+
+    return {
+        "account_id": payload.account_id,
+        "category_id": payload.category_id,
+        "force_apply": payload.force_apply,
+        "is_leaf": is_leaf,
+        "descendants_updated_count": len(descendants_updated),
+        "descendants_skipped_count": len(descendants_skipped),
+        "descendants_updated": descendants_updated,
+        "descendants_skipped": descendants_skipped,
     }
