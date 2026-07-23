@@ -1333,6 +1333,7 @@ def init_db():
                 closing_cr REAL,
                 source_account_type TEXT,
                 manually_overridden INTEGER NOT NULL DEFAULT 0,
+                category_id INTEGER,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 raw_row_data TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1356,6 +1357,28 @@ def init_db():
             print("✅ Added opening_dr/opening_cr/period_dr/period_cr/closing_dr/closing_cr columns to trial_balance_accounts")
         except Exception as e:
             print("⚠️ Could not add new amount columns to trial_balance_accounts:", e)
+
+        # Schema upgrade: Audit Rules "Assign Categories", Section 2 Phase 3 - add a
+        # nullable category_id link from trial_balance_accounts to
+        # audit_rule_categories.id, so an auditor can later (Phase 4/5) assign a
+        # Category to a TB account with parent-to-child cascade. Nullable because most
+        # accounts won't have a category assigned immediately after upload - assignment
+        # happens later via the Phase 5 UI. This table already existed with data, so
+        # same ALTER TABLE ADD COLUMN upgrade-block pattern as the two blocks above.
+        # No FOREIGN KEY clause (in the CREATE TABLE above or here) - this app never
+        # enables PRAGMA foreign_keys, and no other soft-reference column on this table
+        # (e.g. parent_account_code) declares one either, so this is a soft reference in
+        # practice, consistent with the rest of the app; a Category deleted while
+        # accounts still reference it is not handled at the DB layer. No index added
+        # this phase - would be premature until a real filter-by-category query exists.
+        try:
+            cur = conn.execute("PRAGMA table_info(trial_balance_accounts)")
+            existing_columns = [row[1] for row in cur.fetchall()]
+            if 'category_id' not in existing_columns:
+                conn.execute("ALTER TABLE trial_balance_accounts ADD COLUMN category_id INTEGER")
+            print("✅ Added category_id column to trial_balance_accounts")
+        except Exception as e:
+            print("⚠️ Could not add category_id column to trial_balance_accounts:", e)
 
         # Schema upgrade: Periodic dates & overwrite warning, Section 2 Phase 4 - add
         # period tracking to trial_balance_uploads so an upload records the actual
