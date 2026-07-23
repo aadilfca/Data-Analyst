@@ -2007,22 +2007,26 @@ async function completeTransaction() {
 }
 
 // ---------- EXIT SESSION ----------
-function exitSession() {
+// This is what runs on both the "🏦/📒 Cashbook" button and the global navbar back-arrow (its
+// setBackOverride() target, set in activateSessionView()). Returning to the cashbook view now
+// reuses restoreCashbookView() — the exact same fresh load/render path a hard refresh into
+// ?state=cashbook goes through (loadCashbooks() then activateCashbookView(), which itself handles
+// hiding dashboard/session, showing cashbookContent, the back-override, header labels, the
+// cashbook selector, date-range defaults, the URL, and fetching data) — instead of manually
+// toggling visibility and calling fetchCashbookData() directly. The manual version rendered a
+// blank cashbook whenever the session had been reached via a direct ?state=session URL restore
+// (restoreSessionView()), since that path never populates cashbookStartDate/cashbookEndDate/the
+// selector - fetchCashbookData() would then bail out early on an empty date range.
+async function exitSession() {
     if (confirm('Are you sure you want to exit this verification session? Progress will be saved.')) {
         saveAllVoucherLines(); // Phase 4: saves every line, not just the active one
-                sessionContent.style.display = 'none';
-        cashbookContent.style.display = 'block';
-        // Back to the Cashbook view — navbar back-arrow should now go to the Verification
-        // module's entry view (same override openCashbook() sets), not straight to index.html.
-        if (typeof setBackOverride === 'function') setBackOverride(exitCashbookView);
-        // Restore padding when session ends
-        const container = document.getElementById('verificationContainer');
-        if (container) container.classList.remove('verification-active');
         clearVoucherHeader();
         currentSessionId = null;
         currentDetailId = null;
-        setVerificationUrl('cashbook', selectedCashbook);
-        fetchCashbookData();
+        // Restore padding when session ends
+        const container = document.getElementById('verificationContainer');
+        if (container) container.classList.remove('verification-active');
+        await restoreCashbookView(selectedCashbook);
     }
 }
 
