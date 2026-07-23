@@ -510,6 +510,13 @@ async function startSessionFromCashbook() {
 // drift apart.
 async function activateSessionView(sessionId) {
     currentSessionId = sessionId;
+    // Explicitly hide the dashboard/module-selection view here too (not just cashbookContent) -
+    // matches activateCashbookView()'s own hide of dashboardContent. Previously this only ever ran
+    // as the tail of startSessionFromCashbook(), which is always reached after
+    // activateCashbookView() had already hidden the dashboard, so the omission was invisible until
+    // restoreSessionView() (hard-refresh straight into a session) called this function directly,
+    // leaving the dashboard's window.onload default of display:'block' stacked underneath.
+    dashboardContent.style.display = 'none';
     cashbookContent.style.display = 'none';
     sessionContent.style.display = 'block';
     // Global navbar back-arrow should return to the Cashbook selection screen (not index.html)
