@@ -3275,3 +3275,12 @@ body {
 .ar-tb-force-apply-icon:hover {
     opacity: 1;
 }
+
+/* Verification deep link (Phase 5, FINAL): outline (not border) so the highlight renders cleanly
+   around the row's full bounding box despite .ar-tb-table's border-collapse: collapse, without
+   affecting row height/layout. Applied/removed in audit_rules.js (highlightAssignCategoriesRow(),
+   cleared by the row's own Category-select change listener). */
+.ar-tb-table tbody tr.ar-tb-deep-link-highlight {
+    outline: 2px solid #fca5a5;
+    outline-offset: -2px;
+}

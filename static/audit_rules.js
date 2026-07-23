@@ -1322,10 +1322,14 @@ function showAssignCategoriesStatus(message, type) {
 }
 
 // ---------- OPEN / CLOSE (whole-shell swap) ----------
-function openAssignCategoriesView() {
+// async/await added for the Verification -> Assign Categories deep link (Phase 5), which needs
+// to know once the accounts have actually loaded before it can locate/highlight a row. The
+// existing in-app button click listener ignores the returned promise, so this is fully
+// backward-compatible with that call site.
+async function openAssignCategoriesView() {
     arShellContainer.style.display = 'none';
     arAssignCategoriesSection.style.display = 'block';
-    loadAssignCategoriesData();
+    await loadAssignCategoriesData();
 }
 
 function closeAssignCategoriesView() {
@@ -1565,6 +1569,45 @@ async function resetAssignCategories() {
     }
 }
 
+// ---------- VERIFICATION DEEP LINK (Verification ↔ Assign Categories link, Phase 5, FINAL) ----------
+// Verification's recycle-arrow icon (unmatched lines) opens this page as
+// audit_rules.html?client_id=&account_code= in a new tab. Design decision: client_id is read and
+// required only to recognize a deep link — it is NOT used to switch the globally-selected client
+// (getSelectedClientId()/localStorage, which loadAssignCategoriesData() already sources from and
+// which this phase leaves completely untouched). At the moment Verification's icon is clicked,
+// its own getClientId() and this page's getSelectedClientId() read the exact same localStorage
+// value, so they're identical by construction — the only way they could differ is an unrelated
+// tab changing the active client in the brief window before this tab finishes loading, and in
+// that rare case the account code simply won't be found below (a harmless no-op, not a crash).
+
+// Scrolls the row matching accountCode into view and outlines it in light red (cleared by the
+// row's own Category-select change listener below). A no-op if the code isn't in the currently
+// loaded (client-scoped) account list — covers "no parsed TB for this client", "code not in the
+// latest TB", and the rare client-mismatch edge case described above.
+function highlightAssignCategoriesRow(accountCode) {
+    const account = assignCategoriesAccounts.find(a => a.account_code === accountCode);
+    if (!account) return;
+    const row = arAssignCategoriesTableBody.querySelector('tr[data-account-id="' + account.id + '"]');
+    if (!row) return;
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('ar-tb-deep-link-highlight');
+}
+
+// Reads client_id + account_code from the page URL; if both are present this is a deep link, so
+// it opens the Assign Categories view directly (bypassing the normal Documents-rail default) and
+// highlights the matching row once accounts have loaded. Returns false (no side effects) for a
+// normal, non-deep-link page load, so window.onload's existing default entry stays unaffected.
+async function checkAssignCategoriesDeepLink() {
+    const params = new URLSearchParams(window.location.search);
+    const clientId = params.get('client_id');
+    const accountCode = params.get('account_code');
+    if (!clientId || !accountCode) return false;
+
+    await openAssignCategoriesView();
+    highlightAssignCategoriesRow(accountCode);
+    return true;
+}
+
 // ---------- WIRE UP EVENT LISTENERS ----------
 arAssignCategoriesBtn.addEventListener('click', openAssignCategoriesView);
 arAssignCategoriesBackBtn.addEventListener('click', closeAssignCategoriesView);
@@ -1573,6 +1616,11 @@ arResetCategoriesBtn.addEventListener('click', resetAssignCategories);
 // Delegated listeners on the table body (rows are rebuilt from scratch on every load).
 arAssignCategoriesTableBody.addEventListener('change', function(e) {
     if (!e.target.matches('select[data-account-id]')) return;
+    // Verification deep link (Phase 5): the light-red highlight clears the moment a Category is
+    // selected for this row — independent of whether the save below succeeds or fails, per the
+    // confirmed spec. A row that was never highlighted simply has nothing to remove here.
+    const row = e.target.closest('tr');
+    if (row) row.classList.remove('ar-tb-deep-link-highlight');
     const categoryId = parseAssignCategoriesSelectValue(e.target.value);
     const accountId = parseInt(e.target.dataset.accountId, 10);
     assignCategory(accountId, categoryId, false);
@@ -1600,7 +1648,14 @@ arAssignCategoriesTableBody.addEventListener('click', function(e) {
 });
 
 // ---------- INIT ----------
-window.onload = function() {
-    loadDocuments();
-    loadTemplatesForDocuments();
+window.onload = async function() {
+    // Verification deep link (Phase 5, FINAL): a ?client_id=&account_code= URL means Verification's
+    // recycle-arrow icon opened this page — skip the normal Documents-rail default entirely and go
+    // straight to the highlighted Assign Categories row. A plain/in-app page load (no params) is
+    // completely unaffected, matching the confirmed brief.
+    const isDeepLink = await checkAssignCategoriesDeepLink();
+    if (!isDeepLink) {
+        loadDocuments();
+        loadTemplatesForDocuments();
+    }
 };
