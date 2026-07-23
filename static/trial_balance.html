@@ -53,6 +53,14 @@
             font-size: 13px;
         }
 
+        /* Section 2, Phase 6: Period Type dropdown -- same sizing as the date inputs above. */
+        .tb-field-row select {
+            padding: 6px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
         /* ---------- UPLOAD FILE BUTTON (same visual language as upload.html's .btn-upload-file) ---------- */
         .btn-upload-file {
             display: flex;
@@ -384,6 +392,26 @@
                 <label for="asOfDateInput">As of Date</label>
                 <input type="date" id="asOfDateInput">
             </div>
+
+            <!-- Section 2, Phase 6: optional period tracking. Left blank, an upload
+                 behaves exactly as before this phase (as_of_date only). When both
+                 dates are filled, the page checks with the backend (Phase 5) whether
+                 an upload already exists for this exact period before allowing the
+                 upload to proceed. -->
+            <div class="tb-field-row">
+                <label for="periodStartInput">Period Start</label>
+                <input type="date" id="periodStartInput">
+                <label for="periodEndInput">Period End</label>
+                <input type="date" id="periodEndInput">
+                <label for="periodTypeSelect">Period Type</label>
+                <select id="periodTypeSelect">
+                    <option value="monthly">Monthly</option>
+                    <option value="quarterly">Quarterly</option>
+                    <option value="half_yearly">Half-Yearly</option>
+                    <option value="annual">Annual</option>
+                </select>
+            </div>
+            <p class="group-hint" style="margin-top:-8px;">Optional -- if set, the period type above is auto-suggested from the date range but can be changed. Used to detect a duplicate upload for the exact same period.</p>
 
             <div class="tb-field-row">
                 <button class="btn-upload-file" id="uploadFileBtn" type="button">

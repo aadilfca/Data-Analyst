@@ -26,6 +26,15 @@ let selectedFile = null;
 // row-toggle handler knows which upload's summary tiles to refresh after a flip.
 let currentUploadId = null;
 
+// ---------- PERIOD TRACKING + OVERWRITE CONFLICT STATE (Section 2, Phase 6) ----------
+// Caches the outcome of the last check-period-conflict call so the exact same period
+// pair isn't re-checked/re-prompted twice in a row (e.g. once on file selection, again
+// on the actual Upload & Classify click, when nothing changed in between). Reset to
+// null whenever either period date changes, so a stale confirmation from a different
+// period pair can never be reused.
+let lastConflictCheckPeriod = null; // { start, end } the cached result below applies to
+let lastConflictCheckResult = null; // 'no_conflict' | 'confirmed' | 'declined' | 'error'
+
 // ---------- COLUMN MAPPING STATE (Section 1, Phase 2 -- standard 8-field fix) ----------
 // The 8 required mapping fields this UI surfaces, matching the standard trial
 // balance shape (Opening/Period/Closing Dr+Cr pairs). Type is supported by the
@@ -76,6 +85,9 @@ function getElement(id) {
 
 const clientSelectionWarning = getElement('clientSelectionWarning');
 const asOfDateInput = getElement('asOfDateInput');
+const periodStartInput = getElement('periodStartInput');
+const periodEndInput = getElement('periodEndInput');
+const periodTypeSelect = getElement('periodTypeSelect');
 const uploadFileBtn = getElement('uploadFileBtn');
 const fileInput = getElement('fileInput');
 const fileInfo = getElement('fileInfo');
@@ -170,6 +182,22 @@ function handleFileSelected(file) {
     if (fileInfo) fileInfo.style.display = 'flex';
     updateClientDependentUI();
     loadColumnMappingForFile(file);
+
+    // Section 2, Phase 6: early heads-up -- if a period is already entered when the
+    // file is chosen, check now rather than waiting for Upload & Classify. This is a
+    // warning only: a 'declined'/'error' outcome here does NOT touch the file
+    // selection or the column mapping already loading above -- the brief's own
+    // instruction is that the form stays as-is so the auditor can adjust just the
+    // period. The authoritative, final gate is in uploadTrialBalance() below.
+    const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
+    if (clientId && periodStartInput && periodEndInput && periodStartInput.value && periodEndInput.value) {
+        checkAndConfirmPeriodOverwrite(clientId, periodStartInput.value, periodEndInput.value)
+            .then(function (result) {
+                if (result === 'declined') {
+                    showStatus('⚠️ An upload already exists for this exact period. Adjust the period dates above, or click Upload & Classify when ready to confirm the overwrite.', 'error');
+                }
+            });
+    }
 }
 
 // Resets the 3 column-mapping state vars and hides the mapping section -- shared by
@@ -201,6 +229,97 @@ if (clearBtn) {
 
 if (asOfDateInput) {
     asOfDateInput.addEventListener('change', updateClientDependentUI);
+}
+
+// ---------- PERIOD TYPE AUTO-SUGGESTION (Section 2, Phase 6) ----------
+// Buckets the day-span between Period Start/End into the 4 standard period types.
+// Purely a suggestion -- periodTypeSelect stays a normal, always-editable <select>,
+// an auditor can pick a different value afterward and nothing here locks it.
+function suggestPeriodType(startStr, endStr) {
+    const start = new Date(startStr);
+    const end = new Date(endStr);
+    const diffDays = Math.round((end - start) / 86400000);
+    if (diffDays <= 40) return 'monthly';
+    if (diffDays <= 100) return 'quarterly';
+    if (diffDays <= 200) return 'half_yearly';
+    return 'annual';
+}
+
+function updatePeriodTypeSuggestion() {
+    if (!periodStartInput || !periodEndInput || !periodTypeSelect) return;
+    if (!periodStartInput.value || !periodEndInput.value) return; // nothing to suggest yet
+    periodTypeSelect.value = suggestPeriodType(periodStartInput.value, periodEndInput.value);
+}
+
+// Any period-date edit invalidates a previously cached conflict-check result -- it
+// applied to a different period pair and must not be silently reused.
+function handlePeriodDateChanged() {
+    updatePeriodTypeSuggestion();
+    lastConflictCheckPeriod = null;
+    lastConflictCheckResult = null;
+}
+
+if (periodStartInput) {
+    periodStartInput.addEventListener('change', handlePeriodDateChanged);
+}
+if (periodEndInput) {
+    periodEndInput.addEventListener('change', handlePeriodDateChanged);
+}
+
+// ---------- OVERWRITE-CONFLICT CHECK + CONFIRMATION (Section 2, Phase 6) ----------
+// Shared by both the early "on file selection" heads-up and the authoritative check
+// right before the actual upload request. Uses Phase 5's read-only check endpoint --
+// this call never touches any data itself.
+async function checkAndConfirmPeriodOverwrite(clientId, periodStart, periodEnd) {
+    // Reuse a cached result for the exact same period pair ONLY when it was a settled,
+    // safe-to-proceed outcome ('no_conflict'/'confirmed') -- a 'declined'/'error' result
+    // must never be silently reused, since nothing has actually been confirmed for this
+    // period yet; every later attempt (re-selecting the file, clicking Upload &
+    // Classify) should re-prompt fresh until the auditor actually confirms or the
+    // period changes.
+    if (lastConflictCheckPeriod &&
+        lastConflictCheckPeriod.start === periodStart &&
+        lastConflictCheckPeriod.end === periodEnd &&
+        (lastConflictCheckResult === 'no_conflict' || lastConflictCheckResult === 'confirmed')) {
+        return lastConflictCheckResult;
+    }
+
+    let result;
+    try {
+        const url = API_BASE + '/api/trial-balance/check-period-conflict'
+            + '?client_id=' + encodeURIComponent(clientId)
+            + '&period_start=' + encodeURIComponent(periodStart)
+            + '&period_end=' + encodeURIComponent(periodEnd);
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.detail || 'Failed to check for a conflicting upload');
+        }
+
+        if (!data.conflict) {
+            result = 'no_conflict';
+        } else {
+            const existing = data.existing_upload;
+            // Deliberately explicit, non-softened wording -- matches the confirmed
+            // delete-then-insert behaviour built in Phase 5, not a vague "replace".
+            const message =
+                'An upload already exists for this client for the exact period ' +
+                existing.period_start + ' to ' + existing.period_end + ' ' +
+                '(uploaded ' + existing.uploaded_at + ', ' + existing.row_count + ' accounts).\n\n' +
+                'Confirming will PERMANENTLY DELETE that prior upload and all of its account ' +
+                'classifications -- including any manual Leaf/Parent overrides made on it -- ' +
+                'before creating the new one. This cannot be undone.\n\n' +
+                'Click OK to overwrite it, or Cancel to go back and adjust the period.';
+            result = window.confirm(message) ? 'confirmed' : 'declined';
+        }
+    } catch (error) {
+        showStatus('❌ Could not check for a conflicting upload: ' + error.message, 'error');
+        result = 'error';
+    }
+
+    lastConflictCheckPeriod = { start: periodStart, end: periodEnd };
+    lastConflictCheckResult = result;
+    return result;
 }
 
 // ---------- COLUMN MAPPING (Section 1, Phase 2) ----------
@@ -435,6 +554,25 @@ async function uploadTrialBalance() {
         return;
     }
 
+    // Section 2, Phase 6: authoritative overwrite-conflict gate. This re-checks (or
+    // reuses a still-valid cached result) right before the actual request -- catches
+    // a period entered/changed after file selection, and re-prompts if an earlier
+    // check on this exact period was declined or failed. A period left blank skips
+    // this entirely (period_start/period_end simply aren't sent below), matching the
+    // backend's own optional/backward-compatible contract.
+    const hasPeriod = periodStartInput && periodEndInput && periodStartInput.value && periodEndInput.value;
+    let confirmOverwrite = false;
+    if (hasPeriod) {
+        const conflictResult = await checkAndConfirmPeriodOverwrite(clientId, periodStartInput.value, periodEndInput.value);
+        if (conflictResult === 'declined' || conflictResult === 'error') {
+            // No request sent -- the form stays exactly as the auditor left it so
+            // they can adjust the period (or try again) themselves.
+            showStatus('Upload cancelled.', 'info');
+            return;
+        }
+        confirmOverwrite = conflictResult === 'confirmed';
+    }
+
     if (summaryContainer) summaryContainer.style.display = 'none';
     if (reviewContainer) reviewContainer.style.display = 'none';
     showStatus('Uploading and classifying...', 'loading');
@@ -450,6 +588,16 @@ async function uploadTrialBalance() {
         TB_MAPPING_FIELDS.forEach(function (field) {
             formData.append(field.role, tbColumnMapping[field.role]);
         });
+        // Section 2, Phase 6: period fields are only sent when both dates are present --
+        // omitted (not sent as empty strings) when left blank, matching the backend's
+        // own optional-fields contract exactly (Phase 5). confirm_overwrite is always
+        // sent explicitly so the backend's default (false) is never relied on silently.
+        if (hasPeriod) {
+            formData.append('period_start', periodStartInput.value);
+            formData.append('period_end', periodEndInput.value);
+            formData.append('period_type', periodTypeSelect ? periodTypeSelect.value : '');
+        }
+        formData.append('confirm_overwrite', confirmOverwrite ? 'true' : 'false');
 
         const res = await fetch(API_BASE + '/api/trial-balance/upload', {
             method: 'POST',
