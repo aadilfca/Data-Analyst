@@ -1406,6 +1406,38 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_parent ON trial_balance_accounts (upload_id, parent_account_code)")
         print("✅ Created Trial Balance module tables (Phase 1 of 5: schema foundation)")
 
+        # ---------- ACCOUNT CATEGORY ASSIGNMENTS (Verification <-> Assign Categories link, Phase 1 of 5: schema) ----------
+        # Persistent account-code -> Category mapping, so the Verification module's per-line
+        # "Type" field can auto-fill from what was assigned on the Assign Categories screen
+        # instead of being manually picked each time. Assign Categories remains the only place
+        # a Category is ever set (Verification only reads, never writes, this table).
+        # Keyed by client_id + account_code (not by trial_balance_upload_id) so the mapping
+        # survives a new Trial Balance upload - re-uploading keeps prior assignments and only
+        # genuinely new account codes show up as unassigned. Matched on account code, not
+        # account name, and scoped per client since account codes are not globally unique
+        # across clients. category_id is a soft link to audit_rule_categories.id - no
+        # FOREIGN KEY clause, same convention as trial_balance_accounts.category_id above (this
+        # app never enables PRAGMA foreign_keys, so every audit_rule_* reference elsewhere in
+        # this file is already a soft reference in practice, not an enforced one). Brand-new
+        # table with no prior data, so a plain CREATE TABLE IF NOT EXISTS is sufficient - no
+        # ALTER TABLE upgrade block needed (unlike trial_balance_accounts.category_id, which
+        # had to retrofit an already-live table). Schema only this phase - no backend endpoint,
+        # no UI, no migration/backfill from trial_balance_accounts.category_id (that carry-
+        # forward logic is Phase 2's job).
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_category_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                account_code TEXT NOT NULL,
+                category_id INTEGER,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, account_code)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_category_assignments_client ON account_category_assignments (client_id)")
+        print("✅ Created account_category_assignments table (Phase 1 of 5: schema foundation)")
+
         conn.commit()
         print("✅ Database initialization complete")
 
