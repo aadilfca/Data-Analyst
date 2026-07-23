@@ -704,6 +704,53 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
     return {"upload_id": upload_id, "accounts": accounts}
 
 
+@router.get("/api/trial-balance/uploads")
+def list_trial_balance_uploads(client_id: int):
+    """
+    Available Trial Balances, Section 1/Phase 1: list every upload for a
+    client, so the upcoming "Available Trial Balances" page (Phase 2) has
+    data to populate its dropdown. Returns just enough per upload (period
+    dates/type, status, row_count) to build a label like "Q1 2026 (Jul-Sep)"
+    without a second call per row.
+
+    Ordered most-recent-period-first (period_end desc), since that's the
+    most useful default when browsing - falls back to uploaded_at desc for
+    any row with no period_end (e.g. an upload made before Section 2's
+    period fields existed), so older/legacy rows still sort predictably
+    instead of being pushed to an arbitrary position by a null comparison.
+
+    No filtering/pagination this phase, per the locked scope - a client's
+    full upload history is returned in one call.
+    """
+    client_rows = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client_rows:
+        raise HTTPException(404, "Client not found")
+
+    rows = execute_query(
+        """
+        SELECT id, period_start, period_end, period_type, status, row_count
+        FROM trial_balance_uploads
+        WHERE client_id = ?
+        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
+        """,
+        (client_id,)
+    )
+
+    uploads = [
+        {
+            "id": r["id"],
+            "period_start": r["period_start"],
+            "period_end": r["period_end"],
+            "period_type": r["period_type"],
+            "status": r["status"],
+            "row_count": r["row_count"],
+        }
+        for r in rows
+    ]
+
+    return {"client_id": client_id, "uploads": uploads}
+
+
 @router.get("/api/trial-balance/summary")
 def get_trial_balance_summary(upload_id: int):
     """
