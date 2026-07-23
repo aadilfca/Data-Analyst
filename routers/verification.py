@@ -1248,3 +1248,52 @@ def get_audit_guidance(
         "documents": get_category_guidance_documents(category_id),
         "cross_checks": get_category_guidance_cross_checks(category_id)
     }
+
+# ==============================================
+# VERIFICATION ↔ ASSIGN CATEGORIES LINK (Phase 3 of 5)
+# Read-only lookup against Phase 1's persistent account_category_assignments
+# table (client_id + account_code -> category_id), written only by Assign
+# Categories (routers/trial_balance.py's assign_trial_balance_category()).
+# Verification never writes to this table - this endpoint is the read side
+# a later phase will use to auto-fill the per-line Type dropdown.
+# ==============================================
+
+@router.get("/api/verification/category-for-account")
+def get_category_for_account(
+    client_id: int = Query(..., description="Client ID"),
+    account_code: str = Query(..., description="Account code to look up")
+):
+    """
+    Look up the Audit Rules Category assigned (via Assign Categories) to a
+    given client + account code. Returns a clean "no match" shape rather than
+    a 404 when nothing is assigned - not having a mapping yet is a normal,
+    expected state, not an error.
+    """
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    # LEFT JOIN (with the category's own is_active check folded into the ON
+    # clause) means category_name comes back NULL for every "no match" case
+    # in one query: no assignment row at all, an assignment explicitly
+    # cleared to NULL, or an assignment pointing at a since-soft-deleted
+    # category (no FK enforcement in this app, so a stale id is possible).
+    rows = execute_query(
+        """
+        SELECT aca.category_id, arc.name AS category_name
+        FROM account_category_assignments aca
+        LEFT JOIN audit_rule_categories arc
+            ON arc.id = aca.category_id AND arc.is_active = 1
+        WHERE aca.client_id = ? AND aca.account_code = ?
+        """,
+        (client_id, account_code)
+    )
+
+    if not rows or not rows[0]['category_name']:
+        return {"matched": False, "category_id": None, "category_name": None}
+
+    return {
+        "matched": True,
+        "category_id": rows[0]['category_id'],
+        "category_name": rows[0]['category_name']
+    }
