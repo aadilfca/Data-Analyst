@@ -618,24 +618,12 @@ function getVoucherLineAlias(row, aliases) {
     return '—';
 }
 
-// Phase 9 (Audit Rules): the Type dropdown's options and the Supporting column's document
-// links are now sourced live from Audit Rules Categories, replacing the old hardcoded
-// 7-option transaction-type list and the fixed 5-document VOUCHER_LINE_PROCEDURES constant.
-
-// Populated once by loadAuditCategories() (called from window.onload); list of active
-// { id, name, kb_overview, documents, cross_checks } Category objects.
-let auditCategories = [];
-
-async function loadAuditCategories() {
-    try {
-        const res = await fetch(`${API_BASE}/api/audit-rules/categories?include_inactive=false`);
-        if (!res.ok) throw new Error('Failed to fetch audit categories');
-        auditCategories = await res.json();
-    } catch (e) {
-        console.error('Failed to load audit categories:', e);
-        auditCategories = [];
-    }
-}
+// Phase 9 (Audit Rules): the Supporting column's document links are sourced live from Audit
+// Rules Categories, replacing the old fixed 5-document VOUCHER_LINE_PROCEDURES constant.
+// (The Type dropdown's own option list — previously also sourced from Audit Rules Categories via
+// a module-level auditCategories array/loadAuditCategories() — was removed in the Verification ↔
+// Assign Categories link, Phase 4: Type is no longer manually picked, so there is no dropdown
+// left to populate options for.)
 
 // GET /api/verification/audit_guidance response, keyed by Category name (the same value the
 // Type dropdown stores) — shared between the "Guide" popover and the Supporting column so
@@ -711,6 +699,67 @@ async function updateSupportingCellForLine(uid, type) {
             openProcedureModal(procKey2, label2, templateId2, uid2);
         });
     });
+}
+
+// ---------- TYPE AUTO-FILL FROM ASSIGN CATEGORIES (Verification ↔ Assign Categories link, Phase 4) ----------
+// The Type field is no longer manually picked — it auto-fills from whatever Category was set for
+// this account code on the Assign Categories screen (Trial Balance module), via Phase 3's
+// GET /api/verification/category-for-account lookup. Assign Categories remains the only place a
+// Category is ever set; Verification only reads. Cached by account code (not by client, since a
+// session is always scoped to one client) — mirrors auditGuidanceCache's convention — so
+// revisiting an already-looked-up voucher this session doesn't re-hit the endpoint. A matched
+// name caches as itself, "no match" caches as null; a genuine fetch error is NOT cached, so a
+// later retry (e.g. reloading the voucher) can succeed.
+let categoryForAccountCache = {};
+
+// Writes the resolved Category (or null/unassigned) into one line's Type cell and state. Re-queries
+// the DOM by data-uid rather than taking element references, so it's a safe no-op if the line's
+// row is no longer present (e.g. the voucher was navigated away from while the lookup was in
+// flight) instead of writing into a detached, stale node.
+function applyCategoryToTypeCell(uid, categoryName) {
+    const valueEl = document.querySelector(`.voucher-line-type-value[data-uid="${uid}"]`);
+    const iconEl = document.querySelector(`.voucher-line-type-recycle-icon[data-uid="${uid}"]`);
+    if (!valueEl) return; // row no longer rendered
+
+    if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
+    voucherLineState[uid].transactionType = categoryName || '';
+    voucherLineState[uid].procedureData.transaction_type = categoryName || '';
+
+    valueEl.textContent = categoryName || 'Unassigned';
+    if (iconEl) iconEl.style.display = categoryName ? 'none' : 'inline-flex';
+
+    // Supporting already no-ops on a falsy type, so only call it when there's a real match.
+    if (categoryName) updateSupportingCellForLine(uid, categoryName);
+}
+
+// Looks up the Category for one line's account code and applies it to that line's Type cell.
+// accountCode may be the '—' placeholder (getVoucherLineAlias() found no matching column) — in
+// that case there is nothing to look up, so it's treated as unassigned without a network call.
+async function autoFillCategoryForLine(uid, accountCode) {
+    if (!accountCode || accountCode === '—') {
+        applyCategoryToTypeCell(uid, null);
+        return;
+    }
+
+    let categoryName = null;
+    try {
+        if (Object.prototype.hasOwnProperty.call(categoryForAccountCache, accountCode)) {
+            categoryName = categoryForAccountCache[accountCode];
+        } else {
+            const clientId = getClientId();
+            const params = new URLSearchParams({ client_id: clientId, account_code: accountCode });
+            const res = await fetch(`${API_BASE}/api/verification/category-for-account?${params}`);
+            if (!res.ok) throw new Error('Failed to look up category for account');
+            const data = await res.json();
+            categoryName = data.matched ? data.category_name : null;
+            categoryForAccountCache[accountCode] = categoryName;
+        }
+    } catch (e) {
+        console.error('Category auto-fill lookup failed:', e);
+        categoryName = null; // fail safe to unassigned — not cached, so a later attempt can retry
+    }
+
+    applyCategoryToTypeCell(uid, categoryName);
 }
 
 // Order matches .voucher-line-summary-grid's columns: Account Code, Type, Account Name, Amount,
@@ -842,10 +891,15 @@ function renderVoucherLines(lines) {
         </div>
     `;
 
+    // Collected during the loop below so the Type auto-fill lookups (which need real DOM nodes
+    // to write into) can run once, after container.innerHTML is set.
+    const lineAccountCodes = [];
+
     lines.forEach(line => {
         const uid = line.detail_id;
         const row = line.row_data || {};
         const accountCode = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_CODE_ALIASES);
+        lineAccountCodes.push({ uid, accountCode });
         const accountName = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_NAME_ALIASES);
         const description = getVoucherLineAlias(row, VOUCHER_LINE_DESCRIPTION_ALIASES);
         const amount = getVoucherLineAmount(row);
@@ -866,10 +920,10 @@ function renderVoucherLines(lines) {
                 <div class="voucher-line-summary voucher-line-summary-grid" data-detail-id="${uid}">
                     <span class="voucher-line-code">${accountCode}</span>
                     <span class="voucher-line-type-cell">
-                        <select class="vh-type-dropdown voucher-line-type-dropdown" data-uid="${uid}">
-                            <option value="">-- Select --</option>
-                            ${auditCategories.map(cat => `<option value="${escapeHtml(cat.name)}">${escapeHtml(cat.name)}</option>`).join('')}
-                        </select>
+                        <span class="voucher-line-type-value-row">
+                            <span class="voucher-line-type-value" data-uid="${uid}">Loading…</span>
+                            <span class="voucher-line-type-recycle-icon" data-uid="${uid}" data-account-code="${escapeHtml(accountCode)}" title="No category assigned — click to assign one in Assign Categories" style="display:none">🔄</span>
+                        </span>
                         <span class="voucher-line-type-chips">
                             <button type="button" class="voucher-line-chip voucher-line-audit-icon" data-uid="${uid}" title="Audit guidance">📋 Guide</button>
                             <button type="button" class="voucher-line-chip voucher-line-dfd-chip" data-uid="${uid}" title="Data Flow Diagram">🔀 DFD</button>
@@ -909,15 +963,12 @@ function renderVoucherLines(lines) {
 
     container.innerHTML = html;
 
-    // Sync each line's type dropdown with its seeded state, and populate the Supporting
-    // column for any line that already has a Category selected (e.g. from a prior save).
-    container.querySelectorAll('.voucher-line-type-dropdown').forEach(select => {
-        const uid = select.dataset.uid;
-        const state = voucherLineState[uid];
-        if (state && state.transactionType) {
-            select.value = state.transactionType;
-            updateSupportingCellForLine(uid, state.transactionType);
-        }
+    // Type auto-fill (Verification ↔ Assign Categories link, Phase 4): look up each line's Category
+    // by its account code and populate the read-only Type cell — replaces the old dropdown-sync
+    // loop that read a manually-saved value. Fire-and-forget per line; each call safely no-ops if
+    // its row is no longer in the DOM by the time the lookup resolves.
+    lineAccountCodes.forEach(({ uid, accountCode }) => {
+        autoFillCategoryForLine(uid, accountCode);
     });
 
     // Phase 4: attach each line's change-alert icon (only present for lines flagged 'updated').
@@ -939,17 +990,18 @@ function renderVoucherLines(lines) {
         });
     });
 
-    // Transaction type (Category) dropdown, scoped per line. Changing it also refreshes this
-    // line's Supporting column, since each Category has its own attached Documents.
-    container.querySelectorAll('.voucher-line-type-dropdown').forEach(select => {
-        select.addEventListener('click', function(e) { e.stopPropagation(); });
-        select.addEventListener('change', function() {
-            const uid = this.dataset.uid;
-            const type = this.value;
-            if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
-            voucherLineState[uid].transactionType = type;
-            voucherLineState[uid].procedureData.transaction_type = type;
-            updateSupportingCellForLine(uid, type);
+    // Recycle-arrow icon (Verification ↔ Assign Categories link, Phase 4) — visible only on
+    // unassigned lines (toggled by applyCategoryToTypeCell()). Opens Assign Categories in a new
+    // tab so the current Verification session stays untouched, carrying client_id + account_code
+    // forward as query params. Phase 5 (not yet built) is what makes audit_rules.html/.js actually
+    // read those params and jump straight to that account — this phase only emits the link.
+    container.querySelectorAll('.voucher-line-type-recycle-icon').forEach(icon => {
+        icon.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const accountCode = this.dataset.accountCode;
+            const clientId = getClientId();
+            const params = new URLSearchParams({ client_id: clientId, account_code: accountCode });
+            window.open(`/static/audit_rules.html?${params}`, '_blank');
         });
     });
 
@@ -2456,7 +2508,6 @@ window.onload = function() {
         setNavModule('Verification');
     }
     loadVerificationStats();
-    loadAuditCategories();
     // Bank Verification (Phase 8): a ?type= param means the user already chose Cash or Bank on
     // the dashboard (static/index.html) - skip this page's own internal Module Grid and open the
     // session popup directly, instead of asking the user to pick a verification type a second

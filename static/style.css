@@ -1512,18 +1512,6 @@ body {
     transition: transform 0.2s;
 }
 .vh-icon:hover { transform: scale(1.15); }
-/* Sized to sit inline in the voucher table's own Type column (.voucher-line-type-cell) — trimmed
-   from a larger, spacious-context size since it moved out of the expanded panel. */
-.vh-type-dropdown {
-    width: 100%;
-    padding: 4px 6px;
-    border: 1px solid #d0d5dd;
-    border-radius: 4px;
-    font-size: 12px;
-    background: white;
-    cursor: pointer;
-}
-.vh-type-dropdown:focus { outline: none; border-color: #3b82f6; }
 
 .btn-cashbook {
     padding: 6px 16px;
@@ -1937,13 +1925,44 @@ body {
     font-size: 14px;
 }
 
-/* Type cell stacks the dropdown above its two chips (Guide / DFD), overriding the shared cell
-   rule's centered row layout. */
+/* Type cell stacks the read-only value row above its two chips (Guide / DFD), overriding the
+   shared cell rule's centered row layout. */
 .voucher-line-type-cell {
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
 }
+
+/* Verification ↔ Assign Categories link (Phase 4): the value row puts the auto-filled Category
+   name on the left and the recycle icon at the extreme right of the field, per the confirmed
+   spec — space-between does this without needing a fixed width for either side. */
+.voucher-line-type-value-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 6px;
+}
+/* Plain read-only text — no border/background, deliberately distinct from the removed
+   .vh-type-dropdown box styling, since this is no longer an editable control. */
+.voucher-line-type-value {
+    font-size: 13px;
+    color: #1a1a2e;
+}
+/* Transparent-by-default per the confirmed spec: a low-opacity hint rather than an alert, shown
+   only on unassigned lines (toggled in applyCategoryToTypeCell(), verification.js). Same
+   low-opacity-default/full-on-hover convention as .ar-tb-force-apply-icon (Assign Categories'
+   own force-apply icon) for a very similar "subtle icon in a table cell" case. */
+.voucher-line-type-recycle-icon {
+    font-size: 14px;
+    opacity: 0.35;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+}
+.voucher-line-type-recycle-icon:hover {
+    opacity: 1;
+}
+
 .voucher-line-type-chips {
     display: flex;
     gap: 6px;
