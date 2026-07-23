@@ -1293,6 +1293,7 @@ const arShellContainer = document.getElementById('arShellContainer');
 const arAssignCategoriesBtn = document.getElementById('arAssignCategoriesBtn');
 const arAssignCategoriesSection = document.getElementById('arAssignCategoriesSection');
 const arAssignCategoriesBackBtn = document.getElementById('arAssignCategoriesBackBtn');
+const arResetCategoriesBtn = document.getElementById('arResetCategoriesBtn');
 const arAssignCategoriesSubtitle = document.getElementById('arAssignCategoriesSubtitle');
 const arAssignCategoriesStatus = document.getElementById('arAssignCategoriesStatus');
 const arAssignCategoriesEmpty = document.getElementById('arAssignCategoriesEmpty');
@@ -1424,12 +1425,14 @@ function buildAssignCategoriesRow(account) {
     select.className = 'ar-tb-category-select';
     select.dataset.accountId = account.id;
 
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.disabled = true;
-    placeholder.textContent = '-- Not assigned --';
-    if (!account.category_id) placeholder.selected = true;
-    select.appendChild(placeholder);
+    // Confirmed fix: "Not assigned" is now a real, selectable option (value="none"),
+    // not a disabled placeholder — picking it clears the account's category the same
+    // way picking a real category assigns one (see the change listener below).
+    const notAssignedOption = document.createElement('option');
+    notAssignedOption.value = 'none';
+    notAssignedOption.textContent = '-- Not assigned --';
+    if (!account.category_id) notAssignedOption.selected = true;
+    select.appendChild(notAssignedOption);
 
     assignCategoriesCategoryOptions.forEach(cat => {
         const opt = document.createElement('option');
@@ -1461,6 +1464,7 @@ function getAssignCategoriesAccountById(id) {
     return assignCategoriesAccounts.find(a => a.id === id);
 }
 function getAssignCategoriesCategoryName(id) {
+    if (!id) return 'Not assigned';
     const cat = assignCategoriesCategoryOptions.find(c => c.id === id);
     return cat ? cat.name : null;
 }
@@ -1483,15 +1487,19 @@ async function assignCategory(accountId, categoryId, forceApply) {
         // (result.descendants_updated) get their displayed Category refreshed —
         // descendants_skipped are deliberately left alone, so the UI reflects the real
         // smart-fill outcome rather than assuming every descendant changed.
+        // categoryId/categoryName are null when the user picked "Not assigned" —
+        // getAssignCategoriesCategoryName() already returns the 'Not assigned' label
+        // for a null/falsy id, so this reads correctly either way.
         const categoryName = getAssignCategoriesCategoryName(categoryId);
         const affectedIds = [accountId].concat(result.descendants_updated || []);
-        applyCategoryToRows(affectedIds, categoryId, categoryName);
+        applyCategoryToRows(affectedIds, categoryId, categoryId ? categoryName : null);
 
+        const actionLabel = categoryId ? 'Category assigned' : 'Category cleared';
         if (result.is_leaf) {
-            showAssignCategoriesStatus('✅ Category assigned.', 'success');
+            showAssignCategoriesStatus('✅ ' + actionLabel + '.', 'success');
         } else {
             showAssignCategoriesStatus(
-                '✅ Category assigned' + (forceApply ? ' (force-applied)' : '') + '. ' +
+                '✅ ' + actionLabel + (forceApply ? ' (force-applied)' : '') + '. ' +
                 result.descendants_updated_count + ' descendant(s) updated, ' +
                 result.descendants_skipped_count + ' left unchanged.',
                 'success'
@@ -1502,34 +1510,70 @@ async function assignCategory(accountId, categoryId, forceApply) {
         // optimistically updated, so only the native <select>'s own visible value (which
         // the browser already changed on user selection) needs correcting back.
         const select = arAssignCategoriesTableBody.querySelector('select[data-account-id="' + accountId + '"]');
-        if (select) select.value = previousCategoryId || '';
+        if (select) select.value = previousCategoryId || 'none';
         showAssignCategoriesStatus('❌ Error: ' + error.message, 'error');
     }
 }
 
 // Updates both the in-memory account list and the visible <select> value for a set of
-// account ids, after a successful assignment call.
+// account ids, after a successful assignment call. categoryId may be null/falsy (the
+// account was cleared to "Not assigned") — the <select>'s "none" option value is used
+// in that case, since a real <select> element has no concept of a null value.
 function applyCategoryToRows(accountIds, categoryId, categoryName) {
     accountIds.forEach(id => {
         const account = getAssignCategoriesAccountById(id);
         if (account) {
-            account.category_id = categoryId;
+            account.category_id = categoryId || null;
             account.category_name = categoryName;
         }
         const select = arAssignCategoriesTableBody.querySelector('select[data-account-id="' + id + '"]');
-        if (select) select.value = categoryId;
+        if (select) select.value = categoryId || 'none';
     });
+}
+
+// Converts a <select>'s raw string value ("none" or a numeric category id string)
+// into the value assignCategory()/the backend expect: null, or a real integer id.
+function parseAssignCategoriesSelectValue(rawValue) {
+    return (!rawValue || rawValue === 'none') ? null : parseInt(rawValue, 10);
+}
+
+// ---------- RESET (confirmed fix) ----------
+// Bulk-clears every account's Category for the client's currently loaded (latest
+// parsed) Trial Balance only — a hard-to-reverse action, so it requires a confirm()
+// step first, matching this app's existing convention for destructive bulk actions.
+async function resetAssignCategories() {
+    const clientId = getSelectedClientId();
+    const proceed = confirm(
+        'Reset every account\'s Category to "Not assigned" for this client\'s current ' +
+        'Trial Balance? This cannot be undone.'
+    );
+    if (!proceed) return;
+
+    try {
+        const res = await fetch(API_BASE + '/api/trial-balance/reset-categories?client_id=' + clientId, {
+            method: 'POST'
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to reset categories');
+
+        showAssignCategoriesStatus('✅ Reset ' + result.reset_count + ' account(s) to Not assigned.', 'success');
+        // Full reload rather than a local state patch — simplest way to guarantee the
+        // table matches the server exactly after a bulk change touching every row.
+        await loadAssignCategoriesData();
+    } catch (error) {
+        showAssignCategoriesStatus('❌ Error: ' + error.message, 'error');
+    }
 }
 
 // ---------- WIRE UP EVENT LISTENERS ----------
 arAssignCategoriesBtn.addEventListener('click', openAssignCategoriesView);
 arAssignCategoriesBackBtn.addEventListener('click', closeAssignCategoriesView);
+arResetCategoriesBtn.addEventListener('click', resetAssignCategories);
 
 // Delegated listeners on the table body (rows are rebuilt from scratch on every load).
 arAssignCategoriesTableBody.addEventListener('change', function(e) {
     if (!e.target.matches('select[data-account-id]')) return;
-    const categoryId = parseInt(e.target.value, 10);
-    if (!categoryId) return; // defensive — the placeholder option is disabled
+    const categoryId = parseAssignCategoriesSelectValue(e.target.value);
     const accountId = parseInt(e.target.dataset.accountId, 10);
     assignCategory(accountId, categoryId, false);
 });
@@ -1539,11 +1583,11 @@ arAssignCategoriesTableBody.addEventListener('click', function(e) {
     if (!btn) return;
     const accountId = parseInt(btn.dataset.accountId, 10);
     const select = arAssignCategoriesTableBody.querySelector('select[data-account-id="' + accountId + '"]');
-    const categoryId = select ? parseInt(select.value, 10) : NaN;
-    if (!categoryId) {
-        showAssignCategoriesStatus('Select a category for this row first.', 'error');
-        return;
-    }
+    if (!select) return;
+    // "Not assigned" is a real selectable value now, so force-apply works with it too
+    // (clears the target and cascades that clearing to every descendant) — no "select
+    // a category first" guard needed anymore.
+    const categoryId = parseAssignCategoriesSelectValue(select.value);
     const account = getAssignCategoriesAccountById(accountId);
     const categoryName = getAssignCategoriesCategoryName(categoryId);
     const proceed = confirm(

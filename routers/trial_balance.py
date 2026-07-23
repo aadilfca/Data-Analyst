@@ -48,9 +48,12 @@ class CategoryAssignmentRequest(BaseModel):
     """Body for the Assign Categories cascade-assignment endpoint (Section 2,
     Phase 4). force_apply defaults to False (smart-fill) - True (force-apply)
     is only ever sent via the explicit UI icon in Phase 5, never the default
-    path."""
+    path. category_id is nullable (confirmed fix) - null means "Not assigned":
+    selecting it via the normal path clears just the target account, and
+    selecting it with force_apply=True clears the target and cascades that
+    clearing to every descendant, same rule as assigning a real category."""
     account_id: int
-    category_id: int
+    category_id: Optional[int] = None
     force_apply: bool = False
 
 # ---------- COLUMN IDENTIFICATION ----------
@@ -882,6 +885,28 @@ def _validate_active_category(category_id: int) -> None:
         raise HTTPException(400, f"Category {category_id} not found or inactive")
 
 
+def _find_latest_parsed_upload(client_id: int):
+    """
+    Shared "latest Trial Balance" lookup - the most recent upload (by
+    period_end, falling back to uploaded_at as tiebreaker for uploads made
+    before period tracking existed) with status='parsed'. Used by both
+    get_latest_trial_balance_accounts() and reset_trial_balance_categories()
+    (confirmed fix) so "latest" is defined identically in both places.
+    Returns the raw upload row, or None if no parsed upload exists.
+    """
+    upload_rows = execute_query(
+        """
+        SELECT id, period_start, period_end, period_type, as_of_date
+        FROM trial_balance_uploads
+        WHERE client_id = ? AND status = 'parsed'
+        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
+        LIMIT 1
+        """,
+        (client_id,)
+    )
+    return upload_rows[0] if upload_rows else None
+
+
 @router.get("/api/trial-balance/latest-accounts")
 def get_latest_trial_balance_accounts(client_id: int):
     """
@@ -895,19 +920,9 @@ def get_latest_trial_balance_accounts(client_id: int):
     if not client_rows:
         raise HTTPException(404, "Client not found")
 
-    upload_rows = execute_query(
-        """
-        SELECT id, period_start, period_end, period_type, as_of_date
-        FROM trial_balance_uploads
-        WHERE client_id = ? AND status = 'parsed'
-        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
-        LIMIT 1
-        """,
-        (client_id,)
-    )
-    if not upload_rows:
+    upload = _find_latest_parsed_upload(client_id)
+    if not upload:
         raise HTTPException(404, "No parsed trial balance found for this client")
-    upload = upload_rows[0]
 
     rows = execute_query(
         """
@@ -968,10 +983,14 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
         raise HTTPException(404, "Trial balance account not found")
     target = account_rows[0]
 
-    _validate_active_category(payload.category_id)
+    # category_id is nullable (confirmed fix) - null means "Not assigned", so
+    # the active-category check only applies when a real category is given.
+    if payload.category_id is not None:
+        _validate_active_category(payload.category_id)
 
     # Target account's own assignment is unconditional - this is the explicit
-    # action requested, regardless of force_apply or its current value.
+    # action requested, regardless of force_apply or its current value. When
+    # payload.category_id is None this writes NULL, i.e. clears the category.
     execute_write(
         "UPDATE trial_balance_accounts SET category_id = ? WHERE id = ?",
         (payload.category_id, payload.account_id)
@@ -1016,8 +1035,9 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
                 tuple([payload.category_id] + descendants_updated)
             )
 
+    category_label = payload.category_id if payload.category_id is not None else "None (cleared)"
     log_audit("Analyst", "Update", "TrialBalance",
-               f"Assigned category {payload.category_id} to account {target['account_code']} "
+               f"Assigned category {category_label} to account {target['account_code']} "
                f"(id={payload.account_id}, force_apply={payload.force_apply}); "
                f"{len(descendants_updated)} descendant(s) updated, {len(descendants_skipped)} skipped")
 
@@ -1031,3 +1051,41 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
         "descendants_updated": descendants_updated,
         "descendants_skipped": descendants_skipped,
     }
+
+
+@router.post("/api/trial-balance/reset-categories")
+def reset_trial_balance_categories(client_id: int):
+    """
+    Confirmed fix: bulk "Reset" for the Assign Categories page. Sets every
+    account's category_id to NULL for the client's CURRENTLY LOADED (latest
+    parsed) Trial Balance only - not historical uploads - using the same
+    "latest" lookup as get_latest_trial_balance_accounts() (via
+    _find_latest_parsed_upload()), so the two endpoints can never disagree on
+    which upload "the current one" means.
+    """
+    client_rows = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client_rows:
+        raise HTTPException(404, "Client not found")
+
+    upload = _find_latest_parsed_upload(client_id)
+    if not upload:
+        raise HTTPException(404, "No parsed trial balance found for this client")
+    upload_id = upload["id"]
+
+    # Count first so the audit log/response can say how many rows actually
+    # had a category cleared (rather than reporting the upload's full row
+    # count, which would overstate a reset that finds most rows already
+    # unassigned).
+    count_rows = execute_query(
+        "SELECT COUNT(*) as count FROM trial_balance_accounts WHERE upload_id = ? AND category_id IS NOT NULL",
+        (upload_id,)
+    )
+    reset_count = count_rows[0]["count"] if count_rows else 0
+
+    execute_write("UPDATE trial_balance_accounts SET category_id = NULL WHERE upload_id = ?", (upload_id,))
+
+    log_audit("Analyst", "Update", "TrialBalance",
+               f"Reset all category assignments for client {client_id}'s latest trial balance "
+               f"(upload_id={upload_id}); {reset_count} account(s) had a category cleared")
+
+    return {"upload_id": upload_id, "reset_count": reset_count}

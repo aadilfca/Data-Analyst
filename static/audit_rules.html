@@ -304,6 +304,11 @@
                     <h2 class="ar-assign-categories-title">Assign Categories — Trial Balance Accounts</h2>
                     <span id="arAssignCategoriesSubtitle" class="ar-assign-categories-subtitle"></span>
                 </div>
+                <!-- Confirmed fix: bulk reset for the currently loaded (latest parsed) Trial
+                     Balance only. margin-left:auto (see style.css) pushes it to the far right
+                     of this flex header row. -->
+                <button type="button" id="arResetCategoriesBtn" class="ar-btn-reset-categories">🔄
+                    Reset</button>
             </div>
 
             <div id="arAssignCategoriesStatus" class="upload-status" style="display:none;"></div>

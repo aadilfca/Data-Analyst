@@ -3170,6 +3170,27 @@ body {
     text-decoration: underline;
 }
 
+/* Confirmed fix: bulk "Reset" button, pushed to the far right of the flex header row
+   via margin-left:auto (works regardless of the row's own justify-content). Outlined
+   red, matching this app's existing destructive-action convention (e.g. .clear-btn). */
+.ar-btn-reset-categories {
+    margin-left: auto;
+    background: white;
+    border: 1px solid #fca5a5;
+    color: #dc2626;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+}
+.ar-btn-reset-categories:hover {
+    background: #fef2f2;
+    border-color: #dc2626;
+}
+
 .ar-tb-table {
     width: 100%;
     border-collapse: collapse;
