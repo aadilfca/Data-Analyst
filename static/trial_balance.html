@@ -178,6 +178,27 @@
             margin-left: auto;
         }
 
+        /* ---------- DANGER ACTION BUTTON (Delete Upload) ---------- */
+        /* Same size/shape as .btn-secondary-action, red palette to signal a
+           destructive action -- distinct from the blue outline used elsewhere. */
+        .btn-danger-action {
+            padding: 7px 16px;
+            background: white;
+            color: #dc2626;
+            border: 1px solid #fca5a5;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+            white-space: nowrap;
+        }
+
+        .btn-danger-action:hover {
+            background: #fef2f2;
+            border-color: #f87171;
+        }
+
         /* ---------- CLIENT SELECTION WARNING (same as upload.html's .client-warning) ---------- */
         .client-warning {
             display: none;
@@ -574,6 +595,10 @@
             <select id="availableUploadsDropdown">
                 <option value="">— Select an upload —</option>
             </select>
+            <!-- Confirmed fix: deletes the selected upload + all its accounts. Hidden
+                 until an upload is actually selected (same visibility pattern as
+                 availableAccountsTableWrapper below). -->
+            <button class="btn-danger-action" id="deleteUploadBtn" type="button" style="display:none;">🗑️ Delete</button>
         </div>
 
         <p class="group-hint" id="availableUploadsEmptyHint" style="display:none;">No classified Trial Balance uploads found for this client yet.</p>

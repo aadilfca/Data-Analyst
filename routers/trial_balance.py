@@ -761,6 +761,34 @@ def list_trial_balance_uploads(client_id: int):
     return {"client_id": client_id, "uploads": uploads}
 
 
+@router.delete("/api/trial-balance/uploads/{upload_id}")
+def delete_trial_balance_upload(upload_id: int):
+    """
+    Delete an upload and all its account rows. trial_balance_accounts.upload_id
+    declares ON DELETE CASCADE, but this app's connections never enable
+    PRAGMA foreign_keys = ON (documented elsewhere in this file/codebase), so
+    the cascade would not actually fire - accounts are deleted explicitly
+    first, then the upload row, same two-step order/style already used by the
+    Section 2/Phase 5 overwrite-conflict delete above.
+    """
+    _require_upload(upload_id)
+
+    # Count first so the audit log can name how many account rows went with it.
+    count_rows = execute_query(
+        "SELECT COUNT(*) as count FROM trial_balance_accounts WHERE upload_id = ?",
+        (upload_id,)
+    )
+    account_count = count_rows[0]["count"] if count_rows else 0
+
+    execute_write("DELETE FROM trial_balance_accounts WHERE upload_id = ?", (upload_id,))
+    execute_write("DELETE FROM trial_balance_uploads WHERE id = ?", (upload_id,))
+
+    log_audit("Analyst", "Delete", "TrialBalance",
+               f"Deleted trial balance upload {upload_id} and its {account_count} account row(s)")
+
+    return {"upload_id": upload_id, "deleted": True, "deleted_account_count": account_count}
+
+
 @router.get("/api/trial-balance/summary")
 def get_trial_balance_summary(upload_id: int):
     """

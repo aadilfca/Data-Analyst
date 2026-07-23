@@ -120,6 +120,7 @@ const availableUploadsDropdown = getElement('availableUploadsDropdown');
 const availableUploadsEmptyHint = getElement('availableUploadsEmptyHint');
 const availableAccountsTableWrapper = getElement('availableAccountsTableWrapper');
 const availableAccountsTableBody = getElement('availableAccountsTableBody');
+const deleteUploadBtn = getElement('deleteUploadBtn');
 
 // ---------- STATUS BAR ----------
 // Same show/hide + color-coded classes convention as upload.js's showStatus().
@@ -836,6 +837,7 @@ async function loadAvailableUploads() {
     if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'none';
     if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
     if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
+    if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
 
     try {
         const res = await fetch(API_BASE + '/api/trial-balance/uploads?client_id=' + clientId);
@@ -916,9 +918,48 @@ if (availableUploadsDropdown) {
         if (!uploadId) {
             if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
             if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
+            if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
             return;
         }
         loadAvailableUploadAccounts(uploadId);
+        // Confirmed fix: Delete only appears once a real upload is selected.
+        if (deleteUploadBtn) deleteUploadBtn.style.display = 'inline-block';
+    });
+}
+
+// Confirmed fix: deletes the currently selected upload (and all its accounts) after
+// a native confirm() -- same single-flat-destructive-action pattern this file already
+// uses for the Section 2/Phase 6 overwrite confirmation. On success, refreshes the
+// dropdown/table so the deleted upload disappears from view.
+if (deleteUploadBtn) {
+    deleteUploadBtn.addEventListener('click', async function () {
+        const uploadId = availableUploadsDropdown ? availableUploadsDropdown.value : null;
+        if (!uploadId) return;
+
+        const confirmed = window.confirm('Delete this Trial Balance and all its accounts? This cannot be undone.');
+        if (!confirmed) return;
+
+        try {
+            const res = await fetch(API_BASE + '/api/trial-balance/uploads/' + uploadId, {
+                method: 'DELETE'
+            });
+            const result = await res.json();
+
+            if (!res.ok) {
+                throw new Error(result.detail || 'Failed to delete trial balance upload');
+            }
+
+            showStatus('✅ Trial balance upload deleted.', 'success');
+
+            // Reset this view's selection/table state, then reload the dropdown so
+            // the deleted upload is gone from the list.
+            if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
+            if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
+            deleteUploadBtn.style.display = 'none';
+            await loadAvailableUploads();
+        } catch (error) {
+            showStatus('❌ ' + error.message, 'error');
+        }
     });
 }
 
@@ -943,6 +984,7 @@ if (closeAvailableTrialBalancesBtn) {
         if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
         if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
         if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'none';
+        if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
     });
 }
 
