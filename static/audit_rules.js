@@ -1276,6 +1276,285 @@ arCategorySaveBtn.addEventListener('click', saveCategory);
 arCategoryDeleteBtn.addEventListener('click', deleteCategory);
 arCategoryRestoreBtn.addEventListener('click', restoreCategory);
 
+// ==============================================
+// 🧮 AUDIT RULES — ASSIGN CATEGORIES (Section 2, Phase 5 of 5, FINAL)
+// ==============================================
+// Full-page view (not another rail entity type) listing the current client's latest
+// parsed Trial Balance accounts, with a per-row Category <select> (smart-fill cascade
+// on change) and a force-apply icon on parent rows only. Uses Phase 4's
+// GET /api/trial-balance/latest-accounts and PUT /api/trial-balance/assign-category.
+// Toggled via #arShellContainer <-> #arAssignCategoriesSection, mirroring
+// trial_balance.js's #uploadViewContainer <-> #availableTrialBalancesSection pattern —
+// a distinct, unrelated screen, so it swaps the whole shell rather than living inside
+// the rail/list/detail three-pane layout.
+
+// ---------- DOM REFS ----------
+const arShellContainer = document.getElementById('arShellContainer');
+const arAssignCategoriesBtn = document.getElementById('arAssignCategoriesBtn');
+const arAssignCategoriesSection = document.getElementById('arAssignCategoriesSection');
+const arAssignCategoriesBackBtn = document.getElementById('arAssignCategoriesBackBtn');
+const arAssignCategoriesSubtitle = document.getElementById('arAssignCategoriesSubtitle');
+const arAssignCategoriesStatus = document.getElementById('arAssignCategoriesStatus');
+const arAssignCategoriesEmpty = document.getElementById('arAssignCategoriesEmpty');
+const arAssignCategoriesTable = document.getElementById('arAssignCategoriesTable');
+const arAssignCategoriesTableBody = document.getElementById('arAssignCategoriesTableBody');
+
+// ---------- STATE ----------
+// Raw accounts from the latest-accounts response, refreshed every time the view opens
+// (same "refetch on open, don't cache indefinitely" convention as Cross-checks'/
+// Categories' own document/cross-check caches above).
+let assignCategoriesAccounts = [];
+// Active Categories ({id, name}) for the per-row dropdown options, refreshed alongside
+// the accounts on every open so a Category added/renamed elsewhere is picked up.
+let assignCategoriesCategoryOptions = [];
+
+// ---------- STATUS MESSAGES ----------
+// Same timeout-based show/hide pattern as showDetailStatus()/showCategoryDetailStatus().
+function showAssignCategoriesStatus(message, type) {
+    arAssignCategoriesStatus.textContent = message;
+    arAssignCategoriesStatus.className = 'upload-status ' + type;
+    arAssignCategoriesStatus.style.display = 'block';
+    clearTimeout(window.arAssignCategoriesStatusTimeout);
+    window.arAssignCategoriesStatusTimeout = setTimeout(() => {
+        arAssignCategoriesStatus.style.display = 'none';
+    }, 5000);
+}
+
+// ---------- OPEN / CLOSE (whole-shell swap) ----------
+function openAssignCategoriesView() {
+    arShellContainer.style.display = 'none';
+    arAssignCategoriesSection.style.display = 'block';
+    loadAssignCategoriesData();
+}
+
+function closeAssignCategoriesView() {
+    arAssignCategoriesSection.style.display = 'none';
+    arShellContainer.style.display = 'flex';
+}
+
+// ---------- LOAD ----------
+async function loadAssignCategoriesData() {
+    // Client selection reuses the global client context (client_context.js) — a client
+    // is always already selected on this page, since enforceClientSelection() redirects
+    // to the dashboard otherwise, same as every other module page.
+    const clientId = getSelectedClientId();
+
+    arAssignCategoriesTable.style.display = 'none';
+    arAssignCategoriesEmpty.style.display = 'none';
+    arAssignCategoriesSubtitle.textContent = '';
+
+    try {
+        const [categoriesRes, accountsRes] = await Promise.all([
+            fetch(API_BASE + '/api/audit-rules/categories?include_inactive=false'),
+            fetch(API_BASE + '/api/trial-balance/latest-accounts?client_id=' + clientId)
+        ]);
+
+        if (!categoriesRes.ok) throw new Error('Failed to load categories');
+        const categories = await categoriesRes.json();
+        assignCategoriesCategoryOptions = categories.map(c => ({ id: c.id, name: c.name }));
+
+        if (accountsRes.status === 404) {
+            // No parsed TB exists yet for this client — a clear empty state, not a
+            // blank/broken table, per the confirmed brief.
+            const result = await accountsRes.json();
+            assignCategoriesAccounts = [];
+            arAssignCategoriesEmpty.textContent = result.detail || 'No parsed trial balance found for this client.';
+            arAssignCategoriesEmpty.style.display = 'block';
+            return;
+        }
+        if (!accountsRes.ok) throw new Error('Failed to load trial balance accounts');
+
+        const data = await accountsRes.json();
+        assignCategoriesAccounts = data.accounts;
+
+        const periodLabel = (data.period_start && data.period_end)
+            ? (data.period_type ? data.period_type + ' ' : '') + data.period_start + ' to ' + data.period_end
+            : 'As of ' + data.as_of_date;
+        arAssignCategoriesSubtitle.textContent = periodLabel;
+
+        if (assignCategoriesAccounts.length === 0) {
+            arAssignCategoriesEmpty.textContent = 'This trial balance has no accounts.';
+            arAssignCategoriesEmpty.style.display = 'block';
+            return;
+        }
+
+        renderAssignCategoriesTable();
+        arAssignCategoriesTable.style.display = 'table';
+    } catch (error) {
+        assignCategoriesAccounts = [];
+        arAssignCategoriesEmpty.textContent = '❌ Error loading data: ' + error.message;
+        arAssignCategoriesEmpty.style.display = 'block';
+    }
+}
+
+// ---------- RENDER TABLE ----------
+function renderAssignCategoriesTable() {
+    arAssignCategoriesTableBody.innerHTML = '';
+    assignCategoriesAccounts.forEach(account => {
+        arAssignCategoriesTableBody.appendChild(buildAssignCategoriesRow(account));
+    });
+}
+
+// Builds one <tr> for an account. createElement/textContent throughout (no innerHTML)
+// since account codes/names come from an uploaded file, not this app's own control —
+// same convention trial_balance.js's renderReviewTable() already follows.
+function buildAssignCategoriesRow(account) {
+    const tr = document.createElement('tr');
+    tr.dataset.accountId = account.id;
+
+    const tdCode = document.createElement('td');
+    tdCode.textContent = account.account_code;
+    tr.appendChild(tdCode);
+
+    const tdName = document.createElement('td');
+    tdName.textContent = account.account_name || '';
+    tr.appendChild(tdName);
+
+    const tdBadge = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = 'ar-tb-badge ' + (account.is_leaf ? 'leaf' : 'parent');
+    badge.textContent = account.is_leaf ? 'Leaf' : 'Parent';
+    tdBadge.appendChild(badge);
+    tr.appendChild(tdBadge);
+
+    const tdCategory = document.createElement('td');
+    tdCategory.className = 'ar-tb-category-cell';
+
+    const select = document.createElement('select');
+    select.className = 'ar-tb-category-select';
+    select.dataset.accountId = account.id;
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.disabled = true;
+    placeholder.textContent = '-- Not assigned --';
+    if (!account.category_id) placeholder.selected = true;
+    select.appendChild(placeholder);
+
+    assignCategoriesCategoryOptions.forEach(cat => {
+        const opt = document.createElement('option');
+        opt.value = cat.id;
+        opt.textContent = cat.name;
+        if (account.category_id === cat.id) opt.selected = true;
+        select.appendChild(opt);
+    });
+    tdCategory.appendChild(select);
+
+    // Force-apply icon: parent rows only, omitted entirely (not just hidden/disabled)
+    // for leaves, since force_apply is a documented no-op there.
+    if (!account.is_leaf) {
+        const forceBtn = document.createElement('button');
+        forceBtn.type = 'button';
+        forceBtn.className = 'ar-tb-force-apply-icon';
+        forceBtn.dataset.accountId = account.id;
+        forceBtn.textContent = '⤵';
+        forceBtn.title = 'Force-apply the selected category to every descendant, overwriting any existing assignment';
+        tdCategory.appendChild(forceBtn);
+    }
+
+    tr.appendChild(tdCategory);
+    return tr;
+}
+
+// ---------- LOOKUPS ----------
+function getAssignCategoriesAccountById(id) {
+    return assignCategoriesAccounts.find(a => a.id === id);
+}
+function getAssignCategoriesCategoryName(id) {
+    const cat = assignCategoriesCategoryOptions.find(c => c.id === id);
+    return cat ? cat.name : null;
+}
+
+// ---------- ASSIGN (smart-fill default / force-apply explicit) ----------
+async function assignCategory(accountId, categoryId, forceApply) {
+    const targetAccount = getAssignCategoriesAccountById(accountId);
+    const previousCategoryId = targetAccount ? targetAccount.category_id : null;
+
+    try {
+        const res = await fetch(API_BASE + '/api/trial-balance/assign-category', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId, category_id: categoryId, force_apply: forceApply })
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to assign category');
+
+        // Only the target account plus whatever the backend actually updated
+        // (result.descendants_updated) get their displayed Category refreshed —
+        // descendants_skipped are deliberately left alone, so the UI reflects the real
+        // smart-fill outcome rather than assuming every descendant changed.
+        const categoryName = getAssignCategoriesCategoryName(categoryId);
+        const affectedIds = [accountId].concat(result.descendants_updated || []);
+        applyCategoryToRows(affectedIds, categoryId, categoryName);
+
+        if (result.is_leaf) {
+            showAssignCategoriesStatus('✅ Category assigned.', 'success');
+        } else {
+            showAssignCategoriesStatus(
+                '✅ Category assigned' + (forceApply ? ' (force-applied)' : '') + '. ' +
+                result.descendants_updated_count + ' descendant(s) updated, ' +
+                result.descendants_skipped_count + ' left unchanged.',
+                'success'
+            );
+        }
+    } catch (error) {
+        // Revert the target row's dropdown to its pre-change value — state was never
+        // optimistically updated, so only the native <select>'s own visible value (which
+        // the browser already changed on user selection) needs correcting back.
+        const select = arAssignCategoriesTableBody.querySelector('select[data-account-id="' + accountId + '"]');
+        if (select) select.value = previousCategoryId || '';
+        showAssignCategoriesStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+// Updates both the in-memory account list and the visible <select> value for a set of
+// account ids, after a successful assignment call.
+function applyCategoryToRows(accountIds, categoryId, categoryName) {
+    accountIds.forEach(id => {
+        const account = getAssignCategoriesAccountById(id);
+        if (account) {
+            account.category_id = categoryId;
+            account.category_name = categoryName;
+        }
+        const select = arAssignCategoriesTableBody.querySelector('select[data-account-id="' + id + '"]');
+        if (select) select.value = categoryId;
+    });
+}
+
+// ---------- WIRE UP EVENT LISTENERS ----------
+arAssignCategoriesBtn.addEventListener('click', openAssignCategoriesView);
+arAssignCategoriesBackBtn.addEventListener('click', closeAssignCategoriesView);
+
+// Delegated listeners on the table body (rows are rebuilt from scratch on every load).
+arAssignCategoriesTableBody.addEventListener('change', function(e) {
+    if (!e.target.matches('select[data-account-id]')) return;
+    const categoryId = parseInt(e.target.value, 10);
+    if (!categoryId) return; // defensive — the placeholder option is disabled
+    const accountId = parseInt(e.target.dataset.accountId, 10);
+    assignCategory(accountId, categoryId, false);
+});
+
+arAssignCategoriesTableBody.addEventListener('click', function(e) {
+    const btn = e.target.closest('.ar-tb-force-apply-icon');
+    if (!btn) return;
+    const accountId = parseInt(btn.dataset.accountId, 10);
+    const select = arAssignCategoriesTableBody.querySelector('select[data-account-id="' + accountId + '"]');
+    const categoryId = select ? parseInt(select.value, 10) : NaN;
+    if (!categoryId) {
+        showAssignCategoriesStatus('Select a category for this row first.', 'error');
+        return;
+    }
+    const account = getAssignCategoriesAccountById(accountId);
+    const categoryName = getAssignCategoriesCategoryName(categoryId);
+    const proceed = confirm(
+        'Force-apply "' + categoryName + '" to every descendant of ' +
+        (account ? account.account_code : accountId) +
+        ', overwriting any category already assigned to them? This cannot be undone.'
+    );
+    if (!proceed) return;
+    assignCategory(accountId, categoryId, true);
+});
+
 // ---------- INIT ----------
 window.onload = function() {
     loadDocuments();
