@@ -374,11 +374,6 @@
     </nav>
 
     <div class="main-container">
-        <header class="module-header">
-            <h1>📊 Trial Balance</h1>
-            <p>Upload a client's Trial Balance and classify accounts as parent or leaf</p>
-        </header>
-
         <div id="clientSelectionWarning" class="client-warning">
             <span class="icon">⚠️</span>
             <span><strong>Please select a client</strong> from the dashboard before uploading a Trial Balance.</span>
@@ -386,18 +381,13 @@
 
         <div class="tb-form-group">
             <h3>📤 Upload Trial Balance</h3>
-            <p class="group-hint">Select the as-of date and the Excel file (.xlsx or .xls) to classify.</p>
 
-            <div class="tb-field-row">
-                <label for="asOfDateInput">As of Date</label>
-                <input type="date" id="asOfDateInput">
-            </div>
-
-            <!-- Section 2, Phase 6: optional period tracking. Left blank, an upload
-                 behaves exactly as before this phase (as_of_date only). When both
-                 dates are filled, the page checks with the backend (Phase 5) whether
-                 an upload already exists for this exact period before allowing the
-                 upload to proceed. -->
+            <!-- Period Start/End/Type is now the sole date source for an upload -- it supersedes
+                 the old standalone As of Date field. Both dates are required (see
+                 updateClientDependentUI()/uploadTrialBalance() in trial_balance.js): Period End's
+                 value is what actually gets sent to the backend as as_of_date. When both dates are
+                 filled, the page checks with the backend (Phase 5) whether an upload already exists
+                 for this exact period before allowing the upload to proceed. -->
             <div class="tb-field-row">
                 <label for="periodStartInput">Period Start</label>
                 <input type="date" id="periodStartInput">
@@ -411,7 +401,6 @@
                     <option value="annual">Annual</option>
                 </select>
             </div>
-            <p class="group-hint" style="margin-top:-8px;">Optional -- if set, the period type above is auto-suggested from the date range but can be changed. Used to detect a duplicate upload for the exact same period.</p>
 
             <div class="tb-field-row">
                 <button class="btn-upload-file" id="uploadFileBtn" type="button">

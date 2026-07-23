@@ -84,7 +84,6 @@ function getElement(id) {
 }
 
 const clientSelectionWarning = getElement('clientSelectionWarning');
-const asOfDateInput = getElement('asOfDateInput');
 const periodStartInput = getElement('periodStartInput');
 const periodEndInput = getElement('periodEndInput');
 const periodTypeSelect = getElement('periodTypeSelect');
@@ -131,10 +130,12 @@ function formatFileSize(bytes) {
 
 // ---------- CLIENT-DEPENDENT UI ----------
 // Enables the Upload & Classify button only once a client is selected, a file
-// is chosen, and an as-of date is filled in. Client switching on this app
-// always navigates away to the dashboard (confirmSwitchClient() in
+// is chosen, and Period Start/End are filled in (Period End's value is what gets
+// sent to the backend as as_of_date -- the old standalone As of Date field is gone,
+// so both period dates are now the required date source). Client switching on this
+// app always navigates away to the dashboard (confirmSwitchClient() in
 // client_context.js), so this only needs to run on load and after each of
-// the three inputs changes — no live cross-page client-change listener needed.
+// the relevant inputs changes — no live cross-page client-change listener needed.
 function updateClientDependentUI() {
     const hasClient = typeof window.isClientSelected === 'function' && window.isClientSelected();
 
@@ -143,14 +144,14 @@ function updateClientDependentUI() {
     }
 
     const hasFile = !!selectedFile;
-    const hasDate = !!(asOfDateInput && asOfDateInput.value);
+    const hasPeriod = !!(periodStartInput && periodEndInput && periodStartInput.value && periodEndInput.value);
     // A file with no headers yet (still loading, or suggest-mapping failed) can never
     // be considered mapped -- checkMappingComplete() alone would incorrectly pass on
     // an all-null tbColumnMapping before fileHeaders has ever been populated.
     const hasMapping = fileHeaders.length > 0 && checkMappingComplete();
 
     if (uploadTrialBalanceBtn) {
-        uploadTrialBalanceBtn.disabled = !(hasClient && hasFile && hasDate && hasMapping);
+        uploadTrialBalanceBtn.disabled = !(hasClient && hasFile && hasPeriod && hasMapping);
     }
 }
 
@@ -227,10 +228,6 @@ if (clearBtn) {
     });
 }
 
-if (asOfDateInput) {
-    asOfDateInput.addEventListener('change', updateClientDependentUI);
-}
-
 // ---------- PERIOD TYPE AUTO-SUGGESTION (Section 2, Phase 6) ----------
 // Buckets the day-span between Period Start/End into the 4 standard period types.
 // Purely a suggestion -- periodTypeSelect stays a normal, always-editable <select>,
@@ -252,11 +249,15 @@ function updatePeriodTypeSuggestion() {
 }
 
 // Any period-date edit invalidates a previously cached conflict-check result -- it
-// applied to a different period pair and must not be silently reused.
+// applied to a different period pair and must not be silently reused. Also re-checks
+// button enablement, since Period Start/End are now the required date source that
+// updateClientDependentUI() gates on (previously this reactivity came from the old
+// standalone As of Date field's own change listener).
 function handlePeriodDateChanged() {
     updatePeriodTypeSuggestion();
     lastConflictCheckPeriod = null;
     lastConflictCheckResult = null;
+    updateClientDependentUI();
 }
 
 if (periodStartInput) {
@@ -539,12 +540,14 @@ if (uploadTrialBalanceBtn) {
 }
 
 async function uploadTrialBalance() {
-    // Defensive guard -- the button is disabled unless all three are present,
-    // but re-check directly in case of a race (e.g. a stale click event).
+    // Defensive guard -- the button is disabled unless all of these are present,
+    // but re-check directly in case of a race (e.g. a stale click event). Period
+    // Start/End are now required (not optional) since the old standalone As of Date
+    // field is gone and Period End's value is what actually gets sent as as_of_date.
     const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
-    const asOfDate = asOfDateInput ? asOfDateInput.value : '';
-    if (!clientId || !selectedFile || !asOfDate) {
-        showStatus('⚠️ Select a client, an as-of date, and a file first.', 'error');
+    const hasPeriod = !!(periodStartInput && periodEndInput && periodStartInput.value && periodEndInput.value);
+    if (!clientId || !selectedFile || !hasPeriod) {
+        showStatus('⚠️ Select a client, a Period Start/End, and a file first.', 'error');
         return;
     }
     // Defensive re-check of the column mapping too, same reasoning as the guard above --
@@ -557,21 +560,16 @@ async function uploadTrialBalance() {
     // Section 2, Phase 6: authoritative overwrite-conflict gate. This re-checks (or
     // reuses a still-valid cached result) right before the actual request -- catches
     // a period entered/changed after file selection, and re-prompts if an earlier
-    // check on this exact period was declined or failed. A period left blank skips
-    // this entirely (period_start/period_end simply aren't sent below), matching the
-    // backend's own optional/backward-compatible contract.
-    const hasPeriod = periodStartInput && periodEndInput && periodStartInput.value && periodEndInput.value;
-    let confirmOverwrite = false;
-    if (hasPeriod) {
-        const conflictResult = await checkAndConfirmPeriodOverwrite(clientId, periodStartInput.value, periodEndInput.value);
-        if (conflictResult === 'declined' || conflictResult === 'error') {
-            // No request sent -- the form stays exactly as the auditor left it so
-            // they can adjust the period (or try again) themselves.
-            showStatus('Upload cancelled.', 'info');
-            return;
-        }
-        confirmOverwrite = conflictResult === 'confirmed';
+    // check on this exact period was declined or failed. Period is now always present
+    // by this point (guarded above), so this check always runs.
+    const conflictResult = await checkAndConfirmPeriodOverwrite(clientId, periodStartInput.value, periodEndInput.value);
+    if (conflictResult === 'declined' || conflictResult === 'error') {
+        // No request sent -- the form stays exactly as the auditor left it so
+        // they can adjust the period (or try again) themselves.
+        showStatus('Upload cancelled.', 'info');
+        return;
     }
+    const confirmOverwrite = conflictResult === 'confirmed';
 
     if (summaryContainer) summaryContainer.style.display = 'none';
     if (reviewContainer) reviewContainer.style.display = 'none';
@@ -581,22 +579,21 @@ async function uploadTrialBalance() {
     try {
         const formData = new FormData();
         formData.append('client_id', clientId);
-        formData.append('as_of_date', asOfDate);
+        // The backend's as_of_date field still exists (not touched this phase) -- Period
+        // End's value fills it now that the old standalone As of Date input is gone.
+        formData.append('as_of_date', periodEndInput.value);
         formData.append('file', selectedFile);
         // Section 1, Phase 2: send the confirmed column mapping alongside the file --
         // the backend (Phase 1) validates this same payload again on its own.
         TB_MAPPING_FIELDS.forEach(function (field) {
             formData.append(field.role, tbColumnMapping[field.role]);
         });
-        // Section 2, Phase 6: period fields are only sent when both dates are present --
-        // omitted (not sent as empty strings) when left blank, matching the backend's
-        // own optional-fields contract exactly (Phase 5). confirm_overwrite is always
-        // sent explicitly so the backend's default (false) is never relied on silently.
-        if (hasPeriod) {
-            formData.append('period_start', periodStartInput.value);
-            formData.append('period_end', periodEndInput.value);
-            formData.append('period_type', periodTypeSelect ? periodTypeSelect.value : '');
-        }
+        // Section 2, Phase 6: period fields are always sent now (hasPeriod is guaranteed
+        // true by the guard above). confirm_overwrite is always sent explicitly so the
+        // backend's default (false) is never relied on silently.
+        formData.append('period_start', periodStartInput.value);
+        formData.append('period_end', periodEndInput.value);
+        formData.append('period_type', periodTypeSelect ? periodTypeSelect.value : '');
         formData.append('confirm_overwrite', confirmOverwrite ? 'true' : 'false');
 
         const res = await fetch(API_BASE + '/api/trial-balance/upload', {
