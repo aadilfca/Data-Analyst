@@ -150,6 +150,34 @@
             cursor: not-allowed;
         }
 
+        /* ---------- SECONDARY ACTION BUTTON (Available Trial Balances trigger + its own
+           Back button) -- outline style, distinct from the filled-green .btn-primary-action
+           used for the actual Upload & Classify submit. ---------- */
+        .btn-secondary-action {
+            padding: 7px 16px;
+            background: white;
+            color: #2563eb;
+            border: 1px solid #93c5fd;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+            white-space: nowrap;
+        }
+
+        .btn-secondary-action:hover {
+            background: #eff6ff;
+            border-color: #60a5fa;
+        }
+
+        /* Only the period row's trigger button needs pushing to the far right of its row --
+           the Back button inside availableTrialBalancesSection reuses .btn-secondary-action
+           as-is (no auto margin), sitting naturally at the start of its own row. */
+        #availableTrialBalancesBtn {
+            margin-left: auto;
+        }
+
         /* ---------- CLIENT SELECTION WARNING (same as upload.html's .client-warning) ---------- */
         .client-warning {
             display: none;
@@ -374,6 +402,12 @@
     </nav>
 
     <div class="main-container">
+    <!-- Available Trial Balances (Section 1, Phase 2): the whole normal upload flow is
+         wrapped in this container so it can be hidden as one unit while the read-only
+         browsing view below is shown, and restored unchanged via "Back" -- no in-progress
+         file/mapping state is lost, since it all lives inside this container, untouched
+         while hidden. -->
+    <div id="uploadViewContainer">
         <div id="clientSelectionWarning" class="client-warning">
             <span class="icon">⚠️</span>
             <span><strong>Please select a client</strong> from the dashboard before uploading a Trial Balance.</span>
@@ -400,6 +434,10 @@
                     <option value="half_yearly">Half-Yearly</option>
                     <option value="annual">Annual</option>
                 </select>
+                <!-- Available Trial Balances (Section 1, Phase 2): opens the read-only
+                     browsing view below. Pushed to the far right of this row via
+                     margin-left:auto on .btn-secondary-action. -->
+                <button class="btn-secondary-action" id="availableTrialBalancesBtn" type="button">📊 Available Trial Balances</button>
             </div>
 
             <div class="tb-field-row">
@@ -514,6 +552,45 @@
                     </tbody>
                 </table>
             </div>
+        </div>
+    </div>
+    <!-- /uploadViewContainer -->
+
+    <!-- Available Trial Balances (Section 1, Phase 2): read-only browsing view -- an
+         upload-selection dropdown (fed by GET /api/trial-balance/uploads, Phase 1) and
+         a Code/Name/Classification table for whichever upload is selected (fed by the
+         existing GET /api/trial-balance/accounts, unchanged). No override controls here
+         -- that's the Review Classifications screen above, this is purely a reference
+         view. Hidden by default; toggled with uploadViewContainer above. -->
+    <div class="tb-form-group" id="availableTrialBalancesSection" style="display:none;">
+        <div class="tb-field-row" style="margin-bottom:8px;">
+            <button class="btn-secondary-action" id="closeAvailableTrialBalancesBtn" type="button">← Back</button>
+            <h3 style="margin-bottom:0;">📊 Available Trial Balances</h3>
+        </div>
+        <p class="group-hint">Browse a previously uploaded and classified Trial Balance for this client. Read-only -- to correct a classification, use the Review Classifications screen right after an upload.</p>
+
+        <div class="tb-field-row">
+            <label for="availableUploadsDropdown">Upload</label>
+            <select id="availableUploadsDropdown">
+                <option value="">— Select an upload —</option>
+            </select>
+        </div>
+
+        <p class="group-hint" id="availableUploadsEmptyHint" style="display:none;">No classified Trial Balance uploads found for this client yet.</p>
+
+        <div class="tb-review-table-wrapper" id="availableAccountsTableWrapper" style="display:none;">
+            <table class="tb-review-table">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th>Classification</th>
+                    </tr>
+                </thead>
+                <tbody id="availableAccountsTableBody">
+                    <!-- Populated by renderAvailableAccountsTable() in trial_balance.js -->
+                </tbody>
+            </table>
         </div>
     </div>
 

@@ -111,6 +111,16 @@ const mappingPreviewHead = getElement('mappingPreviewHead');
 const mappingPreviewBody = getElement('mappingPreviewBody');
 const downloadStandardTemplateBtn = getElement('downloadStandardTemplateBtn');
 
+// Available Trial Balances (Section 1, Phase 2) elements.
+const uploadViewContainer = getElement('uploadViewContainer');
+const availableTrialBalancesBtn = getElement('availableTrialBalancesBtn');
+const availableTrialBalancesSection = getElement('availableTrialBalancesSection');
+const closeAvailableTrialBalancesBtn = getElement('closeAvailableTrialBalancesBtn');
+const availableUploadsDropdown = getElement('availableUploadsDropdown');
+const availableUploadsEmptyHint = getElement('availableUploadsEmptyHint');
+const availableAccountsTableWrapper = getElement('availableAccountsTableWrapper');
+const availableAccountsTableBody = getElement('availableAccountsTableBody');
+
 // ---------- STATUS BAR ----------
 // Same show/hide + color-coded classes convention as upload.js's showStatus().
 function showStatus(msg, type = 'info') {
@@ -767,6 +777,173 @@ async function toggleAccountClassification(accountId, newIsLeaf) {
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
     }
+}
+
+// ---------- AVAILABLE TRIAL BALANCES (Section 1, Phase 2: read-only browsing view) ----------
+// A separate, self-contained in-page view: an upload-selection dropdown (fed by Phase 1's
+// list-uploads endpoint) and a read-only Code/Name/Classification table for whichever
+// upload is selected. Deliberately kept independent from currentUploadId/reviewTableBody/
+// loadAccounts()/renderReviewTable() above -- those back the override-capable Review
+// Classifications screen that appears right after an upload, and must not be disturbed by
+// browsing here (this view has no toggle buttons, nothing to override).
+
+// Human-readable period-type labels for the dropdown -- mirrors periodTypeSelect's own
+// option text so a listed upload's period type reads the same way here as it does on
+// the upload form itself.
+const PERIOD_TYPE_LABELS = {
+    monthly: 'Monthly',
+    quarterly: 'Quarterly',
+    half_yearly: 'Half-Yearly',
+    annual: 'Annual',
+};
+
+const SHORT_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// Builds a dropdown label for one upload, e.g. "Quarterly 2026 (Jul-Sep)" or, for a
+// period spanning two calendar years, "Quarterly (Jul 2025 - Jun 2026)". A real quarter
+// number (Q1/Q2...) isn't derived, since an arbitrary date range can't be reliably
+// mapped to a calendar quarter without assuming alignment that isn't guaranteed here --
+// the period type name is used instead. Uploads made before Section 2's period fields
+// existed have no period_start/period_end and fall back to an id/status/row-count label.
+function buildUploadLabel(upload) {
+    const typeLabel = PERIOD_TYPE_LABELS[upload.period_type] || 'Period';
+
+    if (!upload.period_start || !upload.period_end) {
+        return 'Upload #' + upload.id + ' (' + upload.status + ', ' + upload.row_count + ' rows)';
+    }
+
+    const start = new Date(upload.period_start);
+    const end = new Date(upload.period_end);
+    const startMonth = SHORT_MONTH_NAMES[start.getMonth()];
+    const endMonth = SHORT_MONTH_NAMES[end.getMonth()];
+    const startYear = start.getFullYear();
+    const endYear = end.getFullYear();
+
+    if (startYear === endYear) {
+        return typeLabel + ' ' + endYear + ' (' + startMonth + '-' + endMonth + ')';
+    }
+    return typeLabel + ' (' + startMonth + ' ' + startYear + ' - ' + endMonth + ' ' + endYear + ')';
+}
+
+// Fetches Phase 1's list-uploads endpoint and populates the dropdown. Only 'parsed'
+// uploads are listed -- an 'error'/'pending' upload has no accounts to browse, so
+// including it would just be a dead entry that returns an empty table on selection.
+async function loadAvailableUploads() {
+    const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
+    if (!availableUploadsDropdown || !clientId) return;
+
+    availableUploadsDropdown.innerHTML = '<option value="">— Select an upload —</option>';
+    if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'none';
+    if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
+    if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
+
+    try {
+        const res = await fetch(API_BASE + '/api/trial-balance/uploads?client_id=' + clientId);
+        const result = await res.json();
+
+        if (!res.ok) {
+            throw new Error(result.detail || 'Failed to load available trial balances');
+        }
+
+        const parsedUploads = result.uploads.filter(function (u) { return u.status === 'parsed'; });
+
+        if (parsedUploads.length === 0) {
+            if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'block';
+            return;
+        }
+
+        parsedUploads.forEach(function (upload) {
+            const option = document.createElement('option');
+            option.value = upload.id;
+            option.textContent = buildUploadLabel(upload);
+            availableUploadsDropdown.appendChild(option);
+        });
+    } catch (error) {
+        showStatus('❌ Could not load available trial balances: ' + error.message, 'error');
+    }
+}
+
+// Fetches the existing accounts-list endpoint for the selected upload (unchanged --
+// same endpoint the Review Classifications screen already uses) and renders it into
+// this view's own table.
+async function loadAvailableUploadAccounts(uploadId) {
+    if (!availableAccountsTableWrapper || !availableAccountsTableBody) return;
+
+    try {
+        const res = await fetch(API_BASE + '/api/trial-balance/accounts?upload_id=' + uploadId);
+        const result = await res.json();
+
+        if (!res.ok) {
+            throw new Error(result.detail || 'Failed to load accounts');
+        }
+
+        renderAvailableAccountsTable(result.accounts);
+        availableAccountsTableWrapper.style.display = 'block';
+    } catch (error) {
+        showStatus('❌ ' + error.message, 'error');
+    }
+}
+
+// Read-only Code/Name/Classification rows -- reuses buildClassificationCellContent()
+// (the same Leaf/Parent badge + "Overridden" tag builder the Review Classifications
+// screen uses) so a manually-overridden account still shows that fact here, without
+// any of the toggle/Action column that screen adds on top of it.
+function renderAvailableAccountsTable(accounts) {
+    availableAccountsTableBody.innerHTML = '';
+
+    accounts.forEach(function (account) {
+        const tr = document.createElement('tr');
+
+        const tdCode = document.createElement('td');
+        tdCode.textContent = account.account_code;
+        tr.appendChild(tdCode);
+
+        const tdName = document.createElement('td');
+        tdName.textContent = account.account_name || '—';
+        tr.appendChild(tdName);
+
+        const tdClassification = document.createElement('td');
+        tdClassification.appendChild(buildClassificationCellContent(account));
+        tr.appendChild(tdClassification);
+
+        availableAccountsTableBody.appendChild(tr);
+    });
+}
+
+if (availableUploadsDropdown) {
+    availableUploadsDropdown.addEventListener('change', function () {
+        const uploadId = this.value;
+        if (!uploadId) {
+            if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
+            if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
+            return;
+        }
+        loadAvailableUploadAccounts(uploadId);
+    });
+}
+
+// Opens the browsing view: hides the normal upload flow (untouched underneath) and
+// shows this section, fetching the upload list fresh every time it's opened.
+if (availableTrialBalancesBtn) {
+    availableTrialBalancesBtn.addEventListener('click', function () {
+        if (uploadViewContainer) uploadViewContainer.style.display = 'none';
+        if (availableTrialBalancesSection) availableTrialBalancesSection.style.display = 'block';
+        loadAvailableUploads();
+    });
+}
+
+// Back affordance: restores the normal upload flow exactly as it was left (nothing in
+// uploadViewContainer was touched while hidden) and resets this view's own dropdown/table
+// so the next open starts clean rather than showing a stale selection.
+if (closeAvailableTrialBalancesBtn) {
+    closeAvailableTrialBalancesBtn.addEventListener('click', function () {
+        if (availableTrialBalancesSection) availableTrialBalancesSection.style.display = 'none';
+        if (uploadViewContainer) uploadViewContainer.style.display = 'block';
+        if (availableUploadsDropdown) availableUploadsDropdown.innerHTML = '<option value="">— Select an upload —</option>';
+        if (availableAccountsTableWrapper) availableAccountsTableWrapper.style.display = 'none';
+        if (availableAccountsTableBody) availableAccountsTableBody.innerHTML = '';
+        if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'none';
+    });
 }
 
 // ---------- INIT ----------
