@@ -450,6 +450,12 @@
                 <p>Select a verification type to begin</p>
             </header>
 
+            <!-- Hard-refresh view-persistence fallback: shown by showDashboardWithMessage() in
+                 verification.js when a URL-restored cashbook/session view can't actually be
+                 resumed (e.g. the session was completed/deleted elsewhere) - reuses the same
+                 .upload-status/.error styling as #verificationStatus below, no new CSS. -->
+            <div id="dashboardFallbackMessage" class="upload-status error" style="display:none; margin-bottom:16px;"></div>
+
             <!-- Verification Hub: two labelled groups replacing the old 4-card Module Grid.
                  Only Cash/Bank voucher tiles are live (they navigate with ?type=, re-entering
                  through the existing window.onload auto-open path in verification.js); every

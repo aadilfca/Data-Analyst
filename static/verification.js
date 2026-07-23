@@ -156,6 +156,47 @@ function formatDateInput(d) {
     return `${y}-${m}-${day}`;
 }
 
+// ---------- HARD-REFRESH VIEW PERSISTENCE ----------
+// Reflects the current view + its identifying id in the URL (state=<view>&id=<id>&type=<currentType>)
+// so a hard refresh can restore the right view (see window.onload below) instead of always dropping
+// back to the dashboard. Uses history.replaceState, not pushState — this page already manages its
+// own "back" behavior via setBackOverride()/the global navbar arrow, not the browser's native back
+// button, so no new history entries should be introduced here. Distinct from the pre-existing
+// entry-only ?type=/?view= params (which only mean "open the Start-Verification popup" and are read
+// once by window.onload) — this always deletes ?view=, since it's served its purpose once a real
+// view is reached.
+function setVerificationUrl(view, id) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('view');
+    if (view === 'dashboard') {
+        url.searchParams.delete('state');
+        url.searchParams.delete('id');
+        url.searchParams.delete('type');
+    } else {
+        url.searchParams.set('state', view);
+        url.searchParams.set('id', String(id));
+        url.searchParams.set('type', currentType);
+    }
+    history.replaceState(null, '', url);
+}
+
+// Shows the dashboard/hub view with a clear inline message instead of a broken screen — used when
+// a URL-restored view (session/cashbook) can't actually be resumed (e.g. the session was completed
+// or deleted elsewhere since the URL was last saved).
+function showDashboardWithMessage(message) {
+    if (sessionContent) sessionContent.style.display = 'none';
+    if (cashbookContent) cashbookContent.style.display = 'none';
+    if (dashboardContent) dashboardContent.style.display = 'block';
+    const container = document.getElementById('verificationContainer');
+    if (container) container.classList.remove('verification-active');
+    setVerificationUrl('dashboard');
+    const msgEl = document.getElementById('dashboardFallbackMessage');
+    if (msgEl) {
+        msgEl.textContent = '⚠️ ' + message;
+        msgEl.style.display = 'block';
+    }
+}
+
 // ---------- POPUP: LOAD CASHBOOKS ----------
 async function loadCashbooks() {
     const clientId = getClientId();
@@ -225,8 +266,16 @@ async function openCashbook() {
         return;
     }
     hidePopupError();
-    selectedCashbook = cashbook;
     popupOverlay.style.display = 'none';
+    await activateCashbookView(cashbook);
+}
+
+// Switches to the cashbook view for the given book name and fetches fresh data — shared by
+// openCashbook() (Start-Verification popup flow) and restoreCashbookView() (hard-refresh URL
+// restore, below), so both paths land on the exact same view/state instead of two parallel
+// implementations that could drift apart.
+async function activateCashbookView(cashbook) {
+    selectedCashbook = cashbook;
     dashboardContent.style.display = 'none';
     sessionContent.style.display = 'none';
     cashbookContent.style.display = 'block';
@@ -239,8 +288,8 @@ async function openCashbook() {
     cashbookNameDisplay.textContent = cashbook;
     // Cashbook Preview selector (Phase 1 of 3): relabel to match currentType, and populate the
     // dropdown from the same account list already fetched into popupCashbookSelect for the
-    // Start-Verification popup - openCashbook() only runs after that list has loaded successfully
-    // (the Open button stays disabled otherwise), so no second network call is needed here.
+    // Start-Verification popup (openCashbook()) or by restoreCashbookView()'s own loadCashbooks()
+    // call - both callers guarantee that list is already loaded before this function runs.
     if (cashbookSelectorLabel) cashbookSelectorLabel.textContent = currentType === 'bank' ? '🏦 Bankbook' : '📒 Cashbook';
     if (cashbookSelector) {
         cashbookSelector.innerHTML = '';
@@ -259,7 +308,23 @@ async function openCashbook() {
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
     cashbookStartDate.value = formatDateInput(firstDay);
     cashbookEndDate.value = formatDateInput(lastDay);
+    setVerificationUrl('cashbook', cashbook);
     await fetchCashbookData();
+}
+
+// ---------- HARD-REFRESH VIEW PERSISTENCE: CASHBOOK VIEW ----------
+// Restores the cashbook (pre-session) view after a hard refresh from ?state=cashbook&id=<name> -
+// re-fetches the cashbook list and this cashbook's transactions fresh (via loadCashbooks() and
+// activateCashbookView()'s own fetchCashbookData() call), never a cached/frozen snapshot. A
+// cashbook name that no longer matches any data isn't treated as a hard failure - fetchCashbookData()
+// already renders a graceful "No transactions found" state for that case.
+async function restoreCashbookView(cashbookName) {
+    if (!getClientId()) {
+        showDashboardWithMessage('Please select a client to view this cashbook.');
+        return;
+    }
+    await loadCashbooks();
+    await activateCashbookView(cashbookName);
 }
 
 // ---------- EXIT CASHBOOK VIEW (return to Verification module's entry view) ----------
@@ -271,6 +336,7 @@ function exitCashbookView() {
     dashboardContent.style.display = 'block';
     selectedCashbook = null;
     cashbookTableWrapper.innerHTML = '';
+    setVerificationUrl('dashboard');
 }
 
 // ---------- CASHBOOK PREVIEW SELECTOR: APPLY ----------
@@ -427,25 +493,65 @@ async function startSessionFromCashbook() {
             throw new Error(err.detail || 'Failed to start session');
         }
             const data = await res.json();
-               currentSessionId = data.session_id;
         totalTransactions = data.total_transactions || 0;
-        cashbookContent.style.display = 'none';
-        sessionContent.style.display = 'block';
-        // Global navbar back-arrow should return to the Cashbook selection screen (not index.html)
-        // while a session is active — reuse the same exit flow as the "Cashbook" button.
-        if (typeof setBackOverride === 'function') setBackOverride(exitSession);
-        // Remove padding from main container when verification session is active
-        const container = document.getElementById('verificationContainer');
-        if (container) container.classList.add('verification-active');
-        // Load transaction list (without showing popover) to get indices and total
-        await loadTransactionList(false);
-        await loadNextTransaction();
+        await activateSessionView(data.session_id);
     } catch (error) {
         console.error('Error starting session:', error);
         showStatus('❌ Error starting verification: ' + error.message, 'error');
     } finally {
         startVerificationBtn.disabled = false;
         startVerificationBtn.textContent = '✅ Verification';
+    }
+}
+
+// Switches to the session view for the given session id — shared by startSessionFromCashbook()
+// (new session, just started) and restoreSessionView() (hard-refresh URL restore, below), so both
+// paths land on the exact same view/state instead of two parallel implementations that could
+// drift apart.
+async function activateSessionView(sessionId) {
+    currentSessionId = sessionId;
+    cashbookContent.style.display = 'none';
+    sessionContent.style.display = 'block';
+    // Global navbar back-arrow should return to the Cashbook selection screen (not index.html)
+    // while a session is active — reuse the same exit flow as the "Cashbook" button.
+    if (typeof setBackOverride === 'function') setBackOverride(exitSession);
+    // Remove padding from main container when verification session is active
+    const container = document.getElementById('verificationContainer');
+    if (container) container.classList.add('verification-active');
+    setVerificationUrl('session', sessionId);
+    // Load transaction list (without showing popover) to get indices and total
+    await loadTransactionList(false);
+    await loadNextTransaction();
+}
+
+// ---------- HARD-REFRESH VIEW PERSISTENCE: SESSION VIEW ----------
+// Restores the session view after a hard refresh from ?state=session&id=<sessionId> - re-fetches
+// this session fresh from the server rather than restoring any cached view. GET audited_cashbook
+// is used as the existence+data check since it already 404s cleanly on a missing/cancelled session
+// (see get_audited_cashbook() in routers/verification.py); on success it also carries the cashbook
+// name and full transaction list, so no extra request is needed to seed that state before handing
+// off to activateSessionView(). Falls back to the dashboard with a clear message on failure,
+// instead of leaving a broken session screen.
+async function restoreSessionView(sessionId) {
+    if (!sessionId || isNaN(sessionId)) {
+        showDashboardWithMessage('That verification session link is invalid.');
+        return;
+    }
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/audited_cashbook/${sessionId}`);
+        if (!res.ok) {
+            showDashboardWithMessage('This verification session is no longer available.');
+            return;
+        }
+        const data = await res.json();
+        // get_audited_cashbook() nests session fields under data.session, not top-level.
+        selectedCashbook = (data.session && data.session.cashbook_name) || null;
+        sessionTransactions = data.transactions || [];
+        totalTransactions = sessionTransactions.length;
+        await activateSessionView(sessionId);
+    } catch (e) {
+        console.error('Error restoring verification session:', e);
+        showDashboardWithMessage('Could not restore this verification session.');
     }
 }
 
@@ -1908,6 +2014,7 @@ function exitSession() {
         clearVoucherHeader();
         currentSessionId = null;
         currentDetailId = null;
+        setVerificationUrl('cashbook', selectedCashbook);
         fetchCashbookData();
     }
 }
@@ -2522,6 +2629,23 @@ window.onload = function() {
     // needed here: openCashbook()/startSessionFromCashbook()/exitSession() already register the
     // correct back-arrow override once the user actually reaches a real view.
     const arrivalParams = new URLSearchParams(window.location.search);
+
+    // Hard-refresh view persistence: ?state=session|cashbook&id=... (written by
+    // setVerificationUrl()) means the user was previously in that view and hard-refreshed - always
+    // re-fetch fresh from the server for that id rather than falling through to the dashboard
+    // default below. Checked ahead of the existing ?type=/?view= entry-link handling, which stays
+    // completely unchanged for ordinary (non-restored) page loads.
+    const stateParam = arrivalParams.get('state');
+    const idParam = arrivalParams.get('id');
+    if (stateParam === 'session' && idParam) {
+        restoreSessionView(parseInt(idParam, 10));
+        return;
+    }
+    if (stateParam === 'cashbook' && idParam) {
+        restoreCashbookView(idParam);
+        return;
+    }
+
     const arrivalView = arrivalParams.get('view');
     const isDeepLinkView = arrivalView === 'cashbook' || arrivalView === 'bankbook';
     if (arrivalParams.has('type') || isDeepLinkView) {
