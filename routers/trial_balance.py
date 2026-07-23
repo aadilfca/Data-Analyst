@@ -504,12 +504,26 @@ async def upload_trial_balance(
 
         # 8. Classify every distinct code from its dash-delimited hierarchy.
         classification = classify_accounts(seen_codes)
+
+        # 8b. Carry-forward (Verification link, Phase 2): look up this
+        # client's persistent account_category_assignments once (a single
+        # query, not one per account) and pre-populate category_id for every
+        # account code that already has a saved assignment. A code with no
+        # match is simply left unassigned (category_id stays None) - that's
+        # the "genuinely new account code" case the brief calls out.
+        assignment_rows = execute_query(
+            "SELECT account_code, category_id FROM account_category_assignments WHERE client_id = ?",
+            (client_id,)
+        )
+        carried_categories = {r["account_code"]: r["category_id"] for r in assignment_rows}
+
         for account in accounts:
             code = account["account_code"]
             parts = code.split('-')
             account["level"] = len(parts)
             account["parent_account_code"] = '-'.join(parts[:-1]) if len(parts) > 1 else None
             account["classification"] = classification[code]
+            account["category_id"] = carried_categories.get(code)
 
         # 9. Bulk insert in one transaction (same BEGIN/loop/commit/rollback
         # shape already used by templates.py's import_backup()).
@@ -522,15 +536,16 @@ async def upload_trial_balance(
                     INSERT INTO trial_balance_accounts
                         (upload_id, account_code, account_name, parent_account_code, level,
                          classification, opening_dr, opening_cr, period_dr, period_cr,
-                         closing_dr, closing_cr, source_account_type, sort_order, raw_row_data)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         closing_dr, closing_cr, source_account_type, sort_order, raw_row_data,
+                         category_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         upload_id, account["account_code"], account["account_name"],
                         account["parent_account_code"], account["level"], account["classification"],
                         account["opening_dr"], account["opening_cr"], account["period_dr"], account["period_cr"],
                         account["closing_dr"], account["closing_cr"], account["source_account_type"],
-                        account["sort_order"], account["raw_row_data"]
+                        account["sort_order"], account["raw_row_data"], account["category_id"]
                     )
                 )
             conn.commit()
@@ -885,6 +900,27 @@ def _validate_active_category(category_id: int) -> None:
         raise HTTPException(400, f"Category {category_id} not found or inactive")
 
 
+def upsert_account_category_assignment(client_id: int, account_code: str, category_id: Optional[int]) -> None:
+    """
+    Verification <-> Assign Categories link, Phase 2: single write point into
+    the persistent account_category_assignments table (Phase 1 schema,
+    database.py). Keyed by client_id + account_code (UNIQUE constraint), so
+    this is always an upsert - insert on first assignment, overwrite on every
+    later change. category_id may be None (clearing a category), which is
+    persisted as-is - the persistent table mirrors trial_balance_accounts'
+    own category_id exactly, including "explicitly cleared".
+    """
+    execute_write(
+        """
+        INSERT INTO account_category_assignments (client_id, account_code, category_id)
+        VALUES (?, ?, ?)
+        ON CONFLICT(client_id, account_code)
+        DO UPDATE SET category_id = excluded.category_id, updated_at = CURRENT_TIMESTAMP
+        """,
+        (client_id, account_code, category_id)
+    )
+
+
 def _find_latest_parsed_upload(client_id: int):
     """
     Shared "latest Trial Balance" lookup - the most recent upload (by
@@ -988,6 +1024,15 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
     if payload.category_id is not None:
         _validate_active_category(payload.category_id)
 
+    # client_id isn't a column on trial_balance_accounts (reached via
+    # upload_id -> trial_balance_uploads.client_id) - needed for the
+    # persistent account_category_assignments upserts below (Verification
+    # link, Phase 2), keyed by client_id + account_code.
+    upload_rows = execute_query(
+        "SELECT client_id FROM trial_balance_uploads WHERE id = ?", (target["upload_id"],)
+    )
+    client_id = upload_rows[0]["client_id"] if upload_rows else None
+
     # Target account's own assignment is unconditional - this is the explicit
     # action requested, regardless of force_apply or its current value. When
     # payload.category_id is None this writes NULL, i.e. clears the category.
@@ -995,6 +1040,8 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
         "UPDATE trial_balance_accounts SET category_id = ? WHERE id = ?",
         (payload.category_id, payload.account_id)
     )
+    if client_id is not None:
+        upsert_account_category_assignment(client_id, target["account_code"], payload.category_id)
 
     is_leaf = target["classification"] == "leaf"
     descendants_updated = []
@@ -1034,6 +1081,16 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
                 f"UPDATE trial_balance_accounts SET category_id = ? WHERE id IN ({placeholders})",
                 tuple([payload.category_id] + descendants_updated)
             )
+            # Mirror every actually-updated descendant into the persistent
+            # table too (Verification link, Phase 2) - descendants_skipped
+            # (smart-fill leaving an already-categorized row alone) are
+            # deliberately NOT touched here, since their category_id on
+            # trial_balance_accounts itself didn't change.
+            if client_id is not None:
+                updated_id_set = set(descendants_updated)
+                for row in descendants:
+                    if row["id"] in updated_id_set:
+                        upsert_account_category_assignment(client_id, row["account_code"], payload.category_id)
 
     category_label = payload.category_id if payload.category_id is not None else "None (cleared)"
     log_audit("Analyst", "Update", "TrialBalance",
