@@ -1294,6 +1294,9 @@ def init_db():
                 row_count INTEGER DEFAULT 0,
                 notes TEXT,
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                period_start TEXT,
+                period_end TEXT,
+                period_type TEXT,
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
             )
         ''')
@@ -1353,6 +1356,27 @@ def init_db():
             print("✅ Added opening_dr/opening_cr/period_dr/period_cr/closing_dr/closing_cr columns to trial_balance_accounts")
         except Exception as e:
             print("⚠️ Could not add new amount columns to trial_balance_accounts:", e)
+
+        # Schema upgrade: Periodic dates & overwrite warning, Section 2 Phase 4 - add
+        # period tracking to trial_balance_uploads so an upload records the actual
+        # period it covers (monthly/quarterly/half_yearly/annual), not just a single
+        # as_of_date. This table already existed with data from the completed 5-phase
+        # build, so a plain CREATE TABLE IF NOT EXISTS column addition alone would be a
+        # no-op there - same ALTER TABLE ADD COLUMN upgrade-block pattern used just
+        # above for trial_balance_accounts. as_of_date is left in place, untouched -
+        # not renamed/removed, and no backfill of period_start/period_end/period_type
+        # is done for pre-existing rows (schema only this phase; validation/overwrite-
+        # detection is a later phase). Overlapping periods for the same client are
+        # explicitly allowed - no UNIQUE/exclusion constraint on the period range.
+        try:
+            cur = conn.execute("PRAGMA table_info(trial_balance_uploads)")
+            existing_columns = [row[1] for row in cur.fetchall()]
+            for new_col in ('period_start', 'period_end', 'period_type'):
+                if new_col not in existing_columns:
+                    conn.execute(f"ALTER TABLE trial_balance_uploads ADD COLUMN {new_col} TEXT")
+            print("✅ Added period_start/period_end/period_type columns to trial_balance_uploads")
+        except Exception as e:
+            print("⚠️ Could not add period tracking columns to trial_balance_uploads:", e)
 
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_uploads_client ON trial_balance_uploads (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_upload ON trial_balance_accounts (upload_id)")
