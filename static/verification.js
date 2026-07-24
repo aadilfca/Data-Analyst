@@ -37,15 +37,20 @@ let voucherLineState = {};
 // "locked"/dimmed, or null if none. Purely visual, not persisted; reset whenever a new voucher's
 // lines are rendered (see renderVoucherLines()).
 let lockedLineUid = null;
-// Voucher Supporting-Document Linking, Phase 3 of 6: per-voucher-line state for the tabbed
-// #procedureModal. Keyed by voucher line uid; each entry is
-// { activeDocId, documents, assignedDocIds, tabs: { [docId]: { loaded, searchTerm, selections, observation } } }.
-// documents/assignedDocIds are cached per open so switching tabs never re-fetches them; the
-// per-tab searchTerm/selections/observation fields are placeholders this phase (Phases 4-6 wire
-// real content into them) but the shape is fixed now so later phases don't need to touch the
-// state's structure, only what reads/writes it. Reset alongside voucherLineState in
-// seedVoucherLineState() so it can never leak stale tabs across a voucher navigation.
+// Voucher Supporting-Document Linking, Phase 3 of 6 (shell)/Phase 4 (real content): per-voucher-
+// line state for the tabbed #procedureModal. Keyed by voucher line uid; each entry is
+// { activeDocId, documents, assignedDocIds, voucherLineAmount,
+//   tabs: { [docId]: { loaded, searchTerm, searchResults, selections, observation } } }.
+// documents/assignedDocIds/voucherLineAmount are (re-)fetched/computed fresh on every modal open
+// (see openProcedureModal()) so they can never drift from server state; each tab's own
+// searchTerm/searchResults/selections persist across tab switches within one modal-open session
+// (not cleared on close, only on voucher navigation, in seedVoucherLineState()). `observation`
+// stays an unused placeholder — Phase 6's territory.
 let procedureModalState = {};
+// Phase 4: the currently loaded voucher's full lines array (row_data included), set alongside
+// voucherLineState in seedVoucherLineState() — lets openProcedureModal() look up a line's own
+// amount for the mismatch badge without a second fetch.
+let currentVoucherLines = [];
 let selectedCashbook = null;
 let cashbookCurrentPage = 1;
 let cashbookPageSize = 50;
@@ -972,6 +977,10 @@ function seedVoucherLineState(lines) {
     // loaded voucher, same as voucherLineState/voucherLineDiffData above — reset here so a new
     // voucher never shows a stale tab set from a previously viewed line.
     procedureModalState = {};
+    // Phase 4: keeps the full lines array (row_data included) so openProcedureModal() can look up
+    // a line's own amount (via the existing getVoucherLineAmount()/parseVoucherAmount() helpers)
+    // for the selected-lines table's mismatch badge, without a second fetch.
+    currentVoucherLines = lines || [];
     (lines || []).forEach(line => {
         let procedureData = line.procedure_flags ? { ...line.procedure_flags } : {};
         if (line.procedure_data) procedureData = { ...procedureData, ...line.procedure_data };
@@ -2261,22 +2270,83 @@ if (dfdModal) {
 
 // ==============================================
 // SUPPORTING DOCUMENTS TABBED MODAL
-// Voucher Supporting-Document Linking, Phase 3 of 6: one tab per document belonging to the
-// voucher line's Category, generated dynamically from that Category's documents[] list (the
+// Voucher Supporting-Document Linking, Phase 3 of 6 (shell): one tab per document belonging to
+// the voucher line's Category, generated dynamically from that Category's documents[] list (the
 // same list already fetched for the Guide popover/Supporting cell via fetchAuditGuidanceData()).
-// This phase builds the tab shell + per-tab state scaffolding only — each tab shows a
-// placeholder body; real search/select/procedure-tick/observation content is wired into this
-// shell in Phases 4-6.
+// Phase 4 of 6 (this phase): wires each tab to real search (Phase 2's extended
+// GET /api/data/preview), a paginated browse fallback (#procedureBrowseModal, below), and a
+// selected-lines table sourced from Phase 1's assign_document/voucher_line_documents endpoints.
+// Procedure ticks/observations remain Phases 5-6.
 // ==============================================
 
+// Wide fixed search/browse window (confirmed with the user): evidence documents (e.g. a Purchase
+// Order) can predate the voucher by weeks or months, so search/browse deliberately spans this
+// fixed range rather than the voucher's own date window — GET /api/data/preview requires
+// date_start/date_end, so this is the widest practical bound, not a real filter.
+const PROCEDURE_SEARCH_DATE_START = '2000-01-01';
+function getProcedureSearchDateEnd() {
+    return new Date().toISOString().slice(0, 10);
+}
+
+// Shared fetch used by both the search dropdown and the browse modal — GET /api/data/preview
+// scoped to one document's own template, over the wide fixed date window above. search='' (browse
+// mode) returns every row for that template, paginated; a non-empty search narrows it.
+async function fetchProcedureRows(templateId, search, page, limit) {
+    const clientId = getClientId();
+    if (!clientId) throw new Error('No client selected.');
+    const params = new URLSearchParams({
+        client_id: clientId,
+        template_id: templateId,
+        date_start: PROCEDURE_SEARCH_DATE_START,
+        date_end: getProcedureSearchDateEnd(),
+        page: page,
+        limit: limit
+    });
+    if (search) params.set('search', search);
+    const res = await fetch(`${API_BASE}/api/data/preview?${params}`);
+    if (!res.ok) throw new Error('Failed to fetch Data Bank rows.');
+    return res.json();
+}
+
+// Builds one selectable/greyed result row's HTML — shared by the search dropdown and the browse
+// modal so both present identical lock-state treatment, driven by Phase 2's
+// is_assigned/assigned_to_voucher_line/assigned_to_voucher_id fields. docKeyColumn (the
+// template's own document-key column name, from the same response) labels the row the same way
+// Data Bank's own preview identifies a document — falls back to a bare row id if unknown.
+function buildProcedureResultRowHtml(uid, row, docKeyColumn) {
+    const label = (docKeyColumn && row.row_data && row.row_data[docKeyColumn] != null && row.row_data[docKeyColumn] !== '')
+        ? row.row_data[docKeyColumn]
+        : `Row #${row.id}`;
+    const date = row.extract_date || '—';
+    const amount = row.extract_amount != null ? row.extract_amount : '—';
+    const isSelf = row.is_assigned && String(row.assigned_to_voucher_line) === String(uid);
+    const isLocked = !!row.is_assigned;
+    let lockNote = '';
+    if (isSelf) {
+        lockNote = '<span class="procedure-result-locked">Already linked here</span>';
+    } else if (isLocked) {
+        lockNote = `<span class="procedure-result-locked">Assigned to voucher ${escapeHtml(row.assigned_to_voucher_id || '')}</span>`;
+    }
+    return `
+        <div class="procedure-result-item${isLocked ? ' locked' : ''}" data-id="${row.id}"${isLocked ? '' : ' role="button" tabindex="0"'}>
+            <div class="procedure-result-main">
+                <span class="procedure-result-label">${escapeHtml(String(label))}</span>
+                <span class="procedure-result-meta">${escapeHtml(date)} · ${escapeHtml(String(amount))}</span>
+            </div>
+            ${lockNote}
+        </div>
+    `;
+}
+
 // Returns (creating if needed) one tab's own state object, so every reader/writer shares the
-// same shape: { loaded, searchTerm, selections, observation }. loaded flips true the first time
-// a tab is activated — the hook Phase 4 replaces with a real per-document fetch; this phase it
-// just marks the tab as "seen" so re-activating it doesn't re-render from scratch unnecessarily.
+// same shape: { loaded, searchTerm, searchResults, docKeyColumn, selections, observation }.
+// selections/searchTerm/searchResults persist across tab switches within one modal-open session
+// (not reset on close, only on voucher navigation in seedVoucherLineState()) — the "switching
+// tabs doesn't lose unsaved work" requirement. observation stays an unused placeholder (Phase 6).
 function getProcedureTabState(uid, docId) {
-    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), tabs: {} };
+    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, tabs: {} };
     if (!procedureModalState[uid].tabs[docId]) {
-        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', selections: [], observation: '' };
+        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '' };
     }
     return procedureModalState[uid].tabs[docId];
 }
@@ -2301,25 +2371,39 @@ async function openProcedureModal(uid, initialDocId = null) {
     const documents = (guidance && guidance.documents) || [];
     if (!documents.length) return;
 
-    // Presence-check fetch (Phase 1/2 data): which documents already have at least one
-    // voucher_line_documents row for this line — drives each tab's completion dot. Re-fetched on
-    // every open so a dot reflects reality even if an assignment was made earlier this session.
-    let assignedDocIds = new Set();
+    // Full assignment records (not just IDs) for this line — Phase 1's endpoint. Drives the tab
+    // completion dots AND seeds each tab's selected-lines table, grouped by document_id. Re-
+    // fetched fresh on every open so both can never drift from true server state.
+    let assignedRecords = [];
     try {
         const res = await fetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
         if (res.ok) {
             const assignData = await res.json();
-            assignedDocIds = new Set((assignData.documents || []).map(d => d.document_id));
+            assignedRecords = assignData.documents || [];
         }
     } catch (e) {
         console.error('Failed to load Supporting Document assignment status:', e);
     }
+    const assignedDocIds = new Set(assignedRecords.map(d => d.document_id));
 
-    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), tabs: {} };
+    // The voucher line's own amount (for the mismatch badge) — looked up from the already-loaded
+    // voucher, no extra fetch needed.
+    const voucherLine = currentVoucherLines.find(l => l.detail_id === uid);
+    const voucherLineAmount = voucherLine ? parseVoucherAmount(getVoucherLineAmount(voucherLine.row_data || {})) : 0;
+
+    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, tabs: {} };
     procedureModalState[uid].documents = documents;
     procedureModalState[uid].assignedDocIds = assignedDocIds;
+    procedureModalState[uid].voucherLineAmount = voucherLineAmount;
     const activeDocId = (initialDocId && documents.some(d => d.id === initialDocId)) ? initialDocId : documents[0].id;
     procedureModalState[uid].activeDocId = activeDocId;
+
+    // Re-sync each tab's selections from the fresh server data (never just seeded once) so
+    // reopening the modal always reflects reality, even if an assignment happened elsewhere.
+    documents.forEach(doc => {
+        const tabState = getProcedureTabState(uid, doc.id);
+        tabState.selections = assignedRecords.filter(r => r.document_id === doc.id);
+    });
 
     if (procedureModalTitle) procedureModalTitle.textContent = `📎 Supporting Documents — ${type}`;
     procedureModal.style.display = 'flex';
@@ -2330,6 +2414,9 @@ async function openProcedureModal(uid, initialDocId = null) {
 
 function closeProcedureModal() {
     if (procedureModal) procedureModal.style.display = 'none';
+    // Defensive — the browse modal is nested on top of this one, so it should never remain open
+    // once the parent closes.
+    closeProcedureBrowseModal();
     // procedureModalState[uid] is deliberately left in place (not cleared here) — reopening the
     // same line's modal within the same voucher should show tab state exactly as it was left;
     // it's only reset on voucher navigation, in seedVoucherLineState().
@@ -2384,9 +2471,10 @@ function activateProcedureTab(uid, docId) {
     renderProcedureModalPanel(uid, docId);
 }
 
-// Renders the (placeholder) body for one tab. Real search/selection UI is Phase 4, procedure
-// ticks Phase 5, observations Phase 6 — this phase only shows which document the tab represents
-// and, for a document with no template_id configured, an explicit note (Phase 4's search needs one).
+// Renders one tab's body: a search box + results dropdown, and the selected-lines table (Phase
+// 4). Procedure ticks/observations remain Phase 5-6 territory — not added here. A document with
+// no template_id configured shows an explicit note and disables search/browse (Phase 3's original
+// note, still applies since neither search nor browse can query without one).
 function renderProcedureModalPanel(uid, docId) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
@@ -2394,16 +2482,318 @@ function renderProcedureModalPanel(uid, docId) {
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     if (!doc) { container.innerHTML = ''; return; }
 
-    const noTemplateNote = doc.template_id
+    const tabState = getProcedureTabState(uid, docId);
+    const hasTemplate = !!doc.template_id;
+
+    const noTemplateNote = hasTemplate
         ? ''
         : `<p class="procedure-tab-note">No Data Bank template linked to "${escapeHtml(doc.name)}" yet — configure one in Audit Rules before searching.</p>`;
 
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${docId}">
             ${noTemplateNote}
-            <p class="procedure-tab-placeholder">Search and selection for "${escapeHtml(doc.name)}" will be available here in a later phase.</p>
+            <div class="procedure-search-row">
+                <input type="text" id="procedureSearchInput" class="procedure-search-input"
+                    placeholder="Search by reference, vendor, amount..." value="${escapeHtml(tabState.searchTerm)}"
+                    ${hasTemplate ? '' : 'disabled'}>
+                <button type="button" id="procedureBrowseBtn" class="procedure-browse-btn" title="Browse all rows for this document"
+                    ${hasTemplate ? '' : 'disabled'}>👁️</button>
+            </div>
+            <div id="procedureSearchDropdown" class="procedure-search-dropdown"></div>
+            <div class="procedure-selected-section">
+                <h4 class="procedure-selected-heading">Linked evidence</h4>
+                ${buildSelectedLinesTable(uid, docId)}
+            </div>
         </div>
     `;
+
+    const searchInput = document.getElementById('procedureSearchInput');
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            debounceProcedureSearch(uid, docId, this.value);
+        });
+    }
+    const browseBtn = document.getElementById('procedureBrowseBtn');
+    if (browseBtn) {
+        browseBtn.addEventListener('click', function() {
+            openProcedureBrowseModal(uid, docId);
+        });
+    }
+
+    // Restore a previously-fetched search's dropdown (extends Phase 3's "switching tabs doesn't
+    // lose unsaved work" to cover search results too) — re-renders from tabState, no new fetch.
+    if (tabState.searchResults && tabState.searchResults.length) {
+        renderProcedureSearchDropdown(uid, docId);
+    }
+}
+
+// ---------- SEARCH (debounced, stale-response-guarded) ----------
+let procedureSearchDebounceTimer = null;
+let procedureSearchRequestToken = 0;
+
+function debounceProcedureSearch(uid, docId, term) {
+    clearTimeout(procedureSearchDebounceTimer);
+    procedureSearchDebounceTimer = setTimeout(() => performProcedureSearch(uid, docId, term), 300);
+}
+
+async function performProcedureSearch(uid, docId, term) {
+    const tabState = getProcedureTabState(uid, docId);
+    tabState.searchTerm = term;
+    const lineState = procedureModalState[uid];
+    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
+    const dropdown = document.getElementById('procedureSearchDropdown');
+    if (!doc || !doc.template_id) return;
+
+    if (!term.trim()) {
+        tabState.searchResults = [];
+        if (dropdown) dropdown.innerHTML = '';
+        return;
+    }
+
+    const thisRequest = ++procedureSearchRequestToken;
+    if (dropdown) dropdown.innerHTML = '<div class="procedure-search-loading"><span class="spinner"></span> Searching...</div>';
+
+    try {
+        const data = await fetchProcedureRows(doc.template_id, term.trim(), 1, 10);
+        // Stale guard: a later search (or a tab switch that changed the input's value) may have
+        // started after this one — only the most recently dispatched request may write state/DOM.
+        if (thisRequest !== procedureSearchRequestToken) return;
+        tabState.searchResults = data.rows || [];
+        tabState.docKeyColumn = data.document_key_column;
+        renderProcedureSearchDropdown(uid, docId);
+    } catch (e) {
+        if (thisRequest !== procedureSearchRequestToken) return;
+        console.error('Supporting document search failed:', e);
+        if (dropdown) dropdown.innerHTML = '<div class="procedure-search-error">Search failed — try again.</div>';
+    }
+}
+
+function renderProcedureSearchDropdown(uid, docId) {
+    const dropdown = document.getElementById('procedureSearchDropdown');
+    if (!dropdown) return;
+    const tabState = getProcedureTabState(uid, docId);
+    const results = tabState.searchResults || [];
+    if (!results.length) {
+        dropdown.innerHTML = tabState.searchTerm.trim()
+            ? '<div class="procedure-search-empty">No matching rows found.</div>'
+            : '';
+        return;
+    }
+    dropdown.innerHTML = results.map(row => buildProcedureResultRowHtml(uid, row, tabState.docKeyColumn)).join('');
+    dropdown.querySelectorAll('.procedure-result-item:not(.locked)').forEach(item => {
+        item.addEventListener('click', async function() {
+            const row = results.find(r => r.id === parseInt(this.dataset.id));
+            if (row) await selectProcedureDocument(uid, docId, row);
+        });
+    });
+}
+
+// ---------- SELECTING A ROW (Phase 1's assign_document endpoint) ----------
+// Links a Data Bank row to this voucher line for the active tab's document, then reflects the
+// result locally — no full modal reload needed, since GET /api/data/preview's search/browse rows
+// already carry everything the selected-lines table needs (row_data/extract_date/extract_amount).
+// Returns true on success, false on failure, so callers (the dropdown and the browse modal) can
+// each decide what to do next (clear the dropdown vs. keep the browse modal open and refresh it).
+async function selectProcedureDocument(uid, docId, row) {
+    const lineState = procedureModalState[uid];
+    if (!lineState) return false;
+    const tabState = getProcedureTabState(uid, docId);
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/assign_document`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ voucher_line_id: parseInt(uid), client_data_id: row.id, document_id: docId })
+        });
+        if (!res.ok) {
+            // A real race, not hypothetical — the row's own UNIQUE(client_data_id) constraint is
+            // the actual enforcement, so a concurrent assignment elsewhere can land first.
+            const err = await res.json().catch(() => ({}));
+            showStatus(err.detail || 'That row is no longer available — it was just assigned elsewhere.', 'error');
+            if (tabState.searchTerm) performProcedureSearch(uid, docId, tabState.searchTerm);
+            return false;
+        }
+        const assignment = await res.json();
+        tabState.selections.push({
+            id: assignment.id,
+            client_data_id: row.id,
+            document_id: docId,
+            row_data: row.row_data,
+            extract_date: row.extract_date,
+            extract_amount: row.extract_amount
+        });
+        lineState.assignedDocIds.add(docId);
+        // Clear the search box/dropdown for this tab now that the row is locked — it stays
+        // selected in the table below, no longer meaningful as a search result.
+        tabState.searchTerm = '';
+        tabState.searchResults = [];
+        renderProcedureModalTabs(uid);
+        renderProcedureModalPanel(uid, docId);
+        showStatus('✅ Evidence linked.', 'success');
+        return true;
+    } catch (e) {
+        console.error('Failed to assign supporting document:', e);
+        showStatus('Failed to link evidence — please try again.', 'error');
+        return false;
+    }
+}
+
+// ---------- SELECTED-LINES TABLE ----------
+// Renders the "linked evidence" table for one tab: dynamic columns derived from the union of
+// row_data keys across selections (same convention template-viewer.js's renderTemplateData() uses
+// — read for reference, not modified), plus a totals/mismatch summary below it. Read-only this
+// phase — Phase 1 deliberately has no unassign endpoint yet, so there is no remove action here.
+function buildSelectedLinesTable(uid, docId) {
+    const lineState = procedureModalState[uid];
+    const tabState = getProcedureTabState(uid, docId);
+    const selections = tabState.selections || [];
+    if (!selections.length) {
+        return '<p class="procedure-selected-empty">No evidence linked yet for this document.</p>';
+    }
+
+    // Column order: first-seen order across every selected row's row_data keys, so the table
+    // shows every real column present without hardcoding a template's shape.
+    const columns = [];
+    selections.forEach(sel => {
+        Object.keys(sel.row_data || {}).forEach(key => {
+            if (!columns.includes(key)) columns.push(key);
+        });
+    });
+
+    let html = '<div class="procedure-selected-table-wrapper"><table class="procedure-selected-table"><thead><tr>';
+    columns.forEach(col => { html += `<th>${escapeHtml(col)}</th>`; });
+    html += '</tr></thead><tbody>';
+    selections.forEach(sel => {
+        html += '<tr>';
+        columns.forEach(col => {
+            const value = sel.row_data ? sel.row_data[col] : '';
+            html += `<td>${escapeHtml(value == null ? '' : String(value))}</td>`;
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+
+    const total = selections.reduce((sum, sel) => sum + (parseFloat(sel.extract_amount) || 0), 0);
+    const voucherAmount = (lineState && lineState.voucherLineAmount) || 0;
+    const mismatch = Math.abs(total - voucherAmount) > 0.01;
+    html += `
+        <div class="procedure-total-summary">
+            <span>Voucher line amount: <strong>${voucherAmount.toFixed(2)}</strong></span>
+            <span>Evidence total (${selections.length} line${selections.length === 1 ? '' : 's'}): <strong>${total.toFixed(2)}</strong></span>
+            ${mismatch
+                ? '<span class="procedure-mismatch-badge">⚠️ Mismatch</span>'
+                : '<span class="procedure-match-badge">✅ Matches</span>'}
+        </div>
+    `;
+    return html;
+}
+
+// ---------- BROWSE MODAL (nested on top of #procedureModal) ----------
+// Opened by a tab's 👁️ icon for when the analyst doesn't have a search term — a paginated,
+// read-only browse of every row for that document's template, same select/grey-out row treatment
+// as the search dropdown (buildProcedureResultRowHtml()). Confirmed with the user as the closest
+// achievable equivalent to "the same Data Bank preview modal" since static/databank.js/.html are
+// out of scope for this phase.
+const procedureBrowseModal = document.getElementById('procedureBrowseModal');
+const procedureBrowseModalTitle = document.getElementById('procedureBrowseModalTitle');
+const procedureBrowseModalClose = document.getElementById('procedureBrowseModalClose');
+const procedureBrowseTableContainer = document.getElementById('procedureBrowseTableContainer');
+const procedureBrowsePrevBtn = document.getElementById('procedureBrowsePrevBtn');
+const procedureBrowseNextBtn = document.getElementById('procedureBrowseNextBtn');
+const procedureBrowsePageInfo = document.getElementById('procedureBrowsePageInfo');
+
+const PROCEDURE_BROWSE_PAGE_SIZE = 20;
+let procedureBrowseState = { uid: null, docId: null, page: 1, totalRows: 0, docKeyColumn: null, rows: [] };
+
+async function openProcedureBrowseModal(uid, docId) {
+    if (!procedureBrowseModal) return;
+    const lineState = procedureModalState[uid];
+    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
+    if (!doc || !doc.template_id) return;
+
+    procedureBrowseState = { uid, docId, page: 1, totalRows: 0, docKeyColumn: null, rows: [] };
+    if (procedureBrowseModalTitle) procedureBrowseModalTitle.textContent = `👁️ Browse — ${doc.name}`;
+    procedureBrowseModal.style.display = 'flex';
+    await fetchProcedureBrowsePage();
+}
+
+function closeProcedureBrowseModal() {
+    if (procedureBrowseModal) procedureBrowseModal.style.display = 'none';
+}
+
+async function fetchProcedureBrowsePage() {
+    const { uid, docId, page } = procedureBrowseState;
+    const lineState = procedureModalState[uid];
+    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
+    if (!doc) return;
+    if (procedureBrowseTableContainer) {
+        procedureBrowseTableContainer.innerHTML = '<div style="text-align:center; padding:20px;"><span class="spinner"></span> Loading...</div>';
+    }
+    try {
+        const data = await fetchProcedureRows(doc.template_id, '', page, PROCEDURE_BROWSE_PAGE_SIZE);
+        procedureBrowseState.rows = data.rows || [];
+        procedureBrowseState.totalRows = data.total_rows || 0;
+        procedureBrowseState.docKeyColumn = data.document_key_column;
+        renderProcedureBrowseTable();
+    } catch (e) {
+        console.error('Failed to browse Data Bank rows:', e);
+        if (procedureBrowseTableContainer) {
+            procedureBrowseTableContainer.innerHTML = '<div style="color:#dc2626; text-align:center; padding:20px;">Failed to load rows.</div>';
+        }
+    }
+}
+
+function renderProcedureBrowseTable() {
+    if (!procedureBrowseTableContainer) return;
+    const { uid, docId, rows, docKeyColumn, page, totalRows } = procedureBrowseState;
+    if (!rows.length) {
+        procedureBrowseTableContainer.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">No rows found for this template.</div>';
+    } else {
+        procedureBrowseTableContainer.innerHTML = rows.map(row => buildProcedureResultRowHtml(uid, row, docKeyColumn)).join('');
+        procedureBrowseTableContainer.querySelectorAll('.procedure-result-item:not(.locked)').forEach(item => {
+            item.addEventListener('click', async function() {
+                const row = rows.find(r => r.id === parseInt(this.dataset.id));
+                if (!row) return;
+                const success = await selectProcedureDocument(uid, docId, row);
+                if (success) {
+                    closeProcedureBrowseModal();
+                } else {
+                    // The row was locked by someone else between fetch and click — refresh this
+                    // page so it shows correctly instead of staying stale/clickable.
+                    fetchProcedureBrowsePage();
+                }
+            });
+        });
+    }
+    const totalPages = Math.max(Math.ceil(totalRows / PROCEDURE_BROWSE_PAGE_SIZE), 1);
+    if (procedureBrowsePageInfo) procedureBrowsePageInfo.textContent = `Page ${page} of ${totalPages} (${totalRows} row${totalRows === 1 ? '' : 's'})`;
+    if (procedureBrowsePrevBtn) procedureBrowsePrevBtn.disabled = page <= 1;
+    if (procedureBrowseNextBtn) procedureBrowseNextBtn.disabled = page >= totalPages;
+}
+
+if (procedureBrowsePrevBtn) {
+    procedureBrowsePrevBtn.addEventListener('click', function() {
+        if (procedureBrowseState.page > 1) {
+            procedureBrowseState.page--;
+            fetchProcedureBrowsePage();
+        }
+    });
+}
+if (procedureBrowseNextBtn) {
+    procedureBrowseNextBtn.addEventListener('click', function() {
+        const totalPages = Math.max(Math.ceil(procedureBrowseState.totalRows / PROCEDURE_BROWSE_PAGE_SIZE), 1);
+        if (procedureBrowseState.page < totalPages) {
+            procedureBrowseState.page++;
+            fetchProcedureBrowsePage();
+        }
+    });
+}
+if (procedureBrowseModalClose) {
+    procedureBrowseModalClose.addEventListener('click', closeProcedureBrowseModal);
+}
+if (procedureBrowseModal) {
+    procedureBrowseModal.addEventListener('click', function(e) {
+        if (e.target === this) closeProcedureBrowseModal();
+    });
 }
 
 if (procedureModalClose) {

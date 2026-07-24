@@ -2538,12 +2538,6 @@ body {
 .procedure-tab-panel {
     padding: 4px 2px;
 }
-.procedure-tab-placeholder {
-    color: #94a3b8;
-    text-align: center;
-    padding: 30px 10px;
-    font-size: 14px;
-}
 .procedure-tab-note {
     color: #b45309;
     background: #fffbeb;
@@ -2552,6 +2546,238 @@ body {
     padding: 8px 12px;
     font-size: 13px;
     margin-bottom: 10px;
+}
+
+/* ----- Supporting Documents: search box + results dropdown (Voucher Supporting-Document
+   Linking, Phase 4 of 6) ----- */
+.procedure-search-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.procedure-search-input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 14px;
+}
+.procedure-search-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+}
+.procedure-search-input:disabled {
+    background: #f1f5f9;
+    cursor: not-allowed;
+}
+.procedure-browse-btn {
+    padding: 6px 14px;
+    background: #f1f5f9;
+    border: 1px solid #d0d5dd;
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.procedure-browse-btn:hover:not(:disabled) {
+    background: #e2e8f0;
+}
+.procedure-browse-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.procedure-search-dropdown {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    margin-bottom: 14px;
+}
+.procedure-search-dropdown:empty {
+    border: none;
+    margin-bottom: 0;
+}
+.procedure-search-loading,
+.procedure-search-empty,
+.procedure-search-error {
+    padding: 12px;
+    text-align: center;
+    font-size: 13px;
+    color: #94a3b8;
+}
+.procedure-search-error {
+    color: #dc2626;
+}
+
+/* Result row — shared markup/classes between the search dropdown and the browse modal
+   (buildProcedureResultRowHtml() in verification.js), so both look and behave identically. */
+.procedure-result-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #f0f2f5;
+    cursor: pointer;
+    transition: background 0.1s ease;
+}
+.procedure-result-item:last-child {
+    border-bottom: none;
+}
+.procedure-result-item:hover {
+    background: #f8fafc;
+}
+.procedure-result-item.locked {
+    cursor: not-allowed;
+    opacity: 0.6;
+    background: #f8fafc;
+}
+.procedure-result-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.procedure-result-label {
+    font-weight: 600;
+    font-size: 13px;
+    color: #1a1a2e;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.procedure-result-meta {
+    font-size: 12px;
+    color: #64748b;
+}
+.procedure-result-locked {
+    font-size: 11px;
+    font-weight: 600;
+    color: #92400e;
+    background: #fef3c7;
+    padding: 2px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+
+/* ----- Supporting Documents: selected-lines table + totals (Phase 4 of 6) ----- */
+.procedure-selected-section {
+    margin-top: 4px;
+}
+.procedure-selected-heading {
+    font-size: 13px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 8px;
+}
+.procedure-selected-empty {
+    color: #94a3b8;
+    font-size: 13px;
+    padding: 12px 0;
+}
+.procedure-selected-table-wrapper {
+    overflow-x: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    margin-bottom: 10px;
+}
+.procedure-selected-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.procedure-selected-table th {
+    background: #f8fafc;
+    padding: 8px 10px;
+    text-align: left;
+    font-weight: 600;
+    color: #475569;
+    border-bottom: 2px solid #e2e8f0;
+}
+.procedure-selected-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #f0f2f5;
+}
+.procedure-selected-table tr:last-child td {
+    border-bottom: none;
+}
+
+.procedure-total-summary {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: #475569;
+}
+.procedure-mismatch-badge {
+    font-weight: 600;
+    color: #991b1b;
+    background: #fee2e2;
+    padding: 3px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+}
+.procedure-match-badge {
+    font-weight: 600;
+    color: #166534;
+    background: #dcfce7;
+    padding: 3px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+}
+
+/* ----- Supporting Documents Browse Modal (Phase 4 of 6) -----
+   Nested on top of #procedureModal (higher z-index) — same per-modal-scoped .modal-content/
+   .modal-header convention as every other modal in this file. */
+#procedureBrowseModal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 3500;
+    justify-content: center;
+    align-items: center;
+}
+#procedureBrowseModal .modal-content {
+    background: white;
+    border-radius: 16px;
+    padding: 24px;
+    max-width: 700px;
+    width: 95%;
+    max-height: 85vh;
+    overflow: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+#procedureBrowseModal .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.procedure-browse-table-container {
+    max-height: 55vh;
+    overflow-y: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+}
+.procedure-browse-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+}
+.procedure-browse-page-info {
+    font-size: 12px;
+    color: #64748b;
 }
 
 /* ----- DFD Placeholder Modal (Phase 5) ----- */

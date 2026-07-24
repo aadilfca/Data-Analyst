@@ -810,8 +810,10 @@
         <!-- (#procedureModalPanels) are populated entirely by JS in verification.js - shell/CSS -->
         <!-- lives in the #procedureModal rules in style.css, per this file's documented         -->
         <!-- per-modal-scoped .modal-content/.modal-header convention (see #supportingModal/     -->
-        <!-- #dfdModal above). Search/select/procedure-tick/observation content within each tab  -->
-        <!-- is a placeholder this phase - wired in Phases 4-6.                                  -->
+        <!-- #dfdModal above). Phase 4 of 6: each tab's search box/results dropdown/selected-     -->
+        <!-- lines table are also 100% JS-rendered (renderProcedureModalPanel() in                -->
+        <!-- verification.js) - no per-tab static markup here, same convention as Phase 3.        -->
+        <!-- Procedure-tick/observation content within each tab remains Phase 5-6.                -->
         <!-- ============================================= -->
         <div id="procedureModal">
             <div class="modal-content">
@@ -822,6 +824,31 @@
                 </div>
                 <div id="procedureModalTabs" class="procedure-tab-bar"></div>
                 <div id="procedureModalPanels" class="procedure-tab-panels"></div>
+            </div>
+        </div>
+
+        <!-- ============================================= -->
+        <!-- SUPPORTING DOCUMENTS BROWSE MODAL             -->
+        <!-- Voucher Supporting-Document Linking, Phase 4 of 6: nested on top of #procedureModal, -->
+        <!-- opened by a tab's 👁️ preview icon when the analyst doesn't have a search term -      -->
+        <!-- a paginated, read-only browse of GET /api/data/preview for that tab's document,      -->
+        <!-- same select/grey-out row treatment as the search dropdown                            -->
+        <!-- (buildProcedureResultRowHtml() in verification.js). Content is 100% JS-rendered;      -->
+        <!-- Prev/Next reuse the app's shared .btn-pagination class (style.css).                   -->
+        <!-- ============================================= -->
+        <div id="procedureBrowseModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="procedureBrowseModalTitle">👁️ Browse</h3>
+                    <button class="close-btn" id="procedureBrowseModalClose"
+                        style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+                </div>
+                <div id="procedureBrowseTableContainer" class="procedure-browse-table-container"></div>
+                <div class="procedure-browse-pagination">
+                    <button type="button" id="procedureBrowsePrevBtn" class="btn-pagination" disabled>Previous</button>
+                    <span id="procedureBrowsePageInfo" class="procedure-browse-page-info">Page 1 of 1</span>
+                    <button type="button" id="procedureBrowseNextBtn" class="btn-pagination" disabled>Next</button>
+                </div>
             </div>
         </div>
 
