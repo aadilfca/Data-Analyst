@@ -110,42 +110,55 @@
             margin-bottom: 12px;
         }
 
-        .data-links .link-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 12px;
+        /* Phase 1 of 5 (card strip redesign): horizontally scrolling mini-card strip. Native
+           browser scroll only, no arrow controls — flex row with no wrap + overflow-x auto.
+           Replaces the old .link-grid/.link-item flat-row layout. */
+        .data-links .link-card-strip {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 14px;
+            overflow-x: auto;
+            padding-bottom: 6px;
         }
 
-        .data-links .link-item {
+        /* Vertical mini-card, styled to read as a "read-only shortcut" consistent with the
+           app's existing card language (.module-card/.stat-card in style.css): white
+           background, rounded corners, soft shadow, subtle hover lift. Fixed width so cards
+           don't stretch/shrink and keep a uniform size across the strip. */
+        .data-links .link-card {
+            flex: 0 0 150px;
             display: flex;
+            flex-direction: column;
             align-items: center;
-            gap: 10px;
-            padding: 10px 14px;
-            background: #f8fafc;
-            border-radius: 8px;
+            text-align: center;
+            gap: 6px;
+            padding: 16px 12px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            border: 1px solid transparent;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
             text-decoration: none;
             color: #1a1a2e;
             font-weight: 500;
-            border: 1px solid transparent;
         }
 
-        .data-links .link-item:hover {
-            background: #eef2f6;
-            border-color: #cbd5e1;
+        .data-links .link-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+            border-color: #4fc3f7;
         }
 
-        .data-links .link-item .icon {
-            font-size: 24px;
+        .data-links .link-card .icon {
+            font-size: 28px;
         }
 
-        .data-links .link-item .label {
-            font-size: 14px;
+        .data-links .link-card .label {
+            font-size: 13px;
         }
 
-        .data-links .link-item .badge {
-            margin-left: auto;
+        .data-links .link-card .badge {
             font-size: 11px;
             background: #e2e8f0;
             padding: 2px 10px;
@@ -558,42 +571,47 @@
             <!-- Data Links -->
             <div class="data-links">
                 <h2>📂 Client Data Links</h2>
-                <div class="link-grid">
+                <!-- Phase 1 of 5 (card strip redesign): horizontally scrolling mini-card strip,
+                     native browser scroll, no arrow controls. Card destinations/hrefs are
+                     unchanged this phase — only the container/card layout changed (see
+                     .link-card-strip/.link-card in style.css). Wiring to a new template viewer
+                     is Phase 5. -->
+                <div class="link-card-strip">
                     <!-- In-page report view (formerly a Module Grid card) — opens
                          openTransactionReport() via an id-based listener in verification.js,
                          unlike the databank template links below which navigate directly. -->
-                    <a href="#" class="link-item" id="transactionReportLink">
+                    <a href="#" class="link-card" id="transactionReportLink">
                         <span class="icon">📊</span>
                         <span class="label">Transaction Report</span>
                         <span class="badge">Report view</span>
                     </a>
-                    <a href="/static/databank.html?template=1" class="link-item" target="_blank">
+                    <a href="/static/databank.html?template=1" class="link-card" target="_blank">
                         <span class="icon">📊</span>
                         <span class="label">Transaction Report</span>
                         <span class="badge">Template 1</span>
                     </a>
-                    <a href="/static/databank.html?template=2" class="link-item" target="_blank">
+                    <a href="/static/databank.html?template=2" class="link-card" target="_blank">
                         <span class="icon">📋</span>
                         <span class="label">Purchase Demand</span>
                         <span class="badge">Template 2</span>
                     </a>
-                    <a href="/static/databank.html?template=3" class="link-item" target="_blank">
+                    <a href="/static/databank.html?template=3" class="link-card" target="_blank">
                         <span class="icon">📄</span>
                         <span class="label">Purchase Order</span>
                         <span class="badge">Template 3</span>
                     </a>
-                    <a href="/static/databank.html?template=4" class="link-item" target="_blank">
+                    <a href="/static/databank.html?template=4" class="link-card" target="_blank">
                         <span class="icon">🚪</span>
                         <span class="label">Gate Receiving</span>
                         <span class="badge">Template 4</span>
                     </a>
-                    <a href="/static/databank.html?template=5" class="link-item" target="_blank">
+                    <a href="/static/databank.html?template=5" class="link-card" target="_blank">
                         <span class="icon">📥</span>
                         <span class="label">Store Receiving</span>
                         <span class="badge">Template 5</span>
                     </a>
                 </div>
-                <p style="font-size:12px; color:#94a3b8; margin-top:10px;">💡 Click a link to open the Data Bank with
+                <p style="font-size:12px; color:#94a3b8; margin-top:10px;">💡 Click a card to open the Data Bank with
                     the corresponding template filter. (Date range can be set in the Data Bank.)</p>
             </div>
         </div>
