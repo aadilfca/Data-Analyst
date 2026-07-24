@@ -109,6 +109,35 @@
                 transform: rotate(360deg);
             }
         }
+
+        /* Phase 3: plain data table — headers/rows are populated by JS from whatever
+           columns the current template's data actually has (see renderTemplateData() in
+           template-viewer.js), not a hardcoded column list. Kept intentionally simple
+           (no zebra striping/sticky header/grouping) since this is a first pass; visual
+           polish can follow in a later phase if needed. */
+        .tv-table-scroll {
+            overflow-x: auto;
+        }
+
+        #tvDataTable {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        #tvDataTable th,
+        #tvDataTable td {
+            padding: 6px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        #tvDataTable th {
+            background: #f8fafc;
+            color: #1e293b;
+            font-weight: 600;
+        }
     </style>
 </head>
 
@@ -137,7 +166,8 @@
             <p id="templateViewerSubtitle">Loading template...</p>
         </header>
 
-        <!-- Date range + search toolbar (Phase 2: shell only, all controls inert). -->
+        <!-- Date range + Fetch are functional as of Phase 3 (see template-viewer.js).
+             Search stays inert (placeholder text still says "coming soon") until Phase 4. -->
         <div class="tv-toolbar">
             <div class="tv-field">
                 <label for="tvStartDate">Start Date</label>
@@ -155,9 +185,11 @@
             <span id="tvStatus"></span>
         </div>
 
-        <!-- Table container: empty/loading placeholder states only this phase. Neither is
-             toggled by any code yet — #tvEmptyState is the default visible state; #tvLoadingState
-             exists as the shell Phase 3 will drive once real data fetching is wired in. -->
+        <!-- Table container: three mutually-exclusive states, all toggled by JS
+             (template-viewer.js's setViewerState()) — #tvEmptyState (no fetch yet / zero
+             rows), #tvLoadingState (fetch in flight), and #tvDataTableWrapper (populated
+             table, Phase 3). Markup for the table itself is empty here — its <thead>/<tbody>
+             are built fresh on every fetch by renderTemplateData(). -->
         <div class="tv-table-container">
             <div id="tvTableWrapper">
                 <div id="tvEmptyState" class="tv-placeholder">
@@ -166,6 +198,12 @@
                 <div id="tvLoadingState" class="tv-placeholder" style="display:none;">
                     <span class="tv-spinner"></span>
                     Loading...
+                </div>
+                <div id="tvDataTableWrapper" class="tv-table-scroll" style="display:none;">
+                    <table id="tvDataTable">
+                        <thead></thead>
+                        <tbody></tbody>
+                    </table>
                 </div>
             </div>
         </div>
