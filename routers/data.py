@@ -9,6 +9,10 @@ from pydantic import BaseModel
 from datetime import datetime
 import calendar
 import json
+# Voucher Supporting-Document Linking (Phase 2 of 6): reuses verification.py's own
+# voucher_line_documents lookup instead of duplicating that SQL here - no circular import,
+# since routers/verification.py never imports from this module.
+from routers.verification import get_assignment_status_map
 
 router = APIRouter()
 
@@ -59,6 +63,33 @@ def attach_history_flags(rows):
         cnt = count_lookup.get(r["id"], 0)
         r["has_history"] = cnt > 0
         r["revision_count"] = cnt
+
+def attach_assignment_flags(rows):
+    """
+    Given a list of row dicts (each with an "id"), batch-check voucher_line_documents (via
+    routers/verification.py's get_assignment_status_map()) and attach three additive fields
+    per row, for the Verification supporting-document search/select UI (Phases 3-4) to grey
+    out and label rows already locked to another voucher line:
+      - is_assigned: bool                    -> True if this row is linked to any voucher line
+      - assigned_to_voucher_line: int|None    -> the voucher_line_id (verification_details.id)
+      - assigned_to_voucher_id: str|None      -> the human-readable voucher number
+    Uses one batched query for the whole page instead of one query per row, mirroring
+    attach_history_flags() above.
+    """
+    if not rows:
+        return
+    row_ids = [r["id"] for r in rows]
+    assigned_map = get_assignment_status_map(row_ids)
+    for r in rows:
+        match = assigned_map.get(r["id"])
+        if match:
+            r["is_assigned"] = True
+            r["assigned_to_voucher_line"] = match["voucher_line_id"]
+            r["assigned_to_voucher_id"] = match["voucher_id"]
+        else:
+            r["is_assigned"] = False
+            r["assigned_to_voucher_line"] = None
+            r["assigned_to_voucher_id"] = None
 
 # ---------- ENDPOINTS ----------
 
@@ -290,6 +321,10 @@ def get_preview_rows(
 
     # Batch-flag rows that have revision history (one query for the whole page)
     attach_history_flags(result_rows)
+
+    # Voucher Supporting-Document Linking (Phase 2 of 6): batch-flag rows already locked to a
+    # voucher line, so the Verification search/select UI (Phases 3-4) can grey them out.
+    attach_assignment_flags(result_rows)
 
     return {
         "template_id": template_id,

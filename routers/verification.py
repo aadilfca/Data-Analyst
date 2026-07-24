@@ -1410,6 +1410,34 @@ def get_voucher_line_documents(voucher_line_id: int):
     return {"voucher_line_id": voucher_line_id, "documents": result, "count": len(result)}
 
 
+def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
+    """
+    Batch lookup of voucher_line_documents assignment status for a list of client_data ids -
+    the same join get_document_assignment_status() used inline before Phase 2, now extracted
+    so routers/data.py's GET /api/data/preview (Phase 2) can call it directly (no HTTP
+    round-trip, no duplicated SQL) rather than only being reachable via this router's own
+    endpoint. Returns {client_data_id: {"voucher_line_id": ..., "voucher_id": ...}} - only
+    for ids that are actually assigned; callers should treat any id missing from the returned
+    dict as not assigned.
+    """
+    if not client_data_ids:
+        return {}
+    placeholders = ",".join("?" for _ in client_data_ids)
+    rows = execute_query(
+        f"""
+        SELECT vld.client_data_id, vld.voucher_line_id, vd.transaction_ref
+        FROM voucher_line_documents vld
+        JOIN verification_details vd ON vd.id = vld.voucher_line_id
+        WHERE vld.client_data_id IN ({placeholders})
+        """,
+        tuple(client_data_ids)
+    )
+    return {
+        r['client_data_id']: {"voucher_line_id": r['voucher_line_id'], "voucher_id": r['transaction_ref']}
+        for r in rows
+    }
+
+
 @router.get("/api/verification/document_assignment_status")
 def get_document_assignment_status(
     client_data_ids: str = Query(..., description="Comma-separated list of client_data.id values to check")
@@ -1429,17 +1457,7 @@ def get_document_assignment_status(
     if not ids:
         return {"statuses": []}
 
-    placeholders = ",".join("?" for _ in ids)
-    rows = execute_query(
-        f"""
-        SELECT vld.client_data_id, vld.voucher_line_id, vd.transaction_ref
-        FROM voucher_line_documents vld
-        JOIN verification_details vd ON vd.id = vld.voucher_line_id
-        WHERE vld.client_data_id IN ({placeholders})
-        """,
-        tuple(ids)
-    )
-    assigned_map = {r['client_data_id']: r for r in rows}
+    assigned_map = get_assignment_status_map(ids)
 
     statuses = []
     for cid in ids:
@@ -1448,7 +1466,7 @@ def get_document_assignment_status(
             statuses.append({
                 "client_data_id": cid,
                 "assigned": True,
-                "voucher_id": match['transaction_ref'],
+                "voucher_id": match['voucher_id'],
                 "voucher_line_id": match['voucher_line_id']
             })
         else:
