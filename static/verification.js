@@ -2340,16 +2340,21 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn) {
 
 // Returns (creating if needed) one tab's own state object, so every reader/writer shares the
 // same shape: { loaded, searchTerm, searchResults, docKeyColumn, selections, observation,
-// checklist }. selections/searchTerm/searchResults persist across tab switches within one
-// modal-open session (not reset on close, only on voucher navigation in
+// suggestionApplied, checklist }. selections/searchTerm/searchResults persist across tab
+// switches within one modal-open session (not reset on close, only on voucher navigation in
 // seedVoucherLineState()) — the "switching tabs doesn't lose unsaved work" requirement.
-// observation stays an unused placeholder (Phase 6). checklist (Phase 5) is a map keyed by
-// role_name -> {is_checked, checked_by, checked_at}, seeded from GET /api/verification/
-// procedure_checks/{uid} in openProcedureModal() — a role with no entry is unchecked.
+// observation (Phase 6) holds the tab's current observation textarea value, seeded from
+// GET /api/verification/line_observations/{uid} in openProcedureModal() when a saved entry
+// exists. suggestionApplied (Phase 6, client-only — never persisted) tracks whether the
+// auto-suggestion has already been offered for this tab, so it fills an empty box at most
+// once and never overwrites text the auditor typed or deliberately cleared. checklist
+// (Phase 5) is a map keyed by role_name -> {is_checked, checked_by, checked_at}, seeded from
+// GET /api/verification/procedure_checks/{uid} in openProcedureModal() — a role with no entry
+// is unchecked.
 function getProcedureTabState(uid, docId) {
     if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, tabs: {} };
     if (!procedureModalState[uid].tabs[docId]) {
-        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', checklist: {} };
+        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', suggestionApplied: false, checklist: {} };
     }
     return procedureModalState[uid].tabs[docId];
 }
@@ -2403,6 +2408,20 @@ async function openProcedureModal(uid, initialDocId = null) {
         console.error('Failed to load audit procedure checks:', e);
     }
 
+    // Phase 6: every saved observation entry for this line, across all documents — same
+    // fail-soft-to-empty convention as assignedRecords/procedureChecks above, re-fetched fresh
+    // on every open so a saved note is never silently stale.
+    let observationEntries = [];
+    try {
+        const obsRes = await fetch(`${API_BASE}/api/verification/line_observations/${uid}`);
+        if (obsRes.ok) {
+            const obsData = await obsRes.json();
+            observationEntries = obsData.entries || [];
+        }
+    } catch (e) {
+        console.error('Failed to load voucher line observations:', e);
+    }
+
     // The voucher line's own amount (for the mismatch badge) — looked up from the already-loaded
     // voucher, no extra fetch needed.
     const voucherLine = currentVoucherLines.find(l => l.detail_id === uid);
@@ -2425,6 +2444,14 @@ async function openProcedureModal(uid, initialDocId = null) {
             checklist[c.role_name] = { is_checked: c.is_checked, checked_by: c.checked_by, checked_at: c.checked_at };
         });
         tabState.checklist = checklist;
+
+        // Phase 6: a saved entry always wins over a fresh auto-suggestion — mark
+        // suggestionApplied so buildObservationSuggestion() never overwrites it.
+        const savedEntry = observationEntries.find(e => e.document_id === doc.id);
+        if (savedEntry) {
+            tabState.observation = savedEntry.observation_text;
+            tabState.suggestionApplied = true;
+        }
     });
 
     if (procedureModalTitle) procedureModalTitle.textContent = `📎 Supporting Documents — ${type}`;
@@ -2507,6 +2534,10 @@ function renderProcedureModalPanel(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     const hasTemplate = !!doc.template_id;
 
+    // Phase 6: offer the auto-suggestion (a one-shot fill, never re-run over edited/cleared/
+    // saved text) before building the panel's markup, so the textarea below reflects it.
+    applyObservationSuggestionIfNeeded(uid, docId);
+
     const noTemplateNote = hasTemplate
         ? ''
         : `<p class="procedure-tab-note">No Data Bank template linked to "${escapeHtml(doc.name)}" yet — configure one in Audit Rules before searching.</p>`;
@@ -2529,6 +2560,10 @@ function renderProcedureModalPanel(uid, docId) {
             <div class="procedure-checklist-section">
                 <h4 class="procedure-checklist-heading">Audit Procedures</h4>
                 ${buildProcedureChecklist(uid, docId)}
+            </div>
+            <div class="procedure-observation-section">
+                <h4 class="procedure-observation-heading">Observation</h4>
+                ${buildObservationSection(uid, docId)}
             </div>
         </div>
     `;
@@ -2553,6 +2588,21 @@ function renderProcedureModalPanel(uid, docId) {
             toggleProcedureCheck(uid, docId, this.dataset.role, this.checked);
         });
     });
+
+    // Phase 6: the observation textarea is local-only on every keystroke (no network call) — it
+    // is only persisted when the Save button is explicitly clicked, per the confirmed brief.
+    const observationInput = document.getElementById('procedureObservationInput');
+    if (observationInput) {
+        observationInput.addEventListener('input', function() {
+            tabState.observation = this.value;
+        });
+    }
+    const observationSaveBtn = document.getElementById('procedureObservationSaveBtn');
+    if (observationSaveBtn) {
+        observationSaveBtn.addEventListener('click', function() {
+            saveLineObservation(uid, docId);
+        });
+    }
 
     // Restore a previously-fetched search's dropdown (extends Phase 3's "switching tabs doesn't
     // lose unsaved work" to cover search results too) — re-renders from tabState, no new fetch.
@@ -2676,8 +2726,19 @@ async function selectProcedureDocument(uid, docId, row) {
 // row_data keys across selections (same convention template-viewer.js's renderTemplateData() uses
 // — read for reference, not modified), plus a totals/mismatch summary below it. Read-only this
 // phase — Phase 1 deliberately has no unassign endpoint yet, so there is no remove action here.
-function buildSelectedLinesTable(uid, docId) {
+// Shared by buildSelectedLinesTable() and buildObservationSuggestion() (Phase 6) so both read
+// the exact same total/mismatch computation — never recomputed independently.
+function getSelectedLinesSummary(uid, docId) {
     const lineState = procedureModalState[uid];
+    const tabState = getProcedureTabState(uid, docId);
+    const selections = tabState.selections || [];
+    const total = selections.reduce((sum, sel) => sum + (parseFloat(sel.extract_amount) || 0), 0);
+    const voucherAmount = (lineState && lineState.voucherLineAmount) || 0;
+    const mismatch = Math.abs(total - voucherAmount) > 0.01;
+    return { total, voucherAmount, mismatch, count: selections.length };
+}
+
+function buildSelectedLinesTable(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     const selections = tabState.selections || [];
     if (!selections.length) {
@@ -2706,13 +2767,11 @@ function buildSelectedLinesTable(uid, docId) {
     });
     html += '</tbody></table></div>';
 
-    const total = selections.reduce((sum, sel) => sum + (parseFloat(sel.extract_amount) || 0), 0);
-    const voucherAmount = (lineState && lineState.voucherLineAmount) || 0;
-    const mismatch = Math.abs(total - voucherAmount) > 0.01;
+    const { total, voucherAmount, mismatch, count } = getSelectedLinesSummary(uid, docId);
     html += `
         <div class="procedure-total-summary">
             <span>Voucher line amount: <strong>${voucherAmount.toFixed(2)}</strong></span>
-            <span>Evidence total (${selections.length} line${selections.length === 1 ? '' : 's'}): <strong>${total.toFixed(2)}</strong></span>
+            <span>Evidence total (${count} line${count === 1 ? '' : 's'}): <strong>${total.toFixed(2)}</strong></span>
             ${mismatch
                 ? '<span class="procedure-mismatch-badge">⚠️ Mismatch</span>'
                 : '<span class="procedure-match-badge">✅ Matches</span>'}
@@ -2790,6 +2849,93 @@ async function toggleProcedureCheck(uid, docId, roleName, isChecked) {
         }
         showStatus('Failed to save procedure tick — please try again.', 'error');
         renderProcedureModalPanel(uid, docId);
+    }
+}
+
+// ---------- OBSERVATION FLOW (Phase 6 of 6, FINAL) ----------
+// Builds an auto-suggested observation for a tab from (a) the Phase 4 amount-mismatch state
+// (getSelectedLinesSummary(), shared with buildSelectedLinesTable()'s own badge) and (b) any
+// Phase 5 unticked procedures for this document. Returns '' (no forced/neutral text) when
+// neither condition applies — only ever offered once per tab (see suggestionApplied in
+// getProcedureTabState()'s doc comment), never re-run over text the auditor edited/cleared.
+function buildObservationSuggestion(uid, docId) {
+    const lineState = procedureModalState[uid];
+    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
+    const tabState = getProcedureTabState(uid, docId);
+    const lines = [];
+
+    const { total, voucherAmount, mismatch } = getSelectedLinesSummary(uid, docId);
+    if (mismatch) {
+        const diff = total - voucherAmount;
+        lines.push(`Amount mismatch: evidence total ${total.toFixed(2)} vs voucher line amount ${voucherAmount.toFixed(2)} (diff ${diff.toFixed(2)}).`);
+    }
+
+    const roles = (doc && doc.auth_roles) || [];
+    const unticked = roles.filter(role => !(tabState.checklist[role] && tabState.checklist[role].is_checked));
+    if (unticked.length) {
+        lines.push(`Unticked procedures: ${unticked.join(', ')}.`);
+    }
+
+    return lines.join('\n');
+}
+
+// Applies the auto-suggestion to a tab exactly once — only when the box is genuinely empty and
+// no suggestion (or saved entry) has touched it yet, so it never overrides a typed/cleared value.
+function applyObservationSuggestionIfNeeded(uid, docId) {
+    const tabState = getProcedureTabState(uid, docId);
+    if (tabState.suggestionApplied || tabState.observation) return;
+    const suggestion = buildObservationSuggestion(uid, docId);
+    if (suggestion) tabState.observation = suggestion;
+    tabState.suggestionApplied = true;
+}
+
+// Renders one tab's observation section: a textarea (local-only edits) + an explicit Save
+// button. Saving is deliberate (not save-on-keystroke, not save-on-modal-close) since the
+// auditor is expected to review/edit the auto-suggestion before it's persisted.
+function buildObservationSection(uid, docId) {
+    const tabState = getProcedureTabState(uid, docId);
+    return `
+        <textarea id="procedureObservationInput" class="procedure-observation-textarea"
+            placeholder="Add an observation for this document...">${escapeHtml(tabState.observation || '')}</textarea>
+        <div class="procedure-observation-actions">
+            <button type="button" id="procedureObservationSaveBtn" class="procedure-observation-save-btn">💾 Save Observation</button>
+            <span id="procedureObservationStatus" class="procedure-observation-status"></span>
+        </div>
+    `;
+}
+
+// Persists the active tab's observation text as a tagged entry (POST save_line_observation).
+// Always marks it unsynced server-side — it will be rolled into the voucher line's own
+// Observation field the next time that line is saved (saveLineItems(), via
+// sync_line_observations_to_voucher() in routers/verification.py).
+async function saveLineObservation(uid, docId) {
+    const tabState = getProcedureTabState(uid, docId);
+    const statusEl = document.getElementById('procedureObservationStatus');
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/save_line_observation`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                voucher_line_id: parseInt(uid),
+                document_id: docId,
+                observation_text: tabState.observation || ''
+            })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save observation.');
+        }
+        // A save is a deliberate, final decision on this tab's text — it should never be
+        // silently replaced by the auto-suggestion again, even if the box is later cleared.
+        tabState.suggestionApplied = true;
+        if (statusEl) {
+            statusEl.textContent = 'Saved';
+            statusEl.classList.add('saved');
+            setTimeout(() => { statusEl.textContent = ''; statusEl.classList.remove('saved'); }, 2000);
+        }
+    } catch (e) {
+        console.error('Failed to save line observation:', e);
+        showStatus('Failed to save observation — please try again.', 'error');
     }
 }
 

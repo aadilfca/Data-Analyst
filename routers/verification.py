@@ -686,7 +686,12 @@ def save_line_items(
     params.append(detail_id)
     sql = f"UPDATE verification_details SET {', '.join(set_clauses)} WHERE id = ?"
     execute_write(sql, params)
-    
+
+    # Phase 6: roll any unsynced per-document observation entries into this line's own
+    # Observation field. save_line_items() is the single chokepoint every Save/Next/Prev/
+    # Validate/Complete/Exit path already calls per line, so this is the correct place to sync.
+    sync_line_observations_to_voucher(detail_id)
+
     log_audit("Analyst", "Save Line Items", "Verification", f"Detail {detail_id} line items saved.")
     return {"message": "Line items and procedure data saved successfully."}
 
@@ -1507,6 +1512,155 @@ def set_procedure_check(
         "is_checked": bool(updated['is_checked']),
         "checked_by": updated['checked_by'],
         "checked_at": updated['checked_at']
+    }
+
+
+# ==============================================
+# VOUCHER LINE OBSERVATIONS (Phase 6 of 6, FINAL: observation flow)
+# Each Document tab in the Supporting Documents modal gets its own observation text field,
+# saved as a tagged, per-document entry against the voucher line (voucher_line_observations,
+# database.py). Entries are upserted in place (one per voucher_line_id+document_id) and
+# unconditionally marked unsynced on every explicit save; sync_line_observations_to_voucher()
+# (called from save_line_items(), the single chokepoint every Save/Next/Prev/Validate/
+# Complete/Exit path already runs per line) appends any unsynced, non-blank entries into
+# that line's own verification_details.observations field - labelled by document name,
+# never overwriting whatever text (auto or manual) was already there - then marks them
+# synced so the same text is never appended twice.
+# ==============================================
+
+def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
+    """
+    Roll any unsynced voucher_line_observations entries for this line into the line's own
+    verification_details.observations field (append-only), then mark them synced. A no-op
+    if there's nothing pending. Never raises - a failure here should not block the
+    save_line_items() call it's invoked from.
+    """
+    try:
+        pending = execute_query(
+            """
+            SELECT vlo.id, vlo.observation_text, ard.name AS document_name
+            FROM voucher_line_observations vlo
+            JOIN audit_rule_documents ard ON ard.id = vlo.document_id
+            WHERE vlo.voucher_line_id = ? AND vlo.synced = 0
+            """,
+            (voucher_line_id,)
+        )
+        if not pending:
+            return
+
+        # Build one labelled block per pending entry that actually has text; a blank/cleared
+        # observation contributes nothing to the appended text but is still marked synced below.
+        new_blocks = [
+            f"[{p['document_name']}]: {p['observation_text'].strip()}"
+            for p in pending
+            if p['observation_text'] and p['observation_text'].strip()
+        ]
+
+        if new_blocks:
+            current = execute_query(
+                "SELECT observations FROM verification_details WHERE id = ?",
+                (voucher_line_id,)
+            )
+            existing_text = (current[0]['observations'] or '').strip() if current else ''
+            appended_text = "\n".join(new_blocks)
+            combined_text = f"{existing_text}\n{appended_text}" if existing_text else appended_text
+            execute_write(
+                "UPDATE verification_details SET observations = ? WHERE id = ?",
+                (combined_text, voucher_line_id)
+            )
+
+        # Mark every processed entry synced regardless of whether it had text, so a cleared
+        # observation doesn't stay "pending" forever.
+        execute_write(
+            "UPDATE voucher_line_observations SET synced = 1 WHERE voucher_line_id = ? AND synced = 0",
+            (voucher_line_id,)
+        )
+    except Exception as e:
+        # Deliberately swallow - observation roll-up must never block a line save.
+        print(f"⚠️ sync_line_observations_to_voucher failed for line {voucher_line_id}: {e}")
+
+
+@router.get("/api/verification/line_observations/{voucher_line_id}")
+def get_line_observations(voucher_line_id: int):
+    """
+    Batch fetch every observation entry recorded for a voucher line, across all documents -
+    one call per Supporting Documents modal open, mirroring how voucher_line_documents/{id}
+    and procedure_checks/{id} are already fetched once there.
+    """
+    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    if not line:
+        raise HTTPException(404, "Voucher line not found.")
+
+    rows = execute_query(
+        """
+        SELECT document_id, observation_text, synced, updated_by, updated_at
+        FROM voucher_line_observations
+        WHERE voucher_line_id = ?
+        """,
+        (voucher_line_id,)
+    )
+    entries = [
+        {
+            "document_id": r['document_id'],
+            "observation_text": r['observation_text'] or '',
+            "synced": bool(r['synced']),
+            "updated_by": r['updated_by'],
+            "updated_at": r['updated_at']
+        }
+        for r in rows
+    ]
+    return {"voucher_line_id": voucher_line_id, "entries": entries}
+
+
+@router.post("/api/verification/save_line_observation")
+def save_line_observation(
+    voucher_line_id: int = Body(..., embed=True, description="verification_details.id (the voucher line 'uid')"),
+    document_id: int = Body(..., embed=True, description="audit_rule_documents.id this observation belongs to"),
+    observation_text: str = Body("", embed=True),
+    updated_by: str = Body("Analyst", embed=True)
+):
+    """
+    Save (upsert) one Document tab's observation text for a voucher line. Always marks the
+    entry unsynced - an explicit save always means "roll this into the voucher line's
+    Observation field on the next save_line_items() call", whether the text is brand new,
+    edited, or cleared to blank.
+    """
+    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    if not line:
+        raise HTTPException(404, "Voucher line not found.")
+
+    doc = execute_query("SELECT id FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
+    if not doc:
+        raise HTTPException(404, "Document not found or inactive.")
+
+    execute_write(
+        """
+        INSERT INTO voucher_line_observations (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
+        VALUES (?, ?, ?, 0, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(voucher_line_id, document_id)
+        DO UPDATE SET observation_text = excluded.observation_text, synced = 0, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP
+        """,
+        (voucher_line_id, document_id, observation_text, updated_by)
+    )
+
+    log_audit(updated_by, "Save Line Observation", "Verification",
+               f"Saved observation for document {document_id} on voucher line {voucher_line_id}.")
+
+    updated = execute_query(
+        """
+        SELECT voucher_line_id, document_id, observation_text, synced, updated_by, updated_at
+        FROM voucher_line_observations
+        WHERE voucher_line_id = ? AND document_id = ?
+        """,
+        (voucher_line_id, document_id)
+    )[0]
+    return {
+        "voucher_line_id": updated['voucher_line_id'],
+        "document_id": updated['document_id'],
+        "observation_text": updated['observation_text'] or '',
+        "synced": bool(updated['synced']),
+        "updated_by": updated['updated_by'],
+        "updated_at": updated['updated_at']
     }
 
 

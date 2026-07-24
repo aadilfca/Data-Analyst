@@ -2770,6 +2770,64 @@ body {
     margin: 0;
 }
 
+/* ----- Observation Flow (Phase 6 of 6, FINAL) -----
+   Sits directly below the Audit Procedures checklist within each tab's .procedure-tab-panel —
+   a per-document observation textarea (auto-suggested from the mismatch badge/unticked
+   procedures, editable/clearable) plus an explicit Save button, matching the visual weight of
+   .procedure-checklist-* above it. */
+.procedure-observation-section {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid #e2e8f0;
+}
+.procedure-observation-heading {
+    font-size: 13px;
+    font-weight: 600;
+    color: #334155;
+    margin: 0 0 8px 0;
+}
+.procedure-observation-textarea {
+    width: 100%;
+    min-height: 70px;
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    color: #1a1a2e;
+    resize: vertical;
+    box-sizing: border-box;
+}
+.procedure-observation-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+}
+.procedure-observation-save-btn {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    background: #3b82f6;
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.procedure-observation-save-btn:hover {
+    background: #2563eb;
+}
+.procedure-observation-status {
+    font-size: 12px;
+    color: #16a34a;
+    font-weight: 600;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+.procedure-observation-status.saved {
+    opacity: 1;
+}
+
 /* ----- Supporting Documents Browse Modal (Phase 4 of 6) -----
    Nested on top of #procedureModal (higher z-index) — same per-modal-scoped .modal-content/
    .modal-header convention as every other modal in this file. */

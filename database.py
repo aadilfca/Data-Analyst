@@ -1509,6 +1509,37 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_procedure_checks_line ON voucher_line_procedure_checks (voucher_line_id)")
         print("✅ Created voucher_line_procedure_checks table (Phase 5 of 6: audit procedures checklist)")
 
+        # ---------- VOUCHER LINE OBSERVATIONS (Phase 6 of 6, FINAL: observation flow) ----------
+        # One row per (voucher_line_id, document_id) - a Document tab's observation text is
+        # upserted in place here, not appended as a history log. `synced` flags whether the
+        # CURRENT text has already been rolled into that line's own verification_details.observations
+        # field (routers/verification.py's sync_line_observations_to_voucher(), called from
+        # save_line_items() - the single chokepoint every Save/Next/Prev/Validate/Complete/Exit
+        # path already runs per line). Every explicit save via POST /api/verification/save_line_observation
+        # unconditionally resets synced=0, so an edited-and-resaved entry is picked up again on
+        # the next line-save; already-synced entries are skipped so the same text is never
+        # appended twice. Brand-new table with no prior data, so a plain CREATE TABLE IF NOT
+        # EXISTS is sufficient - no ALTER TABLE upgrade block needed (same reasoning as
+        # voucher_line_documents/voucher_line_procedure_checks above). FOREIGN KEY clauses are
+        # documentation/ON DELETE CASCADE intent only - this app never sets PRAGMA foreign_keys
+        # = ON, so routers/verification.py's endpoints validate each referenced id explicitly.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_line_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                voucher_line_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                observation_text TEXT,
+                synced INTEGER NOT NULL DEFAULT 0,
+                updated_by TEXT DEFAULT 'Analyst',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (voucher_line_id) REFERENCES verification_details(id) ON DELETE CASCADE,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id),
+                UNIQUE(voucher_line_id, document_id)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_observations_line ON voucher_line_observations (voucher_line_id)")
+        print("✅ Created voucher_line_observations table (Phase 6 of 6, FINAL: observation flow)")
+
         conn.commit()
         print("✅ Database initialization complete")
 
