@@ -1443,20 +1443,20 @@ def init_db():
         # which voucher line (verification_details.id - the same "uid" used throughout
         # verification.js), and for which Document "slot" (audit_rule_documents.id - the live
         # per-Category document list already powering the Supporting column, reused here rather
-        # than a free-text document type). UNIQUE(client_data_id) is the actual mechanism that
-        # enforces "once linked, a Data Bank row can't be assigned again to any other voucher
-        # line" - a real DB-level constraint, not just an app-layer check. No status/is_active
-        # column: unassign/reassign is deferred to a later phase, and this app's junction tables
-        # free up a slot by deleting the row (delete-then-reinsert convention) rather than
-        # soft-flagging, so a future unassign endpoint can simply DELETE this row to make the
-        # client_data row assignable again - linked_by/linked_at (mirroring created_by/
-        # verified_by elsewhere in this file) already give that future reassign flow a
-        # provenance trail via log_audit() in the meantime. Brand-new table with no prior data,
-        # so a plain CREATE TABLE IF NOT EXISTS is sufficient - no ALTER TABLE upgrade block
-        # needed (same reasoning as account_category_assignments above). No FOREIGN KEY
-        # enforcement fires at runtime (this app never sets PRAGMA foreign_keys = ON), so the
-        # assignment endpoints (routers/verification.py) validate each referenced id explicitly
-        # before writing - the FK clauses below are documentation/ON DELETE CASCADE intent only.
+        # than a free-text document type). A row's `status` (Unassign requirement, single phase)
+        # is 'active' or 'unassigned' - unassigning is a soft delete (status flip + unassigned_at
+        # stamp via POST /api/verification/unassign_document), not a row delete, so linked_by/
+        # linked_at stay intact as a provenance trail. "Once linked, a Data Bank row can't be
+        # assigned again to any other voucher line WHILE the link is active" is enforced by a
+        # PARTIAL unique index on client_data_id scoped to status='active' (see below) rather than
+        # a blanket table-level UNIQUE - a plain UNIQUE(client_data_id) would permanently block
+        # reassignment even after the original link is unassigned, since the old (now-inactive)
+        # row would still occupy that unique slot. Every read query against this table must filter
+        # `status = 'active'` (assign_supporting_document's duplicate check, get_voucher_line_documents,
+        # get_assignment_status_map in routers/verification.py) - an unassigned row must never be
+        # treated as a live link. No FOREIGN KEY enforcement fires at runtime (this app never sets
+        # PRAGMA foreign_keys = ON), so the assignment endpoints validate each referenced id
+        # explicitly before writing - the FK clauses below are documentation/ON DELETE CASCADE intent only.
         conn.execute('''
             CREATE TABLE IF NOT EXISTS voucher_line_documents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1465,14 +1465,73 @@ def init_db():
                 document_id INTEGER NOT NULL,
                 linked_by TEXT DEFAULT 'Analyst',
                 linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'unassigned')),
+                unassigned_at TIMESTAMP,
                 FOREIGN KEY (voucher_line_id) REFERENCES verification_details(id) ON DELETE CASCADE,
                 FOREIGN KEY (client_data_id) REFERENCES client_data(id) ON DELETE CASCADE,
-                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id),
-                UNIQUE(client_data_id)
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id)
             )
         ''')
-        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_documents_line ON voucher_line_documents (voucher_line_id)")
         print("✅ Created voucher_line_documents table (Phase 1 of 6: schema foundation)")
+
+        # Schema upgrade: the table above originally shipped with a blanket table-level
+        # UNIQUE(client_data_id) constraint and no status/unassigned_at columns - the Unassign
+        # requirement needs to swap that for the partial-unique-index shape created above, which
+        # SQLite can't do via ALTER TABLE (a table constraint can't be dropped in place). Detect
+        # the old shape (no 'status' column) and, if found and the table has any rows, rebuild:
+        # rename -> recreate with the new shape (CREATE TABLE IF NOT EXISTS above already ran and
+        # is a no-op on an existing table, so this recreates for real) -> copy every row across as
+        # status='active' (preserving all pre-existing links exactly as they were) -> drop the
+        # renamed old table. A cheap file-copy backup is taken first, same convention as the
+        # client_voucher_prefixes 5-way migration above. Gated so this only ever runs once.
+        try:
+            existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(voucher_line_documents)").fetchall()]
+        except sqlite3.OperationalError:
+            existing_columns = []
+
+        if existing_columns and 'status' not in existing_columns:
+            print("⚠️ Found voucher_line_documents on the old blanket-UNIQUE(client_data_id) shape - migrating to the status/partial-unique-index shape.")
+
+            backup_path = f"{DB_NAME}.bak-premigrate-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            shutil.copy2(DB_NAME, backup_path)
+            print(f"✅ Backed up database to {backup_path} before migrating voucher_line_documents")
+
+            before_count = conn.execute("SELECT COUNT(*) FROM voucher_line_documents").fetchone()[0]
+
+            conn.execute("DROP TABLE IF EXISTS voucher_line_documents_old")
+            conn.execute("ALTER TABLE voucher_line_documents RENAME TO voucher_line_documents_old")
+            conn.execute('''
+                CREATE TABLE voucher_line_documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    voucher_line_id INTEGER NOT NULL,
+                    client_data_id INTEGER NOT NULL,
+                    document_id INTEGER NOT NULL,
+                    linked_by TEXT DEFAULT 'Analyst',
+                    linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'unassigned')),
+                    unassigned_at TIMESTAMP,
+                    FOREIGN KEY (voucher_line_id) REFERENCES verification_details(id) ON DELETE CASCADE,
+                    FOREIGN KEY (client_data_id) REFERENCES client_data(id) ON DELETE CASCADE,
+                    FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id)
+                )
+            ''')
+            conn.execute('''
+                INSERT INTO voucher_line_documents
+                    (id, voucher_line_id, client_data_id, document_id, linked_by, linked_at, status)
+                SELECT id, voucher_line_id, client_data_id, document_id, linked_by, linked_at, 'active'
+                FROM voucher_line_documents_old
+            ''')
+            conn.execute("DROP TABLE voucher_line_documents_old")
+
+            after_count = conn.execute("SELECT COUNT(*) FROM voucher_line_documents WHERE status = 'active'").fetchone()[0]
+            print(f"✅ Migrated voucher_line_documents: {before_count} row(s) carried forward as status='active' ({after_count} confirmed).")
+
+        # Indexes are (re)created here, after the migration block above has guaranteed the table
+        # is on the status/status-partial-unique-index shape (either it always was, on a fresh
+        # install, or it was just rebuilt into that shape) - creating the partial index any earlier
+        # would fail with "no such column: status" against a not-yet-migrated old-shape table.
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_documents_line ON voucher_line_documents (voucher_line_id)")
+        create_index_with_retry(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_voucher_line_documents_active_client_data ON voucher_line_documents (client_data_id) WHERE status = 'active'")
 
         # ---------- VOUCHER LINE PROCEDURE CHECKS (Phase 5 of 6: audit procedures checklist) ----------
         # Tick state for the audit-procedures checklist rendered under each Document tab's

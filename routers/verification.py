@@ -1307,10 +1307,11 @@ def get_category_for_account(
 # VOUCHER LINE SUPPORTING DOCUMENTS (new 6-phase requirement, Phase 1 of 6)
 # Data layer for linking a Data Bank row (client_data) to a voucher line as
 # supporting evidence for a specific Document "slot" (audit_rule_documents).
-# Backend only this phase - consumed by later phases' search (2), modal shell
-# (3), and selection UI (4). Unassign/reassign endpoints are deliberately not
-# built yet (deferred) - the schema's UNIQUE(client_data_id) constraint is
-# what actually enforces "once linked, never assignable again" at this phase.
+# "Once linked, never assignable again elsewhere" is enforced by a partial
+# unique index on client_data_id scoped to status='active' (database.py) -
+# every query below that reads links must filter status='active', since an
+# unassigned (soft-deleted, see unassign_supporting_document further down)
+# row must never be treated as a live link.
 # ==============================================
 
 @router.post("/api/verification/assign_document")
@@ -1343,7 +1344,7 @@ def assign_supporting_document(
         SELECT vld.id, vld.voucher_line_id, vd.transaction_ref
         FROM voucher_line_documents vld
         JOIN verification_details vd ON vd.id = vld.voucher_line_id
-        WHERE vld.client_data_id = ?
+        WHERE vld.client_data_id = ? AND vld.status = 'active'
         """,
         (client_data_id,)
     )
@@ -1374,7 +1375,8 @@ def assign_supporting_document(
 @router.get("/api/verification/voucher_line_documents/{voucher_line_id}")
 def get_voucher_line_documents(voucher_line_id: int):
     """
-    List every document currently assigned to a voucher line, enriched with the
+    List every ACTIVE document currently assigned to a voucher line (status='active' -
+    an unassigned/soft-deleted link is never returned here), enriched with the
     Document's name and the linked client_data row's data - so a later phase's
     selected-lines table can render without a second round-trip.
     """
@@ -1391,7 +1393,7 @@ def get_voucher_line_documents(voucher_line_id: int):
         FROM voucher_line_documents vld
         JOIN audit_rule_documents ard ON ard.id = vld.document_id
         JOIN client_data cd ON cd.id = vld.client_data_id
-        WHERE vld.voucher_line_id = ?
+        WHERE vld.voucher_line_id = ? AND vld.status = 'active'
         ORDER BY vld.linked_at ASC
         """,
         (voucher_line_id,)
@@ -1413,6 +1415,47 @@ def get_voucher_line_documents(voucher_line_id: int):
             "extract_amount": r['extract_amount']
         })
     return {"voucher_line_id": voucher_line_id, "documents": result, "count": len(result)}
+
+
+@router.post("/api/verification/unassign_document")
+def unassign_supporting_document(
+    assignment_id: int = Body(..., embed=True, description="voucher_line_documents.id of the link to unassign")
+):
+    """
+    Soft-deletes a voucher_line_documents link: flips status to 'unassigned' and stamps
+    unassigned_at, rather than deleting the row - preserves linked_by/linked_at as a
+    provenance trail. Once unassigned, the underlying client_data row is free to be
+    assigned again (to this or any other voucher line) because every read query in this
+    file (and get_assignment_status_map, used by routers/data.py's preview flags) filters
+    to status='active' only - the freed row is treated as unassigned automatically, with
+    no other code path needing to change. Observation text for the tab is untouched here;
+    that is a deliberate choice, not an oversight (see the confirmed requirement).
+    404s on an unknown id or one that's already unassigned (nothing to undo twice).
+    """
+    link = execute_query(
+        "SELECT id, voucher_line_id, client_data_id, document_id, status FROM voucher_line_documents WHERE id = ?",
+        (assignment_id,)
+    )
+    if not link:
+        raise HTTPException(404, "Supporting document link not found.")
+    if link[0]['status'] != 'active':
+        raise HTTPException(404, "This supporting document link has already been unassigned.")
+
+    execute_write(
+        "UPDATE voucher_line_documents SET status = 'unassigned', unassigned_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (assignment_id,)
+    )
+
+    log_audit("Analyst", "Unassign Supporting Document", "Verification",
+               f"Unlinked client_data {link[0]['client_data_id']} from voucher line {link[0]['voucher_line_id']} (document {link[0]['document_id']}).")
+
+    return {
+        "id": assignment_id,
+        "voucher_line_id": link[0]['voucher_line_id'],
+        "client_data_id": link[0]['client_data_id'],
+        "document_id": link[0]['document_id'],
+        "status": "unassigned"
+    }
 
 
 # ==============================================
@@ -1682,7 +1725,7 @@ def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
         SELECT vld.client_data_id, vld.voucher_line_id, vd.transaction_ref
         FROM voucher_line_documents vld
         JOIN verification_details vd ON vd.id = vld.voucher_line_id
-        WHERE vld.client_data_id IN ({placeholders})
+        WHERE vld.client_data_id IN ({placeholders}) AND vld.status = 'active'
         """,
         tuple(client_data_ids)
     )

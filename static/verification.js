@@ -2589,6 +2589,13 @@ function renderProcedureModalPanel(uid, docId) {
         });
     });
 
+    // Unassign requirement: one click listener per ✕ unlink button in the Linked Evidence table.
+    container.querySelectorAll('.procedure-unlink-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            unassignSupportingDocument(uid, docId, parseInt(this.dataset.assignmentId));
+        });
+    });
+
     // Phase 6: the observation textarea is local-only on every keystroke (no network call) — it
     // is only persisted when the Save button is explicitly clicked, per the confirmed brief.
     const observationInput = document.getElementById('procedureObservationInput');
@@ -2721,11 +2728,52 @@ async function selectProcedureDocument(uid, docId, row) {
     }
 }
 
+// ---------- UNASSIGNING A ROW (Unassign requirement) ----------
+// Soft-deletes a link via POST /api/verification/unassign_document, then updates local state and
+// re-renders — reusing the exact same buildSelectedLinesTable()/getSelectedLinesSummary() logic
+// Phase 4 already built, so the running total and Matches/mismatch badge recalculate automatically
+// with no separate recompute path. Observation text for the tab is deliberately left untouched.
+async function unassignSupportingDocument(uid, docId, assignmentId) {
+    if (!confirm('Unlink this evidence from the voucher line? The Data Bank row will become available to assign elsewhere.')) {
+        return;
+    }
+    const lineState = procedureModalState[uid];
+    if (!lineState) return;
+    const tabState = getProcedureTabState(uid, docId);
+
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/unassign_document`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assignment_id: assignmentId })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            showStatus(err.detail || 'Failed to unlink evidence — please try again.', 'error');
+            return;
+        }
+
+        tabState.selections = (tabState.selections || []).filter(sel => sel.id !== assignmentId);
+        // If that was this document's last active link, its tab dot should un-fill too.
+        if (!tabState.selections.length) {
+            lineState.assignedDocIds.delete(docId);
+        }
+        renderProcedureModalTabs(uid);
+        renderProcedureModalPanel(uid, docId);
+        showStatus('✅ Evidence unlinked.', 'success');
+    } catch (e) {
+        console.error('Failed to unassign supporting document:', e);
+        showStatus('Failed to unlink evidence — please try again.', 'error');
+    }
+}
+
 // ---------- SELECTED-LINES TABLE ----------
 // Renders the "linked evidence" table for one tab: dynamic columns derived from the union of
 // row_data keys across selections (same convention template-viewer.js's renderTemplateData() uses
-// — read for reference, not modified), plus a totals/mismatch summary below it. Read-only this
-// phase — Phase 1 deliberately has no unassign endpoint yet, so there is no remove action here.
+// — read for reference, not modified), plus a totals/mismatch summary below it. Each row also
+// gets a ✕ unlink button (Unassign requirement) wired up by renderProcedureModalPanel() below,
+// calling unassignSupportingDocument() — removing a selection here and re-rendering reuses this
+// same summary/table logic, so the total/badge always recompute correctly with no separate code path.
 // Shared by buildSelectedLinesTable() and buildObservationSuggestion() (Phase 6) so both read
 // the exact same total/mismatch computation — never recomputed independently.
 function getSelectedLinesSummary(uid, docId) {
@@ -2754,8 +2802,11 @@ function buildSelectedLinesTable(uid, docId) {
         });
     });
 
+    // Trailing "" header for the unlink icon column (Unassign requirement) - no label, matching
+    // this app's existing convention for icon-only action columns (e.g. Data Bank's Actions column).
     let html = '<div class="procedure-selected-table-wrapper"><table class="procedure-selected-table"><thead><tr>';
     columns.forEach(col => { html += `<th>${escapeHtml(col)}</th>`; });
+    html += '<th></th>';
     html += '</tr></thead><tbody>';
     selections.forEach(sel => {
         html += '<tr>';
@@ -2763,6 +2814,7 @@ function buildSelectedLinesTable(uid, docId) {
             const value = sel.row_data ? sel.row_data[col] : '';
             html += `<td>${escapeHtml(value == null ? '' : String(value))}</td>`;
         });
+        html += `<td><button type="button" class="procedure-unlink-btn" data-assignment-id="${sel.id}" title="Unlink this evidence">✕</button></td>`;
         html += '</tr>';
     });
     html += '</tbody></table></div>';
