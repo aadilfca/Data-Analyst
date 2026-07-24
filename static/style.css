@@ -2453,6 +2453,107 @@ body {
     background: #f8fafc;
 }
 
+/* ----- Supporting Documents Tabbed Modal (Voucher Supporting-Document Linking, Phase 3 of 6) -----
+   Shell mirrors #supportingModal/#dfdModal's own scoped .modal-content/.modal-header rules (not
+   shared base classes, per this file's documented convention). Tab bar/panels are new - populated
+   entirely by verification.js's renderProcedureModalTabs()/renderProcedureModalPanel(). */
+#procedureModal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.5);
+    z-index: 3000;
+    justify-content: center;
+    align-items: center;
+}
+#procedureModal .modal-content {
+    background: white;
+    border-radius: 16px;
+    padding: 24px;
+    max-width: 700px;
+    width: 95%;
+    max-height: 85vh;
+    overflow: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+#procedureModal .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.procedure-tab-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    border-bottom: 2px solid #e2e8f0;
+    padding-bottom: 10px;
+    margin-bottom: 14px;
+}
+.procedure-tab-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #475569;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.procedure-tab-btn:hover {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+}
+.procedure-tab-btn.active {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: white;
+}
+.procedure-tab-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #cbd5e1;
+    flex-shrink: 0;
+}
+.procedure-tab-dot.complete {
+    background: #22c55e;
+}
+.procedure-tab-btn.active .procedure-tab-dot {
+    background: rgba(255, 255, 255, 0.5);
+}
+.procedure-tab-btn.active .procedure-tab-dot.complete {
+    background: #bbf7d0;
+}
+.procedure-tab-panels {
+    min-height: 160px;
+}
+.procedure-tab-panel {
+    padding: 4px 2px;
+}
+.procedure-tab-placeholder {
+    color: #94a3b8;
+    text-align: center;
+    padding: 30px 10px;
+    font-size: 14px;
+}
+.procedure-tab-note {
+    color: #b45309;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    margin-bottom: 10px;
+}
+
 /* ----- DFD Placeholder Modal (Phase 5) ----- */
 #dfdModal {
     display: none;

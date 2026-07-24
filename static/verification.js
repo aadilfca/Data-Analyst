@@ -37,6 +37,15 @@ let voucherLineState = {};
 // "locked"/dimmed, or null if none. Purely visual, not persisted; reset whenever a new voucher's
 // lines are rendered (see renderVoucherLines()).
 let lockedLineUid = null;
+// Voucher Supporting-Document Linking, Phase 3 of 6: per-voucher-line state for the tabbed
+// #procedureModal. Keyed by voucher line uid; each entry is
+// { activeDocId, documents, assignedDocIds, tabs: { [docId]: { loaded, searchTerm, selections, observation } } }.
+// documents/assignedDocIds are cached per open so switching tabs never re-fetches them; the
+// per-tab searchTerm/selections/observation fields are placeholders this phase (Phases 4-6 wire
+// real content into them) but the shape is fixed now so later phases don't need to touch the
+// state's structure, only what reads/writes it. Reset alongside voucherLineState in
+// seedVoucherLineState() so it can never leak stale tabs across a voucher navigation.
+let procedureModalState = {};
 let selectedCashbook = null;
 let cashbookCurrentPage = 1;
 let cashbookPageSize = 50;
@@ -85,23 +94,17 @@ const supportingResults = document.getElementById('supportingResults');
 const supportingModalClose = document.getElementById('supportingModalClose');
 
 // ---- PROCEDURE MODAL REFS ----
+// Voucher Supporting-Document Linking, Phase 3 of 6: rebuilt as a tabbed modal (one tab per
+// document belonging to the voucher line's Category) - see openProcedureModal()/
+// renderProcedureModalTabs()/renderProcedureModalPanel() below. The old single-document
+// search/select refs (procedureSearchInput/procedureSearchBtn/procedureResults/
+// procedureCancelBtn/procedureConfirmBtn/procedureStatus) and their module-level state
+// (currentProcedureKey/currentTemplateId/selectedDocId/selectedDocData/currentProcedureTarget)
+// are removed along with the corresponding markup - real per-tab search/select content is wired
+// back in Phase 4.
 const procedureModal = document.getElementById('procedureModal');
 const procedureModalTitle = document.getElementById('procedureModalTitle');
-const procedureSearchInput = document.getElementById('procedureSearchInput');
-const procedureSearchBtn = document.getElementById('procedureSearchBtn');
-const procedureResults = document.getElementById('procedureResults');
-const procedureCancelBtn = document.getElementById('procedureCancelBtn');
-const procedureConfirmBtn = document.getElementById('procedureConfirmBtn');
-const procedureStatus = document.getElementById('procedureStatus');
 const procedureModalClose = document.getElementById('procedureModalClose');
-
-let currentProcedureKey = null;
-let currentTemplateId = null;
-let selectedDocId = null;
-let selectedDocData = null;
-// Phase 3: null = the legacy global-state flow (unchanged behavior below); set to a line's
-// detail_id when the modal was opened from a voucher line's collapsed/expand row.
-let currentProcedureTarget = null;
 
 // ---------- HELPERS ----------
 function showStatus(msg, type = 'info') {
@@ -823,7 +826,7 @@ async function updateSupportingCellForLine(uid, type) {
         const title = hasTemplate
             ? (confirmed ? doc.name + ' — confirmed' : 'Search ' + doc.name)
             : (doc.name + ' — no template linked (set one in Audit Rules)');
-        return `<span class="voucher-line-proc-link${confirmed ? ' confirmed' : ''}" data-uid="${uid}" data-proc="${procKey}" data-label="${escapeHtml(doc.name)}" data-template="${doc.template_id || ''}" title="${escapeHtml(title)}"${muted}>${escapeHtml(doc.name)}</span>`;
+        return `<span class="voucher-line-proc-link${confirmed ? ' confirmed' : ''}" data-uid="${uid}" data-proc="${procKey}" data-doc-id="${doc.id}" data-label="${escapeHtml(doc.name)}" data-template="${doc.template_id || ''}" title="${escapeHtml(title)}"${muted}>${escapeHtml(doc.name)}</span>`;
     }).join('');
     // This cell's links are created after the render's own batch event-wiring pass already ran
     // (see renderVoucherLines()), so they're wired here instead.
@@ -832,10 +835,9 @@ async function updateSupportingCellForLine(uid, type) {
             e.stopPropagation();
             if (!this.dataset.template) return; // no template configured for this Document yet
             const uid2 = this.dataset.uid;
-            const procKey2 = this.dataset.proc;
-            const label2 = this.dataset.label;
-            const templateId2 = parseInt(this.dataset.template);
-            openProcedureModal(procKey2, label2, templateId2, uid2);
+            const docId2 = parseInt(this.dataset.docId);
+            // Phase 3: opens the tabbed modal for the whole line, pre-selecting this document's tab.
+            openProcedureModal(uid2, docId2);
         });
     });
 }
@@ -965,6 +967,11 @@ function seedVoucherLineState(lines) {
     // audited_cashbook-sourced lines simply mean no icon shows for that line — not a regression,
     // same pre-existing gap noted for transaction_type in Phases 2/3).
     voucherLineDiffData = {};
+    // Voucher Supporting-Document Linking, Phase 3: per-line Supporting Documents tab state
+    // (active tab, per-tab search/selection/observation placeholders) is scoped to the currently
+    // loaded voucher, same as voucherLineState/voucherLineDiffData above — reset here so a new
+    // voucher never shows a stale tab set from a previously viewed line.
+    procedureModalState = {};
     (lines || []).forEach(line => {
         let procedureData = line.procedure_flags ? { ...line.procedure_flags } : {};
         if (line.procedure_data) procedureData = { ...procedureData, ...line.procedure_data };
@@ -2253,156 +2260,158 @@ if (dfdModal) {
 }
 
 // ==============================================
-// AUDIT PROCEDURE POPOVER
+// SUPPORTING DOCUMENTS TABBED MODAL
+// Voucher Supporting-Document Linking, Phase 3 of 6: one tab per document belonging to the
+// voucher line's Category, generated dynamically from that Category's documents[] list (the
+// same list already fetched for the Guide popover/Supporting cell via fetchAuditGuidanceData()).
+// This phase builds the tab shell + per-tab state scaffolding only — each tab shows a
+// placeholder body; real search/select/procedure-tick/observation content is wired into this
+// shell in Phases 4-6.
 // ==============================================
 
-function openProcedureModal(procKey, procLabel, templateId, lineUid = null) {
+// Returns (creating if needed) one tab's own state object, so every reader/writer shares the
+// same shape: { loaded, searchTerm, selections, observation }. loaded flips true the first time
+// a tab is activated — the hook Phase 4 replaces with a real per-document fetch; this phase it
+// just marks the tab as "seen" so re-activating it doesn't re-render from scratch unnecessarily.
+function getProcedureTabState(uid, docId) {
+    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), tabs: {} };
+    if (!procedureModalState[uid].tabs[docId]) {
+        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', selections: [], observation: '' };
+    }
+    return procedureModalState[uid].tabs[docId];
+}
+
+// Opens the modal for one voucher line, showing a tab per document in that line's currently
+// assigned Category. initialDocId (optional) pre-selects that document's tab; otherwise the
+// first document's tab opens. No-ops if the line has no Category assigned yet (nothing to build
+// tabs from) or its Category has no documents.
+async function openProcedureModal(uid, initialDocId = null) {
     if (!procedureModal) return;
-    currentProcedureKey = procKey;
-    currentTemplateId = templateId;
-    // Phase 3: when opened from a voucher line's collapsed/expand row, lineUid targets that
-    // line's own voucherLineState instead of the legacy global procedureData.
-    currentProcedureTarget = lineUid;
-    selectedDocId = null;
-    selectedDocData = null;
-    if (procedureModalTitle) procedureModalTitle.textContent = `📋 ${procLabel}`;
-    if (procedureSearchInput) procedureSearchInput.value = '';
-    if (procedureResults) procedureResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">Enter a reference number and click Search.</div>';
-    if (procedureStatus) procedureStatus.textContent = '';
-    if (procedureConfirmBtn) procedureConfirmBtn.disabled = true;
+    const lineState = voucherLineState[uid];
+    const type = lineState && lineState.transactionType;
+    if (!type) return;
+
+    let guidance = null;
+    try {
+        guidance = await fetchAuditGuidanceData(type);
+    } catch (e) {
+        console.error('Failed to load Supporting Documents modal data:', e);
+        return;
+    }
+    const documents = (guidance && guidance.documents) || [];
+    if (!documents.length) return;
+
+    // Presence-check fetch (Phase 1/2 data): which documents already have at least one
+    // voucher_line_documents row for this line — drives each tab's completion dot. Re-fetched on
+    // every open so a dot reflects reality even if an assignment was made earlier this session.
+    let assignedDocIds = new Set();
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
+        if (res.ok) {
+            const assignData = await res.json();
+            assignedDocIds = new Set((assignData.documents || []).map(d => d.document_id));
+        }
+    } catch (e) {
+        console.error('Failed to load Supporting Document assignment status:', e);
+    }
+
+    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), tabs: {} };
+    procedureModalState[uid].documents = documents;
+    procedureModalState[uid].assignedDocIds = assignedDocIds;
+    const activeDocId = (initialDocId && documents.some(d => d.id === initialDocId)) ? initialDocId : documents[0].id;
+    procedureModalState[uid].activeDocId = activeDocId;
+
+    if (procedureModalTitle) procedureModalTitle.textContent = `📎 Supporting Documents — ${type}`;
     procedureModal.style.display = 'flex';
-    setTimeout(() => {
-        if (procedureSearchInput) procedureSearchInput.focus();
-    }, 100);
+
+    renderProcedureModalTabs(uid);
+    activateProcedureTab(uid, activeDocId);
 }
 
 function closeProcedureModal() {
     if (procedureModal) procedureModal.style.display = 'none';
-    currentProcedureKey = null;
-    currentTemplateId = null;
-    currentProcedureTarget = null;
-    selectedDocId = null;
-    selectedDocData = null;
+    // procedureModalState[uid] is deliberately left in place (not cleared here) — reopening the
+    // same line's modal within the same voucher should show tab state exactly as it was left;
+    // it's only reset on voucher navigation, in seedVoucherLineState().
 }
 
-if (procedureModal) {
-    procedureSearchBtn.addEventListener('click', async function() {
-        if (!procedureSearchInput || !procedureResults || !procedureConfirmBtn) return;
-        const searchTerm = procedureSearchInput.value.trim();
-        if (!searchTerm) {
-            procedureResults.innerHTML = '<div style="color:#f59e0b; text-align:center; padding:10px;">Please enter a reference number.</div>';
-            return;
-        }
-        const clientId = getClientId();
-        if (!clientId) {
-            procedureResults.innerHTML = '<div style="color:#dc2626; text-align:center; padding:10px;">No client selected.</div>';
-            return;
-        }
-        procedureResults.innerHTML = '<div style="text-align:center; padding:10px;"><span class="spinner"></span> Searching...</div>';
-        procedureSearchBtn.disabled = true;
-        try {
-            const params = new URLSearchParams({
-                client_id: clientId,
-                search: searchTerm,
-                template_id: currentTemplateId,
-                limit: 20
-            });
-            const res = await fetch(`${API_BASE}/api/verification/supporting?${params}`);
-            if (!res.ok) throw new Error('Failed to search');
-            const data = await res.json();
-            const docs = data.supporting_documents || [];
-            if (docs.length === 0) {
-                procedureResults.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:10px;">No documents found with that reference.</div>';
-                procedureConfirmBtn.disabled = true;
-            } else {
-                let html = '<div style="font-weight:600; font-size:13px; padding:4px 8px; background:#f8fafc; margin-bottom:6px;">Select a document:</div>';
-                docs.forEach(doc => {
-                    const row = doc.row_data || {};
-                    const desc = row['Description'] || row['PO Number'] || row['GRN Number'] || row['Invoice Number'] || '';
-                    const vendor = row['Vendor Name'] || row['Vendor'] || '—';
-                    const unit = row['Unit'] || '—';
-                    const qty = row['Qty'] || row['Quantity'] || '—';
-                    const rate = row['Rate'] || '—';
-                    const amount = doc.extract_amount || row['Amount'] || '—';
-                    html += `
-                        <div class="result-item" data-id="${doc.id}" style="padding:8px; border-bottom:1px solid #f0f2f5; cursor:pointer; display:flex; justify-content:space-between; align-items:center; transition:background 0.1s;">
-                            <div style="flex:1;">
-                                <div><strong>${desc}</strong></div>
-                                <div style="font-size:12px; color:#64748b;">
-                                    Vendor: ${vendor} | Unit: ${unit} | Qty: ${qty} | Rate: ${rate} | Amount: ${amount}
-                                </div>
-                            </div>
-                            <button class="select-doc-btn" data-id="${doc.id}" data-row='${JSON.stringify(row)}' style="padding:4px 12px; background:#3b82f6; color:white; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Select</button>
-                        </div>
-                    `;
-                });
-                procedureResults.innerHTML = html;
-                procedureResults.querySelectorAll('.select-doc-btn').forEach(btn => {
-                    btn.addEventListener('click', function(e) {
-                        e.stopPropagation();
-                        const id = this.dataset.id;
-                        const rowData = JSON.parse(this.dataset.row);
-                        selectedDocId = id;
-                        selectedDocData = rowData;
-                        procedureConfirmBtn.disabled = false;
-                        procedureResults.querySelectorAll('.result-item').forEach(el => el.style.background = '');
-                        this.closest('.result-item').style.background = '#e0f2fe';
-                        if (procedureStatus) {
-                            procedureStatus.textContent = '✅ Document selected. Click "Confirm Selection" to apply.';
-                            procedureStatus.style.color = '#16a34a';
-                        }
-                    });
-                });
-                procedureResults.querySelectorAll('.result-item').forEach(el => {
-                    el.addEventListener('click', function() {
-                        const btn = this.querySelector('.select-doc-btn');
-                        if (btn) btn.click();
-                    });
-                });
-            }
-        } catch (error) {
-            console.error('Search error:', error);
-            procedureResults.innerHTML = `<div style="color:#dc2626; text-align:center; padding:10px;">Error: ${error.message}</div>`;
-        } finally {
-            procedureSearchBtn.disabled = false;
-        }
-    });
+// Renders the tab bar for one line's modal: one button per document, name + a completion dot
+// (filled when that document has at least one linked evidence row for this line, per the
+// assignedDocIds presence check from openProcedureModal()).
+function renderProcedureModalTabs(uid) {
+    const container = document.getElementById('procedureModalTabs');
+    if (!container) return;
+    const lineState = procedureModalState[uid];
+    if (!lineState) { container.innerHTML = ''; return; }
+    const documents = lineState.documents || [];
+    const assignedDocIds = lineState.assignedDocIds || new Set();
 
-    procedureConfirmBtn.addEventListener('click', function() {
-        if (!selectedDocId || !currentProcedureKey) return;
-        if (currentProcedureTarget) {
-            // Phase 3: write into the target line's own state and refresh just its observation
-            // text — no voucher reload, so other expanded lines/state are left untouched.
-            const uid = currentProcedureTarget;
-            if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
-            const target = voucherLineState[uid].procedureData;
-            target[currentProcedureKey] = true;
-            target[currentProcedureKey + '_ref'] = procedureSearchInput.value.trim();
-            target[currentProcedureKey + '_doc_id'] = selectedDocId;
-            target[currentProcedureKey + '_doc_data'] = selectedDocData;
-            const placeholder = document.querySelector(`#voucherLineDetail-${uid} .proc-observation-placeholder[data-proc="${currentProcedureKey}"]`);
-            if (placeholder) placeholder.textContent = procedureSearchInput.value.trim();
-            closeProcedureModal();
-            showStatus('✅ Procedure updated!', 'success');
-            return;
-        }
-        procedureData[currentProcedureKey] = true;
-        procedureData[currentProcedureKey + '_ref'] = procedureSearchInput.value.trim();
-        procedureData[currentProcedureKey + '_doc_id'] = selectedDocId;
-        procedureData[currentProcedureKey + '_doc_data'] = selectedDocData;
-        closeProcedureModal();
-        loadNextTransaction(currentDetailId);
-        showStatus('✅ Procedure updated!', 'success');
-    });
+    container.innerHTML = documents.map(doc => {
+        const isActive = doc.id === lineState.activeDocId;
+        const isComplete = assignedDocIds.has(doc.id);
+        const dotTitle = isComplete ? 'Evidence linked' : 'No evidence linked yet';
+        return `
+            <button type="button" class="procedure-tab-btn${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
+                <span class="procedure-tab-dot${isComplete ? ' complete' : ''}" title="${dotTitle}"></span>
+                <span class="procedure-tab-label">${escapeHtml(doc.name)}</span>
+            </button>
+        `;
+    }).join('');
 
-    procedureCancelBtn.addEventListener('click', closeProcedureModal);
+    container.querySelectorAll('.procedure-tab-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            activateProcedureTab(this.dataset.uid, parseInt(this.dataset.docId));
+        });
+    });
+}
+
+// Switches the active tab for one line's modal. Other tabs' own state objects are left
+// untouched, so unsaved work in a tab (once Phases 4-6 add real content to it) survives
+// switching away and back within the same modal session.
+function activateProcedureTab(uid, docId) {
+    const lineState = procedureModalState[uid];
+    if (!lineState) return;
+    lineState.activeDocId = docId;
+    renderProcedureModalTabs(uid);
+
+    const tabState = getProcedureTabState(uid, docId);
+    if (!tabState.loaded) {
+        // Lazy-load hook: Phase 4 fetches this document's real search/selection state here on
+        // first activation. Nothing to fetch yet this phase — just mark the tab as seen.
+        tabState.loaded = true;
+    }
+
+    renderProcedureModalPanel(uid, docId);
+}
+
+// Renders the (placeholder) body for one tab. Real search/selection UI is Phase 4, procedure
+// ticks Phase 5, observations Phase 6 — this phase only shows which document the tab represents
+// and, for a document with no template_id configured, an explicit note (Phase 4's search needs one).
+function renderProcedureModalPanel(uid, docId) {
+    const container = document.getElementById('procedureModalPanels');
+    if (!container) return;
+    const lineState = procedureModalState[uid];
+    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
+    if (!doc) { container.innerHTML = ''; return; }
+
+    const noTemplateNote = doc.template_id
+        ? ''
+        : `<p class="procedure-tab-note">No Data Bank template linked to "${escapeHtml(doc.name)}" yet — configure one in Audit Rules before searching.</p>`;
+
+    container.innerHTML = `
+        <div class="procedure-tab-panel" data-doc-id="${docId}">
+            ${noTemplateNote}
+            <p class="procedure-tab-placeholder">Search and selection for "${escapeHtml(doc.name)}" will be available here in a later phase.</p>
+        </div>
+    `;
+}
+
+if (procedureModalClose) {
     procedureModalClose.addEventListener('click', closeProcedureModal);
+}
+if (procedureModal) {
     procedureModal.addEventListener('click', function(e) {
         if (e.target === this) closeProcedureModal();
-    });
-
-    procedureSearchInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') procedureSearchBtn.click();
     });
 }
 
