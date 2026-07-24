@@ -813,7 +813,10 @@
         <!-- #dfdModal above). Phase 4 of 6: each tab's search box/results dropdown/selected-     -->
         <!-- lines table are also 100% JS-rendered (renderProcedureModalPanel() in                -->
         <!-- verification.js) - no per-tab static markup here, same convention as Phase 3.        -->
-        <!-- Procedure-tick/observation content within each tab remains Phase 5-6.                -->
+        <!-- Phase 5 of 6: an "Audit Procedures" checklist (buildProcedureChecklist() in           -->
+        <!-- verification.js) renders below the Linked Evidence table in each tab, one checkbox   -->
+        <!-- per auth role already configured on that Document - also 100% JS-rendered, no new    -->
+        <!-- static markup here. Observation content within each tab remains Phase 6.             -->
         <!-- ============================================= -->
         <div id="procedureModal">
             <div class="modal-content">

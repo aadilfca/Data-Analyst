@@ -1410,6 +1410,106 @@ def get_voucher_line_documents(voucher_line_id: int):
     return {"voucher_line_id": voucher_line_id, "documents": result, "count": len(result)}
 
 
+# ==============================================
+# VOUCHER LINE PROCEDURE CHECKS (Phase 5 of 6: audit procedures checklist)
+# Persists the tick state of each Document's auth-role checklist (e.g. "Prepared by",
+# "Approved by") per voucher line, rendered under that Document tab's Linked Evidence
+# table in the Supporting Documents modal. No validation of what a tick "means" - rules
+# are deferred to a future phase, per the confirmed brief.
+# ==============================================
+
+@router.get("/api/verification/procedure_checks/{voucher_line_id}")
+def get_procedure_checks(voucher_line_id: int):
+    """
+    Batch fetch every ticked/unticked role recorded for a voucher line, across all
+    documents - one call per Supporting Documents modal open, mirroring how
+    voucher_line_documents/{id} is already fetched once there. A role with no row is
+    simply absent from the response; the frontend treats absence as unchecked.
+    """
+    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    if not line:
+        raise HTTPException(404, "Voucher line not found.")
+
+    rows = execute_query(
+        """
+        SELECT document_id, role_name, is_checked, checked_by, checked_at
+        FROM voucher_line_procedure_checks
+        WHERE voucher_line_id = ?
+        """,
+        (voucher_line_id,)
+    )
+    checks = [
+        {
+            "document_id": r['document_id'],
+            "role_name": r['role_name'],
+            "is_checked": bool(r['is_checked']),
+            "checked_by": r['checked_by'],
+            "checked_at": r['checked_at']
+        }
+        for r in rows
+    ]
+    return {"voucher_line_id": voucher_line_id, "checks": checks}
+
+
+@router.post("/api/verification/procedure_checks")
+def set_procedure_check(
+    voucher_line_id: int = Body(..., embed=True, description="verification_details.id (the voucher line 'uid')"),
+    document_id: int = Body(..., embed=True, description="audit_rule_documents.id this role belongs to"),
+    role_name: str = Body(..., embed=True, description="Must match an existing audit_rule_document_auth_roles.role_name for this document"),
+    is_checked: bool = Body(..., embed=True),
+    checked_by: str = Body("Analyst", embed=True)
+):
+    """
+    Toggle one auth-role checkbox for a voucher line's Document tab. Upserts by
+    (voucher_line_id, document_id, role_name) so re-ticking the same role updates the
+    existing row instead of creating a duplicate.
+    """
+    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    if not line:
+        raise HTTPException(404, "Voucher line not found.")
+
+    doc = execute_query("SELECT id FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
+    if not doc:
+        raise HTTPException(404, "Document not found or inactive.")
+
+    role = execute_query(
+        "SELECT id FROM audit_rule_document_auth_roles WHERE document_id = ? AND role_name = ?",
+        (document_id, role_name)
+    )
+    if not role:
+        raise HTTPException(400, f"'{role_name}' is not a configured auth role for this document.")
+
+    execute_write(
+        """
+        INSERT INTO voucher_line_procedure_checks (voucher_line_id, document_id, role_name, is_checked, checked_by, checked_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(voucher_line_id, document_id, role_name)
+        DO UPDATE SET is_checked = excluded.is_checked, checked_by = excluded.checked_by, checked_at = CURRENT_TIMESTAMP
+        """,
+        (voucher_line_id, document_id, role_name, 1 if is_checked else 0, checked_by)
+    )
+
+    log_audit(checked_by, "Set Audit Procedure Check", "Verification",
+               f"Set '{role_name}' ({document_id}) to {is_checked} for voucher line {voucher_line_id}.")
+
+    updated = execute_query(
+        """
+        SELECT voucher_line_id, document_id, role_name, is_checked, checked_by, checked_at
+        FROM voucher_line_procedure_checks
+        WHERE voucher_line_id = ? AND document_id = ? AND role_name = ?
+        """,
+        (voucher_line_id, document_id, role_name)
+    )[0]
+    return {
+        "voucher_line_id": updated['voucher_line_id'],
+        "document_id": updated['document_id'],
+        "role_name": updated['role_name'],
+        "is_checked": bool(updated['is_checked']),
+        "checked_by": updated['checked_by'],
+        "checked_at": updated['checked_at']
+    }
+
+
 def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
     """
     Batch lookup of voucher_line_documents assignment status for a list of client_data ids -

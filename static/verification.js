@@ -2339,14 +2339,17 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn) {
 }
 
 // Returns (creating if needed) one tab's own state object, so every reader/writer shares the
-// same shape: { loaded, searchTerm, searchResults, docKeyColumn, selections, observation }.
-// selections/searchTerm/searchResults persist across tab switches within one modal-open session
-// (not reset on close, only on voucher navigation in seedVoucherLineState()) — the "switching
-// tabs doesn't lose unsaved work" requirement. observation stays an unused placeholder (Phase 6).
+// same shape: { loaded, searchTerm, searchResults, docKeyColumn, selections, observation,
+// checklist }. selections/searchTerm/searchResults persist across tab switches within one
+// modal-open session (not reset on close, only on voucher navigation in
+// seedVoucherLineState()) — the "switching tabs doesn't lose unsaved work" requirement.
+// observation stays an unused placeholder (Phase 6). checklist (Phase 5) is a map keyed by
+// role_name -> {is_checked, checked_by, checked_at}, seeded from GET /api/verification/
+// procedure_checks/{uid} in openProcedureModal() — a role with no entry is unchecked.
 function getProcedureTabState(uid, docId) {
     if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, tabs: {} };
     if (!procedureModalState[uid].tabs[docId]) {
-        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '' };
+        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', checklist: {} };
     }
     return procedureModalState[uid].tabs[docId];
 }
@@ -2386,6 +2389,20 @@ async function openProcedureModal(uid, initialDocId = null) {
     }
     const assignedDocIds = new Set(assignedRecords.map(d => d.document_id));
 
+    // Phase 5: every ticked/unticked audit-procedure role for this line, across all documents —
+    // fail-soft to an empty list (same convention as assignedRecords above) so a fetch hiccup
+    // never blocks the modal opening; re-fetched fresh on every open for the same reason.
+    let procedureChecks = [];
+    try {
+        const checksRes = await fetch(`${API_BASE}/api/verification/procedure_checks/${uid}`);
+        if (checksRes.ok) {
+            const checksData = await checksRes.json();
+            procedureChecks = checksData.checks || [];
+        }
+    } catch (e) {
+        console.error('Failed to load audit procedure checks:', e);
+    }
+
     // The voucher line's own amount (for the mismatch badge) — looked up from the already-loaded
     // voucher, no extra fetch needed.
     const voucherLine = currentVoucherLines.find(l => l.detail_id === uid);
@@ -2398,11 +2415,16 @@ async function openProcedureModal(uid, initialDocId = null) {
     const activeDocId = (initialDocId && documents.some(d => d.id === initialDocId)) ? initialDocId : documents[0].id;
     procedureModalState[uid].activeDocId = activeDocId;
 
-    // Re-sync each tab's selections from the fresh server data (never just seeded once) so
-    // reopening the modal always reflects reality, even if an assignment happened elsewhere.
+    // Re-sync each tab's selections and checklist from the fresh server data (never just seeded
+    // once) so reopening the modal always reflects reality, even if a change happened elsewhere.
     documents.forEach(doc => {
         const tabState = getProcedureTabState(uid, doc.id);
         tabState.selections = assignedRecords.filter(r => r.document_id === doc.id);
+        const checklist = {};
+        procedureChecks.filter(c => c.document_id === doc.id).forEach(c => {
+            checklist[c.role_name] = { is_checked: c.is_checked, checked_by: c.checked_by, checked_at: c.checked_at };
+        });
+        tabState.checklist = checklist;
     });
 
     if (procedureModalTitle) procedureModalTitle.textContent = `📎 Supporting Documents — ${type}`;
@@ -2504,6 +2526,10 @@ function renderProcedureModalPanel(uid, docId) {
                 <h4 class="procedure-selected-heading">Linked evidence</h4>
                 ${buildSelectedLinesTable(uid, docId)}
             </div>
+            <div class="procedure-checklist-section">
+                <h4 class="procedure-checklist-heading">Audit Procedures</h4>
+                ${buildProcedureChecklist(uid, docId)}
+            </div>
         </div>
     `;
 
@@ -2519,6 +2545,14 @@ function renderProcedureModalPanel(uid, docId) {
             openProcedureBrowseModal(uid, docId);
         });
     }
+
+    // Phase 5: one change listener per checklist checkbox — ticking/unticking a role posts the
+    // new state immediately (see toggleProcedureCheck()), no separate Save action.
+    container.querySelectorAll('.procedure-checklist-checkbox').forEach(cb => {
+        cb.addEventListener('change', function() {
+            toggleProcedureCheck(uid, docId, this.dataset.role, this.checked);
+        });
+    });
 
     // Restore a previously-fetched search's dropdown (extends Phase 3's "switching tabs doesn't
     // lose unsaved work" to cover search results too) — re-renders from tabState, no new fetch.
@@ -2685,6 +2719,78 @@ function buildSelectedLinesTable(uid, docId) {
         </div>
     `;
     return html;
+}
+
+// ---------- AUDIT PROCEDURES CHECKLIST (Phase 5 of 6) ----------
+// Renders one checkbox per auth role already configured on the Document (doc.auth_roles, sourced
+// from audit_rule_document_auth_roles via the same audit_guidance fetch/cache already used by
+// showAuditGuidancePopover()/updateSupportingCellForLine() — no new fetch for the role list
+// itself). Tick state comes from tabState.checklist (seeded in openProcedureModal() from
+// GET /api/verification/procedure_checks/{uid}) — a role with no entry renders unchecked. No
+// validation behind ticking a role — rules are explicitly deferred to a future phase.
+function buildProcedureChecklist(uid, docId) {
+    const lineState = procedureModalState[uid];
+    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
+    const tabState = getProcedureTabState(uid, docId);
+    const roles = (doc && doc.auth_roles) || [];
+    if (!roles.length) {
+        return '<p class="procedure-checklist-empty">No audit procedures configured for this document.</p>';
+    }
+
+    const items = roles.map(role => {
+        const state = tabState.checklist[role] || {};
+        const checked = !!state.is_checked;
+        return `
+            <label class="procedure-checklist-item">
+                <input type="checkbox" class="procedure-checklist-checkbox" data-role="${escapeHtml(role)}" ${checked ? 'checked' : ''}>
+                <span>${escapeHtml(role)}</span>
+            </label>
+        `;
+    }).join('');
+
+    return `<div class="procedure-checklist-list">${items}</div>`;
+}
+
+// Persists one checkbox toggle. Updates local state from the server's response on success (no
+// re-render needed — the checkbox already reflects the click); on failure, reverts the in-memory
+// state and re-renders so the checkbox visually snaps back to its prior value.
+async function toggleProcedureCheck(uid, docId, roleName, isChecked) {
+    const tabState = getProcedureTabState(uid, docId);
+    const previousState = tabState.checklist[roleName] ? { ...tabState.checklist[roleName] } : null;
+    if (!tabState.checklist[roleName]) tabState.checklist[roleName] = {};
+    tabState.checklist[roleName].is_checked = isChecked;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/procedure_checks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                voucher_line_id: parseInt(uid),
+                document_id: docId,
+                role_name: roleName,
+                is_checked: isChecked
+            })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save procedure check.');
+        }
+        const updated = await res.json();
+        tabState.checklist[roleName] = {
+            is_checked: updated.is_checked,
+            checked_by: updated.checked_by,
+            checked_at: updated.checked_at
+        };
+    } catch (e) {
+        console.error('Failed to save audit procedure check:', e);
+        if (previousState) {
+            tabState.checklist[roleName] = previousState;
+        } else {
+            delete tabState.checklist[roleName];
+        }
+        showStatus('Failed to save procedure tick — please try again.', 'error');
+        renderProcedureModalPanel(uid, docId);
+    }
 }
 
 // ---------- BROWSE MODAL (nested on top of #procedureModal) ----------

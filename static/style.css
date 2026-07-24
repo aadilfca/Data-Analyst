@@ -2730,6 +2730,46 @@ body {
     font-size: 12px;
 }
 
+/* ----- Audit Procedures Checklist (Phase 5 of 6) -----
+   Sits directly below the Linked Evidence section within each tab's .procedure-tab-panel —
+   one checkbox per auth role already configured on the Document (audit_rule_document_auth_roles),
+   no validation behind ticking (deferred). Matches the visual weight of .procedure-selected-*
+   above it. */
+.procedure-checklist-section {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid #e2e8f0;
+}
+.procedure-checklist-heading {
+    font-size: 13px;
+    font-weight: 600;
+    color: #334155;
+    margin: 0 0 8px 0;
+}
+.procedure-checklist-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.procedure-checklist-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #1a1a2e;
+    cursor: pointer;
+}
+.procedure-checklist-checkbox {
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+}
+.procedure-checklist-empty {
+    font-size: 13px;
+    color: #94a3b8;
+    margin: 0;
+}
+
 /* ----- Supporting Documents Browse Modal (Phase 4 of 6) -----
    Nested on top of #procedureModal (higher z-index) — same per-modal-scoped .modal-content/
    .modal-header convention as every other modal in this file. */

@@ -1474,6 +1474,41 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_documents_line ON voucher_line_documents (voucher_line_id)")
         print("✅ Created voucher_line_documents table (Phase 1 of 6: schema foundation)")
 
+        # ---------- VOUCHER LINE PROCEDURE CHECKS (Phase 5 of 6: audit procedures checklist) ----------
+        # Tick state for the audit-procedures checklist rendered under each Document tab's
+        # Linked Evidence table in the Supporting Documents modal. A procedure/role is
+        # identified by role_name (matching audit_rule_document_auth_roles.role_name) rather
+        # than a role id, since get_document_auth_roles() already exposes roles as plain
+        # strings with no id surfaced anywhere in this app - staying consistent with that.
+        # Scoped to (voucher_line_id, document_id, role_name) rather than living on
+        # voucher_line_documents, since a checklist must exist even before any evidence row
+        # has been linked for that document (voucher_line_documents has no row until then).
+        # A role that's never been ticked simply has no row here - absence means unchecked,
+        # the same "missing = not set" convention already used by voucher_line_documents
+        # itself. No validation of what a tick "means" lives here (rules are deferred to a
+        # future phase, per the confirmed brief) - this table only persists the checkbox
+        # state itself. Brand-new table with no prior data, so a plain CREATE TABLE IF NOT
+        # EXISTS is sufficient - no ALTER TABLE upgrade block needed (same reasoning as
+        # voucher_line_documents above). FOREIGN KEY clauses are documentation/ON DELETE
+        # CASCADE intent only - this app never sets PRAGMA foreign_keys = ON, so
+        # routers/verification.py's endpoints validate each referenced id explicitly.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_line_procedure_checks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                voucher_line_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                role_name TEXT NOT NULL,
+                is_checked INTEGER NOT NULL DEFAULT 0,
+                checked_by TEXT,
+                checked_at TIMESTAMP,
+                FOREIGN KEY (voucher_line_id) REFERENCES verification_details(id) ON DELETE CASCADE,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id),
+                UNIQUE(voucher_line_id, document_id, role_name)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_procedure_checks_line ON voucher_line_procedure_checks (voucher_line_id)")
+        print("✅ Created voucher_line_procedure_checks table (Phase 5 of 6: audit procedures checklist)")
+
         conn.commit()
         print("✅ Database initialization complete")
 
