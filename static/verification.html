@@ -571,36 +571,11 @@
             <!-- Data Links -->
             <div class="data-links">
                 <h2>📂 Client Data Links</h2>
-                <!-- Phase 5 of 5 (final): all five cards route to the new template-viewer.html
-                     page shell, differing only by ?template=N. The old duplicate in-page-report
-                     card and the databank.html?template=N destinations are both gone. -->
-                <div class="link-card-strip">
-                    <a href="/static/template-viewer.html?template=1" class="link-card" target="_blank">
-                        <span class="icon">📊</span>
-                        <span class="label">Transaction Report</span>
-                        <span class="badge">Template 1</span>
-                    </a>
-                    <a href="/static/template-viewer.html?template=2" class="link-card" target="_blank">
-                        <span class="icon">📋</span>
-                        <span class="label">Purchase Demand</span>
-                        <span class="badge">Template 2</span>
-                    </a>
-                    <a href="/static/template-viewer.html?template=3" class="link-card" target="_blank">
-                        <span class="icon">📄</span>
-                        <span class="label">Purchase Order</span>
-                        <span class="badge">Template 3</span>
-                    </a>
-                    <a href="/static/template-viewer.html?template=4" class="link-card" target="_blank">
-                        <span class="icon">🚪</span>
-                        <span class="label">Gate Receiving</span>
-                        <span class="badge">Template 4</span>
-                    </a>
-                    <a href="/static/template-viewer.html?template=5" class="link-card" target="_blank">
-                        <span class="icon">📥</span>
-                        <span class="label">Store Receiving</span>
-                        <span class="badge">Template 5</span>
-                    </a>
-                </div>
+                <!-- Cards are generated dynamically from GET /api/templates by loadDataLinksCards()
+                     in verification.js, so any current or future active template automatically gets
+                     a shortcut card here with no HTML changes needed - see that function for the
+                     icon lookup/fallback and card markup. -->
+                <div class="link-card-strip" id="dataLinksCardStrip"></div>
                 <p style="font-size:12px; color:#94a3b8; margin-top:10px;">💡 Click a card to open the template viewer
                     filtered to that data type, with its own date range and search.</p>
             </div>

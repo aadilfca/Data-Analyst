@@ -52,6 +52,9 @@ const popupCashbookSelect = document.getElementById('popupCashbookSelect');
 const popupStartBtn = document.getElementById('popupStartBtn');
 const popupCancelBtn = document.getElementById('popupCancelBtn');
 const popupError = document.getElementById('popupError');
+// Client Data Links card strip - populated dynamically by loadDataLinksCards() from the real
+// templates list, so it never needs a hardcoded per-template edit again.
+const dataLinksCardStrip = document.getElementById('dataLinksCardStrip');
 
 const statusDiv = document.getElementById('verificationStatus');
 // Phase 2: standalone transaction view removed — prevBtn/nextBtn/verifyBtn/saveProgressBtn/exitBtn
@@ -2412,6 +2415,7 @@ window.onload = function() {
         setNavModule('Verification');
     }
     loadVerificationStats();
+    loadDataLinksCards();
     // Bank Verification (Phase 8): a ?type= param means the user already chose Cash or Bank on
     // the dashboard (static/index.html) - skip this page's own internal Module Grid and open the
     // session popup directly, instead of asking the user to pick a verification type a second
@@ -2449,6 +2453,62 @@ window.onload = function() {
         openSessionPopup();
     }
 };
+
+// Icon lookup for Client Data Links cards, keyed by exact template_name. Purely a display detail
+// (the templates table has no icon column) - any template name not listed here still gets a card,
+// just with the generic fallback icon, so a brand-new template needs no code change here either.
+const TEMPLATE_LINK_ICONS = {
+    'Transaction Report': '📊',
+    'Purchase Demand': '📋',
+    'Purchase Order': '📄',
+    'Gate Pass': '🚪',
+    'Store receiving': '📥',
+    'Vendor Bill': '📃'
+};
+const TEMPLATE_LINK_ICON_FALLBACK = '📁';
+
+// Builds the Client Data Links card strip from the real, active templates list instead of a
+// hardcoded set of cards - so a template added/renamed later (e.g. "Vendor Bill") automatically
+// gets/keeps a correct shortcut card with no HTML/JS edits required.
+async function loadDataLinksCards() {
+    if (!dataLinksCardStrip) return;
+    try {
+        const res = await fetch('/api/templates');
+        if (!res.ok) throw new Error('Failed to load templates');
+        const templates = await res.json();
+
+        dataLinksCardStrip.innerHTML = '';
+        templates.forEach(function(template) {
+            const card = document.createElement('a');
+            card.className = 'link-card';
+            card.target = '_blank';
+            card.href = '/static/template-viewer.html?template=' + template.id;
+
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'icon';
+            iconSpan.textContent = TEMPLATE_LINK_ICONS[template.template_name] || TEMPLATE_LINK_ICON_FALLBACK;
+
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'label';
+            labelSpan.textContent = template.template_name;
+
+            const badgeSpan = document.createElement('span');
+            badgeSpan.className = 'badge';
+            badgeSpan.textContent = 'Template ' + template.id;
+
+            card.appendChild(iconSpan);
+            card.appendChild(labelSpan);
+            card.appendChild(badgeSpan);
+            dataLinksCardStrip.appendChild(card);
+        });
+    } catch (error) {
+        dataLinksCardStrip.innerHTML = '';
+        const errorText = document.createElement('span');
+        errorText.style.cssText = 'font-size:13px; color:#94a3b8;';
+        errorText.textContent = 'Unable to load data links.';
+        dataLinksCardStrip.appendChild(errorText);
+    }
+}
 
 async function loadVerificationStats() {
     try {
