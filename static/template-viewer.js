@@ -18,18 +18,51 @@
 // caused real bugs elsewhere in this app, see error_dashboard.js's old STORAGE_KEY crash).
 
 // ---------- TEMPLATE CONFIG ----------
-// Template ID -> display label/icon/endpoint. Label/icon confirmed against the Client
-// Data Links card strip in verification.html (the cards this viewer will eventually
-// replace, Phase 5). `endpoint` is included per the brief even though every template
-// currently reuses the same one — a placeholder for a future template that might need a
-// different data source, without having to restructure this lookup later.
-const TEMPLATE_CONFIG = {
-    1: { label: 'Transaction Report', icon: '📊', endpoint: '/api/data/preview' },
-    2: { label: 'Purchase Demand', icon: '📋', endpoint: '/api/data/preview' },
-    3: { label: 'Purchase Order', icon: '📄', endpoint: '/api/data/preview' },
-    4: { label: 'Gate Receiving', icon: '🚪', endpoint: '/api/data/preview' },
-    5: { label: 'Store Receiving', icon: '📥', endpoint: '/api/data/preview' }
+// Confirmed fix: a hardcoded id->label/icon map (ids 1-5 only) left any template added
+// later (e.g. Vendor Bill, id 6) with no config entry, which fell through to the
+// "invalid/unsupported template" branch below and disabled the whole toolbar - that's
+// what showed up as "greyed-out fields" for Vendor Bill. Config is now built from the
+// real, live template list (GET /api/templates - the same endpoint verification.js's
+// Client Data Links card strip and templates.js's Manage Templates page already use)
+// instead of a fixed lookup, so any current or future active template works with no
+// further code changes here.
+
+// Icon lookup keyed by exact template_name - purely a display detail, since the
+// templates table has no icon column. Any template name not listed still gets a config
+// (and a working toolbar), just with the generic fallback icon.
+const TEMPLATE_ICON_MAP = {
+    'Transaction Report': '📊',
+    'Purchase Demand': '📋',
+    'Purchase Order': '📄',
+    'Gate Pass': '🚪',
+    'Store receiving': '📥',
+    'Vendor Bill': '📃'
 };
+const TEMPLATE_ICON_FALLBACK = '📁';
+
+// Looks up one template's display config by id from the live templates list. Returns
+// null on no match (unknown/inactive template id) or a fetch failure - both cases are
+// treated identically by window.onload's existing invalid-template fallback branch.
+async function fetchTemplateConfig(templateId) {
+    try {
+        const res = await fetch(`${API_BASE}/api/templates`);
+        if (!res.ok) return null;
+        const templates = await res.json();
+        const match = templates.find(t => t.id === templateId);
+        if (!match) return null;
+        return {
+            label: match.template_name,
+            icon: TEMPLATE_ICON_MAP[match.template_name] || TEMPLATE_ICON_FALLBACK,
+            // Every template currently reuses the same data source; kept as an explicit
+            // field (not inlined at the two call sites) in case a future template ever
+            // needs a different one, without restructuring this lookup again.
+            endpoint: '/api/data/preview'
+        };
+    } catch (error) {
+        console.error('Template Viewer config fetch error:', error);
+        return null;
+    }
+}
 
 // This phase's fixed page size — the Phase 2 shell has no pagination controls yet, so a
 // single page (at the endpoint's own max limit) is fetched; see setStatusMessage()'s
@@ -241,13 +274,17 @@ tvEndDateInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetch
 tvSearchInput.addEventListener('input', applySearchAndRender);
 
 // ---------- INIT ----------
-window.onload = function () {
+// async so the live template-config lookup (fetchTemplateConfig) can be awaited before
+// deciding which of the two branches below applies - everything else in each branch is
+// unchanged from before this fix.
+window.onload = async function () {
     const params = new URLSearchParams(window.location.search);
     const templateParam = params.get('template');
     const templateId = Number(templateParam);
-    const config = TEMPLATE_CONFIG[templateId];
+    const isValidTemplateId = templateParam && Number.isInteger(templateId) && templateId > 0;
+    const config = isValidTemplateId ? await fetchTemplateConfig(templateId) : null;
 
-    if (templateParam && Number.isInteger(templateId) && templateId > 0 && config) {
+    if (isValidTemplateId && config) {
         currentTemplateId = templateId;
         currentTemplateConfig = config;
 
