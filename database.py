@@ -1438,6 +1438,42 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_category_assignments_client ON account_category_assignments (client_id)")
         print("✅ Created account_category_assignments table (Phase 1 of 5: schema foundation)")
 
+        # ---------- VOUCHER LINE SUPPORTING DOCUMENTS (new 6-phase requirement, Phase 1 of 6: schema) ----------
+        # Records which Data Bank row (client_data) has been linked as supporting evidence to
+        # which voucher line (verification_details.id - the same "uid" used throughout
+        # verification.js), and for which Document "slot" (audit_rule_documents.id - the live
+        # per-Category document list already powering the Supporting column, reused here rather
+        # than a free-text document type). UNIQUE(client_data_id) is the actual mechanism that
+        # enforces "once linked, a Data Bank row can't be assigned again to any other voucher
+        # line" - a real DB-level constraint, not just an app-layer check. No status/is_active
+        # column: unassign/reassign is deferred to a later phase, and this app's junction tables
+        # free up a slot by deleting the row (delete-then-reinsert convention) rather than
+        # soft-flagging, so a future unassign endpoint can simply DELETE this row to make the
+        # client_data row assignable again - linked_by/linked_at (mirroring created_by/
+        # verified_by elsewhere in this file) already give that future reassign flow a
+        # provenance trail via log_audit() in the meantime. Brand-new table with no prior data,
+        # so a plain CREATE TABLE IF NOT EXISTS is sufficient - no ALTER TABLE upgrade block
+        # needed (same reasoning as account_category_assignments above). No FOREIGN KEY
+        # enforcement fires at runtime (this app never sets PRAGMA foreign_keys = ON), so the
+        # assignment endpoints (routers/verification.py) validate each referenced id explicitly
+        # before writing - the FK clauses below are documentation/ON DELETE CASCADE intent only.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_line_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                voucher_line_id INTEGER NOT NULL,
+                client_data_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                linked_by TEXT DEFAULT 'Analyst',
+                linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (voucher_line_id) REFERENCES verification_details(id) ON DELETE CASCADE,
+                FOREIGN KEY (client_data_id) REFERENCES client_data(id) ON DELETE CASCADE,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id),
+                UNIQUE(client_data_id)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_documents_line ON voucher_line_documents (voucher_line_id)")
+        print("✅ Created voucher_line_documents table (Phase 1 of 6: schema foundation)")
+
         conn.commit()
         print("✅ Database initialization complete")
 

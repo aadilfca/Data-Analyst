@@ -1297,3 +1297,165 @@ def get_category_for_account(
         "category_id": rows[0]['category_id'],
         "category_name": rows[0]['category_name']
     }
+
+# ==============================================
+# VOUCHER LINE SUPPORTING DOCUMENTS (new 6-phase requirement, Phase 1 of 6)
+# Data layer for linking a Data Bank row (client_data) to a voucher line as
+# supporting evidence for a specific Document "slot" (audit_rule_documents).
+# Backend only this phase - consumed by later phases' search (2), modal shell
+# (3), and selection UI (4). Unassign/reassign endpoints are deliberately not
+# built yet (deferred) - the schema's UNIQUE(client_data_id) constraint is
+# what actually enforces "once linked, never assignable again" at this phase.
+# ==============================================
+
+@router.post("/api/verification/assign_document")
+def assign_supporting_document(
+    voucher_line_id: int = Body(..., embed=True, description="verification_details.id (the voucher line 'uid')"),
+    client_data_id: int = Body(..., embed=True, description="client_data.id of the Data Bank row being linked as evidence"),
+    document_id: int = Body(..., embed=True, description="audit_rule_documents.id - which evidence slot this fulfills"),
+    linked_by: str = Body("Analyst", embed=True)
+):
+    """
+    Link a Data Bank row to a voucher line as supporting evidence for one Document slot.
+    Rejects if the client_data row is already linked to any voucher line (the
+    UNIQUE(client_data_id) constraint is the ultimate backstop, but this check gives a
+    clear 400 naming the existing voucher instead of a raw DB-constraint error).
+    """
+    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    if not line:
+        raise HTTPException(404, "Voucher line not found.")
+
+    row = execute_query("SELECT id FROM client_data WHERE id = ? AND is_deleted = 0", (client_data_id,))
+    if not row:
+        raise HTTPException(404, "Data Bank row not found or has been deleted.")
+
+    doc = execute_query("SELECT id FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
+    if not doc:
+        raise HTTPException(404, "Document not found or inactive.")
+
+    existing = execute_query(
+        """
+        SELECT vld.id, vld.voucher_line_id, vd.transaction_ref
+        FROM voucher_line_documents vld
+        JOIN verification_details vd ON vd.id = vld.voucher_line_id
+        WHERE vld.client_data_id = ?
+        """,
+        (client_data_id,)
+    )
+    if existing:
+        raise HTTPException(
+            400,
+            f"This Data Bank row is already assigned to voucher '{existing[0]['transaction_ref']}' (line {existing[0]['voucher_line_id']})."
+        )
+
+    assignment_id = execute_write(
+        """
+        INSERT INTO voucher_line_documents (voucher_line_id, client_data_id, document_id, linked_by)
+        VALUES (?, ?, ?, ?)
+        """,
+        (voucher_line_id, client_data_id, document_id, linked_by)
+    )
+
+    log_audit(linked_by, "Assign Supporting Document", "Verification",
+               f"Linked client_data {client_data_id} to voucher line {voucher_line_id} (document {document_id}).")
+
+    linked_row = execute_query(
+        "SELECT id, voucher_line_id, client_data_id, document_id, linked_by, linked_at FROM voucher_line_documents WHERE id = ?",
+        (assignment_id,)
+    )[0]
+    return dict(linked_row)
+
+
+@router.get("/api/verification/voucher_line_documents/{voucher_line_id}")
+def get_voucher_line_documents(voucher_line_id: int):
+    """
+    List every document currently assigned to a voucher line, enriched with the
+    Document's name and the linked client_data row's data - so a later phase's
+    selected-lines table can render without a second round-trip.
+    """
+    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    if not line:
+        raise HTTPException(404, "Voucher line not found.")
+
+    rows = execute_query(
+        """
+        SELECT vld.id, vld.voucher_line_id, vld.client_data_id, vld.document_id,
+               vld.linked_by, vld.linked_at,
+               ard.name AS document_name,
+               cd.row_data, cd.extract_date, cd.extract_amount
+        FROM voucher_line_documents vld
+        JOIN audit_rule_documents ard ON ard.id = vld.document_id
+        JOIN client_data cd ON cd.id = vld.client_data_id
+        WHERE vld.voucher_line_id = ?
+        ORDER BY vld.linked_at ASC
+        """,
+        (voucher_line_id,)
+    )
+
+    result = []
+    for r in rows:
+        row_data = json.loads(r['row_data']) if isinstance(r['row_data'], str) else r['row_data']
+        result.append({
+            "id": r['id'],
+            "voucher_line_id": r['voucher_line_id'],
+            "client_data_id": r['client_data_id'],
+            "document_id": r['document_id'],
+            "document_name": r['document_name'],
+            "linked_by": r['linked_by'],
+            "linked_at": r['linked_at'],
+            "row_data": row_data,
+            "extract_date": r['extract_date'],
+            "extract_amount": r['extract_amount']
+        })
+    return {"voucher_line_id": voucher_line_id, "documents": result, "count": len(result)}
+
+
+@router.get("/api/verification/document_assignment_status")
+def get_document_assignment_status(
+    client_data_ids: str = Query(..., description="Comma-separated list of client_data.id values to check")
+):
+    """
+    Batch lookup for search/preview contexts (e.g. Phase 2's Data Bank search): for each
+    requested client_data id, reports whether it's already linked to a voucher line and,
+    if so, which one - so an already-assigned row can be shown read-only ("assigned to
+    voucher X") instead of being offered for assignment again. IDs that don't parse as
+    integers are ignored; an id with no assignment simply comes back assigned: false.
+    """
+    try:
+        ids = [int(x) for x in client_data_ids.split(",") if x.strip() != ""]
+    except ValueError:
+        raise HTTPException(400, "client_data_ids must be a comma-separated list of integers.")
+
+    if not ids:
+        return {"statuses": []}
+
+    placeholders = ",".join("?" for _ in ids)
+    rows = execute_query(
+        f"""
+        SELECT vld.client_data_id, vld.voucher_line_id, vd.transaction_ref
+        FROM voucher_line_documents vld
+        JOIN verification_details vd ON vd.id = vld.voucher_line_id
+        WHERE vld.client_data_id IN ({placeholders})
+        """,
+        tuple(ids)
+    )
+    assigned_map = {r['client_data_id']: r for r in rows}
+
+    statuses = []
+    for cid in ids:
+        match = assigned_map.get(cid)
+        if match:
+            statuses.append({
+                "client_data_id": cid,
+                "assigned": True,
+                "voucher_id": match['transaction_ref'],
+                "voucher_line_id": match['voucher_line_id']
+            })
+        else:
+            statuses.append({
+                "client_data_id": cid,
+                "assigned": False,
+                "voucher_id": None,
+                "voucher_line_id": None
+            })
+    return {"statuses": statuses}
