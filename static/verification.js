@@ -1139,7 +1139,7 @@ function renderVoucherLines(lines) {
                     </span>
                     <span class="voucher-line-amount">${amount}</span>
                     <span class="voucher-line-supporting-cell" data-detail-id="${uid}"></span>
-                    <span class="voucher-line-observations-cell"></span>
+                    <span class="voucher-line-observations-cell">${line.observations ? escapeHtml(line.observations) : ''}</span>
                     <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
                 </div>
             </div>
@@ -3130,9 +3130,21 @@ async function saveLineObservation(uid, docId) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.detail || 'Failed to save observation.');
         }
+        const data = await res.json();
         // A save is a deliberate, final decision on this tab's text — it should never be
         // silently replaced by the auto-suggestion again, even if the box is later cleared.
         tabState.suggestionApplied = true;
+
+        // Confirmed fix, 2026-07-25: the backend rolls this up into the voucher line's own
+        // Observation field immediately now (sync_line_observations_to_voucher(), called from
+        // save_line_observation() itself) — reflect that here too, in both the cached line data
+        // (currentVoucherLines, so a later full re-render of this voucher stays correct) and the
+        // live OBSERVATIONS cell on screen, without requiring the auditor to navigate away first.
+        const cachedLine = currentVoucherLines.find(l => l.detail_id === parseInt(uid));
+        if (cachedLine) cachedLine.observations = data.voucher_observations;
+        const observationsCell = document.querySelector(`.voucher-line-row[data-detail-id="${uid}"] .voucher-line-observations-cell`);
+        if (observationsCell) observationsCell.textContent = data.voucher_observations || '';
+
         if (statusEl) {
             statusEl.textContent = 'Saved';
             statusEl.classList.add('saved');

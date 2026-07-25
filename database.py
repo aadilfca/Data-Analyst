@@ -1589,6 +1589,7 @@ def init_db():
                 document_id INTEGER NOT NULL,
                 observation_text TEXT,
                 synced INTEGER NOT NULL DEFAULT 0,
+                last_synced_text TEXT,
                 updated_by TEXT DEFAULT 'Analyst',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (voucher_line_id) REFERENCES verification_details(id) ON DELETE CASCADE,
@@ -1598,6 +1599,26 @@ def init_db():
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_observations_line ON voucher_line_observations (voucher_line_id)")
         print("✅ Created voucher_line_observations table (Phase 6 of 6, FINAL: observation flow)")
+
+        # Schema upgrade (confirmed fix, 2026-07-25): add a nullable last_synced_text column to
+        # voucher_line_observations - the table already has live data (this feature's earlier
+        # save_line_observation() fix now rolls up on every explicit save, not just on the next
+        # save_line_items() call), so a plain CREATE TABLE addition alone would be a no-op on any
+        # existing database - same idempotent ALTER TABLE ADD COLUMN upgrade-block pattern used
+        # for trial_balance_accounts' category_id/period columns above. Records what text was
+        # last actually rolled into verification_details.observations for this
+        # (voucher_line_id, document_id), separate from observation_text (which always holds the
+        # current saved value, even before it's synced) - lets sync_line_observations_to_voucher()
+        # recognize a repeat save of unchanged text as a no-op instead of appending a duplicate
+        # block every time.
+        try:
+            cur = conn.execute("PRAGMA table_info(voucher_line_observations)")
+            existing_columns = [row[1] for row in cur.fetchall()]
+            if 'last_synced_text' not in existing_columns:
+                conn.execute("ALTER TABLE voucher_line_observations ADD COLUMN last_synced_text TEXT")
+            print("✅ Added last_synced_text column to voucher_line_observations")
+        except Exception as e:
+            print("⚠️ Could not add last_synced_text column to voucher_line_observations:", e)
 
         conn.commit()
         print("✅ Database initialization complete")

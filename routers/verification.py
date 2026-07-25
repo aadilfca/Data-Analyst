@@ -500,7 +500,11 @@ def _build_verification_line(d: dict) -> dict:
         # Phase 3: change detection data for the verification card
         "change_detection_status": change_detection_status,
         "old_row_data": old_row_data,
-        "version": current_version
+        "version": current_version,
+        # Confirmed fix, 2026-07-25: the rolled-up Observation text for this line, previously
+        # never returned to the frontend at all (the OBSERVATIONS column in the voucher table
+        # was a placeholder with no data source) - see renderVoucherLines() in verification.js.
+        "observations": d.get('observations')
     }
 
 def _fetch_session_details_grouped(session_id: int) -> list:
@@ -514,7 +518,7 @@ def _fetch_session_details_grouped(session_id: int) -> list:
     details = execute_query(
         """
         SELECT vd.id, vd.client_data_id, vd.transaction_ref, vd.line_items, vd.procedure_data,
-               vd.validation_status, vd.validation_message, vd.status,
+               vd.validation_status, vd.validation_message, vd.status, vd.observations,
                cd.template_id, cd.row_data, cd.extract_date
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
@@ -1629,7 +1633,10 @@ def set_procedure_check(
 # Complete/Exit path already runs per line) appends any unsynced, non-blank entries into
 # that line's own verification_details.observations field - labelled by document name,
 # never overwriting whatever text (auto or manual) was already there - then marks them
-# synced so the same text is never appended twice.
+# synced so the same text is never appended twice. Fixed 2026-07-25 to resolve sibling
+# voucher_line_ids first (via _resolve_sibling_voucher_line_ids()) rather than only the exact
+# id passed in - otherwise an observation saved under an orphaned earlier session (see that
+# helper's docstring) was permanently stranded and never rolled up. See sync function docstring.
 # ==============================================
 
 def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
@@ -1638,26 +1645,60 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
     verification_details.observations field (append-only), then mark them synced. A no-op
     if there's nothing pending. Never raises - a failure here should not block the
     save_line_items() call it's invoked from.
+
+    Bug fix (confirmed against live data, 2026-07-25): start_verification_session() has no
+    session-resume logic, so the same real accounting line gets a brand-new
+    verification_details.id (a new "sibling") every time its cashbook is reopened. An
+    observation saved under an earlier sibling's id was previously invisible to this
+    function - it only ever checked "WHERE voucher_line_id = ?" for the exact id passed in by
+    the CURRENT session - so if that earlier sibling's own save_line_items() was never called
+    again (e.g. the cashbook was reopened before the auditor navigated Next/Prev/Complete/Exit
+    for that line), the observation was permanently stranded as synced=0 and never appended
+    anywhere. Now uses _resolve_sibling_voucher_line_ids() - the same helper already used by
+    every read path in this feature (get_voucher_line_documents/get_procedure_checks/
+    get_line_observations) - to pick up unsynced entries across ALL sibling ids, not just this
+    one, and rolls them all into the CURRENT (active) line's own observations field.
+
+    Bug fix (confirmed against live data, 2026-07-25): save_line_observation() now calls this
+    function immediately on every explicit save (not just via the later save_line_items()
+    chokepoint) - so a repeat save of UNCHANGED text (e.g. clicking Save Observation twice, or
+    an auto-save re-firing with the same value) used to append a second, identical block every
+    time, since the old logic only checked "is this entry non-blank", never "did the text
+    actually change since it was last rolled up". Each pending entry's observation_text is now
+    compared against its own last_synced_text (database.py) - only a genuine change (or a
+    first-ever sync) contributes a new block; an unchanged repeat is still marked synced (so it
+    doesn't stay "pending" forever) but contributes nothing further. A real edit still appends
+    its own distinct block - append-only history for actual changes is unaffected.
     """
     try:
+        sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+        if not sibling_ids:
+            # voucher_line_id itself doesn't exist - nothing to do (shouldn't happen, since
+            # save_line_items() already validated it exists before calling this function).
+            return
+
+        placeholders = ",".join("?" for _ in sibling_ids)
         pending = execute_query(
-            """
-            SELECT vlo.id, vlo.observation_text, ard.name AS document_name
+            f"""
+            SELECT vlo.id, vlo.observation_text, vlo.last_synced_text, ard.name AS document_name
             FROM voucher_line_observations vlo
             JOIN audit_rule_documents ard ON ard.id = vlo.document_id
-            WHERE vlo.voucher_line_id = ? AND vlo.synced = 0
+            WHERE vlo.voucher_line_id IN ({placeholders}) AND vlo.synced = 0
             """,
-            (voucher_line_id,)
+            tuple(sibling_ids)
         )
         if not pending:
             return
 
-        # Build one labelled block per pending entry that actually has text; a blank/cleared
-        # observation contributes nothing to the appended text but is still marked synced below.
+        # Build one labelled block per pending entry that actually has text AND whose text has
+        # genuinely changed since it was last rolled up - a blank/cleared observation, or an
+        # unchanged repeat of what's already there, contributes nothing to the appended text but
+        # is still marked synced below (and has its own last_synced_text kept up to date).
         new_blocks = [
             f"[{p['document_name']}]: {p['observation_text'].strip()}"
             for p in pending
             if p['observation_text'] and p['observation_text'].strip()
+            and p['observation_text'].strip() != (p['last_synced_text'] or '').strip()
         ]
 
         if new_blocks:
@@ -1673,12 +1714,17 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
                 (combined_text, voucher_line_id)
             )
 
-        # Mark every processed entry synced regardless of whether it had text, so a cleared
-        # observation doesn't stay "pending" forever.
-        execute_write(
-            "UPDATE voucher_line_observations SET synced = 1 WHERE voucher_line_id = ? AND synced = 0",
-            (voucher_line_id,)
-        )
+        # Mark every processed entry synced regardless of whether it produced a block, so a
+        # cleared/unchanged observation doesn't stay "pending" forever - across ALL siblings, not
+        # just the current id, so an orphaned entry is never re-picked-up and re-appended later.
+        # last_synced_text is set per-row (not a single bulk statement, since the value differs
+        # per entry) to this run's own observation_text, so the NEXT save is compared against
+        # what was actually just rolled up, not a stale earlier value.
+        for p in pending:
+            execute_write(
+                "UPDATE voucher_line_observations SET synced = 1, last_synced_text = ? WHERE id = ?",
+                (p['observation_text'], p['id'])
+            )
     except Exception as e:
         # Deliberately swallow - observation roll-up must never block a line save.
         print(f"⚠️ sync_line_observations_to_voucher failed for line {voucher_line_id}: {e}")
@@ -1742,10 +1788,23 @@ def save_line_observation(
     updated_by: str = Body("Analyst", embed=True)
 ):
     """
-    Save (upsert) one Document tab's observation text for a voucher line. Always marks the
-    entry unsynced - an explicit save always means "roll this into the voucher line's
-    Observation field on the next save_line_items() call", whether the text is brand new,
-    edited, or cleared to blank.
+    Save (upsert) one Document tab's observation text for a voucher line, then immediately roll
+    it (and any other pending sibling entries) into the voucher line's own Observation field.
+
+    Bug fix (confirmed against live data, 2026-07-25): this endpoint previously only ever marked
+    the entry unsynced and relied entirely on some LATER, unrelated action (save_line_items() -
+    i.e. Next/Prev/Validate/Complete/Exit) to eventually roll it up. Live-tracing a fresh save
+    showed the write itself always worked correctly, but the roll-up could sit pending
+    indefinitely if the auditor saved an observation and never happened to trigger another line
+    save afterward - from the auditor's point of view, clicking "Save Observation" looks like a
+    complete action, so the roll-up should not depend on some separate, later click. Now calls
+    sync_line_observations_to_voucher() directly, right after the upsert - that helper is already
+    idempotent (a no-op if nothing is pending) and marks entries synced as it goes, so a later
+    save_line_items() call for the same line will correctly find nothing left to do; no double-
+    append risk. Confirmed acceptable side effect: sync_line_observations_to_voucher() has no
+    line-status gate (unlike save_line_items()), so an observation can now roll up even after the
+    line has already been validated/completed - reasonable, since this only ever touches the
+    observations field, not validation state.
     """
     line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
     if not line:
@@ -1768,6 +1827,11 @@ def save_line_observation(
     log_audit(updated_by, "Save Line Observation", "Verification",
                f"Saved observation for document {document_id} on voucher line {voucher_line_id}.")
 
+    # Roll up immediately rather than waiting for the next save_line_items() call - see
+    # docstring above. Runs before the final SELECT below so the response's own "synced" field
+    # correctly reflects the roll-up that just happened, not a stale pre-sync value.
+    sync_line_observations_to_voucher(voucher_line_id)
+
     updated = execute_query(
         """
         SELECT voucher_line_id, document_id, observation_text, synced, updated_by, updated_at
@@ -1776,13 +1840,24 @@ def save_line_observation(
         """,
         (voucher_line_id, document_id)
     )[0]
+
+    # Confirmed fix, 2026-07-25: also return the line's own current rolled-up Observation text
+    # (post-sync, since the call above already ran) so the frontend can update the voucher
+    # table's OBSERVATIONS cell immediately, without a full voucher reload.
+    voucher_row = execute_query(
+        "SELECT observations FROM verification_details WHERE id = ?",
+        (voucher_line_id,)
+    )
+    voucher_observations = voucher_row[0]['observations'] if voucher_row else None
+
     return {
         "voucher_line_id": updated['voucher_line_id'],
         "document_id": updated['document_id'],
         "observation_text": updated['observation_text'] or '',
         "synced": bool(updated['synced']),
         "updated_by": updated['updated_by'],
-        "updated_at": updated['updated_at']
+        "updated_at": updated['updated_at'],
+        "voucher_observations": voucher_observations
     }
 
 
