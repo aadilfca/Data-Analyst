@@ -2987,6 +2987,16 @@ body {
     background: #dcfce7;
 }
 
+/* Bug fix: names the Document a row is actually linked under when it's assigned to THIS SAME
+   voucher line but a DIFFERENT Document tab than the one currently open — otherwise this case
+   looked identical to a genuine same-tab assignment in the Voucher No. cell. Muted, not another
+   badge, since the Voucher No. text itself is already the primary signal here. */
+.procedure-browse-other-doc-note {
+    font-size: 11px;
+    color: #64748b;
+    font-style: italic;
+}
+
 /* ----- Browse Modal: Status filter + count badge (Phase 3 of 3, FINAL) -----
    Sits between the modal header and the table container. Purely client-side over the current
    page's already-loaded rows (see renderProcedureBrowseTable() in verification.js) — no search

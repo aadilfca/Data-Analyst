@@ -2367,20 +2367,32 @@ async function fetchProcedureRows(templateId, search, page, limit) {
 
 // Builds one selectable/greyed result row's HTML — shared by the search dropdown and the browse
 // modal so both present identical lock-state treatment, driven by Phase 2's
-// is_assigned/assigned_to_voucher_line/assigned_to_voucher_id fields. docKeyColumn (the
-// template's own document-key column name, from the same response) labels the row the same way
-// Data Bank's own preview identifies a document — falls back to a bare row id if unknown.
-function buildProcedureResultRowHtml(uid, row, docKeyColumn) {
+// is_assigned/assigned_to_voucher_line/assigned_to_voucher_id/assigned_to_document_id/
+// assigned_to_document_name fields. docKeyColumn (the template's own document-key column name,
+// from the same response) labels the row the same way Data Bank's own preview identifies a
+// document — falls back to a bare row id if unknown.
+//
+// Bug fix: "Already linked here" previously only checked assigned_to_voucher_line === uid, which
+// is true even when the row is linked to THIS voucher line under a DIFFERENT Document tab (e.g.
+// two Documents sharing the same template_id) — that row would never appear in the current tab's
+// own Linked Evidence table (which additionally filters by document_id), so Browse and Linked
+// Evidence disagreed about the same row for the same line. Now requires document_id to match the
+// tab actually open (activeDocId) before calling it a true self-match.
+function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
     const label = (docKeyColumn && row.row_data && row.row_data[docKeyColumn] != null && row.row_data[docKeyColumn] !== '')
         ? row.row_data[docKeyColumn]
         : `Row #${row.id}`;
     const date = row.extract_date || '—';
     const amount = row.extract_amount != null ? row.extract_amount : '—';
-    const isSelf = row.is_assigned && String(row.assigned_to_voucher_line) === String(uid);
+    const isSameLine = row.is_assigned && String(row.assigned_to_voucher_line) === String(uid);
+    const isSelf = isSameLine && activeDocId != null && String(row.assigned_to_document_id) === String(activeDocId);
+    const isSameLineOtherDoc = isSameLine && !isSelf;
     const isLocked = !!row.is_assigned;
     let lockNote = '';
     if (isSelf) {
         lockNote = '<span class="procedure-result-locked">Already linked here</span>';
+    } else if (isSameLineOtherDoc) {
+        lockNote = `<span class="procedure-result-locked">Linked to this voucher under "${escapeHtml(row.assigned_to_document_name || 'another document')}"</span>`;
     } else if (isLocked) {
         lockNote = `<span class="procedure-result-locked">Assigned to voucher ${escapeHtml(row.assigned_to_voucher_id || '')}</span>`;
     }
@@ -2727,7 +2739,7 @@ function renderProcedureSearchDropdown(uid, docId) {
             : '';
         return;
     }
-    dropdown.innerHTML = results.map(row => buildProcedureResultRowHtml(uid, row, tabState.docKeyColumn)).join('');
+    dropdown.innerHTML = results.map(row => buildProcedureResultRowHtml(uid, row, tabState.docKeyColumn, docId)).join('');
     dropdown.querySelectorAll('.procedure-result-item:not(.locked)').forEach(item => {
         item.addEventListener('click', async function() {
             const row = results.find(r => r.id === parseInt(this.dataset.id));
@@ -3130,7 +3142,15 @@ function formatProcedureCellValue(value) {
 // Assigned rows reuse this feature's existing "locked" convention (see buildProcedureResultRowHtml()
 // above): rendered fully (real data, not hidden) but visually greyed via .procedure-browse-row-assigned
 // and non-interactive (no click listener bound, no role/tabindex) — reassignment stays deferred.
-function buildProcedureBrowseTableHtml(uid, rows) {
+//
+// Bug fix: the Voucher No. column previously showed only assigned_to_voucher_id, which — for a row
+// assigned to THIS SAME voucher line under a DIFFERENT Document tab — looked identical to a genuine
+// same-tab assignment (same voucher number shown either way), even though such a row will never
+// appear in this tab's own Linked Evidence table (which additionally filters by document_id). The
+// Voucher No. cell now also names the Document it's actually linked under whenever that differs
+// from the tab currently open, so this "assigned elsewhere in the same voucher" case reads clearly
+// instead of looking like a data inconsistency between Browse and Linked Evidence.
+function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
     const columns = Object.keys(rows[0].row_data || {});
 
     let html = '<table class="procedure-browse-table"><thead><tr>';
@@ -3149,7 +3169,16 @@ function buildProcedureBrowseTableHtml(uid, rows) {
         const statusBadgeClass = isAssigned ? 'assigned' : 'unassigned';
         const statusLabel = isAssigned ? 'Assigned' : 'Unassigned';
         html += `<td><span class="procedure-browse-status-badge ${statusBadgeClass}">${statusLabel}</span></td>`;
-        html += `<td>${isAssigned ? escapeHtml(row.assigned_to_voucher_id || '') : ''}</td>`;
+        let voucherCell = '';
+        if (isAssigned) {
+            voucherCell = escapeHtml(row.assigned_to_voucher_id || '');
+            const isOtherDocSameLine = String(row.assigned_to_voucher_line) === String(uid)
+                && activeDocId != null && String(row.assigned_to_document_id) !== String(activeDocId);
+            if (isOtherDocSameLine) {
+                voucherCell += ` <span class="procedure-browse-other-doc-note">(under "${escapeHtml(row.assigned_to_document_name || 'another document')}")</span>`;
+            }
+        }
+        html += `<td>${voucherCell}</td>`;
         html += '</tr>';
     });
 
@@ -3191,7 +3220,7 @@ function renderProcedureBrowseTable() {
         // called with an empty array.
         procedureBrowseTableContainer.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">No rows match this filter.</div>';
     } else {
-        procedureBrowseTableContainer.innerHTML = buildProcedureBrowseTableHtml(uid, filteredRows);
+        procedureBrowseTableContainer.innerHTML = buildProcedureBrowseTableHtml(uid, filteredRows, docId);
         procedureBrowseTableContainer.querySelectorAll('.procedure-browse-table tbody tr:not(.procedure-browse-row-assigned)').forEach(item => {
             item.addEventListener('click', async function() {
                 // Looked up against the full (unfiltered) rows — row ids are stable regardless of

@@ -73,6 +73,12 @@ def attach_assignment_flags(rows):
       - is_assigned: bool                    -> True if this row is linked to any voucher line
       - assigned_to_voucher_line: int|None    -> the voucher_line_id (verification_details.id)
       - assigned_to_voucher_id: str|None      -> the human-readable voucher number
+      - assigned_to_document_id: int|None     -> which audit_rule_documents "slot" it's linked under
+      - assigned_to_document_name: str|None   -> that Document's name, for display
+    document_id/document_name (bug fix) let the Supporting Documents modal tell "assigned to
+    THIS voucher line under a DIFFERENT Document tab" apart from a true same-tab match - without
+    them, the Browse modal's Status column and a document tab's own Linked Evidence table could
+    disagree about the same row for the same voucher line (see get_assignment_status_map()).
     Uses one batched query for the whole page instead of one query per row, mirroring
     attach_history_flags() above.
     """
@@ -86,10 +92,14 @@ def attach_assignment_flags(rows):
             r["is_assigned"] = True
             r["assigned_to_voucher_line"] = match["voucher_line_id"]
             r["assigned_to_voucher_id"] = match["voucher_id"]
+            r["assigned_to_document_id"] = match["document_id"]
+            r["assigned_to_document_name"] = match["document_name"]
         else:
             r["is_assigned"] = False
             r["assigned_to_voucher_line"] = None
             r["assigned_to_voucher_id"] = None
+            r["assigned_to_document_id"] = None
+            r["assigned_to_document_name"] = None
 
 # ---------- ENDPOINTS ----------
 

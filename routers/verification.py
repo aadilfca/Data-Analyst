@@ -1713,24 +1713,39 @@ def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
     the same join get_document_assignment_status() used inline before Phase 2, now extracted
     so routers/data.py's GET /api/data/preview (Phase 2) can call it directly (no HTTP
     round-trip, no duplicated SQL) rather than only being reachable via this router's own
-    endpoint. Returns {client_data_id: {"voucher_line_id": ..., "voucher_id": ...}} - only
-    for ids that are actually assigned; callers should treat any id missing from the returned
-    dict as not assigned.
+    endpoint. Returns {client_data_id: {"voucher_line_id": ..., "voucher_id": ..., "document_id": ...,
+    "document_name": ...}} - only for ids that are actually assigned; callers should treat any
+    id missing from the returned dict as not assigned.
+
+    document_id/document_name are included (bug fix) because a row can be assigned to a given
+    voucher line under one Document "slot" (e.g. Purchase Order) while a different Document tab
+    on that SAME voucher line (e.g. Vendor Bill, if it shares the same template_id) still shows
+    that row in its own search/browse results. Without document_id, a caller can only tell
+    "assigned to this voucher line" - not "assigned to this voucher line UNDER THIS DOCUMENT" -
+    which previously caused the Browse modal (voucher_line match only) and the Linked Evidence
+    table (voucher_line + document_id match) to disagree about the same row for the same line.
     """
     if not client_data_ids:
         return {}
     placeholders = ",".join("?" for _ in client_data_ids)
     rows = execute_query(
         f"""
-        SELECT vld.client_data_id, vld.voucher_line_id, vd.transaction_ref
+        SELECT vld.client_data_id, vld.voucher_line_id, vd.transaction_ref,
+               vld.document_id, ard.name AS document_name
         FROM voucher_line_documents vld
         JOIN verification_details vd ON vd.id = vld.voucher_line_id
+        JOIN audit_rule_documents ard ON ard.id = vld.document_id
         WHERE vld.client_data_id IN ({placeholders}) AND vld.status = 'active'
         """,
         tuple(client_data_ids)
     )
     return {
-        r['client_data_id']: {"voucher_line_id": r['voucher_line_id'], "voucher_id": r['transaction_ref']}
+        r['client_data_id']: {
+            "voucher_line_id": r['voucher_line_id'],
+            "voucher_id": r['transaction_ref'],
+            "document_id": r['document_id'],
+            "document_name": r['document_name']
+        }
         for r in rows
     }
 
