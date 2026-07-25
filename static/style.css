@@ -2128,6 +2128,30 @@ body {
     color: #16a34a;
 }
 
+/* Voucher Supporting-Document Linking follow-up, Phase 4 of 4 (FINAL): each document's link +
+   confirmatory badge are wrapped in one row (the Supporting cell's own flex-direction:column
+   would otherwise stack them as separate rows) — see updateSupportingCellForLine() in
+   verification.js. The badge itself only renders when at least one row is already assigned to
+   that document for this line; click opens Browse pre-filtered to and highlighting it. */
+.voucher-line-proc-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.voucher-line-proc-badge {
+    font-size: 10px;
+    line-height: 1;
+    padding: 1px 4px;
+    border-radius: 8px;
+    background: #fee2e2;
+    color: #991b1b;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.voucher-line-proc-badge:hover {
+    background: #fecaca;
+}
+
 @media (max-width: 768px) {
     .voucher-panel {
         width: 100%;
@@ -2977,6 +3001,18 @@ body {
     cursor: not-allowed;
     opacity: 0.6;
     background: #f8fafc;
+}
+
+/* Confirmatory tick shortcut (Phase 4 of 4, FINAL): brief dim-red flash applied/removed via JS
+   (highlightProcedureBrowseRows() in verification.js) when Browse is opened via a document's
+   badge — reverts to the row's normal .procedure-browse-row-assigned background once the
+   animation ends, so it reads as a one-time cue rather than a permanent restyle. */
+.procedure-browse-row-highlight {
+    animation: procedureBrowseHighlightFlash 2.2s ease-out;
+}
+@keyframes procedureBrowseHighlightFlash {
+    0% { background-color: #fecaca; box-shadow: inset 0 0 0 2px #dc2626; }
+    100% { background-color: #f8fafc; box-shadow: inset 0 0 0 2px transparent; }
 }
 
 /* Status column badges — Assigned reuses this feature's existing amber "locked" palette

@@ -793,6 +793,23 @@ async function fetchAuditGuidanceData(type) {
     return data;
 }
 
+// Voucher Supporting-Document Linking follow-up, Phase 4 of 4 (FINAL): lightweight fetch of a
+// line's active assignment records, used only to determine which document links get a
+// confirmatory badge below — reuses Phase 1's endpoint (already fixed in Phase 3 to be
+// session-independent), never mutates procedureModalState, and fails soft to [] so a badge fetch
+// hiccup never breaks the Supporting cell itself.
+async function fetchAssignedDocumentRecords(uid) {
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.documents || [];
+    } catch (e) {
+        console.error('Failed to load assignment status for Supporting cell badges:', e);
+        return [];
+    }
+}
+
 // Renders the Supporting column's document links for one line, from its currently-selected
 // Category's attached Documents (data.documents[]) — replaces the old fixed VOUCHER_LINE_PROCEDURES
 // list. Async because the Category's guidance (and thus its Documents) is fetched on demand;
@@ -800,6 +817,11 @@ async function fetchAuditGuidanceData(type) {
 // dropdown's change listener. A Document with no template_id configured (Audit Rules module)
 // renders as plain muted text, not clickable — openProcedureModal() needs a real template_id to
 // search Data Bank evidence against.
+//
+// Phase 4 of 4 (FINAL, confirmatory tick shortcut): a document whose category has at least one
+// active assignment for this line also gets a small 🔎 badge next to its link — click jumps
+// straight into Browse mode, scrolled to and briefly highlighting the exact assigned row(s)
+// (see openProcedureBrowseHighlight()).
 async function updateSupportingCellForLine(uid, type) {
     const cell = document.querySelector(`.voucher-line-supporting-cell[data-detail-id="${uid}"]`);
     if (!cell) return;
@@ -822,6 +844,12 @@ async function updateSupportingCellForLine(uid, type) {
         cell.innerHTML = '<span style="color:#94a3b8; font-size:12px;">No documents for this category</span>';
         return;
     }
+
+    const assignedRecords = await fetchAssignedDocumentRecords(uid);
+    // Re-check the stale guard after this second await, same reason as above.
+    if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+    const assignedDocIds = new Set(assignedRecords.map(r => r.document_id));
+
     cell.innerHTML = documents.map(doc => {
         const state = voucherLineState[uid];
         const procKey = `doc_${doc.id}`;
@@ -831,10 +859,17 @@ async function updateSupportingCellForLine(uid, type) {
         const title = hasTemplate
             ? (confirmed ? doc.name + ' — confirmed' : 'Search ' + doc.name)
             : (doc.name + ' — no template linked (set one in Audit Rules)');
-        return `<span class="voucher-line-proc-link${confirmed ? ' confirmed' : ''}" data-uid="${uid}" data-proc="${procKey}" data-doc-id="${doc.id}" data-label="${escapeHtml(doc.name)}" data-template="${doc.template_id || ''}" title="${escapeHtml(title)}"${muted}>${escapeHtml(doc.name)}</span>`;
+        const link = `<span class="voucher-line-proc-link${confirmed ? ' confirmed' : ''}" data-uid="${uid}" data-proc="${procKey}" data-doc-id="${doc.id}" data-label="${escapeHtml(doc.name)}" data-template="${doc.template_id || ''}" title="${escapeHtml(title)}"${muted}>${escapeHtml(doc.name)}</span>`;
+        const isAssigned = hasTemplate && assignedDocIds.has(doc.id);
+        const badge = isAssigned
+            ? `<span class="voucher-line-proc-badge" data-uid="${uid}" data-doc-id="${doc.id}" title="View assigned evidence — jump to it in Browse">🔎</span>`
+            : '';
+        // Wrapped in one row so the link + badge sit side by side — the Supporting cell's own
+        // flex-direction:column would otherwise stack every direct child onto its own row.
+        return `<span class="voucher-line-proc-row">${link}${badge}</span>`;
     }).join('');
-    // This cell's links are created after the render's own batch event-wiring pass already ran
-    // (see renderVoucherLines()), so they're wired here instead.
+    // This cell's links/badges are created after the render's own batch event-wiring pass already
+    // ran (see renderVoucherLines()), so they're wired here instead.
     cell.querySelectorAll('.voucher-line-proc-link').forEach(link => {
         link.addEventListener('click', function(e) {
             e.stopPropagation();
@@ -843,6 +878,14 @@ async function updateSupportingCellForLine(uid, type) {
             const docId2 = parseInt(this.dataset.docId);
             // Phase 3: opens the tabbed modal for the whole line, pre-selecting this document's tab.
             openProcedureModal(uid2, docId2);
+        });
+    });
+    cell.querySelectorAll('.voucher-line-proc-badge').forEach(badge => {
+        badge.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const uid2 = this.dataset.uid;
+            const docId2 = parseInt(this.dataset.docId);
+            openProcedureBrowseHighlight(uid2, docId2);
         });
     });
 }
@@ -3124,7 +3167,11 @@ const PROCEDURE_BROWSE_PAGE_SIZE = 20;
 // renderProcedureBrowseTable() below).
 let procedureBrowseState = { uid: null, docId: null, page: 1, totalRows: 0, rows: [], statusFilter: 'all' };
 
-async function openProcedureBrowseModal(uid, docId) {
+// preloadedRows (Phase 4 of 4, FINAL): when the caller already has the exact rows to show
+// (openProcedureBrowseHighlight()'s confirmatory shortcut), render them directly instead of
+// fetching page 1 of the full unfiltered listing — every other call site omits this argument and
+// behaves exactly as before.
+async function openProcedureBrowseModal(uid, docId, preloadedRows = null) {
     if (!procedureBrowseModal) return;
     const lineState = procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
@@ -3136,11 +3183,67 @@ async function openProcedureBrowseModal(uid, docId) {
     if (procedureBrowseStatusFilterSelect) procedureBrowseStatusFilterSelect.value = 'all';
     if (procedureBrowseModalTitle) procedureBrowseModalTitle.textContent = `👁️ Browse — ${doc.name}`;
     procedureBrowseModal.style.display = 'flex';
-    await fetchProcedureBrowsePage();
+
+    if (preloadedRows) {
+        procedureBrowseState.rows = preloadedRows;
+        procedureBrowseState.totalRows = preloadedRows.length;
+        renderProcedureBrowseTable();
+    } else {
+        await fetchProcedureBrowsePage();
+    }
 }
 
 function closeProcedureBrowseModal() {
     if (procedureBrowseModal) procedureBrowseModal.style.display = 'none';
+}
+
+// ---------- CONFIRMATORY TICK SHORTCUT (Phase 4 of 4, FINAL) ----------
+// Badge click handler (wired in updateSupportingCellForLine()): opens the modal on this document's
+// tab, then opens Browse pre-filtered to and highlighting the exact row(s) already known to be
+// assigned to this line+document — a one-click path from "I can see it's assigned" to "here's
+// exactly where."
+async function openProcedureBrowseHighlight(uid, docId) {
+    // Ensures the correct tab is active and tabState.selections is freshly re-synced from the
+    // server (same fetch openProcedureModal() always does on open).
+    await openProcedureModal(uid, docId);
+    const lineState = procedureModalState[uid];
+    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
+    const tabState = getProcedureTabState(uid, docId);
+    const selections = tabState.selections || [];
+    if (!doc || !doc.template_id || !selections.length) return;
+
+    const targetIds = new Set(selections.map(s => s.client_data_id));
+    try {
+        // There is no backend "find the page containing row X" concept, so fetch the template's
+        // listing at the backend's own max page size (200 — GET /api/data/preview's own cap) and
+        // pull out just the already-known assigned row(s). This is real Browse data (is_assigned/
+        // assigned_to_* fields included by the backend), not a synthesized row — see
+        // buildProcedureBrowseTableHtml(), unchanged. Known limit: a document+line with more than
+        // 200 assigned rows (far beyond this app's document-per-line convention) won't be found.
+        const data = await fetchProcedureRows(doc.template_id, '', 1, 200);
+        const matchedRows = (data.rows || []).filter(r => targetIds.has(r.id));
+        if (!matchedRows.length) return;
+        await openProcedureBrowseModal(uid, docId, matchedRows);
+        highlightProcedureBrowseRows(targetIds);
+    } catch (e) {
+        console.error('Failed to open Browse to the assigned row(s):', e);
+    }
+}
+
+// Scrolls to the first matching row and applies a brief dim-red flash to every matching row
+// (client_data ids), reverting to the row's normal "Assigned" styling once the flash animation
+// ends — a temporary confirmatory cue, not a permanent style change.
+function highlightProcedureBrowseRows(clientDataIds) {
+    if (!procedureBrowseTableContainer) return;
+    let firstRow = null;
+    clientDataIds.forEach(id => {
+        const row = procedureBrowseTableContainer.querySelector(`tr[data-id="${id}"]`);
+        if (!row) return;
+        if (!firstRow) firstRow = row;
+        row.classList.add('procedure-browse-row-highlight');
+        setTimeout(() => row.classList.remove('procedure-browse-row-highlight'), 2200);
+    });
+    if (firstRow) firstRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 async function fetchProcedureBrowsePage() {
