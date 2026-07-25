@@ -3004,9 +3004,15 @@ const procedureBrowseTableContainer = document.getElementById('procedureBrowseTa
 const procedureBrowsePrevBtn = document.getElementById('procedureBrowsePrevBtn');
 const procedureBrowseNextBtn = document.getElementById('procedureBrowseNextBtn');
 const procedureBrowsePageInfo = document.getElementById('procedureBrowsePageInfo');
+// Phase 3 of 3, FINAL: Status filter + count badge controls.
+const procedureBrowseStatusFilterSelect = document.getElementById('procedureBrowseStatusFilter');
+const procedureBrowseStatusCountEl = document.getElementById('procedureBrowseStatusCount');
 
 const PROCEDURE_BROWSE_PAGE_SIZE = 20;
-let procedureBrowseState = { uid: null, docId: null, page: 1, totalRows: 0, rows: [] };
+// statusFilter is 'all'/'assigned'/'unassigned' — purely client-side, applied to whichever page of
+// rows is already loaded (no new fetch, no backend change; see the Phase 3 note on
+// renderProcedureBrowseTable() below).
+let procedureBrowseState = { uid: null, docId: null, page: 1, totalRows: 0, rows: [], statusFilter: 'all' };
 
 async function openProcedureBrowseModal(uid, docId) {
     if (!procedureBrowseModal) return;
@@ -3014,7 +3020,10 @@ async function openProcedureBrowseModal(uid, docId) {
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     if (!doc || !doc.template_id) return;
 
-    procedureBrowseState = { uid, docId, page: 1, totalRows: 0, rows: [] };
+    procedureBrowseState = { uid, docId, page: 1, totalRows: 0, rows: [], statusFilter: 'all' };
+    // The <select> element itself retains its own value across modal reopens independent of this
+    // state object, so it needs an explicit reset too — "default to All on modal/tab open".
+    if (procedureBrowseStatusFilterSelect) procedureBrowseStatusFilterSelect.value = 'all';
     if (procedureBrowseModalTitle) procedureBrowseModalTitle.textContent = `👁️ Browse — ${doc.name}`;
     procedureBrowseModal.style.display = 'flex';
     await fetchProcedureBrowsePage();
@@ -3091,15 +3100,45 @@ function buildProcedureBrowseTableHtml(uid, rows) {
     return html;
 }
 
+// Recomputes the Status count badge from the current page's full (unfiltered) row set — always
+// shows both counts together as a plain breakdown of what's loaded, independent of which filter is
+// currently selected (Phase 3 of 3, FINAL). Page-scoped, per the confirmed brief: this modal loads
+// PROCEDURE_BROWSE_PAGE_SIZE rows at a time, so this is never a whole-template total.
+function updateProcedureBrowseStatusCount(rows) {
+    if (!procedureBrowseStatusCountEl) return;
+    if (!rows.length) {
+        procedureBrowseStatusCountEl.textContent = '';
+        return;
+    }
+    const assignedCount = rows.filter(r => r.is_assigned).length;
+    const unassignedCount = rows.length - assignedCount;
+    procedureBrowseStatusCountEl.textContent = `This page: ${unassignedCount} unassigned · ${assignedCount} assigned`;
+}
+
 function renderProcedureBrowseTable() {
     if (!procedureBrowseTableContainer) return;
-    const { uid, docId, rows, page, totalRows } = procedureBrowseState;
+    const { uid, docId, rows, page, totalRows, statusFilter } = procedureBrowseState;
+    updateProcedureBrowseStatusCount(rows);
+
+    // Status filter (Phase 3 of 3, FINAL) — purely client-side over the rows already loaded for
+    // this page; changing the filter never re-fetches (see the change listener below).
+    const filteredRows = statusFilter === 'assigned' ? rows.filter(r => r.is_assigned)
+        : statusFilter === 'unassigned' ? rows.filter(r => !r.is_assigned)
+        : rows;
+
     if (!rows.length) {
         procedureBrowseTableContainer.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">No rows found for this template.</div>';
+    } else if (!filteredRows.length) {
+        // Distinct from the "no rows at all" message above — the page has data, just none matching
+        // the current filter. buildProcedureBrowseTableHtml() indexes rows[0], so it must never be
+        // called with an empty array.
+        procedureBrowseTableContainer.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">No rows match this filter.</div>';
     } else {
-        procedureBrowseTableContainer.innerHTML = buildProcedureBrowseTableHtml(uid, rows);
+        procedureBrowseTableContainer.innerHTML = buildProcedureBrowseTableHtml(uid, filteredRows);
         procedureBrowseTableContainer.querySelectorAll('.procedure-browse-table tbody tr:not(.procedure-browse-row-assigned)').forEach(item => {
             item.addEventListener('click', async function() {
+                // Looked up against the full (unfiltered) rows — row ids are stable regardless of
+                // whether the row is currently hidden by the status filter.
                 const row = rows.find(r => r.id === parseInt(this.dataset.id));
                 if (!row) return;
                 const success = await selectProcedureDocument(uid, docId, row);
@@ -3134,6 +3173,14 @@ if (procedureBrowseNextBtn) {
             procedureBrowseState.page++;
             fetchProcedureBrowsePage();
         }
+    });
+}
+if (procedureBrowseStatusFilterSelect) {
+    // Phase 3 of 3, FINAL: re-render only — the filter is client-side over the already-loaded
+    // page, so no fetch is needed here (unlike Prev/Next above).
+    procedureBrowseStatusFilterSelect.addEventListener('change', function() {
+        procedureBrowseState.statusFilter = this.value;
+        renderProcedureBrowseTable();
     });
 }
 if (procedureBrowseModalClose) {

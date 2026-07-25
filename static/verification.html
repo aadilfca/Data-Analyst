@@ -846,6 +846,19 @@
                     <button class="close-btn" id="procedureBrowseModalClose"
                         style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
                 </div>
+                <!-- Status filter + count badge (Phase 3 of 3, FINAL) — client-side only, filters
+                     the already-loaded current page of #procedureBrowseTableContainer's rows by
+                     the Status column Phase 1 added. No search box here (this modal has none of
+                     its own; that's the separate tab-panel dropdown, Phase 2, untouched). -->
+                <div class="procedure-browse-toolbar">
+                    <label for="procedureBrowseStatusFilter">Status</label>
+                    <select id="procedureBrowseStatusFilter" class="procedure-browse-status-select">
+                        <option value="all" selected>All</option>
+                        <option value="assigned">Assigned</option>
+                        <option value="unassigned">Unassigned</option>
+                    </select>
+                    <span id="procedureBrowseStatusCount" class="procedure-browse-status-count"></span>
+                </div>
                 <div id="procedureBrowseTableContainer" class="procedure-browse-table-container"></div>
                 <div class="procedure-browse-pagination">
                     <button type="button" id="procedureBrowsePrevBtn" class="btn-pagination" disabled>Previous</button>
