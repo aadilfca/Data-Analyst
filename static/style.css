@@ -1555,6 +1555,30 @@ body {
     max-height: 340px;
     padding: 8px 12px;
 }
+
+/* Search row (client-side filter over the popover's already-loaded data) — sits between the
+   title row and the table body, styled consistently with this app's other popover-scoped
+   inputs (e.g. .nav-search-input's sizing/focus-ring language). */
+.transaction-list-popover .popover-search-row {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e2e8f0;
+}
+.transaction-list-popover .popover-search-row input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 2px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 13px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.transaction-list-popover .popover-search-row input:hover {
+    border-color: #94a3b8;
+}
+.transaction-list-popover .popover-search-row input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
 .transaction-list-popover table {
     width: 100%;
     border-collapse: collapse;

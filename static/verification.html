@@ -594,6 +594,13 @@
                         style="background:none; border:none; font-size:22px; cursor:pointer; color:#94a3b8; padding:0 4px;"
                         title="Close popover">×</button>
                 </div>
+                <!-- Client-side filter over the already-loaded sessionTransactions data (no new
+                     backend call) - see filterTransactionsForPopover()/renderTransactionPopover()
+                     in verification.js. Cleared automatically when the popover closes. -->
+                <div class="popover-search-row">
+                    <input type="text" id="transactionListSearchInput"
+                        placeholder="Search voucher ID, date, account, amount, status...">
+                </div>
                 <div class="popover-body">
                     <table>
                         <thead>

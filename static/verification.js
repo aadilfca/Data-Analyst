@@ -1508,6 +1508,10 @@ document.addEventListener('click', function(e) {
 
 let sessionTransactions = [];
 let currentTransactionIndex = -1;
+// Client-side filter term for the voucher list popover's search box (#transactionListSearchInput).
+// Cleared automatically by closeTransactionPopover() so reopening the popover later always starts
+// with the full list rather than a stale filter.
+let transactionSearchTerm = '';
 
 async function loadTransactionList(showPopover = false) {
     if (!currentSessionId) {
@@ -1560,17 +1564,53 @@ function buildPopoverStatusIcon(validationStatus) {
     return `<span class="status-icon ${status.toLowerCase()}">${statusIcon}</span>`;
 }
 
+// Returns the subset of sessionTransactions whose Voucher ID, Date, Account Name, Amount, or
+// validation Status contains the search term (case-insensitive substring match). Reuses the same
+// field-extraction logic renderTransactionPopover() uses per line (getVoucherLineAmount(), the
+// same rowData account-name fallback chain, the same default-to-'Pending' status) so results are
+// guaranteed consistent with what's actually displayed in the table.
+function filterTransactionsForPopover(term) {
+    const needle = term.trim().toLowerCase();
+    if (!needle) return sessionTransactions;
+    return sessionTransactions.filter(t => {
+        const rowData = t.row_data || {};
+        const accountName = rowData['Account Name'] || rowData['Account'] || rowData['Ledger'] || '';
+        const amount = getVoucherLineAmount(rowData);
+        const status = t.validation_status || 'Pending';
+        const haystack = [
+            t.voucher_id || '',
+            t.extract_date || '',
+            accountName,
+            amount,
+            status
+        ].join(' ').toLowerCase();
+        return haystack.includes(needle);
+    });
+}
+
 function renderTransactionPopover() {
     const popover = document.getElementById('transactionListPopover');
     const tbody = document.getElementById('transactionListBody');
     const totalSpan = document.getElementById('popoverTotal');
     if (!popover || !tbody) return;
 
-    const count = sessionTransactions.length;
+    // Filter over the already-loaded session data — no new backend call. transactionSearchTerm
+    // is updated by the #transactionListSearchInput 'input' listener wired below.
+    const filteredTransactions = transactionSearchTerm ? filterTransactionsForPopover(transactionSearchTerm) : sessionTransactions;
+    const count = filteredTransactions.length;
 
-    if (count === 0) {
+    if (sessionTransactions.length === 0) {
         tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#94a3b8;">No transactions found.</td></tr>`;
         if (totalSpan) totalSpan.textContent = '';
+        popover.style.display = 'block';
+        return;
+    }
+
+    if (count === 0) {
+        // Distinct from the "No transactions found." state above — the session has data, the
+        // current search term just doesn't match any of it.
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#94a3b8;">No transactions match your search.</td></tr>`;
+        if (totalSpan) totalSpan.textContent = 'Total vouchers: 0 | Total: 0 transactions';
         popover.style.display = 'block';
         return;
     }
@@ -1579,7 +1619,7 @@ function renderTransactionPopover() {
     // already contiguous by voucher, but this doesn't assume it).
     const groupOrder = [];
     const groupsByVoucherId = {};
-    sessionTransactions.forEach(t => {
+    filteredTransactions.forEach(t => {
         const vid = t.voucher_id || '—';
         if (!groupsByVoucherId[vid]) {
             groupsByVoucherId[vid] = [];
@@ -1668,6 +1708,23 @@ function renderTransactionPopover() {
 function closeTransactionPopover() {
     const popover = document.getElementById('transactionListPopover');
     if (popover) popover.style.display = 'none';
+    // Reset the search filter on close so reopening the popover later (e.g. after navigating to
+    // a different voucher) always starts with the full list instead of a stale filter.
+    transactionSearchTerm = '';
+    const searchInput = document.getElementById('transactionListSearchInput');
+    if (searchInput) searchInput.value = '';
+}
+
+// Wire the popover search input once — element is static markup (verification.html), never
+// rebuilt, so this listener is set up alongside popoverCloseBtn below rather than re-attached on
+// every renderTransactionPopover() call. No debounce: this filters already-loaded in-memory data,
+// not a backend query (same convention as template-viewer.js's own client-side search).
+const transactionListSearchInput = document.getElementById('transactionListSearchInput');
+if (transactionListSearchInput) {
+    transactionListSearchInput.addEventListener('input', function() {
+        transactionSearchTerm = this.value;
+        renderTransactionPopover();
+    });
 }
 // Close popover on outside click and close button
 document.addEventListener('click', function(e) {
