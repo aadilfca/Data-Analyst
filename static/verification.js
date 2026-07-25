@@ -2384,6 +2384,23 @@ function formatAssignedVoucherLabel(voucherId, lineSrno) {
     return (lineSrno !== null && lineSrno !== undefined) ? `${label} [${lineSrno}]` : label;
 }
 
+// Bug fix (Voucher Supporting-Document Linking follow-up, Phase 3 of 4): determines whether an
+// assigned Data Bank row belongs to the SAME underlying voucher line currently open in the
+// modal — regardless of which verification session that assignment was originally made under.
+// Every new verification session recreates verification_details rows from scratch for every
+// voucher (no session-reuse exists), so the session-specific uid/row.assigned_to_voucher_line
+// can no longer be compared directly (a row assigned under an OLDER session's copy of this same
+// line would wrongly show as "assigned to a different voucher" even though it's the exact same
+// line). Compares by the stable client_data_id of the voucher's own line instead — looked up for
+// "uid" via currentVoucherLines (already loaded for the current voucher), against the new
+// assigned_to_line_client_data_id field routers/data.py's attach_assignment_flags() now returns.
+function isSameUnderlyingLine(uid, row) {
+    if (!row.is_assigned) return false;
+    const currentLine = currentVoucherLines.find(l => l.detail_id === uid);
+    if (!currentLine || currentLine.client_data_id == null || row.assigned_to_line_client_data_id == null) return false;
+    return String(currentLine.client_data_id) === String(row.assigned_to_line_client_data_id);
+}
+
 // Builds one selectable/greyed result row's HTML — shared by the search dropdown and the browse
 // modal so both present identical lock-state treatment, driven by Phase 2's
 // is_assigned/assigned_to_voucher_line/assigned_to_voucher_id/assigned_to_document_id/
@@ -2391,19 +2408,24 @@ function formatAssignedVoucherLabel(voucherId, lineSrno) {
 // document-key column name, from the same response) labels the row the same way Data Bank's own
 // preview identifies a document — falls back to a bare row id if unknown.
 //
-// Bug fix: "Already linked here" previously only checked assigned_to_voucher_line === uid, which
-// is true even when the row is linked to THIS voucher line under a DIFFERENT Document tab (e.g.
-// two Documents sharing the same template_id) — that row would never appear in the current tab's
-// own Linked Evidence table (which additionally filters by document_id), so Browse and Linked
-// Evidence disagreed about the same row for the same line. Now requires document_id to match the
-// tab actually open (activeDocId) before calling it a true self-match.
+// Bug fix (Phase 2 of 4): "Already linked here" previously only checked assigned_to_voucher_line
+// === uid, which is true even when the row is linked to THIS voucher line under a DIFFERENT
+// Document tab (e.g. two Documents sharing the same template_id) — that row would never appear
+// in the current tab's own Linked Evidence table (which additionally filters by document_id), so
+// Browse and Linked Evidence disagreed about the same row for the same line. Now requires
+// document_id to match the tab actually open (activeDocId) before calling it a true self-match.
+//
+// Bug fix (Phase 3 of 4): "same line" itself is now determined by isSameUnderlyingLine() (stable
+// client_data_id comparison) instead of raw assigned_to_voucher_line === uid — see that
+// function's own comment for why a session-specific id comparison silently missed assignments
+// made in an earlier verification session for the exact same voucher line.
 function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
     const label = (docKeyColumn && row.row_data && row.row_data[docKeyColumn] != null && row.row_data[docKeyColumn] !== '')
         ? row.row_data[docKeyColumn]
         : `Row #${row.id}`;
     const date = row.extract_date || '—';
     const amount = row.extract_amount != null ? row.extract_amount : '—';
-    const isSameLine = row.is_assigned && String(row.assigned_to_voucher_line) === String(uid);
+    const isSameLine = isSameUnderlyingLine(uid, row);
     const isSelf = isSameLine && activeDocId != null && String(row.assigned_to_document_id) === String(activeDocId);
     const isSameLineOtherDoc = isSameLine && !isSelf;
     const isLocked = !!row.is_assigned;
@@ -3169,6 +3191,11 @@ function formatProcedureCellValue(value) {
 // Voucher No. cell now also names the Document it's actually linked under whenever that differs
 // from the tab currently open, so this "assigned elsewhere in the same voucher" case reads clearly
 // instead of looking like a data inconsistency between Browse and Linked Evidence.
+//
+// Bug fix (Phase 3 of 4): "same voucher line" here is now determined by isSameUnderlyingLine()
+// (stable client_data_id comparison) instead of raw assigned_to_voucher_line === uid — see that
+// function's own comment for why a session-specific id comparison silently missed assignments
+// made in an earlier verification session for the exact same voucher line.
 function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
     const columns = Object.keys(rows[0].row_data || {});
 
@@ -3191,7 +3218,7 @@ function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
         let voucherCell = '';
         if (isAssigned) {
             voucherCell = escapeHtml(formatAssignedVoucherLabel(row.assigned_to_voucher_id, row.assigned_to_line_srno));
-            const isOtherDocSameLine = String(row.assigned_to_voucher_line) === String(uid)
+            const isOtherDocSameLine = isSameUnderlyingLine(uid, row)
                 && activeDocId != null && String(row.assigned_to_document_id) !== String(activeDocId);
             if (isOtherDocSameLine) {
                 voucherCell += ` <span class="procedure-browse-other-doc-note">(under "${escapeHtml(row.assigned_to_document_name || 'another document')}")</span>`;

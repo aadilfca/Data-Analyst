@@ -80,6 +80,18 @@ def attach_assignment_flags(rows):
                                                   follow-up, Phase 2 of 4), so Browse can show
                                                   "{voucher_id} [{line_srno}]" instead of the
                                                   voucher number alone
+      - assigned_to_line_client_data_id: int|None -> the STABLE client_data_id of the assigned
+                                                  row's own voucher line (bug fix, Phase 3 of 4).
+                                                  assigned_to_voucher_line is only meaningful
+                                                  within whichever verification session the
+                                                  assignment was made under (a new session
+                                                  recreates verification_details rows from
+                                                  scratch for every voucher), so it can no
+                                                  longer be compared directly against a
+                                                  "currently open" line's own id to decide
+                                                  "is this the same line" - the frontend should
+                                                  compare THIS field against the current line's
+                                                  own client_data_id instead.
     document_id/document_name (bug fix) let the Supporting Documents modal tell "assigned to
     THIS voucher line under a DIFFERENT Document tab" apart from a true same-tab match - without
     them, the Browse modal's Status column and a document tab's own Linked Evidence table could
@@ -100,6 +112,7 @@ def attach_assignment_flags(rows):
             r["assigned_to_document_id"] = match["document_id"]
             r["assigned_to_document_name"] = match["document_name"]
             r["assigned_to_line_srno"] = match["line_srno"]
+            r["assigned_to_line_client_data_id"] = match["voucher_line_client_data_id"]
         else:
             r["is_assigned"] = False
             r["assigned_to_voucher_line"] = None
@@ -107,6 +120,7 @@ def attach_assignment_flags(rows):
             r["assigned_to_document_id"] = None
             r["assigned_to_document_name"] = None
             r["assigned_to_line_srno"] = None
+            r["assigned_to_line_client_data_id"] = None
 
 # ---------- ENDPOINTS ----------
 

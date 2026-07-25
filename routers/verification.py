@@ -1314,6 +1314,40 @@ def get_category_for_account(
 # row must never be treated as a live link.
 # ==============================================
 
+def _resolve_sibling_voucher_line_ids(voucher_line_id: int) -> Optional[List[int]]:
+    """
+    Bug fix (Voucher Supporting-Document Linking follow-up, Phase 3 of 4): start_verification_session()
+    has no "resume an existing session" logic - every time a cashbook is opened and verification is
+    (re)started, a brand-new verification_sessions row and a brand-new set of verification_details
+    rows are inserted for every voucher/line, even ones already worked on in an earlier session. So
+    the SAME real accounting line (one client_data row) gets a DIFFERENT verification_details.id -
+    the "voucher_line_id"/"uid" used throughout this file - every time it's re-verified.
+
+    voucher_line_documents/voucher_line_procedure_checks/voucher_line_observations all key their
+    data off that per-session id, which silently orphaned any assignment/tick/observation made in
+    an earlier session the moment a new session was started for the same cashbook - Browse still
+    reported the row as "Assigned" (it resolves the assignment's own stored voucher_line_id back to
+    a still-valid transaction_ref, from whichever old session it belongs to), but Linked Evidence
+    (filtered by the CURRENT session's voucher_line_id only) could never find it.
+
+    Returns every verification_details.id (across ALL sessions, past and present) that shares the
+    same underlying client_data_id as voucher_line_id - i.e. every copy of this exact accounting
+    line - so a caller can query "WHERE voucher_line_id IN (...)" instead of "= ?" and see
+    assignments/ticks/observations regardless of which session they were made under. Returns None
+    if voucher_line_id itself doesn't exist (caller 404s, same as before this fix). Writes are NOT
+    affected by this helper - they still target whichever voucher_line_id the caller passes in,
+    exactly as before.
+    """
+    line = execute_query("SELECT client_data_id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    if not line:
+        return None
+    siblings = execute_query(
+        "SELECT id FROM verification_details WHERE client_data_id = ?",
+        (line[0]['client_data_id'],)
+    )
+    return [s['id'] for s in siblings]
+
+
 @router.post("/api/verification/assign_document")
 def assign_supporting_document(
     voucher_line_id: int = Body(..., embed=True, description="verification_details.id (the voucher line 'uid')"),
@@ -1379,13 +1413,21 @@ def get_voucher_line_documents(voucher_line_id: int):
     an unassigned/soft-deleted link is never returned here), enriched with the
     Document's name and the linked client_data row's data - so a later phase's
     selected-lines table can render without a second round-trip.
+
+    Bug fix (Phase 3 of 4, see _resolve_sibling_voucher_line_ids()): now looks up assignments
+    across every verification_details.id that shares this line's own client_data_id, not just
+    voucher_line_id itself - so evidence linked in an earlier verification session still shows
+    up when the same voucher line is reopened in a new one. No dedup needed here - the partial
+    unique index on client_data_id already guarantees one evidence row can never be actively
+    linked under more than one sibling at a time.
     """
-    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
-    if not line:
+    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+    if sibling_ids is None:
         raise HTTPException(404, "Voucher line not found.")
 
+    placeholders = ",".join("?" for _ in sibling_ids)
     rows = execute_query(
-        """
+        f"""
         SELECT vld.id, vld.voucher_line_id, vld.client_data_id, vld.document_id,
                vld.linked_by, vld.linked_at,
                ard.name AS document_name,
@@ -1393,10 +1435,10 @@ def get_voucher_line_documents(voucher_line_id: int):
         FROM voucher_line_documents vld
         JOIN audit_rule_documents ard ON ard.id = vld.document_id
         JOIN client_data cd ON cd.id = vld.client_data_id
-        WHERE vld.voucher_line_id = ? AND vld.status = 'active'
+        WHERE vld.voucher_line_id IN ({placeholders}) AND vld.status = 'active'
         ORDER BY vld.linked_at ASC
         """,
-        (voucher_line_id,)
+        tuple(sibling_ids)
     )
 
     result = []
@@ -1473,19 +1515,38 @@ def get_procedure_checks(voucher_line_id: int):
     documents - one call per Supporting Documents modal open, mirroring how
     voucher_line_documents/{id} is already fetched once there. A role with no row is
     simply absent from the response; the frontend treats absence as unchecked.
+
+    Bug fix (Phase 3 of 4, see _resolve_sibling_voucher_line_ids()): now looks up ticks across
+    every verification_details.id that shares this line's own client_data_id, not just
+    voucher_line_id itself, so a tick made in an earlier verification session still shows up
+    when the same voucher line is reopened in a new one. Unlike voucher_line_documents (which
+    can never have two sibling lines both claiming the same evidence row), two different
+    sibling sessions COULD each have their own row for the same (document_id, role_name) - the
+    most recently checked/unchecked one wins (deduped in Python below by checked_at).
     """
-    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
-    if not line:
+    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+    if sibling_ids is None:
         raise HTTPException(404, "Voucher line not found.")
 
+    placeholders = ",".join("?" for _ in sibling_ids)
     rows = execute_query(
-        """
+        f"""
         SELECT document_id, role_name, is_checked, checked_by, checked_at
         FROM voucher_line_procedure_checks
-        WHERE voucher_line_id = ?
+        WHERE voucher_line_id IN ({placeholders})
         """,
-        (voucher_line_id,)
+        tuple(sibling_ids)
     )
+    # Dedup by (document_id, role_name), keeping whichever sibling's row was checked/unchecked
+    # most recently - checked_at is a SQLite CURRENT_TIMESTAMP string ("YYYY-MM-DD HH:MM:SS"),
+    # which sorts correctly as a plain string comparison.
+    latest_by_key: Dict[tuple, dict] = {}
+    for r in rows:
+        key = (r['document_id'], r['role_name'])
+        existing = latest_by_key.get(key)
+        if existing is None or (r['checked_at'] or '') > (existing['checked_at'] or ''):
+            latest_by_key[key] = r
+
     checks = [
         {
             "document_id": r['document_id'],
@@ -1494,7 +1555,7 @@ def get_procedure_checks(voucher_line_id: int):
             "checked_by": r['checked_by'],
             "checked_at": r['checked_at']
         }
-        for r in rows
+        for r in latest_by_key.values()
     ]
     return {"voucher_line_id": voucher_line_id, "checks": checks}
 
@@ -1629,19 +1690,37 @@ def get_line_observations(voucher_line_id: int):
     Batch fetch every observation entry recorded for a voucher line, across all documents -
     one call per Supporting Documents modal open, mirroring how voucher_line_documents/{id}
     and procedure_checks/{id} are already fetched once there.
+
+    Bug fix (Phase 3 of 4, see _resolve_sibling_voucher_line_ids()): now looks up entries
+    across every verification_details.id that shares this line's own client_data_id, not just
+    voucher_line_id itself, so an observation saved in an earlier verification session still
+    shows up when the same voucher line is reopened in a new one. Two sibling sessions could
+    each have their own entry for the same document_id - the most recently updated one wins
+    (deduped in Python below by updated_at). This is a display-only read fix - sync_line_
+    observations_to_voucher() (called from save_line_items()) still only ever rolls an entry
+    into ITS OWN voucher_line_id's verification_details.observations field, unaffected.
     """
-    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
-    if not line:
+    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+    if sibling_ids is None:
         raise HTTPException(404, "Voucher line not found.")
 
+    placeholders = ",".join("?" for _ in sibling_ids)
     rows = execute_query(
-        """
+        f"""
         SELECT document_id, observation_text, synced, updated_by, updated_at
         FROM voucher_line_observations
-        WHERE voucher_line_id = ?
+        WHERE voucher_line_id IN ({placeholders})
         """,
-        (voucher_line_id,)
+        tuple(sibling_ids)
     )
+    # Dedup by document_id, keeping whichever sibling's entry was updated most recently -
+    # updated_at is a SQLite CURRENT_TIMESTAMP string, sorts correctly as a string comparison.
+    latest_by_doc: Dict[int, dict] = {}
+    for r in rows:
+        existing = latest_by_doc.get(r['document_id'])
+        if existing is None or (r['updated_at'] or '') > (existing['updated_at'] or ''):
+            latest_by_doc[r['document_id']] = r
+
     entries = [
         {
             "document_id": r['document_id'],
@@ -1650,7 +1729,7 @@ def get_line_observations(voucher_line_id: int):
             "updated_by": r['updated_by'],
             "updated_at": r['updated_at']
         }
-        for r in rows
+        for r in latest_by_doc.values()
     ]
     return {"voucher_line_id": voucher_line_id, "entries": entries}
 
@@ -1760,6 +1839,15 @@ def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
     1-based position within its own voucher - see _resolve_line_srno() - so Browse can show
     "{voucher_id} [{line_srno}]" instead of the voucher number alone, making the assignment
     visibly verifiable against the voucher's own line order.
+
+    voucher_line_client_data_id (Phase 3 of 4 bug fix) is the STABLE client_data_id of the
+    assigned row's own voucher_line_id (vd.client_data_id, already joined) - since a new
+    verification session recreates verification_details rows from scratch for every voucher,
+    the assignment's own voucher_line_id is only meaningful within whichever session it was
+    made under, so it can no longer be compared directly against a "currently open" line's
+    voucher_line_id to decide "is this the same line" (see _resolve_sibling_voucher_line_ids()
+    for the read-side of this same fix). Callers should compare voucher_line_client_data_id
+    against the currently open line's own client_data_id instead.
     """
     if not client_data_ids:
         return {}
@@ -1767,6 +1855,7 @@ def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
     rows = execute_query(
         f"""
         SELECT vld.client_data_id, vld.voucher_line_id, vd.transaction_ref, vd.session_id,
+               vd.client_data_id AS voucher_line_client_data_id,
                vld.document_id, ard.name AS document_name
         FROM voucher_line_documents vld
         JOIN verification_details vd ON vd.id = vld.voucher_line_id
@@ -1784,7 +1873,8 @@ def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
             "voucher_id": r['transaction_ref'],
             "document_id": r['document_id'],
             "document_name": r['document_name'],
-            "line_srno": _resolve_line_srno(r['session_id'], r['voucher_line_id'], session_details_cache)
+            "line_srno": _resolve_line_srno(r['session_id'], r['voucher_line_id'], session_details_cache),
+            "voucher_line_client_data_id": r['voucher_line_client_data_id']
         }
         for r in rows
     }
