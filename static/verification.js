@@ -2970,6 +2970,26 @@ function buildSelectedLinesTable(uid, docId) {
         html += `<td><button type="button" class="procedure-unlink-btn" data-assignment-id="${sel.id}" title="Unlink this evidence">✕</button></td>`;
         html += '</tr>';
     });
+
+    // Totals row: sums only the Quantity/Amount columns (exact, case-insensitive header match —
+    // every real Document template's Numeric columns are literally named "Quantity"/"Amount", so
+    // this deliberately excludes lookalikes like "Tax Amount"/"Receive Quantity"/"Balance Quantity"
+    // that some templates also carry). Every other cell, including the trailing unlink column, is
+    // left blank. Recomputes automatically on every re-render of this table (add/remove a line),
+    // since this function is the single place the Linked Evidence table is built.
+    html += '<tr class="procedure-total-row">';
+    columns.forEach(col => {
+        const isTotalsColumn = ['quantity', 'amount'].includes(col.trim().toLowerCase());
+        if (isTotalsColumn) {
+            const colSum = selections.reduce((sum, sel) => sum + (parseFloat(sel.row_data ? sel.row_data[col] : 0) || 0), 0);
+            html += `<td>${colSum.toFixed(2)}</td>`;
+        } else {
+            html += '<td></td>';
+        }
+    });
+    html += '<td></td>'; // unlink-icon column stays blank on the totals row
+    html += '</tr>';
+
     html += '</tbody></table></div>';
 
     const { total, voucherAmount, mismatch, count } = getSelectedLinesSummary(uid, docId);

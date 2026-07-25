@@ -2767,6 +2767,18 @@ body {
     border-bottom: none;
 }
 
+/* Totals row (Quantity/Amount subtotal) — a distinct footer inside the Linked Evidence table,
+   bold + light-blue tinted so it stands apart from the plain data rows above it while staying
+   visually consistent with the muted, professional .procedure-total-summary line just below the
+   table (not the bright green/red of the Match/Mismatch badges). border-top supplies the "distinct
+   border" since tr:last-child already strips the default bottom border on the row above it. */
+.procedure-total-row td {
+    background: #eff6ff;
+    border-top: 2px solid #bfdbfe;
+    font-weight: 700;
+    color: #1a1a2e;
+}
+
 /* Unlink (✕) button per row in the Linked Evidence table — Unassign requirement */
 .procedure-unlink-btn {
     background: none;
