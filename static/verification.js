@@ -2636,8 +2636,22 @@ function renderProcedureModalTabs(uid) {
 
     container.innerHTML = documents.map(doc => {
         const isActive = doc.id === lineState.activeDocId;
-        const isComplete = assignedDocIds.has(doc.id);
-        const dotTitle = isComplete ? 'Evidence linked' : 'No evidence linked yet';
+
+        // A no-template document has no evidence table to link, so linked-evidence presence
+        // (assignedDocIds) is meaningless for it — its dot instead reflects whether every one of
+        // its Audit Procedures is ticked (voucher_line_procedure_checks, same source the
+        // checklist itself reads via getProcedureTabState()). Zero procedures configured is
+        // deliberately NOT complete (empty ≠ done), per the confirmed requirement.
+        let isComplete, dotTitle;
+        if (doc.template_id) {
+            isComplete = assignedDocIds.has(doc.id);
+            dotTitle = isComplete ? 'Evidence linked' : 'No evidence linked yet';
+        } else {
+            const tabState = getProcedureTabState(uid, doc.id);
+            const roles = doc.auth_roles || [];
+            isComplete = roles.length > 0 && roles.every(role => tabState.checklist[role] && tabState.checklist[role].is_checked);
+            dotTitle = isComplete ? 'All procedures confirmed' : 'Procedures pending';
+        }
         return `
             <button type="button" class="procedure-tab-btn${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
                 <span class="procedure-tab-dot${isComplete ? ' complete' : ''}" title="${dotTitle}"></span>
@@ -3085,6 +3099,11 @@ async function toggleProcedureCheck(uid, docId, roleName, isChecked) {
             checked_by: updated.checked_by,
             checked_at: updated.checked_at
         };
+        // Completion-dot logic (Phase 3): a no-template tab's dot depends on checklist state, so
+        // a successful tick/untick must refresh the tab bar too, not just the panel (which the
+        // checkbox itself already visually reflects). Has-template tabs' dots are unaffected by
+        // this, since their isComplete branch never reads the checklist.
+        renderProcedureModalTabs(uid);
     } catch (e) {
         console.error('Failed to save audit procedure check:', e);
         if (previousState) {
@@ -3094,6 +3113,7 @@ async function toggleProcedureCheck(uid, docId, roleName, isChecked) {
         }
         showStatus('Failed to save procedure tick — please try again.', 'error');
         renderProcedureModalPanel(uid, docId);
+        renderProcedureModalTabs(uid);
     }
 }
 

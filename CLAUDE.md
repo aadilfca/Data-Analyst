@@ -95,7 +95,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 - **Observation roll-up should replace-per-procedure, not append-forever (confirmed fix, `routers/verification.py` only) — supersedes the append-based design of every earlier observation-sync fix above.** — see "Voucher Supporting-Document Linking (incl. follow-up fixes)" in CHANGELOG_ARCHIVE.md.
 
 ## Workflow rules
-- Before editing, list files to be touched and wait for my confirmation
+- Before editing, list files to be touched and wait for my confirmation. This is TWO separate hard stops, not one — even if my brief already includes a "files likely affected" list: (1) reply with the candidate file list only, no Read/Edit/Write on those files yet, and wait for me to confirm/adjust it in a separate reply; (2) only after that, enter Plan Mode, propose the approach for the current phase only, and wait for my explicit approval before implementing. A file list inside my own brief is a draft for you to restate back, never an implicit go-ahead.
 - Use Plan Mode for anything touching more than one file
 - One phase at a time, stop for review after each
 - **Trial Balance upload page (`static/trial_balance.html`/`.js`)**: the old standalone "As of Date" field is gone. Period Start/End (Section 2) are now the sole date source — Period End's value is what actually gets sent to the backend as `as_of_date` (the backend Form field itself was not renamed/touched). `updateClientDependentUI()`/`uploadTrialBalance()` gate the Upload button and the upload request on Period Start+End both being present, not on any as-of-date input. Do not reintroduce a separate as-of-date input without checking this — it would create two competing date sources.
@@ -337,6 +337,7 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - 2026-07-21: Client Data Availability & Coverage Redesign Phase 6 of 6, FINAL (Preview popup shell restyle, `static/databank.html` only) done.
 - 2026-07-25: Supporting-column no-template Documents unlocked, Phase 1 of 3 (`static/verification.js` only) done — a Document with no `template_id` now opens `#procedureModal` normally like any other; panel content for these tabs is Phase 2.
 - 2026-07-25: Supporting-column no-template Documents, Phase 2 of 3 (`static/verification.js` only, no CSS changes needed) done — a no-template Document's tab in `#procedureModal` now renders a two-segment panel (Audit Procedures + Observation only, no search/evidence table), and its Observation auto-suggestion no longer references the (nonexistent) mismatch badge. Completion-dot logic is Phase 3.
+- 2026-07-25: Supporting-column no-template Documents, Phase 3 of 3, FINAL (`static/verification.js` only) done — a no-template Document's tab-bar dot now reflects "all Audit Procedures ticked" instead of the linked-evidence check; ticking/unticking a procedure now also refreshes the tab bar live. **This completes the entire 3-phase requirement.**
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed
