@@ -814,9 +814,10 @@ async function fetchAssignedDocumentRecords(uid) {
 // Category's attached Documents (data.documents[]) — replaces the old fixed VOUCHER_LINE_PROCEDURES
 // list. Async because the Category's guidance (and thus its Documents) is fetched on demand;
 // called both at initial render (for a line with an already-seeded type) and from the Type
-// dropdown's change listener. A Document with no template_id configured (Audit Rules module)
-// renders as plain muted text, not clickable — openProcedureModal() needs a real template_id to
-// search Data Bank evidence against.
+// dropdown's change listener. A Document with no template_id configured (Audit Rules module) is
+// still clickable — it opens #procedureModal on that document's tab like any other; that tab's
+// panel content (no search/evidence table, since there's no template to search against) is a
+// separate, later phase — see openProcedureModal()/renderProcedureModalTabs().
 //
 // Phase 4 of 4 (FINAL, confirmatory tick shortcut): a document whose category has at least one
 // active assignment for this line also gets a small 🔎 badge next to its link — click jumps
@@ -855,11 +856,8 @@ async function updateSupportingCellForLine(uid, type) {
         const procKey = `doc_${doc.id}`;
         const confirmed = state && state.procedureData && state.procedureData[procKey];
         const hasTemplate = !!doc.template_id;
-        const muted = hasTemplate ? '' : ' style="color:#94a3b8; cursor:default; text-decoration:none;"';
-        const title = hasTemplate
-            ? (confirmed ? doc.name + ' — confirmed' : 'Search ' + doc.name)
-            : (doc.name + ' — no template linked (set one in Audit Rules)');
-        const link = `<span class="voucher-line-proc-link${confirmed ? ' confirmed' : ''}" data-uid="${uid}" data-proc="${procKey}" data-doc-id="${doc.id}" data-label="${escapeHtml(doc.name)}" data-template="${doc.template_id || ''}" title="${escapeHtml(title)}"${muted}>${escapeHtml(doc.name)}</span>`;
+        const title = confirmed ? doc.name + ' — confirmed' : 'Search ' + doc.name;
+        const link = `<span class="voucher-line-proc-link${confirmed ? ' confirmed' : ''}" data-uid="${uid}" data-proc="${procKey}" data-doc-id="${doc.id}" data-label="${escapeHtml(doc.name)}" data-template="${doc.template_id || ''}" title="${escapeHtml(title)}">${escapeHtml(doc.name)}</span>`;
         const isAssigned = hasTemplate && assignedDocIds.has(doc.id);
         const badge = isAssigned
             ? `<span class="voucher-line-proc-badge" data-uid="${uid}" data-doc-id="${doc.id}" title="View assigned evidence — jump to it in Browse">🔎</span>`
@@ -873,7 +871,8 @@ async function updateSupportingCellForLine(uid, type) {
     cell.querySelectorAll('.voucher-line-proc-link').forEach(link => {
         link.addEventListener('click', function(e) {
             e.stopPropagation();
-            if (!this.dataset.template) return; // no template configured for this Document yet
+            // No longer gated on a configured template — a no-template Document's tab still
+            // opens normally; what it displays once open is handled elsewhere (later phase).
             const uid2 = this.dataset.uid;
             const docId2 = parseInt(this.dataset.docId);
             // Phase 3: opens the tabbed modal for the whole line, pre-selecting this document's tab.

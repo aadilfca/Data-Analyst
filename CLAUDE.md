@@ -335,6 +335,7 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - 2026-07-21: Client Data Availability & Coverage Redesign Phase 5 of 6 (Missing-dates report, `static/databank.html` + `static/databank.js`) done.
 - 2026-07-25: **Linked Evidence totals row (confirmed fix, `static/verification.js` + `static/style.css` only)** done.
 - 2026-07-21: Client Data Availability & Coverage Redesign Phase 6 of 6, FINAL (Preview popup shell restyle, `static/databank.html` only) done.
+- 2026-07-25: Supporting-column no-template Documents unlocked, Phase 1 of 3 (`static/verification.js` only) done — a Document with no `template_id` now opens `#procedureModal` normally like any other; panel content for these tabs is Phase 2.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed
