@@ -908,11 +908,11 @@ async function autoFillCategoryForLine(uid, accountCode) {
     applyCategoryToTypeCell(uid, categoryName);
 }
 
-// Order matches .voucher-line-summary-grid's columns: Account Code, Type, Account Name, Amount,
-// Supporting, Observations, Status. User-resizable (see the drag handles in renderVoucherLines()'s
-// header row) — persists at module scope across renders/navigation, same convention as
-// voucherLineState, so dragging a column survives Prev/Next voucher navigation.
-let voucherColumnWidths = [100, 170, 395, 90, 130, 300, 90];
+// Order matches .voucher-line-summary-grid's columns: Sr No., Account Code, Type, Account Name,
+// Amount, Supporting, Observations, Status. User-resizable (see the drag handles in
+// renderVoucherLines()'s header row) — persists at module scope across renders/navigation, same
+// convention as voucherLineState, so dragging a column survives Prev/Next voucher navigation.
+let voucherColumnWidths = [40, 100, 170, 395, 90, 130, 300, 90];
 
 // Pushes voucherColumnWidths into the CSS custom property .voucher-line-summary-grid reads its
 // grid-template-columns from. Set on #voucherLinesContainer itself (not its innerHTML content),
@@ -1036,13 +1036,14 @@ function renderVoucherLines(lines) {
     // per the standard spreadsheet convention of resizing from the column header, not the body.
     let html = `
         <div class="voucher-line-header-row voucher-line-summary-grid">
-            <span>Account Code<span class="voucher-col-resize-handle" data-col="0"></span></span>
-            <span>Type<span class="voucher-col-resize-handle" data-col="1"></span></span>
-            <span>Account Name<span class="voucher-col-resize-handle" data-col="2"></span></span>
-            <span class="voucher-line-amount-col">Amount<span class="voucher-col-resize-handle" data-col="3"></span></span>
-            <span>Supporting<span class="voucher-col-resize-handle" data-col="4"></span></span>
-            <span>Observations<span class="voucher-col-resize-handle" data-col="5"></span></span>
-            <span>Status<span class="voucher-col-resize-handle" data-col="6"></span></span>
+            <span>Sr No.<span class="voucher-col-resize-handle" data-col="0"></span></span>
+            <span>Account Code<span class="voucher-col-resize-handle" data-col="1"></span></span>
+            <span>Type<span class="voucher-col-resize-handle" data-col="2"></span></span>
+            <span>Account Name<span class="voucher-col-resize-handle" data-col="3"></span></span>
+            <span class="voucher-line-amount-col">Amount<span class="voucher-col-resize-handle" data-col="4"></span></span>
+            <span>Supporting<span class="voucher-col-resize-handle" data-col="5"></span></span>
+            <span>Observations<span class="voucher-col-resize-handle" data-col="6"></span></span>
+            <span>Status<span class="voucher-col-resize-handle" data-col="7"></span></span>
         </div>
     `;
 
@@ -1050,8 +1051,12 @@ function renderVoucherLines(lines) {
     // to write into) can run once, after container.innerHTML is set.
     const lineAccountCodes = [];
 
-    lines.forEach(line => {
+    // Phase 1 of 4 (Sequential line Sr no.): idx is this line's 0-based position within the
+    // current voucher's own lines array — the same order already rendered top-to-bottom, so
+    // srNo = idx + 1 resets to 1 for every new voucher with no separate counter/state needed.
+    lines.forEach((line, idx) => {
         const uid = line.detail_id;
+        const srNo = idx + 1;
         const row = line.row_data || {};
         const accountCode = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_CODE_ALIASES);
         lineAccountCodes.push({ uid, accountCode });
@@ -1073,6 +1078,7 @@ function renderVoucherLines(lines) {
         html += `
             <div class="voucher-line-row" data-detail-id="${uid}">
                 <div class="voucher-line-summary voucher-line-summary-grid" data-detail-id="${uid}">
+                    <span class="voucher-line-srno">${srNo}</span>
                     <span class="voucher-line-code">${accountCode}</span>
                     <span class="voucher-line-type-cell">
                         <span class="voucher-line-type-value-row">
@@ -1103,6 +1109,7 @@ function renderVoucherLines(lines) {
     const total = computeVoucherTotal(lines);
     html += `
         <div class="voucher-line-total-row voucher-line-summary-grid">
+            <span></span>
             <span></span>
             <span></span>
             <span class="voucher-line-name-cell">
