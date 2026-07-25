@@ -336,6 +336,7 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - 2026-07-25: **Linked Evidence totals row (confirmed fix, `static/verification.js` + `static/style.css` only)** done.
 - 2026-07-21: Client Data Availability & Coverage Redesign Phase 6 of 6, FINAL (Preview popup shell restyle, `static/databank.html` only) done.
 - 2026-07-25: Supporting-column no-template Documents unlocked, Phase 1 of 3 (`static/verification.js` only) done — a Document with no `template_id` now opens `#procedureModal` normally like any other; panel content for these tabs is Phase 2.
+- 2026-07-25: Supporting-column no-template Documents, Phase 2 of 3 (`static/verification.js` only, no CSS changes needed) done — a no-template Document's tab in `#procedureModal` now renders a two-segment panel (Audit Procedures + Observation only, no search/evidence table), and its Observation auto-suggestion no longer references the (nonexistent) mismatch badge. Completion-dot logic is Phase 3.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed

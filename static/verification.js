@@ -2672,10 +2672,39 @@ function activateProcedureTab(uid, docId) {
     renderProcedureModalPanel(uid, docId);
 }
 
-// Renders one tab's body: a search box + results dropdown, and the selected-lines table (Phase
-// 4). Procedure ticks/observations remain Phase 5-6 territory — not added here. A document with
-// no template_id configured shows an explicit note and disables search/browse (Phase 3's original
-// note, still applies since neither search nor browse can query without one).
+// Wires the Audit Procedures checklist + Observation section's listeners — shared by both the
+// full (has-template) panel and the two-segment (no-template) panel below, since both render the
+// exact same checklist/observation markup via buildProcedureChecklist()/buildObservationSection().
+function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
+    // Phase 5: one change listener per checklist checkbox — ticking/unticking a role posts the
+    // new state immediately (see toggleProcedureCheck()), no separate Save action.
+    container.querySelectorAll('.procedure-checklist-checkbox').forEach(cb => {
+        cb.addEventListener('change', function() {
+            toggleProcedureCheck(uid, docId, this.dataset.role, this.checked);
+        });
+    });
+
+    // Phase 6: the observation textarea is local-only on every keystroke (no network call) — it
+    // is only persisted when the Save button is explicitly clicked, per the confirmed brief.
+    const observationInput = document.getElementById('procedureObservationInput');
+    if (observationInput) {
+        observationInput.addEventListener('input', function() {
+            tabState.observation = this.value;
+        });
+    }
+    const observationSaveBtn = document.getElementById('procedureObservationSaveBtn');
+    if (observationSaveBtn) {
+        observationSaveBtn.addEventListener('click', function() {
+            saveLineObservation(uid, docId);
+        });
+    }
+}
+
+// Renders one tab's body. A document with a configured template_id gets the full panel: search
+// box + results dropdown, the linked-evidence table (Phase 4), the Audit Procedures checklist
+// (Phase 5), and the Observation section (Phase 6). A document with no template_id has nothing to
+// search Data Bank evidence against, so its tab renders only the two segments that don't depend on
+// evidence — Audit Procedures + Observation — reusing their existing markup/logic verbatim.
 function renderProcedureModalPanel(uid, docId) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
@@ -2690,19 +2719,32 @@ function renderProcedureModalPanel(uid, docId) {
     // saved text) before building the panel's markup, so the textarea below reflects it.
     applyObservationSuggestionIfNeeded(uid, docId);
 
-    const noTemplateNote = hasTemplate
-        ? ''
-        : `<p class="procedure-tab-note">No Data Bank template linked to "${escapeHtml(doc.name)}" yet — configure one in Audit Rules before searching.</p>`;
+    if (!hasTemplate) {
+        // Two-segment panel: no template means no Data Bank template to search evidence against,
+        // so the search box, results dropdown, and linked-evidence table are skipped entirely.
+        container.innerHTML = `
+            <div class="procedure-tab-panel" data-doc-id="${docId}">
+                <p class="procedure-tab-note">No Data Bank template linked to "${escapeHtml(doc.name)}" — evidence search isn't available for this document. Configure a template in Audit Rules to enable it.</p>
+                <div class="procedure-checklist-section">
+                    <h4 class="procedure-checklist-heading">Audit Procedures</h4>
+                    ${buildProcedureChecklist(uid, docId)}
+                </div>
+                <div class="procedure-observation-section">
+                    <h4 class="procedure-observation-heading">Observation</h4>
+                    ${buildObservationSection(uid, docId)}
+                </div>
+            </div>
+        `;
+        wireProcedureChecklistAndObservation(container, uid, docId, tabState);
+        return;
+    }
 
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${docId}">
-            ${noTemplateNote}
             <div class="procedure-search-row">
                 <input type="text" id="procedureSearchInput" class="procedure-search-input"
-                    placeholder="Search by reference, vendor, amount..." value="${escapeHtml(tabState.searchTerm)}"
-                    ${hasTemplate ? '' : 'disabled'}>
-                <button type="button" id="procedureBrowseBtn" class="procedure-browse-btn" title="Browse all rows for this document"
-                    ${hasTemplate ? '' : 'disabled'}>👁️</button>
+                    placeholder="Search by reference, vendor, amount..." value="${escapeHtml(tabState.searchTerm)}">
+                <button type="button" id="procedureBrowseBtn" class="procedure-browse-btn" title="Browse all rows for this document">👁️</button>
             </div>
             <div id="procedureSearchDropdown" class="procedure-search-dropdown"></div>
             <div class="procedure-selected-section">
@@ -2733,13 +2775,7 @@ function renderProcedureModalPanel(uid, docId) {
         });
     }
 
-    // Phase 5: one change listener per checklist checkbox — ticking/unticking a role posts the
-    // new state immediately (see toggleProcedureCheck()), no separate Save action.
-    container.querySelectorAll('.procedure-checklist-checkbox').forEach(cb => {
-        cb.addEventListener('change', function() {
-            toggleProcedureCheck(uid, docId, this.dataset.role, this.checked);
-        });
-    });
+    wireProcedureChecklistAndObservation(container, uid, docId, tabState);
 
     // Unassign requirement: one click listener per ✕ unlink button in the Linked Evidence table.
     container.querySelectorAll('.procedure-unlink-btn').forEach(btn => {
@@ -2747,21 +2783,6 @@ function renderProcedureModalPanel(uid, docId) {
             unassignSupportingDocument(uid, docId, parseInt(this.dataset.assignmentId));
         });
     });
-
-    // Phase 6: the observation textarea is local-only on every keystroke (no network call) — it
-    // is only persisted when the Save button is explicitly clicked, per the confirmed brief.
-    const observationInput = document.getElementById('procedureObservationInput');
-    if (observationInput) {
-        observationInput.addEventListener('input', function() {
-            tabState.observation = this.value;
-        });
-    }
-    const observationSaveBtn = document.getElementById('procedureObservationSaveBtn');
-    if (observationSaveBtn) {
-        observationSaveBtn.addEventListener('click', function() {
-            saveLineObservation(uid, docId);
-        });
-    }
 
     // Restore a previously-fetched search's dropdown (extends Phase 3's "switching tabs doesn't
     // lose unsaved work" to cover search results too) — re-renders from tabState, no new fetch.
@@ -3082,16 +3103,21 @@ async function toggleProcedureCheck(uid, docId, roleName, isChecked) {
 // Phase 5 unticked procedures for this document. Returns '' (no forced/neutral text) when
 // neither condition applies — only ever offered once per tab (see suggestionApplied in
 // getProcedureTabState()'s doc comment), never re-run over text the auditor edited/cleared.
+// A no-template document has no linked-evidence table/mismatch badge to reference (Two-segment
+// panel phase) — its suggestion is limited to unticked procedures only, or blank if none.
 function buildObservationSuggestion(uid, docId) {
     const lineState = procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     const tabState = getProcedureTabState(uid, docId);
+    const hasTemplate = !!(doc && doc.template_id);
     const lines = [];
 
-    const { total, voucherAmount, mismatch } = getSelectedLinesSummary(uid, docId);
-    if (mismatch) {
-        const diff = total - voucherAmount;
-        lines.push(`Amount mismatch: evidence total ${total.toFixed(2)} vs voucher line amount ${voucherAmount.toFixed(2)} (diff ${diff.toFixed(2)}).`);
+    if (hasTemplate) {
+        const { total, voucherAmount, mismatch } = getSelectedLinesSummary(uid, docId);
+        if (mismatch) {
+            const diff = total - voucherAmount;
+            lines.push(`Amount mismatch: evidence total ${total.toFixed(2)} vs voucher line amount ${voucherAmount.toFixed(2)} (diff ${diff.toFixed(2)}).`);
+        }
     }
 
     const roles = (doc && doc.auth_roles) || [];
