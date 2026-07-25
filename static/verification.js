@@ -3006,7 +3006,7 @@ const procedureBrowseNextBtn = document.getElementById('procedureBrowseNextBtn')
 const procedureBrowsePageInfo = document.getElementById('procedureBrowsePageInfo');
 
 const PROCEDURE_BROWSE_PAGE_SIZE = 20;
-let procedureBrowseState = { uid: null, docId: null, page: 1, totalRows: 0, docKeyColumn: null, rows: [] };
+let procedureBrowseState = { uid: null, docId: null, page: 1, totalRows: 0, rows: [] };
 
 async function openProcedureBrowseModal(uid, docId) {
     if (!procedureBrowseModal) return;
@@ -3014,7 +3014,7 @@ async function openProcedureBrowseModal(uid, docId) {
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     if (!doc || !doc.template_id) return;
 
-    procedureBrowseState = { uid, docId, page: 1, totalRows: 0, docKeyColumn: null, rows: [] };
+    procedureBrowseState = { uid, docId, page: 1, totalRows: 0, rows: [] };
     if (procedureBrowseModalTitle) procedureBrowseModalTitle.textContent = `👁️ Browse — ${doc.name}`;
     procedureBrowseModal.style.display = 'flex';
     await fetchProcedureBrowsePage();
@@ -3036,7 +3036,6 @@ async function fetchProcedureBrowsePage() {
         const data = await fetchProcedureRows(doc.template_id, '', page, PROCEDURE_BROWSE_PAGE_SIZE);
         procedureBrowseState.rows = data.rows || [];
         procedureBrowseState.totalRows = data.total_rows || 0;
-        procedureBrowseState.docKeyColumn = data.document_key_column;
         renderProcedureBrowseTable();
     } catch (e) {
         console.error('Failed to browse Data Bank rows:', e);
@@ -3046,14 +3045,60 @@ async function fetchProcedureBrowsePage() {
     }
 }
 
+// Blank-safe cell formatter for the browse table (Phase 1 of 3: full-table preview). Deliberately
+// a small local helper, not a port of databank.js's formatCellValue() — this table has no
+// number/date-specific formatting needs, only the blank -> em-dash convention shared app-wide.
+function formatProcedureCellValue(value) {
+    if (value === undefined || value === null || value === '') return '—';
+    return String(value);
+}
+
+// Builds the full-column preview table for the Browse modal (Phase 1 of 3: Full-table preview
+// with Status/Voucher No. columns). Column headers are derived dynamically from the first row's
+// row_data keys — same convention GET /api/data/preview already uses in Data Bank's own preview
+// (databank.js renderPreviewRows()) — with two fixed trailing columns appended: Status
+// (Assigned/Unassigned) and Voucher No. (populated only when Assigned). Deliberately flat, one
+// row per Data Bank row — no document grouping/subtotal rows this phase (confirmed with the
+// user: most Document templates here are single-line-per-document; grouping is out of scope).
+//
+// Assigned rows reuse this feature's existing "locked" convention (see buildProcedureResultRowHtml()
+// above): rendered fully (real data, not hidden) but visually greyed via .procedure-browse-row-assigned
+// and non-interactive (no click listener bound, no role/tabindex) — reassignment stays deferred.
+function buildProcedureBrowseTableHtml(uid, rows) {
+    const columns = Object.keys(rows[0].row_data || {});
+
+    let html = '<table class="procedure-browse-table"><thead><tr>';
+    columns.forEach(col => { html += `<th>${escapeHtml(col)}</th>`; });
+    html += '<th>Status</th><th>Voucher No.</th>';
+    html += '</tr></thead><tbody>';
+
+    rows.forEach(row => {
+        const isAssigned = !!row.is_assigned;
+        const rowClass = isAssigned ? ' class="procedure-browse-row-assigned"' : '';
+        const interactiveAttrs = isAssigned ? '' : ' role="button" tabindex="0"';
+        html += `<tr data-id="${row.id}"${rowClass}${interactiveAttrs}>`;
+        columns.forEach(col => {
+            html += `<td>${escapeHtml(formatProcedureCellValue(row.row_data ? row.row_data[col] : ''))}</td>`;
+        });
+        const statusBadgeClass = isAssigned ? 'assigned' : 'unassigned';
+        const statusLabel = isAssigned ? 'Assigned' : 'Unassigned';
+        html += `<td><span class="procedure-browse-status-badge ${statusBadgeClass}">${statusLabel}</span></td>`;
+        html += `<td>${isAssigned ? escapeHtml(row.assigned_to_voucher_id || '') : ''}</td>`;
+        html += '</tr>';
+    });
+
+    html += '</tbody></table>';
+    return html;
+}
+
 function renderProcedureBrowseTable() {
     if (!procedureBrowseTableContainer) return;
-    const { uid, docId, rows, docKeyColumn, page, totalRows } = procedureBrowseState;
+    const { uid, docId, rows, page, totalRows } = procedureBrowseState;
     if (!rows.length) {
         procedureBrowseTableContainer.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">No rows found for this template.</div>';
     } else {
-        procedureBrowseTableContainer.innerHTML = rows.map(row => buildProcedureResultRowHtml(uid, row, docKeyColumn)).join('');
-        procedureBrowseTableContainer.querySelectorAll('.procedure-result-item:not(.locked)').forEach(item => {
+        procedureBrowseTableContainer.innerHTML = buildProcedureBrowseTableHtml(uid, rows);
+        procedureBrowseTableContainer.querySelectorAll('.procedure-browse-table tbody tr:not(.procedure-browse-row-assigned)').forEach(item => {
             item.addEventListener('click', async function() {
                 const row = rows.find(r => r.id === parseInt(this.dataset.id));
                 if (!row) return;

@@ -2868,7 +2868,10 @@ body {
     background: white;
     border-radius: 16px;
     padding: 24px;
-    max-width: 700px;
+    /* Widened from 700px (Phase 1 of 3: Full-table preview) — the browse table now shows every
+       column of the template plus Status/Voucher No., so it needs real room, same rationale as
+       #procedureModal's own 700px -> 1050px widening fix (2026-07-25). */
+    max-width: 1100px;
     width: 95%;
     max-height: 85vh;
     overflow: auto;
@@ -2897,6 +2900,67 @@ body {
 .procedure-browse-page-info {
     font-size: 12px;
     color: #64748b;
+}
+
+/* ----- Browse Modal: full-column preview table (Phase 1 of 3: Full-table preview with
+   Status/Voucher No. columns) -----
+   Replaces the browse modal's old label+meta list (buildProcedureResultRowHtml()) with a real
+   table showing every column of the template's data, plus Status and Voucher No. Built by
+   buildProcedureBrowseTableHtml() in verification.js. Deliberately flat (no document grouping/
+   subtotal rows, unlike Data Bank's own preview) — confirmed with the user as out of scope here. */
+.procedure-browse-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.procedure-browse-table th {
+    background: #f8fafc;
+    padding: 8px 10px;
+    text-align: left;
+    font-weight: 600;
+    color: #475569;
+    border-bottom: 2px solid #e2e8f0;
+    position: sticky;
+    top: 0;
+}
+.procedure-browse-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #f0f2f5;
+}
+.procedure-browse-table tbody tr:not(.procedure-browse-row-assigned) {
+    cursor: pointer;
+    transition: background 0.1s ease;
+}
+.procedure-browse-table tbody tr:not(.procedure-browse-row-assigned):hover {
+    background: #f8fafc;
+}
+
+/* Assigned rows: visible with real data, but greyed/disabled — reassignment stays deferred.
+   Same visual language as the search dropdown/browse-list's existing .procedure-result-item.locked
+   convention, applied to a table row instead of a flex row. */
+.procedure-browse-row-assigned {
+    cursor: not-allowed;
+    opacity: 0.6;
+    background: #f8fafc;
+}
+
+/* Status column badges — Assigned reuses this feature's existing amber "locked" palette
+   (.procedure-result-locked); Unassigned uses a neutral/available green tone. */
+.procedure-browse-status-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+.procedure-browse-status-badge.assigned {
+    color: #92400e;
+    background: #fef3c7;
+}
+.procedure-browse-status-badge.unassigned {
+    color: #166534;
+    background: #dcfce7;
 }
 
 /* ----- DFD Placeholder Modal (Phase 5) ----- */
