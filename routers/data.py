@@ -67,7 +67,7 @@ def attach_history_flags(rows):
 def attach_assignment_flags(rows):
     """
     Given a list of row dicts (each with an "id"), batch-check voucher_line_documents (via
-    routers/verification.py's get_assignment_status_map()) and attach three additive fields
+    routers/verification.py's get_assignment_status_map()) and attach four additive fields
     per row, for the Verification supporting-document search/select UI (Phases 3-4) to grey
     out and label rows already locked to another voucher line:
       - is_assigned: bool                    -> True if this row is linked to any voucher line
@@ -75,6 +75,11 @@ def attach_assignment_flags(rows):
       - assigned_to_voucher_id: str|None      -> the human-readable voucher number
       - assigned_to_document_id: int|None     -> which audit_rule_documents "slot" it's linked under
       - assigned_to_document_name: str|None   -> that Document's name, for display
+      - assigned_to_line_srno: int|None       -> the assigned line's 1-based position within its
+                                                  own voucher (Voucher Supporting-Document Linking
+                                                  follow-up, Phase 2 of 4), so Browse can show
+                                                  "{voucher_id} [{line_srno}]" instead of the
+                                                  voucher number alone
     document_id/document_name (bug fix) let the Supporting Documents modal tell "assigned to
     THIS voucher line under a DIFFERENT Document tab" apart from a true same-tab match - without
     them, the Browse modal's Status column and a document tab's own Linked Evidence table could
@@ -94,12 +99,14 @@ def attach_assignment_flags(rows):
             r["assigned_to_voucher_id"] = match["voucher_id"]
             r["assigned_to_document_id"] = match["document_id"]
             r["assigned_to_document_name"] = match["document_name"]
+            r["assigned_to_line_srno"] = match["line_srno"]
         else:
             r["is_assigned"] = False
             r["assigned_to_voucher_line"] = None
             r["assigned_to_voucher_id"] = None
             r["assigned_to_document_id"] = None
             r["assigned_to_document_name"] = None
+            r["assigned_to_line_srno"] = None
 
 # ---------- ENDPOINTS ----------
 

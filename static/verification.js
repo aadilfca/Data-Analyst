@@ -2372,12 +2372,24 @@ async function fetchProcedureRows(templateId, search, page, limit) {
     return res.json();
 }
 
+// Voucher Supporting-Document Linking follow-up, Phase 2 of 4: formats an assigned row's voucher
+// label as "{voucherId} [{lineSrno}]" so the specific line an assignment belongs to is visibly
+// verifiable, not just the voucher as a whole. Falls back to the bare voucherId when lineSrno is
+// missing (mirrors the backend's own None-on-lookup-failure fallback in _resolve_line_srno(),
+// routers/verification.py) — a rare defensive case, not the expected common path. Shared by both
+// buildProcedureResultRowHtml() and buildProcedureBrowseTableHtml() so the two surfaces can never
+// disagree on this label's format.
+function formatAssignedVoucherLabel(voucherId, lineSrno) {
+    const label = voucherId || '';
+    return (lineSrno !== null && lineSrno !== undefined) ? `${label} [${lineSrno}]` : label;
+}
+
 // Builds one selectable/greyed result row's HTML — shared by the search dropdown and the browse
 // modal so both present identical lock-state treatment, driven by Phase 2's
 // is_assigned/assigned_to_voucher_line/assigned_to_voucher_id/assigned_to_document_id/
-// assigned_to_document_name fields. docKeyColumn (the template's own document-key column name,
-// from the same response) labels the row the same way Data Bank's own preview identifies a
-// document — falls back to a bare row id if unknown.
+// assigned_to_document_name/assigned_to_line_srno fields. docKeyColumn (the template's own
+// document-key column name, from the same response) labels the row the same way Data Bank's own
+// preview identifies a document — falls back to a bare row id if unknown.
 //
 // Bug fix: "Already linked here" previously only checked assigned_to_voucher_line === uid, which
 // is true even when the row is linked to THIS voucher line under a DIFFERENT Document tab (e.g.
@@ -2401,7 +2413,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
     } else if (isSameLineOtherDoc) {
         lockNote = `<span class="procedure-result-locked">Linked to this voucher under "${escapeHtml(row.assigned_to_document_name || 'another document')}"</span>`;
     } else if (isLocked) {
-        lockNote = `<span class="procedure-result-locked">Assigned to voucher ${escapeHtml(row.assigned_to_voucher_id || '')}</span>`;
+        lockNote = `<span class="procedure-result-locked">Assigned to voucher ${escapeHtml(formatAssignedVoucherLabel(row.assigned_to_voucher_id, row.assigned_to_line_srno))}</span>`;
     }
     return `
         <div class="procedure-result-item${isLocked ? ' locked' : ''}" data-id="${row.id}"${isLocked ? '' : ' role="button" tabindex="0"'}>
@@ -3178,7 +3190,7 @@ function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
         html += `<td><span class="procedure-browse-status-badge ${statusBadgeClass}">${statusLabel}</span></td>`;
         let voucherCell = '';
         if (isAssigned) {
-            voucherCell = escapeHtml(row.assigned_to_voucher_id || '');
+            voucherCell = escapeHtml(formatAssignedVoucherLabel(row.assigned_to_voucher_id, row.assigned_to_line_srno));
             const isOtherDocSameLine = String(row.assigned_to_voucher_line) === String(uid)
                 && activeDocId != null && String(row.assigned_to_document_id) !== String(activeDocId);
             if (isOtherDocSameLine) {

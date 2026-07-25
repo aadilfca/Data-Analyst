@@ -1707,6 +1707,37 @@ def save_line_observation(
     }
 
 
+def _resolve_line_srno(session_id: int, target_voucher_line_id: int, session_details_cache: Dict[int, list]) -> int:
+    """
+    Voucher Supporting-Document Linking follow-up, Phase 2 of 4: backend equivalent of Phase 1's
+    client-side Sr no. (renderVoucherLines() in verification.js, which numbers a voucher's lines
+    1..N in the order they're rendered). Reuses _fetch_session_details_grouped() - the exact same
+    grouping (_doc_group_id) and ordering (cd.id ASC) get_next_transaction()/get_voucher_nav()
+    already build their lines[] arrays from - so this can never disagree with what Phase 1 shows
+    for a line belonging to the currently-open voucher, and can also resolve a Sr no. for a line
+    in a DIFFERENT voucher the frontend has no line-order data for at all.
+
+    session_details_cache is shared across a whole get_assignment_status_map() call so a session
+    with multiple matched rows only pays for one query, not one per row.
+
+    Returns None (not 0) if the target line can't be found in its own session - a defensive
+    fallback (e.g. a race where the line was since removed), not an expected outcome.
+    """
+    if session_id not in session_details_cache:
+        session_details_cache[session_id] = _fetch_session_details_grouped(session_id)
+    details = session_details_cache[session_id]
+
+    target = next((d for d in details if d['id'] == target_voucher_line_id), None)
+    if target is None:
+        return None
+
+    group_members = [d for d in details if d['_doc_group_id'] == target['_doc_group_id']]
+    for idx, member in enumerate(group_members):
+        if member['id'] == target_voucher_line_id:
+            return idx + 1
+    return None
+
+
 def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
     """
     Batch lookup of voucher_line_documents assignment status for a list of client_data ids -
@@ -1714,8 +1745,8 @@ def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
     so routers/data.py's GET /api/data/preview (Phase 2) can call it directly (no HTTP
     round-trip, no duplicated SQL) rather than only being reachable via this router's own
     endpoint. Returns {client_data_id: {"voucher_line_id": ..., "voucher_id": ..., "document_id": ...,
-    "document_name": ...}} - only for ids that are actually assigned; callers should treat any
-    id missing from the returned dict as not assigned.
+    "document_name": ..., "line_srno": ...}} - only for ids that are actually assigned; callers
+    should treat any id missing from the returned dict as not assigned.
 
     document_id/document_name are included (bug fix) because a row can be assigned to a given
     voucher line under one Document "slot" (e.g. Purchase Order) while a different Document tab
@@ -1724,13 +1755,18 @@ def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
     "assigned to this voucher line" - not "assigned to this voucher line UNDER THIS DOCUMENT" -
     which previously caused the Browse modal (voucher_line match only) and the Linked Evidence
     table (voucher_line + document_id match) to disagree about the same row for the same line.
+
+    line_srno (Voucher Supporting-Document Linking follow-up, Phase 2 of 4) is the assigned line's
+    1-based position within its own voucher - see _resolve_line_srno() - so Browse can show
+    "{voucher_id} [{line_srno}]" instead of the voucher number alone, making the assignment
+    visibly verifiable against the voucher's own line order.
     """
     if not client_data_ids:
         return {}
     placeholders = ",".join("?" for _ in client_data_ids)
     rows = execute_query(
         f"""
-        SELECT vld.client_data_id, vld.voucher_line_id, vd.transaction_ref,
+        SELECT vld.client_data_id, vld.voucher_line_id, vd.transaction_ref, vd.session_id,
                vld.document_id, ard.name AS document_name
         FROM voucher_line_documents vld
         JOIN verification_details vd ON vd.id = vld.voucher_line_id
@@ -1739,12 +1775,16 @@ def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
         """,
         tuple(client_data_ids)
     )
+    # Shared across every matched row so a session with several assigned lines only has its
+    # details fetched/grouped once, not once per row - see _resolve_line_srno()'s own docstring.
+    session_details_cache: Dict[int, list] = {}
     return {
         r['client_data_id']: {
             "voucher_line_id": r['voucher_line_id'],
             "voucher_id": r['transaction_ref'],
             "document_id": r['document_id'],
-            "document_name": r['document_name']
+            "document_name": r['document_name'],
+            "line_srno": _resolve_line_srno(r['session_id'], r['voucher_line_id'], session_details_cache)
         }
         for r in rows
     }
