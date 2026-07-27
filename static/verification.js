@@ -2749,18 +2749,26 @@ function renderProcedureModalPanel(uid, docId) {
     applyObservationSuggestionIfNeeded(uid, docId);
 
     if (!hasTemplate) {
-        // Two-segment panel: no template means no Data Bank template to search evidence against,
-        // so the search box, results dropdown, and linked-evidence table are skipped entirely.
+        // No template means no Data Bank template to search evidence against, so the Data Table
+        // segment holds only the explanatory note — search box/results dropdown/linked-evidence
+        // table are skipped entirely. Still rendered as a segment (not omitted) so the fixed
+        // Data Table -> Audit Procedures -> Observation order/visual grouping stays consistent
+        // regardless of whether a document has a template.
         container.innerHTML = `
             <div class="procedure-tab-panel" data-doc-id="${docId}">
-                <p class="procedure-tab-note">No Data Bank template linked to "${escapeHtml(doc.name)}" — evidence search isn't available for this document. Configure a template in Audit Rules to enable it.</p>
-                <div class="procedure-checklist-section">
-                    <h4 class="procedure-checklist-heading">Audit Procedures</h4>
-                    ${buildProcedureChecklist(uid, docId)}
+                <div class="procedure-segment procedure-segment-data">
+                    <h4 class="procedure-segment-header">🗂️ Data Table</h4>
+                    <div class="procedure-segment-body">
+                        <p class="procedure-tab-note">No Data Bank template linked to "${escapeHtml(doc.name)}" — evidence search isn't available for this document. Configure a template in Audit Rules to enable it.</p>
+                    </div>
                 </div>
-                <div class="procedure-observation-section">
-                    <h4 class="procedure-observation-heading">Observation</h4>
-                    ${buildObservationSection(uid, docId)}
+                <div class="procedure-segment procedure-segment-procedures">
+                    <h4 class="procedure-segment-header">✅ Audit Procedures</h4>
+                    <div class="procedure-segment-body">${buildProcedureChecklist(uid, docId)}</div>
+                </div>
+                <div class="procedure-segment procedure-segment-observation">
+                    <h4 class="procedure-segment-header">📝 Observation</h4>
+                    <div class="procedure-segment-body">${buildObservationSection(uid, docId)}</div>
                 </div>
             </div>
         `;
@@ -2770,23 +2778,28 @@ function renderProcedureModalPanel(uid, docId) {
 
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${docId}">
-            <div class="procedure-search-row">
-                <input type="text" id="procedureSearchInput" class="procedure-search-input"
-                    placeholder="Search by reference, vendor, amount..." value="${escapeHtml(tabState.searchTerm)}">
-                <button type="button" id="procedureBrowseBtn" class="procedure-browse-btn" title="Browse all rows for this document">👁️</button>
+            <div class="procedure-segment procedure-segment-data">
+                <h4 class="procedure-segment-header">🗂️ Data Table</h4>
+                <div class="procedure-segment-body">
+                    <div class="procedure-search-row">
+                        <input type="text" id="procedureSearchInput" class="procedure-search-input"
+                            placeholder="Search by reference, vendor, amount..." value="${escapeHtml(tabState.searchTerm)}">
+                        <button type="button" id="procedureBrowseBtn" class="procedure-browse-btn" title="Browse all rows for this document">👁️</button>
+                    </div>
+                    <div id="procedureSearchDropdown" class="procedure-search-dropdown"></div>
+                    <div class="procedure-selected-section">
+                        <h4 class="procedure-selected-heading">Linked evidence</h4>
+                        ${buildSelectedLinesTable(uid, docId)}
+                    </div>
+                </div>
             </div>
-            <div id="procedureSearchDropdown" class="procedure-search-dropdown"></div>
-            <div class="procedure-selected-section">
-                <h4 class="procedure-selected-heading">Linked evidence</h4>
-                ${buildSelectedLinesTable(uid, docId)}
+            <div class="procedure-segment procedure-segment-procedures">
+                <h4 class="procedure-segment-header">✅ Audit Procedures</h4>
+                <div class="procedure-segment-body">${buildProcedureChecklist(uid, docId)}</div>
             </div>
-            <div class="procedure-checklist-section">
-                <h4 class="procedure-checklist-heading">Audit Procedures</h4>
-                ${buildProcedureChecklist(uid, docId)}
-            </div>
-            <div class="procedure-observation-section">
-                <h4 class="procedure-observation-heading">Observation</h4>
-                ${buildObservationSection(uid, docId)}
+            <div class="procedure-segment procedure-segment-observation">
+                <h4 class="procedure-segment-header">📝 Observation</h4>
+                <div class="procedure-segment-body">${buildObservationSection(uid, docId)}</div>
             </div>
         </div>
     `;

@@ -2837,22 +2837,53 @@ body {
     font-size: 12px;
 }
 
-/* ----- Audit Procedures Checklist (Phase 5 of 6) -----
-   Sits directly below the Linked Evidence section within each tab's .procedure-tab-panel —
-   one checkbox per auth role already configured on the Document (audit_rule_document_auth_roles),
-   no validation behind ticking (deferred). Matches the visual weight of .procedure-selected-*
-   above it. */
-.procedure-checklist-section {
-    margin-top: 14px;
-    padding-top: 14px;
-    border-top: 1px solid #e2e8f0;
+/* ----- Three-segment panel styling (Supporting Documents redesign, Phase 2) -----
+   Wraps each document panel's Data Table / Audit Procedures / Observation content (built in
+   renderProcedureModalPanel(), verification.js) in a bordered card with its own tinted header, so
+   the three zones read as clearly separate groupings rather than one continuous form. Colors reuse
+   tones already established elsewhere in this file: blue for the primary/data zone, the existing
+   amber warning tone (.procedure-tab-note) for Audit Procedures, and the existing violet accent
+   (.obs-comments-row .comments-wrapper) for Observation. Order is fixed by markup, not CSS. */
+.procedure-segment {
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    margin-bottom: 14px;
+    overflow: hidden;
 }
-.procedure-checklist-heading {
+.procedure-segment:last-child {
+    margin-bottom: 0;
+}
+.procedure-segment-header {
+    margin: 0;
+    padding: 8px 14px;
     font-size: 13px;
-    font-weight: 600;
-    color: #334155;
-    margin: 0 0 8px 0;
+    font-weight: 700;
+    letter-spacing: 0.3px;
 }
+.procedure-segment-body {
+    padding: 12px 14px;
+    background: #ffffff;
+}
+.procedure-segment-data > .procedure-segment-header {
+    background: #eff6ff;
+    color: #1e40af;
+    border-left: 4px solid #3b82f6;
+}
+.procedure-segment-procedures > .procedure-segment-header {
+    background: #fffbeb;
+    color: #92400e;
+    border-left: 4px solid #f59e0b;
+}
+.procedure-segment-observation > .procedure-segment-header {
+    background: #f5f3ff;
+    color: #5b21b6;
+    border-left: 4px solid #8b5cf6;
+}
+
+/* ----- Audit Procedures Checklist (Phase 5 of 6) -----
+   Renders inside .procedure-segment-procedures' body above — one checkbox per auth role already
+   configured on the Document (audit_rule_document_auth_roles), no validation behind ticking
+   (deferred). */
 .procedure-checklist-list {
     display: flex;
     flex-direction: column;
@@ -2878,21 +2909,9 @@ body {
 }
 
 /* ----- Observation Flow (Phase 6 of 6, FINAL) -----
-   Sits directly below the Audit Procedures checklist within each tab's .procedure-tab-panel —
-   a per-document observation textarea (auto-suggested from the mismatch badge/unticked
-   procedures, editable/clearable) plus an explicit Save button, matching the visual weight of
-   .procedure-checklist-* above it. */
-.procedure-observation-section {
-    margin-top: 14px;
-    padding-top: 14px;
-    border-top: 1px solid #e2e8f0;
-}
-.procedure-observation-heading {
-    font-size: 13px;
-    font-weight: 600;
-    color: #334155;
-    margin: 0 0 8px 0;
-}
+   Renders inside .procedure-segment-observation's body above — a per-document observation
+   textarea (auto-suggested from the mismatch badge/unticked procedures, editable/clearable) plus
+   an explicit Save button. */
 .procedure-observation-textarea {
     width: 100%;
     min-height: 70px;
