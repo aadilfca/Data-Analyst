@@ -1997,35 +1997,6 @@ body {
     opacity: 1;
 }
 
-.voucher-line-type-chips {
-    display: flex;
-    gap: 6px;
-}
-/* Small pill buttons below the Type dropdown. "Guide" opens the same audit guidance popup as
-   the "Audit Guidance" button in the expanded panel (see openAuditGuidancePopup() in
-   verification.js) via showAuditGuidancePopover(), and doubles as a close toggle when clicked
-   again while its own popup is open. "DFD" opens the existing Data Flow Diagram placeholder
-   modal (openDfdModal()). */
-.voucher-line-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 10px;
-    border: 1px solid #d0d5dd;
-    border-radius: 999px;
-    background: #f8fafc;
-    color: #475569;
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.15s ease, border-color 0.15s ease;
-}
-.voucher-line-chip:hover {
-    background: #eef2f6;
-    border-color: #94a3b8;
-}
-
 .voucher-line-desc {
     color: #64748b;
     font-size: 12px;
@@ -2063,7 +2034,7 @@ body {
     color: #000000;
 }
 
-/* Status cell: icon + label, colored by validation_status — green for passed, amber for pending,
+/* Status cell: dot + label, colored by validation_status — green for passed, amber for pending,
    red for failed. Replaces the old amount-cell checkmark + separate badge approach. */
 .voucher-line-status {
     font-size: 12px;
@@ -2078,6 +2049,25 @@ body {
 }
 .voucher-line-status.status-failed {
     color: #dc2626;
+}
+/* v7 redesign: a plain colored dot instead of an emoji icon (getVoucherLineStatusIcon() in
+   verification.js) — reuses this same status-pending/passed/failed color trio. */
+.voucher-line-status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 5px;
+    vertical-align: middle;
+}
+.voucher-line-status-dot.pending {
+    background: #b45309;
+}
+.voucher-line-status-dot.passed {
+    background: #16a34a;
+}
+.voucher-line-status-dot.failed {
+    background: #dc2626;
 }
 
 /* Change-alert icon (⚠️) — placed inline next to the account name; a functional signal, not
@@ -2106,80 +2096,117 @@ body {
     margin-left: 6px;
 }
 
-/* Supporting cell — stacks the five procedure names as plain bold text links (no button/card
-   chrome, to keep the column compact); each opens openProcedureModal() directly for its own
-   procedure (renderVoucherLines() in verification.js). */
-.voucher-line-supporting-cell {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 3px;
-}
-.voucher-line-proc-link {
-    font-weight: 700;
-    font-size: 11px;
-    color: #1a1a2e;
-    cursor: pointer;
-    line-height: 1.3;
-}
-.voucher-line-proc-link:hover {
-    text-decoration: underline;
-}
-.voucher-line-proc-link.confirmed {
-    color: #16a34a;
-}
-
-/* Voucher Supporting-Document Linking follow-up, Phase 4 of 4 (FINAL): each document's link +
-   confirmatory badge are wrapped in one row (the Supporting cell's own flex-direction:column
-   would otherwise stack them as separate rows) — see updateSupportingCellForLine() in
-   verification.js. The badge itself only renders when at least one row is already assigned to
-   that document for this line; click opens Browse pre-filtered to and highlighting it. */
-.voucher-line-proc-row {
+/* ----- Learning cluster (v7 redesign) -----
+   Replaces the old standalone Risk column + the Type cell's Guide/DFD chip pills: risk dot +
+   bare-icon Guide/DFD buttons, all in one compact cell. Colors/tooltips are the intentional
+   traffic-light exception to this file's usual primary/secondary/muted text palette, same as the
+   existing validation-status colors — "never fabricated" is preserved (dot has no risk-* class,
+   and stays invisible, when no document in the category has a rating; see applyRiskToCell() in
+   verification.js). */
+.voucher-line-learning-cluster {
     display: flex;
     align-items: center;
-    gap: 4px;
-}
-.voucher-line-proc-badge {
-    font-size: 10px;
-    line-height: 1;
-    padding: 1px 4px;
-    border-radius: 8px;
-    background: #fee2e2;
-    color: #991b1b;
-    cursor: pointer;
-    flex-shrink: 0;
-}
-.voucher-line-proc-badge:hover {
-    background: #fecaca;
-}
-
-/* Audit Risk indicator (Supporting Documents modal redesign, final phase) — a read-only pill
-   reflecting a Category's highest-rated Document risk_rating, with a hover tooltip (native title
-   attribute) listing required procedures per Document. Blank cell when no rating is configured
-   (see applyRiskToCell() in verification.js — never fabricated). Colors are the intentional
-   traffic-light exception to this file's usual primary/secondary/muted text palette, same as the
-   existing validation-status colors. */
-.voucher-line-risk-cell {
+    gap: 6px;
     justify-content: center;
 }
-.voucher-line-risk-pill {
-    font-size: 11px;
-    font-weight: 700;
+.voucher-line-risk-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.voucher-line-risk-dot.risk-low {
+    background: #166534;
+}
+.voucher-line-risk-dot.risk-medium {
+    background: #92400e;
+}
+.voucher-line-risk-dot.risk-high {
+    background: #991b1b;
+}
+.voucher-line-learn-icon {
+    border: none;
+    background: none;
+    padding: 2px;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 4px;
+}
+.voucher-line-learn-icon:hover {
+    background: #f1f5f9;
+}
+
+/* ----- Procedures cell (v7 redesign) -----
+   Replaces the old Supporting cell's per-document text-link list with a single ring+count badge —
+   picking a specific document now happens via #procedureModal's own left rail, once open, not from
+   a per-name link in the table. Click opens the modal on the line's first incomplete document
+   (openProcedureModal()'s existing default). Colors reuse this file's existing status-badge
+   pending/amber/green palette rather than the prototype's own separate CSS-variable palette. */
+.voucher-line-procedures-cell {
+    justify-content: center;
+}
+.voucher-line-procedures-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     padding: 3px 10px;
-    border-radius: 10px;
-    line-height: 1.3;
-    cursor: default;
+    border-radius: 20px;
+    font-size: 11.5px;
+    font-weight: 700;
+    cursor: pointer;
 }
-.voucher-line-risk-pill.risk-low {
-    background: #dcfce7;
-    color: #166534;
+.voucher-line-procedures-badge.pending {
+    background: #f0f1f4;
+    color: #94a3b8;
 }
-.voucher-line-risk-pill.risk-medium {
+.voucher-line-procedures-badge.progress {
     background: #fef3c7;
     color: #92400e;
 }
-.voucher-line-risk-pill.risk-high {
-    background: #fee2e2;
+.voucher-line-procedures-badge.done {
+    background: #dcfce7;
+    color: #166534;
+}
+.voucher-line-procedures-badge:hover {
+    filter: brightness(0.96);
+}
+.voucher-line-proc-ring {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+.voucher-line-proc-ring-fill.pending {
+    stroke: #94a3b8;
+}
+.voucher-line-proc-ring-fill.progress {
+    stroke: #92400e;
+}
+.voucher-line-proc-ring-fill.done {
+    stroke: #166534;
+}
+
+/* ----- Observations cell (v7 redesign) -----
+   Replaces the old raw-text preview with a flag+count (reading the actual text now requires
+   opening the modal). Reuses the existing mismatch-badge red for the flag. */
+.voucher-line-obs-flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11.5px;
+    font-weight: 700;
     color: #991b1b;
+    background: #fee2e2;
+    padding: 3px 9px;
+    border-radius: 14px;
+    cursor: pointer;
+}
+.voucher-line-obs-flag:hover {
+    background: #fecaca;
+}
+.voucher-line-obs-none {
+    color: #94a3b8;
+    font-size: 12px;
 }
 
 @media (max-width: 768px) {
@@ -3141,18 +3168,6 @@ body {
     cursor: not-allowed;
     opacity: 0.6;
     background: #f8fafc;
-}
-
-/* Confirmatory tick shortcut (Phase 4 of 4, FINAL): brief dim-red flash applied/removed via JS
-   (highlightProcedureBrowseRows() in verification.js) when Browse is opened via a document's
-   badge — reverts to the row's normal .procedure-browse-row-assigned background once the
-   animation ends, so it reads as a one-time cue rather than a permanent restyle. */
-.procedure-browse-row-highlight {
-    animation: procedureBrowseHighlightFlash 2.2s ease-out;
-}
-@keyframes procedureBrowseHighlightFlash {
-    0% { background-color: #fecaca; box-shadow: inset 0 0 0 2px #dc2626; }
-    100% { background-color: #f8fafc; box-shadow: inset 0 0 0 2px transparent; }
 }
 
 /* Status column badges — Assigned reuses this feature's existing amber "locked" palette

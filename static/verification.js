@@ -830,11 +830,9 @@ async function fetchTemplateColumns(templateId) {
     }
 }
 
-// Voucher Supporting-Document Linking follow-up, Phase 4 of 4 (FINAL): lightweight fetch of a
-// line's active assignment records, used only to determine which document links get a
-// confirmatory badge below — reuses Phase 1's endpoint (already fixed in Phase 3 to be
-// session-independent), never mutates procedureModalState, and fails soft to [] so a badge fetch
-// hiccup never breaks the Supporting cell itself.
+// Fetch of a line's active assignment records — used to determine which documents count as
+// "complete" for the Procedures ring+badge below. Fails soft to [] so a fetch hiccup never breaks
+// the cell itself.
 async function fetchAssignedDocumentRecords(uid) {
     try {
         const res = await fetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
@@ -842,26 +840,50 @@ async function fetchAssignedDocumentRecords(uid) {
         const data = await res.json();
         return data.documents || [];
     } catch (e) {
-        console.error('Failed to load assignment status for Supporting cell badges:', e);
+        console.error('Failed to load assignment status for Procedures cell:', e);
         return [];
     }
 }
 
-// Renders the Supporting column's document links for one line, from its currently-selected
-// Category's attached Documents (data.documents[]) — replaces the old fixed VOUCHER_LINE_PROCEDURES
-// list. Async because the Category's guidance (and thus its Documents) is fetched on demand;
-// called both at initial render (for a line with an already-seeded type) and from the Type
-// dropdown's change listener. A Document with no template_id configured (Audit Rules module) is
-// still clickable — it opens #procedureModal on that document's tab like any other; that tab's
-// panel content (no search/evidence table, since there's no template to search against) is a
-// separate, later phase — see openProcedureModal()/renderProcedureModalTabs().
-//
-// Phase 4 of 4 (FINAL, confirmatory tick shortcut): a document whose category has at least one
-// active assignment for this line also gets a small 🔎 badge next to its link — click jumps
-// straight into Browse mode, scrolled to and briefly highlighting the exact assigned row(s)
-// (see openProcedureBrowseHighlight()).
-async function updateSupportingCellForLine(uid, type) {
-    const cell = document.querySelector(`.voucher-line-supporting-cell[data-detail-id="${uid}"]`);
+// Fetch of a line's ticked/unticked audit-procedure roles, across all documents — needed so the
+// Procedures cell can judge a no-template document's completion (every configured role ticked)
+// without depending on procedureModalState, which is only populated once the modal has actually
+// been opened. Same fail-soft-to-[] convention as fetchAssignedDocumentRecords().
+async function fetchProcedureChecksForLine(uid) {
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/procedure_checks/${uid}`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.checks || [];
+    } catch (e) {
+        console.error('Failed to load procedure checks for Procedures cell:', e);
+        return [];
+    }
+}
+
+// Small SVG completion ring, adapted from the v7 prototype's ring() helper — pct is 0-100, cls is
+// 'pending'/'progress'/'done' (drives the stroke color via the CSS class, matching this file's
+// existing traffic-light convention rather than the prototype's own separate palette).
+function buildProcedureRingSvg(pct, cls) {
+    const r = 6, c = 2 * Math.PI * r;
+    const off = c - (pct / 100) * c;
+    return `<svg class="voucher-line-proc-ring" viewBox="0 0 16 16">
+        <circle cx="8" cy="8" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="2.5"/>
+        <circle cx="8" cy="8" r="${r}" fill="none" class="voucher-line-proc-ring-fill ${cls}" stroke-width="2.5"
+            stroke-dasharray="${c}" stroke-dashoffset="${off}" transform="rotate(-90 8 8)" stroke-linecap="round"/>
+    </svg>`;
+}
+
+// Renders the Procedures column's ring+count badge for one line, from its currently-selected
+// Category's attached Documents — replaces the old per-document link list (a document is now
+// reached via the modal's own left rail, once open, not from a per-name link in the table).
+// Async because the Category's guidance (and thus its Documents) is fetched on demand; called both
+// at initial render (for a line with an already-seeded type) and from the Type auto-fill.
+// Completion mirrors isProcedureDocumentComplete() (template doc → assigned; no-template doc →
+// every configured role ticked) but computed standalone here, since procedureModalState is only
+// populated once the modal has actually been opened for this line.
+async function updateProceduresCellForLine(uid, type) {
+    const cell = document.querySelector(`.voucher-line-procedures-cell[data-detail-id="${uid}"]`);
     if (!cell) return;
     if (!type) {
         cell.innerHTML = '';
@@ -872,7 +894,7 @@ async function updateSupportingCellForLine(uid, type) {
     try {
         data = await fetchAuditGuidanceData(type);
     } catch (e) {
-        console.error('Failed to load Supporting documents:', e);
+        console.error('Failed to load Procedures documents:', e);
     }
     // Stale guard: the line may have moved on to a different type (or a new voucher entirely)
     // while this fetch was in flight — don't clobber a newer selection.
@@ -883,46 +905,73 @@ async function updateSupportingCellForLine(uid, type) {
         return;
     }
 
-    const assignedRecords = await fetchAssignedDocumentRecords(uid);
-    // Re-check the stale guard after this second await, same reason as above.
+    const [assignedRecords, procedureChecks] = await Promise.all([
+        fetchAssignedDocumentRecords(uid),
+        fetchProcedureChecksForLine(uid)
+    ]);
+    // Re-check the stale guard after these awaits, same reason as above.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
     const assignedDocIds = new Set(assignedRecords.map(r => r.document_id));
 
-    cell.innerHTML = documents.map(doc => {
-        const state = voucherLineState[uid];
-        const procKey = `doc_${doc.id}`;
-        const confirmed = state && state.procedureData && state.procedureData[procKey];
-        const hasTemplate = !!doc.template_id;
-        const title = confirmed ? doc.name + ' — confirmed' : 'Search ' + doc.name;
-        const link = `<span class="voucher-line-proc-link${confirmed ? ' confirmed' : ''}" data-uid="${uid}" data-proc="${procKey}" data-doc-id="${doc.id}" data-label="${escapeHtml(doc.name)}" data-template="${doc.template_id || ''}" title="${escapeHtml(title)}">${escapeHtml(doc.name)}</span>`;
-        const isAssigned = hasTemplate && assignedDocIds.has(doc.id);
-        const badge = isAssigned
-            ? `<span class="voucher-line-proc-badge" data-uid="${uid}" data-doc-id="${doc.id}" title="View assigned evidence — jump to it in Browse">🔎</span>`
-            : '';
-        // Wrapped in one row so the link + badge sit side by side — the Supporting cell's own
-        // flex-direction:column would otherwise stack every direct child onto its own row.
-        return `<span class="voucher-line-proc-row">${link}${badge}</span>`;
-    }).join('');
-    // This cell's links/badges are created after the render's own batch event-wiring pass already
-    // ran (see renderVoucherLines()), so they're wired here instead.
-    cell.querySelectorAll('.voucher-line-proc-link').forEach(link => {
-        link.addEventListener('click', function(e) {
-            e.stopPropagation();
-            // No longer gated on a configured template — a no-template Document's tab still
-            // opens normally; what it displays once open is handled elsewhere (later phase).
-            const uid2 = this.dataset.uid;
-            const docId2 = parseInt(this.dataset.docId);
-            // Phase 3: opens the tabbed modal for the whole line, pre-selecting this document's tab.
-            openProcedureModal(uid2, docId2);
-        });
+    const done = documents.filter(doc => {
+        if (doc.template_id) return assignedDocIds.has(doc.id);
+        const roles = doc.auth_roles || [];
+        if (!roles.length) return false;
+        return roles.every(role => procedureChecks.some(c => c.document_id === doc.id && c.role_name === role && c.is_checked));
+    }).length;
+    const total = documents.length;
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    const cls = done === 0 ? 'pending' : (done === total ? 'done' : 'progress');
+
+    cell.innerHTML = `
+        <span class="voucher-line-procedures-badge ${cls}" data-uid="${uid}" title="${done} of ${total} documents complete">
+            ${buildProcedureRingSvg(pct, cls)}${done}/${total}
+        </span>
+    `;
+    cell.querySelector('.voucher-line-procedures-badge')?.addEventListener('click', function(e) {
+        e.stopPropagation();
+        openProcedureModal(this.dataset.uid);
     });
-    cell.querySelectorAll('.voucher-line-proc-badge').forEach(badge => {
-        badge.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const uid2 = this.dataset.uid;
-            const docId2 = parseInt(this.dataset.docId);
-            openProcedureBrowseHighlight(uid2, docId2);
-        });
+}
+
+// Fetch of a line's saved observation entries (one per document with a non-empty observation) —
+// used only for the Observations column's count/tooltip. Fails soft to [] so a fetch hiccup never
+// breaks the cell itself.
+async function fetchLineObservationEntries(uid) {
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/line_observations/${uid}`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.entries || [];
+    } catch (e) {
+        console.error('Failed to load observations for Observations cell:', e);
+        return [];
+    }
+}
+
+// Renders the Observations column's flag+count for one line — replaces the old raw-text preview.
+// Reading the actual observation text now requires opening the modal (each document's own
+// Observation segment), matching the v7 prototype exactly.
+async function updateObservationsCellForLine(uid, type) {
+    const cell = document.querySelector(`.voucher-line-observations-cell[data-detail-id="${uid}"]`);
+    if (!cell) return;
+    if (!type) {
+        cell.innerHTML = '';
+        return;
+    }
+    const entries = await fetchLineObservationEntries(uid);
+    // Stale guard: the line may have moved on to a different type (or a new voucher entirely)
+    // while this fetch was in flight — don't clobber a newer selection.
+    if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+    const count = entries.length;
+    if (!count) {
+        cell.innerHTML = '<span class="voucher-line-obs-none">—</span>';
+        return;
+    }
+    cell.innerHTML = `<span class="voucher-line-obs-flag" data-uid="${uid}" title="${count} observation${count === 1 ? '' : 's'} recorded">⚑ ${count}</span>`;
+    cell.querySelector('.voucher-line-obs-flag')?.addEventListener('click', function(e) {
+        e.stopPropagation();
+        openProcedureModal(this.dataset.uid);
     });
 }
 
@@ -953,10 +1002,16 @@ function applyCategoryToTypeCell(uid, categoryName) {
     valueEl.textContent = categoryName || 'Unassigned';
     if (iconEl) iconEl.style.display = categoryName ? 'none' : 'inline-flex';
 
-    // Supporting already no-ops on a falsy type, so only call it when there's a real match.
-    if (categoryName) updateSupportingCellForLine(uid, categoryName);
-    if (categoryName) updateRiskCellForLine(uid, categoryName);
-    else applyRiskToCell(uid, null);
+    // Procedures/Observations cells start empty in the template and are only ever populated once
+    // the category resolves — same "only call on a real match" convention the old Supporting cell
+    // used, so an Unassigned line's cells simply stay blank rather than being explicitly cleared.
+    if (categoryName) {
+        updateProceduresCellForLine(uid, categoryName);
+        updateObservationsCellForLine(uid, categoryName);
+        updateRiskCellForLine(uid, categoryName);
+    } else {
+        applyRiskToCell(uid, null);
+    }
 }
 
 // ---------- AUDIT RISK INDICATOR (Supporting Documents modal redesign, final phase) ----------
@@ -983,22 +1038,27 @@ function computeLineRiskData(auditGuidanceData) {
     return { risk, tooltip };
 }
 
-// Writes the risk pill into one line's Risk cell — blank if no document in its category has a
-// risk rating set. Re-queries the DOM by data-uid, same safe-no-op-if-row-gone convention as
-// applyCategoryToTypeCell().
+// Writes the risk dot inside one line's Learning cluster — hidden (no risk-* class) if no
+// document in its category has a risk rating set, "never fabricated" per the original design.
+// Re-queries the DOM by data-uid, same safe-no-op-if-row-gone convention as
+// applyCategoryToTypeCell(). v7 redesign: was a standalone text pill in its own Risk column; now a
+// small colored dot inside the Learning cluster cell (risk-low/medium/high reuse the exact hex
+// values the old .voucher-line-risk-pill used).
 function applyRiskToCell(uid, riskData) {
-    const cell = document.querySelector(`.voucher-line-risk-cell[data-uid="${uid}"]`);
-    if (!cell) return;
+    const dot = document.querySelector(`.voucher-line-risk-dot[data-uid="${uid}"]`);
+    if (!dot) return;
+    dot.className = 'voucher-line-risk-dot';
     if (!riskData || !riskData.risk) {
-        cell.innerHTML = '';
+        dot.title = '';
         return;
     }
     const riskClass = riskData.risk.toLowerCase();
     const tooltip = riskData.tooltip || 'No required procedures configured';
-    cell.innerHTML = `<span class="voucher-line-risk-pill risk-${riskClass}" title="${escapeHtml(tooltip)}">${escapeHtml(riskData.risk)}</span>`;
+    dot.classList.add(`risk-${riskClass}`);
+    dot.title = `${riskData.risk} risk\n${tooltip}`;
 }
 
-// Looks up the Risk cell's data for one line's Category, mirroring updateSupportingCellForLine()'s
+// Looks up the Risk cell's data for one line's Category, mirroring updateProceduresCellForLine()'s
 // shape (blank on no type, stale-guard re-check after the await since the line's Category can
 // change while this fetch is in flight).
 async function updateRiskCellForLine(uid, type) {
@@ -1087,15 +1147,14 @@ function computeVoucherTotal(lines) {
     return total;
 }
 
-// Maps a validation_status string to the same icon/class convention used by the transaction-list
-// popover's .status-icon (renderTransactionPopover()) — reused rather than inventing a new one.
+// v7 redesign: a plain colored dot instead of an emoji icon, matching the prototype's
+// .statusDot. Single source for all three call sites that build this cell (initial render here,
+// plus the two direct .voucher-line-status innerHTML writes in validateTransaction() and the
+// Next/validate-and-advance flow) — changing it here updates all three.
 function getVoucherLineStatusIcon(validationStatus) {
     const status = (validationStatus || 'Pending');
     const statusClass = status.toLowerCase();
-    let icon = '❌';
-    if (statusClass === 'passed') icon = '✅';
-    else if (statusClass === 'pending') icon = '⏳';
-    return `<span class="status-icon ${statusClass}" title="${status}">${icon}</span>`;
+    return `<span class="voucher-line-status-dot ${statusClass}" title="${status}"></span>`;
 }
 
 // ---------- VOUCHER LINE STATE (Phase 3) ----------
@@ -1179,8 +1238,8 @@ function renderVoucherLines(lines) {
             <span>Type<span class="voucher-col-resize-handle" data-col="2"></span></span>
             <span>Account Name<span class="voucher-col-resize-handle" data-col="3"></span></span>
             <span class="voucher-line-amount-col">Amount<span class="voucher-col-resize-handle" data-col="4"></span></span>
-            <span>Supporting<span class="voucher-col-resize-handle" data-col="5"></span></span>
-            <span>Risk<span class="voucher-col-resize-handle" data-col="6"></span></span>
+            <span>Procedures<span class="voucher-col-resize-handle" data-col="5"></span></span>
+            <span>Learning<span class="voucher-col-resize-handle" data-col="6"></span></span>
             <span>Observations<span class="voucher-col-resize-handle" data-col="7"></span></span>
             <span>Status<span class="voucher-col-resize-handle" data-col="8"></span></span>
         </div>
@@ -1224,19 +1283,19 @@ function renderVoucherLines(lines) {
                             <span class="voucher-line-type-value" data-uid="${uid}">Loading…</span>
                             <span class="voucher-line-type-recycle-icon" data-uid="${uid}" data-account-code="${escapeHtml(accountCode)}" title="No category assigned — click to assign one in Assign Categories" style="display:none">🔄</span>
                         </span>
-                        <span class="voucher-line-type-chips">
-                            <button type="button" class="voucher-line-chip voucher-line-audit-icon" data-uid="${uid}" title="Audit guidance">📋 Guide</button>
-                            <button type="button" class="voucher-line-chip voucher-line-dfd-chip" data-uid="${uid}" title="Data Flow Diagram">🔀 DFD</button>
-                        </span>
                     </span>
                     <span class="voucher-line-name-cell">
                         <span class="voucher-line-name">${accountName}${changeIconHtml}${deletedBadgeHtml}</span>
                         <span class="voucher-line-desc">${description}</span>
                     </span>
                     <span class="voucher-line-amount">${amount}</span>
-                    <span class="voucher-line-supporting-cell" data-detail-id="${uid}"></span>
-                    <span class="voucher-line-risk-cell" data-uid="${uid}"></span>
-                    <span class="voucher-line-observations-cell">${line.observations ? escapeHtml(line.observations) : ''}</span>
+                    <span class="voucher-line-procedures-cell" data-detail-id="${uid}"></span>
+                    <span class="voucher-line-learning-cluster" data-uid="${uid}">
+                        <span class="voucher-line-risk-dot" data-uid="${uid}"></span>
+                        <button type="button" class="voucher-line-learn-icon voucher-line-audit-icon" data-uid="${uid}" title="Audit guidance">📋</button>
+                        <button type="button" class="voucher-line-learn-icon voucher-line-dfd-chip" data-uid="${uid}" title="Data Flow Diagram">🔀</button>
+                    </span>
+                    <span class="voucher-line-observations-cell" data-detail-id="${uid}"></span>
                     <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
                 </div>
             </div>
@@ -1332,8 +1391,9 @@ function renderVoucherLines(lines) {
         });
     });
 
-    // Supporting column — populated asynchronously per line (updateSupportingCellForLine(), see
-    // above), since it depends on a fetch of the line's currently-selected Category. That
+    // Procedures/Observations/Learning cells — populated asynchronously per line
+    // (updateProceduresCellForLine()/updateObservationsCellForLine()/updateRiskCellForLine(), see
+    // above), since they depend on a fetch of the line's currently-selected Category. That
     // function wires each of its own links' click listeners once its content lands, since this
     // batch pass runs before any of those async fetches resolve.
 
@@ -2692,8 +2752,14 @@ async function openProcedureModal(uid, initialDocId = null) {
     }
 
     // The voucher line's own amount (for the mismatch badge) — looked up from the already-loaded
-    // voucher, no extra fetch needed.
-    const voucherLine = currentVoucherLines.find(l => l.detail_id === uid);
+    // voucher, no extra fetch needed. String()-normalized: uid arrives as a string whenever this
+    // is called from a table click (dataset.uid is always a string), but currentVoucherLines[].
+    // detail_id is a number straight from the JSON response — a bare === here always missed on
+    // that path (confirmed bug: caused the header below to show "Line 0 of 6 — —" and this amount
+    // to silently default to 0). Object-key lookups elsewhere (voucherLineState[uid]) don't have
+    // this problem since plain-object keys auto-coerce to strings; only Array.find/findIndex do not.
+    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const voucherLine = lineIdx !== -1 ? currentVoucherLines[lineIdx] : null;
     const voucherLineAmount = voucherLine ? parseVoucherAmount(getVoucherLineAmount(voucherLine.row_data || {})) : 0;
 
     if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, tabs: {} };
@@ -2740,8 +2806,7 @@ async function openProcedureModal(uid, initialDocId = null) {
     // Header: line position/account name, type, amount, risk (Supporting Documents modal
     // redesign follow-up) — srNo/totalLines mirror the same order renderVoucherLines() numbers
     // the table with; risk reuses computeLineRiskData() against the guidance already fetched
-    // above, no extra request.
-    const lineIdx = currentVoucherLines.findIndex(l => l.detail_id === uid);
+    // above, no extra request. lineIdx/voucherLine were already resolved above (String()-normalized).
     const srNo = lineIdx + 1;
     const totalLines = currentVoucherLines.length;
     const accountName = voucherLine ? getVoucherLineAlias(voucherLine.row_data || {}, VOUCHER_LINE_ACCOUNT_NAME_ALIASES) : '—';
@@ -2793,7 +2858,9 @@ function updateProcedureModalSavedNote(uid) {
 async function navigateProcedureModalLine(delta) {
     const uid = currentProcedureModalUid;
     if (!uid) return;
-    const idx = currentVoucherLines.findIndex(l => l.detail_id === uid);
+    // String()-normalized — see the matching comment in openProcedureModal() for why a bare ===
+    // between currentProcedureModalUid (may be a string) and detail_id (a number) can miss.
+    const idx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
     if (idx === -1) return;
     const newIdx = idx + delta;
     if (newIdx < 0 || newIdx >= currentVoucherLines.length) return;
@@ -3292,7 +3359,7 @@ function buildSelectedLinesTable(uid, docId) {
 // ---------- AUDIT PROCEDURES CHECKLIST (Phase 5 of 6) ----------
 // Renders one checkbox per auth role already configured on the Document (doc.auth_roles, sourced
 // from audit_rule_document_auth_roles via the same audit_guidance fetch/cache already used by
-// showAuditGuidancePopover()/updateSupportingCellForLine() — no new fetch for the role list
+// showAuditGuidancePopover()/updateProceduresCellForLine() — no new fetch for the role list
 // itself). Tick state comes from tabState.checklist (seeded in openProcedureModal() from
 // GET /api/verification/procedure_checks/{uid}) — a role with no entry renders unchecked. No
 // validation behind ticking a role — rules are explicitly deferred to a future phase.
@@ -3451,12 +3518,14 @@ async function saveLineObservation(uid, docId) {
 
         // The backend rolls this up into the voucher line's own Observation field immediately
         // (sync_line_observations_to_voucher(), called from save_line_observation() itself) —
-        // reflect that here too, in both the cached line data (currentVoucherLines, so a later
-        // full re-render of this voucher stays correct) and the live OBSERVATIONS cell on screen.
+        // reflect that here too, in the cached line data (currentVoucherLines, so a later full
+        // re-render of this voucher stays correct) and the live Observations cell's flag+count
+        // (a fresh recount, not a plain-text write — this cell shows count/tooltip only, per the
+        // v7 redesign).
         const cachedLine = currentVoucherLines.find(l => l.detail_id === parseInt(uid));
         if (cachedLine) cachedLine.observations = data.voucher_observations;
-        const observationsCell = document.querySelector(`.voucher-line-row[data-detail-id="${uid}"] .voucher-line-observations-cell`);
-        if (observationsCell) observationsCell.textContent = data.voucher_observations || '';
+        const lineType = voucherLineState[uid] && voucherLineState[uid].transactionType;
+        if (lineType) updateObservationsCellForLine(uid, lineType);
     } catch (e) {
         console.error('Failed to save line observation:', e);
         showStatus('Failed to save observation — please try again.', 'error');
@@ -3502,11 +3571,7 @@ const PROCEDURE_BROWSE_PAGE_SIZE = 20;
 // renderProcedureBrowseTable() below).
 let procedureBrowseState = { uid: null, docId: null, page: 1, totalRows: 0, rows: [], statusFilter: 'all' };
 
-// preloadedRows (Phase 4 of 4, FINAL): when the caller already has the exact rows to show
-// (openProcedureBrowseHighlight()'s confirmatory shortcut), render them directly instead of
-// fetching page 1 of the full unfiltered listing — every other call site omits this argument and
-// behaves exactly as before.
-async function openProcedureBrowseModal(uid, docId, preloadedRows = null) {
+async function openProcedureBrowseModal(uid, docId) {
     if (!procedureBrowseModal) return;
     const lineState = procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
@@ -3518,67 +3583,11 @@ async function openProcedureBrowseModal(uid, docId, preloadedRows = null) {
     if (procedureBrowseStatusFilterSelect) procedureBrowseStatusFilterSelect.value = 'all';
     if (procedureBrowseModalTitle) procedureBrowseModalTitle.textContent = `👁️ Browse — ${doc.name}`;
     procedureBrowseModal.style.display = 'flex';
-
-    if (preloadedRows) {
-        procedureBrowseState.rows = preloadedRows;
-        procedureBrowseState.totalRows = preloadedRows.length;
-        renderProcedureBrowseTable();
-    } else {
-        await fetchProcedureBrowsePage();
-    }
+    await fetchProcedureBrowsePage();
 }
 
 function closeProcedureBrowseModal() {
     if (procedureBrowseModal) procedureBrowseModal.style.display = 'none';
-}
-
-// ---------- CONFIRMATORY TICK SHORTCUT (Phase 4 of 4, FINAL) ----------
-// Badge click handler (wired in updateSupportingCellForLine()): opens the modal on this document's
-// tab, then opens Browse pre-filtered to and highlighting the exact row(s) already known to be
-// assigned to this line+document — a one-click path from "I can see it's assigned" to "here's
-// exactly where."
-async function openProcedureBrowseHighlight(uid, docId) {
-    // Ensures the correct tab is active and tabState.selections is freshly re-synced from the
-    // server (same fetch openProcedureModal() always does on open).
-    await openProcedureModal(uid, docId);
-    const lineState = procedureModalState[uid];
-    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
-    const tabState = getProcedureTabState(uid, docId);
-    const selections = tabState.selections || [];
-    if (!doc || !doc.template_id || !selections.length) return;
-
-    const targetIds = new Set(selections.map(s => s.client_data_id));
-    try {
-        // There is no backend "find the page containing row X" concept, so fetch the template's
-        // listing at the backend's own max page size (200 — GET /api/data/preview's own cap) and
-        // pull out just the already-known assigned row(s). This is real Browse data (is_assigned/
-        // assigned_to_* fields included by the backend), not a synthesized row — see
-        // buildProcedureBrowseTableHtml(), unchanged. Known limit: a document+line with more than
-        // 200 assigned rows (far beyond this app's document-per-line convention) won't be found.
-        const data = await fetchProcedureRows(doc.template_id, '', 1, 200);
-        const matchedRows = (data.rows || []).filter(r => targetIds.has(r.id));
-        if (!matchedRows.length) return;
-        await openProcedureBrowseModal(uid, docId, matchedRows);
-        highlightProcedureBrowseRows(targetIds);
-    } catch (e) {
-        console.error('Failed to open Browse to the assigned row(s):', e);
-    }
-}
-
-// Scrolls to the first matching row and applies a brief dim-red flash to every matching row
-// (client_data ids), reverting to the row's normal "Assigned" styling once the flash animation
-// ends — a temporary confirmatory cue, not a permanent style change.
-function highlightProcedureBrowseRows(clientDataIds) {
-    if (!procedureBrowseTableContainer) return;
-    let firstRow = null;
-    clientDataIds.forEach(id => {
-        const row = procedureBrowseTableContainer.querySelector(`tr[data-id="${id}"]`);
-        if (!row) return;
-        if (!firstRow) firstRow = row;
-        row.classList.add('procedure-browse-row-highlight');
-        setTimeout(() => row.classList.remove('procedure-browse-row-highlight'), 2200);
-    });
-    if (firstRow) firstRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 async function fetchProcedureBrowsePage() {
