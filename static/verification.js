@@ -780,10 +780,13 @@ function getVoucherLineAlias(row, aliases) {
 // Type dropdown stores) — shared between the "Guide" popover and the Supporting column so
 // selecting a category doesn't trigger two separate fetches for the same data. 404s cache as
 // null; a transient fetch error is deliberately NOT cached, so a later retry can succeed.
+// openProcedureModal() passes forceRefresh=true to bypass this cache — its Document list and
+// per-Document auth_roles (Prepared by/Checked by/Approved by) must reflect Audit Rules' live
+// state on every open, not whatever this Category last returned earlier in the page's lifetime.
 let auditGuidanceCache = {};
 
-async function fetchAuditGuidanceData(type) {
-    if (Object.prototype.hasOwnProperty.call(auditGuidanceCache, type)) {
+async function fetchAuditGuidanceData(type, forceRefresh = false) {
+    if (!forceRefresh && Object.prototype.hasOwnProperty.call(auditGuidanceCache, type)) {
         return auditGuidanceCache[type];
     }
     const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
@@ -2533,9 +2536,12 @@ async function openProcedureModal(uid, initialDocId = null) {
     const type = lineState && lineState.transactionType;
     if (!type) return;
 
+    // forceRefresh=true — bypasses auditGuidanceCache so this Category's Document list and each
+    // Document's auth_roles always reflect Audit Rules' live state on open, same "re-fetched
+    // fresh on every open" convention as assignedRecords/procedureChecks just below.
     let guidance = null;
     try {
-        guidance = await fetchAuditGuidanceData(type);
+        guidance = await fetchAuditGuidanceData(type, true);
     } catch (e) {
         console.error('Failed to load Supporting Documents modal data:', e);
         return;
