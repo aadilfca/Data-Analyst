@@ -2547,36 +2547,49 @@ body {
     align-items: center;
     margin-bottom: 12px;
 }
-.procedure-tab-bar {
+/* Left-side document rail (Supporting Documents redesign, Phase 1) - replaces the earlier
+   horizontal .procedure-tab-bar. .procedure-modal-body lays the rail and the panel side by side;
+   the rail scrolls independently when a Category has more documents than fit its fixed height. */
+.procedure-modal-body {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    border-bottom: 2px solid #e2e8f0;
-    padding-bottom: 10px;
-    margin-bottom: 14px;
+    gap: 16px;
+    align-items: flex-start;
+}
+.procedure-doc-rail {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 0 0 200px;
+    max-height: 65vh;
+    overflow-y: auto;
+    border-right: 1px solid #e2e8f0;
+    padding-right: 12px;
 }
 .procedure-tab-btn {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 14px;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
     background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 20px;
+    border: 1px solid transparent;
+    border-radius: 8px;
     font-size: 13px;
     font-weight: 500;
     color: #475569;
     cursor: pointer;
+    text-align: left;
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 .procedure-tab-btn:hover {
     background: #eff6ff;
-    border-color: #bfdbfe;
 }
 .procedure-tab-btn.active {
-    background: #3b82f6;
+    background: #eff6ff;
     border-color: #3b82f6;
-    color: white;
+    border-left: 3px solid #3b82f6;
+    color: #1a1a2e;
+    font-weight: 600;
 }
 .procedure-tab-dot {
     width: 8px;
@@ -2588,13 +2601,16 @@ body {
 .procedure-tab-dot.complete {
     background: #22c55e;
 }
-.procedure-tab-btn.active .procedure-tab-dot {
-    background: rgba(255, 255, 255, 0.5);
-}
-.procedure-tab-btn.active .procedure-tab-dot.complete {
-    background: #bbf7d0;
+.procedure-tab-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .procedure-tab-panels {
+    flex: 1;
+    min-width: 0;
     min-height: 160px;
 }
 .procedure-tab-panel {

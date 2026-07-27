@@ -811,19 +811,17 @@
         <!-- ============================================= -->
         <div id="auditGuidancePopover" class="audit-guidance-popover" style="display:none;"></div>
         <!-- ============================================= -->
-        <!-- SUPPORTING DOCUMENTS TABBED MODAL             -->
-        <!-- Voucher Supporting-Document Linking, Phase 3 of 6: one tab per document belonging  -->
-        <!-- to the voucher line's Category. Tab bar (#procedureModalTabs) and panels           -->
-        <!-- (#procedureModalPanels) are populated entirely by JS in verification.js - shell/CSS -->
-        <!-- lives in the #procedureModal rules in style.css, per this file's documented         -->
-        <!-- per-modal-scoped .modal-content/.modal-header convention (see #supportingModal/     -->
-        <!-- #dfdModal above). Phase 4 of 6: each tab's search box/results dropdown/selected-     -->
-        <!-- lines table are also 100% JS-rendered (renderProcedureModalPanel() in                -->
-        <!-- verification.js) - no per-tab static markup here, same convention as Phase 3.        -->
-        <!-- Phase 5 of 6: an "Audit Procedures" checklist (buildProcedureChecklist() in           -->
-        <!-- verification.js) renders below the Linked Evidence table in each tab, one checkbox   -->
-        <!-- per auth role already configured on that Document - also 100% JS-rendered, no new    -->
-        <!-- static markup here. Observation content within each tab remains Phase 6.             -->
+        <!-- SUPPORTING DOCUMENTS MODAL (left-side document rail)  -->
+        <!-- Voucher Supporting-Document Linking Phases 3-6 built this as a top tab bar; the       -->
+        <!-- Supporting Documents redesign's Phase 1 restructured it into a left rail instead -     -->
+        <!-- one entry per document belonging to the voucher line's Category, listed vertically.   -->
+        <!-- Rail (#procedureModalTabs) and panel (#procedureModalPanels) are still populated       -->
+        <!-- entirely by JS in verification.js (renderProcedureModalTabs()/renderProcedureModalPanel()) -->
+        <!-- - shell/CSS lives in the #procedureModal rules in style.css, per this file's documented -->
+        <!-- per-modal-scoped .modal-content/.modal-header convention (see #supportingModal/         -->
+        <!-- #dfdModal above). Each document's panel renders a search box/results dropdown/selected- -->
+        <!-- lines table (templated documents), an Audit Procedures checklist, and an Observation    -->
+        <!-- section - no per-document static markup here, all JS-rendered.                          -->
         <!-- ============================================= -->
         <div id="procedureModal">
             <div class="modal-content">
@@ -832,8 +830,10 @@
                     <button class="close-btn" id="procedureModalClose"
                         style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
                 </div>
-                <div id="procedureModalTabs" class="procedure-tab-bar"></div>
-                <div id="procedureModalPanels" class="procedure-tab-panels"></div>
+                <div class="procedure-modal-body">
+                    <div id="procedureModalTabs" class="procedure-doc-rail"></div>
+                    <div id="procedureModalPanels" class="procedure-tab-panels"></div>
+                </div>
             </div>
         </div>
 

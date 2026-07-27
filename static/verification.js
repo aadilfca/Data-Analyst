@@ -2583,11 +2583,11 @@ async function openProcedureModal(uid, initialDocId = null) {
     procedureModalState[uid].documents = documents;
     procedureModalState[uid].assignedDocIds = assignedDocIds;
     procedureModalState[uid].voucherLineAmount = voucherLineAmount;
-    const activeDocId = (initialDocId && documents.some(d => d.id === initialDocId)) ? initialDocId : documents[0].id;
-    procedureModalState[uid].activeDocId = activeDocId;
 
     // Re-sync each tab's selections and checklist from the fresh server data (never just seeded
     // once) so reopening the modal always reflects reality, even if a change happened elsewhere.
+    // Must run before the default-tab selection below — a no-template document's completeness
+    // depends on tabState.checklist, populated here.
     documents.forEach(doc => {
         const tabState = getProcedureTabState(uid, doc.id);
         tabState.selections = assignedRecords.filter(r => r.document_id === doc.id);
@@ -2606,6 +2606,18 @@ async function openProcedureModal(uid, initialDocId = null) {
         }
     });
 
+    // Rail default (Phase 1): an explicit target (a specific document link clicked in the
+    // Supporting column) still wins; otherwise open the first document that isn't yet complete,
+    // falling back to the first document if everything is already done.
+    let activeDocId;
+    if (initialDocId && documents.some(d => d.id === initialDocId)) {
+        activeDocId = initialDocId;
+    } else {
+        const firstIncomplete = documents.find(doc => !isProcedureDocumentComplete(uid, doc));
+        activeDocId = firstIncomplete ? firstIncomplete.id : documents[0].id;
+    }
+    procedureModalState[uid].activeDocId = activeDocId;
+
     if (procedureModalTitle) procedureModalTitle.textContent = `📎 Supporting Documents — ${type}`;
     procedureModal.style.display = 'flex';
 
@@ -2623,35 +2635,38 @@ function closeProcedureModal() {
     // it's only reset on voucher navigation, in seedVoucherLineState().
 }
 
-// Renders the tab bar for one line's modal: one button per document, name + a completion dot
-// (filled when that document has at least one linked evidence row for this line, per the
-// assignedDocIds presence check from openProcedureModal()).
+// Shared completeness check for one document within one voucher line's modal — used both by the
+// rail's completion dot (below) and by openProcedureModal()'s default-tab selection. A no-template
+// document has no evidence table to link, so linked-evidence presence (assignedDocIds) is
+// meaningless for it — its completeness instead reflects whether every one of its Audit Procedures
+// is ticked (voucher_line_procedure_checks, same source the checklist itself reads via
+// getProcedureTabState()). Zero procedures configured is deliberately NOT complete (empty ≠ done),
+// per the confirmed requirement.
+function isProcedureDocumentComplete(uid, doc) {
+    if (doc.template_id) {
+        const lineState = procedureModalState[uid];
+        return !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(doc.id));
+    }
+    const tabState = getProcedureTabState(uid, doc.id);
+    const roles = doc.auth_roles || [];
+    return roles.length > 0 && roles.every(role => tabState.checklist[role] && tabState.checklist[role].is_checked);
+}
+
+// Renders the left-side document rail for one line's modal: one entry per document, name + a
+// completion dot (see isProcedureDocumentComplete() above).
 function renderProcedureModalTabs(uid) {
     const container = document.getElementById('procedureModalTabs');
     if (!container) return;
     const lineState = procedureModalState[uid];
     if (!lineState) { container.innerHTML = ''; return; }
     const documents = lineState.documents || [];
-    const assignedDocIds = lineState.assignedDocIds || new Set();
 
     container.innerHTML = documents.map(doc => {
         const isActive = doc.id === lineState.activeDocId;
-
-        // A no-template document has no evidence table to link, so linked-evidence presence
-        // (assignedDocIds) is meaningless for it — its dot instead reflects whether every one of
-        // its Audit Procedures is ticked (voucher_line_procedure_checks, same source the
-        // checklist itself reads via getProcedureTabState()). Zero procedures configured is
-        // deliberately NOT complete (empty ≠ done), per the confirmed requirement.
-        let isComplete, dotTitle;
-        if (doc.template_id) {
-            isComplete = assignedDocIds.has(doc.id);
-            dotTitle = isComplete ? 'Evidence linked' : 'No evidence linked yet';
-        } else {
-            const tabState = getProcedureTabState(uid, doc.id);
-            const roles = doc.auth_roles || [];
-            isComplete = roles.length > 0 && roles.every(role => tabState.checklist[role] && tabState.checklist[role].is_checked);
-            dotTitle = isComplete ? 'All procedures confirmed' : 'Procedures pending';
-        }
+        const isComplete = isProcedureDocumentComplete(uid, doc);
+        const dotTitle = doc.template_id
+            ? (isComplete ? 'Evidence linked' : 'No evidence linked yet')
+            : (isComplete ? 'All procedures confirmed' : 'Procedures pending');
         return `
             <button type="button" class="procedure-tab-btn${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
                 <span class="procedure-tab-dot${isComplete ? ' complete' : ''}" title="${dotTitle}"></span>
