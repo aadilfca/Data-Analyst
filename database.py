@@ -1057,6 +1057,20 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add template_id to audit_rule_documents:", e)
 
+        # Audit Risk indicator (Supporting Documents modal redesign, final phase): a Document's
+        # risk rating ('Low'/'Medium'/'High'), surfaced on the main voucher table's Risk column.
+        # No CHECK constraint here (this is a post-hoc ALTER, not the original CREATE TABLE) -
+        # validity is enforced in Python (routers/audit_rules.py's RISK_RATINGS/validate_document_risk_rating).
+        # Same upgrade-block treatment as is_active/template_id above.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'risk_rating' not in columns:
+                conn.execute("ALTER TABLE audit_rule_documents ADD COLUMN risk_rating TEXT")
+                print("✅ Added risk_rating column to audit_rule_documents")
+        except Exception as e:
+            print("⚠️ Could not add risk_rating to audit_rule_documents:", e)
+
         # Fields on a Document available for cross-checks (e.g. Quantity, Amount, Date) -
         # stored here so they're a controlled per-document list, not free-typed elsewhere.
         conn.execute('''

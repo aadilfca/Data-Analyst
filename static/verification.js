@@ -925,6 +925,65 @@ function applyCategoryToTypeCell(uid, categoryName) {
 
     // Supporting already no-ops on a falsy type, so only call it when there's a real match.
     if (categoryName) updateSupportingCellForLine(uid, categoryName);
+    if (categoryName) updateRiskCellForLine(uid, categoryName);
+    else applyRiskToCell(uid, null);
+}
+
+// ---------- AUDIT RISK INDICATOR (Supporting Documents modal redesign, final phase) ----------
+// Read-only reference: a Category's highest-rated Document risk_rating, shown as a colored pill,
+// with a hover tooltip listing each Document's required procedures (auth_roles). Sourced from the
+// same cached fetchAuditGuidanceData(type) the Supporting column already uses — no new endpoint.
+const RISK_RATING_ORDER = { Low: 1, Medium: 2, High: 3 };
+
+// Computes { risk, tooltip } from an audit_guidance response's documents[] — risk is the highest
+// risk_rating among them (documents with no rating set are ignored, never fabricated), tooltip is
+// one line per document that has auth_roles, e.g. "Purchase Order: Prepared by, Approved by".
+function computeLineRiskData(auditGuidanceData) {
+    const documents = (auditGuidanceData && auditGuidanceData.documents) || [];
+    let risk = null;
+    documents.forEach(doc => {
+        if (doc.risk_rating && (!risk || RISK_RATING_ORDER[doc.risk_rating] > RISK_RATING_ORDER[risk])) {
+            risk = doc.risk_rating;
+        }
+    });
+    const tooltip = documents
+        .filter(doc => (doc.auth_roles || []).length)
+        .map(doc => `${doc.name}: ${doc.auth_roles.join(', ')}`)
+        .join('\n');
+    return { risk, tooltip };
+}
+
+// Writes the risk pill into one line's Risk cell — blank if no document in its category has a
+// risk rating set. Re-queries the DOM by data-uid, same safe-no-op-if-row-gone convention as
+// applyCategoryToTypeCell().
+function applyRiskToCell(uid, riskData) {
+    const cell = document.querySelector(`.voucher-line-risk-cell[data-uid="${uid}"]`);
+    if (!cell) return;
+    if (!riskData || !riskData.risk) {
+        cell.innerHTML = '';
+        return;
+    }
+    const riskClass = riskData.risk.toLowerCase();
+    const tooltip = riskData.tooltip || 'No required procedures configured';
+    cell.innerHTML = `<span class="voucher-line-risk-pill risk-${riskClass}" title="${escapeHtml(tooltip)}">${escapeHtml(riskData.risk)}</span>`;
+}
+
+// Looks up the Risk cell's data for one line's Category, mirroring updateSupportingCellForLine()'s
+// shape (blank on no type, stale-guard re-check after the await since the line's Category can
+// change while this fetch is in flight).
+async function updateRiskCellForLine(uid, type) {
+    if (!type) {
+        applyRiskToCell(uid, null);
+        return;
+    }
+    let data = null;
+    try {
+        data = await fetchAuditGuidanceData(type);
+    } catch (e) {
+        console.error('Failed to load Risk indicator:', e);
+    }
+    if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+    applyRiskToCell(uid, computeLineRiskData(data));
 }
 
 // Looks up the Category for one line's account code and applies it to that line's Type cell.
@@ -958,10 +1017,10 @@ async function autoFillCategoryForLine(uid, accountCode) {
 }
 
 // Order matches .voucher-line-summary-grid's columns: Sr No., Account Code, Type, Account Name,
-// Amount, Supporting, Observations, Status. User-resizable (see the drag handles in
+// Amount, Supporting, Risk, Observations, Status. User-resizable (see the drag handles in
 // renderVoucherLines()'s header row) — persists at module scope across renders/navigation, same
 // convention as voucherLineState, so dragging a column survives Prev/Next voucher navigation.
-let voucherColumnWidths = [40, 100, 170, 395, 90, 130, 300, 90];
+let voucherColumnWidths = [40, 100, 170, 395, 90, 130, 90, 300, 90];
 
 // Pushes voucherColumnWidths into the CSS custom property .voucher-line-summary-grid reads its
 // grid-template-columns from. Set on #voucherLinesContainer itself (not its innerHTML content),
@@ -1091,8 +1150,9 @@ function renderVoucherLines(lines) {
             <span>Account Name<span class="voucher-col-resize-handle" data-col="3"></span></span>
             <span class="voucher-line-amount-col">Amount<span class="voucher-col-resize-handle" data-col="4"></span></span>
             <span>Supporting<span class="voucher-col-resize-handle" data-col="5"></span></span>
-            <span>Observations<span class="voucher-col-resize-handle" data-col="6"></span></span>
-            <span>Status<span class="voucher-col-resize-handle" data-col="7"></span></span>
+            <span>Risk<span class="voucher-col-resize-handle" data-col="6"></span></span>
+            <span>Observations<span class="voucher-col-resize-handle" data-col="7"></span></span>
+            <span>Status<span class="voucher-col-resize-handle" data-col="8"></span></span>
         </div>
     `;
 
@@ -1145,6 +1205,7 @@ function renderVoucherLines(lines) {
                     </span>
                     <span class="voucher-line-amount">${amount}</span>
                     <span class="voucher-line-supporting-cell" data-detail-id="${uid}"></span>
+                    <span class="voucher-line-risk-cell" data-uid="${uid}"></span>
                     <span class="voucher-line-observations-cell">${line.observations ? escapeHtml(line.observations) : ''}</span>
                     <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
                 </div>
@@ -1166,6 +1227,7 @@ function renderVoucherLines(lines) {
                 <span class="voucher-line-desc">${cashbookName}</span>
             </span>
             <span class="voucher-line-amount">${total}</span>
+            <span></span>
             <span></span>
             <span></span>
             <span></span>

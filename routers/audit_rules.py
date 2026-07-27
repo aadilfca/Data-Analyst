@@ -20,6 +20,9 @@ class DocumentCreate(BaseModel):
     # Phase 9: which Data Bank template this Document's supporting evidence should be
     # searched in (verification.js's Supporting column needs this per-Document).
     template_id: Optional[int] = None
+    # Audit Risk indicator (Supporting Documents modal redesign, final phase): this Document's
+    # risk rating, surfaced on the main voucher table's Risk column.
+    risk_rating: Optional[str] = None
     auth_roles: List[str] = []
     cross_check_fields: List[str] = []
 
@@ -27,6 +30,7 @@ class DocumentUpdate(BaseModel):
     name: str
     kb_note: Optional[str] = None
     template_id: Optional[int] = None
+    risk_rating: Optional[str] = None
     auth_roles: List[str] = []
     cross_check_fields: List[str] = []
 
@@ -59,6 +63,7 @@ def row_to_document(row: dict) -> dict:
         "name": row["name"],
         "kb_note": row.get("kb_note"),
         "template_id": row.get("template_id"),
+        "risk_rating": row.get("risk_rating"),
         "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
         "auth_roles": get_document_auth_roles(document_id),
@@ -73,6 +78,17 @@ def validate_document_template_id(template_id: Optional[int]):
     rows = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (template_id,))
     if not rows:
         raise HTTPException(400, f"Template ID {template_id} not found or inactive")
+
+# Fixed rating scale for a Document's Audit Risk indicator (Supporting Documents modal redesign,
+# final phase) - validated here since risk_rating has no DB-level CHECK constraint (see database.py).
+RISK_RATINGS = ('Low', 'Medium', 'High')
+
+def validate_document_risk_rating(risk_rating: Optional[str]):
+    """Raises HTTPException(400) if risk_rating is set but isn't one of the fixed RISK_RATINGS."""
+    if risk_rating is None:
+        return
+    if risk_rating not in RISK_RATINGS:
+        raise HTTPException(400, f"Invalid risk rating '{risk_rating}'. Must be one of: {', '.join(RISK_RATINGS)}")
 
 def save_document_auth_roles(document_id: int, auth_roles: List[str]):
     """Replace a Document's authorisation-roles list (delete-then-reinsert)."""
@@ -117,9 +133,10 @@ def get_document(document_id: int):
 @router.post("/api/audit-rules/documents")
 def create_document(document: DocumentCreate):
     validate_document_template_id(document.template_id)
+    validate_document_risk_rating(document.risk_rating)
     document_id = execute_write(
-        "INSERT INTO audit_rule_documents (name, kb_note, template_id) VALUES (?, ?, ?)",
-        (document.name, document.kb_note, document.template_id)
+        "INSERT INTO audit_rule_documents (name, kb_note, template_id, risk_rating) VALUES (?, ?, ?, ?)",
+        (document.name, document.kb_note, document.template_id, document.risk_rating)
     )
     save_document_auth_roles(document_id, document.auth_roles)
     save_document_cross_check_fields(document_id, document.cross_check_fields)
@@ -133,10 +150,11 @@ def update_document(document_id: int, document: DocumentUpdate):
     if not existing:
         raise HTTPException(404, "Document not found")
     validate_document_template_id(document.template_id)
+    validate_document_risk_rating(document.risk_rating)
 
     execute_write(
-        "UPDATE audit_rule_documents SET name = ?, kb_note = ?, template_id = ? WHERE id = ?",
-        (document.name, document.kb_note, document.template_id, document_id)
+        "UPDATE audit_rule_documents SET name = ?, kb_note = ?, template_id = ?, risk_rating = ? WHERE id = ?",
+        (document.name, document.kb_note, document.template_id, document.risk_rating, document_id)
     )
     save_document_auth_roles(document_id, document.auth_roles)
     save_document_cross_check_fields(document_id, document.cross_check_fields)
@@ -389,7 +407,7 @@ def get_category_cross_checks(category_id: int) -> List[dict]:
 def get_category_guidance_documents(category_id: int) -> List[dict]:
     rows = execute_query(
         """
-        SELECT d.id as document_id, d.name, d.kb_note, d.template_id
+        SELECT d.id as document_id, d.name, d.kb_note, d.template_id, d.risk_rating
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
         WHERE cd.category_id = ?
@@ -403,6 +421,7 @@ def get_category_guidance_documents(category_id: int) -> List[dict]:
             "name": r["name"],
             "kb_note": r["kb_note"],
             "template_id": r["template_id"],
+            "risk_rating": r["risk_rating"],
             "auth_roles": get_document_auth_roles(r["document_id"]),
             "cross_check_fields": get_document_cross_check_fields(r["document_id"])
         }

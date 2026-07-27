@@ -1837,7 +1837,7 @@ body {
    variable re-lines-up the header/line/total rows in one shot since they all read from it. */
 .voucher-line-summary-grid {
     display: grid;
-    grid-template-columns: var(--voucher-col-widths, 40px 100px 170px 395px 90px 130px 300px 90px);
+    grid-template-columns: var(--voucher-col-widths, 40px 100px 170px 395px 90px 130px 90px 300px 90px);
     align-items: stretch;
     /* Block-level (and flex-stretched, for the header/total rows) boxes default to filling their
        container's full width — now that .voucher-panel is 100% wide and columns are fixed pixel
@@ -1876,7 +1876,7 @@ body {
     text-align: center;
 }
 .voucher-line-header-row .voucher-line-amount-col,
-.voucher-line-header-row > *:nth-child(8) {
+.voucher-line-header-row > *:nth-child(9) {
     justify-content: center;
     text-align: center;
 }
@@ -2152,12 +2152,42 @@ body {
     background: #fecaca;
 }
 
+/* Audit Risk indicator (Supporting Documents modal redesign, final phase) — a read-only pill
+   reflecting a Category's highest-rated Document risk_rating, with a hover tooltip (native title
+   attribute) listing required procedures per Document. Blank cell when no rating is configured
+   (see applyRiskToCell() in verification.js — never fabricated). Colors are the intentional
+   traffic-light exception to this file's usual primary/secondary/muted text palette, same as the
+   existing validation-status colors. */
+.voucher-line-risk-cell {
+    justify-content: center;
+}
+.voucher-line-risk-pill {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 10px;
+    line-height: 1.3;
+    cursor: default;
+}
+.voucher-line-risk-pill.risk-low {
+    background: #dcfce7;
+    color: #166534;
+}
+.voucher-line-risk-pill.risk-medium {
+    background: #fef3c7;
+    color: #92400e;
+}
+.voucher-line-risk-pill.risk-high {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
 @media (max-width: 768px) {
     .voucher-panel {
         width: 100%;
     }
     .voucher-line-summary-grid {
-        grid-template-columns: 30px 50px 100px 1fr 55px 70px 80px 55px;
+        grid-template-columns: 30px 50px 100px 1fr 55px 70px 55px 80px 55px;
         gap: 8px;
     }
 }

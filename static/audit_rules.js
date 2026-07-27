@@ -31,6 +31,7 @@ const arEditingIdInput = document.getElementById('arEditingId');
 const arNameInput = document.getElementById('arNameInput');
 const arKbNoteInput = document.getElementById('arKbNoteInput');
 const arTemplateSelect = document.getElementById('arTemplateSelect');
+const arRiskRatingSelect = document.getElementById('arRiskRatingSelect');
 const arRolesChipList = document.getElementById('arRolesChipList');
 const arRolesInput = document.getElementById('arRolesInput');
 const arRolesAddBtn = document.getElementById('arRolesAddBtn');
@@ -205,6 +206,7 @@ async function selectDocument(id) {
         arNameInput.value = doc.name;
         arKbNoteInput.value = doc.kb_note || '';
         arTemplateSelect.value = doc.template_id || '';
+        arRiskRatingSelect.value = doc.risk_rating || '';
         rolesState = (doc.auth_roles || []).slice();
         fieldsState = (doc.cross_check_fields || []).slice();
         renderRoleChips();
@@ -237,6 +239,7 @@ function startNewDocument() {
     arNameInput.value = '';
     arKbNoteInput.value = '';
     arTemplateSelect.value = '';
+    arRiskRatingSelect.value = '';
     rolesState = [];
     fieldsState = [];
     renderRoleChips();
@@ -263,6 +266,7 @@ async function saveDocument() {
         name: name,
         kb_note: arKbNoteInput.value.trim() || null,
         template_id: arTemplateSelect.value ? parseInt(arTemplateSelect.value) : null,
+        risk_rating: arRiskRatingSelect.value || null,
         auth_roles: rolesState,
         cross_check_fields: fieldsState
     };
