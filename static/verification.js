@@ -800,6 +800,36 @@ async function fetchAuditGuidanceData(type, forceRefresh = false) {
     return data;
 }
 
+// Confirmed fix (Linked Evidence table dynamic columns): each Document's evidence table needs
+// its own template's actual configured columns (name + data_type, sort_order), not a one-size-
+// fits-all set. Cached by template_id — several Documents can share the same template, and a
+// Category's Documents don't change template mid-session, so no forceRefresh option is needed
+// here (unlike auditGuidanceCache above). Fails soft to [] on error/404 so a lookup hiccup never
+// blocks the modal from opening; buildSelectedLinesTable() falls back to deriving columns from
+// the selections themselves when this returns empty.
+let templateColumnsCache = {};
+
+async function fetchTemplateColumns(templateId) {
+    if (Object.prototype.hasOwnProperty.call(templateColumnsCache, templateId)) {
+        return templateColumnsCache[templateId];
+    }
+    try {
+        const res = await fetch(`${API_BASE}/api/templates/${templateId}`);
+        if (!res.ok) {
+            templateColumnsCache[templateId] = [];
+            return [];
+        }
+        const data = await res.json();
+        const columns = (data.columns || []).map(c => ({ column_name: c.column_name, data_type: c.data_type }));
+        templateColumnsCache[templateId] = columns;
+        return columns;
+    } catch (e) {
+        console.error('Failed to load template columns:', e);
+        templateColumnsCache[templateId] = [];
+        return [];
+    }
+}
+
 // Voucher Supporting-Document Linking follow-up, Phase 4 of 4 (FINAL): lightweight fetch of a
 // line's active assignment records, used only to determine which document links get a
 // confirmatory badge below — reuses Phase 1's endpoint (already fixed in Phase 3 to be
@@ -2611,6 +2641,13 @@ async function openProcedureModal(uid, initialDocId = null) {
     const documents = (guidance && guidance.documents) || [];
     if (!documents.length) return;
 
+    // Confirmed fix: warm templateColumnsCache for every template_id among this Category's
+    // Documents before the tabs render, so buildSelectedLinesTable() can look up each template's
+    // real column list synchronously — mirrors the assignedRecords/procedureChecks/
+    // observationEntries pattern below (all awaited before rendering).
+    const distinctTemplateIds = [...new Set(documents.filter(d => d.template_id).map(d => d.template_id))];
+    await Promise.all(distinctTemplateIds.map(fetchTemplateColumns));
+
     // Full assignment records (not just IDs) for this line — Phase 1's endpoint. Drives the tab
     // completion dots AND seeds each tab's selected-lines table, grouped by document_id. Re-
     // fetched fresh on every open so both can never drift from true server state.
@@ -3101,40 +3138,50 @@ function buildSelectedLinesTable(uid, docId) {
         return '<p class="procedure-selected-empty">No evidence linked yet for this document.</p>';
     }
 
-    // Fixed column set (Supporting Documents modal redesign, Phase 4 of 6) - standardized across
-    // every template rather than the prior "one column per row_data key" dynamic layout. Sr No is
-    // a plain row index, not sourced from row_data; Description/Quantity/Rate/Amount are looked up
-    // case-insensitively via getRowFieldCaseInsensitive() and render blank when a template has no
-    // matching field, instead of breaking the row.
-    const columns = ['Description', 'Quantity', 'Rate', 'Amount'];
+    // Confirmed fix: render this document's own template's actual configured columns (name +
+    // data_type, in sort_order) instead of a hardcoded set standardized across every template —
+    // different templates (Gate Pass, Purchase Order, Vendor Bill, ...) have different real
+    // fields. Columns come from templateColumnsCache, warmed in openProcedureModal() before the
+    // tabs render. Falls back to the union of row_data keys across current selections (the
+    // pre-Phase-4 convention, same as template-viewer.js's renderTemplateData()) if the cache has
+    // nothing for this template (e.g. a deleted/inactive template) — so the table still renders
+    // sensibly rather than going blank. Sr No is a plain row index, not sourced from row_data;
+    // values are still looked up case-insensitively via getRowFieldCaseInsensitive(), which
+    // renders blank when a row happens to be missing that field.
+    const lineState = procedureModalState[uid];
+    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
+    let columns = (doc && templateColumnsCache[doc.template_id]) || [];
+    if (!columns.length) {
+        const unionKeys = [...new Set(selections.flatMap(sel => Object.keys(sel.row_data || {})))];
+        columns = unionKeys.map(name => ({ column_name: name, data_type: null }));
+    }
 
     // Trailing "" header for the unlink icon column (Unassign requirement) - no label, matching
     // this app's existing convention for icon-only action columns (e.g. Data Bank's Actions column).
     let html = '<div class="procedure-selected-table-wrapper"><table class="procedure-selected-table"><thead><tr>';
     html += '<th>Sr No</th>';
-    columns.forEach(col => { html += `<th>${escapeHtml(col)}</th>`; });
+    columns.forEach(col => { html += `<th>${escapeHtml(col.column_name)}</th>`; });
     html += '<th></th>';
     html += '</tr></thead><tbody>';
     selections.forEach((sel, idx) => {
         html += '<tr>';
         html += `<td>${idx + 1}</td>`;
         columns.forEach(col => {
-            const value = getRowFieldCaseInsensitive(sel.row_data, col);
+            const value = getRowFieldCaseInsensitive(sel.row_data, col.column_name);
             html += `<td>${escapeHtml(value)}</td>`;
         });
         html += `<td><button type="button" class="procedure-unlink-btn" data-assignment-id="${sel.id}" title="Unlink this evidence">✕</button></td>`;
         html += '</tr>';
     });
 
-    // Totals row: sums only the Quantity/Amount columns. Every other cell, including Sr No,
-    // Description, Rate, and the trailing unlink column, is left blank. Recomputes automatically
-    // on every re-render of this table (add/remove a line), since this function is the single
-    // place the Linked Evidence table is built.
+    // Totals row: sums only columns whose data_type is Numeric (mirrors routers/data.py's own
+    // amount_columns convention) — every other cell, including Sr No and the trailing unlink
+    // column, is left blank. Recomputes automatically on every re-render of this table (add/
+    // remove a line), since this function is the single place the Linked Evidence table is built.
     html += '<tr class="procedure-total-row"><td></td>';
     columns.forEach(col => {
-        const isTotalsColumn = ['quantity', 'amount'].includes(col.toLowerCase());
-        if (isTotalsColumn) {
-            const colSum = selections.reduce((sum, sel) => sum + (parseFloat(getRowFieldCaseInsensitive(sel.row_data, col)) || 0), 0);
+        if (col.data_type === 'Numeric') {
+            const colSum = selections.reduce((sum, sel) => sum + (parseFloat(getRowFieldCaseInsensitive(sel.row_data, col.column_name)) || 0), 0);
             html += `<td>${colSum.toFixed(2)}</td>`;
         } else {
             html += '<td></td>';
