@@ -826,13 +826,27 @@
         <div id="procedureModal">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h3 id="procedureModalTitle">📎 Supporting Documents</h3>
+                    <div class="procedure-modal-heading">
+                        <h3 id="procedureModalTitle">📎 Supporting Documents</h3>
+                        <div id="procedureModalMeta" class="procedure-modal-meta"></div>
+                    </div>
                     <button class="close-btn" id="procedureModalClose"
                         style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
                 </div>
                 <div class="procedure-modal-body">
                     <div id="procedureModalTabs" class="procedure-doc-rail"></div>
                     <div id="procedureModalPanels" class="procedure-tab-panels"></div>
+                </div>
+                <!-- Footer (Supporting Documents modal redesign follow-up): saved-state indicator +
+                     Back/Next to move between this voucher's OTHER lines without closing the modal -
+                     distinct from the rail's tab switching, which moves between one line's Documents.
+                     See navigateProcedureModalLine()/updateProcedureModalSavedNote() in verification.js. -->
+                <div class="procedure-modal-footer">
+                    <span id="procedureModalSavedNote" class="procedure-modal-saved-note"></span>
+                    <div class="procedure-modal-footnav">
+                        <button type="button" id="procedureModalBackBtn" class="btn-ghost">← Back</button>
+                        <button type="button" id="procedureModalNextBtn" class="btn-primary">Next →</button>
+                    </div>
                 </div>
             </div>
         </div>

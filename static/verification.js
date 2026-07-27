@@ -2736,11 +2736,75 @@ async function openProcedureModal(uid, initialDocId = null) {
     procedureModalState[uid].activeDocId = activeDocId;
 
     currentProcedureModalUid = uid;
-    if (procedureModalTitle) procedureModalTitle.textContent = `📎 Supporting Documents — ${type}`;
+
+    // Header: line position/account name, type, amount, risk (Supporting Documents modal
+    // redesign follow-up) — srNo/totalLines mirror the same order renderVoucherLines() numbers
+    // the table with; risk reuses computeLineRiskData() against the guidance already fetched
+    // above, no extra request.
+    const lineIdx = currentVoucherLines.findIndex(l => l.detail_id === uid);
+    const srNo = lineIdx + 1;
+    const totalLines = currentVoucherLines.length;
+    const accountName = voucherLine ? getVoucherLineAlias(voucherLine.row_data || {}, VOUCHER_LINE_ACCOUNT_NAME_ALIASES) : '—';
+    const amountDisplay = voucherLine ? getVoucherLineAmount(voucherLine.row_data || {}) : '';
+    const riskData = computeLineRiskData(guidance);
+    if (procedureModalTitle) procedureModalTitle.textContent = `Line ${srNo} of ${totalLines} — ${accountName}`;
+    const metaEl = document.getElementById('procedureModalMeta');
+    if (metaEl) {
+        let meta = `${type} · ${amountDisplay}`;
+        if (riskData.risk) meta += ` · Risk: ${riskData.risk}`;
+        metaEl.textContent = meta;
+    }
+
+    // Footer nav: Back disabled on the voucher's first line, Next on its last.
+    const backBtn = document.getElementById('procedureModalBackBtn');
+    const nextBtn = document.getElementById('procedureModalNextBtn');
+    if (backBtn) backBtn.disabled = lineIdx <= 0;
+    if (nextBtn) nextBtn.disabled = lineIdx === -1 || lineIdx >= totalLines - 1;
+
     procedureModal.style.display = 'flex';
 
     renderProcedureModalTabs(uid);
     activateProcedureTab(uid, activeDocId);
+    updateProcedureModalSavedNote(uid);
+}
+
+// Reflects whether any tab for this line has an unsaved (typed-but-not-yet-flushed) observation —
+// checklist ticks already save immediately (toggleProcedureCheck()), so only observation text can
+// ever be "unsaved" here. Called on modal open, on every keystroke in the observation textarea
+// (wireProcedureChecklistAndObservation()), and after flushProcedureObservations() resolves.
+function updateProcedureModalSavedNote(uid) {
+    const noteEl = document.getElementById('procedureModalSavedNote');
+    if (!noteEl) return;
+    const lineState = procedureModalState[uid];
+    const tabs = (lineState && lineState.tabs) || {};
+    const dirty = Object.values(tabs).some(t => t.observationDirty);
+    noteEl.textContent = dirty ? 'Unsaved changes' : 'All changes saved';
+    noteEl.classList.toggle('dirty', dirty);
+}
+
+// Moves the open modal to the adjacent voucher line (delta = -1 for Back, +1 for Next) without
+// closing it — distinct from activateProcedureTab(), which switches between one line's own
+// Documents. Flushes any unsaved observation text on the line being left, same as
+// closeProcedureModal() does, then re-runs openProcedureModal()'s full fetch/render pipeline for
+// the target line so its own tab state is always freshly synced from the server. A target line
+// with no Category assigned has nothing to show (openProcedureModal() no-ops on a falsy type, per
+// this module's existing documented rule) — caught here first so the user gets a clear message
+// instead of the modal silently freezing on the old line's content.
+async function navigateProcedureModalLine(delta) {
+    const uid = currentProcedureModalUid;
+    if (!uid) return;
+    const idx = currentVoucherLines.findIndex(l => l.detail_id === uid);
+    if (idx === -1) return;
+    const newIdx = idx + delta;
+    if (newIdx < 0 || newIdx >= currentVoucherLines.length) return;
+    const newUid = currentVoucherLines[newIdx].detail_id;
+    const newLineState = voucherLineState[newUid];
+    if (!newLineState || !newLineState.transactionType) {
+        showStatus('This line has no assigned category — supporting documents unavailable.', 'error');
+        return;
+    }
+    await flushProcedureObservations(uid);
+    await openProcedureModal(newUid);
 }
 
 async function closeProcedureModal() {
@@ -2790,10 +2854,29 @@ function renderProcedureModalTabs(uid) {
         const dotTitle = doc.template_id
             ? (isComplete ? 'Evidence linked' : 'No evidence linked yet')
             : (isComplete ? 'All procedures confirmed' : 'Procedures pending');
+
+        // "X/Y roles" subtext — same checklist state the completion dot itself reads.
+        const tabState = getProcedureTabState(uid, doc.id);
+        const roles = doc.auth_roles || [];
+        const rolesDone = roles.filter(r => tabState.checklist[r] && tabState.checklist[r].is_checked).length;
+
+        // Mismatch tag — has-template documents only, and only once evidence is actually linked
+        // (same gating buildSelectedLinesTable()'s own summary line uses, so the rail never
+        // disagrees with the panel about a document with nothing linked yet).
+        let mismatchTagHtml = '';
+        if (doc.template_id) {
+            const { count, mismatch } = getSelectedLinesSummary(uid, doc.id);
+            if (count > 0 && mismatch) mismatchTagHtml = '<span class="procedure-tab-mismatch">mismatch</span>';
+        }
+
         return `
             <button type="button" class="procedure-tab-btn${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
                 <span class="procedure-tab-dot${isComplete ? ' complete' : ''}" title="${dotTitle}"></span>
-                <span class="procedure-tab-label">${escapeHtml(doc.name)}</span>
+                <span class="procedure-tab-text">
+                    <span class="procedure-tab-label">${escapeHtml(doc.name)}</span>
+                    <span class="procedure-tab-sub">${rolesDone}/${roles.length} roles</span>
+                    ${mismatchTagHtml}
+                </span>
             </button>
         `;
     }).join('');
@@ -2844,6 +2927,7 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
         observationInput.addEventListener('input', function() {
             tabState.observation = this.value;
             tabState.observationDirty = true;
+            updateProcedureModalSavedNote(uid);
         });
     }
 }
@@ -3228,6 +3312,7 @@ function buildProcedureChecklist(uid, docId) {
             <label class="procedure-checklist-item">
                 <input type="checkbox" class="procedure-checklist-checkbox" data-role="${escapeHtml(role)}" ${checked ? 'checked' : ''}>
                 <span>${escapeHtml(role)}</span>
+                <span class="procedure-checklist-source">sourced from Audit Rules</span>
             </label>
         `;
     }).join('');
@@ -3391,6 +3476,7 @@ async function flushProcedureObservations(uid) {
             await saveLineObservation(uid, parseInt(docId));
         }
     }
+    updateProcedureModalSavedNote(uid);
 }
 
 // ---------- BROWSE MODAL (nested on top of #procedureModal) ----------
@@ -3684,6 +3770,12 @@ if (procedureModal) {
         if (e.target === this) closeProcedureModal();
     });
 }
+document.getElementById('procedureModalBackBtn')?.addEventListener('click', function() {
+    navigateProcedureModalLine(-1);
+});
+document.getElementById('procedureModalNextBtn')?.addEventListener('click', function() {
+    navigateProcedureModalLine(1);
+});
 
 // ---------- INIT ----------
 window.onload = function() {

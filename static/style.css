@@ -2638,6 +2638,40 @@ body {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+/* Rail item subtext ("X/Y roles") + mismatch tag (Supporting Documents modal redesign follow-up) */
+.procedure-tab-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.procedure-tab-text .procedure-tab-label {
+    flex: none;
+}
+.procedure-tab-sub {
+    font-size: 10.5px;
+    color: #94a3b8;
+    font-weight: 500;
+}
+.procedure-tab-mismatch {
+    align-self: flex-start;
+    font-size: 9.5px;
+    font-weight: 700;
+    color: #991b1b;
+    background: #fee2e2;
+    padding: 1px 7px;
+    border-radius: 8px;
+}
+/* Modal header heading block (line/type/amount/risk) */
+.procedure-modal-heading {
+    min-width: 0;
+}
+.procedure-modal-meta {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 2px;
+}
 .procedure-tab-panels {
     flex: 1;
     min-width: 0;
@@ -2937,6 +2971,12 @@ body {
     color: #94a3b8;
     margin: 0;
 }
+.procedure-checklist-source {
+    margin-left: auto;
+    font-size: 10.5px;
+    color: #94a3b8;
+    font-style: italic;
+}
 
 /* ----- Observation Flow (Phase 6 of 6, FINAL) -----
    Renders inside .procedure-segment-observation's body above — a per-document observation
@@ -2953,6 +2993,59 @@ body {
     color: #1a1a2e;
     resize: vertical;
     box-sizing: border-box;
+}
+/* ----- Footer: saved-state indicator + cross-line Back/Next (Supporting Documents modal
+   redesign follow-up) ----- */
+.procedure-modal-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid #e2e8f0;
+}
+.procedure-modal-saved-note {
+    font-size: 12px;
+    color: #94a3b8;
+}
+.procedure-modal-saved-note.dirty {
+    color: #b45309;
+    font-weight: 600;
+}
+.procedure-modal-footnav {
+    display: flex;
+    gap: 8px;
+}
+#procedureModal .btn-ghost,
+#procedureModal .btn-primary {
+    border: none;
+    padding: 8px 18px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+#procedureModal .btn-ghost {
+    background: white;
+    border: 1px solid #d0d5dd;
+    color: #1a1a2e;
+}
+#procedureModal .btn-ghost:hover:not(:disabled) {
+    border-color: #3b82f6;
+    color: #3b82f6;
+}
+#procedureModal .btn-primary {
+    background: #3b82f6;
+    color: white;
+}
+#procedureModal .btn-primary:hover:not(:disabled) {
+    background: #2563eb;
+}
+#procedureModal .btn-ghost:disabled,
+#procedureModal .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 /* ----- Supporting Documents Browse Modal (Phase 4 of 6) -----
    Nested on top of #procedureModal (higher z-index) — same per-modal-scoped .modal-content/
