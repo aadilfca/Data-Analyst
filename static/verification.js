@@ -23,6 +23,10 @@ const currentType = (viewParam === 'bankbook') ? 'bank'
 
 let currentSessionId = null;
 let currentDetailId = null;
+// The voucher line uid currently shown in #procedureModal, or null when it's closed — lets
+// closeProcedureModal() flush any unsaved observation text without needing a uid parameter,
+// since its callers (the ✕ button and the outside-click listener) don't have one either.
+let currentProcedureModalUid = null;
 let currentClientDataId = null;
 let currentVoucherId = null;
 let currentTransactionType = '';
@@ -2057,6 +2061,11 @@ async function saveLineItems(detailId = currentDetailId) {
         if (refInput) state.procedureData[key + '_ref'] = refInput.value;
     });
 
+    // Flush any unsaved Supporting Documents observation text for this line before/alongside the
+    // legacy save below — this is what lets the observation textarea skip a dedicated Save button
+    // and still survive Prev/Next/Complete/Exit (see flushProcedureObservations()).
+    await flushProcedureObservations(detailId);
+
     try {
         const payload = {
             detail_id: detailId,
@@ -2497,7 +2506,10 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 // seedVoucherLineState()) — the "switching tabs doesn't lose unsaved work" requirement.
 // observation (Phase 6) holds the tab's current observation textarea value, seeded from
 // GET /api/verification/line_observations/{uid} in openProcedureModal() when a saved entry
-// exists. suggestionApplied (Phase 6, client-only — never persisted) tracks whether the
+// exists. observationDirty (Phase 3 of the modal-redesign follow-up) tracks whether observation
+// has been typed since the last successful save — flushProcedureObservations() uses this to only
+// POST tabs that actually changed, on the Prev/Next/Complete/Exit chokepoint and on modal close.
+// suggestionApplied (Phase 6, client-only — never persisted) tracks whether the
 // auto-suggestion has already been offered for this tab, so it fills an empty box at most
 // once and never overwrites text the auditor typed or deliberately cleared. checklist
 // (Phase 5) is a map keyed by role_name -> {is_checked, checked_by, checked_at}, seeded from
@@ -2506,7 +2518,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, tabs: {} };
     if (!procedureModalState[uid].tabs[docId]) {
-        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', suggestionApplied: false, checklist: {} };
+        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, checklist: {} };
     }
     return procedureModalState[uid].tabs[docId];
 }
@@ -2618,6 +2630,7 @@ async function openProcedureModal(uid, initialDocId = null) {
     }
     procedureModalState[uid].activeDocId = activeDocId;
 
+    currentProcedureModalUid = uid;
     if (procedureModalTitle) procedureModalTitle.textContent = `📎 Supporting Documents — ${type}`;
     procedureModal.style.display = 'flex';
 
@@ -2625,7 +2638,11 @@ async function openProcedureModal(uid, initialDocId = null) {
     activateProcedureTab(uid, activeDocId);
 }
 
-function closeProcedureModal() {
+async function closeProcedureModal() {
+    // Flush any unsaved observation text before hiding — closing via ✕ or outside-click persists
+    // the same way Prev/Next/Complete/Exit does, per the confirmed requirement (there is no
+    // longer a Save button to rely on instead).
+    if (currentProcedureModalUid) await flushProcedureObservations(currentProcedureModalUid);
     if (procedureModal) procedureModal.style.display = 'none';
     // Defensive — the browse modal is nested on top of this one, so it should never remain open
     // once the parent closes.
@@ -2633,6 +2650,7 @@ function closeProcedureModal() {
     // procedureModalState[uid] is deliberately left in place (not cleared here) — reopening the
     // same line's modal within the same voucher should show tab state exactly as it was left;
     // it's only reset on voucher navigation, in seedVoucherLineState().
+    currentProcedureModalUid = null;
 }
 
 // Shared completeness check for one document within one voucher line's modal — used both by the
@@ -2713,18 +2731,14 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
         });
     });
 
-    // Phase 6: the observation textarea is local-only on every keystroke (no network call) — it
-    // is only persisted when the Save button is explicitly clicked, per the confirmed brief.
+    // The observation textarea is local-only on every keystroke (no network call) — there is no
+    // Save button anymore; flushProcedureObservations() persists any dirty tab automatically on
+    // Prev/Next/Complete/Exit (via saveLineItems()) and on modal close (via closeProcedureModal()).
     const observationInput = document.getElementById('procedureObservationInput');
     if (observationInput) {
         observationInput.addEventListener('input', function() {
             tabState.observation = this.value;
-        });
-    }
-    const observationSaveBtn = document.getElementById('procedureObservationSaveBtn');
-    if (observationSaveBtn) {
-        observationSaveBtn.addEventListener('click', function() {
-            saveLineObservation(uid, docId);
+            tabState.observationDirty = true;
         });
     }
 }
@@ -3187,28 +3201,25 @@ function applyObservationSuggestionIfNeeded(uid, docId) {
     tabState.suggestionApplied = true;
 }
 
-// Renders one tab's observation section: a textarea (local-only edits) + an explicit Save
-// button. Saving is deliberate (not save-on-keystroke, not save-on-modal-close) since the
-// auditor is expected to review/edit the auto-suggestion before it's persisted.
+// Renders one tab's observation section: just a textarea (local-only edits). No Save button —
+// flushProcedureObservations() persists a dirty tab automatically on Prev/Next/Complete/Exit and
+// on modal close, the same "no manual save step" convention the checklist ticks already used.
 function buildObservationSection(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     return `
         <textarea id="procedureObservationInput" class="procedure-observation-textarea"
             placeholder="Add an observation for this document...">${escapeHtml(tabState.observation || '')}</textarea>
-        <div class="procedure-observation-actions">
-            <button type="button" id="procedureObservationSaveBtn" class="procedure-observation-save-btn">💾 Save Observation</button>
-            <span id="procedureObservationStatus" class="procedure-observation-status"></span>
-        </div>
     `;
 }
 
-// Persists the active tab's observation text as a tagged entry (POST save_line_observation).
-// Always marks it unsynced server-side — it will be rolled into the voucher line's own
+// Persists one tab's observation text as a tagged entry (POST save_line_observation). Called only
+// by flushProcedureObservations() below, never directly from a UI event — there is no Save button
+// anymore. Always marks it unsynced server-side — it will be rolled into the voucher line's own
 // Observation field the next time that line is saved (saveLineItems(), via
-// sync_line_observations_to_voucher() in routers/verification.py).
+// sync_line_observations_to_voucher() in routers/verification.py), and also immediately here since
+// save_line_observation() itself calls that same sync function.
 async function saveLineObservation(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
-    const statusEl = document.getElementById('procedureObservationStatus');
     try {
         const res = await fetch(`${API_BASE}/api/verification/save_line_observation`, {
             method: 'POST',
@@ -3224,28 +3235,37 @@ async function saveLineObservation(uid, docId) {
             throw new Error(err.detail || 'Failed to save observation.');
         }
         const data = await res.json();
+        tabState.observationDirty = false;
         // A save is a deliberate, final decision on this tab's text — it should never be
         // silently replaced by the auto-suggestion again, even if the box is later cleared.
         tabState.suggestionApplied = true;
 
-        // Confirmed fix, 2026-07-25: the backend rolls this up into the voucher line's own
-        // Observation field immediately now (sync_line_observations_to_voucher(), called from
-        // save_line_observation() itself) — reflect that here too, in both the cached line data
-        // (currentVoucherLines, so a later full re-render of this voucher stays correct) and the
-        // live OBSERVATIONS cell on screen, without requiring the auditor to navigate away first.
+        // The backend rolls this up into the voucher line's own Observation field immediately
+        // (sync_line_observations_to_voucher(), called from save_line_observation() itself) —
+        // reflect that here too, in both the cached line data (currentVoucherLines, so a later
+        // full re-render of this voucher stays correct) and the live OBSERVATIONS cell on screen.
         const cachedLine = currentVoucherLines.find(l => l.detail_id === parseInt(uid));
         if (cachedLine) cachedLine.observations = data.voucher_observations;
         const observationsCell = document.querySelector(`.voucher-line-row[data-detail-id="${uid}"] .voucher-line-observations-cell`);
         if (observationsCell) observationsCell.textContent = data.voucher_observations || '';
-
-        if (statusEl) {
-            statusEl.textContent = 'Saved';
-            statusEl.classList.add('saved');
-            setTimeout(() => { statusEl.textContent = ''; statusEl.classList.remove('saved'); }, 2000);
-        }
     } catch (e) {
         console.error('Failed to save line observation:', e);
         showStatus('Failed to save observation — please try again.', 'error');
+    }
+}
+
+// Persists every dirty (unsaved) observation tab for one voucher line — called from the
+// Prev/Next/Complete/Exit save chokepoint (saveLineItems()) and from closeProcedureModal(), so an
+// observation typed without an explicit Save action is never lost. No-op if the modal was never
+// opened for this uid or nothing changed since the last save.
+async function flushProcedureObservations(uid) {
+    const lineState = procedureModalState[uid];
+    if (!lineState || !lineState.tabs) return;
+    for (const docId of Object.keys(lineState.tabs)) {
+        const tabState = lineState.tabs[docId];
+        if (tabState.observationDirty) {
+            await saveLineObservation(uid, parseInt(docId));
+        }
     }
 }
 
