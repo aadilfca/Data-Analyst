@@ -3015,6 +3015,17 @@ function getSelectedLinesSummary(uid, docId) {
     return { total, voucherAmount, mismatch, count: selections.length };
 }
 
+// Finds a key in row_data matching fieldName case-insensitively (trimmed) - same matching
+// convention the totals row already used for Quantity/Amount. Returns '' if the template's
+// row_data has no such field, so a fixed column never breaks the row.
+function getRowFieldCaseInsensitive(row_data, fieldName) {
+    if (!row_data) return '';
+    const target = fieldName.trim().toLowerCase();
+    const key = Object.keys(row_data).find(k => k.trim().toLowerCase() === target);
+    const value = key !== undefined ? row_data[key] : '';
+    return value == null ? '' : String(value);
+}
+
 function buildSelectedLinesTable(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     const selections = tabState.selections || [];
@@ -3022,42 +3033,40 @@ function buildSelectedLinesTable(uid, docId) {
         return '<p class="procedure-selected-empty">No evidence linked yet for this document.</p>';
     }
 
-    // Column order: first-seen order across every selected row's row_data keys, so the table
-    // shows every real column present without hardcoding a template's shape.
-    const columns = [];
-    selections.forEach(sel => {
-        Object.keys(sel.row_data || {}).forEach(key => {
-            if (!columns.includes(key)) columns.push(key);
-        });
-    });
+    // Fixed column set (Supporting Documents modal redesign, Phase 4 of 6) - standardized across
+    // every template rather than the prior "one column per row_data key" dynamic layout. Sr No is
+    // a plain row index, not sourced from row_data; Description/Quantity/Rate/Amount are looked up
+    // case-insensitively via getRowFieldCaseInsensitive() and render blank when a template has no
+    // matching field, instead of breaking the row.
+    const columns = ['Description', 'Quantity', 'Rate', 'Amount'];
 
     // Trailing "" header for the unlink icon column (Unassign requirement) - no label, matching
     // this app's existing convention for icon-only action columns (e.g. Data Bank's Actions column).
     let html = '<div class="procedure-selected-table-wrapper"><table class="procedure-selected-table"><thead><tr>';
+    html += '<th>Sr No</th>';
     columns.forEach(col => { html += `<th>${escapeHtml(col)}</th>`; });
     html += '<th></th>';
     html += '</tr></thead><tbody>';
-    selections.forEach(sel => {
+    selections.forEach((sel, idx) => {
         html += '<tr>';
+        html += `<td>${idx + 1}</td>`;
         columns.forEach(col => {
-            const value = sel.row_data ? sel.row_data[col] : '';
-            html += `<td>${escapeHtml(value == null ? '' : String(value))}</td>`;
+            const value = getRowFieldCaseInsensitive(sel.row_data, col);
+            html += `<td>${escapeHtml(value)}</td>`;
         });
         html += `<td><button type="button" class="procedure-unlink-btn" data-assignment-id="${sel.id}" title="Unlink this evidence">✕</button></td>`;
         html += '</tr>';
     });
 
-    // Totals row: sums only the Quantity/Amount columns (exact, case-insensitive header match —
-    // every real Document template's Numeric columns are literally named "Quantity"/"Amount", so
-    // this deliberately excludes lookalikes like "Tax Amount"/"Receive Quantity"/"Balance Quantity"
-    // that some templates also carry). Every other cell, including the trailing unlink column, is
-    // left blank. Recomputes automatically on every re-render of this table (add/remove a line),
-    // since this function is the single place the Linked Evidence table is built.
-    html += '<tr class="procedure-total-row">';
+    // Totals row: sums only the Quantity/Amount columns. Every other cell, including Sr No,
+    // Description, Rate, and the trailing unlink column, is left blank. Recomputes automatically
+    // on every re-render of this table (add/remove a line), since this function is the single
+    // place the Linked Evidence table is built.
+    html += '<tr class="procedure-total-row"><td></td>';
     columns.forEach(col => {
-        const isTotalsColumn = ['quantity', 'amount'].includes(col.trim().toLowerCase());
+        const isTotalsColumn = ['quantity', 'amount'].includes(col.toLowerCase());
         if (isTotalsColumn) {
-            const colSum = selections.reduce((sum, sel) => sum + (parseFloat(sel.row_data ? sel.row_data[col] : 0) || 0), 0);
+            const colSum = selections.reduce((sum, sel) => sum + (parseFloat(getRowFieldCaseInsensitive(sel.row_data, col)) || 0), 0);
             html += `<td>${colSum.toFixed(2)}</td>`;
         } else {
             html += '<td></td>';
