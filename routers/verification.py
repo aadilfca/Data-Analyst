@@ -234,7 +234,7 @@ def get_cashbooks(
         """
         SELECT id, row_data
         FROM client_data
-        WHERE client_id = ? AND is_deleted = 0
+        WHERE client_id = ? AND is_deleted = 0 AND change_detection_status != 'deleted'
           AND extract_date BETWEEN ? AND ?
         ORDER BY extract_date
         """,
@@ -306,7 +306,7 @@ def start_verification_session(
         """
         SELECT id, row_data, extract_date, extract_amount
         FROM client_data
-        WHERE client_id = ? AND is_deleted = 0
+        WHERE client_id = ? AND is_deleted = 0 AND change_detection_status != 'deleted'
           AND extract_date BETWEEN ? AND ?
         ORDER BY extract_date
         """,
@@ -874,7 +874,7 @@ def preview_cashbook(
         """
         SELECT id, row_data, extract_date, extract_amount
         FROM client_data
-        WHERE client_id = ? AND is_deleted = 0
+        WHERE client_id = ? AND is_deleted = 0 AND change_detection_status != 'deleted'
           AND extract_date BETWEEN ? AND ?
         ORDER BY extract_date
         """,
