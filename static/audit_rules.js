@@ -365,19 +365,22 @@ arRestoreBtn.addEventListener('click', restoreDocument);
 // columns.js/client_settings.js rather than importing them).
 
 // ---------- RAIL / VIEW SWITCHING ----------
-// 'documents', 'cross-checks', or 'categories' — which entity type's list/detail
-// sections are visible.
+// 'documents', 'cross-checks', 'categories', or 'signature-specimens' — which entity
+// type's list/detail sections are visible.
 let currentEntityType = 'documents';
 
 const arRailDocuments = document.getElementById('arRailDocuments');
 const arRailCrossChecks = document.getElementById('arRailCrossChecks');
 const arRailCategories = document.getElementById('arRailCategories');
+const arRailSignatureSpecimens = document.getElementById('arRailSignatureSpecimens');
 const arDocumentsListSection = document.getElementById('arDocumentsListSection');
 const arDocumentsDetailSection = document.getElementById('arDocumentsDetailSection');
 const arCrossChecksListSection = document.getElementById('arCrossChecksListSection');
 const arCrossChecksDetailSection = document.getElementById('arCrossChecksDetailSection');
 const arCategoriesListSection = document.getElementById('arCategoriesListSection');
 const arCategoriesDetailSection = document.getElementById('arCategoriesDetailSection');
+const arSignatureSpecimensListSection = document.getElementById('arSignatureSpecimensListSection');
+const arSignatureSpecimensDetailSection = document.getElementById('arSignatureSpecimensDetailSection');
 
 function switchEntityType(type) {
     currentEntityType = type;
@@ -385,6 +388,7 @@ function switchEntityType(type) {
     arRailDocuments.classList.toggle('active', type === 'documents');
     arRailCrossChecks.classList.toggle('active', type === 'cross-checks');
     arRailCategories.classList.toggle('active', type === 'categories');
+    arRailSignatureSpecimens.classList.toggle('active', type === 'signature-specimens');
 
     arDocumentsListSection.style.display = (type === 'documents') ? 'flex' : 'none';
     arDocumentsDetailSection.style.display = (type === 'documents') ? 'block' : 'none';
@@ -392,6 +396,8 @@ function switchEntityType(type) {
     arCrossChecksDetailSection.style.display = (type === 'cross-checks') ? 'block' : 'none';
     arCategoriesListSection.style.display = (type === 'categories') ? 'flex' : 'none';
     arCategoriesDetailSection.style.display = (type === 'categories') ? 'block' : 'none';
+    arSignatureSpecimensListSection.style.display = (type === 'signature-specimens') ? 'flex' : 'none';
+    arSignatureSpecimensDetailSection.style.display = (type === 'signature-specimens') ? 'block' : 'none';
 
     if (type === 'cross-checks') {
         // Refresh the Documents cache every time this view is opened, so the "add
@@ -402,6 +408,13 @@ function switchEntityType(type) {
         // Refresh both caches every time this view is opened, so the Documents/
         // Cross-checks pickers and the eligibility check reflect the latest state.
         Promise.all([loadAllDocumentsForCrossChecks(), loadAllCrossChecksForCategories()]).then(loadCategories);
+    } else if (type === 'signature-specimens') {
+        // Refresh the Documents cache (Document picker + per-document auth_roles for the
+        // Role picker) every time this view is opened, same convention as above.
+        loadAllDocumentsForCrossChecks().then(() => {
+            populateSpecimenDocumentSelect();
+            loadSignatureSpecimens();
+        });
     }
 }
 
@@ -823,6 +836,7 @@ async function restoreCrossCheck() {
 arRailDocuments.addEventListener('click', () => switchEntityType('documents'));
 arRailCrossChecks.addEventListener('click', () => switchEntityType('cross-checks'));
 arRailCategories.addEventListener('click', () => switchEntityType('categories'));
+arRailSignatureSpecimens.addEventListener('click', () => switchEntityType('signature-specimens'));
 
 arCrossCheckAddNewBtn.addEventListener('click', startNewCrossCheck);
 arCrossCheckShowInactiveCheckbox.addEventListener('change', loadCrossChecks);
@@ -860,6 +874,8 @@ const arCategoryAddDocumentBtn = document.getElementById('arCategoryAddDocumentB
 const arCategoryCrossChecksChipList = document.getElementById('arCategoryCrossChecksChipList');
 const arCategoryAddCrossCheckSelect = document.getElementById('arCategoryAddCrossCheckSelect');
 const arCategoryAddCrossCheckBtn = document.getElementById('arCategoryAddCrossCheckBtn');
+const arCategoryDocApprovalsList = document.getElementById('arCategoryDocApprovalsList');
+const arCategoryMatrixVersion = document.getElementById('arCategoryMatrixVersion');
 const arCategoryUsedByRow = document.getElementById('arCategoryUsedByRow');
 const arCategoryUsedByCount = document.getElementById('arCategoryUsedByCount');
 const arCategoryDetailStatus = document.getElementById('arCategoryDetailStatus');
@@ -873,6 +889,11 @@ let editingCategoryId = null;
 // Flat arrays (insertion order only, no reorder) of the ids currently attached.
 let categoryDocIds = [];
 let categoryCrossCheckIds = [];
+// Validation Rules (Phase 3 of 7): {document_id: approval_required (bool)}, populated from
+// cat.documents on selectCategory() — a document's presence as a KEY here (not its value)
+// is what "this pairing is actually persisted in audit_rule_category_documents" means, since
+// a document just added locally (not yet saved) has no key at all.
+let categoryDocApprovals = {};
 // Cache of all active Cross-checks ({id, name, documents: [{document_id, name}], ...}),
 // mirroring Phase 6's allDocuments cache — used for the "add cross-check" picker's
 // eligibility check and the document-removal warning. No reusable "all cross-checks"
@@ -1006,6 +1027,87 @@ function renderCategoryDocChips() {
             arCategoryAddDocumentSelect.appendChild(opt);
         });
         arCategoryAddDocumentBtn.disabled = false;
+    }
+
+    renderCategoryDocApprovalsList();
+}
+
+// ---------- APPROVAL-REQUIRED PER DOCUMENT (Validation Rules, Phase 3 of 7) ----------
+// Sits alongside the Documents chip list above (not merged into each chip pill) — one
+// checkbox row per currently-attached document. A row is only enabled once its document is
+// actually persisted in audit_rule_category_documents (i.e. present as a key in
+// categoryDocApprovals) — PUT .../categories/{id}/documents/{doc_id}/approval 404s on a
+// pairing that doesn't exist yet (a brand-new category, or a document just added locally
+// but not yet saved). All row styling is inline to override .ar-field label's block/bold
+// styling, which would otherwise apply to every nested <label> including these.
+function renderCategoryDocApprovalsList() {
+    arCategoryDocApprovalsList.innerHTML = '';
+
+    if (categoryDocIds.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ar-chip-empty';
+        empty.textContent = 'No documents attached yet.';
+        arCategoryDocApprovalsList.appendChild(empty);
+        return;
+    }
+
+    categoryDocIds.forEach(docId => {
+        const doc = getDocumentById(docId);
+        const isPersisted = Object.prototype.hasOwnProperty.call(categoryDocApprovals, docId);
+
+        const row = document.createElement('label');
+        row.style.display = 'flex';
+        row.style.alignItems = 'center';
+        row.style.gap = '8px';
+        row.style.fontSize = '13px';
+        row.style.fontWeight = '400';
+        row.style.color = isPersisted ? '#1a1a2e' : '#94a3b8';
+        row.style.padding = '4px 0';
+        row.style.marginBottom = '0';
+        row.style.cursor = isPersisted ? 'pointer' : 'default';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = !!categoryDocApprovals[docId];
+        checkbox.disabled = !isPersisted;
+        checkbox.addEventListener('change', () => toggleCategoryDocumentApproval(docId, checkbox.checked));
+        row.appendChild(checkbox);
+
+        const label = document.createElement('span');
+        label.textContent = (doc ? doc.name : ('Document #' + docId)) +
+            (isPersisted ? '' : ' (save the category first)');
+        row.appendChild(label);
+
+        arCategoryDocApprovalsList.appendChild(row);
+    });
+}
+
+async function toggleCategoryDocumentApproval(docId, checked) {
+    if (!editingCategoryId) return;
+
+    try {
+        const res = await fetch(
+            API_BASE + '/api/audit-rules/categories/' + editingCategoryId + '/documents/' + docId + '/approval',
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ approval_required: checked })
+            }
+        );
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to update approval requirement');
+
+        const changed = !!categoryDocApprovals[docId] !== checked;
+        categoryDocApprovals[docId] = checked;
+        if (changed) {
+            // Mirrors the backend's own no-op-doesn't-bump rule (bump_category_matrix_version()
+            // only fires on an actual value change) — no extra fetch needed to know this.
+            arCategoryMatrixVersion.textContent = String(parseInt(arCategoryMatrixVersion.textContent, 10) + 1);
+        }
+        showCategoryDetailStatus('✅ Approval requirement updated.', 'success');
+    } catch (error) {
+        showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+        renderCategoryDocApprovalsList();
     }
 }
 
@@ -1144,6 +1246,9 @@ async function selectCategory(id) {
         arCategoryKbOverviewInput.value = cat.kb_overview || '';
         categoryDocIds = (cat.documents || []).map(d => d.document_id);
         categoryCrossCheckIds = (cat.cross_checks || []).map(c => c.cross_check_id);
+        categoryDocApprovals = {};
+        (cat.documents || []).forEach(d => { categoryDocApprovals[d.document_id] = !!d.approval_required; });
+        arCategoryMatrixVersion.textContent = String(cat.matrix_version || 1);
         renderCategoryDocChips();
         renderCategoryCrossCheckChips();
 
@@ -1175,6 +1280,8 @@ function startNewCategory() {
     arCategoryKbOverviewInput.value = '';
     categoryDocIds = [];
     categoryCrossCheckIds = [];
+    categoryDocApprovals = {};
+    arCategoryMatrixVersion.textContent = '1';
     renderCategoryDocChips();
     renderCategoryCrossCheckChips();
 
@@ -1685,3 +1792,274 @@ window.onload = async function() {
         loadTemplatesForDocuments();
     }
 };
+
+// ==============================================
+// 🖊️ AUDIT RULES — SIGNATURE SPECIMENS (Validation Rules, Phase 3 of 7)
+// ==============================================
+// Same rail → list → detail duplication pattern as Documents/Cross-checks/Categories above
+// (own markup ids, own state, own functions), per this module's documented "full duplication
+// per entity type" convention. Always scoped to the globally-selected client
+// (getSelectedClientId(), client_context.js) — client selection is enforced on every
+// non-dashboard page, so it's always available here, same assumption Assign Categories above
+// already relies on. No "Show inactive" toggle and no Restore button: signature_specimens has
+// no is_active column (Phase 1 schema), so Delete is a real hard delete.
+
+// ---------- DOM REFS ----------
+const arSpecimenListPanelTitle = document.getElementById('arSpecimenListPanelTitle');
+const arSpecimenListBody = document.getElementById('arSpecimenListBody');
+const arSpecimenListEmptyMessage = document.getElementById('arSpecimenListEmptyMessage');
+const arSpecimenAddNewBtn = document.getElementById('arSpecimenAddNewBtn');
+
+const arSpecimenDetailEmpty = document.getElementById('arSpecimenDetailEmpty');
+const arSpecimenDetailForm = document.getElementById('arSpecimenDetailForm');
+const arSpecimenEditingIdInput = document.getElementById('arSpecimenEditingId');
+const arSpecimenDocumentSelect = document.getElementById('arSpecimenDocumentSelect');
+const arSpecimenRoleSelect = document.getElementById('arSpecimenRoleSelect');
+const arSpecimenNameInput = document.getElementById('arSpecimenNameInput');
+const arSpecimenDetailStatus = document.getElementById('arSpecimenDetailStatus');
+const arSpecimenSaveBtn = document.getElementById('arSpecimenSaveBtn');
+const arSpecimenDeleteBtn = document.getElementById('arSpecimenDeleteBtn');
+
+// ---------- STATE ----------
+// null while creating a new specimen; set to its id while editing an existing one.
+let editingSpecimenId = null;
+// Current client's specimens, refetched every time this view opens (same "refetch on open,
+// don't cache indefinitely" convention as allDocuments/allCrossChecks above).
+let allSpecimens = [];
+
+// ---------- STATUS MESSAGES ----------
+// Standalone duplicate of showDetailStatus()/showCrossCheckDetailStatus()/
+// showCategoryDetailStatus() above, scoped to this entity's own status div.
+function showSpecimenDetailStatus(message, type) {
+    arSpecimenDetailStatus.textContent = message;
+    arSpecimenDetailStatus.className = 'upload-status ' + type;
+    arSpecimenDetailStatus.style.display = 'block';
+    clearTimeout(window.arSpecimenDetailStatusTimeout);
+    window.arSpecimenDetailStatusTimeout = setTimeout(() => {
+        arSpecimenDetailStatus.style.display = 'none';
+    }, 5000);
+}
+
+// ---------- DOCUMENT PICKER ----------
+// Reuses the allDocuments cache (Cross-checks/Categories above) - already active-only, and
+// already carries each Document's auth_roles, which the Role picker below needs.
+function populateSpecimenDocumentSelect() {
+    arSpecimenDocumentSelect.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    placeholder.textContent = allDocuments.length === 0 ? 'No documents exist yet' : 'Select a document';
+    arSpecimenDocumentSelect.appendChild(placeholder);
+
+    allDocuments.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.textContent = d.name;
+        arSpecimenDocumentSelect.appendChild(opt);
+    });
+}
+
+// ---------- ROLE PICKER (dynamic, driven by the selected Document's auth_roles) ----------
+// Mirrors renderCompareFieldDropdown()'s pattern above.
+function renderSpecimenRoleOptions() {
+    const docId = parseInt(arSpecimenDocumentSelect.value, 10);
+    const doc = getDocumentById(docId);
+    const roles = doc ? (doc.auth_roles || []) : [];
+    const previousValue = arSpecimenRoleSelect.value;
+
+    arSpecimenRoleSelect.innerHTML = '';
+
+    if (roles.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.disabled = true;
+        opt.selected = true;
+        opt.textContent = doc ? 'This document has no authorisation roles configured' : 'Select a document first';
+        arSpecimenRoleSelect.appendChild(opt);
+        return;
+    }
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.disabled = true;
+    placeholder.textContent = 'Select a role';
+    arSpecimenRoleSelect.appendChild(placeholder);
+
+    roles.forEach(role => {
+        const opt = document.createElement('option');
+        opt.value = role;
+        opt.textContent = role;
+        arSpecimenRoleSelect.appendChild(opt);
+    });
+
+    if (roles.includes(previousValue)) {
+        arSpecimenRoleSelect.value = previousValue;
+    } else {
+        placeholder.selected = true;
+    }
+}
+
+// ---------- LOAD & RENDER LIST ----------
+async function loadSignatureSpecimens() {
+    const clientId = getSelectedClientId();
+    arSpecimenListPanelTitle.textContent = 'Signature Specimens — ' + (getSelectedClientName() || '');
+
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens?client_id=' + clientId);
+        if (!res.ok) throw new Error('Failed to load signature specimens');
+        allSpecimens = await res.json();
+        renderSpecimenList(allSpecimens);
+    } catch (error) {
+        arSpecimenListBody.innerHTML = '';
+        arSpecimenListEmptyMessage.textContent = '❌ Error loading signature specimens: ' + error.message;
+        arSpecimenListEmptyMessage.style.display = 'block';
+    }
+}
+
+function renderSpecimenList(specimens) {
+    arSpecimenListBody.innerHTML = '';
+
+    if (specimens.length === 0) {
+        arSpecimenListEmptyMessage.textContent = 'No signature specimens found.';
+        arSpecimenListEmptyMessage.style.display = 'block';
+        return;
+    }
+    arSpecimenListEmptyMessage.style.display = 'none';
+
+    specimens.forEach(s => {
+        const row = document.createElement('div');
+        row.className = 'ar-list-row';
+        if (s.id === editingSpecimenId) row.classList.add('ar-list-row-selected');
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'ar-list-row-name';
+        nameSpan.textContent = (s.document_name || ('Document #' + s.document_id)) +
+            ' — ' + s.role_name + ': ' + s.expected_signatory_name;
+        row.appendChild(nameSpan);
+
+        row.addEventListener('click', () => selectSpecimen(s.id));
+        arSpecimenListBody.appendChild(row);
+    });
+}
+
+// ---------- SELECT / NEW / RESET DETAIL PANEL ----------
+async function selectSpecimen(id) {
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens/' + id);
+        if (!res.ok) throw new Error('Signature specimen not found');
+        const s = await res.json();
+
+        editingSpecimenId = s.id;
+        arSpecimenEditingIdInput.value = s.id;
+        arSpecimenDocumentSelect.value = s.document_id;
+        renderSpecimenRoleOptions();
+        arSpecimenRoleSelect.value = s.role_name;
+        arSpecimenNameInput.value = s.expected_signatory_name;
+
+        arSpecimenDeleteBtn.style.display = 'inline-block';
+
+        arSpecimenDetailEmpty.style.display = 'none';
+        arSpecimenDetailForm.style.display = 'block';
+
+        // Re-render the list so the selected row highlight moves without a full re-fetch.
+        loadSignatureSpecimens();
+    } catch (error) {
+        showSpecimenDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+function startNewSpecimen() {
+    editingSpecimenId = null;
+    arSpecimenEditingIdInput.value = '';
+    arSpecimenDocumentSelect.value = '';
+    renderSpecimenRoleOptions();
+    arSpecimenNameInput.value = '';
+
+    arSpecimenDeleteBtn.style.display = 'none';
+
+    arSpecimenDetailEmpty.style.display = 'none';
+    arSpecimenDetailForm.style.display = 'block';
+    arSpecimenDocumentSelect.focus();
+}
+
+// ---------- SAVE ----------
+async function saveSpecimen() {
+    const clientId = getSelectedClientId();
+    const documentId = arSpecimenDocumentSelect.value;
+    const roleName = arSpecimenRoleSelect.value;
+    const expectedName = arSpecimenNameInput.value.trim();
+
+    if (!documentId) {
+        showSpecimenDetailStatus('❌ A document is required.', 'error');
+        return;
+    }
+    if (!roleName) {
+        showSpecimenDetailStatus('❌ A role is required.', 'error');
+        return;
+    }
+    if (!expectedName) {
+        showSpecimenDetailStatus('❌ Expected signatory name is required.', 'error');
+        return;
+    }
+
+    const payload = {
+        client_id: parseInt(clientId, 10),
+        document_id: parseInt(documentId, 10),
+        role_name: roleName,
+        expected_signatory_name: expectedName
+    };
+
+    try {
+        let url = API_BASE + '/api/audit-rules/signature-specimens';
+        let method = 'POST';
+        if (editingSpecimenId) {
+            url += '/' + editingSpecimenId;
+            method = 'PUT';
+        }
+
+        const res = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save signature specimen');
+
+        showSpecimenDetailStatus('✅ ' + result.message, 'success');
+
+        const savedId = editingSpecimenId || result.specimen_id;
+        await loadSignatureSpecimens();
+        await selectSpecimen(savedId);
+    } catch (error) {
+        showSpecimenDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+// ---------- DELETE (hard delete - no is_active/Restore for this entity) ----------
+async function deleteSpecimen() {
+    if (!editingSpecimenId) return;
+    if (!confirm('Are you sure you want to permanently delete this signature specimen? This cannot be undone.')) return;
+
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens/' + editingSpecimenId, { method: 'DELETE' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to delete signature specimen');
+
+        showSpecimenDetailStatus('✅ ' + result.message, 'success');
+        // Unlike the soft-delete flows above, the row no longer exists - return the detail
+        // panel to its empty state instead of re-selecting the now-deleted id.
+        editingSpecimenId = null;
+        arSpecimenDetailForm.style.display = 'none';
+        arSpecimenDetailEmpty.style.display = 'block';
+        await loadSignatureSpecimens();
+    } catch (error) {
+        showSpecimenDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+// ---------- WIRE UP EVENT LISTENERS ----------
+arSpecimenAddNewBtn.addEventListener('click', startNewSpecimen);
+arSpecimenDocumentSelect.addEventListener('change', renderSpecimenRoleOptions);
+arSpecimenSaveBtn.addEventListener('click', saveSpecimen);
+arSpecimenDeleteBtn.addEventListener('click', deleteSpecimen);
