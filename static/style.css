@@ -3008,15 +3008,15 @@ body {
     font-size: 12px;
 }
 
-/* ----- Three-segment panel styling (Supporting Documents redesign, Phase 2) -----
+/* ----- Three-segment panel styling (Supporting Documents redesign, Phase 2; colours corrected to
+   match verification_prototype_v7.html's .seg1/.seg2/.seg3 exactly) -----
    Wraps each document panel's Data Table / Audit Procedures / Observation content (built in
    renderProcedureModalPanel(), verification.js) in a bordered card with its own tinted header, so
-   the three zones read as clearly separate groupings rather than one continuous form. Colors reuse
-   tones already established elsewhere in this file: blue for the primary/data zone, the existing
-   amber warning tone (.procedure-tab-note) for Audit Procedures, and the existing violet accent
-   (.obs-comments-row .comments-wrapper) for Observation. Order is fixed by markup, not CSS. */
+   the three zones read as clearly separate groupings rather than one continuous form. Data Table is
+   deliberately neutral grey (not coloured) in the prototype — only Audit Procedures (green) and
+   Observation (peach) carry an accent hue. Body fills are near-white per the prototype (a whisper of
+   tint, not a wash) — the header stays the visibly stronger tone. Order is fixed by markup, not CSS. */
 .procedure-segment {
-    border: 1px solid #e2e8f0;
     border-radius: 10px;
     margin-bottom: 14px;
     overflow: hidden;
@@ -3033,22 +3033,38 @@ body {
 }
 .procedure-segment-body {
     padding: 12px 14px;
-    background: #ffffff;
+}
+.procedure-segment-data {
+    border: 1px solid #e6e9ed;
 }
 .procedure-segment-data > .procedure-segment-header {
-    background: #eff6ff;
-    color: #1e40af;
-    border-left: 4px solid #3b82f6;
+    background: #eef0f2;
+    color: #586172;
+}
+.procedure-segment-data > .procedure-segment-body {
+    background: #ffffff;
+}
+.procedure-segment-procedures {
+    border: 1px solid #cfe0d9;
 }
 .procedure-segment-procedures > .procedure-segment-header {
-    background: #fffbeb;
-    color: #92400e;
-    border-left: 4px solid #f59e0b;
+    background: #e8f2ef;
+    color: #2f6f5e;
+    border-left: 4px solid #2f6f5e;
+}
+.procedure-segment-procedures > .procedure-segment-body {
+    background: #fbfdfc;
+}
+.procedure-segment-observation {
+    border: 1px solid #e8d3ae;
 }
 .procedure-segment-observation > .procedure-segment-header {
-    background: #f5f3ff;
-    color: #5b21b6;
-    border-left: 4px solid #8b5cf6;
+    background: #fbf3e7;
+    color: #b1701f;
+    border-left: 4px solid #b1701f;
+}
+.procedure-segment-observation > .procedure-segment-body {
+    background: #fffdf9;
 }
 
 /* ----- Audit Procedures Checklist (Phase 5 of 6) -----
