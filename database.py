@@ -442,6 +442,26 @@ def init_db():
             )
         ''')
 
+        # Schema upgrade (Validation Rules, Phase 1 of 7): first ALTER-TABLE upgrade block for
+        # this table (it already carries live data, so these can't just join the CREATE TABLE
+        # above). cleared_status is the persisted/cached Cleared-vs-Query status - recalculated
+        # on save by a later phase's status engine, not computed live on every read.
+        # matrix_version_applied records audit_rule_categories.matrix_version as it stood when
+        # this line was last classified/cleared, so a later matrix edit doesn't silently
+        # reclassify an already-Cleared voucher. Both nullable - existing rows start unset
+        # until the status engine (a later phase) first computes them.
+        try:
+            cur = conn.execute("PRAGMA table_info(verification_details)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'cleared_status' not in columns:
+                conn.execute("ALTER TABLE verification_details ADD COLUMN cleared_status TEXT")
+                print("✅ Added cleared_status column to verification_details")
+            if 'matrix_version_applied' not in columns:
+                conn.execute("ALTER TABLE verification_details ADD COLUMN matrix_version_applied INTEGER")
+                print("✅ Added matrix_version_applied column to verification_details")
+        except Exception as e:
+            print("⚠️ Could not add cleared_status/matrix_version_applied to verification_details:", e)
+
         conn.execute('''
             CREATE TABLE IF NOT EXISTS audit_procedure_library (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1164,6 +1184,19 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add is_active to audit_rule_categories:", e)
 
+        # Schema upgrade (Validation Rules, Phase 1 of 7): matrix_version is bumped by a later
+        # phase whenever this Category's document/approval requirements change - lets
+        # matrix_version_applied (verification_details, below) detect a stale classification
+        # without silently reclassifying an already-Cleared voucher.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_categories)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'matrix_version' not in columns:
+                conn.execute("ALTER TABLE audit_rule_categories ADD COLUMN matrix_version INTEGER NOT NULL DEFAULT 1")
+                print("✅ Added matrix_version column to audit_rule_categories")
+        except Exception as e:
+            print("⚠️ Could not add matrix_version to audit_rule_categories:", e)
+
         # Documents a Category uses.
         conn.execute('''
             CREATE TABLE IF NOT EXISTS audit_rule_category_documents (
@@ -1176,6 +1209,18 @@ def init_db():
                 UNIQUE(category_id, document_id)
             )
         ''')
+        # Schema upgrade (Validation Rules, Phase 1 of 7): approval_required flags whether
+        # this specific Document, within this specific Category, requires approval sign-off -
+        # a per-(category, document) flag, not a blanket per-Document one, since the same
+        # Document may be optional in one Category's matrix and mandatory in another's.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_category_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'approval_required' not in columns:
+                conn.execute("ALTER TABLE audit_rule_category_documents ADD COLUMN approval_required INTEGER DEFAULT 0")
+                print("✅ Added approval_required column to audit_rule_category_documents")
+        except Exception as e:
+            print("⚠️ Could not add approval_required to audit_rule_category_documents:", e)
 
         # Cross-checks a Category applies.
         conn.execute('''
@@ -1189,6 +1234,31 @@ def init_db():
                 UNIQUE(category_id, cross_check_id)
             )
         ''')
+
+        # Signature specimens (Validation Rules, Phase 1 of 7: schema): the expected signatory
+        # name for a given role, on a given Document, for a given client - name-only, no image
+        # storage, per the locked assumption. Scoped per client (signatures are a client's own
+        # staff, not a global list). role_name is a free string matching the existing convention
+        # used by audit_rule_document_auth_roles.role_name/voucher_line_procedure_checks.role_name
+        # (no role id exists anywhere in this app). Brand-new table with no prior data, so a
+        # plain CREATE TABLE IF NOT EXISTS is sufficient - no ALTER TABLE upgrade block needed.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS signature_specimens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                role_name TEXT NOT NULL,
+                expected_signatory_name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+                UNIQUE(client_id, document_id, role_name)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_signature_specimens_client ON signature_specimens (client_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_signature_specimens_document ON signature_specimens (document_id)")
+        print("✅ Created signature_specimens table (Validation Rules, Phase 1 of 7: schema)")
 
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_document_fields_document ON audit_rule_document_fields (document_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_document_auth_roles_document ON audit_rule_document_auth_roles (document_id)")
@@ -1546,6 +1616,21 @@ def init_db():
         # would fail with "no such column: status" against a not-yet-migrated old-shape table.
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_documents_line ON voucher_line_documents (voucher_line_id)")
         create_index_with_retry(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_voucher_line_documents_active_client_data ON voucher_line_documents (client_data_id) WHERE status = 'active'")
+
+        # Schema upgrade (Validation Rules, Phase 1 of 7): signature_exception flags a confirmed
+        # mismatch between a linked evidence document's actual signatory and its expected
+        # signature_specimens entry. Default 0 = OK (matches expected specimen, or not yet
+        # checked) - only ever set to 1 on a confirmed mismatch, per the locked assumption.
+        # Per voucher_line_documents row (i.e. per linked evidence document), not per voucher
+        # line, since a signature check is inherently about one specific linked document.
+        try:
+            cur = conn.execute("PRAGMA table_info(voucher_line_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'signature_exception' not in columns:
+                conn.execute("ALTER TABLE voucher_line_documents ADD COLUMN signature_exception INTEGER DEFAULT 0")
+                print("✅ Added signature_exception column to voucher_line_documents")
+        except Exception as e:
+            print("⚠️ Could not add signature_exception to voucher_line_documents:", e)
 
         # ---------- VOUCHER LINE PROCEDURE CHECKS (Phase 5 of 6: audit procedures checklist) ----------
         # Tick state for the audit-procedures checklist rendered under each Document tab's
