@@ -1876,7 +1876,7 @@ body {
     text-align: center;
 }
 .voucher-line-header-row .voucher-line-amount-col,
-.voucher-line-header-row > *:nth-child(9) {
+.voucher-line-header-row > *:nth-child(8) {
     justify-content: center;
     text-align: center;
 }
@@ -2096,18 +2096,14 @@ body {
     margin-left: 6px;
 }
 
-/* ----- Learning cluster (v7 redesign) -----
-   Replaces the old standalone Risk column + the Type cell's Guide/DFD chip pills: risk dot +
-   bare-icon Guide/DFD buttons, all in one compact cell. Colors/tooltips are the intentional
-   traffic-light exception to this file's usual primary/secondary/muted text palette, same as the
-   existing validation-status colors — "never fabricated" is preserved (dot has no risk-* class,
-   and stays invisible, when no document in the category has a rating; see applyRiskToCell() in
-   verification.js). */
-.voucher-line-learning-cluster {
+/* ----- Account Type chips (Guide / DFD) -----
+   Sits beneath the Account Type value inside .voucher-line-type-cell (which supplies the column
+   flex-direction/align-items). Previously grouped with the risk dot in a since-removed "Learning"
+   column; the risk dot now lives separately inside .voucher-line-procedures-cell (below). */
+.voucher-line-type-chips {
     display: flex;
     align-items: center;
     gap: 6px;
-    justify-content: center;
 }
 .voucher-line-risk-dot {
     width: 9px;
@@ -2142,9 +2138,13 @@ body {
    picking a specific document now happens via #procedureModal's own left rail, once open, not from
    a per-name link in the table. Click opens the modal on the line's first incomplete document
    (openProcedureModal()'s existing default). Colors reuse this file's existing status-badge
-   pending/amber/green palette rather than the prototype's own separate CSS-variable palette. */
+   pending/amber/green palette rather than the prototype's own separate CSS-variable palette.
+   Also now holds the risk-level dot (.voucher-line-risk-dot, below) as a second child beside the
+   badge — moved out of the removed "Learning" column; gap separates the pair, which stays
+   centered as a group via justify-content. */
 .voucher-line-procedures-cell {
     justify-content: center;
+    gap: 6px;
 }
 .voucher-line-procedures-badge {
     display: inline-flex;

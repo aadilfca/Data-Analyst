@@ -883,7 +883,10 @@ function buildProcedureRingSvg(pct, cls) {
 // every configured role ticked) but computed standalone here, since procedureModalState is only
 // populated once the modal has actually been opened for this line.
 async function updateProceduresCellForLine(uid, type) {
-    const cell = document.querySelector(`.voucher-line-procedures-cell[data-detail-id="${uid}"]`);
+    // Targets the inner slot, not the outer .voucher-line-procedures-cell — the cell also holds
+    // the persistent risk dot (see applyRiskToCell()), which must survive this function's
+    // innerHTML rewrites rather than being wiped out by them.
+    const cell = document.querySelector(`.voucher-line-procedures-slot[data-detail-id="${uid}"]`);
     if (!cell) return;
     if (!type) {
         cell.innerHTML = '';
@@ -1038,12 +1041,12 @@ function computeLineRiskData(auditGuidanceData) {
     return { risk, tooltip };
 }
 
-// Writes the risk dot inside one line's Learning cluster — hidden (no risk-* class) if no
-// document in its category has a risk rating set, "never fabricated" per the original design.
-// Re-queries the DOM by data-uid, same safe-no-op-if-row-gone convention as
-// applyCategoryToTypeCell(). v7 redesign: was a standalone text pill in its own Risk column; now a
-// small colored dot inside the Learning cluster cell (risk-low/medium/high reuse the exact hex
-// values the old .voucher-line-risk-pill used).
+// Writes the risk dot inside one line's Procedures cell (sits beside the procedure ring+count
+// badge) — hidden (no risk-* class) if no document in its category has a risk rating set, "never
+// fabricated" per the original design. Re-queries the DOM by data-uid, same safe-no-op-if-row-gone
+// convention as applyCategoryToTypeCell(). Originally a standalone text pill in its own Risk
+// column, then a dot in a since-removed "Learning" cluster; risk-low/medium/high reuse the exact
+// hex values the old .voucher-line-risk-pill used.
 function applyRiskToCell(uid, riskData) {
     const dot = document.querySelector(`.voucher-line-risk-dot[data-uid="${uid}"]`);
     if (!dot) return;
@@ -1106,11 +1109,11 @@ async function autoFillCategoryForLine(uid, accountCode) {
     applyCategoryToTypeCell(uid, categoryName);
 }
 
-// Order matches .voucher-line-summary-grid's columns: Sr No., Account Code, Type, Account Name,
-// Amount, Supporting, Risk, Observations, Status. User-resizable (see the drag handles in
+// Order matches .voucher-line-summary-grid's columns: Sr No., Account Code, Account Type, Account
+// Name, Amount, Procedures, Observations, Status. User-resizable (see the drag handles in
 // renderVoucherLines()'s header row) — persists at module scope across renders/navigation, same
 // convention as voucherLineState, so dragging a column survives Prev/Next voucher navigation.
-let voucherColumnWidths = [40, 100, 170, 395, 90, 130, 90, 300, 90];
+let voucherColumnWidths = [40, 100, 170, 395, 90, 130, 300, 90];
 
 // Pushes voucherColumnWidths into the CSS custom property .voucher-line-summary-grid reads its
 // grid-template-columns from. Set on #voucherLinesContainer itself (not its innerHTML content),
@@ -1235,13 +1238,12 @@ function renderVoucherLines(lines) {
         <div class="voucher-line-header-row voucher-line-summary-grid">
             <span>Sr No.<span class="voucher-col-resize-handle" data-col="0"></span></span>
             <span>Account Code<span class="voucher-col-resize-handle" data-col="1"></span></span>
-            <span>Type<span class="voucher-col-resize-handle" data-col="2"></span></span>
+            <span>Account Type<span class="voucher-col-resize-handle" data-col="2"></span></span>
             <span>Account Name<span class="voucher-col-resize-handle" data-col="3"></span></span>
             <span class="voucher-line-amount-col">Amount<span class="voucher-col-resize-handle" data-col="4"></span></span>
             <span>Procedures<span class="voucher-col-resize-handle" data-col="5"></span></span>
-            <span>Learning<span class="voucher-col-resize-handle" data-col="6"></span></span>
-            <span>Observations<span class="voucher-col-resize-handle" data-col="7"></span></span>
-            <span>Status<span class="voucher-col-resize-handle" data-col="8"></span></span>
+            <span>Observations<span class="voucher-col-resize-handle" data-col="6"></span></span>
+            <span>Status<span class="voucher-col-resize-handle" data-col="7"></span></span>
         </div>
     `;
 
@@ -1283,17 +1285,19 @@ function renderVoucherLines(lines) {
                             <span class="voucher-line-type-value" data-uid="${uid}">Loading…</span>
                             <span class="voucher-line-type-recycle-icon" data-uid="${uid}" data-account-code="${escapeHtml(accountCode)}" title="No category assigned — click to assign one in Assign Categories" style="display:none">🔄</span>
                         </span>
+                        <span class="voucher-line-type-chips" data-uid="${uid}">
+                            <button type="button" class="voucher-line-learn-icon voucher-line-audit-icon" data-uid="${uid}" title="Audit guidance">📋</button>
+                            <button type="button" class="voucher-line-learn-icon voucher-line-dfd-chip" data-uid="${uid}" title="Data Flow Diagram">🔀</button>
+                        </span>
                     </span>
                     <span class="voucher-line-name-cell">
                         <span class="voucher-line-name">${accountName}${changeIconHtml}${deletedBadgeHtml}</span>
                         <span class="voucher-line-desc">${description}</span>
                     </span>
                     <span class="voucher-line-amount">${amount}</span>
-                    <span class="voucher-line-procedures-cell" data-detail-id="${uid}"></span>
-                    <span class="voucher-line-learning-cluster" data-uid="${uid}">
+                    <span class="voucher-line-procedures-cell" data-detail-id="${uid}">
+                        <span class="voucher-line-procedures-slot" data-detail-id="${uid}"></span>
                         <span class="voucher-line-risk-dot" data-uid="${uid}"></span>
-                        <button type="button" class="voucher-line-learn-icon voucher-line-audit-icon" data-uid="${uid}" title="Audit guidance">📋</button>
-                        <button type="button" class="voucher-line-learn-icon voucher-line-dfd-chip" data-uid="${uid}" title="Data Flow Diagram">🔀</button>
                     </span>
                     <span class="voucher-line-observations-cell" data-detail-id="${uid}"></span>
                     <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
@@ -1316,7 +1320,6 @@ function renderVoucherLines(lines) {
                 <span class="voucher-line-desc">${cashbookName}</span>
             </span>
             <span class="voucher-line-amount">${total}</span>
-            <span></span>
             <span></span>
             <span></span>
             <span></span>
@@ -1391,7 +1394,7 @@ function renderVoucherLines(lines) {
         });
     });
 
-    // Procedures/Observations/Learning cells — populated asynchronously per line
+    // Procedures/Observations cells — populated asynchronously per line
     // (updateProceduresCellForLine()/updateObservationsCellForLine()/updateRiskCellForLine(), see
     // above), since they depend on a fetch of the line's currently-selected Category. That
     // function wires each of its own links' click listeners once its content lands, since this
