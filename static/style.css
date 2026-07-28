@@ -3147,6 +3147,26 @@ body {
     opacity: 0.4;
     cursor: not-allowed;
 }
+.procedure-observation-system-btn {
+    padding: 4px 12px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    background: white;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.procedure-observation-system-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+    color: #1a1a2e;
+}
+.procedure-observation-system-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
 .procedure-observation-copy-btn {
     padding: 4px 12px;
     border: 1px solid #d0d5dd;

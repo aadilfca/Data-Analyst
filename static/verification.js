@@ -3101,6 +3101,7 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
     const observationInput = document.getElementById('procedureObservationInput');
     const copyBtn = document.getElementById('procedureObservationCopyBtn');
     const restoreBtn = document.getElementById('procedureObservationRestoreBtn');
+    const systemBtn = document.getElementById('procedureObservationSystemBtn');
 
     function refreshObservationButtons() {
         if (copyBtn) {
@@ -3112,6 +3113,9 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
         }
         if (restoreBtn) {
             restoreBtn.disabled = !(tabState.lastSyncedText && tabState.lastSyncedText.trim());
+        }
+        if (systemBtn) {
+            systemBtn.disabled = !buildObservationSuggestion(uid, docId);
         }
     }
 
@@ -3148,6 +3152,27 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
             // Reverts to the last-copied snapshot only — does not itself re-sync to the voucher
             // table; a further edit (this counts as one), so Copy is needed again afterward.
             tabState.observation = tabState.lastSyncedText || '';
+            tabState.observationDirty = true;
+            if (observationInput) observationInput.value = tabState.observation;
+            updateProcedureModalSavedNote(uid);
+            refreshObservationButtons();
+        });
+    }
+
+    if (systemBtn) {
+        systemBtn.addEventListener('click', function() {
+            // Recomputed live at click time (not the render-time value) so this stays correct
+            // even if the button's disabled state is momentarily stale — e.g. a checklist box
+            // ticked without switching tabs, since toggleProcedureCheck()'s success path
+            // intentionally skips a full panel re-render.
+            const suggestion = buildObservationSuggestion(uid, docId);
+            if (!suggestion) return;
+            const current = tabState.observation || '';
+            // Never a stored snapshot — always appends below whatever's already there, so the
+            // system text is recoverable on demand no matter how many times it's been cleared.
+            // Counts as an edit, same as typing: marks dirty, does not itself sync (Copy still
+            // required afterward), and leaves suggestionApplied/the one-shot auto-fill untouched.
+            tabState.observation = current.trim() ? `${current}\n${suggestion}` : suggestion;
             tabState.observationDirty = true;
             if (observationInput) observationInput.value = tabState.observation;
             updateProcedureModalSavedNote(uid);
@@ -3641,18 +3666,23 @@ function applyObservationSuggestionIfNeeded(uid, docId) {
 
 // Renders one tab's observation section: a textarea (local-only edits), a ↺ Restore button that
 // reverts the textarea to tabState.lastSyncedText (the exact text last pushed to the voucher
-// table — a single snapshot, no auto/manual distinction) without re-syncing, and an explicit Copy
+// table — a single snapshot, no auto/manual distinction) without re-syncing, a System
+// Observations button that recomputes buildObservationSuggestion() live and appends it (never a
+// stored snapshot, so it's always recoverable regardless of edits/clears), and an explicit Copy
 // button that pushes this one document's observation into the voucher line's Observations column
 // on demand (POSTs immediately via saveLineObservation(), rather than waiting for the
 // Prev/Next/Complete/Exit autosave chokepoint). Copy is disabled for a blank observation, shows
 // "Copy" (grey) while tabState.observationDirty is true, and flips to "Copied" (green) once it
 // isn't — the same flag an edit already sets, so no separate synced flag is needed client-side.
 // Restore is disabled whenever lastSyncedText is null/empty — nothing has ever been copied yet.
+// System Observations is disabled whenever there's currently no mismatch/unticked-procedure text
+// to offer — independent of both lastSyncedText and any saved/copied state.
 function buildObservationSection(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     const hasText = !!(tabState.observation && tabState.observation.trim());
     const isCopied = hasText && !tabState.observationDirty;
     const hasRestoreTarget = !!(tabState.lastSyncedText && tabState.lastSyncedText.trim());
+    const systemSuggestion = buildObservationSuggestion(uid, docId);
     return `
         <textarea id="procedureObservationInput" class="procedure-observation-textarea"
             placeholder="Add an observation for this document...">${escapeHtml(tabState.observation || '')}</textarea>
@@ -3661,6 +3691,10 @@ function buildObservationSection(uid, docId) {
                 class="procedure-observation-restore-btn"
                 title="Revert to last copied text"
                 ${hasRestoreTarget ? '' : 'disabled'}>↺</button>
+            <button type="button" id="procedureObservationSystemBtn"
+                class="procedure-observation-system-btn"
+                title="Append current system-generated observation (mismatch / unticked procedures)"
+                ${systemSuggestion ? '' : 'disabled'}>🔄 System Observations</button>
             <button type="button" id="procedureObservationCopyBtn"
                 class="procedure-observation-copy-btn${isCopied ? ' copied' : ''}"
                 ${hasText ? '' : 'disabled'}>${isCopied ? '✓ Copied' : '📋 Copy'}</button>
