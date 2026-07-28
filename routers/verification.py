@@ -19,7 +19,7 @@ from openpyxl.styles import Font, Alignment, Border, Side
 from routers.import_export import get_document_group_id
 # Phase 9 (Audit Rules): audit guidance now sources from Audit Rules Categories instead of
 # the old hardcoded audit_procedure_library table — same cross-router import pattern as above.
-from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents
 
 router = APIRouter()
 
@@ -69,6 +69,138 @@ def get_column_value(row_data: dict, aliases: list) -> Optional[str]:
             if val is not None and val != '':
                 return val
     return None
+
+# Validation Rules Phase 4 (status engine): same account-code alias list as
+# verification.js's VOUCHER_LINE_ACCOUNT_CODE_ALIASES, ported here so the backend can
+# resolve a line's Category the same way the frontend's Type cell already does (via
+# GET /api/verification/category-for-account) without a network round-trip.
+ACCOUNT_CODE_ALIASES = ['Account Detail', 'Account Details', 'Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head', 'Ledger Detail']
+
+def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
+    """
+    Validation Rules Phase 4: compute this line's Cleared/Query status from four AND'ed
+    checks and persist it to verification_details.cleared_status/matrix_version_applied.
+    Called from save_line_items() - the same chokepoint every Save/Next/Prev/Validate/
+    Complete/Exit path already runs per line (mirrors sync_line_observations_to_voucher()).
+
+    Returns the computed {"cleared_status", "matrix_version_applied"} dict, or None if the
+    line/its account code/its Category can't be resolved - cleared_status is left exactly
+    as it was (NULL for a never-computed line) rather than written to, since "not yet
+    classified" is a normal state (a line with no resolved Category can't even open
+    Supporting Documents today, per the existing Verification workflow convention).
+    """
+    line = execute_query(
+        """
+        SELECT vd.id, vd.transaction_ref, cd.row_data, vs.client_id
+        FROM verification_details vd
+        JOIN client_data cd ON cd.id = vd.client_data_id
+        JOIN verification_sessions vs ON vs.id = vd.session_id
+        WHERE vd.id = ?
+        """,
+        (voucher_line_id,)
+    )
+    if not line:
+        return None
+    row = line[0]
+    client_id = row['client_id']
+    transaction_ref = row['transaction_ref']
+    row_data = row['row_data']
+    if isinstance(row_data, str):
+        try:
+            row_data = json.loads(row_data)
+        except Exception:
+            row_data = {}
+    row_data = row_data or {}
+
+    account_code = get_column_value(row_data, ACCOUNT_CODE_ALIASES)
+    if not account_code:
+        return None
+
+    cat_rows = execute_query(
+        """
+        SELECT aca.category_id, arc.name AS category_name, arc.matrix_version
+        FROM account_category_assignments aca
+        LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = 1
+        WHERE aca.client_id = ? AND aca.account_code = ?
+        """,
+        (client_id, account_code)
+    )
+    if not cat_rows or not cat_rows[0]['category_id'] or not cat_rows[0]['category_name']:
+        return None
+
+    category_id = cat_rows[0]['category_id']
+    matrix_version = cat_rows[0]['matrix_version']
+
+    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id) or [voucher_line_id]
+    placeholders = ",".join("?" for _ in sibling_ids)
+
+    # 1. Document requirement check: Category's required documents vs linked (active) documents.
+    required_docs = get_category_documents(category_id)
+    required_doc_ids = {d['document_id'] for d in required_docs}
+
+    linked_rows = execute_query(
+        f"""
+        SELECT DISTINCT document_id FROM voucher_line_documents
+        WHERE voucher_line_id IN ({placeholders}) AND status = 'active'
+        """,
+        tuple(sibling_ids)
+    )
+    linked_doc_ids = {r['document_id'] for r in linked_rows}
+    doc_requirement_met = required_doc_ids.issubset(linked_doc_ids)
+
+    # 2. Per-document approval-required check: each approval_required document among the
+    # required set must have at least one ticked role matching "approv" (case-insensitive
+    # substring) for that specific document_id.
+    approval_required_doc_ids = {d['document_id'] for d in required_docs if d['approval_required']}
+    approval_docs_ok = True
+    if approval_required_doc_ids:
+        check_rows = execute_query(
+            f"""
+            SELECT document_id, role_name FROM voucher_line_procedure_checks
+            WHERE voucher_line_id IN ({placeholders}) AND is_checked = 1
+            """,
+            tuple(sibling_ids)
+        )
+        approved_doc_ids = {
+            r['document_id'] for r in check_rows
+            if 'approv' in (r['role_name'] or '').lower()
+        }
+        approval_docs_ok = approval_required_doc_ids.issubset(approved_doc_ids)
+
+    # 3. Voucher-level approval check: independent of Category/documents, always required.
+    # Reads voucher_approvals (keyed client_id+transaction_ref, not session-scoped) - see
+    # the Conventions note on that table for why. No transaction_ref/no row/any blank
+    # field = fail (fails safe).
+    voucher_approval_ok = False
+    if transaction_ref:
+        va_rows = execute_query(
+            "SELECT prepared_by, checked_by, approved_by FROM voucher_approvals WHERE client_id = ? AND transaction_ref = ?",
+            (client_id, transaction_ref)
+        )
+        if va_rows:
+            va = va_rows[0]
+            voucher_approval_ok = bool((va['prepared_by'] or '').strip()) \
+                and bool((va['checked_by'] or '').strip()) \
+                and bool((va['approved_by'] or '').strip())
+
+    # 4. Signature-exception check: defaults OK, fails only on a confirmed flagged mismatch.
+    sig_rows = execute_query(
+        f"""
+        SELECT COUNT(*) as cnt FROM voucher_line_documents
+        WHERE voucher_line_id IN ({placeholders}) AND status = 'active' AND signature_exception = 1
+        """,
+        tuple(sibling_ids)
+    )
+    signature_ok = (sig_rows[0]['cnt'] == 0)
+
+    all_ok = doc_requirement_met and approval_docs_ok and voucher_approval_ok and signature_ok
+    cleared_status = "Cleared" if all_ok else "Query"
+
+    execute_write(
+        "UPDATE verification_details SET cleared_status = ?, matrix_version_applied = ? WHERE id = ?",
+        (cleared_status, matrix_version, voucher_line_id)
+    )
+    return {"cleared_status": cleared_status, "matrix_version_applied": matrix_version}
 
 def extract_cashbook_name(row_data: dict, client_prefixes: dict) -> Optional[str]:
     # Define aliases for required columns
@@ -695,6 +827,10 @@ def save_line_items(
     # Observation field. save_line_items() is the single chokepoint every Save/Next/Prev/
     # Validate/Complete/Exit path already calls per line, so this is the correct place to sync.
     sync_line_observations_to_voucher(detail_id)
+
+    # Validation Rules Phase 4: recompute Cleared/Query status on every save, same
+    # chokepoint as the observation sync directly above.
+    compute_and_persist_cleared_status(detail_id)
 
     log_audit("Analyst", "Save Line Items", "Verification", f"Detail {detail_id} line items saved.")
     return {"message": "Line items and procedure data saved successfully."}
