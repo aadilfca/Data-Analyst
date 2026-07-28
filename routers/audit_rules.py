@@ -6,6 +6,7 @@
 # Categories) in the Audit Rules module now have CRUD. Categories is the entity a
 # voucher will eventually reference (wired up in Phase 9).
 
+import sqlite3
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
@@ -375,7 +376,7 @@ class CategoryUpdate(BaseModel):
 def get_category_documents(category_id: int) -> List[dict]:
     rows = execute_query(
         """
-        SELECT d.id as document_id, d.name
+        SELECT d.id as document_id, d.name, cd.approval_required
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
         WHERE cd.category_id = ?
@@ -383,7 +384,22 @@ def get_category_documents(category_id: int) -> List[dict]:
         """,
         (category_id,)
     )
-    return [{"document_id": r["document_id"], "name": r["name"]} for r in rows]
+    return [
+        {
+            "document_id": r["document_id"],
+            "name": r["name"],
+            "approval_required": bool(r["approval_required"])
+        }
+        for r in rows
+    ]
+
+def get_category_document_approvals(category_id: int) -> dict:
+    """Return {document_id: approval_required (0/1)} for a Category's current document list."""
+    rows = execute_query(
+        "SELECT document_id, approval_required FROM audit_rule_category_documents WHERE category_id = ?",
+        (category_id,)
+    )
+    return {r["document_id"]: r["approval_required"] for r in rows}
 
 def get_category_cross_checks(category_id: int) -> List[dict]:
     rows = execute_query(
@@ -477,19 +493,42 @@ def row_to_category(row: dict) -> dict:
         "kb_overview": row.get("kb_overview"),
         "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
+        # Validation Rules (Phase 2 of 7): bumped by bump_category_matrix_version() whenever
+        # this Category's document list or approval-required flags change.
+        "matrix_version": row.get("matrix_version", 1),
         "documents": get_category_documents(category_id),
         "cross_checks": get_category_cross_checks(category_id),
         "used_by_vouchers_count": get_category_used_by_vouchers_count(category_id)
     }
 
 def save_category_documents(category_id: int, document_ids: List[int]):
-    """Replace a Category's Document list (delete-then-reinsert)."""
+    """
+    Replace a Category's Document list (delete-then-reinsert). Carries each surviving
+    document's approval_required value forward across the delete-then-reinsert (Validation
+    Rules, Phase 2 of 7) - without this, any ordinary document-list edit would silently
+    reset every document's approval flag back to 0. A newly-added document defaults to 0,
+    matching the column's own DB default.
+    """
+    existing_approvals = get_category_document_approvals(category_id)
     execute_write("DELETE FROM audit_rule_category_documents WHERE category_id = ?", (category_id,))
     for idx, document_id in enumerate(document_ids):
+        approval_required = existing_approvals.get(document_id, 0)
         execute_write(
-            "INSERT INTO audit_rule_category_documents (category_id, document_id, sort_order) VALUES (?, ?, ?)",
-            (category_id, document_id, idx)
+            "INSERT INTO audit_rule_category_documents (category_id, document_id, sort_order, approval_required) VALUES (?, ?, ?, ?)",
+            (category_id, document_id, idx, approval_required)
         )
+
+def bump_category_matrix_version(category_id: int):
+    """
+    Increment audit_rule_categories.matrix_version (Validation Rules, Phase 2 of 7) - called
+    automatically whenever a Category's document list or approval-required flags change, never
+    as a separate manual action. Lets a later phase's verification_details.matrix_version_applied
+    detect a stale classification without silently reclassifying an already-Cleared voucher.
+    """
+    execute_write(
+        "UPDATE audit_rule_categories SET matrix_version = matrix_version + 1 WHERE id = ?",
+        (category_id,)
+    )
 
 def save_category_cross_checks(category_id: int, cross_check_ids: List[int]):
     """Replace a Category's Cross-check list (delete-then-reinsert)."""
@@ -575,12 +614,20 @@ def update_category(category_id: int, category: CategoryUpdate):
 
     validate_category_payload(category.document_ids, category.cross_check_ids)
 
+    # Validation Rules (Phase 2 of 7): capture the document set before it's replaced, so a
+    # real membership change (add/remove - reordering alone doesn't count) can trigger a
+    # matrix_version bump below. Cross-check changes deliberately do not bump the version.
+    old_document_ids = set(get_category_document_approvals(category_id).keys())
+
     execute_write(
         "UPDATE audit_rule_categories SET name = ?, kb_overview = ? WHERE id = ?",
         (category.name, category.kb_overview, category_id)
     )
     save_category_documents(category_id, category.document_ids)
     save_category_cross_checks(category_id, category.cross_check_ids)
+
+    if old_document_ids != set(category.document_ids):
+        bump_category_matrix_version(category_id)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated Category ID {category_id}")
     return {"message": "Category updated successfully"}
@@ -608,3 +655,181 @@ def restore_category(category_id: int):
     execute_write("UPDATE audit_rule_categories SET is_active = 1 WHERE id = ?", (category_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Category: {existing[0]['name']} (ID: {category_id})")
     return {"message": "Category restored successfully"}
+
+
+# ==============================================
+# SIGNATURE SPECIMENS
+# ==============================================
+# Validation Rules (Phase 2 of 7): expected signatory name per role/document type, name-only,
+# no image handling, per the locked assumption. Always scoped to a client (a client's own
+# staff, not a global list). The signature_specimens table (Phase 1 schema) has no is_active
+# column, so unlike Documents/Cross-checks/Categories above this is a plain 5-endpoint CRUD
+# with a real hard delete, not the six-endpoint soft-delete/restore pattern - a deliberate
+# deviation, not an oversight, matching the "simple name-list management" scope of this phase.
+
+# ---------- DATA MODELS ----------
+class SignatureSpecimenCreate(BaseModel):
+    client_id: int
+    document_id: int
+    role_name: str
+    expected_signatory_name: str
+
+class SignatureSpecimenUpdate(BaseModel):
+    client_id: int
+    document_id: int
+    role_name: str
+    expected_signatory_name: str
+
+# ---------- HELPERS ----------
+def validate_client_id(client_id: int):
+    """Raises HTTPException(400) if client_id doesn't reference an active client."""
+    rows = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not rows:
+        raise HTTPException(400, f"Client ID {client_id} not found or inactive")
+
+def validate_signature_specimen_payload(document_id: int, role_name: str):
+    """
+    Raises HTTPException(400) if document_id doesn't exist, or role_name isn't one of that
+    Document's configured auth roles - mirrors validate_cross_check_payload()'s compare_field
+    check against a Document's cross_check_fields.
+    """
+    doc_rows = execute_query("SELECT name FROM audit_rule_documents WHERE id = ?", (document_id,))
+    if not doc_rows:
+        raise HTTPException(400, f"Document ID {document_id} not found")
+    auth_roles = get_document_auth_roles(document_id)
+    if role_name not in auth_roles:
+        raise HTTPException(
+            400,
+            f"Role '{role_name}' is not a configured authorisation role on Document '{doc_rows[0]['name']}' (ID {document_id})"
+        )
+
+def row_to_signature_specimen(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "client_id": row["client_id"],
+        "document_id": row["document_id"],
+        "document_name": row.get("document_name"),
+        "role_name": row["role_name"],
+        "expected_signatory_name": row["expected_signatory_name"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+SIGNATURE_SPECIMEN_SELECT = """
+    SELECT s.id, s.client_id, s.document_id, d.name as document_name, s.role_name,
+           s.expected_signatory_name, s.created_at, s.updated_at
+    FROM signature_specimens s
+    JOIN audit_rule_documents d ON s.document_id = d.id
+"""
+
+# ---------- ENDPOINTS ----------
+
+@router.get("/api/audit-rules/signature-specimens")
+def get_signature_specimens(client_id: int, document_id: Optional[int] = None):
+    """
+    Get all signature specimens for a client, optionally filtered to one Document.
+    client_id is required - specimens are always client-scoped.
+    """
+    query = SIGNATURE_SPECIMEN_SELECT + " WHERE s.client_id = ?"
+    params = [client_id]
+    if document_id is not None:
+        query += " AND s.document_id = ?"
+        params.append(document_id)
+    query += " ORDER BY d.name, s.role_name"
+    rows = execute_query(query, tuple(params))
+    return [row_to_signature_specimen(r) for r in rows]
+
+@router.get("/api/audit-rules/signature-specimens/{specimen_id}")
+def get_signature_specimen(specimen_id: int):
+    rows = execute_query(SIGNATURE_SPECIMEN_SELECT + " WHERE s.id = ?", (specimen_id,))
+    if not rows:
+        raise HTTPException(404, "Signature specimen not found")
+    return row_to_signature_specimen(rows[0])
+
+@router.post("/api/audit-rules/signature-specimens")
+def create_signature_specimen(specimen: SignatureSpecimenCreate):
+    validate_client_id(specimen.client_id)
+    validate_signature_specimen_payload(specimen.document_id, specimen.role_name)
+
+    try:
+        specimen_id = execute_write(
+            "INSERT INTO signature_specimens (client_id, document_id, role_name, expected_signatory_name) VALUES (?, ?, ?, ?)",
+            (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name)
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(400, "A signature specimen for this client/document/role already exists")
+
+    log_audit(
+        "Admin", "Create", "AuditRules",
+        f"Created signature specimen for client {specimen.client_id}, document {specimen.document_id}, role '{specimen.role_name}'"
+    )
+    return {"message": "Signature specimen created successfully", "specimen_id": specimen_id}
+
+@router.put("/api/audit-rules/signature-specimens/{specimen_id}")
+def update_signature_specimen(specimen_id: int, specimen: SignatureSpecimenUpdate):
+    existing = execute_query("SELECT id FROM signature_specimens WHERE id = ?", (specimen_id,))
+    if not existing:
+        raise HTTPException(404, "Signature specimen not found")
+
+    validate_client_id(specimen.client_id)
+    validate_signature_specimen_payload(specimen.document_id, specimen.role_name)
+
+    try:
+        execute_write(
+            "UPDATE signature_specimens SET client_id = ?, document_id = ?, role_name = ?, "
+            "expected_signatory_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name, specimen_id)
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(400, "A signature specimen for this client/document/role already exists")
+
+    log_audit("Admin", "Update", "AuditRules", f"Updated signature specimen ID {specimen_id}")
+    return {"message": "Signature specimen updated successfully"}
+
+@router.delete("/api/audit-rules/signature-specimens/{specimen_id}")
+def delete_signature_specimen(specimen_id: int):
+    """
+    Hard delete - no is_active column exists on signature_specimens (Phase 1 schema), so
+    unlike Documents/Cross-checks/Categories there is no soft-delete/restore for this entity.
+    """
+    existing = execute_query("SELECT expected_signatory_name FROM signature_specimens WHERE id = ?", (specimen_id,))
+    if not existing:
+        raise HTTPException(404, "Signature specimen not found")
+    execute_write("DELETE FROM signature_specimens WHERE id = ?", (specimen_id,))
+    log_audit("Admin", "Delete", "AuditRules", f"Deleted signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
+    return {"message": "Signature specimen deleted successfully"}
+
+
+# ---------- PER-DOCUMENT APPROVAL-REQUIRED FLAG (Validation Rules, Phase 2 of 7) ----------
+# A dedicated toggle endpoint rather than folding approval state into CategoryCreate/
+# CategoryUpdate's existing document_ids: List[int] - that field's shape stays exactly as the
+# already-live Categories page (Phase 7 of 9) sends it today, so this addition doesn't disturb
+# an unrelated, already-working flow. Mirrors this app's existing single-field-toggle-on-an-
+# existing-row convention (e.g. PUT /api/trial-balance/accounts/{id}/override).
+class CategoryDocumentApprovalUpdate(BaseModel):
+    approval_required: bool
+
+@router.put("/api/audit-rules/categories/{category_id}/documents/{document_id}/approval")
+def update_category_document_approval(category_id: int, document_id: int, payload: CategoryDocumentApprovalUpdate):
+    existing = execute_query(
+        "SELECT approval_required FROM audit_rule_category_documents WHERE category_id = ? AND document_id = ?",
+        (category_id, document_id)
+    )
+    if not existing:
+        raise HTTPException(404, "This Document is not part of this Category")
+
+    new_value = 1 if payload.approval_required else 0
+    changed = bool(existing[0]["approval_required"]) != payload.approval_required
+
+    execute_write(
+        "UPDATE audit_rule_category_documents SET approval_required = ? WHERE category_id = ? AND document_id = ?",
+        (new_value, category_id, document_id)
+    )
+    if changed:
+        bump_category_matrix_version(category_id)
+
+    log_audit(
+        "Admin", "Update", "AuditRules",
+        f"Set approval_required={payload.approval_required} for Document ID {document_id} in Category ID {category_id}"
+    )
+    return {"category_id": category_id, "document_id": document_id, "approval_required": payload.approval_required}
