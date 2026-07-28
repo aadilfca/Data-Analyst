@@ -874,6 +874,41 @@ function buildProcedureRingSvg(pct, cls) {
     </svg>`;
 }
 
+// ---------- PROCEDURES/OBSERVATIONS COLUMN EXPAND TOGGLE (Phase 4) ----------
+// A single shared boolean drives both columns' render together — there is deliberately no
+// per-column state. Either header's icon toggles it; both columns re-render in lockstep.
+// Not persisted: reset to collapsed on every new voucher load (see seedVoucherLineState()).
+let columnsExpanded = false;
+
+// Syncs both header icons' glyph/title/class to the current columnsExpanded value — called after
+// every render and after every toggle, so a stale icon never disagrees with what's showing below.
+function updateColumnToggleIcons() {
+    document.querySelectorAll('.voucher-col-toggle-icon').forEach(icon => {
+        icon.textContent = columnsExpanded ? '⤡' : '⤢';
+        icon.title = columnsExpanded ? 'Collapse' : 'Expand';
+        icon.classList.toggle('expanded', columnsExpanded);
+    });
+    // Drives the flex-start alignment override (style.css) so an expanded cell's list sits at the
+    // top of its row instead of the collapsed badge's vertically-centered position.
+    const container = document.getElementById('voucherLinesContainer');
+    if (container) container.classList.toggle('columns-expanded', columnsExpanded);
+}
+
+// Flips the shared state and re-renders every currently-rendered line's Procedures/Observations
+// cells under it — reuses each line's already-resolved Category (voucherLineState[uid].
+// transactionType) rather than re-running the Type auto-fill lookup itself.
+function toggleColumnsExpanded() {
+    columnsExpanded = !columnsExpanded;
+    updateColumnToggleIcons();
+    Object.keys(voucherLineState).forEach(uid => {
+        const type = voucherLineState[uid].transactionType;
+        if (type) {
+            updateProceduresCellForLine(uid, type);
+            updateObservationsCellForLine(uid, type);
+        }
+    });
+}
+
 // Renders the Procedures column's ring+count badge for one line, from its currently-selected
 // Category's attached Documents — replaces the old per-document link list (a document is now
 // reached via the modal's own left rail, once open, not from a per-name link in the table).
@@ -915,13 +950,32 @@ async function updateProceduresCellForLine(uid, type) {
     // Re-check the stale guard after these awaits, same reason as above.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
     const assignedDocIds = new Set(assignedRecords.map(r => r.document_id));
-
-    const done = documents.filter(doc => {
+    const isDocDone = doc => {
         if (doc.template_id) return assignedDocIds.has(doc.id);
         const roles = doc.auth_roles || [];
         if (!roles.length) return false;
         return roles.every(role => procedureChecks.some(c => c.document_id === doc.id && c.role_name === role && c.is_checked));
-    }).length;
+    };
+
+    if (columnsExpanded) {
+        const itemsHtml = documents.map(doc => {
+            const done = isDocDone(doc);
+            return `
+                <div class="voucher-line-proc-expanded-item">
+                    <span class="voucher-line-proc-expanded-dot ${done ? 'done' : 'pending'}">${done ? '✔' : '●'}</span>
+                    <span class="voucher-line-proc-expanded-name">${escapeHtml(doc.name)}</span>
+                </div>
+            `;
+        }).join('');
+        cell.innerHTML = `<div class="voucher-line-proc-expanded-list" data-uid="${uid}">${itemsHtml}</div>`;
+        cell.querySelector('.voucher-line-proc-expanded-list')?.addEventListener('click', function(e) {
+            e.stopPropagation();
+            openProcedureModal(this.dataset.uid);
+        });
+        return;
+    }
+
+    const done = documents.filter(isDocDone).length;
     const total = documents.length;
     const pct = total ? Math.round((done / total) * 100) : 0;
     const cls = done === 0 ? 'pending' : (done === total ? 'done' : 'progress');
@@ -966,6 +1020,38 @@ async function updateObservationsCellForLine(uid, type) {
     // Stale guard: the line may have moved on to a different type (or a new voucher entirely)
     // while this fetch was in flight — don't clobber a newer selection.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+
+    if (columnsExpanded) {
+        const nonEmpty = entries.filter(e => (e.observation_text || '').trim());
+        if (!nonEmpty.length) {
+            cell.innerHTML = '<span class="voucher-line-obs-none">—</span>';
+            return;
+        }
+        // Document names aren't on the entry itself — reuse the same cached guidance fetch the
+        // Procedures cell already draws from, no new endpoint.
+        let data = null;
+        try {
+            data = await fetchAuditGuidanceData(type);
+        } catch (e) {
+            console.error('Failed to load document names for expanded Observations:', e);
+        }
+        if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+        const nameById = {};
+        ((data && data.documents) || []).forEach(doc => { nameById[doc.id] = doc.name; });
+        const itemsHtml = nonEmpty.map(entry => `
+            <div class="voucher-line-obs-expanded-item">
+                <span class="voucher-line-obs-expanded-doc">${escapeHtml(nameById[entry.document_id] || 'Document')}:</span>
+                <span class="voucher-line-obs-expanded-text">${escapeHtml(entry.observation_text)}</span>
+            </div>
+        `).join('');
+        cell.innerHTML = `<div class="voucher-line-obs-expanded-list" data-uid="${uid}">${itemsHtml}</div>`;
+        cell.querySelector('.voucher-line-obs-expanded-list')?.addEventListener('click', function(e) {
+            e.stopPropagation();
+            openProcedureModal(this.dataset.uid);
+        });
+        return;
+    }
+
     const count = entries.length;
     if (!count) {
         cell.innerHTML = '<span class="voucher-line-obs-none">—</span>';
@@ -1168,6 +1254,9 @@ function getVoucherLineStatusIcon(validationStatus) {
 // globals, applied per line here.
 function seedVoucherLineState(lines) {
     voucherLineState = {};
+    // Phase 4 (Procedures/Observations expand toggle): not persisted — every new voucher load
+    // starts collapsed, same reset point as the other per-voucher state below.
+    columnsExpanded = false;
     // Phase 4: each line's own change-alert diff data (undefined/absent fields for
     // audited_cashbook-sourced lines simply mean no icon shows for that line — not a regression,
     // same pre-existing gap noted for transaction_type in Phases 2/3).
@@ -1241,8 +1330,8 @@ function renderVoucherLines(lines) {
             <span>Account Type<span class="voucher-col-resize-handle" data-col="2"></span></span>
             <span>Account Name<span class="voucher-col-resize-handle" data-col="3"></span></span>
             <span class="voucher-line-amount-col">Amount<span class="voucher-col-resize-handle" data-col="4"></span></span>
-            <span>Procedures<span class="voucher-col-resize-handle" data-col="5"></span></span>
-            <span>Observations<span class="voucher-col-resize-handle" data-col="6"></span></span>
+            <span>Procedures<button type="button" class="voucher-col-toggle-icon" title="Expand">⤢</button><span class="voucher-col-resize-handle" data-col="5"></span></span>
+            <span>Observations<button type="button" class="voucher-col-toggle-icon" title="Expand">⤢</button><span class="voucher-col-resize-handle" data-col="6"></span></span>
             <span>Status<span class="voucher-col-resize-handle" data-col="7"></span></span>
         </div>
     `;
@@ -1393,6 +1482,16 @@ function renderVoucherLines(lines) {
             if (typeof openDfdModal === 'function') openDfdModal();
         });
     });
+
+    // Procedures/Observations column expand toggle (Phase 4): either header icon flips the one
+    // shared columnsExpanded state; sync icon glyphs to whatever it currently is on every render.
+    container.querySelectorAll('.voucher-col-toggle-icon').forEach(icon => {
+        icon.addEventListener('click', function(e) {
+            e.stopPropagation();
+            toggleColumnsExpanded();
+        });
+    });
+    updateColumnToggleIcons();
 
     // Procedures/Observations cells — populated asynchronously per line
     // (updateProceduresCellForLine()/updateObservationsCellForLine()/updateRiskCellForLine(), see

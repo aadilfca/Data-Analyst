@@ -2209,6 +2209,86 @@ body {
     font-size: 12px;
 }
 
+/* ----- Procedures/Observations column expand toggle (Phase 4) -----
+   One tiny icon per header, mirrored: clicking either fires the same shared toggle
+   (toggleColumnsExpanded() in verification.js), so both flip glyph/state together. Sits inline
+   next to the header label, before the column's own resize handle. */
+.voucher-col-toggle-icon {
+    border: none;
+    background: none;
+    padding: 0 2px;
+    margin-left: 4px;
+    font-size: 12px;
+    line-height: 1;
+    color: #475569;
+    cursor: pointer;
+    border-radius: 4px;
+    vertical-align: middle;
+}
+.voucher-col-toggle-icon:hover {
+    background: rgba(0, 0, 0, 0.08);
+}
+.voucher-col-toggle-icon.expanded {
+    color: #1a1a2e;
+}
+
+/* Expanded Procedures cell: vertical list of every procedure, tick (done) or dot (pending) per
+   the existing traffic-light convention (.voucher-line-proc-ring-fill.done/.pending colors reused
+   here as text color instead of stroke). Left-aligned, unlike the collapsed badge's centered
+   layout, since a list reads better ragged-left than centered. */
+.voucher-lines-container.columns-expanded .voucher-line-procedures-cell,
+.voucher-lines-container.columns-expanded .voucher-line-observations-cell {
+    align-items: flex-start;
+}
+.voucher-line-proc-expanded-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    cursor: pointer;
+    width: 100%;
+}
+.voucher-line-proc-expanded-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+}
+.voucher-line-proc-expanded-dot {
+    flex-shrink: 0;
+    font-size: 11px;
+}
+.voucher-line-proc-expanded-dot.done {
+    color: #166534;
+}
+.voucher-line-proc-expanded-dot.pending {
+    color: #94a3b8;
+}
+.voucher-line-proc-expanded-name {
+    color: #1a1a2e;
+}
+
+/* Expanded Observations cell: full text per document with a recorded (non-empty) observation. */
+.voucher-line-obs-expanded-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    cursor: pointer;
+    width: 100%;
+}
+.voucher-line-obs-expanded-item {
+    font-size: 12px;
+    line-height: 1.4;
+}
+.voucher-line-obs-expanded-doc {
+    font-weight: 700;
+    color: #991b1b;
+    margin-right: 4px;
+}
+.voucher-line-obs-expanded-text {
+    color: #1a1a2e;
+    white-space: pre-wrap;
+}
+
 @media (max-width: 768px) {
     .voucher-panel {
         width: 100%;
