@@ -1667,6 +1667,37 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_procedure_checks_line ON voucher_line_procedure_checks (voucher_line_id)")
         print("✅ Created voucher_line_procedure_checks table (Phase 5 of 6: audit procedures checklist)")
 
+        # ---------- VOUCHER-LEVEL APPROVAL (Validation Rules, Phase 1 addendum) ----------
+        # Prepared By / Checked By / Approved By as one independent, mandatory record per
+        # real-world voucher - separate from (not replacing) the per-document approval_required
+        # flag on audit_rule_category_documents. Text/name fields only, no signature capture,
+        # no linked document. Conceptually surfaces on the procedure modal's first tab (renamed
+        # "Voucher Line") in a later phase - schema only this phase.
+        #
+        # Keyed by (client_id, transaction_ref) rather than (session_id, transaction_ref):
+        # reopening a cashbook creates a brand-new verification_sessions row every time, and this
+        # exact orphaning failure mode has already been fixed three times in this module
+        # (voucher_line_documents/voucher_line_procedure_checks/voucher_line_observations, see
+        # _resolve_sibling_voucher_line_ids()) - keying by client_id keeps one approval record
+        # alive across every session that ever touches the same real-world voucher. Brand-new
+        # table with no prior data, so a plain CREATE TABLE IF NOT EXISTS is sufficient - no
+        # ALTER TABLE upgrade block needed (same reasoning as voucher_line_documents above).
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_approvals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                transaction_ref TEXT NOT NULL,
+                prepared_by TEXT,
+                checked_by TEXT,
+                approved_by TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, transaction_ref)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_approvals_client_ref ON voucher_approvals (client_id, transaction_ref)")
+        print("✅ Created voucher_approvals table (Validation Rules, Phase 1 addendum: voucher-level approval)")
+
         # ---------- VOUCHER LINE OBSERVATIONS (Phase 6 of 6, FINAL: observation flow) ----------
         # One row per (voucher_line_id, document_id) - a Document tab's observation text is
         # upserted in place here, not appended as a history log. `synced` flags whether the
