@@ -636,7 +636,12 @@ def _build_verification_line(d: dict) -> dict:
         # Confirmed fix, 2026-07-25: the rolled-up Observation text for this line, previously
         # never returned to the frontend at all (the OBSERVATIONS column in the voucher table
         # was a placeholder with no data source) - see renderVoucherLines() in verification.js.
-        "observations": d.get('observations')
+        "observations": d.get('observations'),
+        # Validation Rules Phase 5: Cleared/Query status computed and persisted by
+        # compute_and_persist_cleared_status() (Phase 4) - null until a line has been saved at
+        # least once with a resolvable Category, same "not yet computed" convention as elsewhere.
+        "cleared_status": d.get('cleared_status'),
+        "matrix_version_applied": d.get('matrix_version_applied')
     }
 
 def _fetch_session_details_grouped(session_id: int) -> list:
@@ -651,6 +656,7 @@ def _fetch_session_details_grouped(session_id: int) -> list:
         """
         SELECT vd.id, vd.client_data_id, vd.transaction_ref, vd.line_items, vd.procedure_data,
                vd.validation_status, vd.validation_message, vd.status, vd.observations,
+               vd.cleared_status, vd.matrix_version_applied,
                cd.template_id, cd.row_data, cd.extract_date
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
@@ -829,11 +835,16 @@ def save_line_items(
     sync_line_observations_to_voucher(detail_id)
 
     # Validation Rules Phase 4: recompute Cleared/Query status on every save, same
-    # chokepoint as the observation sync directly above.
-    compute_and_persist_cleared_status(detail_id)
+    # chokepoint as the observation sync directly above. Phase 5: surface the result in the
+    # response so the frontend can refresh the line's badge without a second round-trip.
+    status_result = compute_and_persist_cleared_status(detail_id)
 
     log_audit("Analyst", "Save Line Items", "Verification", f"Detail {detail_id} line items saved.")
-    return {"message": "Line items and procedure data saved successfully."}
+    response = {"message": "Line items and procedure data saved successfully."}
+    if status_result:
+        response["cleared_status"] = status_result["cleared_status"]
+        response["matrix_version_applied"] = status_result["matrix_version_applied"]
+    return response
 
 @router.post("/api/verification/validate")
 def validate_transaction(
@@ -1444,6 +1455,77 @@ def get_category_for_account(
     }
 
 # ==============================================
+# VOUCHER-LEVEL APPROVAL (Validation Rules, Phase 5 of 7)
+# Read/write for the voucher_approvals table (database.py, Phase 1 addendum) - a mandatory,
+# always-required gate independent of Category/documents. Keyed by client_id+transaction_ref
+# (not session_id), so it survives across a cashbook being reopened in a new verification
+# session - see the Conventions note on voucher_approvals for the full rationale.
+# ==============================================
+
+@router.get("/api/verification/voucher_approval")
+def get_voucher_approval(
+    client_id: int = Query(..., description="Client ID"),
+    transaction_ref: str = Query(..., description="Voucher number (verification_details.transaction_ref)")
+):
+    """
+    Look up the Prepared/Checked/Approved By record for one voucher. Returns a clean
+    "no record yet" shape (all fields null) rather than a 404 - not having entered the
+    approval yet is a normal, expected state, same convention as get_category_for_account().
+    """
+    rows = execute_query(
+        "SELECT prepared_by, checked_by, approved_by FROM voucher_approvals WHERE client_id = ? AND transaction_ref = ?",
+        (client_id, transaction_ref)
+    )
+    if not rows:
+        return {"client_id": client_id, "transaction_ref": transaction_ref, "prepared_by": None, "checked_by": None, "approved_by": None}
+    r = rows[0]
+    return {
+        "client_id": client_id,
+        "transaction_ref": transaction_ref,
+        "prepared_by": r['prepared_by'],
+        "checked_by": r['checked_by'],
+        "approved_by": r['approved_by']
+    }
+
+
+@router.post("/api/verification/save_voucher_approval")
+def save_voucher_approval(
+    client_id: int = Body(..., embed=True),
+    transaction_ref: str = Body(..., embed=True),
+    prepared_by: Optional[str] = Body(None, embed=True),
+    checked_by: Optional[str] = Body(None, embed=True),
+    approved_by: Optional[str] = Body(None, embed=True)
+):
+    """
+    Upsert the Prepared/Checked/Approved By record for one voucher. Select-then-branch rather
+    than INSERT OR REPLACE, since REPLACE would reset the row's autoincrement id on every edit -
+    same pattern this module already uses elsewhere for a single-record-per-key upsert.
+    """
+    existing = execute_query(
+        "SELECT id FROM voucher_approvals WHERE client_id = ? AND transaction_ref = ?",
+        (client_id, transaction_ref)
+    )
+    if existing:
+        execute_write(
+            "UPDATE voucher_approvals SET prepared_by = ?, checked_by = ?, approved_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (prepared_by, checked_by, approved_by, existing[0]['id'])
+        )
+    else:
+        execute_write(
+            "INSERT INTO voucher_approvals (client_id, transaction_ref, prepared_by, checked_by, approved_by) VALUES (?, ?, ?, ?, ?)",
+            (client_id, transaction_ref, prepared_by, checked_by, approved_by)
+        )
+    log_audit("Analyst", "Save Voucher Approval", "Verification",
+              f"Client {client_id}, voucher '{transaction_ref}' approval record saved.")
+    return {
+        "client_id": client_id,
+        "transaction_ref": transaction_ref,
+        "prepared_by": prepared_by,
+        "checked_by": checked_by,
+        "approved_by": approved_by
+    }
+
+# ==============================================
 # VOUCHER LINE SUPPORTING DOCUMENTS (new 6-phase requirement, Phase 1 of 6)
 # Data layer for linking a Data Bank row (client_data) to a voucher line as
 # supporting evidence for a specific Document "slot" (audit_rule_documents).
@@ -1569,7 +1651,7 @@ def get_voucher_line_documents(voucher_line_id: int):
     rows = execute_query(
         f"""
         SELECT vld.id, vld.voucher_line_id, vld.client_data_id, vld.document_id,
-               vld.linked_by, vld.linked_at,
+               vld.linked_by, vld.linked_at, vld.signature_exception,
                ard.name AS document_name,
                cd.row_data, cd.extract_date, cd.extract_amount
         FROM voucher_line_documents vld
@@ -1592,11 +1674,41 @@ def get_voucher_line_documents(voucher_line_id: int):
             "document_name": r['document_name'],
             "linked_by": r['linked_by'],
             "linked_at": r['linked_at'],
+            # Validation Rules Phase 5: default OK (0/False) - only ever set to True on a
+            # confirmed signature mismatch, per Phase 1's locked assumption.
+            "signature_exception": bool(r['signature_exception']),
             "row_data": row_data,
             "extract_date": r['extract_date'],
             "extract_amount": r['extract_amount']
         })
     return {"voucher_line_id": voucher_line_id, "documents": result, "count": len(result)}
+
+
+@router.post("/api/verification/set_signature_exception")
+def set_signature_exception(
+    assignment_id: int = Body(..., embed=True, description="voucher_line_documents.id of the linked evidence row"),
+    signature_exception: bool = Body(..., embed=True)
+):
+    """
+    Validation Rules Phase 5: flag/clear a signature-exception on one linked evidence row.
+    Defaults OK - the auditor ticks this only to record a confirmed mismatch against the
+    document's signature_specimens entry (Phase 1). Simple update-and-return, mirroring
+    toggle_procedure_check()'s shape.
+    """
+    row = execute_query(
+        "SELECT id, voucher_line_id FROM voucher_line_documents WHERE id = ? AND status = 'active'",
+        (assignment_id,)
+    )
+    if not row:
+        raise HTTPException(404, "Linked evidence row not found or no longer active.")
+
+    execute_write(
+        "UPDATE voucher_line_documents SET signature_exception = ? WHERE id = ?",
+        (1 if signature_exception else 0, assignment_id)
+    )
+    log_audit("Analyst", "Set Signature Exception", "Verification",
+              f"Assignment {assignment_id}: signature_exception={signature_exception}.")
+    return {"id": assignment_id, "voucher_line_id": row[0]['voucher_line_id'], "signature_exception": signature_exception}
 
 
 @router.post("/api/verification/unassign_document")

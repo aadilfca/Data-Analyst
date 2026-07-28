@@ -758,6 +758,16 @@ function clearVoucherHeader() {
 // this phase per the confirmed plan).
 const VOUCHER_LINE_ACCOUNT_CODE_ALIASES = ['Account Detail', 'Account Details', 'Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head', 'Ledger Detail'];
 const VOUCHER_LINE_ACCOUNT_NAME_ALIASES = ['Account Name', 'Account', 'Account Detail', 'Ledger', 'Head'];
+
+// Validation Rules Phase 5: synthetic id for the procedure modal's non-document "Voucher Line"
+// tab (Prepared/Checked/Approved By) — never a real audit_rule_documents.id, so it can't collide.
+const VOUCHER_LINE_TAB_ID = '__voucher_line__';
+
+// Voucher-level approval cache, keyed by transaction_ref (shared across every line of the same
+// voucher, not per-uid) — { client_id, transaction_ref, prepared_by, checked_by, approved_by,
+// dirty, loaded }. Fetched once per voucher in openProcedureModal(), reused across lines of that
+// same voucher within one modal session.
+let voucherApprovalCache = {};
 const VOUCHER_LINE_DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars'];
 const VOUCHER_LINE_DEBIT_ALIASES = ['Debit Amount', 'Debit', 'Dr Amount', 'Dr'];
 const VOUCHER_LINE_CREDIT_ALIASES = ['Credit Amount', 'Credit', 'Cr Amount', 'Cr'];
@@ -1251,6 +1261,25 @@ function getVoucherLineStatusIcon(validationStatus) {
     return `<span class="voucher-line-status-dot ${statusClass}" title="${status}"></span>`;
 }
 
+// Validation Rules Phase 5: Cleared/Query badge, a sibling pill next to the existing
+// validation-status dot+label inside .voucher-line-status — not a new column, styled on the
+// existing .procedure-mismatch-badge/.status-badge.passed convention (see style.css). Renders
+// nothing when cleared_status is null ("not yet computed" is a normal state, per Phase 4).
+function getClearedStatusBadgeHtml(clearedStatus) {
+    if (clearedStatus !== 'Cleared' && clearedStatus !== 'Query') return '';
+    const cls = clearedStatus === 'Cleared' ? 'cleared' : 'query';
+    return `<span class="voucher-line-cleared-badge ${cls}">${clearedStatus}</span>`;
+}
+
+// Targeted update of one line's Cleared/Query badge — a separate persistent sibling slot next to
+// .voucher-line-status (not nested inside it), since validateTransaction() wholesale-rewrites
+// .voucher-line-status's own innerHTML on every validation and would otherwise wipe this out.
+// Mirrors updateRiskCellForLine()'s "independent sibling slot" pattern for the Risk dot.
+function updateClearedStatusBadgeForLine(uid, clearedStatus) {
+    const slot = document.querySelector(`.voucher-line-cleared-badge-slot[data-detail-id="${uid}"]`);
+    if (slot) slot.innerHTML = getClearedStatusBadgeHtml(clearedStatus);
+}
+
 // ---------- VOUCHER LINE STATE (Phase 3) ----------
 // Seeds voucherLineState fresh from a voucher's lines. Accepts either a /next line object
 // (has transaction_type + procedure_data + change_detection_status/old_row_data) or an
@@ -1394,7 +1423,10 @@ function renderVoucherLines(lines) {
                         <span class="voucher-line-risk-dot" data-uid="${uid}"></span>
                     </span>
                     <span class="voucher-line-observations-cell" data-detail-id="${uid}"></span>
-                    <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
+                    <span class="voucher-line-status-cell" data-detail-id="${uid}">
+                        <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
+                        <span class="voucher-line-cleared-badge-slot" data-detail-id="${uid}">${getClearedStatusBadgeHtml(line.cleared_status)}</span>
+                    </span>
                 </div>
             </div>
         `;
@@ -2327,6 +2359,8 @@ async function saveLineItems(detailId = currentDetailId) {
     // legacy save below — this is what lets the observation textarea skip a dedicated Save button
     // and still survive Prev/Next/Complete/Exit (see flushProcedureObservations()).
     await flushProcedureObservations(detailId);
+    // Validation Rules Phase 5: same "flush on save" treatment for a dirty voucher-approval edit.
+    await flushVoucherApproval(detailId);
 
     try {
         const payload = {
@@ -2343,6 +2377,18 @@ async function saveLineItems(detailId = currentDetailId) {
         if (!res.ok) {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to save');
+        }
+        // Validation Rules Phase 5: the response now carries the freshly recomputed Cleared/Query
+        // status — refresh the cached line + this line's badge without a second fetch, same
+        // "live" refresh the mismatch badge already gets from already-loaded state.
+        const data = await res.json();
+        if ('cleared_status' in data) {
+            const cachedLine = currentVoucherLines.find(l => String(l.detail_id) === String(detailId));
+            if (cachedLine) {
+                cachedLine.cleared_status = data.cleared_status;
+                cachedLine.matrix_version_applied = data.matrix_version_applied;
+            }
+            updateClearedStatusBadgeForLine(detailId, data.cleared_status);
         }
         // Success – no status bar message
     } catch (e) {
@@ -2805,8 +2851,19 @@ async function openProcedureModal(uid, initialDocId = null) {
         console.error('Failed to load Supporting Documents modal data:', e);
         return;
     }
-    const documents = (guidance && guidance.documents) || [];
-    if (!documents.length) return;
+    const guidanceDocuments = (guidance && guidance.documents) || [];
+    if (!guidanceDocuments.length) return;
+
+    // Validation Rules Phase 5: prepend a synthetic, non-document "Voucher Line" tab holding the
+    // Prepared/Checked/Approved By fields — always present as the first rail entry, distinct from
+    // the Category's real Documents. __voucherTab marks it so renderProcedureModalTabs()/
+    // isProcedureDocumentComplete()/renderProcedureModalPanel() can special-case it; every other
+    // place that iterates `documents` (e.g. the template-warming filter just below) naturally
+    // skips it since it has no template_id. Built as a NEW array (not documents.unshift(), which
+    // would mutate guidance.documents in place — that's the same object fetchAuditGuidanceData()
+    // just wrote into auditGuidanceCache, so mutating it would permanently pollute the shared
+    // cache other callers (Supporting column, Guide popover) read from).
+    const documents = [{ id: VOUCHER_LINE_TAB_ID, name: 'Voucher Line', __voucherTab: true }, ...guidanceDocuments];
 
     // Confirmed fix: warm templateColumnsCache for every template_id among this Category's
     // Documents before the tabs render, so buildSelectedLinesTable() can look up each template's
@@ -2856,6 +2913,34 @@ async function openProcedureModal(uid, initialDocId = null) {
         }
     } catch (e) {
         console.error('Failed to load voucher line observations:', e);
+    }
+
+    // Validation Rules Phase 5: the voucher-level Prepared/Checked/Approved By record — read once
+    // per voucher (client_id+transaction_ref), reused across every line of that same voucher
+    // rather than re-fetched per line, matching the backend's own "applied to every line of that
+    // voucher" design (Phase 4). currentVoucherId is this open voucher's transaction_ref, kept in
+    // sync by every navigation function in this module.
+    const clientId = getClientId();
+    const transactionRef = currentVoucherId;
+    if (transactionRef && !(voucherApprovalCache[transactionRef] && voucherApprovalCache[transactionRef].loaded)) {
+        try {
+            const params = new URLSearchParams({ client_id: clientId, transaction_ref: transactionRef });
+            const vaRes = await fetch(`${API_BASE}/api/verification/voucher_approval?${params}`);
+            if (vaRes.ok) {
+                const vaData = await vaRes.json();
+                voucherApprovalCache[transactionRef] = {
+                    client_id: clientId,
+                    transaction_ref: transactionRef,
+                    prepared_by: vaData.prepared_by || '',
+                    checked_by: vaData.checked_by || '',
+                    approved_by: vaData.approved_by || '',
+                    dirty: false,
+                    loaded: true
+                };
+            }
+        } catch (e) {
+            console.error('Failed to load voucher approval record:', e);
+        }
     }
 
     // The voucher line's own amount (for the mismatch badge) — looked up from the already-loaded
@@ -2941,16 +3026,20 @@ async function openProcedureModal(uid, initialDocId = null) {
     updateProcedureModalSavedNote(uid);
 }
 
-// Reflects whether any tab for this line has an unsaved (typed-but-not-yet-flushed) observation —
-// checklist ticks already save immediately (toggleProcedureCheck()), so only observation text can
-// ever be "unsaved" here. Called on modal open, on every keystroke in the observation textarea
-// (wireProcedureChecklistAndObservation()), and after flushProcedureObservations() resolves.
+// Reflects whether any tab for this line has an unsaved (typed-but-not-yet-flushed) observation,
+// or the voucher-level approval fields have an unsaved edit (Validation Rules Phase 5) — checklist
+// ticks and the signature-exception tick already save immediately, so only text fields can ever
+// be "unsaved" here. Called on modal open, on every keystroke in the observation textarea
+// (wireProcedureChecklistAndObservation()) or the voucher-approval fields
+// (renderVoucherApprovalPanel()), and after flushProcedureObservations()/flushVoucherApproval()
+// resolve.
 function updateProcedureModalSavedNote(uid) {
     const noteEl = document.getElementById('procedureModalSavedNote');
     if (!noteEl) return;
     const lineState = procedureModalState[uid];
     const tabs = (lineState && lineState.tabs) || {};
-    const dirty = Object.values(tabs).some(t => t.observationDirty);
+    const va = voucherApprovalCache[currentVoucherId];
+    const dirty = Object.values(tabs).some(t => t.observationDirty) || !!(va && va.dirty);
     noteEl.textContent = dirty ? 'Unsaved changes' : 'All changes saved';
     noteEl.classList.toggle('dirty', dirty);
 }
@@ -2978,15 +3067,23 @@ async function navigateProcedureModalLine(delta) {
         showStatus('This line has no assigned category — supporting documents unavailable.', 'error');
         return;
     }
-    await flushProcedureObservations(uid);
+    // Validation Rules Phase 5: saveLineItems() (not just flushProcedureObservations()) so
+    // cleared_status recomputes and the badge refreshes every time the modal moves between
+    // lines — the badge lives in the main table, hidden behind the modal while it's open, so
+    // this is the natural point for it to catch up. saveLineItems() already calls
+    // flushProcedureObservations()/flushVoucherApproval() internally, so this is a strict
+    // superset of the old call, not a behavior change to the observation flush itself.
+    await saveLineItems(uid);
     await openProcedureModal(newUid);
 }
 
 async function closeProcedureModal() {
-    // Flush any unsaved observation text before hiding — closing via ✕ or outside-click persists
-    // the same way Prev/Next/Complete/Exit does, per the confirmed requirement (there is no
-    // longer a Save button to rely on instead).
-    if (currentProcedureModalUid) await flushProcedureObservations(currentProcedureModalUid);
+    // Flush any unsaved observation text/voucher-approval edits before hiding — closing via ✕ or
+    // outside-click persists the same way Prev/Next/Complete/Exit does, per the confirmed
+    // requirement (there is no longer a Save button to rely on instead). saveLineItems() also
+    // recomputes cleared_status (Validation Rules Phase 5) so the main table's badge is caught up
+    // by the time the modal is gone.
+    if (currentProcedureModalUid) await saveLineItems(currentProcedureModalUid);
     if (procedureModal) procedureModal.style.display = 'none';
     // Defensive — the browse modal is nested on top of this one, so it should never remain open
     // once the parent closes.
@@ -3005,6 +3102,13 @@ async function closeProcedureModal() {
 // getProcedureTabState()). Zero procedures configured is deliberately NOT complete (empty ≠ done),
 // per the confirmed requirement.
 function isProcedureDocumentComplete(uid, doc) {
+    // Validation Rules Phase 5: the synthetic Voucher Line tab is complete only when all three
+    // approval fields are filled — currentVoucherId is this open voucher's transaction_ref
+    // (the modal only ever shows lines of the currently open voucher).
+    if (doc.__voucherTab) {
+        const va = voucherApprovalCache[currentVoucherId];
+        return !!(va && (va.prepared_by || '').trim() && (va.checked_by || '').trim() && (va.approved_by || '').trim());
+    }
     if (doc.template_id) {
         const lineState = procedureModalState[uid];
         return !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(doc.id));
@@ -3026,6 +3130,21 @@ function renderProcedureModalTabs(uid) {
     container.innerHTML = documents.map(doc => {
         const isActive = doc.id === lineState.activeDocId;
         const isComplete = isProcedureDocumentComplete(uid, doc);
+
+        // Validation Rules Phase 5: the synthetic Voucher Line tab has no roles/mismatch concept —
+        // just name + completion dot.
+        if (doc.__voucherTab) {
+            const dotTitle = isComplete ? 'Approval recorded' : 'Approval pending';
+            return `
+                <button type="button" class="procedure-tab-btn${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
+                    <span class="procedure-tab-dot${isComplete ? ' complete' : ''}" title="${dotTitle}"></span>
+                    <span class="procedure-tab-text">
+                        <span class="procedure-tab-label">${escapeHtml(doc.name)}</span>
+                    </span>
+                </button>
+            `;
+        }
+
         const dotTitle = doc.template_id
             ? (isComplete ? 'Evidence linked' : 'No evidence linked yet')
             : (isComplete ? 'All procedures confirmed' : 'Procedures pending');
@@ -3058,7 +3177,12 @@ function renderProcedureModalTabs(uid) {
 
     container.querySelectorAll('.procedure-tab-btn').forEach(btn => {
         btn.addEventListener('click', function() {
-            activateProcedureTab(this.dataset.uid, parseInt(this.dataset.docId));
+            // Validation Rules Phase 5: the synthetic Voucher Line tab's id is a non-numeric
+            // string (VOUCHER_LINE_TAB_ID) — parseInt would turn it into NaN, so only real
+            // document ids get parsed.
+            const rawDocId = this.dataset.docId;
+            const docId = rawDocId === VOUCHER_LINE_TAB_ID ? rawDocId : parseInt(rawDocId);
+            activateProcedureTab(this.dataset.uid, docId);
         });
     });
 }
@@ -3186,12 +3310,72 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
 // (Phase 5), and the Observation section (Phase 6). A document with no template_id has nothing to
 // search Data Bank evidence against, so its tab renders only the two segments that don't depend on
 // evidence — Audit Procedures + Observation — reusing their existing markup/logic verbatim.
+// Validation Rules Phase 5: Prepared/Checked/Approved By fields for the synthetic Voucher Line
+// tab. Reuses the app's neutral "Data Table" segment styling (grey header, white body) so it
+// stays visually consistent with the other tabs' segment cards without inventing a new look.
+// Local-first, no-network-per-keystroke — same pattern as the Observation textarea (see
+// buildObservationSection()) — flushed via flushVoucherApproval() at the same save points.
+function renderVoucherApprovalPanel(uid) {
+    const container = document.getElementById('procedureModalPanels');
+    if (!container) return;
+    const transactionRef = currentVoucherId;
+    const va = voucherApprovalCache[transactionRef] || { prepared_by: '', checked_by: '', approved_by: '', dirty: false, loaded: false };
+
+    container.innerHTML = `
+        <div class="procedure-tab-panel" data-doc-id="${VOUCHER_LINE_TAB_ID}">
+            <div class="procedure-segment procedure-segment-data">
+                <h4 class="procedure-segment-header">🖊️ Voucher Approval</h4>
+                <div class="procedure-segment-body">
+                    <p class="procedure-tab-note">Mandatory for every line of this voucher — independent of Category and any document's own approval requirement.</p>
+                    <div class="procedure-voucher-approval-field">
+                        <label for="procedureVoucherPreparedBy">Prepared By</label>
+                        <input type="text" id="procedureVoucherPreparedBy" class="procedure-search-input" value="${escapeHtml(va.prepared_by)}">
+                    </div>
+                    <div class="procedure-voucher-approval-field">
+                        <label for="procedureVoucherCheckedBy">Checked By</label>
+                        <input type="text" id="procedureVoucherCheckedBy" class="procedure-search-input" value="${escapeHtml(va.checked_by)}">
+                    </div>
+                    <div class="procedure-voucher-approval-field">
+                        <label for="procedureVoucherApprovedBy">Approved By</label>
+                        <input type="text" id="procedureVoucherApprovedBy" class="procedure-search-input" value="${escapeHtml(va.approved_by)}">
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    const fieldMap = {
+        procedureVoucherPreparedBy: 'prepared_by',
+        procedureVoucherCheckedBy: 'checked_by',
+        procedureVoucherApprovedBy: 'approved_by'
+    };
+    Object.keys(fieldMap).forEach(elId => {
+        const el = document.getElementById(elId);
+        if (!el) return;
+        el.addEventListener('input', function() {
+            if (!voucherApprovalCache[transactionRef]) {
+                voucherApprovalCache[transactionRef] = { client_id: getClientId(), transaction_ref: transactionRef, prepared_by: '', checked_by: '', approved_by: '', dirty: false, loaded: true };
+            }
+            voucherApprovalCache[transactionRef][fieldMap[elId]] = this.value;
+            voucherApprovalCache[transactionRef].dirty = true;
+            updateProcedureModalSavedNote(uid);
+        });
+    });
+}
+
 function renderProcedureModalPanel(uid, docId) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
     const lineState = procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     if (!doc) { container.innerHTML = ''; return; }
+
+    // Validation Rules Phase 5: the synthetic Voucher Line tab renders a dedicated panel, not the
+    // has-template/no-template layouts below (neither concept applies — this isn't a Document).
+    if (doc.__voucherTab) {
+        renderVoucherApprovalPanel(uid);
+        return;
+    }
 
     const tabState = getProcedureTabState(uid, docId);
     const hasTemplate = !!doc.template_id;
@@ -3275,6 +3459,15 @@ function renderProcedureModalPanel(uid, docId) {
     container.querySelectorAll('.procedure-unlink-btn').forEach(btn => {
         btn.addEventListener('click', function() {
             unassignSupportingDocument(uid, docId, parseInt(this.dataset.assignmentId));
+        });
+    });
+
+    // Validation Rules Phase 5: one change listener per Sig. Exc. checkbox in the Linked
+    // Evidence table — immediate save on toggle, same convention as the Audit Procedures
+    // checklist ticks (no separate Save action).
+    container.querySelectorAll('.procedure-sig-exception-checkbox').forEach(cb => {
+        cb.addEventListener('change', function() {
+            toggleSignatureException(uid, docId, parseInt(this.dataset.assignmentId), this.checked);
         });
     });
 
@@ -3491,9 +3684,13 @@ function buildSelectedLinesTable(uid, docId) {
 
     // Trailing "" header for the unlink icon column (Unassign requirement) - no label, matching
     // this app's existing convention for icon-only action columns (e.g. Data Bank's Actions column).
+    // Sig. Exc. (Validation Rules Phase 5): defaults unticked/OK — the auditor ticks it only to
+    // flag a confirmed mismatch against the document's signature specimen, per Phase 1's locked
+    // assumption. Sits in the existing Linked Evidence row, not a separate control.
     let html = '<div class="procedure-selected-table-wrapper"><table class="procedure-selected-table"><thead><tr>';
     html += '<th>Sr No</th>';
     columns.forEach(col => { html += `<th>${escapeHtml(col.column_name)}</th>`; });
+    html += '<th>Sig. Exc.</th>';
     html += '<th></th>';
     html += '</tr></thead><tbody>';
     selections.forEach((sel, idx) => {
@@ -3503,6 +3700,8 @@ function buildSelectedLinesTable(uid, docId) {
             const value = getRowFieldCaseInsensitive(sel.row_data, col.column_name);
             html += `<td>${escapeHtml(value)}</td>`;
         });
+        const sigChecked = !!sel.signature_exception;
+        html += `<td><input type="checkbox" class="procedure-sig-exception-checkbox" data-assignment-id="${sel.id}" title="Flag a confirmed signature mismatch" ${sigChecked ? 'checked' : ''}></td>`;
         html += `<td><button type="button" class="procedure-unlink-btn" data-assignment-id="${sel.id}" title="Unlink this evidence">✕</button></td>`;
         html += '</tr>';
     });
@@ -3520,6 +3719,7 @@ function buildSelectedLinesTable(uid, docId) {
             html += '<td></td>';
         }
     });
+    html += '<td></td>'; // Sig. Exc. column stays blank on the totals row
     html += '<td></td>'; // unlink-icon column stays blank on the totals row
     html += '</tr>';
 
@@ -3614,6 +3814,32 @@ async function toggleProcedureCheck(uid, docId, roleName, isChecked) {
         showStatus('Failed to save procedure tick — please try again.', 'error');
         renderProcedureModalPanel(uid, docId);
         renderProcedureModalTabs(uid);
+    }
+}
+
+// Validation Rules Phase 5: signature-exception tick per linked evidence row — same optimistic-
+// update-then-revert-on-failure shape as toggleProcedureCheck() above, immediate save on toggle.
+async function toggleSignatureException(uid, docId, assignmentId, isChecked) {
+    const tabState = getProcedureTabState(uid, docId);
+    const sel = (tabState.selections || []).find(s => s.id === assignmentId);
+    const previousValue = sel ? sel.signature_exception : null;
+    if (sel) sel.signature_exception = isChecked;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/set_signature_exception`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assignment_id: assignmentId, signature_exception: isChecked })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save signature exception.');
+        }
+    } catch (e) {
+        console.error('Failed to save signature exception:', e);
+        if (sel) sel.signature_exception = previousValue;
+        showStatus('Failed to save signature exception — please try again.', 'error');
+        renderProcedureModalPanel(uid, docId);
     }
 }
 
@@ -3747,6 +3973,43 @@ async function saveLineObservation(uid, docId) {
     } catch (e) {
         console.error('Failed to save line observation:', e);
         showStatus('Failed to save observation — please try again.', 'error');
+    }
+}
+
+// Validation Rules Phase 5: persists a dirty (unsaved) voucher-approval edit — called from the
+// same save chokepoint as flushProcedureObservations() (saveLineItems()). No-op if nothing
+// changed since the last save. On a successful save, refreshes every currently-loaded line of
+// this voucher (not just the active one) via saveAllVoucherLines(), since the approval record is
+// shared across the whole voucher, not scoped to one line — matches the backend's own "applied to
+// every line of that voucher" design (Phase 4). Marking dirty=false before that call means any
+// nested saveLineItems()->flushVoucherApproval() calls it triggers simply no-op, not recurse.
+async function flushVoucherApproval(uid) {
+    const transactionRef = currentVoucherId;
+    const va = voucherApprovalCache[transactionRef];
+    if (!va || !va.dirty) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/save_voucher_approval`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                client_id: va.client_id,
+                transaction_ref: transactionRef,
+                prepared_by: va.prepared_by,
+                checked_by: va.checked_by,
+                approved_by: va.approved_by
+            })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save voucher approval.');
+        }
+        va.dirty = false;
+        updateProcedureModalSavedNote(uid);
+        await saveAllVoucherLines();
+    } catch (e) {
+        console.error('Failed to save voucher approval:', e);
+        showStatus('Failed to save voucher approval — please try again.', 'error');
     }
 }
 

@@ -2034,11 +2034,22 @@ body {
     color: #000000;
 }
 
+/* Status cell wrapper (Validation Rules Phase 5): the actual grid child, now holding two
+   independent siblings — the validation-status pill (.voucher-line-status, unchanged below) and
+   the Cleared/Query badge slot. Kept separate rather than merged into one element because
+   validateTransaction() wholesale-rewrites .voucher-line-status's own innerHTML on every
+   validation and would otherwise wipe out the badge — same "independent sibling slot" pattern
+   already used for the Risk dot inside .voucher-line-procedures-cell. */
+.voucher-line-status-cell {
+    justify-content: flex-end;
+    gap: 6px;
+    white-space: nowrap;
+}
+
 /* Status cell: dot + label, colored by validation_status — green for passed, amber for pending,
    red for failed. Replaces the old amount-cell checkmark + separate badge approach. */
 .voucher-line-status {
     font-size: 12px;
-    justify-content: flex-end;
     white-space: nowrap;
 }
 .voucher-line-status.status-pending {
@@ -2068,6 +2079,27 @@ body {
 }
 .voucher-line-status-dot.failed {
     background: #dc2626;
+}
+
+/* Cleared/Query badge (Validation Rules Phase 5) — sibling pill next to the validation-status
+   pill inside .voucher-line-status-cell, styled on the existing .procedure-mismatch-badge (red)
+   and .status-badge.passed (green) convention rather than introducing new colors. Renders nothing
+   (see getClearedStatusBadgeHtml() in verification.js) when cleared_status hasn't been computed
+   yet — a normal state, not an error. */
+.voucher-line-cleared-badge {
+    font-weight: 600;
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 12px;
+    white-space: nowrap;
+}
+.voucher-line-cleared-badge.cleared {
+    background: #dcfce7;
+    color: #166534;
+}
+.voucher-line-cleared-badge.query {
+    background: #fee2e2;
+    color: #991b1b;
 }
 
 /* Change-alert icon (⚠️) — placed inline next to the account name; a functional signal, not
@@ -2795,6 +2827,24 @@ body {
     padding: 8px 12px;
     font-size: 13px;
     margin-bottom: 10px;
+}
+
+/* ----- Voucher Line tab: Prepared/Checked/Approved By fields (Validation Rules Phase 5) -----
+   Label + text input rows inside the Voucher Approval segment's body — reuses .procedure-search-
+   input for the inputs themselves (see renderVoucherApprovalPanel() in verification.js), only the
+   label/spacing layout is new. */
+.procedure-voucher-approval-field {
+    margin-bottom: 12px;
+}
+.procedure-voucher-approval-field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 4px;
+}
+.procedure-voucher-approval-field:last-child {
+    margin-bottom: 0;
 }
 
 /* ----- Supporting Documents: search box + results dropdown (Voucher Supporting-Document
