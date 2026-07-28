@@ -3103,10 +3103,11 @@ body {
 
 /* ----- Observation Flow -----
    Renders inside .procedure-segment-observation's body above — a per-document observation
-   textarea (auto-suggested from the mismatch badge/unticked procedures, editable/clearable) plus
-   an explicit Copy button that pushes that one document's text into the voucher line's
-   Observations column immediately (see buildObservationSection()/saveLineObservation() in
-   verification.js) instead of waiting for the Prev/Next/Complete/Exit autosave. */
+   textarea (auto-suggested from the mismatch badge/unticked procedures, editable/clearable), a ↺
+   Restore button that reverts the textarea to the last-copied snapshot without re-syncing, and an
+   explicit Copy button that pushes that one document's text into the voucher line's Observations
+   column immediately (see buildObservationSection()/saveLineObservation() in verification.js)
+   instead of waiting for the Prev/Next/Complete/Exit autosave. */
 .procedure-observation-textarea {
     width: 100%;
     min-height: 70px;
@@ -3122,7 +3123,29 @@ body {
 .procedure-observation-copy-row {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
     margin-top: 6px;
+}
+.procedure-observation-restore-btn {
+    padding: 4px 9px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    background: white;
+    color: #64748b;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.procedure-observation-restore-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+    color: #1a1a2e;
+}
+.procedure-observation-restore-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 .procedure-observation-copy-btn {
     padding: 4px 12px;

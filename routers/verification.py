@@ -1754,7 +1754,7 @@ def get_line_observations(voucher_line_id: int):
     placeholders = ",".join("?" for _ in sibling_ids)
     rows = execute_query(
         f"""
-        SELECT document_id, observation_text, synced, updated_by, updated_at
+        SELECT document_id, observation_text, synced, last_synced_text, updated_by, updated_at
         FROM voucher_line_observations
         WHERE voucher_line_id IN ({placeholders})
         """,
@@ -1773,6 +1773,7 @@ def get_line_observations(voucher_line_id: int):
             "document_id": r['document_id'],
             "observation_text": r['observation_text'] or '',
             "synced": bool(r['synced']),
+            "last_synced_text": r['last_synced_text'],
             "updated_by": r['updated_by'],
             "updated_at": r['updated_at']
         }

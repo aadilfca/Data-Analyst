@@ -1021,8 +1021,13 @@ async function updateObservationsCellForLine(uid, type) {
     // while this fetch was in flight — don't clobber a newer selection.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
 
+    // A document can have a voucher_line_observations row with blank text (e.g. cleared then
+    // explicitly synced) — that's a "nothing recorded" state, not a recorded observation, so both
+    // the collapsed count and the expanded list must exclude it (previously only the expanded
+    // branch did, leaving the collapsed badge permanently over-counting once anything was cleared).
+    const nonEmpty = entries.filter(e => (e.observation_text || '').trim());
+
     if (columnsExpanded) {
-        const nonEmpty = entries.filter(e => (e.observation_text || '').trim());
         if (!nonEmpty.length) {
             cell.innerHTML = '<span class="voucher-line-obs-none">—</span>';
             return;
@@ -1052,7 +1057,7 @@ async function updateObservationsCellForLine(uid, type) {
         return;
     }
 
-    const count = entries.length;
+    const count = nonEmpty.length;
     if (!count) {
         cell.innerHTML = '<span class="voucher-line-obs-none">—</span>';
         return;
@@ -2775,7 +2780,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, tabs: {} };
     if (!procedureModalState[uid].tabs[docId]) {
-        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, checklist: {} };
+        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {} };
     }
     return procedureModalState[uid].tabs[docId];
 }
@@ -2888,6 +2893,7 @@ async function openProcedureModal(uid, initialDocId = null) {
         if (savedEntry) {
             tabState.observation = savedEntry.observation_text;
             tabState.suggestionApplied = true;
+            tabState.lastSyncedText = savedEntry.last_synced_text || null;
         }
     });
 
@@ -3094,22 +3100,36 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
     // the Copy button below is an additional, explicit, immediate trigger for one tab at a time.
     const observationInput = document.getElementById('procedureObservationInput');
     const copyBtn = document.getElementById('procedureObservationCopyBtn');
+    const restoreBtn = document.getElementById('procedureObservationRestoreBtn');
 
-    function refreshCopyBtnState() {
-        if (!copyBtn) return;
-        const hasText = !!(tabState.observation && tabState.observation.trim());
-        copyBtn.disabled = !hasText;
-        const isCopied = hasText && !tabState.observationDirty;
-        copyBtn.classList.toggle('copied', isCopied);
-        copyBtn.textContent = isCopied ? '✓ Copied' : '📋 Copy';
+    function refreshObservationButtons() {
+        if (copyBtn) {
+            const hasText = !!(tabState.observation && tabState.observation.trim());
+            copyBtn.disabled = !hasText;
+            const isCopied = hasText && !tabState.observationDirty;
+            copyBtn.classList.toggle('copied', isCopied);
+            copyBtn.textContent = isCopied ? '✓ Copied' : '📋 Copy';
+        }
+        if (restoreBtn) {
+            restoreBtn.disabled = !(tabState.lastSyncedText && tabState.lastSyncedText.trim());
+        }
     }
 
     if (observationInput) {
         observationInput.addEventListener('input', function() {
+            const wasEmpty = !(tabState.observation && tabState.observation.trim());
             tabState.observation = this.value;
             tabState.observationDirty = true;
             updateProcedureModalSavedNote(uid);
-            refreshCopyBtnState();
+            refreshObservationButtons();
+            // Deleting/emptying an observation should clear the main table's Observations badge
+            // immediately, not wait for an unrelated later save — push the empty string through
+            // the same explicit-sync path Copy uses. Only on the genuine clear transition (had
+            // text, now doesn't), not on every keystroke while the box is already empty.
+            const isEmptyNow = !this.value.trim();
+            if (isEmptyNow && !wasEmpty) {
+                saveLineObservation(uid, docId).then(refreshObservationButtons);
+            }
         });
     }
 
@@ -3118,7 +3138,20 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
             if (copyBtn.disabled) return;
             copyBtn.disabled = true;
             await saveLineObservation(uid, docId);
-            refreshCopyBtnState();
+            refreshObservationButtons();
+        });
+    }
+
+    if (restoreBtn) {
+        restoreBtn.addEventListener('click', function() {
+            if (restoreBtn.disabled) return;
+            // Reverts to the last-copied snapshot only — does not itself re-sync to the voucher
+            // table; a further edit (this counts as one), so Copy is needed again afterward.
+            tabState.observation = tabState.lastSyncedText || '';
+            tabState.observationDirty = true;
+            if (observationInput) observationInput.value = tabState.observation;
+            updateProcedureModalSavedNote(uid);
+            refreshObservationButtons();
         });
     }
 }
@@ -3606,20 +3639,28 @@ function applyObservationSuggestionIfNeeded(uid, docId) {
     tabState.suggestionApplied = true;
 }
 
-// Renders one tab's observation section: a textarea (local-only edits) plus an explicit Copy
+// Renders one tab's observation section: a textarea (local-only edits), a ↺ Restore button that
+// reverts the textarea to tabState.lastSyncedText (the exact text last pushed to the voucher
+// table — a single snapshot, no auto/manual distinction) without re-syncing, and an explicit Copy
 // button that pushes this one document's observation into the voucher line's Observations column
 // on demand (POSTs immediately via saveLineObservation(), rather than waiting for the
-// Prev/Next/Complete/Exit autosave chokepoint). Button is disabled for a blank observation, shows
+// Prev/Next/Complete/Exit autosave chokepoint). Copy is disabled for a blank observation, shows
 // "Copy" (grey) while tabState.observationDirty is true, and flips to "Copied" (green) once it
 // isn't — the same flag an edit already sets, so no separate synced flag is needed client-side.
+// Restore is disabled whenever lastSyncedText is null/empty — nothing has ever been copied yet.
 function buildObservationSection(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     const hasText = !!(tabState.observation && tabState.observation.trim());
     const isCopied = hasText && !tabState.observationDirty;
+    const hasRestoreTarget = !!(tabState.lastSyncedText && tabState.lastSyncedText.trim());
     return `
         <textarea id="procedureObservationInput" class="procedure-observation-textarea"
             placeholder="Add an observation for this document...">${escapeHtml(tabState.observation || '')}</textarea>
         <div class="procedure-observation-copy-row">
+            <button type="button" id="procedureObservationRestoreBtn"
+                class="procedure-observation-restore-btn"
+                title="Revert to last copied text"
+                ${hasRestoreTarget ? '' : 'disabled'}>↺</button>
             <button type="button" id="procedureObservationCopyBtn"
                 class="procedure-observation-copy-btn${isCopied ? ' copied' : ''}"
                 ${hasText ? '' : 'disabled'}>${isCopied ? '✓ Copied' : '📋 Copy'}</button>
@@ -3654,6 +3695,10 @@ async function saveLineObservation(uid, docId) {
         // A save is a deliberate, final decision on this tab's text — it should never be
         // silently replaced by the auto-suggestion again, even if the box is later cleared.
         tabState.suggestionApplied = true;
+        // The just-confirmed text is now the baseline the ↺ restore button reverts to — equal to
+        // what the backend's sync just wrote into last_synced_text for this entry, so no extra
+        // fetch is needed to learn it.
+        tabState.lastSyncedText = data.observation_text;
 
         // The backend rolls this up into the voucher line's own Observation field immediately
         // (sync_line_observations_to_voucher(), called from save_line_observation() itself) —
