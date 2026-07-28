@@ -3088,15 +3088,37 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
         });
     });
 
-    // The observation textarea is local-only on every keystroke (no network call) — there is no
-    // Save button anymore; flushProcedureObservations() persists any dirty tab automatically on
-    // Prev/Next/Complete/Exit (via saveLineItems()) and on modal close (via closeProcedureModal()).
+    // The observation textarea is local-only on every keystroke (no network call) —
+    // flushProcedureObservations() still persists any dirty tab automatically on
+    // Prev/Next/Complete/Exit (via saveLineItems()) and on modal close (via closeProcedureModal());
+    // the Copy button below is an additional, explicit, immediate trigger for one tab at a time.
     const observationInput = document.getElementById('procedureObservationInput');
+    const copyBtn = document.getElementById('procedureObservationCopyBtn');
+
+    function refreshCopyBtnState() {
+        if (!copyBtn) return;
+        const hasText = !!(tabState.observation && tabState.observation.trim());
+        copyBtn.disabled = !hasText;
+        const isCopied = hasText && !tabState.observationDirty;
+        copyBtn.classList.toggle('copied', isCopied);
+        copyBtn.textContent = isCopied ? '✓ Copied' : '📋 Copy';
+    }
+
     if (observationInput) {
         observationInput.addEventListener('input', function() {
             tabState.observation = this.value;
             tabState.observationDirty = true;
             updateProcedureModalSavedNote(uid);
+            refreshCopyBtnState();
+        });
+    }
+
+    if (copyBtn) {
+        copyBtn.addEventListener('click', async function() {
+            if (copyBtn.disabled) return;
+            copyBtn.disabled = true;
+            await saveLineObservation(uid, docId);
+            refreshCopyBtnState();
         });
     }
 }
@@ -3575,18 +3597,33 @@ function applyObservationSuggestionIfNeeded(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     if (tabState.suggestionApplied || tabState.observation) return;
     const suggestion = buildObservationSuggestion(uid, docId);
-    if (suggestion) tabState.observation = suggestion;
+    if (suggestion) {
+        tabState.observation = suggestion;
+        // Local-only text, never persisted yet — mark dirty so the Copy button (and the
+        // eventual Prev/Next/Complete/Exit autosave) correctly treat it as not-yet-pushed.
+        tabState.observationDirty = true;
+    }
     tabState.suggestionApplied = true;
 }
 
-// Renders one tab's observation section: just a textarea (local-only edits). No Save button —
-// flushProcedureObservations() persists a dirty tab automatically on Prev/Next/Complete/Exit and
-// on modal close, the same "no manual save step" convention the checklist ticks already used.
+// Renders one tab's observation section: a textarea (local-only edits) plus an explicit Copy
+// button that pushes this one document's observation into the voucher line's Observations column
+// on demand (POSTs immediately via saveLineObservation(), rather than waiting for the
+// Prev/Next/Complete/Exit autosave chokepoint). Button is disabled for a blank observation, shows
+// "Copy" (grey) while tabState.observationDirty is true, and flips to "Copied" (green) once it
+// isn't — the same flag an edit already sets, so no separate synced flag is needed client-side.
 function buildObservationSection(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
+    const hasText = !!(tabState.observation && tabState.observation.trim());
+    const isCopied = hasText && !tabState.observationDirty;
     return `
         <textarea id="procedureObservationInput" class="procedure-observation-textarea"
             placeholder="Add an observation for this document...">${escapeHtml(tabState.observation || '')}</textarea>
+        <div class="procedure-observation-copy-row">
+            <button type="button" id="procedureObservationCopyBtn"
+                class="procedure-observation-copy-btn${isCopied ? ' copied' : ''}"
+                ${hasText ? '' : 'disabled'}>${isCopied ? '✓ Copied' : '📋 Copy'}</button>
+        </div>
     `;
 }
 
