@@ -50,6 +50,10 @@
                     <span class="ar-rail-icon">🖊️</span>
                     <span class="ar-rail-label">Signature Specimens</span>
                 </button>
+                <button type="button" id="arRailVoucherChecks" class="ar-rail-item">
+                    <span class="ar-rail-icon">✅</span>
+                    <span class="ar-rail-label">Voucher-level Checks</span>
+                </button>
             </div>
 
             <!-- MIDDLE: list panel. Each entity type gets its own section, toggled by
@@ -116,6 +120,34 @@
                 <div id="arSpecimenListBody" class="ar-list-body"></div>
                 <div id="arSpecimenListEmptyMessage" class="ar-list-empty" style="display:none;">No signature
                     specimens found.</div>
+            </div>
+
+            <!-- Voucher-level Checks list section (Generic Voucher-Level Checks, Phase 3 of 6, new).
+                 Ordered by sort_order (server-assigned), NOT alphabetical -- unlike
+                 Documents/Cross-checks/Categories. Drag-to-reorder via Sortable.js persists live
+                 on drop (POST .../reorder), since there is no parent-form save step for this list
+                 -- see arVoucherCheckSortable in audit_rules.js. -->
+            <div id="arVoucherChecksListSection" class="ar-list-panel" style="display:none;">
+                <div class="ar-list-panel-header">
+                    <span class="ar-list-panel-title">Voucher-level Checks</span>
+                    <button type="button" id="arVoucherCheckAddNewBtn" class="ar-btn-add-new">+ Add New</button>
+                </div>
+                <label class="ar-show-inactive-toggle">
+                    <input type="checkbox" id="arVoucherCheckShowInactiveCheckbox">
+                    <span>Show inactive</span>
+                </label>
+                <!-- Reorder is disabled while "Show inactive" is checked -- see
+                     loadVoucherChecks()/arVoucherCheckShowInactiveCheckbox listener in
+                     audit_rules.js for why (sending a reorder payload built from a
+                     filtered/partial list would corrupt sort_order for any items hidden from
+                     view). -->
+                <div id="arVoucherCheckReorderHint" class="ar-list-empty"
+                    style="display:none; padding:4px 12px; font-size:12px;">
+                    Drag-to-reorder is disabled while inactive items are shown.
+                </div>
+                <div id="arVoucherCheckListBody" class="ar-list-body"></div>
+                <div id="arVoucherCheckListEmptyMessage" class="ar-list-empty" style="display:none;">No
+                    voucher-level checks found.</div>
             </div>
 
             <!-- RIGHT: detail / edit panel. Same one-section-per-entity-type toggle pattern
@@ -369,6 +401,45 @@
                 </form>
             </div>
 
+            <!-- Voucher-level Checks detail section (Generic Voucher-Level Checks, Phase 3 of 6, new).
+                 Soft-delete/restore like Documents (not hard-delete like Signature Specimens).
+                 is_active is Delete/Restore-button-driven only, same convention as every other
+                 soft-delete entity here -- no separate checkbox. -->
+            <div id="arVoucherChecksDetailSection" class="ar-detail-panel" style="display:none;">
+                <div id="arVoucherCheckDetailEmpty" class="ar-detail-empty">
+                    <p>Select a voucher-level check from the list, or click "+ Add New" to create one.</p>
+                </div>
+
+                <form id="arVoucherCheckDetailForm" class="ar-detail-form" style="display:none;">
+                    <input type="hidden" id="arVoucherCheckEditingId" value="">
+
+                    <div class="ar-field">
+                        <label for="arVoucherCheckNameInput">Name</label>
+                        <input type="text" id="arVoucherCheckNameInput" required>
+                    </div>
+
+                    <!-- Authorisation Roles chip editor -->
+                    <div class="ar-field">
+                        <label>Authorisation Roles</label>
+                        <div class="ar-chip-list" id="arVoucherCheckRolesChipList"></div>
+                        <div class="ar-chip-input-row">
+                            <input type="text" id="arVoucherCheckRolesInput" placeholder="e.g. Approved by">
+                            <button type="button" id="arVoucherCheckRolesAddBtn" class="ar-btn-chip-add">Add</button>
+                        </div>
+                    </div>
+
+                    <div id="arVoucherCheckDetailStatus" class="upload-status" style="display:none;"></div>
+
+                    <div class="ar-detail-actions">
+                        <button type="button" id="arVoucherCheckSaveBtn" class="ar-btn-save">Save</button>
+                        <button type="button" id="arVoucherCheckDeleteBtn" class="ar-btn-delete"
+                            style="display:none;">Delete</button>
+                        <button type="button" id="arVoucherCheckRestoreBtn" class="ar-btn-restore"
+                            style="display:none;">Restore</button>
+                    </div>
+                </form>
+            </div>
+
         </div>
 
         <!-- Assign Categories (Section 2, Phase 5, FINAL): full-page view listing the
@@ -409,6 +480,7 @@
         </div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
     <script src="/static/client_context.js?v=2"></script>
     <script src="/static/audit_rules.js?v=2"></script>
 </body>

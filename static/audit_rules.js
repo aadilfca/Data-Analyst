@@ -405,6 +405,9 @@ const arCategoriesListSection = document.getElementById('arCategoriesListSection
 const arCategoriesDetailSection = document.getElementById('arCategoriesDetailSection');
 const arSignatureSpecimensListSection = document.getElementById('arSignatureSpecimensListSection');
 const arSignatureSpecimensDetailSection = document.getElementById('arSignatureSpecimensDetailSection');
+const arRailVoucherChecks = document.getElementById('arRailVoucherChecks');
+const arVoucherChecksListSection = document.getElementById('arVoucherChecksListSection');
+const arVoucherChecksDetailSection = document.getElementById('arVoucherChecksDetailSection');
 
 function switchEntityType(type) {
     currentEntityType = type;
@@ -413,6 +416,7 @@ function switchEntityType(type) {
     arRailCrossChecks.classList.toggle('active', type === 'cross-checks');
     arRailCategories.classList.toggle('active', type === 'categories');
     arRailSignatureSpecimens.classList.toggle('active', type === 'signature-specimens');
+    arRailVoucherChecks.classList.toggle('active', type === 'voucher-checks');
 
     arDocumentsListSection.style.display = (type === 'documents') ? 'flex' : 'none';
     arDocumentsDetailSection.style.display = (type === 'documents') ? 'block' : 'none';
@@ -422,6 +426,8 @@ function switchEntityType(type) {
     arCategoriesDetailSection.style.display = (type === 'categories') ? 'block' : 'none';
     arSignatureSpecimensListSection.style.display = (type === 'signature-specimens') ? 'flex' : 'none';
     arSignatureSpecimensDetailSection.style.display = (type === 'signature-specimens') ? 'block' : 'none';
+    arVoucherChecksListSection.style.display = (type === 'voucher-checks') ? 'flex' : 'none';
+    arVoucherChecksDetailSection.style.display = (type === 'voucher-checks') ? 'block' : 'none';
 
     if (type === 'cross-checks') {
         // Refresh the Documents cache every time this view is opened, so the "add
@@ -439,6 +445,10 @@ function switchEntityType(type) {
             populateSpecimenDocumentSelect();
             loadSignatureSpecimens();
         });
+    } else if (type === 'voucher-checks') {
+        // No cross-entity cache to refresh -- Voucher Checks has no picker dependent
+        // on Documents/Cross-checks, unlike the three branches above.
+        loadVoucherChecks();
     }
 }
 
@@ -861,6 +871,7 @@ arRailDocuments.addEventListener('click', () => switchEntityType('documents'));
 arRailCrossChecks.addEventListener('click', () => switchEntityType('cross-checks'));
 arRailCategories.addEventListener('click', () => switchEntityType('categories'));
 arRailSignatureSpecimens.addEventListener('click', () => switchEntityType('signature-specimens'));
+arRailVoucherChecks.addEventListener('click', () => switchEntityType('voucher-checks'));
 
 arCrossCheckAddNewBtn.addEventListener('click', startNewCrossCheck);
 arCrossCheckShowInactiveCheckbox.addEventListener('change', loadCrossChecks);
@@ -2086,4 +2097,304 @@ async function deleteSpecimen() {
 arSpecimenAddNewBtn.addEventListener('click', startNewSpecimen);
 arSpecimenDocumentSelect.addEventListener('change', renderSpecimenRoleOptions);
 arSpecimenSaveBtn.addEventListener('click', saveSpecimen);
+
+// =====================================================================================
+// VOUCHER-LEVEL CHECKS (Generic Voucher-Level Checks, Phase 3 of 6)
+// A 4th reusable entity type: audit_rule_voucher_checks. Ordered by sort_order (server-
+// assigned), NOT alphabetical like Documents/Cross-checks/Categories. Soft-delete/restore
+// like Documents (not hard-delete like Signature Specimens). auth_roles is an embedded
+// list edited via the same chip-editor shape as Documents' own Authorisation Roles field.
+// Uses its own state (editingVoucherCheckId/voucherCheckRolesState), distinct from
+// Documents' editingId/rolesState globals, to avoid clobbering that section's state.
+// =====================================================================================
+
+// ---------- DOM REFS ----------
+const arVoucherCheckListBody = document.getElementById('arVoucherCheckListBody');
+const arVoucherCheckListEmptyMessage = document.getElementById('arVoucherCheckListEmptyMessage');
+const arVoucherCheckShowInactiveCheckbox = document.getElementById('arVoucherCheckShowInactiveCheckbox');
+const arVoucherCheckAddNewBtn = document.getElementById('arVoucherCheckAddNewBtn');
+const arVoucherCheckReorderHint = document.getElementById('arVoucherCheckReorderHint');
+
+const arVoucherCheckDetailEmpty = document.getElementById('arVoucherCheckDetailEmpty');
+const arVoucherCheckDetailForm = document.getElementById('arVoucherCheckDetailForm');
+const arVoucherCheckEditingIdInput = document.getElementById('arVoucherCheckEditingId');
+const arVoucherCheckNameInput = document.getElementById('arVoucherCheckNameInput');
+const arVoucherCheckRolesChipList = document.getElementById('arVoucherCheckRolesChipList');
+const arVoucherCheckRolesInput = document.getElementById('arVoucherCheckRolesInput');
+const arVoucherCheckRolesAddBtn = document.getElementById('arVoucherCheckRolesAddBtn');
+const arVoucherCheckDetailStatus = document.getElementById('arVoucherCheckDetailStatus');
+const arVoucherCheckSaveBtn = document.getElementById('arVoucherCheckSaveBtn');
+const arVoucherCheckDeleteBtn = document.getElementById('arVoucherCheckDeleteBtn');
+const arVoucherCheckRestoreBtn = document.getElementById('arVoucherCheckRestoreBtn');
+
+// ---------- STATE ----------
+// null while creating a new Voucher-level check; set to its id while editing an existing one.
+let editingVoucherCheckId = null;
+// In-memory auth_roles list for the check currently being edited, sent raw on Save.
+let voucherCheckRolesState = [];
+// Sortable.js instance, created once (see initVoucherCheckSortable()) and toggled via
+// .option('disabled', ...) rather than destroyed/recreated on every render.
+let arVoucherCheckSortable = null;
+
+// ---------- STATUS MESSAGE ----------
+function showVoucherCheckDetailStatus(message, type) {
+    arVoucherCheckDetailStatus.textContent = message;
+    arVoucherCheckDetailStatus.className = 'upload-status ' + type;
+    arVoucherCheckDetailStatus.style.display = 'block';
+    clearTimeout(window.arVoucherCheckDetailStatusTimeout);
+    window.arVoucherCheckDetailStatusTimeout = setTimeout(() => {
+        arVoucherCheckDetailStatus.style.display = 'none';
+    }, 5000);
+}
+
+// ---------- LOAD & RENDER LIST ----------
+async function loadVoucherChecks() {
+    initVoucherCheckSortable();
+    const includeInactive = arVoucherCheckShowInactiveCheckbox.checked;
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks?include_inactive=' + includeInactive);
+        if (!res.ok) throw new Error('Failed to load voucher-level checks');
+        const checks = await res.json(); // already ORDER BY sort_order server-side -- do not re-sort here
+        renderVoucherCheckList(checks, includeInactive);
+    } catch (error) {
+        arVoucherCheckListBody.innerHTML = '';
+        arVoucherCheckListEmptyMessage.textContent = '❌ Error loading voucher-level checks: ' + error.message;
+        arVoucherCheckListEmptyMessage.style.display = 'block';
+    }
+}
+
+function renderVoucherCheckList(checks, includeInactive) {
+    arVoucherCheckListBody.innerHTML = '';
+
+    if (checks.length === 0) {
+        arVoucherCheckListEmptyMessage.textContent = 'No voucher-level checks found.';
+        arVoucherCheckListEmptyMessage.style.display = 'block';
+    } else {
+        arVoucherCheckListEmptyMessage.style.display = 'none';
+        checks.forEach(check => {
+            const row = document.createElement('div');
+            row.className = 'ar-list-row' + (check.is_active ? '' : ' ar-list-row-inactive');
+            row.dataset.id = check.id;
+            if (check.id === editingVoucherCheckId) row.classList.add('ar-list-row-selected');
+
+            const handle = document.createElement('span');
+            handle.className = 'ar-drag-handle';
+            handle.textContent = '::';
+            handle.style.cursor = 'grab';
+            handle.style.marginRight = '8px';
+            handle.style.color = '#94a3b8';
+            row.appendChild(handle);
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'ar-list-row-name';
+            nameSpan.style.flex = '1';
+            nameSpan.textContent = check.name;
+            row.appendChild(nameSpan);
+
+            if (!check.is_active) {
+                const badge = document.createElement('span');
+                badge.className = 'ar-list-row-badge';
+                badge.textContent = 'Inactive';
+                row.appendChild(badge);
+            }
+
+            // A plain click landing on the handle (no actual drag) must not trigger
+            // selection -- only clicks elsewhere on the row select the check.
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.ar-drag-handle')) return;
+                selectVoucherCheck(check.id);
+            });
+            arVoucherCheckListBody.appendChild(row);
+        });
+    }
+
+    // Reorder is only safe when the full active-only set is shown, since the reorder
+    // endpoint reassigns sort_order = enumerate(index) over exactly the ids sent --
+    // mixing in hidden inactive rows (or omitting them) would corrupt/gap their sort_order.
+    if (arVoucherCheckSortable) {
+        arVoucherCheckSortable.option('disabled', includeInactive);
+    }
+    arVoucherCheckReorderHint.style.display = includeInactive ? 'block' : 'none';
+}
+
+// ---------- DRAG-TO-REORDER ----------
+// Created once, lazily -- arVoucherCheckListBody (the container Sortable binds to) is
+// never destroyed/recreated, only its children are replaced on each render, which is
+// exactly what Sortable is designed to tolerate.
+function initVoucherCheckSortable() {
+    if (arVoucherCheckSortable) return;
+    arVoucherCheckSortable = new Sortable(arVoucherCheckListBody, {
+        handle: '.ar-drag-handle',
+        animation: 150,
+        ghostClass: 'sortable-ghost',
+        disabled: arVoucherCheckShowInactiveCheckbox.checked,
+        onEnd: async function () {
+            const orderedIds = Array.from(arVoucherCheckListBody.children).map(row => parseInt(row.dataset.id, 10));
+            try {
+                const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks/reorder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(orderedIds) // bare array, not wrapped -- matches backend Body(...)
+                });
+                const result = await res.json();
+                if (!res.ok) throw new Error(result.detail || result.message || 'Failed to reorder');
+                showVoucherCheckDetailStatus('✅ Order updated.', 'success');
+            } catch (error) {
+                showVoucherCheckDetailStatus('❌ Error reordering: ' + error.message, 'error');
+                // Re-fetch to restore the true server order after a failed persist, since
+                // the DOM has already been reordered visually by Sortable itself.
+                await loadVoucherChecks();
+            }
+        }
+    });
+}
+
+// ---------- CHIP EDITOR (Authorisation Roles) ----------
+// Reuses the existing generic renderChipList(container, items, onRemove) helper (defined
+// above, shared across Documents/etc.) rather than duplicating it.
+function renderVoucherCheckRoleChips() {
+    renderChipList(arVoucherCheckRolesChipList, voucherCheckRolesState, removeVoucherCheckRole);
+}
+function addVoucherCheckRole() {
+    const value = arVoucherCheckRolesInput.value.trim();
+    if (!value) return;
+    if (voucherCheckRolesState.some(r => r.toLowerCase() === value.toLowerCase())) {
+        arVoucherCheckRolesInput.value = '';
+        return;
+    }
+    voucherCheckRolesState.push(value);
+    arVoucherCheckRolesInput.value = '';
+    renderVoucherCheckRoleChips();
+}
+function removeVoucherCheckRole(value) {
+    voucherCheckRolesState = voucherCheckRolesState.filter(r => r !== value);
+    renderVoucherCheckRoleChips();
+}
+
+// ---------- SELECT / NEW ----------
+async function selectVoucherCheck(id) {
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks/' + id);
+        if (!res.ok) throw new Error('Voucher-level check not found');
+        const check = await res.json();
+
+        editingVoucherCheckId = check.id;
+        arVoucherCheckEditingIdInput.value = check.id;
+        arVoucherCheckNameInput.value = check.name;
+        voucherCheckRolesState = (check.auth_roles || []).slice();
+        renderVoucherCheckRoleChips();
+
+        if (check.is_active) {
+            arVoucherCheckDeleteBtn.style.display = 'inline-block';
+            arVoucherCheckRestoreBtn.style.display = 'none';
+        } else {
+            arVoucherCheckDeleteBtn.style.display = 'none';
+            arVoucherCheckRestoreBtn.style.display = 'inline-block';
+        }
+
+        arVoucherCheckDetailEmpty.style.display = 'none';
+        arVoucherCheckDetailForm.style.display = 'block';
+
+        loadVoucherChecks(); // refresh selected-row highlight, same pattern as Documents
+    } catch (error) {
+        showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+function startNewVoucherCheck() {
+    editingVoucherCheckId = null;
+    arVoucherCheckEditingIdInput.value = '';
+    arVoucherCheckNameInput.value = '';
+    voucherCheckRolesState = [];
+    renderVoucherCheckRoleChips();
+
+    arVoucherCheckDeleteBtn.style.display = 'none';
+    arVoucherCheckRestoreBtn.style.display = 'none';
+
+    arVoucherCheckDetailEmpty.style.display = 'none';
+    arVoucherCheckDetailForm.style.display = 'block';
+    arVoucherCheckNameInput.focus();
+}
+
+// ---------- SAVE / DELETE / RESTORE ----------
+async function saveVoucherCheck() {
+    const name = arVoucherCheckNameInput.value.trim();
+    if (!name) {
+        showVoucherCheckDetailStatus('⚠️ Name is required.', 'error');
+        return;
+    }
+
+    const payload = { name: name, auth_roles: voucherCheckRolesState };
+
+    try {
+        let url = API_BASE + '/api/audit-rules/voucher-checks';
+        let method = 'POST';
+        if (editingVoucherCheckId) {
+            url += '/' + editingVoucherCheckId;
+            method = 'PUT';
+        }
+
+        const res = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save voucher-level check');
+
+        showVoucherCheckDetailStatus('✅ ' + result.message, 'success');
+
+        const savedId = editingVoucherCheckId || result.voucher_check_id;
+        await loadVoucherChecks();
+        await selectVoucherCheck(savedId);
+    } catch (error) {
+        showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+async function deleteVoucherCheck() {
+    if (!editingVoucherCheckId) return;
+    if (!confirm('Are you sure you want to delete "' + arVoucherCheckNameInput.value + '"? This will soft-delete it.')) return;
+
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks/' + editingVoucherCheckId, { method: 'DELETE' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to delete voucher-level check');
+
+        showVoucherCheckDetailStatus('✅ ' + result.message, 'success');
+        await loadVoucherChecks();
+        await selectVoucherCheck(editingVoucherCheckId);
+    } catch (error) {
+        showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+async function restoreVoucherCheck() {
+    if (!editingVoucherCheckId) return;
+
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks/' + editingVoucherCheckId + '/restore', { method: 'POST' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to restore voucher-level check');
+
+        showVoucherCheckDetailStatus('✅ ' + result.message, 'success');
+        await loadVoucherChecks();
+        await selectVoucherCheck(editingVoucherCheckId);
+    } catch (error) {
+        showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+// ---------- WIRE UP EVENT LISTENERS ----------
+arVoucherCheckAddNewBtn.addEventListener('click', startNewVoucherCheck);
+arVoucherCheckShowInactiveCheckbox.addEventListener('change', loadVoucherChecks);
+
+arVoucherCheckRolesAddBtn.addEventListener('click', addVoucherCheckRole);
+arVoucherCheckRolesInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); addVoucherCheckRole(); }
+});
+
+arVoucherCheckSaveBtn.addEventListener('click', saveVoucherCheck);
+arVoucherCheckDeleteBtn.addEventListener('click', deleteVoucherCheck);
+arVoucherCheckRestoreBtn.addEventListener('click', restoreVoucherCheck);
 arSpecimenDeleteBtn.addEventListener('click', deleteSpecimen);
