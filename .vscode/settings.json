@@ -6,7 +6,7 @@
         "__pycache__": true,
    ".vscode": true,
    ".claude": true,
-        "requirements.txt": true,
+        //"requirements.txt": true,
         "run.bat": true,
         "test.db": true,
         "*.pyc": true

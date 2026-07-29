@@ -9,11 +9,13 @@ from fastapi.responses import StreamingResponse
 from database import execute_query, execute_write, log_audit, get_raw_conn, get_client_voucher_prefixes
 from datetime import datetime
 import json
+import re
 from typing import List, Optional, Dict, Any
 import io
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
+from rapidfuzz import fuzz, utils as fuzz_utils
 # Reused for voucher/line grouping in get_next_transaction (Phase 1) — same document-key
 # logic already used by import's compare_transactions, applied at query time.
 from routers.import_export import get_document_group_id
@@ -1453,6 +1455,116 @@ def get_category_for_account(
         "category_id": rows[0]['category_id'],
         "category_name": rows[0]['category_name']
     }
+
+# ==============================================
+# ACCOUNT HEAD RECOMMENDATION (Validation Rules, Phase 6 of 7)
+# Fuzzy-matches a voucher line's description against the client's leaf
+# Trial Balance accounts (by Name, via rapidfuzz) to recommend an existing
+# Chart-of-Accounts head instead of creating a new one. Separate, name-based
+# lookup - does not touch the account-code-based Assign Categories logic.
+# Recommends only; never creates accounts.
+# ==============================================
+
+# Starting judgement call for this phase - tunable, not fixed forever.
+ACCOUNT_HEAD_MATCH_THRESHOLD = 55
+
+_ACCOUNT_HEAD_STOPWORDS = {
+    'the', 'and', 'for', 'from', 'with', 'this', 'that', 'account', 'accounts'
+}
+
+
+def _account_head_keyword_match(description: str, account_name: str):
+    """Longest shared significant word (len>=4, stopwords skipped) between the
+    two strings, or None if there's no such overlap. Rule-based reason text,
+    not a scoring input."""
+    desc_words = {w for w in re.findall(r'[a-zA-Z]+', description.lower())
+                  if len(w) >= 4 and w not in _ACCOUNT_HEAD_STOPWORDS}
+    name_words = {w for w in re.findall(r'[a-zA-Z]+', (account_name or '').lower())
+                  if len(w) >= 4 and w not in _ACCOUNT_HEAD_STOPWORDS}
+    shared = desc_words & name_words
+    if not shared:
+        return None
+    return max(shared, key=len)
+
+
+@router.get("/api/verification/suggest-account-head")
+def suggest_account_head(
+    client_id: int = Query(..., description="Client ID"),
+    description: str = Query(..., description="Voucher line description to match"),
+    category: str = Query(None, description="Category (Account Type) name, used only for the alignment bonus/reason")
+):
+    """
+    Recommend up to 2 existing leaf Trial Balance accounts (by Name) as a
+    Chart-of-Accounts head for a voucher line, using rapidfuzz fuzzy matching
+    plus rule-based reason strings. Returns a clean "no match" shape (not an
+    error) when nothing clears ACCOUNT_HEAD_MATCH_THRESHOLD - matches
+    category-for-account's "absence is a normal outcome" convention. This
+    only recommends; it never creates a Chart-of-Accounts head.
+    """
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    no_match_response = {"matched": False, "message": "No match — new head likely needed", "suggestions": []}
+
+    upload_rows = execute_query(
+        """
+        SELECT id FROM trial_balance_uploads
+        WHERE client_id = ? AND status = 'parsed'
+        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
+        LIMIT 1
+        """,
+        (client_id,)
+    )
+    if not upload_rows:
+        return no_match_response
+
+    accounts = execute_query(
+        """
+        SELECT a.account_code, a.account_name, a.category_id, c.name AS category_name
+        FROM trial_balance_accounts a
+        LEFT JOIN audit_rule_categories c ON a.category_id = c.id AND c.is_active = 1
+        WHERE a.upload_id = ? AND a.classification = 'leaf'
+        """,
+        (upload_rows[0]['id'],)
+    )
+    if not accounts:
+        return no_match_response
+
+    scored = []
+    for acc in accounts:
+        # WRatio (rapidfuzz's blended general-purpose scorer) + default_process
+        # (case/punctuation-insensitive) - account names are stored ALL CAPS
+        # while descriptions use natural case, so a case-sensitive scorer
+        # silently sinks every real match.
+        score = fuzz.WRatio(description, acc['account_name'] or '', processor=fuzz_utils.default_process)
+        reasons = []
+
+        if category and acc['category_name'] and acc['category_name'].strip().lower() == category.strip().lower():
+            score = min(100, score + 10)
+            reasons.append(f"Category alignment: linked to Category '{acc['category_name']}'")
+
+        keyword = _account_head_keyword_match(description, acc['account_name'])
+        if keyword:
+            reasons.append(f"Matched keyword: '{keyword}'")
+
+        reasons.append("High confidence match" if score >= 80 else "Medium confidence match")
+
+        scored.append({
+            "account_code": acc['account_code'],
+            "account_name": acc['account_name'],
+            "score": round(score),
+            "reasons": reasons
+        })
+
+    scored.sort(key=lambda s: s['score'], reverse=True)
+    top = scored[:2]
+
+    if not top or top[0]['score'] < ACCOUNT_HEAD_MATCH_THRESHOLD:
+        return no_match_response
+
+    top = [s for s in top if s['score'] >= ACCOUNT_HEAD_MATCH_THRESHOLD]
+    return {"matched": True, "suggestions": top}
 
 # ==============================================
 # VOUCHER-LEVEL APPROVAL (Validation Rules, Phase 5 of 7)
