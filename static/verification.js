@@ -772,6 +772,17 @@ const VOUCHER_LINE_DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narr
 const VOUCHER_LINE_DEBIT_ALIASES = ['Debit Amount', 'Debit', 'Dr Amount', 'Dr'];
 const VOUCHER_LINE_CREDIT_ALIASES = ['Credit Amount', 'Credit', 'Cr Amount', 'Cr'];
 
+// Account Head Recommendation (Validation Rules Phase 7) — keyed by uid (per voucher line, not
+// shared across lines like voucherApprovalCache, since suggestions are description-driven). No
+// backend persistence — recommendedValue/suggestions are a scratch pad that resets on reload.
+const accountHeadCache = {};
+function getAccountHeadState(uid) {
+    if (!accountHeadCache[uid]) {
+        accountHeadCache[uid] = { recommendedValue: '', suggestions: [], matched: null, message: '', loading: false, hasFetched: false };
+    }
+    return accountHeadCache[uid];
+}
+
 function getVoucherLineAlias(row, aliases) {
     for (const alias of aliases) {
         if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
@@ -3321,6 +3332,11 @@ function renderVoucherApprovalPanel(uid) {
     const transactionRef = currentVoucherId;
     const va = voucherApprovalCache[transactionRef] || { prepared_by: '', checked_by: '', approved_by: '', dirty: false, loaded: false };
 
+    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const voucherLine = lineIdx !== -1 ? currentVoucherLines[lineIdx] : null;
+    const currentAccountName = voucherLine ? getVoucherLineAlias(voucherLine.row_data || {}, VOUCHER_LINE_ACCOUNT_NAME_ALIASES) : '—';
+    const ahState = getAccountHeadState(uid);
+
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${VOUCHER_LINE_TAB_ID}">
             <div class="procedure-segment procedure-segment-data">
@@ -3339,6 +3355,21 @@ function renderVoucherApprovalPanel(uid) {
                         <label for="procedureVoucherApprovedBy">Approved By</label>
                         <input type="text" id="procedureVoucherApprovedBy" class="procedure-search-input" value="${escapeHtml(va.approved_by)}">
                     </div>
+                </div>
+            </div>
+            <div class="procedure-segment procedure-segment-data">
+                <h4 class="procedure-segment-header">🎯 Account Head Recommendation</h4>
+                <div class="procedure-segment-body">
+                    <div class="procedure-account-head-current">
+                        <label>Current Account Name</label>
+                        <span>${escapeHtml(currentAccountName)}</span>
+                    </div>
+                    <div class="procedure-voucher-approval-field">
+                        <label for="procedureAccountHeadInput">Recommended Account Head</label>
+                        <input type="text" id="procedureAccountHeadInput" class="procedure-search-input" value="${escapeHtml(ahState.recommendedValue)}">
+                    </div>
+                    <button type="button" id="procedureAccountHeadSuggestBtn" class="procedure-account-head-suggest-btn" ${ahState.loading ? 'disabled' : ''}>${ahState.loading ? 'Searching…' : '🔍 Suggest Account Head'}</button>
+                    <div id="procedureAccountHeadResults" class="procedure-account-head-results"></div>
                 </div>
             </div>
         </div>
@@ -3361,6 +3392,112 @@ function renderVoucherApprovalPanel(uid) {
             updateProcedureModalSavedNote(uid);
         });
     });
+
+    const accountHeadInput = document.getElementById('procedureAccountHeadInput');
+    if (accountHeadInput) {
+        accountHeadInput.addEventListener('input', function() {
+            getAccountHeadState(uid).recommendedValue = this.value;
+        });
+    }
+    const suggestBtn = document.getElementById('procedureAccountHeadSuggestBtn');
+    if (suggestBtn) {
+        suggestBtn.addEventListener('click', function() {
+            fetchAccountHeadSuggestions(uid);
+        });
+    }
+    renderAccountHeadResults(uid);
+}
+
+// Renders the results container inside the Account Head Recommendation segment based on the
+// current accountHeadCache[uid] state — called after every fetch and every "Use" click.
+function renderAccountHeadResults(uid) {
+    const resultsEl = document.getElementById('procedureAccountHeadResults');
+    if (!resultsEl) return;
+    const state = getAccountHeadState(uid);
+
+    if (state.loading || !state.hasFetched) {
+        resultsEl.innerHTML = '';
+        return;
+    }
+
+    if (!state.matched) {
+        resultsEl.innerHTML = `<p class="procedure-account-head-no-match">${escapeHtml(state.message || 'No match — new head likely needed')}</p>`;
+        return;
+    }
+
+    resultsEl.innerHTML = state.suggestions.map((s, idx) => `
+        <div class="procedure-account-head-suggestion">
+            <div class="procedure-account-head-suggestion-row">
+                <span class="procedure-account-head-suggestion-name">${escapeHtml(s.account_name)}</span>
+                <span class="procedure-account-head-suggestion-score">Score: ${escapeHtml(String(s.score))}</span>
+                <button type="button" class="procedure-account-head-use-btn" data-suggestion-idx="${idx}" title="Copy into Recommended Account Head">📋 Use</button>
+            </div>
+            <ul class="procedure-account-head-reasons">
+                ${(s.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join('')}
+            </ul>
+        </div>
+    `).join('');
+
+    resultsEl.querySelectorAll('.procedure-account-head-use-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const idx = parseInt(this.dataset.suggestionIdx, 10);
+            const suggestion = state.suggestions[idx];
+            if (!suggestion) return;
+            state.recommendedValue = suggestion.account_name;
+            const inputEl = document.getElementById('procedureAccountHeadInput');
+            if (inputEl) inputEl.value = suggestion.account_name;
+        });
+    });
+}
+
+// Fetches Account Head suggestions for one voucher line (Validation Rules Phase 7) from the
+// already-verified GET /api/verification/suggest-account-head endpoint. Description is read from
+// the cashbook line's own row_data (Narration/Particulars-style aliases), falling back to the
+// account name when the alias lookup finds nothing ('—' sentinel from getVoucherLineAlias).
+async function fetchAccountHeadSuggestions(uid) {
+    const state = getAccountHeadState(uid);
+    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const voucherLine = lineIdx !== -1 ? currentVoucherLines[lineIdx] : null;
+    const rowData = voucherLine ? (voucherLine.row_data || {}) : {};
+    const accountName = getVoucherLineAlias(rowData, VOUCHER_LINE_ACCOUNT_NAME_ALIASES);
+    const rawDescription = getVoucherLineAlias(rowData, VOUCHER_LINE_DESCRIPTION_ALIASES);
+    const description = (rawDescription && rawDescription !== '—') ? rawDescription : accountName;
+    const category = (voucherLineState[uid] && voucherLineState[uid].transactionType) || '';
+    const clientId = getClientId();
+
+    state.loading = true;
+    renderAccountHeadResultsButtonState(uid);
+
+    try {
+        const params = new URLSearchParams({ client_id: clientId, description: description });
+        if (category) params.set('category', category);
+        const res = await fetch(`/api/verification/suggest-account-head?${params.toString()}`);
+        const data = await res.json();
+        state.matched = !!data.matched;
+        state.suggestions = data.suggestions || [];
+        state.message = data.message || '';
+        state.hasFetched = true;
+    } catch (e) {
+        console.error('Failed to fetch account head suggestions:', e);
+        state.matched = false;
+        state.suggestions = [];
+        state.message = "Couldn't fetch suggestions — try again.";
+        state.hasFetched = true;
+    } finally {
+        state.loading = false;
+        renderAccountHeadResultsButtonState(uid);
+        renderAccountHeadResults(uid);
+    }
+}
+
+// Keeps the Suggest button's disabled/label state in sync with accountHeadCache[uid].loading
+// without a full panel re-render (which would drop focus/typed input elsewhere in the tab).
+function renderAccountHeadResultsButtonState(uid) {
+    const btn = document.getElementById('procedureAccountHeadSuggestBtn');
+    if (!btn) return;
+    const state = getAccountHeadState(uid);
+    btn.disabled = state.loading;
+    btn.textContent = state.loading ? 'Searching…' : '🔍 Suggest Account Head';
 }
 
 function renderProcedureModalPanel(uid, docId) {

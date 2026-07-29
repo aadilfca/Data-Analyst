@@ -2847,6 +2847,105 @@ body {
     margin-bottom: 0;
 }
 
+/* ----- Account Head Recommendation (Validation Rules Phase 7 of 7, FINAL) -----
+   Renders inside the Voucher Line tab's second procedure-segment-data card (see
+   renderVoucherApprovalPanel() in verification.js), directly below the Voucher Approval fields.
+   Reuses the neutral grey segment/input/button language already established for this tab rather
+   than inventing a new palette. */
+.procedure-account-head-current {
+    margin-bottom: 12px;
+}
+.procedure-account-head-current label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 4px;
+}
+.procedure-account-head-current span {
+    font-size: 14px;
+    color: #1a1a2e;
+}
+.procedure-account-head-suggest-btn {
+    margin-top: 4px;
+    padding: 6px 14px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    background: white;
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.procedure-account-head-suggest-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+    color: #1a1a2e;
+}
+.procedure-account-head-suggest-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.procedure-account-head-results {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.procedure-account-head-suggestion {
+    border: 1px solid #e6e9ed;
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: #fafbfc;
+}
+.procedure-account-head-suggestion-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.procedure-account-head-suggestion-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: #1a1a2e;
+}
+.procedure-account-head-suggestion-score {
+    font-size: 12px;
+    color: #64748b;
+}
+.procedure-account-head-use-btn {
+    margin-left: auto;
+    padding: 4px 12px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    background: white;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.procedure-account-head-use-btn:hover {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+    color: #1a1a2e;
+}
+.procedure-account-head-reasons {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    font-size: 12px;
+    color: #64748b;
+}
+.procedure-account-head-reasons li {
+    margin-bottom: 2px;
+}
+.procedure-account-head-no-match {
+    font-size: 13px;
+    color: #94a3b8;
+    font-style: italic;
+    margin: 0;
+}
+
 /* ----- Supporting Documents: search box + results dropdown (Voucher Supporting-Document
    Linking, Phase 4 of 6) ----- */
 .procedure-search-row {
