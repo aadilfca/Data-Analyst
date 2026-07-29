@@ -1714,6 +1714,68 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_approvals_client_ref ON voucher_approvals (client_id, transaction_ref)")
         print("✅ Created voucher_approvals table (Validation Rules, Phase 1 addendum: voucher-level approval)")
 
+        # ---------- GENERIC VOUCHER-LEVEL CHECKS (new, confirmed 6-phase requirement, Phase 1 of 6: schema) ----------
+        # Replaces the hardcoded Prepared/Checked/Approved-By concept (voucher_approvals above,
+        # left in place untouched - not dropped/migrated yet) with a data-driven list of checks,
+        # so a future check (e.g. "Received By") can be added with no schema change. Checks are
+        # global (apply across all clients), not per-client. Brand-new tables with no prior data,
+        # so plain CREATE TABLE IF NOT EXISTS is sufficient - no ALTER TABLE upgrade block needed
+        # (same reasoning as voucher_approvals/voucher_line_observations above).
+        #
+        # Check definitions: name + display order + active flag. Named with the audit_rule_*
+        # prefix (matching audit_rule_documents/audit_rule_cross_checks/audit_rule_categories)
+        # since this gets its own CRUD/tab in the Audit Rules module in a later phase.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_voucher_checks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        print("✅ Created audit_rule_voucher_checks table (Generic Voucher-Level Checks, Phase 1 of 6: schema)")
+
+        # Role-gating on a check, modelled identically to audit_rule_document_auth_roles - a
+        # list from the start so more than one required role can gate a single check.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_voucher_check_auth_roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                voucher_check_id INTEGER NOT NULL,
+                role_name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (voucher_check_id) REFERENCES audit_rule_voucher_checks(id) ON DELETE CASCADE,
+                UNIQUE(voucher_check_id, role_name)
+            )
+        ''')
+        print("✅ Created audit_rule_voucher_check_auth_roles table (Generic Voucher-Level Checks, Phase 1 of 6: schema)")
+
+        # Per-voucher status: one row per (voucher, check) capturing both the tick and the
+        # inline name of who did it (no login/identity system exists to auto-fill this). Keyed
+        # by (client_id, transaction_ref) rather than session_id, deliberately mirroring
+        # voucher_approvals' own keying rationale above - a cashbook reopen creates a brand-new
+        # verification_sessions row every time, and session-scoped keys have already caused
+        # three separate orphaning bugs elsewhere in this module (voucher_line_documents/
+        # voucher_line_procedure_checks/voucher_line_observations). New checks apply going
+        # forward only - no retroactive backfill onto in-progress vouchers, per confirmed scope.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_check_status (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                transaction_ref TEXT NOT NULL,
+                check_id INTEGER NOT NULL,
+                ticked INTEGER NOT NULL DEFAULT 0,
+                performed_by_name TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (check_id) REFERENCES audit_rule_voucher_checks(id),
+                UNIQUE(client_id, transaction_ref, check_id)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_voucher_check_auth_roles_check ON audit_rule_voucher_check_auth_roles (voucher_check_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_check_status_client_ref ON voucher_check_status (client_id, transaction_ref)")
+        print("✅ Created voucher_check_status table (Generic Voucher-Level Checks, Phase 1 of 6: schema)")
+
         # ---------- VOUCHER LINE OBSERVATIONS (Phase 6 of 6, FINAL: observation flow) ----------
         # One row per (voucher_line_id, document_id) - a Document tab's observation text is
         # upserted in place here, not appended as a history log. `synced` flags whether the
