@@ -1645,6 +1645,94 @@ def save_voucher_approval(
     }
 
 # ==============================================
+# GENERIC VOUCHER-LEVEL CHECKS (new 6-phase requirement, Phase 4 of 6)
+# Read/write for voucher_check_status (database.py, Phase 1) against the check definitions
+# configured in Audit Rules (audit_rule_voucher_checks / audit_rule_voucher_check_auth_roles,
+# Phase 2). Keyed by client_id+transaction_ref, same rationale as voucher_approvals above.
+# This is additive only - it does NOT yet replace the VOUCHER-LEVEL APPROVAL section above or
+# the voucher_approvals check inside compute_and_persist_cleared_status(); that cutover is
+# deferred to Phase 5 (frontend), once the new checks are actually populated by real ticks.
+# ==============================================
+
+@router.get("/api/verification/voucher_checks")
+def get_voucher_checks_status(
+    client_id: int = Query(..., description="Client ID"),
+    transaction_ref: str = Query(..., description="Voucher number (verification_details.transaction_ref)")
+):
+    """
+    Return every active audit_rule_voucher_checks definition, ordered by sort_order, merged
+    with this voucher's current tick/performed-by status. A check with no voucher_check_status
+    row yet returns ticked=false/performed_by_name=None - no record yet is a normal state, same
+    convention as get_voucher_approval().
+    """
+    checks = execute_query(
+        "SELECT id, name, sort_order FROM audit_rule_voucher_checks WHERE is_active = 1 ORDER BY sort_order"
+    )
+    status_rows = execute_query(
+        "SELECT check_id, ticked, performed_by_name FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ?",
+        (client_id, transaction_ref)
+    )
+    status_by_check_id = {r['check_id']: r for r in status_rows}
+
+    result = []
+    for check in checks:
+        role_rows = execute_query(
+            "SELECT role_name FROM audit_rule_voucher_check_auth_roles WHERE voucher_check_id = ? ORDER BY sort_order",
+            (check['id'],)
+        )
+        status = status_by_check_id.get(check['id'])
+        result.append({
+            "id": check['id'],
+            "name": check['name'],
+            "sort_order": check['sort_order'],
+            "auth_roles": [r['role_name'] for r in role_rows],
+            "ticked": bool(status['ticked']) if status else False,
+            "performed_by_name": status['performed_by_name'] if status else None
+        })
+    return result
+
+
+@router.post("/api/verification/save_voucher_check")
+def save_voucher_check_status(
+    client_id: int = Body(..., embed=True),
+    transaction_ref: str = Body(..., embed=True),
+    check_id: int = Body(..., embed=True),
+    ticked: bool = Body(..., embed=True),
+    performed_by_name: Optional[str] = Body(None, embed=True)
+):
+    """
+    Upsert one voucher's tick/performed-by state for one check. ON CONFLICT DO UPDATE, matching
+    voucher_check_status's own UNIQUE(client_id, transaction_ref, check_id) constraint - same
+    per-item-tick upsert shape as set_procedure_check(), not voucher_approvals' select-then-branch,
+    since this is a repeated single-field tick rather than a single multi-field record.
+    """
+    check = execute_query(
+        "SELECT id FROM audit_rule_voucher_checks WHERE id = ? AND is_active = 1",
+        (check_id,)
+    )
+    if not check:
+        raise HTTPException(400, f"Check {check_id} is not a configured active voucher-level check.")
+
+    execute_write(
+        """
+        INSERT INTO voucher_check_status (client_id, transaction_ref, check_id, ticked, performed_by_name, updated_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(client_id, transaction_ref, check_id)
+        DO UPDATE SET ticked = excluded.ticked, performed_by_name = excluded.performed_by_name, updated_at = CURRENT_TIMESTAMP
+        """,
+        (client_id, transaction_ref, check_id, 1 if ticked else 0, performed_by_name)
+    )
+    log_audit("Analyst", "Save Voucher Check", "Verification",
+              f"Client {client_id}, voucher '{transaction_ref}', check {check_id} set to ticked={ticked}.")
+    return {
+        "client_id": client_id,
+        "transaction_ref": transaction_ref,
+        "check_id": check_id,
+        "ticked": ticked,
+        "performed_by_name": performed_by_name
+    }
+
+# ==============================================
 # VOUCHER LINE SUPPORTING DOCUMENTS (new 6-phase requirement, Phase 1 of 6)
 # Data layer for linking a Data Bank row (client_data) to a voucher line as
 # supporting evidence for a specific Document "slot" (audit_rule_documents).
