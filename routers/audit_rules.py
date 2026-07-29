@@ -7,7 +7,7 @@
 # voucher will eventually reference (wired up in Phase 9).
 
 import sqlite3
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 from typing import Optional, List
 from database import execute_query, execute_write, log_audit
@@ -657,6 +657,148 @@ def restore_category(category_id: int):
     execute_write("UPDATE audit_rule_categories SET is_active = 1 WHERE id = ?", (category_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Category: {existing[0]['name']} (ID: {category_id})")
     return {"message": "Category restored successfully"}
+
+
+# ==============================================
+# VOUCHER CHECKS
+# ==============================================
+# Generic Voucher-Level Checks (new, confirmed 6-phase requirement), Phase 2 of 6: CRUD for
+# check definitions, replacing the hardcoded Prepared/Checked/Approved-By concept
+# (voucher_approvals, untouched by this phase) with a data-driven, extensible list of global
+# checks. Mirrors Documents' 6-endpoint soft-delete/restore CRUD pattern exactly, plus a
+# reorder endpoint (this is the first entity in this file with a user-orderable sort_order on
+# the entity itself, rather than only on its child rows) modeled on
+# routers/templates.py's POST /api/templates/{template_id}/reorder.
+
+# ---------- DATA MODELS ----------
+class VoucherCheckCreate(BaseModel):
+    name: str
+    auth_roles: List[str] = []
+
+class VoucherCheckUpdate(BaseModel):
+    name: str
+    auth_roles: List[str] = []
+
+# ---------- HELPERS ----------
+def get_voucher_check_auth_roles(voucher_check_id: int) -> List[str]:
+    rows = execute_query(
+        "SELECT role_name FROM audit_rule_voucher_check_auth_roles WHERE voucher_check_id = ? ORDER BY sort_order",
+        (voucher_check_id,)
+    )
+    return [r["role_name"] for r in rows]
+
+def save_voucher_check_auth_roles(voucher_check_id: int, auth_roles: List[str]):
+    """Replace a voucher check's authorisation-roles list (delete-then-reinsert)."""
+    execute_write("DELETE FROM audit_rule_voucher_check_auth_roles WHERE voucher_check_id = ?", (voucher_check_id,))
+    for idx, role_name in enumerate(auth_roles):
+        execute_write(
+            "INSERT INTO audit_rule_voucher_check_auth_roles (voucher_check_id, role_name, sort_order) VALUES (?, ?, ?)",
+            (voucher_check_id, role_name, idx)
+        )
+
+def row_to_voucher_check(row: dict) -> dict:
+    voucher_check_id = row["id"]
+    return {
+        "id": voucher_check_id,
+        "name": row["name"],
+        "sort_order": row["sort_order"],
+        "is_active": bool(row["is_active"]),
+        "created_at": row["created_at"],
+        "auth_roles": get_voucher_check_auth_roles(voucher_check_id),
+    }
+
+def get_next_voucher_check_sort_order() -> int:
+    """
+    Next sort_order value to append a new check at the end of the list. Computed across all
+    rows (active or not) so a soft-deleted row's slot isn't reused unexpectedly.
+    """
+    rows = execute_query("SELECT COALESCE(MAX(sort_order), -1) as max_order FROM audit_rule_voucher_checks")
+    return rows[0]["max_order"] + 1
+
+# ---------- ENDPOINTS ----------
+
+@router.get("/api/audit-rules/voucher-checks")
+def get_voucher_checks(include_inactive: bool = False):
+    """
+    Get all voucher checks, ordered by sort_order (a user-orderable list, unlike
+    Documents/Cross-checks/Categories which order alphabetically). By default, only active
+    checks are returned. Set include_inactive=True to get all.
+    """
+    query = "SELECT * FROM audit_rule_voucher_checks"
+    if not include_inactive:
+        query += " WHERE is_active = 1"
+    query += " ORDER BY sort_order"
+    rows = execute_query(query)
+    return [row_to_voucher_check(r) for r in rows]
+
+@router.get("/api/audit-rules/voucher-checks/{voucher_check_id}")
+def get_voucher_check(voucher_check_id: int):
+    rows = execute_query("SELECT * FROM audit_rule_voucher_checks WHERE id = ?", (voucher_check_id,))
+    if not rows:
+        raise HTTPException(404, "Voucher check not found")
+    return row_to_voucher_check(rows[0])
+
+@router.post("/api/audit-rules/voucher-checks")
+def create_voucher_check(voucher_check: VoucherCheckCreate):
+    sort_order = get_next_voucher_check_sort_order()
+    voucher_check_id = execute_write(
+        "INSERT INTO audit_rule_voucher_checks (name, sort_order) VALUES (?, ?)",
+        (voucher_check.name, sort_order)
+    )
+    save_voucher_check_auth_roles(voucher_check_id, voucher_check.auth_roles)
+
+    log_audit("Admin", "Create", "AuditRules", f"Created voucher check: {voucher_check.name}")
+    return {"message": f"Voucher check '{voucher_check.name}' created successfully", "voucher_check_id": voucher_check_id}
+
+@router.put("/api/audit-rules/voucher-checks/{voucher_check_id}")
+def update_voucher_check(voucher_check_id: int, voucher_check: VoucherCheckUpdate):
+    existing = execute_query("SELECT id FROM audit_rule_voucher_checks WHERE id = ?", (voucher_check_id,))
+    if not existing:
+        raise HTTPException(404, "Voucher check not found")
+
+    execute_write(
+        "UPDATE audit_rule_voucher_checks SET name = ? WHERE id = ?",
+        (voucher_check.name, voucher_check_id)
+    )
+    save_voucher_check_auth_roles(voucher_check_id, voucher_check.auth_roles)
+
+    log_audit("Admin", "Update", "AuditRules", f"Updated voucher check ID {voucher_check_id}")
+    return {"message": "Voucher check updated successfully"}
+
+@router.delete("/api/audit-rules/voucher-checks/{voucher_check_id}")
+def delete_voucher_check(voucher_check_id: int):
+    """
+    Soft-delete a voucher check (set is_active = 0).
+    """
+    existing = execute_query("SELECT name FROM audit_rule_voucher_checks WHERE id = ? AND is_active = 1", (voucher_check_id,))
+    if not existing:
+        raise HTTPException(404, "Active voucher check not found")
+    execute_write("UPDATE audit_rule_voucher_checks SET is_active = 0 WHERE id = ?", (voucher_check_id,))
+    log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted voucher check: {existing[0]['name']} (ID: {voucher_check_id})")
+    return {"message": "Voucher check deleted (soft-delete) successfully"}
+
+@router.post("/api/audit-rules/voucher-checks/{voucher_check_id}/restore")
+def restore_voucher_check(voucher_check_id: int):
+    """
+    Restore a soft-deleted voucher check.
+    """
+    existing = execute_query("SELECT name FROM audit_rule_voucher_checks WHERE id = ? AND is_active = 0", (voucher_check_id,))
+    if not existing:
+        raise HTTPException(404, "Inactive voucher check not found")
+    execute_write("UPDATE audit_rule_voucher_checks SET is_active = 1 WHERE id = ?", (voucher_check_id,))
+    log_audit("Admin", "Restore", "AuditRules", f"Restored voucher check: {existing[0]['name']} (ID: {voucher_check_id})")
+    return {"message": "Voucher check restored successfully"}
+
+@router.post("/api/audit-rules/voucher-checks/reorder")
+def reorder_voucher_checks(check_ids: List[int] = Body(...)):
+    """Update sort_order for all voucher checks, same pattern as reorder_template_columns()."""
+    for idx, check_id in enumerate(check_ids):
+        execute_write(
+            "UPDATE audit_rule_voucher_checks SET sort_order = ? WHERE id = ?",
+            (idx, check_id)
+        )
+    log_audit("Admin", "Reorder", "AuditRules", "Reordered voucher checks")
+    return {"message": "Order updated successfully"}
 
 
 # ==============================================
