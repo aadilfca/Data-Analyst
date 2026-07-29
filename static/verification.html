@@ -833,6 +833,13 @@
                     <button class="close-btn" id="procedureModalClose"
                         style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
                 </div>
+                <!-- Persistent voucher-level checks bar (Generic Voucher-Level Checks cutover): shown
+                     once per voucher, above the document rail — not duplicated per tab/line, since
+                     these checks (audit_rule_voucher_checks/voucher_check_status) apply to the whole
+                     voucher, not one line. Fully JS-rendered by renderVoucherChecksBar() in
+                     verification.js, same "no static per-item markup" convention as the rail/panels
+                     below. -->
+                <div id="procedureVoucherChecksBar" class="procedure-voucher-checks-bar"></div>
                 <div class="procedure-modal-body">
                     <div id="procedureModalTabs" class="procedure-doc-rail"></div>
                     <div id="procedureModalPanels" class="procedure-tab-panels"></div>

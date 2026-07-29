@@ -768,18 +768,19 @@ const VOUCHER_LINE_TAB_ID = '__voucher_line__';
 // Must match ACCOUNT_HEAD_OBSERVATION_DOC_ID in routers/verification.py exactly.
 const ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1;
 
-// Voucher-level approval cache, keyed by transaction_ref (shared across every line of the same
-// voucher, not per-uid) — { client_id, transaction_ref, prepared_by, checked_by, approved_by,
-// dirty, loaded }. Fetched once per voucher in openProcedureModal(), reused across lines of that
-// same voucher within one modal session.
-let voucherApprovalCache = {};
+// Generic Voucher-Level Checks (Phase 5 cutover) — voucher-level checks cache, keyed by
+// transaction_ref (shared across every line of the same voucher, not per-uid) — array of
+// { id, name, sort_order, auth_roles, ticked, performed_by_name, dirty }. Fetched once per
+// voucher in openProcedureModal(), reused across lines of that same voucher within one modal
+// session. Replaces the old voucherApprovalCache (Prepared/Checked/Approved-By, retired).
+let voucherChecksCache = {};
 const VOUCHER_LINE_DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars'];
 const VOUCHER_LINE_DEBIT_ALIASES = ['Debit Amount', 'Debit', 'Dr Amount', 'Dr'];
 const VOUCHER_LINE_CREDIT_ALIASES = ['Credit Amount', 'Credit', 'Cr Amount', 'Cr'];
 
 // Account Head Recommendation (Validation Rules Phase 7, extended by the reposition/search-select/
 // no-match follow-up) — keyed by uid (per voucher line, not shared across lines like
-// voucherApprovalCache, since suggestions are description-driven).
+// voucherChecksCache, since suggestions are description-driven).
 // `mode`: 'match' (default, search-select over Trial Balance leaf accounts — scratch-only, no
 // backend persistence, confirmed) or 'nomatch' (free-text finding — IS persisted, via
 // flushAccountHeadNoMatchNote()/ACCOUNT_HEAD_OBSERVATION_DOC_ID). `selectedAccountId`/
@@ -1009,15 +1010,16 @@ async function updateProceduresCellForLine(uid, type) {
         return;
     }
 
-    // Transaction level approval (Phase 4 of 4, FINAL): only fetch/await the voucher-level
-    // approval record when at least one of this Category's Documents is actually flagged —
-    // avoids an extra network call for the common unflagged case. Warms the same
-    // voucherApprovalCache openProcedureModal() reads, via the shared ensureVoucherApprovalLoaded().
-    const needsVoucherApproval = documents.some(doc => doc.transaction_level_approval);
-    const [assignedRecords, procedureChecks, va] = await Promise.all([
+    // Transaction level approval (Phase 4 of 4, FINAL, re-pointed by the Generic Voucher-Level
+    // Checks cutover): only fetch/await the voucher-level checks list when at least one of this
+    // Category's Documents is actually flagged — avoids an extra network call for the common
+    // unflagged case. Warms the same voucherChecksCache openProcedureModal() reads, via the shared
+    // ensureVoucherChecksLoaded().
+    const needsVoucherChecks = documents.some(doc => doc.transaction_level_approval);
+    const [assignedRecords, procedureChecks, checks] = await Promise.all([
         fetchAssignedDocumentRecords(uid),
         fetchProcedureChecksForLine(uid),
-        needsVoucherApproval ? ensureVoucherApprovalLoaded(getClientId(), currentVoucherId) : Promise.resolve(null)
+        needsVoucherChecks ? ensureVoucherChecksLoaded(getClientId(), currentVoucherId) : Promise.resolve(null)
     ]);
     // Re-check the stale guard after these awaits, same reason as above.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
@@ -1033,7 +1035,7 @@ async function updateProceduresCellForLine(uid, type) {
             base = roles.length > 0 && roles.every(role => procedureChecks.some(c => c.document_id === doc.id && c.role_name === role && c.is_checked));
         }
         if (!base) return false;
-        if (doc.transaction_level_approval) return isVoucherApprovalComplete(va);
+        if (doc.transaction_level_approval) return isVoucherChecksComplete(checks);
         return true;
     };
 
@@ -2429,8 +2431,8 @@ async function saveLineItems(detailId = currentDetailId) {
     // legacy save below — this is what lets the observation textarea skip a dedicated Save button
     // and still survive Prev/Next/Complete/Exit (see flushProcedureObservations()).
     await flushProcedureObservations(detailId);
-    // Validation Rules Phase 5: same "flush on save" treatment for a dirty voucher-approval edit.
-    await flushVoucherApproval(detailId);
+    // Generic Voucher-Level Checks cutover: same "flush on save" treatment for a dirty check name.
+    await flushVoucherChecks(detailId);
     // Account Head Recommendation follow-up: same "flush on save" treatment for a dirty no-match
     // note (the TB-match search-select selection stays confirmed scratch-only and is never flushed).
     await flushAccountHeadNoMatchNote(detailId);
@@ -3003,12 +3005,12 @@ async function openProcedureModal(uid, initialDocId = null) {
     // on every open, same fail-soft-to-empty convention as assignedRecords/procedureChecks above.
     await fetchLatestTbAccounts(getClientId());
 
-    // Validation Rules Phase 5: the voucher-level Prepared/Checked/Approved By record — read once
-    // per voucher (client_id+transaction_ref), reused across every line of that same voucher
+    // Generic Voucher-Level Checks cutover: the persistent voucher-level checks bar's data — read
+    // once per voucher (client_id+transaction_ref), reused across every line of that same voucher
     // rather than re-fetched per line, matching the backend's own "applied to every line of that
     // voucher" design (Phase 4). currentVoucherId is this open voucher's transaction_ref, kept in
     // sync by every navigation function in this module.
-    await ensureVoucherApprovalLoaded(getClientId(), currentVoucherId);
+    await ensureVoucherChecksLoaded(getClientId(), currentVoucherId);
 
     // The voucher line's own amount (for the mismatch badge) — looked up from the already-loaded
     // voucher, no extra fetch needed. String()-normalized: uid arrives as a string whenever this
@@ -3088,25 +3090,29 @@ async function openProcedureModal(uid, initialDocId = null) {
 
     procedureModal.style.display = 'flex';
 
+    // Generic Voucher-Level Checks cutover: the persistent bar is shown once per voucher, above
+    // the rail — rendered here (not per-tab, unlike renderProcedureModalTabs()/activateProcedureTab()
+    // below) since it doesn't belong to any one document's panel.
+    renderVoucherChecksBar(uid);
     renderProcedureModalTabs(uid);
     activateProcedureTab(uid, activeDocId);
     updateProcedureModalSavedNote(uid);
 }
 
 // Reflects whether any tab for this line has an unsaved (typed-but-not-yet-flushed) observation,
-// or the voucher-level approval fields have an unsaved edit (Validation Rules Phase 5) — checklist
-// ticks and the signature-exception tick already save immediately, so only text fields can ever
-// be "unsaved" here. Called on modal open, on every keystroke in the observation textarea
-// (wireProcedureChecklistAndObservation()) or the voucher-approval fields
-// (renderVoucherApprovalPanel()), and after flushProcedureObservations()/flushVoucherApproval()
-// resolve.
+// or any voucher-level check's performed-by name field has an unsaved edit (Generic Voucher-Level
+// Checks cutover — replaces the old voucher-approval-fields dirty check) — checklist ticks and the
+// signature-exception tick already save immediately, so only text fields can ever be "unsaved"
+// here. Called on modal open, on every keystroke in the observation textarea
+// (wireProcedureChecklistAndObservation()) or a check's name field (renderVoucherChecksBar()), and
+// after flushProcedureObservations()/flushVoucherChecks() resolve.
 function updateProcedureModalSavedNote(uid) {
     const noteEl = document.getElementById('procedureModalSavedNote');
     if (!noteEl) return;
     const lineState = procedureModalState[uid];
     const tabs = (lineState && lineState.tabs) || {};
-    const va = voucherApprovalCache[currentVoucherId];
-    const dirty = Object.values(tabs).some(t => t.observationDirty) || !!(va && va.dirty);
+    const checks = voucherChecksCache[currentVoucherId] || [];
+    const dirty = Object.values(tabs).some(t => t.observationDirty) || checks.some(c => c.dirty);
     noteEl.textContent = dirty ? 'Unsaved changes' : 'All changes saved';
     noteEl.classList.toggle('dirty', dirty);
 }
@@ -3138,7 +3144,7 @@ async function navigateProcedureModalLine(delta) {
     // cleared_status recomputes and the badge refreshes every time the modal moves between
     // lines — the badge lives in the main table, hidden behind the modal while it's open, so
     // this is the natural point for it to catch up. saveLineItems() already calls
-    // flushProcedureObservations()/flushVoucherApproval() internally, so this is a strict
+    // flushProcedureObservations()/flushVoucherChecks() internally, so this is a strict
     // superset of the old call, not a behavior change to the observation flush itself.
     await saveLineItems(uid);
     await openProcedureModal(newUid);
@@ -3161,41 +3167,124 @@ async function closeProcedureModal() {
     currentProcedureModalUid = null;
 }
 
-// Shared "are all three voucher-level approval fields filled" check — used by the synthetic
-// Voucher Line tab's own completeness below, and (Transaction level approval, Phase 4 of 4) by
-// any real Document flagged transaction_level_approval, whose tab additionally requires this.
-function isVoucherApprovalComplete(va) {
-    return !!(va && (va.prepared_by || '').trim() && (va.checked_by || '').trim() && (va.approved_by || '').trim());
+// Shared "are all currently-active voucher-level checks ticked" check — used by any real Document
+// flagged transaction_level_approval, whose tab additionally requires this (Generic Voucher-Level
+// Checks cutover: replaces the old isVoucherApprovalComplete(), same gating role but reading the
+// new checks list instead of the retired 3-field Prepared/Checked/Approved-By record).
+function isVoucherChecksComplete(checks) {
+    return Array.isArray(checks) && checks.length > 0 && checks.every(c => c.ticked);
 }
 
-// Fetches and caches one voucher's Prepared/Checked/Approved By record (client_id+transaction_ref
-// scoped, shared across every line of that voucher) — factored out of openProcedureModal() so
+// Fetches and caches one voucher's checks list (client_id+transaction_ref scoped, shared across
+// every line of that voucher) — factored out of openProcedureModal() so
 // updateProceduresCellForLine()'s standalone badge computation (below) can also warm the same
 // cache for a transaction_level_approval-flagged Document, without duplicating this fetch.
-async function ensureVoucherApprovalLoaded(clientId, transactionRef) {
+async function ensureVoucherChecksLoaded(clientId, transactionRef) {
     if (!transactionRef) return null;
-    if (voucherApprovalCache[transactionRef] && voucherApprovalCache[transactionRef].loaded) {
-        return voucherApprovalCache[transactionRef];
+    if (voucherChecksCache[transactionRef]) {
+        return voucherChecksCache[transactionRef];
     }
     try {
         const params = new URLSearchParams({ client_id: clientId, transaction_ref: transactionRef });
-        const vaRes = await fetch(`${API_BASE}/api/verification/voucher_approval?${params}`);
-        if (vaRes.ok) {
-            const vaData = await vaRes.json();
-            voucherApprovalCache[transactionRef] = {
-                client_id: clientId,
-                transaction_ref: transactionRef,
-                prepared_by: vaData.prepared_by || '',
-                checked_by: vaData.checked_by || '',
-                approved_by: vaData.approved_by || '',
-                dirty: false,
-                loaded: true
-            };
+        const res = await fetch(`${API_BASE}/api/verification/voucher_checks?${params}`);
+        if (res.ok) {
+            const data = await res.json();
+            voucherChecksCache[transactionRef] = data.map(c => ({
+                id: c.id,
+                name: c.name,
+                sort_order: c.sort_order,
+                auth_roles: c.auth_roles || [],
+                ticked: !!c.ticked,
+                performed_by_name: c.performed_by_name || '',
+                dirty: false
+            }));
         }
     } catch (e) {
-        console.error('Failed to load voucher approval record:', e);
+        console.error('Failed to load voucher checks:', e);
     }
-    return voucherApprovalCache[transactionRef] || null;
+    return voucherChecksCache[transactionRef] || null;
+}
+
+// Renders the persistent voucher-level checks bar, shown once per voucher above the document rail
+// (#procedureVoucherChecksBar, static/verification.html) — not duplicated per tab/line, since these
+// checks apply to the whole voucher (client_id+transaction_ref), not one line. Each configured
+// check (audit_rule_voucher_checks, ordered by sort_order) renders as a tick checkbox + an inline
+// performed-by name field + a small display-only roles hint (auth_roles have no access-control
+// meaning anywhere in this codebase — same "informational only" convention as the per-document
+// Audit Procedures checklist's "sourced from Audit Rules" label). Ticking saves immediately
+// (optimistic, mirrors toggleProcedureCheck()); the name field is local-first, flushed at the same
+// Prev/Next/Complete/Exit/close chokepoint as everything else (flushVoucherChecks(), called from
+// saveLineItems()).
+function renderVoucherChecksBar(uid) {
+    const container = document.getElementById('procedureVoucherChecksBar');
+    if (!container) return;
+    const transactionRef = currentVoucherId;
+    const checks = voucherChecksCache[transactionRef] || [];
+
+    if (!checks.length) {
+        container.innerHTML = '<p class="procedure-voucher-checks-empty">No voucher-level checks configured.</p>';
+        return;
+    }
+
+    container.innerHTML = checks.map(check => `
+        <div class="procedure-voucher-check-item" data-check-id="${check.id}">
+            <label class="procedure-voucher-check-tick">
+                <input type="checkbox" class="procedure-voucher-check-checkbox" data-check-id="${check.id}" ${check.ticked ? 'checked' : ''}>
+                <span>${escapeHtml(check.name)}</span>
+            </label>
+            <input type="text" class="procedure-search-input procedure-voucher-check-name" data-check-id="${check.id}"
+                placeholder="Performed by..." value="${escapeHtml(check.performed_by_name || '')}">
+            ${check.auth_roles.length ? `<span class="procedure-voucher-check-roles">${escapeHtml(check.auth_roles.join(', '))}</span>` : ''}
+        </div>
+    `).join('');
+
+    container.querySelectorAll('.procedure-voucher-check-checkbox').forEach(cb => {
+        cb.addEventListener('change', async function() {
+            const checkId = parseInt(this.dataset.checkId);
+            const check = checks.find(c => c.id === checkId);
+            if (!check) return;
+            const previousTicked = check.ticked;
+            check.ticked = this.checked;
+            try {
+                const res = await fetch(`${API_BASE}/api/verification/save_voucher_check`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_id: getClientId(),
+                        transaction_ref: transactionRef,
+                        check_id: checkId,
+                        ticked: check.ticked,
+                        performed_by_name: check.performed_by_name
+                    })
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Failed to save voucher check.');
+                }
+                // Completion-dot/gate logic depends on tick state, so a successful toggle must
+                // refresh the rail's dots and the main table's Procedures badges — mirrors
+                // toggleProcedureCheck()'s own renderProcedureModalTabs() refresh.
+                renderProcedureModalTabs(uid);
+                await saveAllVoucherLines();
+            } catch (e) {
+                console.error('Failed to save voucher check:', e);
+                check.ticked = previousTicked;
+                this.checked = previousTicked;
+                showStatus('Failed to save voucher-level check — please try again.', 'error');
+            }
+        });
+    });
+
+    container.querySelectorAll('.procedure-voucher-check-name').forEach(input => {
+        input.addEventListener('input', function() {
+            const checkId = parseInt(this.dataset.checkId);
+            const check = checks.find(c => c.id === checkId);
+            if (!check) return;
+            check.performed_by_name = this.value;
+            check.dirty = true;
+            updateProcedureModalSavedNote(uid);
+        });
+    });
 }
 
 // Shared completeness check for one document within one voucher line's modal — used both by the
@@ -3204,15 +3293,17 @@ async function ensureVoucherApprovalLoaded(clientId, transactionRef) {
 // meaningless for it — its completeness instead reflects whether every one of its Audit Procedures
 // is ticked (voucher_line_procedure_checks, same source the checklist itself reads via
 // getProcedureTabState()). Zero procedures configured is deliberately NOT complete (empty ≠ done),
-// per the confirmed requirement. Transaction level approval (Phase 4 of 4, FINAL): a Document
-// flagged transaction_level_approval requires the voucher-level approval fields to ALSO be
-// complete, on top of (not instead of) its own base completeness rule above.
+// per the confirmed requirement. Transaction level approval (Phase 4 of 4, FINAL, re-pointed by the
+// Generic Voucher-Level Checks cutover): a Document flagged transaction_level_approval requires the
+// new voucher-level checks bar to ALSO be complete, on top of (not instead of) its own base
+// completeness rule above.
 function isProcedureDocumentComplete(uid, doc) {
-    // Validation Rules Phase 5: the synthetic Voucher Line tab is complete only when all three
-    // approval fields are filled — currentVoucherId is this open voucher's transaction_ref
-    // (the modal only ever shows lines of the currently open voucher).
+    // Generic Voucher-Level Checks cutover: the synthetic Voucher Line tab now only hosts the
+    // Account Head Recommendation card (an optional recommendation, not a gate) — the voucher-level
+    // checks it used to hold live in the persistent bar above the rail instead, so this tab's dot
+    // is always neutral/complete and never blocks the rail's default-tab selection.
     if (doc.__voucherTab) {
-        return isVoucherApprovalComplete(voucherApprovalCache[currentVoucherId]);
+        return true;
     }
     let baseComplete;
     if (doc.template_id) {
@@ -3225,7 +3316,7 @@ function isProcedureDocumentComplete(uid, doc) {
     }
     if (!baseComplete) return false;
     if (doc.transaction_level_approval) {
-        return isVoucherApprovalComplete(voucherApprovalCache[currentVoucherId]);
+        return isVoucherChecksComplete(voucherChecksCache[currentVoucherId]);
     }
     return true;
 }
@@ -3243,13 +3334,14 @@ function renderProcedureModalTabs(uid) {
         const isActive = doc.id === lineState.activeDocId;
         const isComplete = isProcedureDocumentComplete(uid, doc);
 
-        // Validation Rules Phase 5: the synthetic Voucher Line tab has no roles/mismatch concept —
-        // just name + completion dot.
+        // Generic Voucher-Level Checks cutover: the synthetic Voucher Line tab now only hosts the
+        // (optional, non-gating) Account Head Recommendation card — no roles/mismatch concept, and
+        // isProcedureDocumentComplete() always returns true for it, so its dot is a fixed neutral
+        // "complete" marker rather than reflecting any real approval state.
         if (doc.__voucherTab) {
-            const dotTitle = isComplete ? 'Approval recorded' : 'Approval pending';
             return `
                 <button type="button" class="procedure-tab-btn${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
-                    <span class="procedure-tab-dot${isComplete ? ' complete' : ''}" title="${dotTitle}"></span>
+                    <span class="procedure-tab-dot complete" title="Account Head Recommendation"></span>
                     <span class="procedure-tab-text">
                         <span class="procedure-tab-label">${escapeHtml(doc.name)}</span>
                     </span>
@@ -3446,23 +3538,18 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
 // (Phase 5), and the Observation section (Phase 6). A document with no template_id has nothing to
 // search Data Bank evidence against, so its tab renders only the two segments that don't depend on
 // evidence — Audit Procedures + Observation — reusing their existing markup/logic verbatim.
-// Validation Rules Phase 5: Prepared/Checked/Approved By fields for the synthetic Voucher Line
-// tab. Reuses the app's neutral "Data Table" segment styling (grey header, white body) so it
-// stays visually consistent with the other tabs' segment cards without inventing a new look.
-// Local-first, no-network-per-keystroke — same pattern as the Observation textarea (see
-// buildObservationSection()) — flushed via flushVoucherApproval() at the same save points.
+// Generic Voucher-Level Checks cutover: the synthetic Voucher Line tab now hosts only the Account
+// Head Recommendation card — the old Prepared/Checked/Approved-By fields that used to sit below it
+// were removed, replaced by the persistent voucher-level checks bar above the rail
+// (renderVoucherChecksBar()).
 function renderVoucherApprovalPanel(uid) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
-    const transactionRef = currentVoucherId;
-    const va = voucherApprovalCache[transactionRef] || { prepared_by: '', checked_by: '', approved_by: '', dirty: false, loaded: false };
 
     const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
     const voucherLine = lineIdx !== -1 ? currentVoucherLines[lineIdx] : null;
     const currentAccountName = voucherLine ? getVoucherLineAlias(voucherLine.row_data || {}, VOUCHER_LINE_ACCOUNT_NAME_ALIASES) : '—';
 
-    // Reposition (confirmed fix): Account Head Recommendation now sits above Voucher Approval —
-    // DOM order swapped from the original Phase 5/7 build, no other change to this outer shell.
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${VOUCHER_LINE_TAB_ID}">
             <div class="procedure-segment procedure-segment-data">
@@ -3475,51 +3562,15 @@ function renderVoucherApprovalPanel(uid) {
                     <div id="procedureAccountHeadBody"></div>
                 </div>
             </div>
-            <div class="procedure-segment procedure-segment-data">
-                <h4 class="procedure-segment-header">🖊️ Voucher Approval</h4>
-                <div class="procedure-segment-body">
-                    <p class="procedure-tab-note">Mandatory for every line of this voucher — independent of Category and any document's own approval requirement.</p>
-                    <div class="procedure-voucher-approval-field">
-                        <label for="procedureVoucherPreparedBy">Prepared By</label>
-                        <input type="text" id="procedureVoucherPreparedBy" class="procedure-search-input" value="${escapeHtml(va.prepared_by)}">
-                    </div>
-                    <div class="procedure-voucher-approval-field">
-                        <label for="procedureVoucherCheckedBy">Checked By</label>
-                        <input type="text" id="procedureVoucherCheckedBy" class="procedure-search-input" value="${escapeHtml(va.checked_by)}">
-                    </div>
-                    <div class="procedure-voucher-approval-field">
-                        <label for="procedureVoucherApprovedBy">Approved By</label>
-                        <input type="text" id="procedureVoucherApprovedBy" class="procedure-search-input" value="${escapeHtml(va.approved_by)}">
-                    </div>
-                </div>
-            </div>
         </div>
     `;
-
-    const fieldMap = {
-        procedureVoucherPreparedBy: 'prepared_by',
-        procedureVoucherCheckedBy: 'checked_by',
-        procedureVoucherApprovedBy: 'approved_by'
-    };
-    Object.keys(fieldMap).forEach(elId => {
-        const el = document.getElementById(elId);
-        if (!el) return;
-        el.addEventListener('input', function() {
-            if (!voucherApprovalCache[transactionRef]) {
-                voucherApprovalCache[transactionRef] = { client_id: getClientId(), transaction_ref: transactionRef, prepared_by: '', checked_by: '', approved_by: '', dirty: false, loaded: true };
-            }
-            voucherApprovalCache[transactionRef][fieldMap[elId]] = this.value;
-            voucherApprovalCache[transactionRef].dirty = true;
-            updateProcedureModalSavedNote(uid);
-        });
-    });
 
     renderAccountHeadCard(uid);
 }
 
 // Renders just the Account Head Recommendation segment's body (#procedureAccountHeadBody) —
-// scoped re-render so toggling match/no-match mode doesn't disturb the sibling Voucher Approval
-// fields' focus/typed state. Branches entirely on accountHeadCache[uid].mode:
+// scoped re-render so toggling match/no-match mode doesn't disturb sibling state.
+// Branches entirely on accountHeadCache[uid].mode:
 //   'match'   — search-select over Trial Balance leaf accounts (latestTbAccountsCache), scratch-
 //               only per the confirmed decision (no backend persistence), plus the existing
 //               fuzzy-match Suggest flow.
@@ -4340,45 +4391,55 @@ async function saveLineObservation(uid, docId) {
     }
 }
 
-// Validation Rules Phase 5: persists a dirty (unsaved) voucher-approval edit — called from the
-// same save chokepoint as flushProcedureObservations() (saveLineItems()). No-op if nothing
-// changed since the last save. On a successful save, refreshes every currently-loaded line of
-// this voucher (not just the active one) via saveAllVoucherLines(), since the approval record is
-// shared across the whole voucher, not scoped to one line — matches the backend's own "applied to
-// every line of that voucher" design (Phase 4). Marking dirty=false before that call means any
-// nested saveLineItems()->flushVoucherApproval() calls it triggers simply no-op, not recurse.
-async function flushVoucherApproval(uid) {
+// Generic Voucher-Level Checks cutover: persists every dirty (unsaved) performed-by-name edit for
+// this voucher's checks — called from the same save chokepoint as flushProcedureObservations()
+// (saveLineItems()). No-op if nothing changed since the last save. Tick state itself already saves
+// immediately on click (see the checkbox listener in renderVoucherChecksBar()); only the free-text
+// name field can ever be "dirty" here. On any successful save, refreshes every currently-loaded
+// line of this voucher (not just the active one) via saveAllVoucherLines(), since checks are shared
+// across the whole voucher, not scoped to one line — matches the backend's own "applied to every
+// line of that voucher" design (Phase 4). Marking dirty=false before that call means any nested
+// saveLineItems()->flushVoucherChecks() calls it triggers simply no-op, not recurse.
+async function flushVoucherChecks(uid) {
     const transactionRef = currentVoucherId;
-    const va = voucherApprovalCache[transactionRef];
-    if (!va || !va.dirty) return;
+    const checks = voucherChecksCache[transactionRef];
+    if (!checks || !checks.length) return;
+    const dirtyChecks = checks.filter(c => c.dirty);
+    if (!dirtyChecks.length) return;
 
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/save_voucher_approval`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                client_id: va.client_id,
-                transaction_ref: transactionRef,
-                prepared_by: va.prepared_by,
-                checked_by: va.checked_by,
-                approved_by: va.approved_by
-            })
-        });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to save voucher approval.');
+    let anySaved = false;
+    for (const check of dirtyChecks) {
+        try {
+            const res = await fetch(`${API_BASE}/api/verification/save_voucher_check`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    client_id: getClientId(),
+                    transaction_ref: transactionRef,
+                    check_id: check.id,
+                    ticked: check.ticked,
+                    performed_by_name: check.performed_by_name
+                })
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || 'Failed to save voucher check.');
+            }
+            check.dirty = false;
+            anySaved = true;
+        } catch (e) {
+            console.error('Failed to save voucher check:', e);
+            showStatus('Failed to save a voucher-level check — please try again.', 'error');
         }
-        va.dirty = false;
+    }
+    if (anySaved) {
         updateProcedureModalSavedNote(uid);
         await saveAllVoucherLines();
-    } catch (e) {
-        console.error('Failed to save voucher approval:', e);
-        showStatus('Failed to save voucher approval — please try again.', 'error');
     }
 }
 
 // Account Head Recommendation follow-up: persists a dirty no-match finding — called from the same
-// save chokepoint as flushProcedureObservations()/flushVoucherApproval() (saveLineItems()). No-op
+// save chokepoint as flushProcedureObservations()/flushVoucherChecks() (saveLineItems()). No-op
 // unless the card is currently in no-match mode with unsaved text. Reuses the existing
 // save_line_observation endpoint under the reserved ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel — the
 // backend wraps the raw text into the "[Account Head Recommendation]: New account head

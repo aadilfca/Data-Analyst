@@ -169,21 +169,28 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
         }
         approval_docs_ok = approval_required_doc_ids.issubset(approved_doc_ids)
 
-    # 3. Voucher-level approval check: independent of Category/documents, always required.
-    # Reads voucher_approvals (keyed client_id+transaction_ref, not session-scoped) - see
-    # the Conventions note on that table for why. No transaction_ref/no row/any blank
-    # field = fail (fails safe).
-    voucher_approval_ok = False
+    # 3. Voucher-level checks gate: independent of Category/documents, always required.
+    # Generic Voucher-Level Checks (Phase 5 cutover) - reads voucher_check_status/
+    # audit_rule_voucher_checks (keyed client_id+transaction_ref, not session-scoped, same
+    # rationale as the old voucher_approvals table it replaces) instead of the retired
+    # voucher_approvals-based Prepared/Checked/Approved-By fields. Passes only if every
+    # currently-active check has been ticked - a check with no voucher_check_status row yet
+    # counts as unticked (fails safe, same "no record = normal not-yet-done state, but that
+    # state doesn't pass the gate" convention used elsewhere in this function). No transaction_ref
+    # = fail.
+    voucher_checks_ok = False
     if transaction_ref:
-        va_rows = execute_query(
-            "SELECT prepared_by, checked_by, approved_by FROM voucher_approvals WHERE client_id = ? AND transaction_ref = ?",
+        active_check_ids = {
+            c['id'] for c in execute_query("SELECT id FROM audit_rule_voucher_checks WHERE is_active = 1")
+        }
+        ticked_rows = execute_query(
+            "SELECT check_id FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ? AND ticked = 1",
             (client_id, transaction_ref)
         )
-        if va_rows:
-            va = va_rows[0]
-            voucher_approval_ok = bool((va['prepared_by'] or '').strip()) \
-                and bool((va['checked_by'] or '').strip()) \
-                and bool((va['approved_by'] or '').strip())
+        ticked_check_ids = {r['check_id'] for r in ticked_rows}
+        # Vacuously true when zero checks are configured (nothing required = nothing to satisfy),
+        # same as an empty required-documents set already behaves in check #1 above.
+        voucher_checks_ok = active_check_ids.issubset(ticked_check_ids)
 
     # 4. Signature-exception check: defaults OK, fails only on a confirmed flagged mismatch.
     sig_rows = execute_query(
@@ -195,7 +202,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     )
     signature_ok = (sig_rows[0]['cnt'] == 0)
 
-    all_ok = doc_requirement_met and approval_docs_ok and voucher_approval_ok and signature_ok
+    all_ok = doc_requirement_met and approval_docs_ok and voucher_checks_ok and signature_ok
     cleared_status = "Cleared" if all_ok else "Query"
 
     execute_write(
@@ -1574,84 +1581,16 @@ def suggest_account_head(
     return {"matched": True, "suggestions": top}
 
 # ==============================================
-# VOUCHER-LEVEL APPROVAL (Validation Rules, Phase 5 of 7)
-# Read/write for the voucher_approvals table (database.py, Phase 1 addendum) - a mandatory,
-# always-required gate independent of Category/documents. Keyed by client_id+transaction_ref
-# (not session_id), so it survives across a cashbook being reopened in a new verification
-# session - see the Conventions note on voucher_approvals for the full rationale.
-# ==============================================
-
-@router.get("/api/verification/voucher_approval")
-def get_voucher_approval(
-    client_id: int = Query(..., description="Client ID"),
-    transaction_ref: str = Query(..., description="Voucher number (verification_details.transaction_ref)")
-):
-    """
-    Look up the Prepared/Checked/Approved By record for one voucher. Returns a clean
-    "no record yet" shape (all fields null) rather than a 404 - not having entered the
-    approval yet is a normal, expected state, same convention as get_category_for_account().
-    """
-    rows = execute_query(
-        "SELECT prepared_by, checked_by, approved_by FROM voucher_approvals WHERE client_id = ? AND transaction_ref = ?",
-        (client_id, transaction_ref)
-    )
-    if not rows:
-        return {"client_id": client_id, "transaction_ref": transaction_ref, "prepared_by": None, "checked_by": None, "approved_by": None}
-    r = rows[0]
-    return {
-        "client_id": client_id,
-        "transaction_ref": transaction_ref,
-        "prepared_by": r['prepared_by'],
-        "checked_by": r['checked_by'],
-        "approved_by": r['approved_by']
-    }
-
-
-@router.post("/api/verification/save_voucher_approval")
-def save_voucher_approval(
-    client_id: int = Body(..., embed=True),
-    transaction_ref: str = Body(..., embed=True),
-    prepared_by: Optional[str] = Body(None, embed=True),
-    checked_by: Optional[str] = Body(None, embed=True),
-    approved_by: Optional[str] = Body(None, embed=True)
-):
-    """
-    Upsert the Prepared/Checked/Approved By record for one voucher. Select-then-branch rather
-    than INSERT OR REPLACE, since REPLACE would reset the row's autoincrement id on every edit -
-    same pattern this module already uses elsewhere for a single-record-per-key upsert.
-    """
-    existing = execute_query(
-        "SELECT id FROM voucher_approvals WHERE client_id = ? AND transaction_ref = ?",
-        (client_id, transaction_ref)
-    )
-    if existing:
-        execute_write(
-            "UPDATE voucher_approvals SET prepared_by = ?, checked_by = ?, approved_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (prepared_by, checked_by, approved_by, existing[0]['id'])
-        )
-    else:
-        execute_write(
-            "INSERT INTO voucher_approvals (client_id, transaction_ref, prepared_by, checked_by, approved_by) VALUES (?, ?, ?, ?, ?)",
-            (client_id, transaction_ref, prepared_by, checked_by, approved_by)
-        )
-    log_audit("Analyst", "Save Voucher Approval", "Verification",
-              f"Client {client_id}, voucher '{transaction_ref}' approval record saved.")
-    return {
-        "client_id": client_id,
-        "transaction_ref": transaction_ref,
-        "prepared_by": prepared_by,
-        "checked_by": checked_by,
-        "approved_by": approved_by
-    }
-
-# ==============================================
-# GENERIC VOUCHER-LEVEL CHECKS (new 6-phase requirement, Phase 4 of 6)
+# GENERIC VOUCHER-LEVEL CHECKS (new 6-phase requirement, Phase 4 of 6; cutover Phase 5 of 6)
 # Read/write for voucher_check_status (database.py, Phase 1) against the check definitions
 # configured in Audit Rules (audit_rule_voucher_checks / audit_rule_voucher_check_auth_roles,
-# Phase 2). Keyed by client_id+transaction_ref, same rationale as voucher_approvals above.
-# This is additive only - it does NOT yet replace the VOUCHER-LEVEL APPROVAL section above or
-# the voucher_approvals check inside compute_and_persist_cleared_status(); that cutover is
-# deferred to Phase 5 (frontend), once the new checks are actually populated by real ticks.
+# Phase 2). Keyed by client_id+transaction_ref - same rationale as the old voucher_approvals
+# table (mandatory, always-required gate independent of Category/documents; survives a
+# cashbook being reopened in a new verification session since it isn't session_id-scoped).
+# Phase 5 cut compute_and_persist_cleared_status()'s voucher-level gate over to this table and
+# retired the old GET/POST voucher_approval / save_voucher_approval endpoints that used to read
+# voucher_approvals directly - that table itself is left in place (schema untouched), just no
+# longer read/written by this router.
 # ==============================================
 
 @router.get("/api/verification/voucher_checks")
@@ -1663,7 +1602,7 @@ def get_voucher_checks_status(
     Return every active audit_rule_voucher_checks definition, ordered by sort_order, merged
     with this voucher's current tick/performed-by status. A check with no voucher_check_status
     row yet returns ticked=false/performed_by_name=None - no record yet is a normal state, same
-    convention as get_voucher_approval().
+    convention as get_category_for_account().
     """
     checks = execute_query(
         "SELECT id, name, sort_order FROM audit_rule_voucher_checks WHERE is_active = 1 ORDER BY sort_order"
