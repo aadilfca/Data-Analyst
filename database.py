@@ -1091,6 +1091,22 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add risk_rating to audit_rule_documents:", e)
 
+        # Transaction level approval (new, confirmed requirement): a per-Document flag saying
+        # whether transaction-level approval applies to this Document - read later by
+        # Verification's procedure window (#procedureModal) to decide what to show/require for
+        # that Document's tab. Lives directly on audit_rule_documents (not per-Category, not the
+        # Category-Document junction table approval_required uses) since this is a property of
+        # the Document itself. Same upgrade-block treatment as is_active/template_id/risk_rating
+        # above.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'transaction_level_approval' not in columns:
+                conn.execute("ALTER TABLE audit_rule_documents ADD COLUMN transaction_level_approval INTEGER DEFAULT 0")
+                print("✅ Added transaction_level_approval column to audit_rule_documents")
+        except Exception as e:
+            print("⚠️ Could not add transaction_level_approval to audit_rule_documents:", e)
+
         # Fields on a Document available for cross-checks (e.g. Quantity, Amount, Date) -
         # stored here so they're a controlled per-document list, not free-typed elsewhere.
         conn.execute('''

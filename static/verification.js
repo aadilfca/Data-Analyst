@@ -3304,8 +3304,10 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
 
     function refreshObservationButtons() {
         if (suggestBtn) {
-            const hasTextNow = !!(tabState.observation && tabState.observation.trim());
-            suggestBtn.disabled = tabState.suggestionApplied || hasTextNow || !buildObservationSuggestion(uid, docId);
+            // Same rule as System Observations — driven only by whether a suggestion currently
+            // exists, never by suggestionApplied/hasText (those gate the old auto-fill-on-open
+            // behavior, not this button).
+            suggestBtn.disabled = !buildObservationSuggestion(uid, docId);
         }
         if (copyBtn) {
             const hasText = !!(tabState.observation && tabState.observation.trim());
@@ -3342,9 +3344,16 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
 
     if (suggestBtn) {
         suggestBtn.addEventListener('click', function() {
-            if (suggestBtn.disabled) return;
-            applyObservationSuggestionIfNeeded(uid, docId);
-            if (observationInput) observationInput.value = tabState.observation || '';
+            // Recomputed live at click time, same correctness-guard convention as System
+            // Observations' handler. Fills/replaces directly — does NOT go through
+            // applyObservationSuggestionIfNeeded(), whose suggestionApplied/non-empty-box guard
+            // exists only for the old auto-fill-on-open behavior and would otherwise block a
+            // re-fill after the box has been cleared or already suggested once.
+            const suggestion = buildObservationSuggestion(uid, docId);
+            if (!suggestion) return;
+            tabState.observation = suggestion;
+            tabState.observationDirty = true;
+            if (observationInput) observationInput.value = tabState.observation;
             updateProcedureModalSavedNote(uid);
             refreshObservationButtons();
         });
@@ -4234,7 +4243,10 @@ function buildObservationSection(uid, docId) {
     const isCopied = hasText && !tabState.observationDirty;
     const hasRestoreTarget = !!(tabState.lastSyncedText && tabState.lastSyncedText.trim());
     const systemSuggestion = buildObservationSuggestion(uid, docId);
-    const canSuggest = !tabState.suggestionApplied && !hasText && !!systemSuggestion;
+    // Disabled only when there's no suggestion to offer (same rule as System Observations) —
+    // suggestionApplied/hasText must never grey this out, since Suggest is a repeatable
+    // fill/replace action, not the old one-shot auto-fill it replaced.
+    const canSuggest = !!systemSuggestion;
     return `
         <textarea id="procedureObservationInput" class="procedure-observation-textarea"
             placeholder="Add an observation for this document...">${escapeHtml(tabState.observation || '')}</textarea>
