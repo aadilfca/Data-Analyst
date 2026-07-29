@@ -424,7 +424,7 @@ def get_category_cross_checks(category_id: int) -> List[dict]:
 def get_category_guidance_documents(category_id: int) -> List[dict]:
     rows = execute_query(
         """
-        SELECT d.id as document_id, d.name, d.kb_note, d.template_id, d.risk_rating
+        SELECT d.id as document_id, d.name, d.kb_note, d.template_id, d.risk_rating, d.transaction_level_approval
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
         WHERE cd.category_id = ?
@@ -439,6 +439,7 @@ def get_category_guidance_documents(category_id: int) -> List[dict]:
             "kb_note": r["kb_note"],
             "template_id": r["template_id"],
             "risk_rating": r["risk_rating"],
+            "transaction_level_approval": bool(r["transaction_level_approval"]),
             "auth_roles": get_document_auth_roles(r["document_id"]),
             "cross_check_fields": get_document_cross_check_fields(r["document_id"])
         }

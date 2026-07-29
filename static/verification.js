@@ -1009,18 +1009,32 @@ async function updateProceduresCellForLine(uid, type) {
         return;
     }
 
-    const [assignedRecords, procedureChecks] = await Promise.all([
+    // Transaction level approval (Phase 4 of 4, FINAL): only fetch/await the voucher-level
+    // approval record when at least one of this Category's Documents is actually flagged —
+    // avoids an extra network call for the common unflagged case. Warms the same
+    // voucherApprovalCache openProcedureModal() reads, via the shared ensureVoucherApprovalLoaded().
+    const needsVoucherApproval = documents.some(doc => doc.transaction_level_approval);
+    const [assignedRecords, procedureChecks, va] = await Promise.all([
         fetchAssignedDocumentRecords(uid),
-        fetchProcedureChecksForLine(uid)
+        fetchProcedureChecksForLine(uid),
+        needsVoucherApproval ? ensureVoucherApprovalLoaded(getClientId(), currentVoucherId) : Promise.resolve(null)
     ]);
     // Re-check the stale guard after these awaits, same reason as above.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
     const assignedDocIds = new Set(assignedRecords.map(r => r.document_id));
+    // Mirrors isProcedureDocumentComplete()'s base-then-gate shape so this standalone badge never
+    // disagrees with the modal tab's own completion dot for a flagged Document.
     const isDocDone = doc => {
-        if (doc.template_id) return assignedDocIds.has(doc.id);
-        const roles = doc.auth_roles || [];
-        if (!roles.length) return false;
-        return roles.every(role => procedureChecks.some(c => c.document_id === doc.id && c.role_name === role && c.is_checked));
+        let base;
+        if (doc.template_id) {
+            base = assignedDocIds.has(doc.id);
+        } else {
+            const roles = doc.auth_roles || [];
+            base = roles.length > 0 && roles.every(role => procedureChecks.some(c => c.document_id === doc.id && c.role_name === role && c.is_checked));
+        }
+        if (!base) return false;
+        if (doc.transaction_level_approval) return isVoucherApprovalComplete(va);
+        return true;
     };
 
     if (columnsExpanded) {
@@ -2994,28 +3008,7 @@ async function openProcedureModal(uid, initialDocId = null) {
     // rather than re-fetched per line, matching the backend's own "applied to every line of that
     // voucher" design (Phase 4). currentVoucherId is this open voucher's transaction_ref, kept in
     // sync by every navigation function in this module.
-    const clientId = getClientId();
-    const transactionRef = currentVoucherId;
-    if (transactionRef && !(voucherApprovalCache[transactionRef] && voucherApprovalCache[transactionRef].loaded)) {
-        try {
-            const params = new URLSearchParams({ client_id: clientId, transaction_ref: transactionRef });
-            const vaRes = await fetch(`${API_BASE}/api/verification/voucher_approval?${params}`);
-            if (vaRes.ok) {
-                const vaData = await vaRes.json();
-                voucherApprovalCache[transactionRef] = {
-                    client_id: clientId,
-                    transaction_ref: transactionRef,
-                    prepared_by: vaData.prepared_by || '',
-                    checked_by: vaData.checked_by || '',
-                    approved_by: vaData.approved_by || '',
-                    dirty: false,
-                    loaded: true
-                };
-            }
-        } catch (e) {
-            console.error('Failed to load voucher approval record:', e);
-        }
-    }
+    await ensureVoucherApprovalLoaded(getClientId(), currentVoucherId);
 
     // The voucher line's own amount (for the mismatch badge) — looked up from the already-loaded
     // voucher, no extra fetch needed. String()-normalized: uid arrives as a string whenever this
@@ -3168,28 +3161,73 @@ async function closeProcedureModal() {
     currentProcedureModalUid = null;
 }
 
+// Shared "are all three voucher-level approval fields filled" check — used by the synthetic
+// Voucher Line tab's own completeness below, and (Transaction level approval, Phase 4 of 4) by
+// any real Document flagged transaction_level_approval, whose tab additionally requires this.
+function isVoucherApprovalComplete(va) {
+    return !!(va && (va.prepared_by || '').trim() && (va.checked_by || '').trim() && (va.approved_by || '').trim());
+}
+
+// Fetches and caches one voucher's Prepared/Checked/Approved By record (client_id+transaction_ref
+// scoped, shared across every line of that voucher) — factored out of openProcedureModal() so
+// updateProceduresCellForLine()'s standalone badge computation (below) can also warm the same
+// cache for a transaction_level_approval-flagged Document, without duplicating this fetch.
+async function ensureVoucherApprovalLoaded(clientId, transactionRef) {
+    if (!transactionRef) return null;
+    if (voucherApprovalCache[transactionRef] && voucherApprovalCache[transactionRef].loaded) {
+        return voucherApprovalCache[transactionRef];
+    }
+    try {
+        const params = new URLSearchParams({ client_id: clientId, transaction_ref: transactionRef });
+        const vaRes = await fetch(`${API_BASE}/api/verification/voucher_approval?${params}`);
+        if (vaRes.ok) {
+            const vaData = await vaRes.json();
+            voucherApprovalCache[transactionRef] = {
+                client_id: clientId,
+                transaction_ref: transactionRef,
+                prepared_by: vaData.prepared_by || '',
+                checked_by: vaData.checked_by || '',
+                approved_by: vaData.approved_by || '',
+                dirty: false,
+                loaded: true
+            };
+        }
+    } catch (e) {
+        console.error('Failed to load voucher approval record:', e);
+    }
+    return voucherApprovalCache[transactionRef] || null;
+}
+
 // Shared completeness check for one document within one voucher line's modal — used both by the
 // rail's completion dot (below) and by openProcedureModal()'s default-tab selection. A no-template
 // document has no evidence table to link, so linked-evidence presence (assignedDocIds) is
 // meaningless for it — its completeness instead reflects whether every one of its Audit Procedures
 // is ticked (voucher_line_procedure_checks, same source the checklist itself reads via
 // getProcedureTabState()). Zero procedures configured is deliberately NOT complete (empty ≠ done),
-// per the confirmed requirement.
+// per the confirmed requirement. Transaction level approval (Phase 4 of 4, FINAL): a Document
+// flagged transaction_level_approval requires the voucher-level approval fields to ALSO be
+// complete, on top of (not instead of) its own base completeness rule above.
 function isProcedureDocumentComplete(uid, doc) {
     // Validation Rules Phase 5: the synthetic Voucher Line tab is complete only when all three
     // approval fields are filled — currentVoucherId is this open voucher's transaction_ref
     // (the modal only ever shows lines of the currently open voucher).
     if (doc.__voucherTab) {
-        const va = voucherApprovalCache[currentVoucherId];
-        return !!(va && (va.prepared_by || '').trim() && (va.checked_by || '').trim() && (va.approved_by || '').trim());
+        return isVoucherApprovalComplete(voucherApprovalCache[currentVoucherId]);
     }
+    let baseComplete;
     if (doc.template_id) {
         const lineState = procedureModalState[uid];
-        return !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(doc.id));
+        baseComplete = !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(doc.id));
+    } else {
+        const tabState = getProcedureTabState(uid, doc.id);
+        const roles = doc.auth_roles || [];
+        baseComplete = roles.length > 0 && roles.every(role => tabState.checklist[role] && tabState.checklist[role].is_checked);
     }
-    const tabState = getProcedureTabState(uid, doc.id);
-    const roles = doc.auth_roles || [];
-    return roles.length > 0 && roles.every(role => tabState.checklist[role] && tabState.checklist[role].is_checked);
+    if (!baseComplete) return false;
+    if (doc.transaction_level_approval) {
+        return isVoucherApprovalComplete(voucherApprovalCache[currentVoucherId]);
+    }
+    return true;
 }
 
 // Renders the left-side document rail for one line's modal: one entry per document, name + a
