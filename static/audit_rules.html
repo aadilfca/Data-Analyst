@@ -161,18 +161,6 @@
                         </select>
                     </div>
 
-                    <!-- Transaction level approval (new, confirmed requirement): per-Document flag read by
-                         Verification's procedure window. Disabled until the Document is saved (see
-                         renderTransactionLevelApprovalCheckbox() in audit_rules.js) - the dedicated toggle
-                         endpoint 404s on a document_id that doesn't exist yet. -->
-                    <div class="ar-field">
-                        <label style="display:flex; align-items:center; gap:8px; font-weight:400;">
-                            <input type="checkbox" id="arTransactionLevelApprovalCheckbox">
-                            <span>Transaction level approval</span>
-                        </label>
-                        <span id="arTransactionLevelApprovalHint" class="ar-chip-empty" style="display:none;">Save the document first</span>
-                    </div>
-
                     <!-- Authorisation Roles chip editor -->
                     <div class="ar-field">
                         <label>Authorisation Roles</label>

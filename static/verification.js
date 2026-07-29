@@ -3834,15 +3834,6 @@ function renderProcedureModalPanel(uid, docId) {
         });
     });
 
-    // Validation Rules Phase 5: one change listener per Sig. Exc. checkbox in the Linked
-    // Evidence table — immediate save on toggle, same convention as the Audit Procedures
-    // checklist ticks (no separate Save action).
-    container.querySelectorAll('.procedure-sig-exception-checkbox').forEach(cb => {
-        cb.addEventListener('change', function() {
-            toggleSignatureException(uid, docId, parseInt(this.dataset.assignmentId), this.checked);
-        });
-    });
-
     // Restore a previously-fetched search's dropdown (extends Phase 3's "switching tabs doesn't
     // lose unsaved work" to cover search results too) — re-renders from tabState, no new fetch.
     if (tabState.searchResults && tabState.searchResults.length) {
@@ -4056,13 +4047,9 @@ function buildSelectedLinesTable(uid, docId) {
 
     // Trailing "" header for the unlink icon column (Unassign requirement) - no label, matching
     // this app's existing convention for icon-only action columns (e.g. Data Bank's Actions column).
-    // Sig. Exc. (Validation Rules Phase 5): defaults unticked/OK — the auditor ticks it only to
-    // flag a confirmed mismatch against the document's signature specimen, per Phase 1's locked
-    // assumption. Sits in the existing Linked Evidence row, not a separate control.
     let html = '<div class="procedure-selected-table-wrapper"><table class="procedure-selected-table"><thead><tr>';
     html += '<th>Sr No</th>';
     columns.forEach(col => { html += `<th>${escapeHtml(col.column_name)}</th>`; });
-    html += '<th>Sig. Exc.</th>';
     html += '<th></th>';
     html += '</tr></thead><tbody>';
     selections.forEach((sel, idx) => {
@@ -4072,8 +4059,6 @@ function buildSelectedLinesTable(uid, docId) {
             const value = getRowFieldCaseInsensitive(sel.row_data, col.column_name);
             html += `<td>${escapeHtml(value)}</td>`;
         });
-        const sigChecked = !!sel.signature_exception;
-        html += `<td><input type="checkbox" class="procedure-sig-exception-checkbox" data-assignment-id="${sel.id}" title="Flag a confirmed signature mismatch" ${sigChecked ? 'checked' : ''}></td>`;
         html += `<td><button type="button" class="procedure-unlink-btn" data-assignment-id="${sel.id}" title="Unlink this evidence">✕</button></td>`;
         html += '</tr>';
     });
@@ -4091,7 +4076,6 @@ function buildSelectedLinesTable(uid, docId) {
             html += '<td></td>';
         }
     });
-    html += '<td></td>'; // Sig. Exc. column stays blank on the totals row
     html += '<td></td>'; // unlink-icon column stays blank on the totals row
     html += '</tr>';
 
