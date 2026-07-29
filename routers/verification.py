@@ -1468,6 +1468,13 @@ def get_category_for_account(
 # Starting judgement call for this phase - tunable, not fixed forever.
 ACCOUNT_HEAD_MATCH_THRESHOLD = 55
 
+# Account Head Recommendation follow-up (reposition + TB search-select + no-match note):
+# reserved sentinel document_id for the Voucher Line tab's "no suitable TB account" note - reuses
+# voucher_line_observations/sync_line_observations_to_voucher() without a real audit_rule_documents
+# row (this app never enables PRAGMA foreign_keys=ON, so a non-existent id is safe at the DB
+# level). Must match ACCOUNT_HEAD_OBSERVATION_DOC_ID in static/verification.js.
+ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1
+
 _ACCOUNT_HEAD_STOPWORDS = {
     'the', 'and', 'for', 'from', 'with', 'this', 'that', 'account', 'accounts'
 }
@@ -2039,12 +2046,16 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
             return
 
         placeholders = ",".join("?" for _ in sibling_ids)
+        # LEFT JOIN (not INNER) so the reserved ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel entry -
+        # which has no matching audit_rule_documents row by design - isn't silently dropped from
+        # the rollup; its document_name comes back NULL and is handled in the block-building loop
+        # below instead.
         all_entries = execute_query(
             f"""
             SELECT vlo.id, vlo.document_id, vlo.observation_text, vlo.updated_at,
                    ard.name AS document_name
             FROM voucher_line_observations vlo
-            JOIN audit_rule_documents ard ON ard.id = vlo.document_id
+            LEFT JOIN audit_rule_documents ard ON ard.id = vlo.document_id
             WHERE vlo.voucher_line_id IN ({placeholders})
             """,
             tuple(sibling_ids)
@@ -2065,8 +2076,17 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
         # One labelled block per document that currently has non-blank text - a blank/cleared
         # observation simply contributes no line, so re-clearing a box removes its line entirely
         # on the next rebuild rather than leaving a stale one behind.
+        def _format_block(entry: dict) -> str:
+            # The sentinel entry stores the intern's raw note text (unwrapped, so re-opening the
+            # modal shows exactly what was typed) - the fully-worded finding is only assembled
+            # here, at rollup time.
+            if entry['document_id'] == ACCOUNT_HEAD_OBSERVATION_DOC_ID:
+                return (f"[Account Head Recommendation]: New account head recommended: "
+                        f"{entry['observation_text'].strip()} — no match in Trial Balance")
+            return f"[{entry['document_name']}]: {entry['observation_text'].strip()}"
+
         blocks = [
-            (entry['document_id'], f"[{entry['document_name']}]: {entry['observation_text'].strip()}")
+            (entry['document_id'], _format_block(entry))
             for entry in latest_by_doc.values()
             if entry['observation_text'] and entry['observation_text'].strip()
         ]
@@ -2172,9 +2192,12 @@ def save_line_observation(
     if not line:
         raise HTTPException(404, "Voucher line not found.")
 
-    doc = execute_query("SELECT id FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
-    if not doc:
-        raise HTTPException(404, "Document not found or inactive.")
+    # ACCOUNT_HEAD_OBSERVATION_DOC_ID is a reserved sentinel, not a real audit_rule_documents row -
+    # skip the existence/active check for it (see the constant's definition above).
+    if document_id != ACCOUNT_HEAD_OBSERVATION_DOC_ID:
+        doc = execute_query("SELECT id FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
+        if not doc:
+            raise HTTPException(404, "Document not found or inactive.")
 
     execute_write(
         """

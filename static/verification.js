@@ -763,6 +763,11 @@ const VOUCHER_LINE_ACCOUNT_NAME_ALIASES = ['Account Name', 'Account', 'Account D
 // tab (Prepared/Checked/Approved By) — never a real audit_rule_documents.id, so it can't collide.
 const VOUCHER_LINE_TAB_ID = '__voucher_line__';
 
+// Account Head Recommendation follow-up: reserved sentinel document_id for the "no suitable TB
+// account" note, reused via the existing save_line_observation/voucher_line_observations flow.
+// Must match ACCOUNT_HEAD_OBSERVATION_DOC_ID in routers/verification.py exactly.
+const ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1;
+
 // Voucher-level approval cache, keyed by transaction_ref (shared across every line of the same
 // voucher, not per-uid) — { client_id, transaction_ref, prepared_by, checked_by, approved_by,
 // dirty, loaded }. Fetched once per voucher in openProcedureModal(), reused across lines of that
@@ -772,15 +777,55 @@ const VOUCHER_LINE_DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narr
 const VOUCHER_LINE_DEBIT_ALIASES = ['Debit Amount', 'Debit', 'Dr Amount', 'Dr'];
 const VOUCHER_LINE_CREDIT_ALIASES = ['Credit Amount', 'Credit', 'Cr Amount', 'Cr'];
 
-// Account Head Recommendation (Validation Rules Phase 7) — keyed by uid (per voucher line, not
-// shared across lines like voucherApprovalCache, since suggestions are description-driven). No
-// backend persistence — recommendedValue/suggestions are a scratch pad that resets on reload.
+// Account Head Recommendation (Validation Rules Phase 7, extended by the reposition/search-select/
+// no-match follow-up) — keyed by uid (per voucher line, not shared across lines like
+// voucherApprovalCache, since suggestions are description-driven).
+// `mode`: 'match' (default, search-select over Trial Balance leaf accounts — scratch-only, no
+// backend persistence, confirmed) or 'nomatch' (free-text finding — IS persisted, via
+// flushAccountHeadNoMatchNote()/ACCOUNT_HEAD_OBSERVATION_DOC_ID). `selectedAccountId`/
+// `selectedAccountName` replace the old free-text `recommendedValue` for match mode.
+// `noMatchText`/`noMatchDirty` back the no-match textarea; noMatchText is re-seeded from server
+// truth (the sentinel voucher_line_observations entry) on every openProcedureModal() call, same
+// "never trust stale local state across a reopen" convention every other tab already follows.
 const accountHeadCache = {};
 function getAccountHeadState(uid) {
     if (!accountHeadCache[uid]) {
-        accountHeadCache[uid] = { recommendedValue: '', suggestions: [], matched: null, message: '', loading: false, hasFetched: false };
+        accountHeadCache[uid] = {
+            mode: 'match',
+            selectedAccountId: null,
+            selectedAccountName: '',
+            searchTerm: '',
+            suggestions: [], matched: null, message: '', loading: false, hasFetched: false,
+            noMatchText: '',
+            noMatchDirty: false
+        };
     }
     return accountHeadCache[uid];
+}
+
+// Trial Balance leaf accounts for the Account Head search-select — warmed once per modal open
+// (openProcedureModal()) via GET /api/trial-balance/latest-accounts, same source Assign
+// Categories already uses. That endpoint returns both parent and leaf accounts, so is_leaf
+// filtering happens here, client-side; not pre-filtered server-side.
+let latestTbAccountsCache = null;
+async function fetchLatestTbAccounts(clientId) {
+    if (!clientId) {
+        latestTbAccountsCache = [];
+        return latestTbAccountsCache;
+    }
+    try {
+        const res = await fetch(`${API_BASE}/api/trial-balance/latest-accounts?client_id=${encodeURIComponent(clientId)}`);
+        if (!res.ok) {
+            latestTbAccountsCache = [];
+            return latestTbAccountsCache;
+        }
+        const data = await res.json();
+        latestTbAccountsCache = (data.accounts || []).filter(a => a.is_leaf);
+    } catch (e) {
+        console.error('Failed to load Trial Balance leaf accounts:', e);
+        latestTbAccountsCache = [];
+    }
+    return latestTbAccountsCache;
 }
 
 function getVoucherLineAlias(row, aliases) {
@@ -2372,6 +2417,9 @@ async function saveLineItems(detailId = currentDetailId) {
     await flushProcedureObservations(detailId);
     // Validation Rules Phase 5: same "flush on save" treatment for a dirty voucher-approval edit.
     await flushVoucherApproval(detailId);
+    // Account Head Recommendation follow-up: same "flush on save" treatment for a dirty no-match
+    // note (the TB-match search-select selection stays confirmed scratch-only and is never flushed).
+    await flushAccountHeadNoMatchNote(detailId);
 
     try {
         const payload = {
@@ -2926,6 +2974,21 @@ async function openProcedureModal(uid, initialDocId = null) {
         console.error('Failed to load voucher line observations:', e);
     }
 
+    // Account Head Recommendation follow-up: re-seed the no-match note from server truth on every
+    // open (the ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel entry, if any) — a stale local edit from a
+    // previous session must never silently persist across reload, same convention every other
+    // tab's state already follows. The match-mode selection (selectedAccountId/Name) is
+    // deliberately NOT re-seeded here — it's confirmed scratch-only, with no server-side source.
+    const ahState = getAccountHeadState(uid);
+    const savedNoMatchEntry = observationEntries.find(e => e.document_id === ACCOUNT_HEAD_OBSERVATION_DOC_ID);
+    ahState.noMatchText = savedNoMatchEntry ? (savedNoMatchEntry.observation_text || '') : '';
+    ahState.noMatchDirty = false;
+    ahState.mode = ahState.noMatchText ? 'nomatch' : 'match';
+
+    // Warm the Trial Balance leaf-account list for the Account Head search-select — fetched fresh
+    // on every open, same fail-soft-to-empty convention as assignedRecords/procedureChecks above.
+    await fetchLatestTbAccounts(getClientId());
+
     // Validation Rules Phase 5: the voucher-level Prepared/Checked/Approved By record — read once
     // per voucher (client_id+transaction_ref), reused across every line of that same voucher
     // rather than re-fetched per line, matching the backend's own "applied to every line of that
@@ -3335,10 +3398,21 @@ function renderVoucherApprovalPanel(uid) {
     const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
     const voucherLine = lineIdx !== -1 ? currentVoucherLines[lineIdx] : null;
     const currentAccountName = voucherLine ? getVoucherLineAlias(voucherLine.row_data || {}, VOUCHER_LINE_ACCOUNT_NAME_ALIASES) : '—';
-    const ahState = getAccountHeadState(uid);
 
+    // Reposition (confirmed fix): Account Head Recommendation now sits above Voucher Approval —
+    // DOM order swapped from the original Phase 5/7 build, no other change to this outer shell.
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${VOUCHER_LINE_TAB_ID}">
+            <div class="procedure-segment procedure-segment-data">
+                <h4 class="procedure-segment-header">🎯 Account Head Recommendation</h4>
+                <div class="procedure-segment-body">
+                    <div class="procedure-account-head-current">
+                        <label>Current Account Name</label>
+                        <span>${escapeHtml(currentAccountName)}</span>
+                    </div>
+                    <div id="procedureAccountHeadBody"></div>
+                </div>
+            </div>
             <div class="procedure-segment procedure-segment-data">
                 <h4 class="procedure-segment-header">🖊️ Voucher Approval</h4>
                 <div class="procedure-segment-body">
@@ -3355,21 +3429,6 @@ function renderVoucherApprovalPanel(uid) {
                         <label for="procedureVoucherApprovedBy">Approved By</label>
                         <input type="text" id="procedureVoucherApprovedBy" class="procedure-search-input" value="${escapeHtml(va.approved_by)}">
                     </div>
-                </div>
-            </div>
-            <div class="procedure-segment procedure-segment-data">
-                <h4 class="procedure-segment-header">🎯 Account Head Recommendation</h4>
-                <div class="procedure-segment-body">
-                    <div class="procedure-account-head-current">
-                        <label>Current Account Name</label>
-                        <span>${escapeHtml(currentAccountName)}</span>
-                    </div>
-                    <div class="procedure-voucher-approval-field">
-                        <label for="procedureAccountHeadInput">Recommended Account Head</label>
-                        <input type="text" id="procedureAccountHeadInput" class="procedure-search-input" value="${escapeHtml(ahState.recommendedValue)}">
-                    </div>
-                    <button type="button" id="procedureAccountHeadSuggestBtn" class="procedure-account-head-suggest-btn" ${ahState.loading ? 'disabled' : ''}>${ahState.loading ? 'Searching…' : '🔍 Suggest Account Head'}</button>
-                    <div id="procedureAccountHeadResults" class="procedure-account-head-results"></div>
                 </div>
             </div>
         </div>
@@ -3393,23 +3452,133 @@ function renderVoucherApprovalPanel(uid) {
         });
     });
 
-    const accountHeadInput = document.getElementById('procedureAccountHeadInput');
-    if (accountHeadInput) {
-        accountHeadInput.addEventListener('input', function() {
-            getAccountHeadState(uid).recommendedValue = this.value;
+    renderAccountHeadCard(uid);
+}
+
+// Renders just the Account Head Recommendation segment's body (#procedureAccountHeadBody) —
+// scoped re-render so toggling match/no-match mode doesn't disturb the sibling Voucher Approval
+// fields' focus/typed state. Branches entirely on accountHeadCache[uid].mode:
+//   'match'   — search-select over Trial Balance leaf accounts (latestTbAccountsCache), scratch-
+//               only per the confirmed decision (no backend persistence), plus the existing
+//               fuzzy-match Suggest flow.
+//   'nomatch' — free-text finding, persisted via flushAccountHeadNoMatchNote() into the existing
+//               Observation flow under the ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel.
+function renderAccountHeadCard(uid) {
+    const bodyEl = document.getElementById('procedureAccountHeadBody');
+    if (!bodyEl) return;
+    const state = getAccountHeadState(uid);
+
+    if (state.mode === 'nomatch') {
+        bodyEl.innerHTML = `
+            <div class="procedure-voucher-approval-field">
+                <label for="procedureAccountHeadNoMatchInput">Finding — no suitable account in Trial Balance</label>
+                <textarea id="procedureAccountHeadNoMatchInput" class="procedure-observation-textarea" rows="3"
+                    placeholder="Describe the recommended new account head...">${escapeHtml(state.noMatchText || '')}</textarea>
+            </div>
+            <button type="button" id="procedureAccountHeadToggleBtn" class="procedure-account-head-toggle-link">🔍 Search Trial Balance instead</button>
+        `;
+        const noMatchInput = document.getElementById('procedureAccountHeadNoMatchInput');
+        if (noMatchInput) {
+            noMatchInput.addEventListener('input', function() {
+                state.noMatchText = this.value;
+                state.noMatchDirty = true;
+            });
+        }
+    } else {
+        bodyEl.innerHTML = `
+            <div class="procedure-voucher-approval-field">
+                <label for="procedureAccountHeadSearchInput">Recommended Account Head</label>
+                <input type="text" id="procedureAccountHeadSearchInput" class="procedure-search-input"
+                    placeholder="Search Trial Balance accounts..." autocomplete="off"
+                    value="${escapeHtml(state.selectedAccountName || state.searchTerm || '')}">
+            </div>
+            <div id="procedureAccountHeadSearchDropdown" class="procedure-search-dropdown"></div>
+            <button type="button" id="procedureAccountHeadSuggestBtn" class="procedure-account-head-suggest-btn" ${state.loading ? 'disabled' : ''}>${state.loading ? 'Searching…' : '🔍 Suggest Account Head'}</button>
+            <div id="procedureAccountHeadResults" class="procedure-account-head-results"></div>
+            <button type="button" id="procedureAccountHeadToggleBtn" class="procedure-account-head-toggle-link">No suitable account exists</button>
+        `;
+        const searchInput = document.getElementById('procedureAccountHeadSearchInput');
+        if (searchInput) {
+            searchInput.addEventListener('input', function() {
+                state.searchTerm = this.value;
+                state.selectedAccountId = null;
+                state.selectedAccountName = '';
+                renderAccountHeadSearchDropdown(uid);
+            });
+        }
+        const suggestBtn = document.getElementById('procedureAccountHeadSuggestBtn');
+        if (suggestBtn) {
+            suggestBtn.addEventListener('click', function() {
+                fetchAccountHeadSuggestions(uid);
+            });
+        }
+        renderAccountHeadResults(uid);
+    }
+
+    const toggleBtn = document.getElementById('procedureAccountHeadToggleBtn');
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', function() {
+            state.mode = state.mode === 'nomatch' ? 'match' : 'nomatch';
+            renderAccountHeadCard(uid);
         });
     }
-    const suggestBtn = document.getElementById('procedureAccountHeadSuggestBtn');
-    if (suggestBtn) {
-        suggestBtn.addEventListener('click', function() {
-            fetchAccountHeadSuggestions(uid);
-        });
+}
+
+// Client-side filter over latestTbAccountsCache (already fully loaded — no debounce/pagination
+// needed, unlike the Data Bank search which hits the server per keystroke). Matches on either
+// account name or code, case-insensitive substring, capped at 20 rows shown at once.
+function renderAccountHeadSearchDropdown(uid) {
+    const dropdownEl = document.getElementById('procedureAccountHeadSearchDropdown');
+    if (!dropdownEl) return;
+    const state = getAccountHeadState(uid);
+    const term = (state.searchTerm || '').trim().toLowerCase();
+    if (!term) {
+        dropdownEl.innerHTML = '';
+        return;
     }
-    renderAccountHeadResults(uid);
+    const matches = (latestTbAccountsCache || []).filter(a =>
+        (a.account_name || '').toLowerCase().includes(term) || (a.account_code || '').toLowerCase().includes(term)
+    ).slice(0, 20);
+
+    if (!matches.length) {
+        dropdownEl.innerHTML = '<div class="procedure-search-empty">No matching Trial Balance accounts.</div>';
+        return;
+    }
+
+    dropdownEl.innerHTML = matches.map(a => `
+        <div class="procedure-result-item" data-account-id="${a.id}" data-account-name="${escapeHtml(a.account_name)}">
+            <div class="procedure-result-main">
+                <span>${escapeHtml(a.account_name)}</span>
+                <span class="procedure-result-meta">${escapeHtml(a.account_code || '')}</span>
+            </div>
+        </div>
+    `).join('');
+
+    dropdownEl.querySelectorAll('.procedure-result-item').forEach(item => {
+        item.addEventListener('click', function() {
+            selectAccountHeadTbAccount(uid, parseInt(this.dataset.accountId, 10), this.dataset.accountName);
+        });
+    });
+}
+
+// Commits a leaf-account selection — called both from a manual dropdown click and from the
+// Suggest flow's "Use" button. Scratch-only (no network call): the confirmed decision keeps the
+// TB-match case exactly as scratch as it already was, just via a dropdown instead of free text.
+function selectAccountHeadTbAccount(uid, accountId, accountName) {
+    const state = getAccountHeadState(uid);
+    state.selectedAccountId = accountId;
+    state.selectedAccountName = accountName;
+    state.searchTerm = accountName;
+    const inputEl = document.getElementById('procedureAccountHeadSearchInput');
+    if (inputEl) inputEl.value = accountName;
+    const dropdownEl = document.getElementById('procedureAccountHeadSearchDropdown');
+    if (dropdownEl) dropdownEl.innerHTML = '';
 }
 
 // Renders the results container inside the Account Head Recommendation segment based on the
-// current accountHeadCache[uid] state — called after every fetch and every "Use" click.
+// current accountHeadCache[uid] state — called after every fetch and every "Use" click. Only
+// rendered in match mode (see renderAccountHeadCard()) — the no-match textarea has no fuzzy-match
+// results of its own.
 function renderAccountHeadResults(uid) {
     const resultsEl = document.getElementById('procedureAccountHeadResults');
     if (!resultsEl) return;
@@ -3430,7 +3599,7 @@ function renderAccountHeadResults(uid) {
             <div class="procedure-account-head-suggestion-row">
                 <span class="procedure-account-head-suggestion-name">${escapeHtml(s.account_name)}</span>
                 <span class="procedure-account-head-suggestion-score">Score: ${escapeHtml(String(s.score))}</span>
-                <button type="button" class="procedure-account-head-use-btn" data-suggestion-idx="${idx}" title="Copy into Recommended Account Head">📋 Use</button>
+                <button type="button" class="procedure-account-head-use-btn" data-suggestion-idx="${idx}" title="Select this account in the dropdown above">📋 Use</button>
             </div>
             <ul class="procedure-account-head-reasons">
                 ${(s.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join('')}
@@ -3443,9 +3612,17 @@ function renderAccountHeadResults(uid) {
             const idx = parseInt(this.dataset.suggestionIdx, 10);
             const suggestion = state.suggestions[idx];
             if (!suggestion) return;
-            state.recommendedValue = suggestion.account_name;
-            const inputEl = document.getElementById('procedureAccountHeadInput');
-            if (inputEl) inputEl.value = suggestion.account_name;
+            // The suggestion is a fuzzy-matched Trial Balance leaf account name — look it up in
+            // the same latestTbAccountsCache the dropdown itself filters, so "Use" commits a real
+            // account id/selection rather than free text. A miss here would mean the TB changed
+            // between the suggestion being computed and now (e.g. a re-upload) — surfaced rather
+            // than silently writing an unselectable value.
+            const match = (latestTbAccountsCache || []).find(a => a.account_name === suggestion.account_name);
+            if (match) {
+                selectAccountHeadTbAccount(uid, match.id, match.account_name);
+            } else {
+                showStatus(`"${suggestion.account_name}" is no longer in the current Trial Balance — pick a leaf account manually if it still applies.`, 'error');
+            }
         });
     });
 }
@@ -4147,6 +4324,46 @@ async function flushVoucherApproval(uid) {
     } catch (e) {
         console.error('Failed to save voucher approval:', e);
         showStatus('Failed to save voucher approval — please try again.', 'error');
+    }
+}
+
+// Account Head Recommendation follow-up: persists a dirty no-match finding — called from the same
+// save chokepoint as flushProcedureObservations()/flushVoucherApproval() (saveLineItems()). No-op
+// unless the card is currently in no-match mode with unsaved text. Reuses the existing
+// save_line_observation endpoint under the reserved ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel — the
+// backend wraps the raw text into the "[Account Head Recommendation]: New account head
+// recommended: ... — no match in Trial Balance" finding at rollup time
+// (sync_line_observations_to_voucher()), so only the raw note is sent here.
+async function flushAccountHeadNoMatchNote(uid) {
+    const state = getAccountHeadState(uid);
+    if (state.mode !== 'nomatch' || !state.noMatchDirty) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/save_line_observation`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                voucher_line_id: parseInt(uid),
+                document_id: ACCOUNT_HEAD_OBSERVATION_DOC_ID,
+                observation_text: state.noMatchText || ''
+            })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save account head note.');
+        }
+        const data = await res.json();
+        state.noMatchDirty = false;
+
+        // Same "keep the main table's Observations cell caught up immediately" pattern
+        // saveLineObservation() already uses for real Document tabs.
+        const cachedLine = currentVoucherLines.find(l => l.detail_id === parseInt(uid));
+        if (cachedLine) cachedLine.observations = data.voucher_observations;
+        const lineType = voucherLineState[uid] && voucherLineState[uid].transactionType;
+        if (lineType) updateObservationsCellForLine(uid, lineType);
+    } catch (e) {
+        console.error('Failed to save account head no-match note:', e);
+        showStatus('Failed to save account head finding — please try again.', 'error');
     }
 }
 
