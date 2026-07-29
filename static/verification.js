@@ -3300,8 +3300,13 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
     const copyBtn = document.getElementById('procedureObservationCopyBtn');
     const restoreBtn = document.getElementById('procedureObservationRestoreBtn');
     const systemBtn = document.getElementById('procedureObservationSystemBtn');
+    const suggestBtn = document.getElementById('procedureObservationSuggestBtn');
 
     function refreshObservationButtons() {
+        if (suggestBtn) {
+            const hasTextNow = !!(tabState.observation && tabState.observation.trim());
+            suggestBtn.disabled = tabState.suggestionApplied || hasTextNow || !buildObservationSuggestion(uid, docId);
+        }
         if (copyBtn) {
             const hasText = !!(tabState.observation && tabState.observation.trim());
             copyBtn.disabled = !hasText;
@@ -3332,6 +3337,16 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
             if (isEmptyNow && !wasEmpty) {
                 saveLineObservation(uid, docId).then(refreshObservationButtons);
             }
+        });
+    }
+
+    if (suggestBtn) {
+        suggestBtn.addEventListener('click', function() {
+            if (suggestBtn.disabled) return;
+            applyObservationSuggestionIfNeeded(uid, docId);
+            if (observationInput) observationInput.value = tabState.observation || '';
+            updateProcedureModalSavedNote(uid);
+            refreshObservationButtons();
         });
     }
 
@@ -3693,10 +3708,6 @@ function renderProcedureModalPanel(uid, docId) {
 
     const tabState = getProcedureTabState(uid, docId);
     const hasTemplate = !!doc.template_id;
-
-    // Phase 6: offer the auto-suggestion (a one-shot fill, never re-run over edited/cleared/
-    // saved text) before building the panel's markup, so the textarea below reflects it.
-    applyObservationSuggestionIfNeeded(uid, docId);
 
     if (!hasTemplate) {
         // No template means no Data Bank template to search evidence against, so the Data Table
@@ -4223,10 +4234,15 @@ function buildObservationSection(uid, docId) {
     const isCopied = hasText && !tabState.observationDirty;
     const hasRestoreTarget = !!(tabState.lastSyncedText && tabState.lastSyncedText.trim());
     const systemSuggestion = buildObservationSuggestion(uid, docId);
+    const canSuggest = !tabState.suggestionApplied && !hasText && !!systemSuggestion;
     return `
         <textarea id="procedureObservationInput" class="procedure-observation-textarea"
             placeholder="Add an observation for this document...">${escapeHtml(tabState.observation || '')}</textarea>
         <div class="procedure-observation-copy-row">
+            <button type="button" id="procedureObservationSuggestBtn"
+                class="procedure-observation-suggest-btn"
+                title="Fill this observation with the suggested text (mismatch / unticked procedures)"
+                ${canSuggest ? '' : 'disabled'}>💡 Suggest</button>
             <button type="button" id="procedureObservationRestoreBtn"
                 class="procedure-observation-restore-btn"
                 title="Revert to last copied text"
