@@ -2829,44 +2829,57 @@ body {
     margin-bottom: 10px;
 }
 
-/* ----- Persistent voucher-level checks bar (Generic Voucher-Level Checks cutover) -----
-   Sits above .procedure-modal-body (the rail+panels row), shown once per voucher. Deliberately
-   plain/functional this phase — a dedicated Styling phase is planned to polish this further.
-   Reuses .procedure-search-input for the name text input, same as the retired approval fields
-   below did. */
+/* ----- Persistent voucher-level checks bar (Generic Voucher-Level Checks, Phase 6 of 6 styling) -----
+   Sits above .procedure-modal-body (the rail+panels row), shown once per voucher. Given a distinct
+   indigo-tinted accent card (a color family not already used by the three per-document segments —
+   grey/Data, green/Procedures, amber/Observation) so it reads as its own zone, not a fourth
+   segment, and separates cleanly from the rail below it. */
 .procedure-voucher-checks-bar {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px 20px;
-    padding-bottom: 12px;
-    margin-bottom: 12px;
-    border-bottom: 1px solid #e2e8f0;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    background: #eef2ff;
+    border-left: 4px solid #4f46e5;
+    border-radius: 8px;
 }
 .procedure-voucher-checks-empty {
     font-size: 13px;
-    color: #94a3b8;
+    color: #6366f1;
     margin: 0;
 }
+/* Each check reads as one compact card — tick + name + roles hint — rather than loose inline
+   elements, so multiple checks wrap tidily without turning into a wall of controls. */
 .procedure-voucher-check-item {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    background: #ffffff;
+    border: 1px solid #c7d2fe;
+    border-radius: 999px;
+    padding: 4px 10px 4px 8px;
 }
 .procedure-voucher-check-tick {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 13px;
-    font-weight: 500;
+    font-size: 12.5px;
+    font-weight: 600;
     color: #1a1a2e;
     white-space: nowrap;
 }
 .procedure-voucher-check-name {
-    width: 140px;
+    width: 120px;
+    padding: 3px 8px;
+    font-size: 12px;
+    border-radius: 6px;
 }
 .procedure-voucher-check-roles {
-    font-size: 10.5px;
+    font-size: 10px;
     color: #94a3b8;
+    font-style: italic;
     white-space: nowrap;
 }
 
@@ -3297,10 +3310,46 @@ body {
     color: #1a1a2e;
     cursor: pointer;
 }
-.procedure-checklist-checkbox {
-    width: 15px;
-    height: 15px;
+/* Shared custom tick icon (Phase 6 of 6 styling): applied to both this checklist's checkbox and
+   the voucher-level checks bar's checkbox (.procedure-voucher-check-checkbox, above) so the two
+   "audit tick" controls in this modal look identical rather than one being a plain browser
+   checkbox and the other custom. Green fill on check — same "done" accent already used elsewhere
+   in this module (.voucher-line-proc-expanded-dot.done / .procedure-tab-dot.complete /
+   .voucher-line-cleared-badge.cleared). */
+.procedure-checklist-checkbox,
+.procedure-voucher-check-checkbox {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 17px;
+    height: 17px;
+    flex-shrink: 0;
+    border: 2px solid #cbd5e1;
+    border-radius: 4px;
+    background: #ffffff;
     cursor: pointer;
+    position: relative;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.procedure-checklist-checkbox:hover,
+.procedure-voucher-check-checkbox:hover {
+    border-color: #16a34a;
+}
+.procedure-checklist-checkbox:checked,
+.procedure-voucher-check-checkbox:checked {
+    background: #16a34a;
+    border-color: #16a34a;
+}
+.procedure-checklist-checkbox:checked::after,
+.procedure-voucher-check-checkbox:checked::after {
+    content: '\2713';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -55%);
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
 }
 .procedure-checklist-empty {
     font-size: 13px;
