@@ -65,6 +65,7 @@ def row_to_document(row: dict) -> dict:
         "kb_note": row.get("kb_note"),
         "template_id": row.get("template_id"),
         "risk_rating": row.get("risk_rating"),
+        "transaction_level_approval": bool(row.get("transaction_level_approval") or 0),
         "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
         "auth_roles": get_document_auth_roles(document_id),
@@ -833,3 +834,30 @@ def update_category_document_approval(category_id: int, document_id: int, payloa
         f"Set approval_required={payload.approval_required} for Document ID {document_id} in Category ID {category_id}"
     )
     return {"category_id": category_id, "document_id": document_id, "approval_required": payload.approval_required}
+
+
+# ---------- PER-DOCUMENT TRANSACTION-LEVEL-APPROVAL FLAG (new, confirmed requirement) ----------
+# A dedicated toggle endpoint, same convention as the Category-Document approval_required
+# toggle above - but scoped to the Document itself (no category_id), since this flag lives
+# directly on audit_rule_documents, not a Category pairing. No matrix_version bump: that
+# concept only applies to a Category's own document/approval-required state.
+class DocumentTransactionLevelApprovalUpdate(BaseModel):
+    transaction_level_approval: bool
+
+@router.put("/api/audit-rules/documents/{document_id}/transaction-level-approval")
+def update_document_transaction_level_approval(document_id: int, payload: DocumentTransactionLevelApprovalUpdate):
+    existing = execute_query("SELECT id FROM audit_rule_documents WHERE id = ?", (document_id,))
+    if not existing:
+        raise HTTPException(404, "Document not found")
+
+    new_value = 1 if payload.transaction_level_approval else 0
+    execute_write(
+        "UPDATE audit_rule_documents SET transaction_level_approval = ? WHERE id = ?",
+        (new_value, document_id)
+    )
+
+    log_audit(
+        "Admin", "Update", "AuditRules",
+        f"Set transaction_level_approval={payload.transaction_level_approval} for Document ID {document_id}"
+    )
+    return {"document_id": document_id, "transaction_level_approval": payload.transaction_level_approval}

@@ -32,6 +32,8 @@ const arNameInput = document.getElementById('arNameInput');
 const arKbNoteInput = document.getElementById('arKbNoteInput');
 const arTemplateSelect = document.getElementById('arTemplateSelect');
 const arRiskRatingSelect = document.getElementById('arRiskRatingSelect');
+const arTransactionLevelApprovalCheckbox = document.getElementById('arTransactionLevelApprovalCheckbox');
+const arTransactionLevelApprovalHint = document.getElementById('arTransactionLevelApprovalHint');
 const arRolesChipList = document.getElementById('arRolesChipList');
 const arRolesInput = document.getElementById('arRolesInput');
 const arRolesAddBtn = document.getElementById('arRolesAddBtn');
@@ -194,6 +196,40 @@ async function loadTemplatesForDocuments() {
     }
 }
 
+// ---------- TRANSACTION LEVEL APPROVAL (new, confirmed requirement) ----------
+// A single per-Document checkbox, disabled until the Document is persisted (mirrors the
+// "disabled until persisted" convention already used by the Category-level Approval Required
+// checkboxes — see renderCategoryDocApprovalsList() below — but as one plain field, not a list,
+// since this flag lives directly on the Document itself, not a Category-Document pairing.
+function renderTransactionLevelApprovalCheckbox(doc) {
+    const isPersisted = !!(doc && doc.id);
+    arTransactionLevelApprovalCheckbox.checked = !!(doc && doc.transaction_level_approval);
+    arTransactionLevelApprovalCheckbox.disabled = !isPersisted;
+    arTransactionLevelApprovalHint.style.display = isPersisted ? 'none' : 'inline';
+}
+
+async function toggleDocumentTransactionLevelApproval(checked) {
+    if (!editingId) return;
+
+    try {
+        const res = await fetch(
+            API_BASE + '/api/audit-rules/documents/' + editingId + '/transaction-level-approval',
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ transaction_level_approval: checked })
+            }
+        );
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to update transaction level approval');
+
+        showDetailStatus('✅ Transaction level approval updated.', 'success');
+    } catch (error) {
+        showDetailStatus('❌ Error: ' + error.message, 'error');
+        arTransactionLevelApprovalCheckbox.checked = !checked; // revert on failure
+    }
+}
+
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectDocument(id) {
     try {
@@ -207,6 +243,7 @@ async function selectDocument(id) {
         arKbNoteInput.value = doc.kb_note || '';
         arTemplateSelect.value = doc.template_id || '';
         arRiskRatingSelect.value = doc.risk_rating || '';
+        renderTransactionLevelApprovalCheckbox(doc);
         rolesState = (doc.auth_roles || []).slice();
         fieldsState = (doc.cross_check_fields || []).slice();
         renderRoleChips();
@@ -240,6 +277,7 @@ function startNewDocument() {
     arKbNoteInput.value = '';
     arTemplateSelect.value = '';
     arRiskRatingSelect.value = '';
+    renderTransactionLevelApprovalCheckbox(null);
     rolesState = [];
     fieldsState = [];
     renderRoleChips();
@@ -336,6 +374,9 @@ async function restoreDocument() {
 
 // ---------- WIRE UP EVENT LISTENERS ----------
 arAddNewBtn.addEventListener('click', startNewDocument);
+arTransactionLevelApprovalCheckbox.addEventListener('change', function() {
+    toggleDocumentTransactionLevelApproval(this.checked);
+});
 arShowInactiveCheckbox.addEventListener('change', loadDocuments);
 
 arRolesAddBtn.addEventListener('click', addRole);
