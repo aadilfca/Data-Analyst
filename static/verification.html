@@ -852,7 +852,10 @@
                     <span id="procedureModalSavedNote" class="procedure-modal-saved-note"></span>
                     <div class="procedure-modal-footnav">
                         <button type="button" id="procedureModalBackBtn" class="btn-ghost">← Back</button>
-                        <button type="button" id="procedureModalNextBtn" class="btn-primary">Next →</button>
+                        <!-- Voucher-level Checks simplified to name-only (Phase 3 of 4): replaces the old
+                             per-line "Next →" nav. Label/disabled state are fully JS-driven
+                             (updateVerifyFooterButton() in verification.js) — see that function for why. -->
+                        <button type="button" id="procedureModalVerifyBtn" class="btn-verify">✅ Verify & Next</button>
                     </div>
                 </div>
             </div>

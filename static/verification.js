@@ -768,11 +768,12 @@ const VOUCHER_LINE_TAB_ID = '__voucher_line__';
 // Must match ACCOUNT_HEAD_OBSERVATION_DOC_ID in routers/verification.py exactly.
 const ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1;
 
-// Generic Voucher-Level Checks (Phase 5 cutover) — voucher-level checks cache, keyed by
-// transaction_ref (shared across every line of the same voucher, not per-uid) — array of
-// { id, name, sort_order, auth_roles, ticked, performed_by_name, dirty }. Fetched once per
-// voucher in openProcedureModal(), reused across lines of that same voucher within one modal
-// session. Replaces the old voucherApprovalCache (Prepared/Checked/Approved-By, retired).
+// Voucher-level Checks simplified to name-only (Phase 3 of 4) — voucher-level checks cache,
+// keyed by transaction_ref (shared across every line of the same voucher, not per-uid) — array
+// of { id, name, sort_order, state }. `state` is one of 'untouched'/'done'/'not_done' (Phase 2's
+// 3-state model); both tick and cross save immediately server-side, so there is no local-first
+// `dirty` field anymore. Fetched once per voucher in openProcedureModal(), reused across lines of
+// that same voucher within one modal session.
 let voucherChecksCache = {};
 const VOUCHER_LINE_DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars'];
 const VOUCHER_LINE_DEBIT_ALIASES = ['Debit Amount', 'Debit', 'Dr Amount', 'Dr'];
@@ -2283,6 +2284,35 @@ function computeVoucherStats() {
     return { totalVouchers: voucherIds.length, verifiedVouchers: verifiedCount };
 }
 
+// Consumes a voucher-nav-shaped response (non-boundary: {voucher_id, voucher_date, lines, ...})
+// and renders it onto the main page — the shared render half of moveToAdjacentVoucher() below,
+// factored out so the Verify & Next/Close button (verifyAndAdvanceVoucher()) can render its own
+// verify_voucher_checks response the same way, since that endpoint returns the identical shape
+// (it's built via the same _compute_voucher_nav_result() helper server-side). Returns true on
+// success, false if the response has no lines to render (defensive — should not happen for a
+// non-boundary response). Does NOT call updateProgressDisplay() — callers do that themselves,
+// since the Verify path also has its own boundary branch to consider.
+function applyVoucherNavRenderData(data) {
+    const voucherLines = data.lines || [];
+    const activeLine = voucherLines[0];
+    if (!activeLine) return false;
+    currentDetailId = activeLine.detail_id;
+    currentClientDataId = activeLine.client_data_id;
+    currentVoucherId = data.voucher_id;
+    setVerificationUrlVoucher(currentVoucherId);
+    currentTransactionType = activeLine.transaction_type || '';
+    lineItems = activeLine.line_items || [];
+    procedureData = activeLine.procedure_data || {};
+    if (sessionTransactions.length > 0) {
+        currentTransactionIndex = sessionTransactions.findIndex(t => t.detail_id === currentDetailId);
+        if (currentTransactionIndex === -1) currentTransactionIndex = 0;
+    }
+    renderVoucherHeader(data.voucher_id, data.voucher_date, voucherLines);
+    seedVoucherLineState(voucherLines);
+    renderVoucherLines(voucherLines);
+    return true;
+}
+
 // Phase B: fetches the whole adjacent voucher (Phase A's /voucher_nav) and renders it via the
 // same pipeline loadNextTransaction() already uses for /next's voucher-shaped response. Returns
 // true on success, false on a boundary (no more vouchers that way) or fetch error — both handled
@@ -2296,23 +2326,7 @@ async function moveToAdjacentVoucher(direction) {
         if (!res.ok) return false;
         const data = await res.json();
         if (data.boundary) return false;
-        const voucherLines = data.lines || [];
-        const activeLine = voucherLines[0];
-        if (!activeLine) return false;
-        currentDetailId = activeLine.detail_id;
-        currentClientDataId = activeLine.client_data_id;
-        currentVoucherId = data.voucher_id;
-        setVerificationUrlVoucher(currentVoucherId);
-        currentTransactionType = activeLine.transaction_type || '';
-        lineItems = activeLine.line_items || [];
-        procedureData = activeLine.procedure_data || {};
-        if (sessionTransactions.length > 0) {
-            currentTransactionIndex = sessionTransactions.findIndex(t => t.detail_id === currentDetailId);
-            if (currentTransactionIndex === -1) currentTransactionIndex = 0;
-        }
-        renderVoucherHeader(data.voucher_id, data.voucher_date, voucherLines);
-        seedVoucherLineState(voucherLines);
-        renderVoucherLines(voucherLines);
+        if (!applyVoucherNavRenderData(data)) return false;
         await updateProgressDisplay();
         return true;
     } catch (e) {
@@ -2431,8 +2445,8 @@ async function saveLineItems(detailId = currentDetailId) {
     // legacy save below — this is what lets the observation textarea skip a dedicated Save button
     // and still survive Prev/Next/Complete/Exit (see flushProcedureObservations()).
     await flushProcedureObservations(detailId);
-    // Generic Voucher-Level Checks cutover: same "flush on save" treatment for a dirty check name.
-    await flushVoucherChecks(detailId);
+    // Voucher-level Checks simplified to name-only (Phase 3 of 4): the checks bar has no
+    // local-first field anymore (tick/cross both save immediately) — no flush step needed here.
     // Account Head Recommendation follow-up: same "flush on save" treatment for a dirty no-match
     // note (the TB-match search-select selection stays confirmed scratch-only and is never flushed).
     await flushAccountHeadNoMatchNote(detailId);
@@ -3082,11 +3096,12 @@ async function openProcedureModal(uid, initialDocId = null) {
         metaEl.textContent = meta;
     }
 
-    // Footer nav: Back disabled on the voucher's first line, Next on its last.
+    // Footer nav: Back disabled on the voucher's first line (unchanged). The old per-line "Next"
+    // button is gone — its footer slot is now the voucher-level Verify & Next/Close button, whose
+    // label/disabled state is computed in updateVerifyFooterButton() below (voucher position for
+    // the label, voucher-checks completeness for disabled).
     const backBtn = document.getElementById('procedureModalBackBtn');
-    const nextBtn = document.getElementById('procedureModalNextBtn');
     if (backBtn) backBtn.disabled = lineIdx <= 0;
-    if (nextBtn) nextBtn.disabled = lineIdx === -1 || lineIdx >= totalLines - 1;
 
     procedureModal.style.display = 'flex';
 
@@ -3099,32 +3114,33 @@ async function openProcedureModal(uid, initialDocId = null) {
     updateProcedureModalSavedNote(uid);
 }
 
-// Reflects whether any tab for this line has an unsaved (typed-but-not-yet-flushed) observation,
-// or any voucher-level check's performed-by name field has an unsaved edit (Generic Voucher-Level
-// Checks cutover — replaces the old voucher-approval-fields dirty check) — checklist ticks and the
-// signature-exception tick already save immediately, so only text fields can ever be "unsaved"
-// here. Called on modal open, on every keystroke in the observation textarea
-// (wireProcedureChecklistAndObservation()) or a check's name field (renderVoucherChecksBar()), and
-// after flushProcedureObservations()/flushVoucherChecks() resolve.
+// Reflects whether any tab for this line has an unsaved (typed-but-not-yet-flushed) observation —
+// checklist ticks, the signature-exception tick, and (as of Voucher-level Checks simplified to
+// name-only) the voucher-checks tick/cross pills all save immediately now, so only observation
+// text can ever be "unsaved" here. Called on modal open, on every keystroke in the observation
+// textarea (wireProcedureChecklistAndObservation()), and after flushProcedureObservations()
+// resolves.
 function updateProcedureModalSavedNote(uid) {
     const noteEl = document.getElementById('procedureModalSavedNote');
     if (!noteEl) return;
     const lineState = procedureModalState[uid];
     const tabs = (lineState && lineState.tabs) || {};
-    const checks = voucherChecksCache[currentVoucherId] || [];
-    const dirty = Object.values(tabs).some(t => t.observationDirty) || checks.some(c => c.dirty);
+    const dirty = Object.values(tabs).some(t => t.observationDirty);
     noteEl.textContent = dirty ? 'Unsaved changes' : 'All changes saved';
     noteEl.classList.toggle('dirty', dirty);
 }
 
-// Moves the open modal to the adjacent voucher line (delta = -1 for Back, +1 for Next) without
-// closing it — distinct from activateProcedureTab(), which switches between one line's own
-// Documents. Flushes any unsaved observation text on the line being left, same as
-// closeProcedureModal() does, then re-runs openProcedureModal()'s full fetch/render pipeline for
-// the target line so its own tab state is always freshly synced from the server. A target line
-// with no Category assigned has nothing to show (openProcedureModal() no-ops on a falsy type, per
-// this module's existing documented rule) — caught here first so the user gets a clear message
-// instead of the modal silently freezing on the old line's content.
+// Moves the open modal to the adjacent voucher line without closing it — distinct from
+// activateProcedureTab(), which switches between one line's own Documents. Only ever called with
+// delta = -1 now (the footer's "Next" slot is the voucher-level Verify & Next/Close button
+// instead — see verifyAndAdvanceVoucher()); the delta parameter is kept generic rather than
+// hardcoding -1 internally, since the underlying step logic is direction-agnostic. Flushes any
+// unsaved observation text on the line being left, same as closeProcedureModal() does, then
+// re-runs openProcedureModal()'s full fetch/render pipeline for the target line so its own tab
+// state is always freshly synced from the server. A target line with no Category assigned has
+// nothing to show (openProcedureModal() no-ops on a falsy type, per this module's existing
+// documented rule) — caught here first so the user gets a clear message instead of the modal
+// silently freezing on the old line's content.
 async function navigateProcedureModalLine(delta) {
     const uid = currentProcedureModalUid;
     if (!uid) return;
@@ -3143,11 +3159,24 @@ async function navigateProcedureModalLine(delta) {
     // Validation Rules Phase 5: saveLineItems() (not just flushProcedureObservations()) so
     // cleared_status recomputes and the badge refreshes every time the modal moves between
     // lines — the badge lives in the main table, hidden behind the modal while it's open, so
-    // this is the natural point for it to catch up. saveLineItems() already calls
-    // flushProcedureObservations()/flushVoucherChecks() internally, so this is a strict
-    // superset of the old call, not a behavior change to the observation flush itself.
+    // this is the natural point for it to catch up.
     await saveLineItems(uid);
     await openProcedureModal(newUid);
+}
+
+// Pure teardown — hides the modal(s) and clears the "currently open" marker, with no save of any
+// kind. Factored out of closeProcedureModal() so the Verify & Next/Close button (which already
+// explicitly saves via saveLineItems() before calling verify_voucher_checks) can tear down the
+// modal without triggering a redundant second save. procedureModalState[uid] is deliberately left
+// in place (not cleared here) — reopening the same line's modal within the same voucher should
+// show tab state exactly as it was left; it's only reset on voucher navigation, in
+// seedVoucherLineState().
+function hideProcedureModalOnly() {
+    if (procedureModal) procedureModal.style.display = 'none';
+    // Defensive — the browse modal is nested on top of this one, so it should never remain open
+    // once the parent closes.
+    closeProcedureBrowseModal();
+    currentProcedureModalUid = null;
 }
 
 async function closeProcedureModal() {
@@ -3157,22 +3186,87 @@ async function closeProcedureModal() {
     // recomputes cleared_status (Validation Rules Phase 5) so the main table's badge is caught up
     // by the time the modal is gone.
     if (currentProcedureModalUid) await saveLineItems(currentProcedureModalUid);
-    if (procedureModal) procedureModal.style.display = 'none';
-    // Defensive — the browse modal is nested on top of this one, so it should never remain open
-    // once the parent closes.
-    closeProcedureBrowseModal();
-    // procedureModalState[uid] is deliberately left in place (not cleared here) — reopening the
-    // same line's modal within the same voucher should show tab state exactly as it was left;
-    // it's only reset on voucher navigation, in seedVoucherLineState().
-    currentProcedureModalUid = null;
+    hideProcedureModalOnly();
 }
 
-// Shared "are all currently-active voucher-level checks ticked" check — used by any real Document
-// flagged transaction_level_approval, whose tab additionally requires this (Generic Voucher-Level
-// Checks cutover: replaces the old isVoucherApprovalComplete(), same gating role but reading the
-// new checks list instead of the retired 3-field Prepared/Checked/Approved-By record).
+// Sets the footer's "Verify & Next/Close" button label and disabled state. Label is driven purely
+// by voucher position — the same pos.index/pos.total check renderVoucherHeader() already uses to
+// disable the main page's own Next-voucher arrow — so the label always agrees with whether there
+// really is a next voucher to advance to. Disabled is driven solely by isVoucherChecksAllTouched()
+// (every active voucher-level check marked done or not_done); it is intentionally independent of
+// document/procedure completeness elsewhere in the modal. Called on modal open and after every
+// voucher-check toggle (renderVoucherChecksBar()).
+function updateVerifyFooterButton(uid) {
+    const btn = document.getElementById('procedureModalVerifyBtn');
+    if (!btn) return;
+    const pos = getVoucherPosition();
+    const isLastVoucher = !(pos.total > 0 && pos.index < pos.total);
+    btn.textContent = isLastVoucher ? '✅ Verify & Close' : '✅ Verify & Next';
+    const checks = voucherChecksCache[currentVoucherId] || [];
+    const allTouched = isVoucherChecksAllTouched(checks);
+    btn.disabled = !allTouched;
+    btn.title = allTouched ? '' : 'Mark every check before verifying';
+}
+
+// Click handler for the footer's "Verify & Next/Close" button — replaces the old per-line "Next"
+// nav (Voucher-level Checks simplified to name-only, Phase 3 of 4). Operates at voucher
+// granularity, not line granularity: saves the current line, verifies this voucher's checks
+// (server-side pushes any not-done check into Observations), then advances the main page to the
+// next voucher — or, on the last voucher, just closes. To review another line of the same
+// voucher, close the modal (✕, unchanged) and reopen that line's own Supporting Documents entry
+// from the table.
+async function verifyAndAdvanceVoucher() {
+    const uid = currentProcedureModalUid;
+    if (!uid) return;
+    const btn = document.getElementById('procedureModalVerifyBtn');
+    if (btn && btn.disabled) return;
+    if (btn) btn.disabled = true;
+    try {
+        // Existing chokepoint — flushes observations/account-head note before verifying.
+        await saveLineItems(uid);
+        const res = await fetch(`${API_BASE}/api/verification/verify_voucher_checks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: currentSessionId, current_detail_id: uid })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            showStatus(err.detail || 'Could not verify voucher-level checks — please try again.', 'error');
+            if (btn) btn.disabled = false;
+            return;
+        }
+        const data = await res.json();
+        // Already saved above — hide only, don't re-save via closeProcedureModal().
+        hideProcedureModalOnly();
+        if (data.boundary) {
+            showStatus('Voucher verified. No more vouchers in this session.', 'success');
+        } else {
+            applyVoucherNavRenderData(data);
+        }
+        await updateProgressDisplay();
+    } catch (e) {
+        console.error('Error verifying voucher checks:', e);
+        showStatus('Could not verify voucher-level checks — please try again.', 'error');
+        if (btn) btn.disabled = false;
+    }
+}
+
+// Shared "are all currently-active voucher-level checks marked done" check — used by any real
+// Document flagged transaction_level_approval, whose tab additionally requires this. Mirrors
+// compute_and_persist_cleared_status()'s own voucher-checks gate (routers/verification.py),
+// which requires state='done' for every active check — a 'not_done' check does NOT satisfy this,
+// even though it counts as "touched" for the Verify button's own, separate gate below.
 function isVoucherChecksComplete(checks) {
-    return Array.isArray(checks) && checks.length > 0 && checks.every(c => c.ticked);
+    return Array.isArray(checks) && checks.length > 0 && checks.every(c => c.state === 'done');
+}
+
+// Separate, looser gate: "has every active check been marked one way or the other" (done OR
+// not_done, just not left untouched) — the sole condition for enabling the footer's Verify &
+// Next/Close button. A voucher with zero configured checks is vacuously touched (same
+// "empty required set" convention used elsewhere in this codebase).
+function isVoucherChecksAllTouched(checks) {
+    if (!Array.isArray(checks) || !checks.length) return true;
+    return checks.every(c => c.state !== 'untouched');
 }
 
 // Fetches and caches one voucher's checks list (client_id+transaction_ref scoped, shared across
@@ -3193,10 +3287,7 @@ async function ensureVoucherChecksLoaded(clientId, transactionRef) {
                 id: c.id,
                 name: c.name,
                 sort_order: c.sort_order,
-                auth_roles: c.auth_roles || [],
-                ticked: !!c.ticked,
-                performed_by_name: c.performed_by_name || '',
-                dirty: false
+                state: c.state || 'untouched'
             }));
         }
     } catch (e) {
@@ -3207,14 +3298,12 @@ async function ensureVoucherChecksLoaded(clientId, transactionRef) {
 
 // Renders the persistent voucher-level checks bar, shown once per voucher above the document rail
 // (#procedureVoucherChecksBar, static/verification.html) — not duplicated per tab/line, since these
-// checks apply to the whole voucher (client_id+transaction_ref), not one line. Each configured
-// check (audit_rule_voucher_checks, ordered by sort_order) renders as a tick checkbox + an inline
-// performed-by name field + a small display-only roles hint (auth_roles have no access-control
-// meaning anywhere in this codebase — same "informational only" convention as the per-document
-// Audit Procedures checklist's "sourced from Audit Rules" label). Ticking saves immediately
-// (optimistic, mirrors toggleProcedureCheck()); the name field is local-first, flushed at the same
-// Prev/Next/Complete/Exit/close chokepoint as everything else (flushVoucherChecks(), called from
-// saveLineItems()).
+// checks apply to the whole voucher (client_id+transaction_ref), not one line. Voucher-level
+// Checks simplified to name-only (Phase 3 of 4): each configured check (audit_rule_voucher_checks,
+// ordered by sort_order) renders as a name + a tick/cross toggle-pill pair — no auth-roles hint,
+// no performed-by name field (both retired alongside the old boolean model). Clicking a pill saves
+// its new state immediately (optimistic, reverts on failure) — nothing here is local-first
+// anymore, so there is no flush step at the Prev/Next/Complete/Exit chokepoint for this bar.
 function renderVoucherChecksBar(uid) {
     const container = document.getElementById('procedureVoucherChecksBar');
     if (!container) return;
@@ -3223,28 +3312,35 @@ function renderVoucherChecksBar(uid) {
 
     if (!checks.length) {
         container.innerHTML = '<p class="procedure-voucher-checks-empty">No voucher-level checks configured.</p>';
+        updateVerifyFooterButton(uid);
         return;
     }
 
-    container.innerHTML = checks.map(check => `
-        <div class="procedure-voucher-check-item" data-check-id="${check.id}">
-            <label class="procedure-voucher-check-tick">
-                <input type="checkbox" class="procedure-voucher-check-checkbox" data-check-id="${check.id}" ${check.ticked ? 'checked' : ''}>
-                <span>${escapeHtml(check.name)}</span>
-            </label>
-            <input type="text" class="procedure-search-input procedure-voucher-check-name" data-check-id="${check.id}"
-                placeholder="Performed by..." value="${escapeHtml(check.performed_by_name || '')}">
-            ${check.auth_roles.length ? `<span class="procedure-voucher-check-roles">${escapeHtml(check.auth_roles.join(', '))}</span>` : ''}
-        </div>
-    `).join('');
+    const notDone = checks.filter(c => c.state === 'not_done');
+    const warningHtml = notDone.length
+        ? `<div class="procedure-voucher-checks-warning">⚠️ ${notDone.map(c => `<strong>${escapeHtml(c.name)}</strong>`).join(', ')} marked not done — observation will auto-note on close.</div>`
+        : '';
 
-    container.querySelectorAll('.procedure-voucher-check-checkbox').forEach(cb => {
-        cb.addEventListener('change', async function() {
+    container.innerHTML = checks.map(check => `
+        <div class="procedure-voucher-check-row" data-check-id="${check.id}">
+            <span class="procedure-voucher-check-label">${escapeHtml(check.name)}</span>
+            <div class="procedure-voucher-check-toggle">
+                <button type="button" class="procedure-voucher-check-btn tick${check.state === 'done' ? ' selected' : ''}"
+                    data-check-id="${check.id}" data-state="done" title="Mark done">✓</button>
+                <button type="button" class="procedure-voucher-check-btn cross${check.state === 'not_done' ? ' selected' : ''}"
+                    data-check-id="${check.id}" data-state="not_done" title="Mark not done">✗</button>
+            </div>
+        </div>
+    `).join('') + warningHtml;
+
+    container.querySelectorAll('.procedure-voucher-check-btn').forEach(btn => {
+        btn.addEventListener('click', async function() {
             const checkId = parseInt(this.dataset.checkId);
+            const newState = this.dataset.state;
             const check = checks.find(c => c.id === checkId);
-            if (!check) return;
-            const previousTicked = check.ticked;
-            check.ticked = this.checked;
+            if (!check || check.state === newState) return;
+            const previousState = check.state;
+            check.state = newState;
             try {
                 const res = await fetch(`${API_BASE}/api/verification/save_voucher_check`, {
                     method: 'POST',
@@ -3253,38 +3349,30 @@ function renderVoucherChecksBar(uid) {
                         client_id: getClientId(),
                         transaction_ref: transactionRef,
                         check_id: checkId,
-                        ticked: check.ticked,
-                        performed_by_name: check.performed_by_name
+                        state: newState
                     })
                 });
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
                     throw new Error(err.detail || 'Failed to save voucher check.');
                 }
-                // Completion-dot/gate logic depends on tick state, so a successful toggle must
-                // refresh the rail's dots and the main table's Procedures badges — mirrors
-                // toggleProcedureCheck()'s own renderProcedureModalTabs() refresh.
+                // Completion-dot/gate logic depends on check state, so a successful toggle must
+                // refresh the rail's dots, the main table's Procedures badges, and the footer's
+                // Verify button — mirrors toggleProcedureCheck()'s own renderProcedureModalTabs()
+                // refresh, extended to this bar's own dependents.
+                renderVoucherChecksBar(uid);
                 renderProcedureModalTabs(uid);
                 await saveAllVoucherLines();
             } catch (e) {
                 console.error('Failed to save voucher check:', e);
-                check.ticked = previousTicked;
-                this.checked = previousTicked;
+                check.state = previousState;
                 showStatus('Failed to save voucher-level check — please try again.', 'error');
+                renderVoucherChecksBar(uid);
             }
         });
     });
 
-    container.querySelectorAll('.procedure-voucher-check-name').forEach(input => {
-        input.addEventListener('input', function() {
-            const checkId = parseInt(this.dataset.checkId);
-            const check = checks.find(c => c.id === checkId);
-            if (!check) return;
-            check.performed_by_name = this.value;
-            check.dirty = true;
-            updateProcedureModalSavedNote(uid);
-        });
-    });
+    updateVerifyFooterButton(uid);
 }
 
 // Shared completeness check for one document within one voucher line's modal — used both by the
@@ -4391,55 +4479,8 @@ async function saveLineObservation(uid, docId) {
     }
 }
 
-// Generic Voucher-Level Checks cutover: persists every dirty (unsaved) performed-by-name edit for
-// this voucher's checks — called from the same save chokepoint as flushProcedureObservations()
-// (saveLineItems()). No-op if nothing changed since the last save. Tick state itself already saves
-// immediately on click (see the checkbox listener in renderVoucherChecksBar()); only the free-text
-// name field can ever be "dirty" here. On any successful save, refreshes every currently-loaded
-// line of this voucher (not just the active one) via saveAllVoucherLines(), since checks are shared
-// across the whole voucher, not scoped to one line — matches the backend's own "applied to every
-// line of that voucher" design (Phase 4). Marking dirty=false before that call means any nested
-// saveLineItems()->flushVoucherChecks() calls it triggers simply no-op, not recurse.
-async function flushVoucherChecks(uid) {
-    const transactionRef = currentVoucherId;
-    const checks = voucherChecksCache[transactionRef];
-    if (!checks || !checks.length) return;
-    const dirtyChecks = checks.filter(c => c.dirty);
-    if (!dirtyChecks.length) return;
-
-    let anySaved = false;
-    for (const check of dirtyChecks) {
-        try {
-            const res = await fetch(`${API_BASE}/api/verification/save_voucher_check`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    client_id: getClientId(),
-                    transaction_ref: transactionRef,
-                    check_id: check.id,
-                    ticked: check.ticked,
-                    performed_by_name: check.performed_by_name
-                })
-            });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.detail || 'Failed to save voucher check.');
-            }
-            check.dirty = false;
-            anySaved = true;
-        } catch (e) {
-            console.error('Failed to save voucher check:', e);
-            showStatus('Failed to save a voucher-level check — please try again.', 'error');
-        }
-    }
-    if (anySaved) {
-        updateProcedureModalSavedNote(uid);
-        await saveAllVoucherLines();
-    }
-}
-
 // Account Head Recommendation follow-up: persists a dirty no-match finding — called from the same
-// save chokepoint as flushProcedureObservations()/flushVoucherChecks() (saveLineItems()). No-op
+// save chokepoint as flushProcedureObservations() (saveLineItems()). No-op
 // unless the card is currently in no-match mode with unsaved text. Reuses the existing
 // save_line_observation endpoint under the reserved ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel — the
 // backend wraps the raw text into the "[Account Head Recommendation]: New account head
@@ -4728,8 +4769,8 @@ if (procedureModal) {
 document.getElementById('procedureModalBackBtn')?.addEventListener('click', function() {
     navigateProcedureModalLine(-1);
 });
-document.getElementById('procedureModalNextBtn')?.addEventListener('click', function() {
-    navigateProcedureModalLine(1);
+document.getElementById('procedureModalVerifyBtn')?.addEventListener('click', function() {
+    verifyAndAdvanceVoucher();
 });
 
 // ---------- INIT ----------
