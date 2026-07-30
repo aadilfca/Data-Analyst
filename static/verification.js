@@ -775,6 +775,9 @@ const ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1;
 // `dirty` field anymore. Fetched once per voucher in openProcedureModal(), reused across lines of
 // that same voucher within one modal session.
 let voucherChecksCache = {};
+// Confirmed fix (2026-07-30): keyed by transaction_ref, holds the in-flight fetch Promise while
+// one is outstanding for that voucher — see ensureVoucherChecksLoaded() below for why this exists.
+let voucherChecksLoadingPromises = {};
 const VOUCHER_LINE_DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars'];
 const VOUCHER_LINE_DEBIT_ALIASES = ['Debit Amount', 'Debit', 'Dr Amount', 'Dr'];
 const VOUCHER_LINE_CREDIT_ALIASES = ['Credit Amount', 'Credit', 'Cr Amount', 'Cr'];
@@ -3278,22 +3281,43 @@ async function ensureVoucherChecksLoaded(clientId, transactionRef) {
     if (voucherChecksCache[transactionRef]) {
         return voucherChecksCache[transactionRef];
     }
-    try {
-        const params = new URLSearchParams({ client_id: clientId, transaction_ref: transactionRef });
-        const res = await fetch(`${API_BASE}/api/verification/voucher_checks?${params}`);
-        if (res.ok) {
-            const data = await res.json();
-            voucherChecksCache[transactionRef] = data.map(c => ({
-                id: c.id,
-                name: c.name,
-                sort_order: c.sort_order,
-                state: c.state || 'untouched'
-            }));
-        }
-    } catch (e) {
-        console.error('Failed to load voucher checks:', e);
+    // Confirmed fix (2026-07-30): this function is called from two independent sites for the
+    // same voucher — openProcedureModal() and updateProceduresCellForLine() (the latter fires
+    // automatically whenever a line's Category has a transaction_level_approval-flagged
+    // Document, e.g. "Purchase Demand"). Without de-duplication, two near-simultaneous callers
+    // could each fire their own GET; if a tick was saved (mutating the cache in place) while an
+    // older, slower GET for the same voucher was still in flight, that older response would
+    // resolve afterward and silently overwrite the cache with pre-tick data — and since the
+    // cache is never re-validated once populated, every later reopen kept showing that stale,
+    // reset-looking state even though the tick was correctly persisted server-side the whole
+    // time. Sharing one in-flight promise per transaction_ref removes the race entirely.
+    if (voucherChecksLoadingPromises[transactionRef]) {
+        return voucherChecksLoadingPromises[transactionRef];
     }
-    return voucherChecksCache[transactionRef] || null;
+    const loadPromise = (async () => {
+        try {
+            const params = new URLSearchParams({ client_id: clientId, transaction_ref: transactionRef });
+            const res = await fetch(`${API_BASE}/api/verification/voucher_checks?${params}`);
+            if (res.ok) {
+                const data = await res.json();
+                voucherChecksCache[transactionRef] = data.map(c => ({
+                    id: c.id,
+                    name: c.name,
+                    sort_order: c.sort_order,
+                    state: c.state || 'untouched'
+                }));
+            }
+        } catch (e) {
+            console.error('Failed to load voucher checks:', e);
+        }
+        return voucherChecksCache[transactionRef] || null;
+    })();
+    voucherChecksLoadingPromises[transactionRef] = loadPromise;
+    try {
+        return await loadPromise;
+    } finally {
+        delete voucherChecksLoadingPromises[transactionRef];
+    }
 }
 
 // Renders the persistent voucher-level checks bar, shown once per voucher above the document rail
