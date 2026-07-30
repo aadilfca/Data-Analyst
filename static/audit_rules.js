@@ -2102,10 +2102,11 @@ arSpecimenSaveBtn.addEventListener('click', saveSpecimen);
 // VOUCHER-LEVEL CHECKS (Generic Voucher-Level Checks, Phase 3 of 6)
 // A 4th reusable entity type: audit_rule_voucher_checks. Ordered by sort_order (server-
 // assigned), NOT alphabetical like Documents/Cross-checks/Categories. Soft-delete/restore
-// like Documents (not hard-delete like Signature Specimens). auth_roles is an embedded
-// list edited via the same chip-editor shape as Documents' own Authorisation Roles field.
-// Uses its own state (editingVoucherCheckId/voucherCheckRolesState), distinct from
-// Documents' editingId/rolesState globals, to avoid clobbering that section's state.
+// like Documents (not hard-delete like Signature Specimens). Name-only (confirmed
+// requirement) - no Authorisation Roles field; audit_rule_voucher_check_auth_roles is left
+// in place but unread/unwritten by this entity going forward.
+// Uses its own state (editingVoucherCheckId), distinct from Documents' editingId global,
+// to avoid clobbering that section's state.
 // =====================================================================================
 
 // ---------- DOM REFS ----------
@@ -2119,9 +2120,6 @@ const arVoucherCheckDetailEmpty = document.getElementById('arVoucherCheckDetailE
 const arVoucherCheckDetailForm = document.getElementById('arVoucherCheckDetailForm');
 const arVoucherCheckEditingIdInput = document.getElementById('arVoucherCheckEditingId');
 const arVoucherCheckNameInput = document.getElementById('arVoucherCheckNameInput');
-const arVoucherCheckRolesChipList = document.getElementById('arVoucherCheckRolesChipList');
-const arVoucherCheckRolesInput = document.getElementById('arVoucherCheckRolesInput');
-const arVoucherCheckRolesAddBtn = document.getElementById('arVoucherCheckRolesAddBtn');
 const arVoucherCheckDetailStatus = document.getElementById('arVoucherCheckDetailStatus');
 const arVoucherCheckSaveBtn = document.getElementById('arVoucherCheckSaveBtn');
 const arVoucherCheckDeleteBtn = document.getElementById('arVoucherCheckDeleteBtn');
@@ -2130,8 +2128,6 @@ const arVoucherCheckRestoreBtn = document.getElementById('arVoucherCheckRestoreB
 // ---------- STATE ----------
 // null while creating a new Voucher-level check; set to its id while editing an existing one.
 let editingVoucherCheckId = null;
-// In-memory auth_roles list for the check currently being edited, sent raw on Save.
-let voucherCheckRolesState = [];
 // Sortable.js instance, created once (see initVoucherCheckSortable()) and toggled via
 // .option('disabled', ...) rather than destroyed/recreated on every render.
 let arVoucherCheckSortable = null;
@@ -2252,25 +2248,6 @@ function initVoucherCheckSortable() {
 // ---------- CHIP EDITOR (Authorisation Roles) ----------
 // Reuses the existing generic renderChipList(container, items, onRemove) helper (defined
 // above, shared across Documents/etc.) rather than duplicating it.
-function renderVoucherCheckRoleChips() {
-    renderChipList(arVoucherCheckRolesChipList, voucherCheckRolesState, removeVoucherCheckRole);
-}
-function addVoucherCheckRole() {
-    const value = arVoucherCheckRolesInput.value.trim();
-    if (!value) return;
-    if (voucherCheckRolesState.some(r => r.toLowerCase() === value.toLowerCase())) {
-        arVoucherCheckRolesInput.value = '';
-        return;
-    }
-    voucherCheckRolesState.push(value);
-    arVoucherCheckRolesInput.value = '';
-    renderVoucherCheckRoleChips();
-}
-function removeVoucherCheckRole(value) {
-    voucherCheckRolesState = voucherCheckRolesState.filter(r => r !== value);
-    renderVoucherCheckRoleChips();
-}
-
 // ---------- SELECT / NEW ----------
 async function selectVoucherCheck(id) {
     try {
@@ -2281,8 +2258,6 @@ async function selectVoucherCheck(id) {
         editingVoucherCheckId = check.id;
         arVoucherCheckEditingIdInput.value = check.id;
         arVoucherCheckNameInput.value = check.name;
-        voucherCheckRolesState = (check.auth_roles || []).slice();
-        renderVoucherCheckRoleChips();
 
         if (check.is_active) {
             arVoucherCheckDeleteBtn.style.display = 'inline-block';
@@ -2305,8 +2280,6 @@ function startNewVoucherCheck() {
     editingVoucherCheckId = null;
     arVoucherCheckEditingIdInput.value = '';
     arVoucherCheckNameInput.value = '';
-    voucherCheckRolesState = [];
-    renderVoucherCheckRoleChips();
 
     arVoucherCheckDeleteBtn.style.display = 'none';
     arVoucherCheckRestoreBtn.style.display = 'none';
@@ -2324,7 +2297,7 @@ async function saveVoucherCheck() {
         return;
     }
 
-    const payload = { name: name, auth_roles: voucherCheckRolesState };
+    const payload = { name: name };
 
     try {
         let url = API_BASE + '/api/audit-rules/voucher-checks';
@@ -2388,11 +2361,6 @@ async function restoreVoucherCheck() {
 // ---------- WIRE UP EVENT LISTENERS ----------
 arVoucherCheckAddNewBtn.addEventListener('click', startNewVoucherCheck);
 arVoucherCheckShowInactiveCheckbox.addEventListener('change', loadVoucherChecks);
-
-arVoucherCheckRolesAddBtn.addEventListener('click', addVoucherCheckRole);
-arVoucherCheckRolesInput.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { e.preventDefault(); addVoucherCheckRole(); }
-});
 
 arVoucherCheckSaveBtn.addEventListener('click', saveVoucherCheck);
 arVoucherCheckDeleteBtn.addEventListener('click', deleteVoucherCheck);

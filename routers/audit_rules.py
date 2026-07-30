@@ -673,13 +673,15 @@ def restore_category(category_id: int):
 # ---------- DATA MODELS ----------
 class VoucherCheckCreate(BaseModel):
     name: str
-    auth_roles: List[str] = []
 
 class VoucherCheckUpdate(BaseModel):
     name: str
-    auth_roles: List[str] = []
 
 # ---------- HELPERS ----------
+# Confirmed requirement: Voucher-level Checks are now name-only (no Authorisation Roles
+# field). audit_rule_voucher_check_auth_roles is left in place, unread/unwritten by this
+# section going forward (non-destructive-schema convention) - these two helpers are kept
+# defined but no longer called from the CRUD endpoints below.
 def get_voucher_check_auth_roles(voucher_check_id: int) -> List[str]:
     rows = execute_query(
         "SELECT role_name FROM audit_rule_voucher_check_auth_roles WHERE voucher_check_id = ? ORDER BY sort_order",
@@ -704,7 +706,6 @@ def row_to_voucher_check(row: dict) -> dict:
         "sort_order": row["sort_order"],
         "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
-        "auth_roles": get_voucher_check_auth_roles(voucher_check_id),
     }
 
 def get_next_voucher_check_sort_order() -> int:
@@ -745,7 +746,6 @@ def create_voucher_check(voucher_check: VoucherCheckCreate):
         "INSERT INTO audit_rule_voucher_checks (name, sort_order) VALUES (?, ?)",
         (voucher_check.name, sort_order)
     )
-    save_voucher_check_auth_roles(voucher_check_id, voucher_check.auth_roles)
 
     log_audit("Admin", "Create", "AuditRules", f"Created voucher check: {voucher_check.name}")
     return {"message": f"Voucher check '{voucher_check.name}' created successfully", "voucher_check_id": voucher_check_id}
@@ -760,7 +760,6 @@ def update_voucher_check(voucher_check_id: int, voucher_check: VoucherCheckUpdat
         "UPDATE audit_rule_voucher_checks SET name = ? WHERE id = ?",
         (voucher_check.name, voucher_check_id)
     )
-    save_voucher_check_auth_roles(voucher_check_id, voucher_check.auth_roles)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated voucher check ID {voucher_check_id}")
     return {"message": "Voucher check updated successfully"}
