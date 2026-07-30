@@ -2041,9 +2041,18 @@ body {
    validation and would otherwise wipe out the badge — same "independent sibling slot" pattern
    already used for the Risk dot inside .voucher-line-procedures-cell. */
 .voucher-line-status-cell {
-    justify-content: flex-end;
-    gap: 6px;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 4px;
     white-space: nowrap;
+}
+/* Confirmed fix (2026-07-30): the two pills (validation-status + Cleared/Query badge) were
+   laid out side-by-side in a fixed-width (90px) column, overflowing and pushing the cell's
+   border past the grid track. Stacked vertically instead - :empty hides the badge slot's gap
+   on lines where cleared_status hasn't been computed yet (the common case). */
+.voucher-line-cleared-badge-slot:empty {
+    display: none;
 }
 
 /* Status cell: dot + label, colored by validation_status — green for passed, amber for pending,

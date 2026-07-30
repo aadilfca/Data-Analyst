@@ -1509,6 +1509,40 @@ def get_category_for_account(
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
+    # Prefer the client's current (latest parsed) Trial Balance's own category_id for this
+    # account_code - this is what Assign Categories itself shows/edits, and is the "correct
+    # type from the client's Trial Balance" a user expects here. account_category_assignments
+    # (below) is a persisted mirror meant to carry a categorization forward across TB
+    # re-uploads, kept in sync by upsert_account_category_assignment() - but it's a separate
+    # cached copy, not the live TB, and confirmed (2026-07-30) to be able to drift stale
+    # relative to it. So the live TB wins whenever the account is present in it; the
+    # assignments table is used only as a fallback for an account not in the latest TB.
+    upload_rows = execute_query(
+        """
+        SELECT id FROM trial_balance_uploads
+        WHERE client_id = ? AND status = 'parsed'
+        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
+        LIMIT 1
+        """,
+        (client_id,)
+    )
+    if upload_rows:
+        tb_rows = execute_query(
+            """
+            SELECT a.category_id, c.name AS category_name
+            FROM trial_balance_accounts a
+            LEFT JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = 1
+            WHERE a.upload_id = ? AND a.account_code = ?
+            """,
+            (upload_rows[0]['id'], account_code)
+        )
+        if tb_rows and tb_rows[0]['category_name']:
+            return {
+                "matched": True,
+                "category_id": tb_rows[0]['category_id'],
+                "category_name": tb_rows[0]['category_name']
+            }
+
     # LEFT JOIN (with the category's own is_active check folded into the ON
     # clause) means category_name comes back NULL for every "no match" case
     # in one query: no assignment row at all, an assignment explicitly
