@@ -184,7 +184,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
             c['id'] for c in execute_query("SELECT id FROM audit_rule_voucher_checks WHERE is_active = 1")
         }
         ticked_rows = execute_query(
-            "SELECT check_id FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ? AND ticked = 1",
+            "SELECT check_id FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ? AND state = 'done'",
             (client_id, transaction_ref)
         )
         ticked_check_ids = {r['check_id'] for r in ticked_rows}
@@ -725,27 +725,13 @@ def get_next_transaction(session_id: int):
     }
 
 
-@router.get("/api/verification/voucher_nav/{session_id}")
-def get_voucher_nav(
-    session_id: int,
-    current_detail_id: int = Query(..., description="detail_id of any line in the currently displayed voucher"),
-    direction: str = Query(..., pattern="^(next|prev)$", description="'next' or 'prev'")
-):
+def _compute_voucher_nav_result(details: list, current_detail_id: int, direction: str) -> dict:
     """
-    Phase A: sequential voucher-to-voucher navigation, independent of
-    verification status (unlike /next, which always jumps to the next
-    Pending voucher). Vouchers are ordered by each group's earliest
-    client_data_id — the same physical row order /next already uses for
-    lines within a voucher.
+    Shared nav computation used by both get_voucher_nav() and verify_voucher_checks() (the
+    "Verify & Next/Close" action) - factored out so the two don't duplicate the ordered-group-id/
+    boundary logic. `details` is the already-fetched _fetch_session_details_grouped() result for
+    one session. Raises HTTPException(404) if current_detail_id isn't in `details`.
     """
-    session = execute_query("SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
-    if not session:
-        raise HTTPException(404, "Verification session not found or cancelled.")
-
-    details = _fetch_session_details_grouped(session_id)
-
-    # Ordered list of distinct voucher group ids (first appearance = earliest client_data_id,
-    # since `details` is already ordered by cd.id ASC).
     ordered_group_ids = []
     seen = set()
     for d in details:
@@ -776,6 +762,7 @@ def get_voucher_nav(
     lines = [_build_verification_line(d) for d in voucher_rows]
 
     return {
+        "boundary": False,
         "voucher_id": anchor['transaction_ref'],
         "voucher_date": anchor['extract_date'],
         "document_group_id": target_group_id,
@@ -784,6 +771,90 @@ def get_voucher_nav(
         "voucher_index": target_index + 1,
         "total_vouchers": total_vouchers
     }
+
+
+@router.get("/api/verification/voucher_nav/{session_id}")
+def get_voucher_nav(
+    session_id: int,
+    current_detail_id: int = Query(..., description="detail_id of any line in the currently displayed voucher"),
+    direction: str = Query(..., pattern="^(next|prev)$", description="'next' or 'prev'")
+):
+    """
+    Phase A: sequential voucher-to-voucher navigation, independent of
+    verification status (unlike /next, which always jumps to the next
+    Pending voucher). Vouchers are ordered by each group's earliest
+    client_data_id — the same physical row order /next already uses for
+    lines within a voucher.
+    """
+    session = execute_query("SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
+    if not session:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+
+    details = _fetch_session_details_grouped(session_id)
+    return _compute_voucher_nav_result(details, current_detail_id, direction)
+
+
+@router.post("/api/verification/verify_voucher_checks")
+def verify_voucher_checks(
+    session_id: int = Body(..., embed=True),
+    current_detail_id: int = Body(..., embed=True, description="detail_id of any line in the currently displayed voucher")
+):
+    """
+    Voucher-level Checks simplified to name-only (Phase 2 of 4): the "Verify & Next/Close"
+    action. This is the ONLY trigger that pushes unresolved ("not done") voucher-level checks
+    into the voucher's Observation field - ordinary Prev/Next/close-icon saves keep auto-saving
+    each check's tick state (via save_voucher_check) but never themselves change what's recorded
+    in Observations. Re-running this (e.g. re-verifying an already-closed voucher) correctly
+    re-syncs: a since-fixed check's line is dropped, a still-unresolved one stays/updates -
+    not a one-time write - because it always recomputes flagged_in_observations fresh from the
+    live state and sync_line_observations_to_voucher() always rebuilds the full field from that
+    flag rather than appending.
+
+    Backend safety net: rejects with 400 if any active check is still 'untouched' for this
+    voucher, mirroring the button-disable condition Phase 3's frontend will also enforce
+    client-side.
+    """
+    session = execute_query("SELECT id, client_id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
+    if not session:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+    client_id = session[0]['client_id']
+
+    details = _fetch_session_details_grouped(session_id)
+    current = next((d for d in details if d['id'] == current_detail_id), None)
+    if current is None:
+        raise HTTPException(404, "Verification detail not found in this session.")
+
+    transaction_ref = current['transaction_ref']
+    voucher_rows = [d for d in details if d['_doc_group_id'] == current['_doc_group_id']]
+
+    active_checks = execute_query(
+        "SELECT id, name FROM audit_rule_voucher_checks WHERE is_active = 1 ORDER BY sort_order"
+    )
+    status_rows = execute_query(
+        "SELECT check_id, state FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ?",
+        (client_id, transaction_ref)
+    )
+    state_by_check_id = {r['check_id']: r['state'] for r in status_rows}
+
+    untouched = [c for c in active_checks if state_by_check_id.get(c['id'], 'untouched') == 'untouched']
+    if untouched:
+        names = ", ".join(c['name'] for c in untouched)
+        raise HTTPException(400, f"Cannot verify: {len(untouched)} check(s) still not marked ({names}).")
+
+    not_done_ids = {c['id'] for c in active_checks if state_by_check_id.get(c['id']) == 'not_done'}
+    for c in active_checks:
+        execute_write(
+            "UPDATE voucher_check_status SET flagged_in_observations = ? WHERE client_id = ? AND transaction_ref = ? AND check_id = ?",
+            (1 if c['id'] in not_done_ids else 0, client_id, transaction_ref, c['id'])
+        )
+
+    for row in voucher_rows:
+        sync_line_observations_to_voucher(row['id'])
+
+    result = _compute_voucher_nav_result(details, current_detail_id, "next")
+    result["verified"] = True
+    result["not_done_count"] = len(not_done_ids)
+    return result
 
 @router.post("/api/verification/save_line_items")
 def save_line_items(
@@ -1593,6 +1664,8 @@ def suggest_account_head(
 # longer read/written by this router.
 # ==============================================
 
+VOUCHER_CHECK_STATES = ('untouched', 'done', 'not_done')
+
 @router.get("/api/verification/voucher_checks")
 def get_voucher_checks_status(
     client_id: int = Query(..., description="Client ID"),
@@ -1600,33 +1673,29 @@ def get_voucher_checks_status(
 ):
     """
     Return every active audit_rule_voucher_checks definition, ordered by sort_order, merged
-    with this voucher's current tick/performed-by status. A check with no voucher_check_status
-    row yet returns ticked=false/performed_by_name=None - no record yet is a normal state, same
-    convention as get_category_for_account().
+    with this voucher's current 3-state status. A check with no voucher_check_status row yet
+    returns state='untouched' - no record yet is a normal state, same convention as
+    get_category_for_account(). Voucher-level Checks simplified to name-only (Phase 2 of 4):
+    auth_roles and performed_by_name are both gone - Phase 1 already dropped the role concept
+    from Audit Rules entirely, and this model has no "performed by" field anymore either.
     """
     checks = execute_query(
         "SELECT id, name, sort_order FROM audit_rule_voucher_checks WHERE is_active = 1 ORDER BY sort_order"
     )
     status_rows = execute_query(
-        "SELECT check_id, ticked, performed_by_name FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ?",
+        "SELECT check_id, state FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ?",
         (client_id, transaction_ref)
     )
     status_by_check_id = {r['check_id']: r for r in status_rows}
 
     result = []
     for check in checks:
-        role_rows = execute_query(
-            "SELECT role_name FROM audit_rule_voucher_check_auth_roles WHERE voucher_check_id = ? ORDER BY sort_order",
-            (check['id'],)
-        )
         status = status_by_check_id.get(check['id'])
         result.append({
             "id": check['id'],
             "name": check['name'],
             "sort_order": check['sort_order'],
-            "auth_roles": [r['role_name'] for r in role_rows],
-            "ticked": bool(status['ticked']) if status else False,
-            "performed_by_name": status['performed_by_name'] if status else None
+            "state": status['state'] if status else 'untouched'
         })
     return result
 
@@ -1636,15 +1705,20 @@ def save_voucher_check_status(
     client_id: int = Body(..., embed=True),
     transaction_ref: str = Body(..., embed=True),
     check_id: int = Body(..., embed=True),
-    ticked: bool = Body(..., embed=True),
-    performed_by_name: Optional[str] = Body(None, embed=True)
+    state: str = Body(..., embed=True, description="'untouched' | 'done' | 'not_done'")
 ):
     """
-    Upsert one voucher's tick/performed-by state for one check. ON CONFLICT DO UPDATE, matching
+    Upsert one voucher's 3-state status for one check. ON CONFLICT DO UPDATE, matching
     voucher_check_status's own UNIQUE(client_id, transaction_ref, check_id) constraint - same
     per-item-tick upsert shape as set_procedure_check(), not voucher_approvals' select-then-branch,
-    since this is a repeated single-field tick rather than a single multi-field record.
+    since this is a repeated single-field toggle rather than a single multi-field record.
+    Only ever writes `state` - `flagged_in_observations` is untouched here, it only ever changes
+    inside verify_voucher_checks() (the "Verify & Next/Close" action), per the confirmed
+    requirement that ordinary ticking must not itself alter the voucher's Observation field.
     """
+    if state not in VOUCHER_CHECK_STATES:
+        raise HTTPException(400, f"Invalid state '{state}' - must be one of {VOUCHER_CHECK_STATES}.")
+
     check = execute_query(
         "SELECT id FROM audit_rule_voucher_checks WHERE id = ? AND is_active = 1",
         (check_id,)
@@ -1654,21 +1728,20 @@ def save_voucher_check_status(
 
     execute_write(
         """
-        INSERT INTO voucher_check_status (client_id, transaction_ref, check_id, ticked, performed_by_name, updated_at)
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO voucher_check_status (client_id, transaction_ref, check_id, state, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(client_id, transaction_ref, check_id)
-        DO UPDATE SET ticked = excluded.ticked, performed_by_name = excluded.performed_by_name, updated_at = CURRENT_TIMESTAMP
+        DO UPDATE SET state = excluded.state, updated_at = CURRENT_TIMESTAMP
         """,
-        (client_id, transaction_ref, check_id, 1 if ticked else 0, performed_by_name)
+        (client_id, transaction_ref, check_id, state)
     )
     log_audit("Analyst", "Save Voucher Check", "Verification",
-              f"Client {client_id}, voucher '{transaction_ref}', check {check_id} set to ticked={ticked}.")
+              f"Client {client_id}, voucher '{transaction_ref}', check {check_id} set to state={state}.")
     return {
         "client_id": client_id,
         "transaction_ref": transaction_ref,
         "check_id": check_id,
-        "ticked": ticked,
-        "performed_by_name": performed_by_name
+        "state": state
     }
 
 # ==============================================
@@ -2064,6 +2137,16 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
     `last_synced_text` are still written per entry for consistency/audit visibility, but under
     this rebuild design they no longer gate any behaviour - every entry is considered every
     time, regardless of synced state.
+
+    Voucher-level Checks simplified to name-only (Phase 2 of 4): the rebuilt text is now
+    <voucher-check "not done" blocks> followed by <per-document blocks> - the check blocks are
+    derived purely from voucher_check_status.flagged_in_observations, a flag written ONLY by
+    verify_voucher_checks() (the "Verify & Next/Close" action). This function itself never
+    changes that flag - it just re-renders whatever it currently says, so an ordinary line save
+    (Prev/Next/close icon, which all funnel through this same function) re-stamps the same
+    check blocks without altering which ones are present. The early "nothing to build" exit is
+    gone for this reason: a line can now have check blocks to write even with zero document
+    observation entries.
     """
     try:
         sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
@@ -2087,8 +2170,6 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
             """,
             tuple(sibling_ids)
         )
-        if not all_entries:
-            return
 
         # Dedup to one row per document_id, keeping whichever sibling's entry is most recently
         # updated - same convention get_line_observations() already uses for this identical
@@ -2112,14 +2193,41 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
                         f"{entry['observation_text'].strip()} — no match in Trial Balance")
             return f"[{entry['document_name']}]: {entry['observation_text'].strip()}"
 
-        blocks = [
-            (entry['document_id'], _format_block(entry))
-            for entry in latest_by_doc.values()
+        doc_blocks = [
+            _format_block(entry)
+            for entry in sorted(latest_by_doc.values(), key=lambda e: e['document_id'])
             if entry['observation_text'] and entry['observation_text'].strip()
         ]
-        # Ordered by document_id for a stable, deterministic line order across rebuilds.
-        blocks.sort(key=lambda b: b[0])
-        new_text = "\n".join(b[1] for b in blocks) if blocks else None
+
+        # Voucher-check blocks: derived from this line's own (client_id, transaction_ref), not
+        # from sibling ids - voucher_check_status is deliberately keyed session-independently
+        # (see that table's own schema comment), so a plain lookup on the line itself is enough.
+        line_row = execute_query(
+            """
+            SELECT vd.transaction_ref, vs.client_id
+            FROM verification_details vd
+            JOIN verification_sessions vs ON vs.id = vd.session_id
+            WHERE vd.id = ?
+            """,
+            (voucher_line_id,)
+        )
+        check_blocks: List[str] = []
+        if line_row:
+            check_rows = execute_query(
+                """
+                SELECT arvc.name
+                FROM voucher_check_status vcs
+                JOIN audit_rule_voucher_checks arvc ON arvc.id = vcs.check_id
+                WHERE vcs.client_id = ? AND vcs.transaction_ref = ?
+                  AND arvc.is_active = 1 AND vcs.flagged_in_observations = 1
+                ORDER BY arvc.sort_order
+                """,
+                (line_row[0]['client_id'], line_row[0]['transaction_ref'])
+            )
+            check_blocks = [f"{r['name']} marked not done" for r in check_rows]
+
+        blocks = check_blocks + doc_blocks
+        new_text = "\n".join(blocks) if blocks else None
 
         execute_write(
             "UPDATE verification_details SET observations = ? WHERE id = ?",

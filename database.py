@@ -1776,6 +1776,37 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_check_status_client_ref ON voucher_check_status (client_id, transaction_ref)")
         print("✅ Created voucher_check_status table (Generic Voucher-Level Checks, Phase 1 of 6: schema)")
 
+        # Voucher-level Checks simplified to name-only (new 4-phase requirement), Phase 2 of 4:
+        # replaces the old boolean ticked/performed_by_name model with a 3-state per-check
+        # status (untouched/done/not_done, validated in Python - same convention as
+        # audit_rule_documents.risk_rating having no SQL CHECK constraint). `flagged_in_
+        # observations` is a second, independent flag written ONLY by the new "verify" endpoint
+        # (routers/verification.py's verify_voucher_checks) - it records which checks were
+        # not-done as of the last Verify action, so that ordinary line saves (Prev/Next/close)
+        # can keep re-rendering the voucher's Observation field without themselves changing
+        # what it contains; only an explicit Verify call is allowed to add/update/remove a
+        # check's "marked not done" line. Same idempotent PRAGMA table_info() upgrade-block
+        # pattern as audit_rule_documents' risk_rating/transaction_level_approval additions.
+        try:
+            cur = conn.execute("PRAGMA table_info(voucher_check_status)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'state' not in columns:
+                conn.execute("ALTER TABLE voucher_check_status ADD COLUMN state TEXT NOT NULL DEFAULT 'untouched'")
+                # One-time backfill from the old boolean column so already-ticked checks aren't
+                # silently reset to blank - only ever runs the moment this column is first added.
+                conn.execute("UPDATE voucher_check_status SET state = CASE WHEN ticked = 1 THEN 'done' ELSE 'untouched' END")
+                print("✅ Added state column to voucher_check_status (backfilled from ticked)")
+        except Exception as e:
+            print("⚠️ Could not add state to voucher_check_status:", e)
+        try:
+            cur = conn.execute("PRAGMA table_info(voucher_check_status)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'flagged_in_observations' not in columns:
+                conn.execute("ALTER TABLE voucher_check_status ADD COLUMN flagged_in_observations INTEGER NOT NULL DEFAULT 0")
+                print("✅ Added flagged_in_observations column to voucher_check_status")
+        except Exception as e:
+            print("⚠️ Could not add flagged_in_observations to voucher_check_status:", e)
+
         # ---------- VOUCHER LINE OBSERVATIONS (Phase 6 of 6, FINAL: observation flow) ----------
         # One row per (voucher_line_id, document_id) - a Document tab's observation text is
         # upserted in place here, not appended as a history log. `synced` flags whether the
