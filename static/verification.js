@@ -3918,56 +3918,42 @@ function renderProcedureModalPanel(uid, docId) {
 
     const tabState = getProcedureTabState(uid, docId);
     const hasTemplate = !!doc.template_id;
+    const hasRoles = !!(doc.auth_roles && doc.auth_roles.length);
 
-    if (!hasTemplate) {
-        // No template means no Data Bank template to search evidence against, so the Data Table
-        // segment holds only the explanatory note — search box/results dropdown/linked-evidence
-        // table are skipped entirely. Still rendered as a segment (not omitted) so the fixed
-        // Data Table -> Audit Procedures -> Observation order/visual grouping stays consistent
-        // regardless of whether a document has a template.
-        container.innerHTML = `
-            <div class="procedure-tab-panel" data-doc-id="${docId}">
-                <div class="procedure-segment procedure-segment-data">
-                    <h4 class="procedure-segment-header">🗂️ Data Table</h4>
-                    <div class="procedure-segment-body">
-                        <p class="procedure-tab-note">No Data Bank template linked to "${escapeHtml(doc.name)}" — evidence search isn't available for this document. Configure a template in Audit Rules to enable it.</p>
-                    </div>
+    // Segment-level hiding: a Document with no template_id has nothing to search Data Bank
+    // evidence against, and a Document with no configured auth_roles has no procedures to check —
+    // both segments are omitted entirely (header + body), not rendered as an empty placeholder.
+    // Observation always renders. Order stays fixed (Data -> Procedures -> Observation) regardless
+    // of which optional segments are present.
+    const dataSegmentHtml = hasTemplate ? `
+        <div class="procedure-segment procedure-segment-data">
+            <h4 class="procedure-segment-header">🗂️ Data Table</h4>
+            <div class="procedure-segment-body">
+                <div class="procedure-search-row">
+                    <input type="text" id="procedureSearchInput" class="procedure-search-input"
+                        placeholder="Search by reference, vendor, amount..." value="${escapeHtml(tabState.searchTerm)}">
+                    <button type="button" id="procedureBrowseBtn" class="procedure-browse-btn" title="Browse all rows for this document">👁️</button>
                 </div>
-                <div class="procedure-segment procedure-segment-procedures">
-                    <h4 class="procedure-segment-header">✅ Audit Procedures</h4>
-                    <div class="procedure-segment-body">${buildProcedureChecklist(uid, docId)}</div>
-                </div>
-                <div class="procedure-segment procedure-segment-observation">
-                    <h4 class="procedure-segment-header">📝 Observation</h4>
-                    <div class="procedure-segment-body">${buildObservationSection(uid, docId)}</div>
+                <div id="procedureSearchDropdown" class="procedure-search-dropdown"></div>
+                <div class="procedure-selected-section">
+                    <h4 class="procedure-selected-heading">Linked evidence</h4>
+                    ${buildSelectedLinesTable(uid, docId)}
                 </div>
             </div>
-        `;
-        wireProcedureChecklistAndObservation(container, uid, docId, tabState);
-        return;
-    }
+        </div>
+    ` : '';
+
+    const proceduresSegmentHtml = hasRoles ? `
+        <div class="procedure-segment procedure-segment-procedures">
+            <h4 class="procedure-segment-header">✅ Audit Procedures</h4>
+            <div class="procedure-segment-body">${buildProcedureChecklist(uid, docId)}</div>
+        </div>
+    ` : '';
 
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${docId}">
-            <div class="procedure-segment procedure-segment-data">
-                <h4 class="procedure-segment-header">🗂️ Data Table</h4>
-                <div class="procedure-segment-body">
-                    <div class="procedure-search-row">
-                        <input type="text" id="procedureSearchInput" class="procedure-search-input"
-                            placeholder="Search by reference, vendor, amount..." value="${escapeHtml(tabState.searchTerm)}">
-                        <button type="button" id="procedureBrowseBtn" class="procedure-browse-btn" title="Browse all rows for this document">👁️</button>
-                    </div>
-                    <div id="procedureSearchDropdown" class="procedure-search-dropdown"></div>
-                    <div class="procedure-selected-section">
-                        <h4 class="procedure-selected-heading">Linked evidence</h4>
-                        ${buildSelectedLinesTable(uid, docId)}
-                    </div>
-                </div>
-            </div>
-            <div class="procedure-segment procedure-segment-procedures">
-                <h4 class="procedure-segment-header">✅ Audit Procedures</h4>
-                <div class="procedure-segment-body">${buildProcedureChecklist(uid, docId)}</div>
-            </div>
+            ${dataSegmentHtml}
+            ${proceduresSegmentHtml}
             <div class="procedure-segment procedure-segment-observation">
                 <h4 class="procedure-segment-header">📝 Observation</h4>
                 <div class="procedure-segment-body">${buildObservationSection(uid, docId)}</div>
@@ -3975,27 +3961,31 @@ function renderProcedureModalPanel(uid, docId) {
         </div>
     `;
 
-    const searchInput = document.getElementById('procedureSearchInput');
-    if (searchInput) {
-        searchInput.addEventListener('input', function() {
-            debounceProcedureSearch(uid, docId, this.value);
-        });
-    }
-    const browseBtn = document.getElementById('procedureBrowseBtn');
-    if (browseBtn) {
-        browseBtn.addEventListener('click', function() {
-            openProcedureBrowseModal(uid, docId);
-        });
+    if (hasTemplate) {
+        const searchInput = document.getElementById('procedureSearchInput');
+        if (searchInput) {
+            searchInput.addEventListener('input', function() {
+                debounceProcedureSearch(uid, docId, this.value);
+            });
+        }
+        const browseBtn = document.getElementById('procedureBrowseBtn');
+        if (browseBtn) {
+            browseBtn.addEventListener('click', function() {
+                openProcedureBrowseModal(uid, docId);
+            });
+        }
     }
 
     wireProcedureChecklistAndObservation(container, uid, docId, tabState);
 
-    // Unassign requirement: one click listener per ✕ unlink button in the Linked Evidence table.
-    container.querySelectorAll('.procedure-unlink-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            unassignSupportingDocument(uid, docId, parseInt(this.dataset.assignmentId));
+    if (hasTemplate) {
+        // Unassign requirement: one click listener per ✕ unlink button in the Linked Evidence table.
+        container.querySelectorAll('.procedure-unlink-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                unassignSupportingDocument(uid, docId, parseInt(this.dataset.assignmentId));
+            });
         });
-    });
+    }
 
     // Restore a previously-fetched search's dropdown (extends Phase 3's "switching tabs doesn't
     // lose unsaved work" to cover search results too) — re-renders from tabState, no new fetch.
