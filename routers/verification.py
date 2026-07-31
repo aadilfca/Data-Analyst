@@ -78,12 +78,52 @@ def get_column_value(row_data: dict, aliases: list) -> Optional[str]:
 # GET /api/verification/category-for-account) without a network round-trip.
 ACCOUNT_CODE_ALIASES = ['Account Detail', 'Account Details', 'Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head', 'Ledger Detail']
 
+def _has_pending_account_head_note(voucher_line_id: int) -> bool:
+    """
+    True if this voucher line (or any sibling session's copy of it - a cashbook reopen creates
+    a fresh verification_details row with no true session-resume, see
+    _resolve_sibling_voucher_line_ids()) currently has a non-blank "no suitable account exists"
+    Account Head note recorded in voucher_line_observations under the reserved sentinel
+    document_id = ACCOUNT_HEAD_OBSERVATION_DOC_ID (both defined later in this file - resolved
+    at call time, same forward-reference this function's own caller already relies on for
+    _resolve_sibling_voucher_line_ids()).
+
+    The "Recommended Account Head" field itself (static/verification.js's accountHeadCache) has
+    no backend persistence at all - this sentinel observation note is the ONLY real signal that
+    exists server-side for "an auditor flagged this line as needing a new account head with no
+    Trial Balance match" (Account Head Recommendation reposition + search-select + no-match
+    note fix). Mirrors get_line_observations()'s sibling-resolution + updated_at dedup, narrowed
+    to just this one document_id.
+
+    Returns False (not blocking) for an unresolvable voucher line - by the time
+    compute_and_persist_cleared_status() would call this, it has already confirmed the line
+    exists via its own lookup, so this case is defensive, not a real path.
+    """
+    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+    if not sibling_ids:
+        return False
+    placeholders = ",".join("?" for _ in sibling_ids)
+    rows = execute_query(
+        f"""
+        SELECT observation_text, updated_at FROM voucher_line_observations
+        WHERE voucher_line_id IN ({placeholders}) AND document_id = ?
+        """,
+        tuple(sibling_ids) + (ACCOUNT_HEAD_OBSERVATION_DOC_ID,)
+    )
+    if not rows:
+        return False
+    latest = max(rows, key=lambda r: r['updated_at'] or '')
+    return bool((latest['observation_text'] or '').strip())
+
+
 def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     """
-    Validation Rules Phase 4: compute this line's Cleared/Query status from four AND'ed
-    checks and persist it to verification_details.cleared_status/matrix_version_applied.
-    Called from save_line_items() - the same chokepoint every Save/Next/Prev/Validate/
-    Complete/Exit path already runs per line (mirrors sync_line_observations_to_voucher()).
+    Validation Rules Phase 4: compute this line's Cleared/Query status. Automated
+    cross-document validation engine Phase 7 added a 5th (cross-document evaluation) and 6th
+    (Account Head note) condition - see those sections below. Persists to
+    verification_details.cleared_status/matrix_version_applied. Called from save_line_items() -
+    the same chokepoint every Save/Next/Prev/Validate/Complete/Exit path already runs per line
+    (mirrors sync_line_observations_to_voucher()).
 
     Returns the computed {"cleared_status", "matrix_version_applied"} dict, or None if the
     line/its account code/its Category can't be resolved - cleared_status is left exactly
@@ -202,7 +242,29 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     )
     signature_ok = (sig_rows[0]['cnt'] == 0)
 
-    all_ok = doc_requirement_met and approval_docs_ok and voucher_checks_ok and signature_ok
+    # 5. Cross-document validation engine (Phase 6): any HARD-FAIL rule result blocks Cleared.
+    # category_id is passed through explicitly - already resolved above, via this exact same
+    # account_category_assignments lookup - so the engine's own (different) Category-resolution
+    # fallback never runs from this call site and the two can never disagree. Shortfalls (soft -
+    # Phase 8's observation-logging concern) and not_evaluated (Phase 6's own "missing data is
+    # inconclusive, not a fail" contract) do NOT gate here - only an actual "fail" does.
+    # With zero active Cross-checks configured (true of every category today),
+    # evaluate_cross_checks_for_line() returns an empty results list, so this is a no-op until
+    # a Cross-check is actually configured and activated. Never raises, per Phase 6's contract.
+    cross_check_result = evaluate_cross_checks_for_line(voucher_line_id, category_id=category_id)
+    cross_checks_ok = not any(r['status'] == 'fail' for r in cross_check_result['results'])
+
+    # 6. Recommended Account Head must be empty. Unconditional - applies to every voucher line
+    # regardless of whether a Category resolved above (unlike checks 1/2/5), per the confirmed
+    # Discuss-mode reconciliation. See _has_pending_account_head_note() for what this actually
+    # reads - the "Recommended Account Head" UI field itself has no backend persistence; the
+    # only real signal is the sentinel Account Head observation note.
+    account_head_ok = not _has_pending_account_head_note(voucher_line_id)
+
+    all_ok = (
+        doc_requirement_met and approval_docs_ok and voucher_checks_ok and signature_ok
+        and cross_checks_ok and account_head_ok
+    )
     cleared_status = "Cleared" if all_ok else "Query"
 
     execute_write(
