@@ -311,6 +311,65 @@ def get_template_columns(template_id: int) -> list:
         (template_id,)
     )
 
+def get_document_field_value(client_data_id: int, field_name: str) -> Optional[Any]:
+    """
+    Resolves a named field's value (e.g. "Quantity", "Rate") from a linked evidence row's
+    row_data, matching field_name against that row's own template's real column list
+    case-insensitively (via get_template_columns()) before reading row_data - mirrors
+    static/verification.js's getRowFieldCaseInsensitive(), server-side, but additionally
+    validates the field actually exists on the template rather than trusting whatever keys
+    happen to be in row_data. Additive to, not a replacement for, extract_amount.
+
+    Used by Phase 6's chain-aware evaluation engine (Cross-Document Validation Engine),
+    called once per (evidence row, field name) pair during a chain walk - must never raise,
+    since a missing client_data row, a row with no template_id, or a field name that doesn't
+    match any of that template's columns are all normal "nothing to compare" outcomes there,
+    not errors. Returns None in all such cases.
+    """
+    if not client_data_id or not field_name or not field_name.strip():
+        return None
+
+    rows = execute_query(
+        "SELECT row_data, template_id FROM client_data WHERE id = ?", (client_data_id,)
+    )
+    if not rows:
+        return None
+
+    template_id = rows[0]['template_id']
+    if not template_id:
+        return None
+
+    row_data = rows[0]['row_data']
+    if isinstance(row_data, str):
+        try:
+            row_data = json.loads(row_data)
+        except Exception:
+            return None
+    if not isinstance(row_data, dict):
+        return None
+
+    columns = get_template_columns(template_id)
+    target = field_name.strip().lower()
+    matched_column_name = next(
+        (c['column_name'] for c in columns if c['column_name'].strip().lower() == target),
+        None
+    )
+    if matched_column_name is None:
+        return None
+
+    # row_data keys are written from template column names at import time, so they should
+    # already match exactly - resolved case-insensitively anyway for parity with
+    # getRowFieldCaseInsensitive()'s own tolerance, and as a defensive fallback.
+    row_key = next(
+        (k for k in row_data.keys() if k.strip().lower() == matched_column_name.strip().lower()),
+        None
+    )
+    if row_key is None:
+        return None
+
+    value = row_data[row_key]
+    return value if value not in (None, '') else None
+
 def flatten_procedure_data(proc_data: dict) -> dict:
     """Extract standard procedure fields from JSON."""
     if not proc_data:
