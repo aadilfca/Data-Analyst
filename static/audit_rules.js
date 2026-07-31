@@ -714,7 +714,9 @@ function renderCompareFieldDropdown(preserveValue) {
         opt.value = '';
         opt.disabled = true;
         opt.selected = true;
-        opt.textContent = 'Add a document first';
+        opt.textContent = (crossCheckDocIds.length === 0)
+            ? 'Add a document first'
+            : 'No field is common to all selected documents';
         arCompareFieldSelect.appendChild(opt);
         hideCompareFieldStaleWarning();
         return;
