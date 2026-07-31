@@ -2607,3 +2607,520 @@ def get_document_assignment_status(
                 "voucher_line_id": None
             })
     return {"statuses": statuses}
+
+# ==============================================
+# 🔗 CHAIN-AWARE CROSS-DOCUMENT EVALUATION ENGINE
+# ==============================================
+# Automated cross-document validation engine, Phase 6 of 10.
+#
+# Given a voucher line, walks its Category's configured Cross-checks and produces a
+# structured pass / fail / shortfall result per rule. Uses Phase 2's
+# get_document_field_value() for field extraction and Phases 1/5's schema
+# (comparison_type's 6 values, compare_to_voucher_line, the ordered
+# audit_rule_cross_check_documents junction that IS the chain).
+#
+# "Chain-aware" means: only the documents ACTUALLY LINKED to this specific voucher line
+# participate. A configured-but-unlinked document (e.g. an optional Purchase Demand a
+# particular client doesn't raise) is skipped entirely - never a failure. The anchor is
+# resolved live as the last linked document in chain order, never configured statically,
+# so different clients running different-length chains each get a correct anchor.
+#
+# This phase WRITES NOTHING and DECIDES NOTHING. It has no endpoint and no call site - it is
+# deliberately dead code until Phase 7, exactly as get_document_field_value() was until this
+# phase. Phase 7 consumes the result for Cleared/Query, Phase 8 for shortfall observations,
+# Phase 9 for the Data Table segment's pass/fail UI.
+#
+# Per Phase 2's contract, nothing here may raise on missing/unparseable data - an
+# unevaluable rule returns a clear "not_evaluated" result rather than breaking the chain walk.
+
+# Tolerance for the 'Within tolerance %' rule. audit_rule_cross_checks has NO per-rule
+# tolerance column (confirmed against the Phase 1 schema), so this is a single global
+# starting judgement call, not a fixed constant - same tunable-placeholder convention as
+# ACCOUNT_HEAD_MATCH_THRESHOLD above. A later phase adding a real per-rule column should
+# read that instead of this and leave this as the fallback default.
+CROSS_CHECK_DEFAULT_TOLERANCE_PCT = 5.0
+
+# Float-noise guard. Values come from Excel imports via JSON, so 100 and 100.0000001 must
+# compare equal; a real audit difference is never this small.
+CROSS_CHECK_FLOAT_EPSILON = 0.005
+
+# The six configured comparison types (mirrors routers/audit_rules.py's COMPARISON_TYPES and
+# the DB CHECK constraint). Kept as literals here rather than imported so this engine can't
+# be silently broken by an unrelated edit to that tuple's ordering.
+CC_ALL_EQUAL = 'All equal'
+CC_MUST_BE_EQUAL = 'Must be equal'
+CC_SEQ_INCREASING = 'Sequential increasing'
+CC_SEQ_DECREASING = 'Sequential decreasing'
+CC_WITHIN_TOLERANCE = 'Within tolerance %'
+CC_MAY_BE_LESS = 'May be less, never more'
+
+
+def _cross_check_numeric(value: Any) -> Optional[float]:
+    """
+    Coerce a raw row_data value into a float for comparison. Handles the shapes an Excel
+    import realistically produces: real numbers, numeric strings, thousands separators, a
+    leading currency symbol, surrounding whitespace. Returns None for anything unparseable
+    (including None/'' and genuinely non-numeric text like a document number) - the caller
+    treats None as "this document contributes nothing", not as zero.
+
+    Never raises.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        # A bool is an int subclass in Python; comparing True as 1.0 would be nonsense here.
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    text = str(value).replace(',', '').strip()
+    if not text:
+        return None
+
+    # Whole-string match only: an optional non-numeric prefix (currency symbol/label, e.g.
+    # "Rs. 250", "$1200"), exactly one number, then an optional non-numeric suffix (unit, e.g.
+    # "100 kg", "12.5%"). Requiring a FULL match is the point - a progressive strip-the-edges
+    # approach silently turns a document number like "PD-0626-1866" into -626.0, fabricating a
+    # comparison value out of an identifier. Anything containing a second run of digits fails
+    # this match and correctly returns None ("not a number I can compare").
+    # The prefix is LAZY and the number accepts a bare leading decimal point, so ".5" parses as
+    # 0.5 rather than the prefix greedily swallowing the "." and leaving 5 - a silent 10x error.
+    match = re.fullmatch(r'[^\d\-]*?(-?(?:\d+(?:\.\d+)?|\.\d+))\s*[^\d]*', text)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _cross_check_values_equal(a: float, b: float) -> bool:
+    """Equality within CROSS_CHECK_FLOAT_EPSILON - see that constant for why."""
+    return abs(a - b) <= CROSS_CHECK_FLOAT_EPSILON
+
+
+def _get_category_cross_check_configs(category_id: int) -> List[dict]:
+    """
+    Every ACTIVE Cross-check attached to a Category, with its ordered Document chain.
+
+    Read directly here rather than via routers/audit_rules.py's
+    get_category_guidance_cross_checks() - that helper returns document NAMES only (no ids)
+    and doesn't expose compare_to_voucher_line, so it can't drive an evaluation. Matches this
+    codebase's documented convention of duplicating a small cross-cutting lookup per-router
+    rather than reshaping another router's already-live helper for one caller.
+
+    documents[] order is audit_rule_cross_check_documents.sort_order - that ordering IS the
+    chain, and the whole engine's direction logic depends on it.
+    """
+    rule_rows = execute_query(
+        """
+        SELECT c.id, c.name, c.compare_field, c.comparison_type, c.compare_to_voucher_line
+        FROM audit_rule_category_cross_checks cc
+        JOIN audit_rule_cross_checks c ON c.id = cc.cross_check_id
+        WHERE cc.category_id = ? AND c.is_active = 1
+        ORDER BY cc.sort_order
+        """,
+        (category_id,)
+    )
+
+    configs = []
+    for r in rule_rows:
+        doc_rows = execute_query(
+            """
+            SELECT ccd.document_id, ccd.sort_order, d.name AS document_name
+            FROM audit_rule_cross_check_documents ccd
+            JOIN audit_rule_documents d ON d.id = ccd.document_id
+            WHERE ccd.cross_check_id = ?
+            ORDER BY ccd.sort_order
+            """,
+            (r['id'],)
+        )
+        configs.append({
+            "id": r['id'],
+            "name": r['name'],
+            "compare_field": r['compare_field'],
+            "comparison_type": r['comparison_type'],
+            "compare_to_voucher_line": bool(r['compare_to_voucher_line'] or 0),
+            "documents": [
+                {
+                    "document_id": d['document_id'],
+                    "document_name": d['document_name'],
+                    "sort_order": d['sort_order'],
+                }
+                for d in doc_rows
+            ],
+        })
+    return configs
+
+
+def _get_linked_evidence_by_document(voucher_line_id: int) -> Dict[int, List[int]]:
+    """
+    {document_id: [client_data_id, ...]} for every ACTIVELY linked evidence row on this
+    voucher line. Resolves sibling verification_details ids first (see
+    _resolve_sibling_voucher_line_ids()) so evidence linked in an earlier verification
+    session of the same cashbook still counts - same convention
+    compute_and_persist_cleared_status() and get_voucher_line_documents() already follow.
+
+    Returns {} for an unknown voucher line rather than raising.
+    """
+    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+    if not sibling_ids:
+        return {}
+
+    placeholders = ",".join("?" for _ in sibling_ids)
+    rows = execute_query(
+        f"""
+        SELECT document_id, client_data_id
+        FROM voucher_line_documents
+        WHERE voucher_line_id IN ({placeholders}) AND status = 'active'
+        ORDER BY linked_at ASC
+        """,
+        tuple(sibling_ids)
+    )
+
+    linked: Dict[int, List[int]] = {}
+    for r in rows:
+        linked.setdefault(r['document_id'], []).append(r['client_data_id'])
+    return linked
+
+
+def _sum_document_field(client_data_ids: List[int], field_name: str):
+    """
+    Sum one named field across every evidence row linked for a single Document, via Phase 2's
+    get_document_field_value() (unchanged). Summing (rather than taking one row) matches the
+    Linked Evidence table's existing totals-row behaviour - a Purchase Order split across
+    three lines of 40/30/30 must compare as 100, not as one arbitrary line.
+
+    Returns (total, contributing_row_count). (None, 0) means no row yielded a usable numeric
+    value - the caller's "cannot evaluate this document" signal, deliberately distinct from a
+    genuine total of 0.
+    """
+    total = None
+    count = 0
+    for client_data_id in client_data_ids or []:
+        raw = get_document_field_value(client_data_id, field_name)
+        numeric = _cross_check_numeric(raw)
+        if numeric is None:
+            continue
+        total = numeric if total is None else total + numeric
+        count += 1
+    return total, count
+
+
+def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, List[int]],
+                                 voucher_amount: Optional[float]) -> dict:
+    """
+    Evaluate one Cross-check against one voucher line's linked evidence. Pure - reads no
+    global state, writes nothing.
+
+    Status precedence is fail > shortfall > pass > not_evaluated: an excess anywhere in the
+    chain outranks a shortfall elsewhere, because an excess is a hard control failure while a
+    shortfall is a reportable observation (Phase 8) rather than a rejection.
+    """
+    compare_field = config['compare_field']
+    comparison_type = config['comparison_type']
+
+    # --- Build the chain: every configured document in order, linked ones carrying values. ---
+    chain = []
+    for doc in config['documents']:
+        evidence_ids = linked_by_document.get(doc['document_id'], [])
+        is_linked = len(evidence_ids) > 0
+        value, row_count = (None, 0)
+        if is_linked:
+            value, row_count = _sum_document_field(evidence_ids, compare_field)
+        chain.append({
+            "document_id": doc['document_id'],
+            "document_name": doc['document_name'],
+            "sort_order": doc['sort_order'],
+            "linked": is_linked,
+            "value": value,
+            "row_count": row_count,
+        })
+
+    # --- Anchor: the LAST linked document in chain order, resolved live. A configured-but-
+    # unlinked trailing document must not become the anchor, which is exactly why this walks
+    # backwards over `linked` rather than just taking chain[-1]. ---
+    anchor = next((c for c in reversed(chain) if c['linked']), None)
+
+    result = {
+        "cross_check_id": config['id'],
+        "name": config['name'],
+        "compare_field": compare_field,
+        "comparison_type": comparison_type,
+        "compare_to_voucher_line": config['compare_to_voucher_line'],
+        "status": "not_evaluated",
+        "message": "",
+        "anchor_document_id": anchor['document_id'] if anchor else None,
+        "anchor_document_name": anchor['document_name'] if anchor else None,
+        "chain": chain,
+        "voucher_line_comparison": None,
+        "failures": [],
+        "shortfalls": [],
+    }
+
+    # Only linked documents with an extractable value participate in the comparison. An
+    # unlinked document is skipped silently (chain-aware behaviour); a linked document whose
+    # field can't be extracted is skipped too, but is still visible in `chain` with value None
+    # so Phase 9's UI can show why.
+    comparable = [c for c in chain if c['linked'] and c['value'] is not None]
+
+    failures: List[str] = []
+    shortfalls: List[dict] = []
+
+    if len(comparable) >= 2:
+        if comparison_type in (CC_ALL_EQUAL, CC_MUST_BE_EQUAL):
+            baseline = comparable[0]
+            for other in comparable[1:]:
+                if not _cross_check_values_equal(baseline['value'], other['value']):
+                    failures.append(
+                        f"{other['document_name']} {compare_field} {other['value']:g} "
+                        f"does not equal {baseline['document_name']} {baseline['value']:g}"
+                    )
+
+        elif comparison_type == CC_SEQ_INCREASING:
+            for earlier, later in zip(comparable, comparable[1:]):
+                if not (later['value'] > earlier['value'] + CROSS_CHECK_FLOAT_EPSILON):
+                    failures.append(
+                        f"{later['document_name']} {compare_field} {later['value']:g} is not greater "
+                        f"than {earlier['document_name']} {earlier['value']:g}"
+                    )
+
+        elif comparison_type == CC_SEQ_DECREASING:
+            for earlier, later in zip(comparable, comparable[1:]):
+                if not (later['value'] < earlier['value'] - CROSS_CHECK_FLOAT_EPSILON):
+                    failures.append(
+                        f"{later['document_name']} {compare_field} {later['value']:g} is not less "
+                        f"than {earlier['document_name']} {earlier['value']:g}"
+                    )
+
+        elif comparison_type == CC_WITHIN_TOLERANCE:
+            baseline = comparable[0]
+            base_value = baseline['value']
+            if abs(base_value) <= CROSS_CHECK_FLOAT_EPSILON:
+                # A zero baseline makes a percentage meaningless - fall back to plain equality
+                # rather than dividing by zero or silently passing everything.
+                for other in comparable[1:]:
+                    if not _cross_check_values_equal(base_value, other['value']):
+                        failures.append(
+                            f"{other['document_name']} {compare_field} {other['value']:g} differs from a "
+                            f"zero baseline on {baseline['document_name']}"
+                        )
+            else:
+                allowed = abs(base_value) * (CROSS_CHECK_DEFAULT_TOLERANCE_PCT / 100.0)
+                for other in comparable[1:]:
+                    diff = abs(other['value'] - base_value)
+                    if diff > allowed + CROSS_CHECK_FLOAT_EPSILON:
+                        pct = (diff / abs(base_value)) * 100.0
+                        failures.append(
+                            f"{other['document_name']} {compare_field} {other['value']:g} is {pct:.2f}% from "
+                            f"{baseline['document_name']} {base_value:g}, over the "
+                            f"{CROSS_CHECK_DEFAULT_TOLERANCE_PCT:g}% tolerance"
+                        )
+
+        elif comparison_type == CC_MAY_BE_LESS:
+            # CONFIRMED DIRECTION (do not invert without re-confirming - getting this backwards
+            # silently reverses the audit conclusion rather than erroring):
+            #   later-in-chain <= earlier-in-chain.
+            #   later <  earlier -> SHORTFALL (soft; reported, not a rejection - Phase 8 writes
+            #                       an observation for it)
+            #   later >  earlier -> EXCESS (hard fail - more was received/billed than authorised)
+            #   equal            -> OK
+            # e.g. Purchase Demand 100 -> Purchase Order 100 -> Store Receiving 95 is a
+            # legitimate short delivery; Store Receiving 105 is an excess and must fail.
+            for earlier, later in zip(comparable, comparable[1:]):
+                if later['value'] > earlier['value'] + CROSS_CHECK_FLOAT_EPSILON:
+                    failures.append(
+                        f"{later['document_name']} {compare_field} {later['value']:g} exceeds "
+                        f"{earlier['document_name']} {earlier['value']:g}"
+                    )
+                elif later['value'] < earlier['value'] - CROSS_CHECK_FLOAT_EPSILON:
+                    shortfalls.append({
+                        "from_document": earlier['document_name'],
+                        "to_document": later['document_name'],
+                        "from_value": earlier['value'],
+                        "to_value": later['value'],
+                        "difference": earlier['value'] - later['value'],
+                    })
+
+        else:
+            # Unknown comparison_type - shouldn't happen (DB CHECK + router validation both
+            # constrain it), but must degrade cleanly rather than silently passing.
+            result['status'] = "not_evaluated"
+            result['message'] = f"Unknown comparison type '{comparison_type}' - not evaluated."
+            return result
+
+    # --- Voucher-line comparison (Phase 5's compare_to_voucher_line flag). Always against the
+    # LIVE-resolved anchor, never a statically configured document. Exact equality, no
+    # tolerance, per the confirmed Phase 5 design. ---
+    if config['compare_to_voucher_line']:
+        anchor_value = anchor['value'] if anchor else None
+        if anchor_value is None or voucher_amount is None:
+            result['voucher_line_comparison'] = {
+                "anchor_value": anchor_value,
+                "voucher_amount": voucher_amount,
+                "match": None,
+            }
+        else:
+            match = _cross_check_values_equal(anchor_value, voucher_amount)
+            result['voucher_line_comparison'] = {
+                "anchor_value": anchor_value,
+                "voucher_amount": voucher_amount,
+                "match": match,
+            }
+            if not match:
+                failures.append(
+                    f"{anchor['document_name']} {compare_field} {anchor_value:g} does not equal the "
+                    f"voucher line amount {voucher_amount:g}"
+                )
+
+    result['failures'] = failures
+    result['shortfalls'] = shortfalls
+
+    # --- Roll up. A rule with nothing comparable AND no usable voucher-line comparison is
+    # "not_evaluated", not a pass - passing it would silently assert a control was satisfied
+    # when it was never actually checked. ---
+    had_voucher_comparison = bool(
+        result['voucher_line_comparison'] and result['voucher_line_comparison']['match'] is not None
+    )
+    if failures:
+        result['status'] = "fail"
+        result['message'] = "; ".join(failures)
+    elif shortfalls:
+        result['status'] = "shortfall"
+        result['message'] = "; ".join(
+            f"{s['to_document']} short of {s['from_document']} by {s['difference']:g}"
+            for s in shortfalls
+        )
+    elif len(comparable) >= 2 or had_voucher_comparison:
+        result['status'] = "pass"
+        result['message'] = "All comparisons passed."
+    else:
+        linked_count = sum(1 for c in chain if c['linked'])
+        if linked_count == 0:
+            result['message'] = "No configured document is linked to this voucher line."
+        else:
+            result['message'] = (
+                f"Not enough comparable values for '{compare_field}' "
+                f"({len(comparable)} of {linked_count} linked documents yielded a value)."
+            )
+
+    return result
+
+
+def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[int] = None) -> dict:
+    """
+    Chain-aware cross-document evaluation for one voucher line (Phase 6 of 10).
+
+    category_id is optional so Phase 7 can pass the Category it has ALREADY resolved inside
+    compute_and_persist_cleared_status(), guaranteeing the two can never disagree. When
+    omitted, it's resolved here the same way that function does (account_category_assignments
+    keyed client_id + account code). Note this is deliberately NOT the newer latest-Trial-
+    Balance-first lookup used by GET /api/verification/category-for-account - that 2026-07-30
+    fix only changed the endpoint, and matching the status engine matters more here than
+    matching the endpoint. Reconciling those two is a separate, pre-existing concern.
+
+    Returns a structured result; writes nothing, persists nothing, decides nothing. Never
+    raises - every failure path returns evaluated=False with a reason.
+    """
+    line = execute_query(
+        """
+        SELECT vd.id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id
+        FROM verification_details vd
+        JOIN client_data cd ON cd.id = vd.client_data_id
+        JOIN verification_sessions vs ON vs.id = vd.session_id
+        WHERE vd.id = ?
+        """,
+        (voucher_line_id,)
+    )
+
+    empty_summary = {"passed": 0, "failed": 0, "shortfall": 0, "not_evaluated": 0}
+
+    if not line:
+        return {
+            "voucher_line_id": voucher_line_id,
+            "category_id": None, "category_name": None,
+            "evaluated": False, "reason": "Voucher line not found.",
+            "summary": dict(empty_summary), "results": [],
+        }
+
+    row = line[0]
+    client_id = row['client_id']
+    voucher_amount = _cross_check_numeric(row['extract_amount'])
+
+    category_name = None
+    if category_id is None:
+        row_data = row['row_data']
+        if isinstance(row_data, str):
+            try:
+                row_data = json.loads(row_data)
+            except Exception:
+                row_data = {}
+        row_data = row_data or {}
+
+        account_code = get_column_value(row_data, ACCOUNT_CODE_ALIASES)
+        if not account_code:
+            return {
+                "voucher_line_id": voucher_line_id,
+                "category_id": None, "category_name": None,
+                "evaluated": False, "reason": "No account code on this line - Category unresolvable.",
+                "summary": dict(empty_summary), "results": [],
+            }
+
+        cat_rows = execute_query(
+            """
+            SELECT aca.category_id, arc.name AS category_name
+            FROM account_category_assignments aca
+            LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = 1
+            WHERE aca.client_id = ? AND aca.account_code = ?
+            """,
+            (client_id, account_code)
+        )
+        if not cat_rows or not cat_rows[0]['category_id'] or not cat_rows[0]['category_name']:
+            return {
+                "voucher_line_id": voucher_line_id,
+                "category_id": None, "category_name": None,
+                "evaluated": False, "reason": "This line's account code has no active Category assigned.",
+                "summary": dict(empty_summary), "results": [],
+            }
+        category_id = cat_rows[0]['category_id']
+        category_name = cat_rows[0]['category_name']
+    else:
+        name_rows = execute_query(
+            "SELECT name FROM audit_rule_categories WHERE id = ? AND is_active = 1", (category_id,)
+        )
+        if not name_rows:
+            return {
+                "voucher_line_id": voucher_line_id,
+                "category_id": category_id, "category_name": None,
+                "evaluated": False, "reason": f"Category ID {category_id} not found or inactive.",
+                "summary": dict(empty_summary), "results": [],
+            }
+        category_name = name_rows[0]['name']
+
+    configs = _get_category_cross_check_configs(category_id)
+    linked_by_document = _get_linked_evidence_by_document(voucher_line_id)
+
+    results = [
+        _evaluate_single_cross_check(cfg, linked_by_document, voucher_amount)
+        for cfg in configs
+    ]
+
+    summary = {
+        "passed": sum(1 for r in results if r['status'] == "pass"),
+        "failed": sum(1 for r in results if r['status'] == "fail"),
+        "shortfall": sum(1 for r in results if r['status'] == "shortfall"),
+        "not_evaluated": sum(1 for r in results if r['status'] == "not_evaluated"),
+    }
+
+    return {
+        "voucher_line_id": voucher_line_id,
+        "category_id": category_id,
+        "category_name": category_name,
+        "evaluated": True,
+        "reason": None,
+        "summary": summary,
+        "results": results,
+    }
