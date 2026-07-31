@@ -78,6 +78,18 @@ def get_column_value(row_data: dict, aliases: list) -> Optional[str]:
 # GET /api/verification/category-for-account) without a network round-trip.
 ACCOUNT_CODE_ALIASES = ['Account Detail', 'Account Details', 'Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head', 'Ledger Detail']
 
+# Automated cross-document validation engine, Phase 8 of 10: reserved sentinel document_id
+# range for auto-written shortfall observations - same non-FK-enforced-sentinel convention as
+# ACCOUNT_HEAD_OBSERVATION_DOC_ID (-1, defined further below in this file) but a distinct range,
+# so the two never collide (cross_check_id is always >= 1, so every sentinel here is <= -1001).
+# One row per (voucher_line_id, cross_check_id): voucher_line_observations' existing
+# UNIQUE(voucher_line_id, document_id) constraint is reused AS-IS as this feature's dedupe key -
+# no schema change, no new duplication-prevention mechanism.
+CROSS_CHECK_SHORTFALL_DOC_ID_BASE = -1000
+
+def _cross_check_shortfall_sentinel_doc_id(cross_check_id: int) -> int:
+    return CROSS_CHECK_SHORTFALL_DOC_ID_BASE - cross_check_id
+
 def _has_pending_account_head_note(voucher_line_id: int) -> bool:
     """
     True if this voucher line (or any sibling session's copy of it - a cashbook reopen creates
@@ -114,6 +126,72 @@ def _has_pending_account_head_note(voucher_line_id: int) -> bool:
         return False
     latest = max(rows, key=lambda r: r['updated_at'] or '')
     return bool((latest['observation_text'] or '').strip())
+
+
+def _format_shortfall_observation_text(rule_result: dict) -> str:
+    """
+    One specific, auditable sentence per shortfall pair in a single Cross-check's result (a
+    chain can produce more than one shortfall step), joined with '; ' - e.g. "Quantity Match:
+    Store Receiving Quantity (95) is less than Purchase Order Quantity (100) - shortfall of 5".
+    The Cross-check's own name is embedded directly in the text (not looked up again later), so
+    sync_line_observations_to_voucher()'s rollup needs no new JOIN to label this correctly.
+    """
+    field = rule_result['compare_field']
+    name = rule_result['name']
+    parts = []
+    for s in rule_result['shortfalls']:
+        parts.append(
+            f"{name}: {s['to_document']} {field} ({s['to_value']:g}) is less than "
+            f"{s['from_document']} {field} ({s['from_value']:g}) — shortfall of {s['difference']:g}"
+        )
+    return "; ".join(parts)
+
+
+def _write_shortfall_observations(voucher_line_id: int, cross_check_result: dict) -> bool:
+    """
+    Auto-log a minor observation for every currently-shortfall Cross-check result (Automated
+    cross-document validation engine, Phase 8 of 10), reusing voucher_line_observations exactly
+    as-is - same upsert shape save_line_observation() already uses for a real Document, one row
+    per (voucher_line_id, sentinel document_id) via _cross_check_shortfall_sentinel_doc_id().
+
+    Self-correcting, not append-only: every rule in cross_check_result['results'] (i.e. every
+    active Cross-check on the Category Phase 7 already resolved) has its sentinel row written
+    on EVERY call - shortfall text when currently "shortfall", or '' otherwise (resolved back to
+    passing, or now a hard fail instead - either way, no longer accurately described as a
+    shortfall). A blank entry contributes no line to the rollup (sync_line_observations_to_
+    voucher()'s existing "blank text = no block" rule, confirmed 2026-07-25), so a resolved
+    shortfall disappears from the voucher's Observations field on the very next recompute with
+    no separate "resolved/superseded" flag needed.
+
+    Deliberately out of scope, flagged not silently handled: a Cross-check later deactivated or
+    removed from its Category stops appearing in cross_check_result entirely, so its old
+    shortfall row is NOT proactively cleared by this function - it's left as a historical entry,
+    matching this file's established append-only-by-default philosophy for observations
+    elsewhere.
+
+    Returns True iff at least one Cross-check was evaluated (i.e. results was non-empty) - the
+    caller uses this to skip an unnecessary re-sync call when there was nothing to write (today:
+    always, since zero active Cross-checks exist anywhere). Never raises - a failure here must
+    not block Cleared/Query computation, matching every other helper's contract in this file.
+    """
+    try:
+        results = cross_check_result.get('results') or []
+        for rule_result in results:
+            sentinel_id = _cross_check_shortfall_sentinel_doc_id(rule_result['cross_check_id'])
+            text = _format_shortfall_observation_text(rule_result) if rule_result['status'] == 'shortfall' else ''
+            execute_write(
+                """
+                INSERT INTO voucher_line_observations (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
+                VALUES (?, ?, ?, 0, 'System', CURRENT_TIMESTAMP)
+                ON CONFLICT(voucher_line_id, document_id)
+                DO UPDATE SET observation_text = excluded.observation_text, synced = 0, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP
+                """,
+                (voucher_line_id, sentinel_id, text)
+            )
+        return len(results) > 0
+    except Exception as exc:
+        print(f"⚠️ _write_shortfall_observations failed for line {voucher_line_id}: {exc}")
+        return False
 
 
 def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
@@ -253,6 +331,17 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     # a Cross-check is actually configured and activated. Never raises, per Phase 6's contract.
     cross_check_result = evaluate_cross_checks_for_line(voucher_line_id, category_id=category_id)
     cross_checks_ok = not any(r['status'] == 'fail' for r in cross_check_result['results'])
+
+    # Phase 8 of 10: auto-log/self-clear a shortfall observation from the SAME cross_check_result
+    # just computed above - never re-runs the engine. Purely a side effect (does not affect
+    # cross_checks_ok/all_ok) - see _write_shortfall_observations()'s own docstring. Re-syncs
+    # immediately (only if something was actually written) rather than waiting for save_line_
+    # items()'s own earlier sync_line_observations_to_voucher() call, which already ran BEFORE
+    # this function - without this, a freshly-appearing shortfall would be one save-cycle stale
+    # in the Observations column, the same class of bug already fixed once for manual
+    # observations (2026-07-25, "roll-up doesn't fire until an unrelated later action").
+    if _write_shortfall_observations(voucher_line_id, cross_check_result):
+        sync_line_observations_to_voucher(voucher_line_id)
 
     # 6. Recommended Account Head must be empty. Unconditional - applies to every voucher line
     # regardless of whether a Category resolved above (unlike checks 1/2/5), per the confirmed
@@ -2346,6 +2435,13 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
             if entry['document_id'] == ACCOUNT_HEAD_OBSERVATION_DOC_ID:
                 return (f"[Account Head Recommendation]: New account head recommended: "
                         f"{entry['observation_text'].strip()} — no match in Trial Balance")
+            # Automated cross-document validation engine, Phase 8 of 10: a shortfall sentinel
+            # (see CROSS_CHECK_SHORTFALL_DOC_ID_BASE) also has no matching audit_rule_documents
+            # row by design - the Cross-check's own name is already embedded in the stored text
+            # itself (_format_shortfall_observation_text()), so this label stays generic and
+            # needs no new JOIN here.
+            if entry['document_id'] <= CROSS_CHECK_SHORTFALL_DOC_ID_BASE:
+                return f"[Cross-check Shortfall]: {entry['observation_text'].strip()}"
             return f"[{entry['document_name']}]: {entry['observation_text'].strip()}"
 
         doc_blocks = [
