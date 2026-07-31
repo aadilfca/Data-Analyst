@@ -377,7 +377,7 @@ class CategoryUpdate(BaseModel):
 def get_category_documents(category_id: int) -> List[dict]:
     rows = execute_query(
         """
-        SELECT d.id as document_id, d.name, cd.approval_required
+        SELECT d.id as document_id, d.name, cd.approval_required, cd.is_required
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
         WHERE cd.category_id = ?
@@ -389,7 +389,12 @@ def get_category_documents(category_id: int) -> List[dict]:
         {
             "document_id": r["document_id"],
             "name": r["name"],
-            "approval_required": bool(r["approval_required"])
+            "approval_required": bool(r["approval_required"]),
+            # Automated cross-document validation engine, Phase 4 of 10: whether this
+            # Document must be present for the Category to be Cleared. Not yet read by
+            # compute_and_persist_cleared_status() - that wiring is Phase 7's job, deliberately
+            # deferred so this can be configured in advance with no effect on live vouchers yet.
+            "is_required": bool(r["is_required"])
         }
         for r in rows
     ]
@@ -401,6 +406,14 @@ def get_category_document_approvals(category_id: int) -> dict:
         (category_id,)
     )
     return {r["document_id"]: r["approval_required"] for r in rows}
+
+def get_category_document_requireds(category_id: int) -> dict:
+    """Return {document_id: is_required (0/1)} for a Category's current document list."""
+    rows = execute_query(
+        "SELECT document_id, is_required FROM audit_rule_category_documents WHERE category_id = ?",
+        (category_id,)
+    )
+    return {r["document_id"]: r["is_required"] for r in rows}
 
 def get_category_cross_checks(category_id: int) -> List[dict]:
     rows = execute_query(
@@ -509,15 +522,19 @@ def save_category_documents(category_id: int, document_ids: List[int]):
     document's approval_required value forward across the delete-then-reinsert (Validation
     Rules, Phase 2 of 7) - without this, any ordinary document-list edit would silently
     reset every document's approval flag back to 0. A newly-added document defaults to 0,
-    matching the column's own DB default.
+    matching the column's own DB default. Same carry-forward now applies to is_required
+    (Phase 4 of 10) - a newly-added document defaults to 1, matching that column's own DB
+    default (TRUE), so a plain document-list edit never silently makes anything optional.
     """
     existing_approvals = get_category_document_approvals(category_id)
+    existing_requireds = get_category_document_requireds(category_id)
     execute_write("DELETE FROM audit_rule_category_documents WHERE category_id = ?", (category_id,))
     for idx, document_id in enumerate(document_ids):
         approval_required = existing_approvals.get(document_id, 0)
+        is_required = existing_requireds.get(document_id, 1)
         execute_write(
-            "INSERT INTO audit_rule_category_documents (category_id, document_id, sort_order, approval_required) VALUES (?, ?, ?, ?)",
-            (category_id, document_id, idx, approval_required)
+            "INSERT INTO audit_rule_category_documents (category_id, document_id, sort_order, approval_required, is_required) VALUES (?, ?, ?, ?, ?)",
+            (category_id, document_id, idx, approval_required, is_required)
         )
 
 def bump_category_matrix_version(category_id: int):
@@ -976,6 +993,42 @@ def update_category_document_approval(category_id: int, document_id: int, payloa
         f"Set approval_required={payload.approval_required} for Document ID {document_id} in Category ID {category_id}"
     )
     return {"category_id": category_id, "document_id": document_id, "approval_required": payload.approval_required}
+
+
+# ---------- PER-DOCUMENT IS-REQUIRED FLAG (Automated cross-document validation engine, Phase 4 of 10) ----------
+# Same dedicated-toggle convention as the approval_required endpoint directly above - a
+# separate endpoint rather than folding into CategoryCreate/CategoryUpdate's document_ids,
+# for the same reason (keeps that already-live payload shape untouched). Bumping
+# matrix_version on an actual change mirrors the approval_required toggle too: is_required is
+# part of the same "what does this Category's matrix require" concept, even though nothing
+# reads it yet (Phase 7 wires it into compute_and_persist_cleared_status()).
+class CategoryDocumentRequiredUpdate(BaseModel):
+    is_required: bool
+
+@router.put("/api/audit-rules/categories/{category_id}/documents/{document_id}/required")
+def update_category_document_required(category_id: int, document_id: int, payload: CategoryDocumentRequiredUpdate):
+    existing = execute_query(
+        "SELECT is_required FROM audit_rule_category_documents WHERE category_id = ? AND document_id = ?",
+        (category_id, document_id)
+    )
+    if not existing:
+        raise HTTPException(404, "This Document is not part of this Category")
+
+    new_value = 1 if payload.is_required else 0
+    changed = bool(existing[0]["is_required"]) != payload.is_required
+
+    execute_write(
+        "UPDATE audit_rule_category_documents SET is_required = ? WHERE category_id = ? AND document_id = ?",
+        (new_value, category_id, document_id)
+    )
+    if changed:
+        bump_category_matrix_version(category_id)
+
+    log_audit(
+        "Admin", "Update", "AuditRules",
+        f"Set is_required={payload.is_required} for Document ID {document_id} in Category ID {category_id}"
+    )
+    return {"category_id": category_id, "document_id": document_id, "is_required": payload.is_required}
 
 
 # ---------- PER-DOCUMENT TRANSACTION-LEVEL-APPROVAL FLAG (new, confirmed requirement) ----------

@@ -951,6 +951,10 @@ let categoryCrossCheckIds = [];
 // is what "this pairing is actually persisted in audit_rule_category_documents" means, since
 // a document just added locally (not yet saved) has no key at all.
 let categoryDocApprovals = {};
+// Automated cross-document validation engine (Phase 4 of 10): {document_id: is_required (bool)},
+// same "key presence = persisted" convention as categoryDocApprovals above, populated
+// alongside it.
+let categoryDocRequired = {};
 // Cache of all active Cross-checks ({id, name, documents: [{document_id, name}], ...}),
 // mirroring Phase 6's allDocuments cache — used for the "add cross-check" picker's
 // eligibility check and the document-removal warning. No reusable "all cross-checks"
@@ -1089,14 +1093,17 @@ function renderCategoryDocChips() {
     renderCategoryDocApprovalsList();
 }
 
-// ---------- APPROVAL-REQUIRED PER DOCUMENT (Validation Rules, Phase 3 of 7) ----------
-// Sits alongside the Documents chip list above (not merged into each chip pill) — one
-// checkbox row per currently-attached document. A row is only enabled once its document is
-// actually persisted in audit_rule_category_documents (i.e. present as a key in
-// categoryDocApprovals) — PUT .../categories/{id}/documents/{doc_id}/approval 404s on a
-// pairing that doesn't exist yet (a brand-new category, or a document just added locally
-// but not yet saved). All row styling is inline to override .ar-field label's block/bold
-// styling, which would otherwise apply to every nested <label> including these.
+// ---------- REQUIRED / APPROVAL-REQUIRED PER DOCUMENT ----------
+// (Validation Rules, Phase 3 of 7 added Approval Required; Automated cross-document
+// validation engine, Phase 4 of 10 added Required, same row.) Sits alongside the Documents
+// chip list above (not merged into each chip pill) — one row per currently-attached
+// document, each with its own Required/Approved checkbox pair. A row's checkboxes are only
+// enabled once its document is actually persisted in audit_rule_category_documents (i.e.
+// present as a key in categoryDocApprovals/categoryDocRequired) — the PUT .../required and
+// .../approval endpoints both 404 on a pairing that doesn't exist yet (a brand-new category,
+// or a document just added locally but not yet saved). All styling is inline to override
+// .ar-field label's block/bold styling, which would otherwise apply to every nested <label>
+// including these.
 function renderCategoryDocApprovalsList() {
     arCategoryDocApprovalsList.innerHTML = '';
 
@@ -1112,28 +1119,54 @@ function renderCategoryDocApprovalsList() {
         const doc = getDocumentById(docId);
         const isPersisted = Object.prototype.hasOwnProperty.call(categoryDocApprovals, docId);
 
-        const row = document.createElement('label');
+        const row = document.createElement('div');
         row.style.display = 'flex';
         row.style.alignItems = 'center';
-        row.style.gap = '8px';
+        row.style.gap = '16px';
         row.style.fontSize = '13px';
-        row.style.fontWeight = '400';
         row.style.color = isPersisted ? '#1a1a2e' : '#94a3b8';
         row.style.padding = '4px 0';
-        row.style.marginBottom = '0';
-        row.style.cursor = isPersisted ? 'pointer' : 'default';
 
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = !!categoryDocApprovals[docId];
-        checkbox.disabled = !isPersisted;
-        checkbox.addEventListener('change', () => toggleCategoryDocumentApproval(docId, checkbox.checked));
-        row.appendChild(checkbox);
-
-        const label = document.createElement('span');
-        label.textContent = (doc ? doc.name : ('Document #' + docId)) +
+        const nameSpan = document.createElement('span');
+        nameSpan.style.flex = '1';
+        nameSpan.textContent = (doc ? doc.name : ('Document #' + docId)) +
             (isPersisted ? '' : ' (save the category first)');
-        row.appendChild(label);
+        row.appendChild(nameSpan);
+
+        // Defaults to checked/required, matching audit_rule_category_documents.is_required's
+        // own DB default (TRUE) — a document whose key isn't in categoryDocRequired yet
+        // (not persisted) still shows checked, so nothing looks "unrequired" before save.
+        const requiredLabel = document.createElement('label');
+        requiredLabel.style.display = 'flex';
+        requiredLabel.style.alignItems = 'center';
+        requiredLabel.style.gap = '6px';
+        requiredLabel.style.fontWeight = '400';
+        requiredLabel.style.cursor = isPersisted ? 'pointer' : 'default';
+        requiredLabel.style.marginBottom = '0';
+        const requiredCheckbox = document.createElement('input');
+        requiredCheckbox.type = 'checkbox';
+        requiredCheckbox.checked = isPersisted ? !!categoryDocRequired[docId] : true;
+        requiredCheckbox.disabled = !isPersisted;
+        requiredCheckbox.addEventListener('change', () => toggleCategoryDocumentRequired(docId, requiredCheckbox.checked));
+        requiredLabel.appendChild(requiredCheckbox);
+        requiredLabel.appendChild(document.createTextNode('Required'));
+        row.appendChild(requiredLabel);
+
+        const approvedLabel = document.createElement('label');
+        approvedLabel.style.display = 'flex';
+        approvedLabel.style.alignItems = 'center';
+        approvedLabel.style.gap = '6px';
+        approvedLabel.style.fontWeight = '400';
+        approvedLabel.style.cursor = isPersisted ? 'pointer' : 'default';
+        approvedLabel.style.marginBottom = '0';
+        const approvedCheckbox = document.createElement('input');
+        approvedCheckbox.type = 'checkbox';
+        approvedCheckbox.checked = !!categoryDocApprovals[docId];
+        approvedCheckbox.disabled = !isPersisted;
+        approvedCheckbox.addEventListener('change', () => toggleCategoryDocumentApproval(docId, approvedCheckbox.checked));
+        approvedLabel.appendChild(approvedCheckbox);
+        approvedLabel.appendChild(document.createTextNode('Approved'));
+        row.appendChild(approvedLabel);
 
         arCategoryDocApprovalsList.appendChild(row);
     });
@@ -1162,6 +1195,34 @@ async function toggleCategoryDocumentApproval(docId, checked) {
             arCategoryMatrixVersion.textContent = String(parseInt(arCategoryMatrixVersion.textContent, 10) + 1);
         }
         showCategoryDetailStatus('✅ Approval requirement updated.', 'success');
+    } catch (error) {
+        showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+        renderCategoryDocApprovalsList();
+    }
+}
+
+async function toggleCategoryDocumentRequired(docId, checked) {
+    if (!editingCategoryId) return;
+
+    try {
+        const res = await fetch(
+            API_BASE + '/api/audit-rules/categories/' + editingCategoryId + '/documents/' + docId + '/required',
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ is_required: checked })
+            }
+        );
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to update required flag');
+
+        const changed = !!categoryDocRequired[docId] !== checked;
+        categoryDocRequired[docId] = checked;
+        if (changed) {
+            // Mirrors the backend's own no-op-doesn't-bump rule, same as the approval toggle.
+            arCategoryMatrixVersion.textContent = String(parseInt(arCategoryMatrixVersion.textContent, 10) + 1);
+        }
+        showCategoryDetailStatus('✅ Required flag updated.', 'success');
     } catch (error) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
         renderCategoryDocApprovalsList();
@@ -1304,7 +1365,11 @@ async function selectCategory(id) {
         categoryDocIds = (cat.documents || []).map(d => d.document_id);
         categoryCrossCheckIds = (cat.cross_checks || []).map(c => c.cross_check_id);
         categoryDocApprovals = {};
-        (cat.documents || []).forEach(d => { categoryDocApprovals[d.document_id] = !!d.approval_required; });
+        categoryDocRequired = {};
+        (cat.documents || []).forEach(d => {
+            categoryDocApprovals[d.document_id] = !!d.approval_required;
+            categoryDocRequired[d.document_id] = !!d.is_required;
+        });
         arCategoryMatrixVersion.textContent = String(cat.matrix_version || 1);
         renderCategoryDocChips();
         renderCategoryCrossCheckChips();
@@ -1338,6 +1403,7 @@ function startNewCategory() {
     categoryDocIds = [];
     categoryCrossCheckIds = [];
     categoryDocApprovals = {};
+    categoryDocRequired = {};
     arCategoryMatrixVersion.textContent = '1';
     renderCategoryDocChips();
     renderCategoryCrossCheckChips();

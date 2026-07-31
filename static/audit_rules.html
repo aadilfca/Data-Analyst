@@ -339,12 +339,14 @@
                         </div>
                     </div>
 
-                    <!-- Approval-required flag per document (Validation Rules, Phase 3 of 7).
-                         Sits alongside the Documents chip list above, not merged into it - a
-                         checkbox here only enables once the document is actually persisted in
+                    <!-- Per-document Required/Approved flags (Validation Rules Phase 3 of 7 added
+                         Approval Required; Automated cross-document validation engine Phase 4 of 10
+                         added Required, same row, same visual pattern). Sits alongside the
+                         Documents chip list above, not merged into it - both checkboxes on a row
+                         only enable once that document is actually persisted in
                          audit_rule_category_documents (i.e. the category has been saved). -->
                     <div class="ar-field">
-                        <label>Approval Required</label>
+                        <label>Document Requirements</label>
                         <div id="arCategoryDocApprovalsList"></div>
                     </div>
                     <div id="arCategoryMatrixVersionRow" style="margin-bottom:18px;">
