@@ -196,8 +196,14 @@ def restore_document(document_id: int):
 # list of Documents and compares one field across them using a fixed comparison type.
 
 # Mirrors the CHECK constraint on audit_rule_cross_checks.comparison_type - validated here
-# too so a bad value returns a clean 400, not a raw SQLite CHECK-constraint 500.
-COMPARISON_TYPES = ('All equal', 'Sequential increasing', 'Sequential decreasing', 'Within tolerance %')
+# too so a bad value returns a clean 400, not a raw SQLite CHECK-constraint 500. Extended
+# from 4 to 6 values (Automated cross-document validation engine, Phase 1 of 10 schema /
+# Phase 5 of 10 this UI) - 'Must be equal' and 'May be less, never more' added, none of the
+# original 4 deprecated.
+COMPARISON_TYPES = (
+    'All equal', 'Sequential increasing', 'Sequential decreasing', 'Within tolerance %',
+    'Must be equal', 'May be less, never more'
+)
 
 # ---------- DATA MODELS ----------
 class CrossCheckCreate(BaseModel):
@@ -205,12 +211,18 @@ class CrossCheckCreate(BaseModel):
     compare_field: str
     comparison_type: str
     document_ids: List[int] = []
+    # Phase 5 of 10: marks this Cross-check as also comparing its anchor document (the last
+    # document in document_ids, resolved live at evaluation time - Phase 6's job, not
+    # configured here) against the voucher line's own amount. Config-only this phase; nothing
+    # reads it yet.
+    compare_to_voucher_line: bool = False
 
 class CrossCheckUpdate(BaseModel):
     name: str
     compare_field: str
     comparison_type: str
     document_ids: List[int] = []
+    compare_to_voucher_line: bool = False
 
 # ---------- HELPERS ----------
 def get_cross_check_documents(cross_check_id: int) -> List[dict]:
@@ -240,6 +252,7 @@ def row_to_cross_check(row: dict) -> dict:
         "name": row["name"],
         "compare_field": row["compare_field"],
         "comparison_type": row["comparison_type"],
+        "compare_to_voucher_line": bool(row.get("compare_to_voucher_line") or 0),
         "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
         "documents": get_cross_check_documents(cross_check_id),
@@ -255,15 +268,21 @@ def save_cross_check_documents(cross_check_id: int, document_ids: List[int]):
             (cross_check_id, document_id, idx)
         )
 
-def validate_cross_check_payload(compare_field: str, comparison_type: str, document_ids: List[int]):
+def validate_cross_check_payload(compare_field: str, comparison_type: str, document_ids: List[int], compare_to_voucher_line: bool = False):
     """
     Raises HTTPException(400) if comparison_type isn't one of the fixed set, or if
-    compare_field isn't a cross-check-eligible field on every selected Document.
+    compare_field isn't a cross-check-eligible field on every selected Document, or if
+    compare_to_voucher_line is set with no Document to act as the anchor (Phase 5 of 10 -
+    the anchor is the last document in document_ids, resolved live at evaluation time, never
+    picked here).
     SQLite foreign keys aren't enforced on this app's connections (see get_db()), so
     Document existence is also checked here rather than left to the database.
     """
     if comparison_type not in COMPARISON_TYPES:
         raise HTTPException(400, f"Invalid comparison type '{comparison_type}'. Must be one of: {', '.join(COMPARISON_TYPES)}")
+
+    if compare_to_voucher_line and not document_ids:
+        raise HTTPException(400, "compare_to_voucher_line requires at least one Document (used as the anchor)")
 
     for document_id in document_ids:
         doc_rows = execute_query("SELECT name FROM audit_rule_documents WHERE id = ?", (document_id,))
@@ -300,11 +319,14 @@ def get_cross_check(cross_check_id: int):
 
 @router.post("/api/audit-rules/cross-checks")
 def create_cross_check(cross_check: CrossCheckCreate):
-    validate_cross_check_payload(cross_check.compare_field, cross_check.comparison_type, cross_check.document_ids)
+    validate_cross_check_payload(
+        cross_check.compare_field, cross_check.comparison_type, cross_check.document_ids,
+        cross_check.compare_to_voucher_line
+    )
 
     cross_check_id = execute_write(
-        "INSERT INTO audit_rule_cross_checks (name, compare_field, comparison_type) VALUES (?, ?, ?)",
-        (cross_check.name, cross_check.compare_field, cross_check.comparison_type)
+        "INSERT INTO audit_rule_cross_checks (name, compare_field, comparison_type, compare_to_voucher_line) VALUES (?, ?, ?, ?)",
+        (cross_check.name, cross_check.compare_field, cross_check.comparison_type, int(cross_check.compare_to_voucher_line))
     )
     save_cross_check_documents(cross_check_id, cross_check.document_ids)
 
@@ -317,11 +339,14 @@ def update_cross_check(cross_check_id: int, cross_check: CrossCheckUpdate):
     if not existing:
         raise HTTPException(404, "Cross-check not found")
 
-    validate_cross_check_payload(cross_check.compare_field, cross_check.comparison_type, cross_check.document_ids)
+    validate_cross_check_payload(
+        cross_check.compare_field, cross_check.comparison_type, cross_check.document_ids,
+        cross_check.compare_to_voucher_line
+    )
 
     execute_write(
-        "UPDATE audit_rule_cross_checks SET name = ?, compare_field = ?, comparison_type = ? WHERE id = ?",
-        (cross_check.name, cross_check.compare_field, cross_check.comparison_type, cross_check_id)
+        "UPDATE audit_rule_cross_checks SET name = ?, compare_field = ?, comparison_type = ?, compare_to_voucher_line = ? WHERE id = ?",
+        (cross_check.name, cross_check.compare_field, cross_check.comparison_type, int(cross_check.compare_to_voucher_line), cross_check_id)
     )
     save_cross_check_documents(cross_check_id, cross_check.document_ids)
 

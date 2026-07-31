@@ -276,7 +276,22 @@
                             <option value="Sequential increasing">Sequential increasing</option>
                             <option value="Sequential decreasing">Sequential decreasing</option>
                             <option value="Within tolerance %">Within tolerance %</option>
+                            <option value="Must be equal">Must be equal</option>
+                            <option value="May be less, never more">May be less, never more</option>
                         </select>
+                    </div>
+
+                    <!-- Automated cross-document validation engine, Phase 5 of 10: also compare
+                         the anchor document (last document above) against the voucher line's own
+                         amount. The anchor is never picked here - it's resolved live at
+                         evaluation time (Phase 6), so this control is just the on/off flag plus
+                         an explanatory hint naming today's anchor for clarity. -->
+                    <div class="ar-field">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                            <input type="checkbox" id="arCompareToVoucherLineCheckbox">
+                            <span>Also compare to voucher line amount</span>
+                        </label>
+                        <div id="arCompareToVoucherLineHint" class="ar-field-warning" style="display:none; color:#64748b;"></div>
                     </div>
 
                     <div class="ar-field" id="arCrossCheckUsedByRow" style="display:none;">

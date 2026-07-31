@@ -468,6 +468,8 @@ const arAddDocumentBtn = document.getElementById('arAddDocumentBtn');
 const arCompareFieldSelect = document.getElementById('arCompareFieldSelect');
 const arCompareFieldStaleWarning = document.getElementById('arCompareFieldStaleWarning');
 const arComparisonTypeSelect = document.getElementById('arComparisonTypeSelect');
+const arCompareToVoucherLineCheckbox = document.getElementById('arCompareToVoucherLineCheckbox');
+const arCompareToVoucherLineHint = document.getElementById('arCompareToVoucherLineHint');
 const arCrossCheckUsedByRow = document.getElementById('arCrossCheckUsedByRow');
 const arCrossCheckUsedByCount = document.getElementById('arCrossCheckUsedByCount');
 const arCrossCheckDetailStatus = document.getElementById('arCrossCheckDetailStatus');
@@ -643,12 +645,14 @@ function addDocumentToCrossCheck() {
     crossCheckDocIds.push(parseInt(value, 10));
     renderCrossCheckDocsList();
     renderCompareFieldDropdown();
+    updateCompareToVoucherLineHint();
 }
 
 function removeDocumentFromCrossCheck(docId) {
     crossCheckDocIds = crossCheckDocIds.filter(id => id !== docId);
     renderCrossCheckDocsList();
     renderCompareFieldDropdown();
+    updateCompareToVoucherLineHint();
 }
 
 function moveDocUp(index) {
@@ -656,6 +660,7 @@ function moveDocUp(index) {
     [crossCheckDocIds[index - 1], crossCheckDocIds[index]] = [crossCheckDocIds[index], crossCheckDocIds[index - 1]];
     renderCrossCheckDocsList();
     renderCompareFieldDropdown();
+    updateCompareToVoucherLineHint();
 }
 
 function moveDocDown(index) {
@@ -663,6 +668,7 @@ function moveDocDown(index) {
     [crossCheckDocIds[index + 1], crossCheckDocIds[index]] = [crossCheckDocIds[index], crossCheckDocIds[index + 1]];
     renderCrossCheckDocsList();
     renderCompareFieldDropdown();
+    updateCompareToVoucherLineHint();
 }
 
 // ---------- COMPARE FIELD DROPDOWN (dynamic, driven by crossCheckDocIds) ----------
@@ -746,6 +752,33 @@ function renderCompareFieldDropdown(preserveValue) {
     }
 }
 
+// ---------- COMPARE TO VOUCHER LINE (Phase 5 of 10) ----------
+// The anchor document is never picked in this UI - it's always the last document in
+// crossCheckDocIds (the chain's own order), resolved live at evaluation time (Phase 6). This
+// just surfaces today's anchor + field as a live-updating explanatory hint so the admin can
+// see what "compare to voucher line" will actually mean once ticked, without configuring it.
+function updateCompareToVoucherLineHint() {
+    if (!arCompareToVoucherLineCheckbox.checked) {
+        arCompareToVoucherLineHint.style.display = 'none';
+        return;
+    }
+
+    if (crossCheckDocIds.length === 0) {
+        arCompareToVoucherLineHint.textContent = 'Add at least one document above to set an anchor.';
+        arCompareToVoucherLineHint.style.display = 'block';
+        return;
+    }
+
+    const anchorDocId = crossCheckDocIds[crossCheckDocIds.length - 1];
+    const anchorDoc = getDocumentById(anchorDocId);
+    const anchorName = anchorDoc ? anchorDoc.name : ('Document #' + anchorDocId);
+    const field = arCompareFieldSelect.value || '(field not yet selected)';
+    arCompareToVoucherLineHint.textContent =
+        'ℹ️ Will compare "' + anchorName + '"\'s ' + field + ' vs. this voucher line\'s amount. ' +
+        '(Anchor = last document above; resolved live, not fixed here.)';
+    arCompareToVoucherLineHint.style.display = 'block';
+}
+
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectCrossCheck(id) {
     try {
@@ -760,6 +793,8 @@ async function selectCrossCheck(id) {
         renderCrossCheckDocsList();
         renderCompareFieldDropdown(cc.compare_field);
         arComparisonTypeSelect.value = cc.comparison_type;
+        arCompareToVoucherLineCheckbox.checked = !!cc.compare_to_voucher_line;
+        updateCompareToVoucherLineHint();
 
         arCrossCheckUsedByRow.style.display = 'block';
         arCrossCheckUsedByCount.textContent = cc.used_by_categories_count;
@@ -790,6 +825,8 @@ function startNewCrossCheck() {
     renderCrossCheckDocsList();
     renderCompareFieldDropdown('');
     arComparisonTypeSelect.value = '';
+    arCompareToVoucherLineCheckbox.checked = false;
+    updateCompareToVoucherLineHint();
 
     arCrossCheckUsedByRow.style.display = 'none';
     arCrossCheckDeleteBtn.style.display = 'none';
@@ -823,7 +860,8 @@ async function saveCrossCheck() {
         name: name,
         compare_field: compareField,
         comparison_type: comparisonType,
-        document_ids: crossCheckDocIds
+        document_ids: crossCheckDocIds,
+        compare_to_voucher_line: arCompareToVoucherLineCheckbox.checked
     };
 
     try {
@@ -899,6 +937,8 @@ arCrossCheckAddNewBtn.addEventListener('click', startNewCrossCheck);
 arCrossCheckShowInactiveCheckbox.addEventListener('change', loadCrossChecks);
 
 arAddDocumentBtn.addEventListener('click', addDocumentToCrossCheck);
+arCompareFieldSelect.addEventListener('change', updateCompareToVoucherLineHint);
+arCompareToVoucherLineCheckbox.addEventListener('change', updateCompareToVoucherLineHint);
 
 arCrossCheckSaveBtn.addEventListener('click', saveCrossCheck);
 arCrossCheckDeleteBtn.addEventListener('click', deleteCrossCheck);
