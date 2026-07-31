@@ -3183,6 +3183,127 @@ body {
     font-size: 13px;
     padding: 12px 0;
 }
+/* ----- Cross-document validation rollup (Automated cross-document validation engine, Phase 9 of
+   10) ----- Sits above the search row inside the Data Table segment's body. Collapsed summary,
+   expand for detail — same disclosure pattern as everywhere else in this modal, not a new UI
+   language. Reuses .procedure-mismatch-badge/.procedure-match-badge's red/green pair for
+   fail/pass (defined further below); only the shortfall (amber, distinct from fail per Phase
+   7/8's own soft-vs-hard distinction) and not_evaluated (neutral gray) states are new. */
+.cc-rollup {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+.cc-rule {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+.cc-rule-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    background: #fafcff;
+    transition: background 0.15s;
+}
+.cc-rule-row:hover {
+    background: #f1f5f9;
+}
+.cc-rule-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.cc-badge-pass { background: #dcfce7; color: #166534; }
+.cc-badge-fail { background: #fee2e2; color: #991b1b; }
+/* Shortfall: amber, deliberately distinct from the red fail state above — a soft finding
+   (doesn't block Cleared, Phase 7) that's still worth the auditor's attention (the same event
+   Phase 8 auto-logs as an observation), not a hard rejection. Same amber pair as the app's
+   existing .status-badge.pending convention. */
+.cc-badge-shortfall { background: #fef3c7; color: #92400e; }
+.cc-badge-neutral { background: #f1f5f9; color: #64748b; }
+
+.cc-rule-summary-text {
+    flex: 1;
+    font-size: 13px;
+    color: #1a1a2e;
+}
+.cc-rule-caret {
+    font-size: 11px;
+    color: #94a3b8;
+    transition: transform 0.15s;
+}
+.cc-rule.cc-rule-expanded .cc-rule-caret {
+    transform: rotate(90deg);
+}
+.cc-rule-detail {
+    display: none;
+    padding: 10px 12px;
+    border-top: 1px solid #e2e8f0;
+    background: #ffffff;
+}
+.cc-rule.cc-rule-expanded .cc-rule-detail {
+    display: block;
+}
+.cc-chain-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.cc-chain-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+    padding: 3px 0;
+}
+.cc-chain-doc {
+    color: #475569;
+}
+.cc-anchor-tag {
+    font-size: 11px;
+    color: #94a3b8;
+    font-style: italic;
+}
+.cc-chain-value {
+    font-weight: 600;
+    color: #1a1a2e;
+    white-space: nowrap;
+}
+.cc-chain-novalue,
+.cc-chain-notlinked {
+    font-weight: 400;
+    font-style: italic;
+    color: #94a3b8;
+}
+.cc-chain-voucher-row {
+    border-top: 1px dashed #e2e8f0;
+    margin-top: 2px;
+    padding-top: 6px;
+}
+.cc-rule-message {
+    margin-top: 8px;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+}
+.cc-rule-message-fail { background: #fee2e2; color: #991b1b; }
+.cc-rule-message-shortfall { background: #fef3c7; color: #92400e; }
+.cc-rule-message-not_evaluated { background: #f1f5f9; color: #64748b; }
+.cc-rule-message-pass { background: #f8fafc; color: #64748b; }
+
 .procedure-selected-table-wrapper {
     overflow-x: auto;
     border: 1px solid #e2e8f0;

@@ -2916,7 +2916,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 // GET /api/verification/procedure_checks/{uid} in openProcedureModal() — a role with no entry
 // is unchecked.
 function getProcedureTabState(uid, docId) {
-    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, tabs: {} };
+    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!procedureModalState[uid].tabs[docId]) {
         procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {} };
     }
@@ -3007,6 +3007,22 @@ async function openProcedureModal(uid, initialDocId = null) {
         console.error('Failed to load voucher line observations:', e);
     }
 
+    // Automated cross-document validation engine, Phase 9 of 10: this line's Cross-check
+    // evaluation results (Phase 6/7's already-computed structure - zero new evaluation logic,
+    // this just fetches it), for the Data Table segment's collapsible pass/fail rollup. Same
+    // fail-soft-to-empty, re-fetched-fresh-on-every-open convention as assignedRecords/
+    // procedureChecks/observationEntries above.
+    let crossCheckResults = [];
+    try {
+        const ccRes = await fetch(`${API_BASE}/api/verification/cross_check_results/${uid}`);
+        if (ccRes.ok) {
+            const ccData = await ccRes.json();
+            crossCheckResults = ccData.results || [];
+        }
+    } catch (e) {
+        console.error('Failed to load cross-check results:', e);
+    }
+
     // Account Head Recommendation follow-up: re-seed the no-match note from server truth on every
     // open (the ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel entry, if any) — a stale local edit from a
     // previous session must never silently persist across reload, same convention every other
@@ -3040,10 +3056,11 @@ async function openProcedureModal(uid, initialDocId = null) {
     const voucherLine = lineIdx !== -1 ? currentVoucherLines[lineIdx] : null;
     const voucherLineAmount = voucherLine ? parseVoucherAmount(getVoucherLineAmount(voucherLine.row_data || {})) : 0;
 
-    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, tabs: {} };
+    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     procedureModalState[uid].documents = documents;
     procedureModalState[uid].assignedDocIds = assignedDocIds;
     procedureModalState[uid].voucherLineAmount = voucherLineAmount;
+    procedureModalState[uid].crossCheckResults = crossCheckResults;
 
     // Re-sync each tab's selections and checklist from the fresh server data (never just seeded
     // once) so reopening the modal always reflects reality, even if a change happened elsewhere.
@@ -3902,6 +3919,83 @@ function renderAccountHeadResultsButtonState(uid) {
     btn.textContent = state.loading ? 'Searching…' : '🔍 Suggest Account Head';
 }
 
+// ---------- CROSS-DOCUMENT VALIDATION ROLLUP (Automated cross-document validation engine, Phase 9 of 10) ----------
+// Collapsed pass/fail/shortfall line per Cross-check rule, expandable to show the actual chain
+// values Phase 6's engine already computed — no raw numbers by default, matching the Linked
+// Evidence table's own running-total/mismatch-badge precedent (collapsed summary, expand for
+// detail, not a new UI language). Pure display: every value used here already exists in the
+// fetched rule result (see GET /api/verification/cross_check_results/{id}), nothing recomputed.
+
+// One compact line per rule. A shortfall gets its own distinct (amber) state — not folded into
+// fail — since Phase 7/8 already treat it differently (doesn't gate Cleared, only observed).
+function summarizeCrossCheckRule(rule) {
+    const field = escapeHtml(rule.compare_field);
+    if (rule.status === 'fail') {
+        return { icon: '✗', text: `${field} mismatch`, cssClass: 'cc-badge-fail' };
+    }
+    if (rule.status === 'shortfall') {
+        return { icon: '⚠', text: `${field} shortfall`, cssClass: 'cc-badge-shortfall' };
+    }
+    if (rule.status === 'not_evaluated') {
+        return { icon: '—', text: `${field} not enough data`, cssClass: 'cc-badge-neutral' };
+    }
+    // pass
+    const linkedCount = rule.chain.filter(c => c.linked && c.value !== null).length;
+    if (linkedCount <= 1 && rule.voucher_line_comparison && rule.voucher_line_comparison.match === true) {
+        return { icon: '✓', text: `${field} (${rule.voucher_line_comparison.anchor_value})`, cssClass: 'cc-badge-pass' };
+    }
+    return { icon: '✓', text: `${field} matched across ${linkedCount} docs`, cssClass: 'cc-badge-pass' };
+}
+
+// Expanded detail: the actual per-document values feeding the rule, plus the voucher-line
+// comparison (if configured) and the rule's own message — all already present in `rule`, no
+// new lookups.
+function buildCrossCheckRuleDetail(rule) {
+    let html = '<ul class="cc-chain-list">';
+    rule.chain.forEach(c => {
+        const isAnchor = rule.anchor_document_id === c.document_id;
+        const valueText = c.linked
+            ? (c.value !== null ? escapeHtml(String(c.value)) : '<span class="cc-chain-novalue">no value</span>')
+            : '<span class="cc-chain-notlinked">not linked</span>';
+        html += `<li class="cc-chain-item">
+            <span class="cc-chain-doc">${escapeHtml(c.document_name)}${isAnchor ? ' <span class="cc-anchor-tag">(anchor)</span>' : ''}</span>
+            <span class="cc-chain-value">${valueText}</span>
+        </li>`;
+    });
+    if (rule.voucher_line_comparison) {
+        const vlc = rule.voucher_line_comparison;
+        const matchIcon = vlc.match === true ? '✓' : (vlc.match === false ? '✗' : '—');
+        html += `<li class="cc-chain-item cc-chain-voucher-row">
+            <span class="cc-chain-doc">Voucher Line Amount</span>
+            <span class="cc-chain-value">${matchIcon} ${vlc.voucher_amount !== null ? escapeHtml(String(vlc.voucher_amount)) : '—'}</span>
+        </li>`;
+    }
+    html += '</ul>';
+    if (rule.message) {
+        html += `<div class="cc-rule-message cc-rule-message-${rule.status}">${escapeHtml(rule.message)}</div>`;
+    }
+    return html;
+}
+
+function buildCrossCheckRollup(rules) {
+    let html = '<div class="cc-rollup">';
+    rules.forEach(rule => {
+        const { icon, text, cssClass } = summarizeCrossCheckRule(rule);
+        html += `
+            <div class="cc-rule">
+                <div class="cc-rule-row">
+                    <span class="cc-rule-badge ${cssClass}">${icon}</span>
+                    <span class="cc-rule-summary-text">${text}</span>
+                    <span class="cc-rule-caret">▸</span>
+                </div>
+                <div class="cc-rule-detail">${buildCrossCheckRuleDetail(rule)}</div>
+            </div>
+        `;
+    });
+    html += '</div>';
+    return html;
+}
+
 function renderProcedureModalPanel(uid, docId) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
@@ -3925,10 +4019,19 @@ function renderProcedureModalPanel(uid, docId) {
     // both segments are omitted entirely (header + body), not rendered as an empty placeholder.
     // Observation always renders. Order stays fixed (Data -> Procedures -> Observation) regardless
     // of which optional segments are present.
+    // Automated cross-document validation engine, Phase 9 of 10: only the Cross-check rules
+    // whose own chain actually includes this Document (each rule already carries its full
+    // chain, so this is a pure client-side filter over already-fetched data, no re-evaluation).
+    // A Document in none of the Category's Cross-check chains gets no rollup section at all —
+    // not an empty one.
+    const docCrossChecks = (lineState.crossCheckResults || [])
+        .filter(rule => rule.chain.some(c => c.document_id === docId));
+
     const dataSegmentHtml = hasTemplate ? `
         <div class="procedure-segment procedure-segment-data">
             <h4 class="procedure-segment-header">🗂️ Data Table</h4>
             <div class="procedure-segment-body">
+                ${docCrossChecks.length ? buildCrossCheckRollup(docCrossChecks) : ''}
                 <div class="procedure-search-row">
                     <input type="text" id="procedureSearchInput" class="procedure-search-input"
                         placeholder="Search by reference, vendor, amount..." value="${escapeHtml(tabState.searchTerm)}">
@@ -3983,6 +4086,15 @@ function renderProcedureModalPanel(uid, docId) {
         container.querySelectorAll('.procedure-unlink-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 unassignSupportingDocument(uid, docId, parseInt(this.dataset.assignmentId));
+            });
+        });
+
+        // Phase 9 of 10: expand/collapse is a plain class toggle, not persisted state — it
+        // simply resets on the next re-render (tab switch, modal reopen), same as this being a
+        // lightweight disclosure rather than durable UI state like tabState.selections.
+        container.querySelectorAll('.cc-rule-row').forEach(row => {
+            row.addEventListener('click', function() {
+                this.closest('.cc-rule').classList.toggle('cc-rule-expanded');
             });
         });
     }

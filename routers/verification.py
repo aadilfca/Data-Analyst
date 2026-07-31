@@ -3282,3 +3282,22 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
         "summary": summary,
         "results": results,
     }
+
+
+@router.get("/api/verification/cross_check_results/{voucher_line_id}")
+def get_cross_check_results(voucher_line_id: int):
+    """
+    Automated cross-document validation engine, Phase 9 of 10: read-only exposure of Phase 6's
+    already-computed evaluation result, for the Supporting Documents modal's Data Table segment
+    rollup. Zero new evaluation logic - a thin pass-through to evaluate_cross_checks_for_line(),
+    the same function compute_and_persist_cleared_status() (Phase 7) already calls.
+
+    category_id is omitted deliberately - the engine resolves it itself via the exact same
+    account_category_assignments lookup the status engine uses, so this endpoint's result can
+    never drift from what actually gates Cleared/Query for the same line.
+
+    Always 200, even when unresolvable (unknown line, no Category, etc.) - never raises, matching
+    evaluate_cross_checks_for_line()'s own contract and this file's "clean no-match, not an
+    error" convention for read endpoints (e.g. category-for-account).
+    """
+    return evaluate_cross_checks_for_line(voucher_line_id)
