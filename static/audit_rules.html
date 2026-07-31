@@ -260,6 +260,12 @@
                         <select id="arCompareFieldSelect">
                             <option value="" disabled selected>Add a document first</option>
                         </select>
+                        <!-- Persistent (not auto-dismissing, unlike arCrossCheckDetailStatus) warning
+                             shown when a saved compare_field no longer matches any current option —
+                             e.g. a document's cross-check-eligible fields changed since this
+                             Cross-check was last saved. See renderCompareFieldDropdown() in
+                             audit_rules.js. -->
+                        <div id="arCompareFieldStaleWarning" class="ar-field-warning" style="display:none;"></div>
                     </div>
 
                     <div class="ar-field">

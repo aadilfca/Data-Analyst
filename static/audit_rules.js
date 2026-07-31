@@ -466,6 +466,7 @@ const arCrossCheckDocsList = document.getElementById('arCrossCheckDocsList');
 const arAddDocumentSelect = document.getElementById('arAddDocumentSelect');
 const arAddDocumentBtn = document.getElementById('arAddDocumentBtn');
 const arCompareFieldSelect = document.getElementById('arCompareFieldSelect');
+const arCompareFieldStaleWarning = document.getElementById('arCompareFieldStaleWarning');
 const arComparisonTypeSelect = document.getElementById('arComparisonTypeSelect');
 const arCrossCheckUsedByRow = document.getElementById('arCrossCheckUsedByRow');
 const arCrossCheckUsedByCount = document.getElementById('arCrossCheckUsedByCount');
@@ -679,19 +680,37 @@ function computeEligibleFields() {
     return eligible || [];
 }
 
-function renderCompareFieldDropdown() {
+function hideCompareFieldStaleWarning() {
+    arCompareFieldStaleWarning.style.display = 'none';
+    arCompareFieldStaleWarning.textContent = '';
+}
+
+function showCompareFieldStaleWarning(value) {
+    arCompareFieldStaleWarning.textContent =
+        '⚠️ "' + value + '" is not available on every selected document — pick a different field, or add/remove documents until it matches.';
+    arCompareFieldStaleWarning.style.display = 'block';
+}
+
+// preserveValue: the value to try to keep selected across a rebuild (e.g. a document
+// add/remove, or the saved compare_field when a Cross-check is first opened). Defaults to
+// the select's own current value, so in-session add/remove-document calls need no change.
+// A preserveValue that isn't in the eligible set is never silently dropped — it's kept
+// visible as a real (selected) option so an existing saved value is never hidden, per the
+// confirmed requirement, with a persistent warning (not the auto-dismissing status toast).
+function renderCompareFieldDropdown(preserveValue) {
     const eligibleFields = computeEligibleFields();
-    const previousValue = arCompareFieldSelect.value;
+    const previousValue = (preserveValue !== undefined) ? preserveValue : arCompareFieldSelect.value;
 
     arCompareFieldSelect.innerHTML = '';
 
-    if (eligibleFields.length === 0) {
+    if (eligibleFields.length === 0 && !previousValue) {
         const opt = document.createElement('option');
         opt.value = '';
         opt.disabled = true;
         opt.selected = true;
         opt.textContent = 'Add a document first';
         arCompareFieldSelect.appendChild(opt);
+        hideCompareFieldStaleWarning();
         return;
     }
 
@@ -710,16 +729,20 @@ function renderCompareFieldDropdown() {
 
     if (eligibleFields.includes(previousValue)) {
         arCompareFieldSelect.value = previousValue;
+        hideCompareFieldStaleWarning();
+    } else if (previousValue) {
+        // Saved/previously-chosen value doesn't match any current option — keep it visible
+        // (as its own selected option) rather than blanking the dropdown, and show a
+        // persistent warning explaining why.
+        const staleOpt = document.createElement('option');
+        staleOpt.value = previousValue;
+        staleOpt.textContent = '⚠️ ' + previousValue + ' (not on every selected document)';
+        staleOpt.selected = true;
+        arCompareFieldSelect.appendChild(staleOpt);
+        showCompareFieldStaleWarning(previousValue);
     } else {
         placeholder.selected = true;
-        if (previousValue) {
-            // The field the user had chosen is no longer eligible after a document
-            // add/remove — surface this rather than silently clearing it.
-            showCrossCheckDetailStatus(
-                '⚠️ "' + previousValue + '" is no longer available on every selected document — please choose a field again.',
-                'error'
-            );
-        }
+        hideCompareFieldStaleWarning();
     }
 }
 
@@ -735,8 +758,7 @@ async function selectCrossCheck(id) {
         arCrossCheckNameInput.value = cc.name;
         crossCheckDocIds = (cc.documents || []).map(d => d.document_id);
         renderCrossCheckDocsList();
-        renderCompareFieldDropdown();
-        arCompareFieldSelect.value = cc.compare_field;
+        renderCompareFieldDropdown(cc.compare_field);
         arComparisonTypeSelect.value = cc.comparison_type;
 
         arCrossCheckUsedByRow.style.display = 'block';
@@ -766,7 +788,7 @@ function startNewCrossCheck() {
     arCrossCheckNameInput.value = '';
     crossCheckDocIds = [];
     renderCrossCheckDocsList();
-    renderCompareFieldDropdown();
+    renderCompareFieldDropdown('');
     arComparisonTypeSelect.value = '';
 
     arCrossCheckUsedByRow.style.display = 'none';
