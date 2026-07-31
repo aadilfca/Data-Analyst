@@ -1137,17 +1137,57 @@ def init_db():
         # set. compare_field is free text (not FK'd to audit_rule_document_fields) since
         # different documents attached to the same cross-check may use differently-named
         # but equivalent fields.
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS audit_rule_cross_checks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                compare_field TEXT NOT NULL,
-                comparison_type TEXT NOT NULL CHECK (comparison_type IN
-                    ('All equal', 'Sequential increasing', 'Sequential decreasing', 'Within tolerance %')),
-                is_active INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+        #
+        # Cross-Document Validation Engine, Phase 1 of 10: comparison_type's CHECK constraint
+        # gains two new values ('Must be equal', 'May be less, never more') alongside the
+        # original 4 (confirmed with Aadil: none of the original 4 are deprecated/dropped).
+        # SQLite can't ALTER a CHECK constraint in place, so upgrading an existing database
+        # needs the same rename -> recreate -> copy -> drop rebuild used for
+        # client_voucher_prefixes' category CHECK above - simpler here since no value
+        # remapping is needed, just a straight row copy. Gated on inspecting sqlite_master
+        # (schema-driven, not data-driven, since there's no "old row" to detect - the
+        # constraint itself is what's stale) so a fresh or already-migrated database is a
+        # cheap no-op on every subsequent startup.
+        NEW_COMPARISON_TYPES = ('All equal', 'Sequential increasing', 'Sequential decreasing',
+                                 'Within tolerance %', 'Must be equal', 'May be less, never more')
+
+        existing_cc_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='audit_rule_cross_checks'"
+        ).fetchone()
+
+        if existing_cc_sql and 'Must be equal' not in existing_cc_sql[0]:
+            print("⚠️ audit_rule_cross_checks.comparison_type CHECK is on the old 4-value scheme - rebuilding.")
+            conn.execute("DROP TABLE IF EXISTS audit_rule_cross_checks_old")
+            conn.execute("ALTER TABLE audit_rule_cross_checks RENAME TO audit_rule_cross_checks_old")
+            conn.execute(f'''
+                CREATE TABLE audit_rule_cross_checks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    compare_field TEXT NOT NULL,
+                    comparison_type TEXT NOT NULL CHECK (comparison_type IN
+                        {NEW_COMPARISON_TYPES}),
+                    is_active INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            conn.execute('''
+                INSERT INTO audit_rule_cross_checks (id, name, compare_field, comparison_type, is_active, created_at)
+                SELECT id, name, compare_field, comparison_type, is_active, created_at FROM audit_rule_cross_checks_old
+            ''')
+            conn.execute("DROP TABLE audit_rule_cross_checks_old")
+            print("✅ Rebuilt audit_rule_cross_checks with expanded comparison_type CHECK")
+        else:
+            conn.execute(f'''
+                CREATE TABLE IF NOT EXISTS audit_rule_cross_checks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    compare_field TEXT NOT NULL,
+                    comparison_type TEXT NOT NULL CHECK (comparison_type IN
+                        {NEW_COMPARISON_TYPES}),
+                    is_active INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
         # Schema upgrade: same reasoning as audit_rule_documents' is_active upgrade above -
         # a database that already ran the Phase 1 CREATE TABLE (with no is_active column)
         # needs it added explicitly, since CREATE TABLE IF NOT EXISTS is a no-op once the
@@ -1160,6 +1200,22 @@ def init_db():
                 print("✅ Added is_active column to audit_rule_cross_checks")
         except Exception as e:
             print("⚠️ Could not add is_active to audit_rule_cross_checks:", e)
+
+        # Schema upgrade (Cross-Document Validation Engine, Phase 1 of 10): compare_to_voucher_line
+        # marks a Cross-check as comparing a Document's field against the voucher line's own
+        # amount, rather than only Document-to-Document. The existing audit_rule_cross_check_documents
+        # junction is untouched - a voucher-line comparison still needs at least one real Document
+        # (the anchor) to compare against, so this is a flag alongside that junction, not a
+        # replacement for it. Nullable-with-default, defaults FALSE (0) so no existing Cross-check
+        # changes behavior.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_cross_checks)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'compare_to_voucher_line' not in columns:
+                conn.execute("ALTER TABLE audit_rule_cross_checks ADD COLUMN compare_to_voucher_line INTEGER DEFAULT 0")
+                print("✅ Added compare_to_voucher_line column to audit_rule_cross_checks")
+        except Exception as e:
+            print("⚠️ Could not add compare_to_voucher_line to audit_rule_cross_checks:", e)
 
         # Ordered list of Documents a Cross-check applies to.
         conn.execute('''
@@ -1237,6 +1293,19 @@ def init_db():
                 print("✅ Added approval_required column to audit_rule_category_documents")
         except Exception as e:
             print("⚠️ Could not add approval_required to audit_rule_category_documents:", e)
+
+        # Schema upgrade (Cross-Document Validation Engine, Phase 1 of 10): is_required flags
+        # whether this Document is mandatory for this Category (vs. optional/informational).
+        # Defaults to TRUE (1) so every existing Category-Document pairing keeps behaving
+        # exactly as it does today, where every configured document is implicitly required.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_category_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'is_required' not in columns:
+                conn.execute("ALTER TABLE audit_rule_category_documents ADD COLUMN is_required INTEGER NOT NULL DEFAULT 1")
+                print("✅ Added is_required column to audit_rule_category_documents")
+        except Exception as e:
+            print("⚠️ Could not add is_required to audit_rule_category_documents:", e)
 
         # Cross-checks a Category applies.
         conn.execute('''
