@@ -971,6 +971,7 @@ const arCategoryAddDocumentBtn = document.getElementById('arCategoryAddDocumentB
 const arCategoryCrossChecksChipList = document.getElementById('arCategoryCrossChecksChipList');
 const arCategoryAddCrossCheckSelect = document.getElementById('arCategoryAddCrossCheckSelect');
 const arCategoryAddCrossCheckBtn = document.getElementById('arCategoryAddCrossCheckBtn');
+const arCategoryCrossCheckChainPreview = document.getElementById('arCategoryCrossCheckChainPreview');
 const arCategoryDocApprovalsList = document.getElementById('arCategoryDocApprovalsList');
 const arCategoryMatrixVersion = document.getElementById('arCategoryMatrixVersion');
 const arCategoryUsedByRow = document.getElementById('arCategoryUsedByRow');
@@ -1262,6 +1263,9 @@ async function toggleCategoryDocumentRequired(docId, checked) {
             // Mirrors the backend's own no-op-doesn't-bump rule, same as the approval toggle.
             arCategoryMatrixVersion.textContent = String(parseInt(arCategoryMatrixVersion.textContent, 10) + 1);
         }
+        // Dimmed/optional pill state in the chain preview depends on categoryDocRequired,
+        // which just changed here without going through renderCategoryCrossCheckChips().
+        renderCategoryCrossCheckChainPreview();
         showCategoryDetailStatus('✅ Required flag updated.', 'success');
     } catch (error) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
@@ -1306,8 +1310,89 @@ function removeCategoryDocument(docId) {
     renderCategoryCrossCheckChips();
 }
 
+// ---------- LIVE DOCUMENT-CHAIN PREVIEW (Automated cross-document validation engine, Phase 10, FINAL) ----------
+// Config-time visual only, no evaluation logic and no real voucher data — reads exactly the
+// same client-side state already loaded for this Category (categoryCrossCheckIds,
+// categoryDocRequired) plus each attached Cross-check's own ordered documents list, already
+// present on the allCrossChecks cache via getCrossCheckById(). One row per attached
+// Cross-check, since chain order is per-Cross-check, not a single combined view across a
+// Category's Cross-checks (confirmed with the user). Called from renderCategoryCrossCheckChips()
+// (covers all its own callers: selectCategory/startNewCategory/add-remove document/cross-check)
+// and from toggleCategoryDocumentRequired() (the one place categoryDocRequired changes without
+// going through renderCategoryCrossCheckChips()).
+function renderCategoryCrossCheckChainPreview() {
+    arCategoryCrossCheckChainPreview.innerHTML = '';
+
+    if (categoryCrossCheckIds.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ar-chip-empty';
+        empty.textContent = 'No cross-checks attached yet.';
+        arCategoryCrossCheckChainPreview.appendChild(empty);
+        return;
+    }
+
+    categoryCrossCheckIds.forEach(ccId => {
+        const cc = getCrossCheckById(ccId);
+        const row = document.createElement('div');
+        row.className = 'ar-chain-row';
+
+        if (!cc) {
+            row.textContent = 'Cross-check #' + ccId + ' (inactive)';
+            row.classList.add('ar-chain-row-unavailable');
+            arCategoryCrossCheckChainPreview.appendChild(row);
+            return;
+        }
+
+        const nameLabel = document.createElement('span');
+        nameLabel.className = 'ar-chain-cc-name';
+        nameLabel.textContent = cc.name;
+        row.appendChild(nameLabel);
+
+        const pillsWrap = document.createElement('div');
+        pillsWrap.className = 'ar-chain-pills';
+
+        const docs = cc.documents || [];
+        if (docs.length === 0) {
+            const empty = document.createElement('span');
+            empty.className = 'ar-chip-empty';
+            empty.textContent = 'No documents in this chain yet.';
+            pillsWrap.appendChild(empty);
+        } else {
+            docs.forEach((d, index) => {
+                const doc = getDocumentById(d.document_id);
+                const pill = document.createElement('span');
+                pill.className = 'ar-chain-pill';
+                if (categoryDocRequired[d.document_id] === false) {
+                    pill.classList.add('optional');
+                }
+                pill.textContent = doc ? doc.name : ('Document #' + d.document_id);
+
+                if (index === docs.length - 1) {
+                    const anchorTag = document.createElement('span');
+                    anchorTag.className = 'ar-chain-anchor-tag';
+                    anchorTag.textContent = ' (anchor)';
+                    pill.appendChild(anchorTag);
+                }
+
+                pillsWrap.appendChild(pill);
+
+                if (index < docs.length - 1) {
+                    const arrow = document.createElement('span');
+                    arrow.className = 'ar-chain-arrow';
+                    arrow.textContent = '→';
+                    pillsWrap.appendChild(arrow);
+                }
+            });
+        }
+
+        row.appendChild(pillsWrap);
+        arCategoryCrossCheckChainPreview.appendChild(row);
+    });
+}
+
 // ---------- CROSS-CHECKS TAG LIST (add / remove, eligibility-gated picker) ----------
 function renderCategoryCrossCheckChips() {
+    renderCategoryCrossCheckChainPreview();
     arCategoryCrossChecksChipList.innerHTML = '';
 
     if (categoryCrossCheckIds.length === 0) {

@@ -354,6 +354,17 @@
                         </div>
                     </div>
 
+                    <!-- Live per-Cross-check document-chain preview (Automated cross-document
+                         validation engine, Phase 10, FINAL). One row per attached Cross-check,
+                         pills in chain order (sort_order), dimmed pill = is_required false for
+                         THIS category (categoryDocRequired), last pill tagged "(anchor)" —
+                         mirrors Phase 6's live anchor resolution (last-linked document), a
+                         static config-time preview only, no real voucher data involved. -->
+                    <div class="ar-field">
+                        <label>Document Chains</label>
+                        <div id="arCategoryCrossCheckChainPreview"></div>
+                    </div>
+
                     <!-- Per-document Required/Approved flags (Validation Rules Phase 3 of 7 added
                          Approval Required; Automated cross-document validation engine Phase 4 of 10
                          added Required, same row, same visual pattern). Sits alongside the

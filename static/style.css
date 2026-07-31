@@ -4375,6 +4375,56 @@ body {
     font-style: italic;
 }
 
+/* ---------- CATEGORY CROSS-CHECK CHAIN PREVIEW (Automated cross-document validation
+   engine, Phase 10, FINAL) — config-time pill/arrow preview of a Category's attached
+   Cross-checks, one row per Cross-check. ---------- */
+.ar-chain-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.ar-chain-row-unavailable {
+    font-size: 12px;
+    color: #94a3b8;
+    font-style: italic;
+}
+.ar-chain-cc-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    white-space: nowrap;
+}
+.ar-chain-pills {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+.ar-chain-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    background: #eef2f6;
+    border: 1px solid #d0d5dd;
+    border-radius: 999px;
+    font-size: 12px;
+    color: #1a1a2e;
+}
+.ar-chain-pill.optional {
+    opacity: 0.55;
+}
+.ar-chain-arrow {
+    font-size: 12px;
+    color: #94a3b8;
+}
+.ar-chain-anchor-tag {
+    font-size: 11px;
+    font-style: italic;
+    color: #64748b;
+}
+
 .ar-chip-input-row {
     display: flex;
     gap: 8px;
