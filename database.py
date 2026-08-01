@@ -265,6 +265,14 @@ def init_db():
                 print("✅ Added is_system column to templates")
         except Exception as e:
             print("⚠️ Could not add is_system column:", e)
+        try:
+            cur = conn.execute("PRAGMA table_info(templates)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'rate_source' not in columns:
+                conn.execute("ALTER TABLE templates ADD COLUMN rate_source TEXT")
+                print("✅ Added rate_source column to templates")
+        except Exception as e:
+            print("⚠️ Could not add rate_source column:", e)
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS template_column_mappings (

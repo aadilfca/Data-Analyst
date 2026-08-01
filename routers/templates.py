@@ -91,20 +91,39 @@ def get_close_matches(name: str):
 
 # ---------- TEMPLATES (with PIVOT table) ----------
 
+RATE_SOURCE_VALUES = ('imported', 'derived')
+# Rate is only ever imported-vs-derived for these templates (matched case-insensitively) --
+# Purchase Demand / Gate Pass never carry a rate_source.
+RATE_SOURCE_ELIGIBLE_TEMPLATES = {'purchase order', 'store receiving', 'vendor bill'}
+
+def resolve_rate_source(template_name: str, rate_source: str | None) -> str | None:
+    """Only Purchase Order / Store Receiving / Vendor Bill templates carry a rate_source.
+    Eligible templates default to 'imported' (never silently start deriving Rate).
+    Any other template's rate_source is always stored as NULL."""
+    if template_name.strip().lower() not in RATE_SOURCE_ELIGIBLE_TEMPLATES:
+        return None
+    if rate_source is None:
+        return 'imported'
+    if rate_source not in RATE_SOURCE_VALUES:
+        raise HTTPException(400, f"rate_source must be one of {RATE_SOURCE_VALUES}")
+    return rate_source
+
 class TemplateCreate(BaseModel):
     template_name: str
     selected_columns: List[int]
     created_by: str = "Admin"
+    rate_source: str | None = None
 
 class TemplateUpdate(BaseModel):
     template_name: str
     selected_columns: List[int]
+    rate_source: str | None = None
 
 @router.get("/api/templates")
 def get_templates():
     """Return all active templates with their columns (ordered by sort_order)."""
     templates = execute_query(
-        "SELECT id, template_name, created_by, created_date, is_active FROM templates WHERE is_active = 1 ORDER BY template_name"
+        "SELECT id, template_name, created_by, created_date, is_active, rate_source FROM templates WHERE is_active = 1 ORDER BY template_name"
     )
     for t in templates:
         mappings = execute_query(
@@ -147,9 +166,10 @@ def create_template(template: TemplateCreate):
     if not template.selected_columns:
         raise HTTPException(400, "Select at least one column")
 
+    resolved_rate_source = resolve_rate_source(template.template_name, template.rate_source)
     template_id = execute_write(
-        "INSERT INTO templates (template_name, created_by) VALUES (?, ?)",
-        (template.template_name, template.created_by)
+        "INSERT INTO templates (template_name, created_by, rate_source) VALUES (?, ?, ?)",
+        (template.template_name, template.created_by, resolved_rate_source)
     )
 
     for idx, col_id in enumerate(template.selected_columns):
@@ -170,7 +190,11 @@ def update_template(template_id: int, template: TemplateUpdate):
     if duplicate:
         raise HTTPException(400, "Template name already exists")
 
-    execute_write("UPDATE templates SET template_name = ? WHERE id = ?", (template.template_name, template_id))
+    resolved_rate_source = resolve_rate_source(template.template_name, template.rate_source)
+    execute_write(
+        "UPDATE templates SET template_name = ?, rate_source = ? WHERE id = ?",
+        (template.template_name, resolved_rate_source, template_id)
+    )
     execute_write("DELETE FROM template_column_mappings WHERE template_id = ?", (template_id,))
     for idx, col_id in enumerate(template.selected_columns):
         execute_write(
