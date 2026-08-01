@@ -205,7 +205,8 @@ def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, te
 
 # ---------- CHANGE DETECTION (Phase 3: document-level grouping using document_group_id) ----------
 def compare_transactions(client_id: int, template_id: int, template_cols: list,
-                         incoming_rows: list, col_mapping: dict, mapping_dict: dict) -> dict:
+                         incoming_rows: list, col_mapping: dict, mapping_dict: dict,
+                         rate_source: Optional[str] = None, rate_precision: int = 0) -> dict:
     """
     Compares incoming transaction rows with existing data for the same client+template.
     Groups rows by document_group_id (derived from the first column / Document ID).
@@ -269,6 +270,11 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         for t_col_name, excel_col in col_mapping.items():
             if excel_col in raw_row:
                 row_data[t_col_name] = json_safe_cell_value(raw_row[excel_col])
+
+        # Rate derivation (Phase 7 of the Rate-derivation requirement) -- must run
+        # here, at first assembly, so the diff below and the eventual insert/update
+        # both see the same finished row_data (see apply_rate_derivation()'s docstring).
+        apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
 
         # Compute document_group_id for this incoming row
         doc_group_id = get_document_group_id(template_cols, row_data, template_id)
@@ -415,6 +421,89 @@ class DatePreviewRequest(BaseModel):
     date_mappings: List[DatePreviewMapping]  # only the Date-typed columns currently mapped
     date_delimiter: Optional[str] = None
     date_order: Optional[str] = None
+
+# ---------- RATE DERIVATION AT IMPORT TIME (Phase 7 of the Rate-derivation requirement) ----------
+def get_rate_precision() -> int:
+    """
+    Reads the 'rate_precision' app_settings key (Phase 1/2 of the Rate-derivation
+    requirement), independent of decimal_precision. Falls back to 0 if missing
+    or unparseable, same defensive convention as everywhere else that reads a
+    setting expected to be a small int (0/2/4).
+    """
+    rows = execute_query("SELECT value FROM app_settings WHERE key = 'rate_precision'")
+    if not rows:
+        return 0
+    try:
+        return int(rows[0]['value'])
+    except (TypeError, ValueError):
+        return 0
+
+
+def find_named_column(template_cols: list, name: str) -> Optional[dict]:
+    """
+    Case-insensitive/trimmed lookup of a template column by column_name --
+    generalizes the "must be named exactly 'Rate'/'Quantity'/'Amount'" naming
+    convention already established for Rate-derivation eligible templates.
+    """
+    target = name.strip().lower()
+    for col in template_cols:
+        if col['column_name'].strip().lower() == target:
+            return col
+    return None
+
+
+def apply_rate_derivation(row_data: dict, template_cols: list, rate_source: Optional[str], rate_precision: int) -> None:
+    """
+    Populates/rounds row_data['Rate'] in place for Purchase Order/Store Receiving/
+    Vendor Bill templates (rate_source is None for every other template -- a
+    complete no-op here). Must be called at the point row_data is first assembled
+    from the raw Excel row, before compare_transactions() diffs it against
+    existing stored rows -- doing it after would make a re-upload look
+    artificially "changed" forever, since a previously-imported row already has
+    a Rate value baked into its stored row_data.
+
+    'derived': Rate = Amount / Quantity, rounded to rate_precision. Quantity
+    missing/blank/0 leaves Rate as None -- a normal "Rate unavailable" outcome,
+    never an error/rejection (Rate is not one of the 3 critical fields
+    document_id/amount/date checked by find_critical_blank_reasons()).
+    'imported': Rate is already whatever came from the mapped Excel "Rate"
+    column (or absent, if the file has no such column) -- just round it.
+    """
+    if rate_source is None:
+        return
+    rate_col = find_named_column(template_cols, 'Rate')
+    if not rate_col:
+        return  # this template has no Rate column to populate
+
+    if rate_source == 'derived':
+        qty_col = find_named_column(template_cols, 'Quantity')
+        amount_col = find_named_column(template_cols, 'Amount')
+        if not qty_col or not amount_col:
+            return  # nothing to derive from
+        qty_raw = row_data.get(qty_col['column_name'])
+        amount_raw = row_data.get(amount_col['column_name'])
+        try:
+            qty = float(qty_raw) if qty_raw not in (None, '') else 0.0
+        except (TypeError, ValueError):
+            qty = 0.0
+        if qty == 0:
+            row_data['Rate'] = None
+            return
+        try:
+            amount = float(amount_raw) if amount_raw not in (None, '') else 0.0
+        except (TypeError, ValueError):
+            row_data['Rate'] = None
+            return
+        row_data['Rate'] = round(amount / qty, rate_precision)
+    else:  # 'imported'
+        rate_raw = row_data.get('Rate')
+        if rate_raw in (None, ''):
+            return
+        try:
+            row_data['Rate'] = round(float(rate_raw), rate_precision)
+        except (TypeError, ValueError):
+            pass  # leave whatever non-numeric value was there -- not this function's concern
+
 
 # ---------- HELPER: Compute document_group_id from the first template column ----------
 def get_document_group_id(template_cols: list, row_data: dict, template_id: int) -> str:
@@ -1121,7 +1210,7 @@ def validate_only(request: ImportRequest):
 @router.post("/api/upload/import")
 def validate_and_import(request: ImportRequest):
     # Validate template and file
-    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    template = execute_query("SELECT id, template_name, rate_source FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
     file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
@@ -1182,6 +1271,12 @@ def validate_and_import(request: ImportRequest):
     # template -- computed once, reused for every row (Phase 2 of the
     # blank-field-rejection requirement).
     critical_cols = get_critical_field_columns(template_cols)
+
+    # Rate derivation config (Phase 7 of the Rate-derivation requirement) --
+    # rate_source is None for every template except Purchase Order/Store
+    # Receiving/Vendor Bill (see resolve_rate_source() in routers/templates.py).
+    rate_source = template[0].get('rate_source')
+    rate_precision = get_rate_precision()
 
     # --- Validation ---
     validation_errors = []
@@ -1290,7 +1385,9 @@ def validate_and_import(request: ImportRequest):
         template_cols=template_cols,
         incoming_rows=rows,
         col_mapping=col_mapping,
-        mapping_dict=mapping_dict
+        mapping_dict=mapping_dict,
+        rate_source=rate_source,
+        rate_precision=rate_precision
     )
 
     # ---- IMPORT: Use change_detection result to decide per-row action ----
@@ -1384,6 +1481,11 @@ def validate_and_import(request: ImportRequest):
             for t_col_name, excel_col in col_mapping.items():
                 if excel_col in row:
                     row_data[t_col_name] = json_safe_cell_value(row[excel_col])
+
+            # Rate derivation (Phase 7 of the Rate-derivation requirement) -- see
+            # apply_rate_derivation()'s docstring for why this must happen right
+            # here, at first assembly.
+            apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
 
             # Compute document_group_id from the first column value
             doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)
