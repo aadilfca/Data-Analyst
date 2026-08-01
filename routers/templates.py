@@ -89,6 +89,45 @@ def get_close_matches(name: str):
         and (typed in col['column_name'].lower() or col['column_name'].lower() in typed)
     ]
 
+@router.get("/api/columns/{column_id}/usage")
+def get_column_usage(column_id: int):
+    """
+    Read-only usage/dependency preview for a master column, shown on the edit form
+    before a rename is saved -- visibility only, does not block or require confirmation.
+    """
+    col = execute_query("SELECT id, column_name FROM master_columns WHERE id = ?", (column_id,))
+    if not col:
+        raise HTTPException(404, "Column not found")
+    column_name = col[0]["column_name"]
+
+    documents_count = execute_query(
+        "SELECT COUNT(DISTINCT document_id) as cnt FROM audit_rule_document_fields WHERE master_column_id = ?",
+        (column_id,)
+    )[0]["cnt"]
+
+    # compare_field is free text (not FK'd to master_columns, per database.py's own comment) --
+    # match by column_name case-insensitively, same convention as
+    # routers/audit_rules.py's resolve_field_name_to_master_column_id()
+    cross_checks_count = execute_query(
+        "SELECT COUNT(*) as cnt FROM audit_rule_cross_checks WHERE LOWER(TRIM(compare_field)) = LOWER(TRIM(?))",
+        (column_name,)
+    )[0]["cnt"]
+
+    templates_count = execute_query(
+        """
+        SELECT COUNT(*) as cnt FROM template_column_mappings tcm
+        JOIN templates t ON t.id = tcm.template_id
+        WHERE tcm.column_id = ? AND t.is_active = 1
+        """,
+        (column_id,)
+    )[0]["cnt"]
+
+    return {
+        "documents_count": documents_count,
+        "cross_checks_count": cross_checks_count,
+        "templates_count": templates_count,
+    }
+
 # ---------- TEMPLATES (with PIVOT table) ----------
 
 RATE_SOURCE_VALUES = ('imported', 'derived')

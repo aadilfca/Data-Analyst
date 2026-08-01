@@ -21,6 +21,7 @@ const categoryDropdown = document.getElementById('categoryDropdown');
 const editId = document.getElementById('editColumnId');
 const cancelBtn = document.getElementById('cancelColumnBtn');
 const modalStatus = document.getElementById('modalStatus');
+const columnUsagePreview = document.getElementById('columnUsagePreview');
 
 // Button references
 const saveBtn = document.getElementById('saveColumnBtn');
@@ -210,6 +211,30 @@ function showModalStatus(message, type) {
     modalStatus.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
 }
 
+// ---------- USAGE PREVIEW ----------
+async function loadColumnUsage(columnId) {
+    try {
+        const res = await fetch(API_BASE + '/api/columns/' + columnId + '/usage');
+        if (!res.ok) throw new Error('Failed to fetch usage');
+        return await res.json();
+    } catch (error) {
+        return null;
+    }
+}
+
+function renderColumnUsage(usage) {
+    if (!usage) {
+        columnUsagePreview.style.display = 'none';
+        columnUsagePreview.textContent = '';
+        return;
+    }
+    columnUsagePreview.style.display = 'block';
+    columnUsagePreview.textContent =
+        `Used in ${usage.templates_count} template(s) · ` +
+        `${usage.documents_count} document(s) (cross-check fields) · ` +
+        `${usage.cross_checks_count} cross-check(s) (field to compare)`;
+}
+
 // ---------- MODAL CONTROL ----------
 function openModal(title, columnData = null) {
     modalTitle.textContent = title;
@@ -226,6 +251,15 @@ function openModal(title, columnData = null) {
         colNotes.value = columnData.notes || '';
         categoryDropdown.value = columnData.category || '';
         editId.value = columnData.id;
+
+        columnUsagePreview.style.display = 'block';
+        columnUsagePreview.textContent = 'Loading usage...';
+        loadColumnUsage(columnData.id).then(usage => {
+            // Guard against a stale response landing after the modal was closed/reopened for a different column
+            if (editingId === columnData.id) {
+                renderColumnUsage(usage);
+            }
+        });
     } else {
         editingId = null;
         colName.value = '';
@@ -234,6 +268,8 @@ function openModal(title, columnData = null) {
         colNotes.value = '';
         categoryDropdown.value = '';
         editId.value = '';
+        columnUsagePreview.style.display = 'none';
+        columnUsagePreview.textContent = '';
     }
 }
 
@@ -243,6 +279,8 @@ function closeModal() {
     document.body.style.overflow = '';
     editingId = null;
     modalStatus.style.display = 'none';
+    columnUsagePreview.style.display = 'none';
+    columnUsagePreview.textContent = '';
 }
 
 addColumnBtn.addEventListener('click', () => openModal('Add New Column'));
