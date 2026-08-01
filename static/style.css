@@ -4396,6 +4396,27 @@ body {
     font-style: italic;
 }
 
+/* Phase 2: the Voucher-level Checks admin UI (#arVoucherChecksListSection/
+   #arVoucherChecksDetailSection) is reparented from its old top-level rail-entity column
+   pair into the Voucher-level Checks .ar-validation-subsection above — buildCategoryValidation
+   RulesSection() tags both moved nodes with .ar-embedded-panel. These compound-selector
+   overrides neutralize their old fixed-sidebar-column sizing (width/border-right/flex/
+   overflow/padding, all meaningless or oversized outside the original flex-row shell)
+   without touching the base .ar-list-panel/.ar-detail-panel rules still used unmodified by
+   the separate Documents/Cross-checks/Categories/Signature Specimens panels. */
+.ar-list-panel.ar-embedded-panel {
+    width: auto;
+    border-right: none;
+    overflow-y: visible;
+    padding: 0;
+    margin-bottom: 14px;
+}
+.ar-detail-panel.ar-embedded-panel {
+    flex: none;
+    padding: 0;
+    overflow-y: visible;
+}
+
 /* ----- Chip editors (Authorisation Roles / Cross-check-eligible Fields) -----
    Independent copy of client_settings.html's inline prefix-chip-* styling — that page's
    rules live in its own <style> block, unreachable from a different page, so redefined
