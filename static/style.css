@@ -4271,6 +4271,27 @@ body {
     margin-left: 8px;
 }
 
+/* ----- Categories list row: rule-count badge (Phase 3 of 3, FINAL) -----
+   Scoped to the Categories list row only -- .ar-list-row-name/.ar-list-row-badge above stay
+   untouched for the still-single-line Documents/Cross-checks/Signature Specimens/
+   Voucher-checks rows. .ar-category-row-info wraps the name + new count line in a column so
+   both sit to the left of the "Inactive" badge (still a direct sibling, still flush-right via
+   .ar-list-row's own space-between). */
+.ar-category-row-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+.ar-category-rule-badge {
+    font-size: 11px;
+    color: #64748b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .ar-list-empty {
     color: #94a3b8;
     font-size: 13px;

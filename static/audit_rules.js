@@ -436,13 +436,19 @@ function switchEntityType(type) {
         // edits made since the last visit.
         loadAllDocumentsForCrossChecks().then(loadCrossChecks);
     } else if (type === 'categories') {
-        // Refresh both caches every time this view is opened, so the Documents/
-        // Cross-checks pickers and the eligibility check reflect the latest state.
-        Promise.all([loadAllDocumentsForCrossChecks(), loadAllCrossChecksForCategories()]).then(loadCategories);
-        // Voucher-level Checks is global (not per-Category), so it only needs refreshing once
-        // per view-entry here -- not on every individual selectCategory()/startNewCategory()
-        // call -- same convention as the Documents/Cross-checks caches just above.
-        loadVoucherChecks();
+        // Refresh all three caches every time this view is opened, so the Documents/
+        // Cross-checks pickers, the eligibility check, and the rule-count badge (Phase 3 of 3)
+        // all reflect the latest state. loadVoucherChecks() is chained here (not fired in
+        // parallel/uncoordinated) so allVoucherChecksCache is populated before loadCategories()
+        // renders the list -- otherwise the badge would race an independent fetch and could
+        // read a stale/empty cache on first entry into this view. Voucher-level Checks is
+        // global (not per-Category), so it only needs refreshing once per view-entry -- not on
+        // every individual selectCategory()/startNewCategory() call.
+        Promise.all([
+            loadAllDocumentsForCrossChecks(),
+            loadAllCrossChecksForCategories(),
+            loadVoucherChecks()
+        ]).then(loadCategories);
     } else if (type === 'signature-specimens') {
         // Refresh the Documents cache (Document picker + per-document auth_roles for the
         // Role picker) every time this view is opened, same convention as above.
@@ -1145,10 +1151,30 @@ function renderCategoryList(categories) {
         row.className = 'ar-list-row' + (cat.is_active ? '' : ' ar-list-row-inactive');
         if (cat.id === editingCategoryId) row.classList.add('ar-list-row-selected');
 
+        // Rule-count badge (Phase 3 of 3, FINAL). Cross-check count comes straight from this
+        // same list response (cat.cross_checks, already returned by row_to_category() -- no
+        // new endpoint needed). Voucher-level checks are global (not per-Category), so every
+        // row shows the same active-check count, read from allVoucherChecksCache (populated by
+        // loadVoucherChecks(), chained before loadCategories() in switchEntityType() above).
+        // Always rendered, zero included -- same plain-count convention as .ar-used-by-label
+        // ("Used by 0 vouchers"), no separate hidden/muted empty state.
+        const infoWrap = document.createElement('div');
+        infoWrap.className = 'ar-category-row-info';
+
         const nameSpan = document.createElement('span');
         nameSpan.className = 'ar-list-row-name';
         nameSpan.textContent = cat.name;
-        row.appendChild(nameSpan);
+        infoWrap.appendChild(nameSpan);
+
+        const crossCheckCount = (cat.cross_checks || []).length;
+        const voucherCheckCount = allVoucherChecksCache.filter(c => c.is_active).length;
+        const ruleBadge = document.createElement('span');
+        ruleBadge.className = 'ar-category-rule-badge';
+        ruleBadge.textContent = crossCheckCount + ' cross-check' + (crossCheckCount === 1 ? '' : 's') +
+            ', ' + voucherCheckCount + ' voucher check' + (voucherCheckCount === 1 ? '' : 's');
+        infoWrap.appendChild(ruleBadge);
+
+        row.appendChild(infoWrap);
 
         if (!cat.is_active) {
             const badge = document.createElement('span');
@@ -2427,6 +2453,11 @@ let editingVoucherCheckId = null;
 // Sortable.js instance, created once (see initVoucherCheckSortable()) and toggled via
 // .option('disabled', ...) rather than destroyed/recreated on every render.
 let arVoucherCheckSortable = null;
+// Rule-count badge (Phase 3 of 3, FINAL): every check fetched by the most recent
+// loadVoucherChecks() call, regardless of that widget's own "Show inactive" toggle -- read by
+// renderCategoryList() (filtered to is_active there) since voucher-level checks are global
+// (no Category linkage in schema), so the same active count applies to every category row.
+let allVoucherChecksCache = [];
 
 // ---------- STATUS MESSAGE ----------
 function showVoucherCheckDetailStatus(message, type) {
@@ -2447,6 +2478,7 @@ async function loadVoucherChecks() {
         const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks?include_inactive=' + includeInactive);
         if (!res.ok) throw new Error('Failed to load voucher-level checks');
         const checks = await res.json(); // already ORDER BY sort_order server-side -- do not re-sort here
+        allVoucherChecksCache = checks;
         renderVoucherCheckList(checks, includeInactive);
     } catch (error) {
         arVoucherCheckListBody.innerHTML = '';
