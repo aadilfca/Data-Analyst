@@ -899,6 +899,78 @@ def init_db():
 
         print("✅ Created indexes on client_data")
 
+        # ---------- RATE COLUMN DEFINITION (Phase 8 of the Rate-derivation requirement) ----------
+        # Phase 6 already writes derived/imported Rate values into row_data at import time for
+        # Purchase Order/Store Receiving/Vendor Bill, and Phase 7 already stamps client_data.rate_source
+        # per row -- but none of the 3 templates ever declared "Rate" as a real column, so nothing
+        # (Data Bank preview, template column lists, etc. -- all name/sort_order driven off
+        # master_columns/template_column_mappings) has anywhere to render it. This block is idempotent
+        # (safe to run on every startup) and retroactively attaches a shared "Rate" master_columns row
+        # to the 3 already-live templates, positioned immediately after Quantity (before Amount) --
+        # matching create_template()/update_template()'s own delete-then-reinsert/contiguous-renumber
+        # sort_order convention (routers/templates.py), just done directly here since those endpoints
+        # only handle a caller-submitted full column list, not a targeted retroactive insert. Does NOT
+        # touch templates.rate_source (left NULL, a separate manual per-template toggle from Phase 5/5a)
+        # or any existing client_data/row_data -- column definition only.
+        try:
+            rate_col = conn.execute(
+                "SELECT id FROM master_columns WHERE column_name = 'Rate'"
+            ).fetchone()
+            if rate_col:
+                rate_col_id = rate_col[0]
+            else:
+                amount_col = conn.execute(
+                    "SELECT category FROM master_columns WHERE column_name = 'Amount'"
+                ).fetchone()
+                rate_category = amount_col[0] if amount_col and amount_col[0] else 'General'
+                conn.execute(
+                    "INSERT INTO master_columns (column_name, data_type, category) VALUES (?, ?, ?)",
+                    ('Rate', 'Numeric', rate_category)
+                )
+                rate_col_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                print("✅ Created column: Rate")
+
+            rate_eligible_template_names = ('purchase order', 'store receiving', 'vendor bill')
+            eligible_templates = conn.execute(
+                "SELECT id, template_name FROM templates WHERE LOWER(template_name) IN (?, ?, ?)",
+                rate_eligible_template_names
+            ).fetchall()
+            for tpl_id, tpl_name in eligible_templates:
+                already_wired = conn.execute(
+                    "SELECT 1 FROM template_column_mappings WHERE template_id = ? AND column_id = ?",
+                    (tpl_id, rate_col_id)
+                ).fetchone()
+                if already_wired:
+                    print(f"✅ Rate column already present on template: {tpl_name}")
+                    continue
+
+                existing_mappings = conn.execute(
+                    "SELECT column_id FROM template_column_mappings WHERE template_id = ? ORDER BY sort_order ASC",
+                    (tpl_id,)
+                ).fetchall()
+                existing_col_ids = [row[0] for row in existing_mappings]
+
+                qty_col = conn.execute(
+                    "SELECT id FROM master_columns WHERE column_name = 'Quantity'"
+                ).fetchone()
+                if not qty_col or qty_col[0] not in existing_col_ids:
+                    print(f"⚠️ Skipped attaching Rate to template '{tpl_name}': no Quantity column found")
+                    continue
+                qty_col_id = qty_col[0]
+
+                qty_index = existing_col_ids.index(qty_col_id)
+                new_col_ids = existing_col_ids[:qty_index + 1] + [rate_col_id] + existing_col_ids[qty_index + 1:]
+
+                conn.execute("DELETE FROM template_column_mappings WHERE template_id = ?", (tpl_id,))
+                for idx, col_id in enumerate(new_col_ids):
+                    conn.execute(
+                        "INSERT INTO template_column_mappings (template_id, column_id, sort_order) VALUES (?, ?, ?)",
+                        (tpl_id, col_id, idx)
+                    )
+                print(f"✅ Attached Rate column to template '{tpl_name}' (positioned after Quantity)")
+        except Exception as e:
+            print("⚠️ Could not attach Rate column to eligible templates:", e)
+
         # ---------- CLIENT VOUCHER PREFIXES (per-client voucher-type detection) ----------
         # Stores each client's voucher-prefix list per category. Categories are 5-way,
         # splitting Payment vs Receipt explicitly (Cash Payment/Cash Receipt/Bank Payment/
