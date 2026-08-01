@@ -234,9 +234,18 @@ def init_db():
                 column_name TEXT NOT NULL UNIQUE,
                 data_type TEXT NOT NULL,
                 category TEXT DEFAULT 'General',
-                is_active INTEGER DEFAULT 1
+                is_active INTEGER DEFAULT 1,
+                notes TEXT
             )
         ''')
+        try:
+            cur = conn.execute("PRAGMA table_info(master_columns)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'notes' not in columns:
+                conn.execute("ALTER TABLE master_columns ADD COLUMN notes TEXT")
+                print("✅ Added notes column to master_columns")
+        except Exception as e:
+            print("⚠️ Could not add notes column:", e)
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS templates (

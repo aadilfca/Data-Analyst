@@ -16,6 +16,7 @@ const modalTitle = document.getElementById('modalTitle');
 const colName = document.getElementById('colName');
 const colType = document.getElementById('colType');
 const colCategory = document.getElementById('colCategory');
+const colNotes = document.getElementById('colNotes');
 const categoryDropdown = document.getElementById('categoryDropdown');
 const editId = document.getElementById('editColumnId');
 const cancelBtn = document.getElementById('cancelColumnBtn');
@@ -222,6 +223,7 @@ function openModal(title, columnData = null) {
         colName.value = columnData.column_name;
         colType.value = columnData.data_type;
         colCategory.value = columnData.category || '';
+        colNotes.value = columnData.notes || '';
         categoryDropdown.value = columnData.category || '';
         editId.value = columnData.id;
     } else {
@@ -229,6 +231,7 @@ function openModal(title, columnData = null) {
         colName.value = '';
         colType.value = 'Text';
         colCategory.value = '';
+        colNotes.value = '';
         categoryDropdown.value = '';
         editId.value = '';
     }
@@ -293,6 +296,7 @@ function clearForm() {
     colName.value = '';
     colType.value = 'Text';
     colCategory.value = '';
+    colNotes.value = '';
     categoryDropdown.value = '';
     editingId = null;
     editId.value = '';
@@ -313,7 +317,8 @@ async function saveColumn(keepModalOpen) {
     const payload = {
         column_name: name,
         data_type: type,
-        category: category || 'General'
+        category: category || 'General',
+        notes: colNotes.value.trim() || null
     };
 
     try {

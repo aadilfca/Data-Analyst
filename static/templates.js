@@ -35,6 +35,7 @@ const quickAddModal = document.getElementById('quickAddColumnModal');
 const quickAddColName = document.getElementById('quickAddColName');
 const quickAddColType = document.getElementById('quickAddColType');
 const quickAddColCategory = document.getElementById('quickAddColCategory');
+const quickAddColNotes = document.getElementById('quickAddColNotes');
 const quickAddCategoryDropdown = document.getElementById('quickAddCategoryDropdown');
 const quickAddModalStatus = document.getElementById('quickAddModalStatus');
 const quickAddCancelBtn = document.getElementById('quickAddCancelBtn');
@@ -348,6 +349,7 @@ function openQuickAddColumnModal(prefillName) {
     quickAddColName.value = prefillName || '';
     quickAddColType.value = 'Text';
     quickAddColCategory.value = '';
+    quickAddColNotes.value = '';
     quickAddCategoryDropdown.value = '';
     quickAddModalStatus.style.display = 'none';
     quickAddOverlay.style.display = 'block';
@@ -368,6 +370,7 @@ async function saveQuickAddColumn(keepModalOpen) {
     const name = quickAddColName.value.trim();
     const type = quickAddColType.value;
     const category = quickAddColCategory.value.trim();
+    const notes = quickAddColNotes.value.trim();
 
     if (!name) {
         showQuickAddModalStatus('⚠️ Column name is required.', 'error');
@@ -378,7 +381,7 @@ async function saveQuickAddColumn(keepModalOpen) {
         const res = await fetch(API_BASE + '/api/columns', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ column_name: name, data_type: type, category: category || 'General' })
+            body: JSON.stringify({ column_name: name, data_type: type, category: category || 'General', notes: notes || null })
         });
         const result = await res.json();
 
@@ -389,7 +392,7 @@ async function saveQuickAddColumn(keepModalOpen) {
 
         // New column now exists in the master table -- reflect it locally so
         // search/exact-match logic sees it immediately, then add it to the template.
-        const newCol = { id: result.column_id, column_name: name, data_type: type, category: category || 'General' };
+        const newCol = { id: result.column_id, column_name: name, data_type: type, category: category || 'General', notes: notes || null };
         allMasterColumns.push(newCol);
         window.allMasterColumns = allMasterColumns;
         addToSelected(newCol);
@@ -400,6 +403,7 @@ async function saveQuickAddColumn(keepModalOpen) {
             quickAddColName.value = '';
             quickAddColType.value = 'Text';
             quickAddColCategory.value = '';
+            quickAddColNotes.value = '';
             quickAddCategoryDropdown.value = '';
             quickAddColName.focus();
         } else {

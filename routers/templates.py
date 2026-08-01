@@ -11,20 +11,22 @@ class ColumnCreate(BaseModel):
     column_name: str
     data_type: str
     category: str = "General"
+    notes: str | None = None
 
 class ColumnUpdate(BaseModel):
     column_name: str
     data_type: str
     category: str = "General"
     is_active: bool = 1
+    notes: str | None = None
 
 @router.get("/api/columns")
 def get_columns():
-    return execute_query("SELECT id, column_name, data_type, category, is_active FROM master_columns WHERE is_active = 1 ORDER BY category, column_name")
+    return execute_query("SELECT id, column_name, data_type, category, is_active, notes FROM master_columns WHERE is_active = 1 ORDER BY category, column_name")
 
 @router.get("/api/columns/all")
 def get_all_columns():
-    return execute_query("SELECT id, column_name, data_type, category, is_active FROM master_columns ORDER BY category, column_name")
+    return execute_query("SELECT id, column_name, data_type, category, is_active, notes FROM master_columns ORDER BY category, column_name")
 
 @router.post("/api/columns")
 def create_column(column: ColumnCreate):
@@ -36,8 +38,8 @@ def create_column(column: ColumnCreate):
     if existing:
         raise HTTPException(400, f"Column name already exists: '{existing[0]['column_name']}'")
     col_id = execute_write(
-        "INSERT INTO master_columns (column_name, data_type, category) VALUES (?, ?, ?)",
-        (column.column_name, column.data_type, column.category)
+        "INSERT INTO master_columns (column_name, data_type, category, notes) VALUES (?, ?, ?, ?)",
+        (column.column_name, column.data_type, column.category, column.notes)
     )
     log_audit("Admin", "Create", "Columns", f"Added column: {column.column_name}")
     return {"message": f"Column '{column.column_name}' created successfully", "column_id": col_id}
@@ -48,8 +50,8 @@ def update_column(column_id: int, column: ColumnUpdate):
     if not existing:
         raise HTTPException(404, "Column not found")
     execute_write(
-        "UPDATE master_columns SET column_name=?, data_type=?, category=?, is_active=? WHERE id=?",
-        (column.column_name, column.data_type, column.category, column.is_active, column_id)
+        "UPDATE master_columns SET column_name=?, data_type=?, category=?, is_active=?, notes=? WHERE id=?",
+        (column.column_name, column.data_type, column.category, column.is_active, column.notes, column_id)
     )
     log_audit("Admin", "Update", "Columns", f"Updated column: {column.column_name}")
     return {"message": f"Column '{column.column_name}' updated successfully"}
