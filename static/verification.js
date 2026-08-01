@@ -4768,7 +4768,18 @@ function formatProcedureCellValue(value) {
 // function's own comment for why a session-specific id comparison silently missed assignments
 // made in an earlier verification session for the exact same voucher line.
 function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
-    const columns = Object.keys(rows[0].row_data || {});
+    // Column-order fix: read column order from the active document's own template
+    // (already-warmed templateColumnsCache, same source buildSelectedLinesTable() uses)
+    // instead of the first row's own row_data key order, which isn't reliable for a
+    // derived field like Rate (see reorder_row_data_by_template()'s docstring, routers/
+    // import_export.py). Falls back to the union-of-keys behavior if the cache has
+    // nothing for this template.
+    const lineState = procedureModalState[uid];
+    const activeDoc = lineState && (lineState.documents || []).find(d => d.id === activeDocId);
+    const templateColumns = (activeDoc && templateColumnsCache[activeDoc.template_id]) || [];
+    const columns = templateColumns.length
+        ? templateColumns.map(c => c.column_name)
+        : Object.keys(rows[0].row_data || {});
 
     let html = '<table class="procedure-browse-table"><thead><tr>';
     columns.forEach(col => { html += `<th>${escapeHtml(col)}</th>`; });

@@ -275,6 +275,10 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         # here, at first assembly, so the diff below and the eventual insert/update
         # both see the same finished row_data (see apply_rate_derivation()'s docstring).
         apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
+        # Restores the template's real column order -- apply_rate_derivation() may have
+        # just appended 'Rate' at the end of the dict (see reorder_row_data_by_template()'s
+        # docstring).
+        row_data = reorder_row_data_by_template(row_data, template_cols)
 
         # Compute document_group_id for this incoming row
         doc_group_id = get_document_group_id(template_cols, row_data, template_id)
@@ -503,6 +507,19 @@ def apply_rate_derivation(row_data: dict, template_cols: list, rate_source: Opti
             row_data['Rate'] = round(float(rate_raw), rate_precision)
         except (TypeError, ValueError):
             pass  # leave whatever non-numeric value was there -- not this function's concern
+
+
+def reorder_row_data_by_template(row_data: dict, template_cols: list) -> dict:
+    """
+    Rebuilds row_data with keys in the template's configured sort_order, keeping
+    only keys that are actually present. Needed because a derived field (e.g.
+    Rate, which has no Excel mapping) gets appended at the end of the dict by
+    apply_rate_derivation() -- called right after it, at every point row_data is
+    first assembled, so the stored JSON's key order always matches the
+    template's real column order regardless of when a given key was added.
+    """
+    return {t_col['column_name']: row_data[t_col['column_name']]
+            for t_col in template_cols if t_col['column_name'] in row_data}
 
 
 # ---------- HELPER: Compute document_group_id from the first template column ----------
@@ -1486,6 +1503,10 @@ def validate_and_import(request: ImportRequest):
             # apply_rate_derivation()'s docstring for why this must happen right
             # here, at first assembly.
             apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
+            # Restores the template's real column order -- apply_rate_derivation() may have
+            # just appended 'Rate' at the end of the dict (see reorder_row_data_by_template()'s
+            # docstring).
+            row_data = reorder_row_data_by_template(row_data, template_cols)
 
             # Compute document_group_id from the first column value
             doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)

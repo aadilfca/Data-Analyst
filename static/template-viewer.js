@@ -56,7 +56,13 @@ async function fetchTemplateConfig(templateId) {
             // Every template currently reuses the same data source; kept as an explicit
             // field (not inlined at the two call sites) in case a future template ever
             // needs a different one, without restructuring this lookup again.
-            endpoint: '/api/data/preview'
+            endpoint: '/api/data/preview',
+            // Column-order fix: the template's own sort_order-ordered column list, used by
+            // renderTemplateData() instead of a row's own row_data key order (unreliable for
+            // a derived field like Rate — see reorder_row_data_by_template()'s docstring,
+            // routers/import_export.py). Already present on this same list response, no
+            // extra fetch needed.
+            columns: match.columns || []
         };
     } catch (error) {
         console.error('Template Viewer config fetch error:', error);
@@ -124,11 +130,11 @@ function setViewerState(state) {
 }
 
 // ---------- RENDER ----------
-// Builds a plain header row + one row per record from row_data's own keys — no S.No
-// column, document grouping, or subtotal rows (that's Data Bank preview-specific polish,
-// out of scope for this viewer). `emptyMessage` (Phase 4) lets a caller distinguish "no
-// data in this date range" from "no rows match your search" — same optional-message
-// convention databank.js's renderYourDatasetsTable() already uses for the same reason.
+// Builds a plain header row + one row per record — no S.No column, document grouping, or
+// subtotal rows (that's Data Bank preview-specific polish, out of scope for this viewer).
+// `emptyMessage` (Phase 4) lets a caller distinguish "no data in this date range" from "no
+// rows match your search" — same optional-message convention databank.js's
+// renderYourDatasetsTable() already uses for the same reason.
 function renderTemplateData(rows, emptyMessage = 'No data found for the selected date range.') {
     const thead = tvDataTable.querySelector('thead');
     const tbody = tvDataTable.querySelector('tbody');
@@ -141,7 +147,15 @@ function renderTemplateData(rows, emptyMessage = 'No data found for the selected
         return;
     }
 
-    const headers = Object.keys(rows[0].row_data || {});
+    // Column-order fix: use the template's own sort_order-ordered column list (fetched once
+    // into currentTemplateConfig.columns) instead of a row's own row_data key order, which
+    // isn't reliable for a derived field like Rate (see reorder_row_data_by_template()'s
+    // docstring, routers/import_export.py). Falls back to the row's own keys if that
+    // config didn't carry any (shouldn't happen for a valid template, defensive only).
+    const configColumns = (currentTemplateConfig && currentTemplateConfig.columns) || [];
+    const headers = configColumns.length
+        ? configColumns.map(c => c.column_name)
+        : Object.keys(rows[0].row_data || {});
     const headerRow = document.createElement('tr');
     headers.forEach(h => {
         const th = document.createElement('th');

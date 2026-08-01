@@ -989,7 +989,7 @@ async function fetchPreviewData() {
         sundayCountBadge.textContent = `Sunday rows: ${previewSundayCount}`;
         
         // Render table
-        renderPreviewRows(rows);
+        await renderPreviewRows(rows);
         updatePagination();
         
         if (rows.length === 0 && previewTotalRows === 0) {
@@ -1007,8 +1007,37 @@ async function fetchPreviewData() {
     }
 }
 
+// Column-order fix: a row's own row_data JSON key order isn't reliable (a
+// derived field like Rate, with no Excel mapping, gets appended at whatever
+// position it was first set, not its configured slot) -- so header/column
+// order is read from the template's own sort_order via GET /api/templates/{id}
+// instead of Object.keys(row_data). Same cache/fetch shape as
+// static/verification.js's templateColumnsCache/fetchTemplateColumns().
+let templateColumnsCache = {};
+
+async function fetchTemplateColumns(templateId) {
+    if (Object.prototype.hasOwnProperty.call(templateColumnsCache, templateId)) {
+        return templateColumnsCache[templateId];
+    }
+    try {
+        const res = await fetch(`${API_BASE}/api/templates/${templateId}`);
+        if (!res.ok) {
+            templateColumnsCache[templateId] = [];
+            return [];
+        }
+        const data = await res.json();
+        const columns = (data.columns || []).map(c => c.column_name);
+        templateColumnsCache[templateId] = columns;
+        return columns;
+    } catch (e) {
+        console.error('Failed to load template columns:', e);
+        templateColumnsCache[templateId] = [];
+        return [];
+    }
+}
+
 // ---------- RENDER PREVIEW ROWS ----------
-function renderPreviewRows(rows) {
+async function renderPreviewRows(rows) {
     hideRowHistoryPopover();
     if (!rows || rows.length === 0) {
         previewTableBody.innerHTML = '<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">No rows to display.</td></tr>';
@@ -1016,10 +1045,13 @@ function renderPreviewRows(rows) {
         previewCountInfo.textContent = '0 rows';
         return;
     }
-    
-    // Build headers from first row
+
+    // Build headers from the template's own configured column order (falls back to the
+    // first row's own row_data key order only if the template lookup returns nothing, e.g.
+    // a deleted/inactive template).
     const firstRow = rows[0].row_data;
-    const headers = firstRow ? Object.keys(firstRow) : [];
+    const templateHeaders = await fetchTemplateColumns(previewTemplateId);
+    const headers = templateHeaders.length ? templateHeaders : (firstRow ? Object.keys(firstRow) : []);
     previewTableHead.innerHTML = '';
     if (headers.length) {
         const tr = document.createElement('tr');
@@ -1281,9 +1313,12 @@ async function exportDataset(templateId, templateName) {
             return;
         }
         
-        // Build Excel data
+        // Build Excel data — headers come from the template's own configured column order
+        // (falls back to the first row's own row_data key order if the template lookup
+        // returns nothing), same fix as renderPreviewRows() above.
         const firstRow = allRows[0];
-        const headers = firstRow.row_data ? Object.keys(firstRow.row_data) : [];
+        const templateHeaders = await fetchTemplateColumns(templateId);
+        const headers = templateHeaders.length ? templateHeaders : (firstRow.row_data ? Object.keys(firstRow.row_data) : []);
         const excelData = [headers];
         allRows.forEach(row => {
             const rowData = headers.map(h => row.row_data[h] !== undefined ? row.row_data[h] : '');
