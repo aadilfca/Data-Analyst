@@ -211,6 +211,39 @@ function showModalStatus(msg, type) {
     setTimeout(() => { modalStatus.style.display = 'none'; }, 4000);
 }
 
+// ---------- NOTES / INTERPRETATION TOOLTIP HELPER ----------
+// Looks up a master column's Notes/Interpretation text by id from the
+// already-loaded allMasterColumns list (Rate-derivation requirement, Phase 4
+// of 9). Returns '' when there's no column, no notes, or a blank/whitespace
+// note -- callers use this to decide whether to render a tooltip icon at all.
+function getColumnNotesById(columnId) {
+    const col = allMasterColumns.find(c => c.id === columnId);
+    const notes = col && col.notes ? col.notes.trim() : '';
+    return notes;
+}
+
+// Minimal HTML-escape for interpolating free-text Notes into an innerHTML
+// template (used only by the Preview modal, which builds markup via strings).
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// Appends a small "ℹ️" info icon (native title tooltip) after nameSpan when
+// notes is non-blank. No-op otherwise -- blank/null Notes get no icon.
+function appendNotesIcon(container, notes) {
+    if (!notes) return;
+    const icon = document.createElement('span');
+    icon.textContent = 'ℹ️';
+    icon.title = notes;
+    icon.style.cssText = 'margin-left:6px; font-size:12px; cursor:help; color:#94a3b8;';
+    container.appendChild(icon);
+}
+
 // ---------- RENDER SEARCH RESULTS ----------
 function renderSearchResults(query) {
     const trimmed = query.trim().toLowerCase();
@@ -236,10 +269,14 @@ function renderSearchResults(query) {
         const div = document.createElement('div');
         div.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-bottom:1px solid #f0f2f5;';
 
+        const nameWrap = document.createElement('span');
+        nameWrap.style.cssText = 'display:flex; align-items:center;';
         const nameSpan = document.createElement('span');
         nameSpan.textContent = col.column_name;
         nameSpan.style.fontSize = '14px';
         nameSpan.style.fontWeight = '500';
+        nameWrap.appendChild(nameSpan);
+        appendNotesIcon(nameWrap, col.notes ? col.notes.trim() : '');
 
         const actionBtn = document.createElement('button');
         if (isSelected) {
@@ -267,7 +304,7 @@ function renderSearchResults(query) {
             }
         });
 
-        div.appendChild(nameSpan);
+        div.appendChild(nameWrap);
         div.appendChild(actionBtn);
         searchResults.appendChild(div);
     });
@@ -440,7 +477,7 @@ quickAddSaveAndNewBtn.addEventListener('click', function(e) {
 // ---------- ADD / REMOVE SELECTED ----------
 function addToSelected(col) {
     if (selectedColumns.some(c => c.id === col.id)) return;
-    selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type });
+    selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type, notes: col.notes || null });
     renderSelectedColumns();
     renderSearchResults(searchInput.value);
     updateSelectedCount();
@@ -477,10 +514,14 @@ function renderSelectedColumns() {
         num.style.cssText = 'font-weight:600; color:#64748b; min-width:24px; font-size:13px;';
         div.appendChild(num);
 
+        const nameWrap = document.createElement('span');
+        nameWrap.style.cssText = 'flex:1; display:flex; align-items:center;';
         const nameSpan = document.createElement('span');
         nameSpan.textContent = col.name;
-        nameSpan.style.cssText = 'flex:1; font-size:14px; font-weight:500; color:#1a1a2e;';
-        div.appendChild(nameSpan);
+        nameSpan.style.cssText = 'font-size:14px; font-weight:500; color:#1a1a2e;';
+        nameWrap.appendChild(nameSpan);
+        appendNotesIcon(nameWrap, col.notes ? col.notes.trim() : '');
+        div.appendChild(nameWrap);
 
         const removeBtn = document.createElement('button');
         removeBtn.textContent = '✕';
@@ -548,10 +589,14 @@ async function openModal(title, templateData = null) {
         editingId = templateData.id;
         templateName.value = templateData.template_name;
         editId.value = templateData.id;
-        // Use templateData.columns (pivot table) instead of selected_columns
+        // Use templateData.columns (pivot table) instead of selected_columns.
+        // GET /api/templates(/{id}) doesn't select master_columns.notes, so
+        // look it up from the just-loaded `columns` (GET /api/columns, which
+        // does) by id -- keeps this phase frontend-only, no backend change.
         const cols = templateData.columns || [];
         cols.forEach(col => {
-            selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type });
+            const masterCol = columns.find(c => c.id === col.id);
+            selectedColumns.push({ id: col.id, name: col.column_name, type: col.data_type, notes: masterCol ? masterCol.notes : null });
         });
         renderSelectedColumns();
         updateSelectedCount();
@@ -686,15 +731,20 @@ async function confirmDelete(id, name) {
 // PREVIEW MODAL (Eye Icon) - PIVOT TABLE VERSION
 // ==============================================
 
-function openPreviewModal(tpl) {
-    // Use tpl.columns (from pivot table) instead of selected_columns
+async function openPreviewModal(tpl) {
+    // Use tpl.columns (from pivot table) instead of selected_columns.
+    // GET /api/templates doesn't select master_columns.notes, so refresh
+    // allMasterColumns (GET /api/columns, which does) and look notes up by
+    // id -- keeps this phase frontend-only, no backend change.
+    await loadMasterColumns();
     const cols = tpl.columns || [];
     let columnData = [];
     if (cols.length > 0) {
         columnData = cols.map(col => ({
             id: col.id,
             name: col.column_name,
-            type: col.data_type
+            type: col.data_type,
+            notes: getColumnNotesById(col.id)
         }));
     }
 
@@ -716,7 +766,7 @@ function openPreviewModal(tpl) {
         <tr style="border-bottom:1px solid #e2e8f0;">
             <td style="padding:10px 16px; text-align:center; color:#94a3b8;">${idx + 1}</td>
             <td style="padding:10px 16px; text-align:center; color:#64748b;">${col.id}</td>
-            <td style="padding:10px 16px; font-weight:500;">${col.name}</td>
+            <td style="padding:10px 16px; font-weight:500;">${escapeHtml(col.name)}${col.notes ? ` <span title="${escapeHtml(col.notes)}" style="margin-left:4px; font-size:12px; cursor:help; color:#94a3b8;">ℹ️</span>` : ''}</td>
             <td style="padding:10px 16px; text-align:center;"><span style="display:inline-block; padding:2px 12px; border-radius:12px; font-size:12px; font-weight:600; background:#f1f5f9; color:#475569;">${col.type}</span></td>
         </tr>
     `).join('');
