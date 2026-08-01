@@ -881,6 +881,22 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add data_quality_flag to client_data:", e)
 
+        # Schema upgrade: add rate_source column (Phase 7 of the Rate-derivation
+        # requirement) -- per-row audit trail of how THIS row's Rate was actually
+        # obtained ('imported'/'derived'), copied from the template's rate_source
+        # at the time of import. Distinct from templates.rate_source (the setting,
+        # which can change later) -- this is the historical record for the row.
+        # Recorded even when Rate itself is null (Qty=0/blank case): it's
+        # provenance of the attempt, not the result.
+        try:
+            cur = conn.execute("PRAGMA table_info(client_data)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'rate_source' not in columns:
+                conn.execute("ALTER TABLE client_data ADD COLUMN rate_source TEXT DEFAULT NULL")
+                print("✅ Added rate_source column to client_data")
+        except Exception as e:
+            print("⚠️ Could not add rate_source to client_data:", e)
+
         print("✅ Created indexes on client_data")
 
         # ---------- CLIENT VOUCHER PREFIXES (per-client voucher-type detection) ----------

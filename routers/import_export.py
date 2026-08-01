@@ -1423,10 +1423,10 @@ def validate_and_import(request: ImportRequest):
             execute_write(
                 """
                 UPDATE client_data
-                SET row_data = ?, version = ?, document_group_id = ?, change_detection_status = 'updated', data_quality_flag = ?
+                SET row_data = ?, version = ?, document_group_id = ?, change_detection_status = 'updated', data_quality_flag = ?, rate_source = ?
                 WHERE id = ?
                 """,
-                (json.dumps(new_row_data), new_version, doc_group_id, data_quality_flag, cid)
+                (json.dumps(new_row_data), new_version, doc_group_id, data_quality_flag, rate_source, cid)
             )
 
             # Log the old values for audit trail
@@ -1450,11 +1450,11 @@ def validate_and_import(request: ImportRequest):
             data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
             row_id = execute_write(
                 """
-                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added', ?, ?)
+                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added', ?, ?, ?)
                 """,
                 (request.client_id, request.template_id, request.file_id,
-                 json.dumps(new_row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag)
+                 json.dumps(new_row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
             )
             inserted_count += 1
             log_data_audit(row_id, "Analyst", "INSERT", None, new_row_data)
@@ -1500,11 +1500,11 @@ def validate_and_import(request: ImportRequest):
             # Insert every row as new
             row_id = execute_write(
                 """
-                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
                 """,
                 (request.client_id, request.template_id, request.file_id,
-                 json.dumps(row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag)
+                 json.dumps(row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
             )
             inserted_count += 1
             log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
