@@ -46,10 +46,6 @@
                     <span class="ar-rail-icon">🗂️</span>
                     <span class="ar-rail-label">Categories</span>
                 </button>
-                <button type="button" id="arRailSignatureSpecimens" class="ar-rail-item">
-                    <span class="ar-rail-icon">🖊️</span>
-                    <span class="ar-rail-label">Signature Specimens</span>
-                </button>
                 <button type="button" id="arRailVoucherChecks" class="ar-rail-item">
                     <span class="ar-rail-icon">✅</span>
                     <span class="ar-rail-label">Voucher-level Checks</span>
@@ -107,19 +103,6 @@
                 <div id="arCategoryListBody" class="ar-list-body"></div>
                 <div id="arCategoryListEmptyMessage" class="ar-list-empty" style="display:none;">No categories found.
                 </div>
-            </div>
-
-            <!-- Signature Specimens list section (Validation Rules, Phase 3 of 7, new).
-                 Always scoped to the globally-selected client (getSelectedClientId()) - no
-                 "Show inactive" toggle, since signature_specimens has no is_active column. -->
-            <div id="arSignatureSpecimensListSection" class="ar-list-panel" style="display:none;">
-                <div class="ar-list-panel-header">
-                    <span class="ar-list-panel-title" id="arSpecimenListPanelTitle">Signature Specimens</span>
-                    <button type="button" id="arSpecimenAddNewBtn" class="ar-btn-add-new">+ Add New</button>
-                </div>
-                <div id="arSpecimenListBody" class="ar-list-body"></div>
-                <div id="arSpecimenListEmptyMessage" class="ar-list-empty" style="display:none;">No signature
-                    specimens found.</div>
             </div>
 
             <!-- Voucher-level Checks list section (Generic Voucher-Level Checks, Phase 3 of 6, new).
@@ -211,6 +194,19 @@
                             <input type="text" id="arFieldsInput" placeholder="e.g. Quantity">
                             <button type="button" id="arFieldsAddBtn" class="ar-btn-chip-add">Add</button>
                         </div>
+                    </div>
+
+                    <!-- Signature Specimens (Soft-delete conversion, Phase 4 of 4, FINAL): moved
+                         in from the old standalone rail entity. Per-Role list of persons with an
+                         active/inactive toggle, scoped to this Document — see
+                         renderDocumentSignatureSpecimensSection() in audit_rules.js. Hidden (hint
+                         shown instead) until the Document is actually saved, since a specimen row
+                         needs a real document_id. -->
+                    <div class="ar-field">
+                        <label>Signature Specimens</label>
+                        <div id="arDocSignatureSpecimensHint" class="ar-field-warning" style="display:none;">
+                            Save the document first to manage signature specimens.</div>
+                        <div id="arDocSignatureSpecimensContainer"></div>
                     </div>
 
                     <div class="ar-field" id="arUsedByRow" style="display:none;">
@@ -391,46 +387,6 @@
                             style="display:none;">Delete</button>
                         <button type="button" id="arCategoryRestoreBtn" class="ar-btn-restore"
                             style="display:none;">Restore</button>
-                    </div>
-                </form>
-            </div>
-
-            <!-- Signature Specimens detail section (Validation Rules, Phase 3 of 7, new).
-                 No is_active column on this table (Phase 1 schema), so unlike the other three
-                 entity types there is no Restore button - Delete is a real hard delete. -->
-            <div id="arSignatureSpecimensDetailSection" class="ar-detail-panel" style="display:none;">
-                <div id="arSpecimenDetailEmpty" class="ar-detail-empty">
-                    <p>Select a signature specimen from the list, or click "+ Add New" to create one.</p>
-                </div>
-
-                <form id="arSpecimenDetailForm" class="ar-detail-form" style="display:none;">
-                    <input type="hidden" id="arSpecimenEditingId" value="">
-
-                    <div class="ar-field">
-                        <label for="arSpecimenDocumentSelect">Document</label>
-                        <select id="arSpecimenDocumentSelect">
-                            <option value="" disabled selected>Select a document</option>
-                        </select>
-                    </div>
-
-                    <div class="ar-field">
-                        <label for="arSpecimenRoleSelect">Role</label>
-                        <select id="arSpecimenRoleSelect">
-                            <option value="" disabled selected>Select a document first</option>
-                        </select>
-                    </div>
-
-                    <div class="ar-field">
-                        <label for="arSpecimenNameInput">Expected Signatory Name</label>
-                        <input type="text" id="arSpecimenNameInput" required>
-                    </div>
-
-                    <div id="arSpecimenDetailStatus" class="upload-status" style="display:none;"></div>
-
-                    <div class="ar-detail-actions">
-                        <button type="button" id="arSpecimenSaveBtn" class="ar-btn-save">Save</button>
-                        <button type="button" id="arSpecimenDeleteBtn" class="ar-btn-delete"
-                            style="display:none;">Delete</button>
                     </div>
                 </form>
             </div>

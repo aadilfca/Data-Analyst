@@ -38,6 +38,8 @@ const arRolesAddBtn = document.getElementById('arRolesAddBtn');
 const arFieldsChipList = document.getElementById('arFieldsChipList');
 const arFieldsInput = document.getElementById('arFieldsInput');
 const arFieldsAddBtn = document.getElementById('arFieldsAddBtn');
+const arDocSignatureSpecimensHint = document.getElementById('arDocSignatureSpecimensHint');
+const arDocSignatureSpecimensContainer = document.getElementById('arDocSignatureSpecimensContainer');
 const arUsedByRow = document.getElementById('arUsedByRow');
 const arUsedByCount = document.getElementById('arUsedByCount');
 const arDetailStatus = document.getElementById('arDetailStatus');
@@ -239,6 +241,9 @@ async function selectDocument(id) {
         arUsedByRow.style.display = 'block';
         arUsedByCount.textContent = doc.used_by_categories_count;
 
+        arDocSignatureSpecimensHint.style.display = 'none';
+        loadDocumentSignatureSpecimens(doc);
+
         if (doc.is_active) {
             arDeleteBtn.style.display = 'inline-block';
             arRestoreBtn.style.display = 'none';
@@ -272,6 +277,11 @@ function startNewDocument() {
     arUsedByRow.style.display = 'none';
     arDeleteBtn.style.display = 'none';
     arRestoreBtn.style.display = 'none';
+
+    currentDocumentSpecimens = [];
+    currentSpecimensDoc = null;
+    arDocSignatureSpecimensContainer.innerHTML = '';
+    arDocSignatureSpecimensHint.style.display = 'block';
 
     arDetailEmpty.style.display = 'none';
     arDetailForm.style.display = 'block';
@@ -358,6 +368,203 @@ async function restoreDocument() {
     }
 }
 
+// ---------- SIGNATURE SPECIMENS (Soft-delete conversion, Phase 4 of 4, FINAL) ----------
+// Moved in from the old standalone "Signature Specimens" rail entity — now a per-Role,
+// multi-person list embedded directly in the selected Document's own detail view, with an
+// active/inactive toggle (soft-delete/restore) plus a separate low-visibility hard-delete
+// for genuine data-entry corrections. Backend (Phases 1-2) already fully supports this:
+// GET .../signature-specimens accepts document_id + include_inactive, and the uniqueness
+// constraint was relaxed so multiple concurrently-active people per role are allowed.
+
+// Current client's specimens for the currently-selected Document (include_inactive=true —
+// inactive rows stay visible, greyed, as a historical record, never hidden).
+let currentDocumentSpecimens = [];
+// The Document object last passed to loadDocumentSignatureSpecimens() — its own
+// server-persisted auth_roles (not the live-editing rolesState chip array, which can be
+// mid-edit/unsaved) is what drives the per-Role grouping, so add/toggle/hard-delete reloads
+// reuse this instead of re-fetching the Document or trusting rolesState.
+let currentSpecimensDoc = null;
+
+async function loadDocumentSignatureSpecimens(doc) {
+    currentSpecimensDoc = doc;
+    try {
+        const res = await fetch(
+            API_BASE + '/api/audit-rules/signature-specimens?client_id=' + getSelectedClientId() +
+            '&document_id=' + doc.id + '&include_inactive=true'
+        );
+        if (!res.ok) throw new Error('Failed to load signature specimens');
+        currentDocumentSpecimens = await res.json();
+        renderDocumentSignatureSpecimensSection(doc);
+    } catch (error) {
+        arDocSignatureSpecimensContainer.innerHTML =
+            '<div class="ar-list-empty">❌ Error loading signature specimens: ' + error.message + '</div>';
+    }
+}
+
+function renderDocumentSignatureSpecimensSection(doc) {
+    arDocSignatureSpecimensContainer.innerHTML = '';
+    const roles = doc.auth_roles || [];
+    const rolesSeen = new Set(roles);
+
+    roles.forEach(role => {
+        const group = buildSpecimenRoleGroup(doc, role, currentDocumentSpecimens.filter(s => s.role_name === role), false);
+        arDocSignatureSpecimensContainer.appendChild(group);
+    });
+
+    // Specimens whose role no longer matches any of this Document's current auth_roles (the
+    // role was since removed/renamed) — kept visible under "(former role)" rather than
+    // silently hidden, per the confirmed "historical record" requirement. No add-row here,
+    // since the role no longer exists to add a new person against.
+    const otherRoles = [...new Set(currentDocumentSpecimens.filter(s => !rolesSeen.has(s.role_name)).map(s => s.role_name))];
+    otherRoles.forEach(role => {
+        const group = buildSpecimenRoleGroup(doc, role, currentDocumentSpecimens.filter(s => s.role_name === role), true);
+        arDocSignatureSpecimensContainer.appendChild(group);
+    });
+
+    if (roles.length === 0 && otherRoles.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ar-chip-empty';
+        empty.textContent = 'Add an Authorisation Role above to record signature specimens for it.';
+        arDocSignatureSpecimensContainer.appendChild(empty);
+    }
+}
+
+function buildSpecimenRoleGroup(doc, role, specimens, isFormerRole) {
+    const group = document.createElement('div');
+    group.className = 'ar-doc-specimens-role-group';
+
+    const title = document.createElement('div');
+    title.className = 'ar-doc-specimens-role-title';
+    title.textContent = role + (isFormerRole ? ' (former role)' : '');
+    group.appendChild(title);
+
+    // Active people first, then inactive — inactive ones stay visible (greyed), never hidden.
+    specimens.slice()
+        .sort((a, b) => (b.is_active ? 1 : 0) - (a.is_active ? 1 : 0))
+        .forEach(s => group.appendChild(buildSpecimenPersonRow(s)));
+
+    if (specimens.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ar-chip-empty';
+        empty.textContent = 'No signatories recorded.';
+        group.appendChild(empty);
+    }
+
+    if (!isFormerRole) {
+        group.appendChild(buildSpecimenAddRow(doc, role));
+    }
+
+    return group;
+}
+
+function buildSpecimenPersonRow(s) {
+    const row = document.createElement('div');
+    row.className = 'ar-doc-specimens-person-row' + (s.is_active ? '' : ' inactive');
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'ar-doc-specimens-person-name';
+    nameSpan.textContent = s.expected_signatory_name;
+    row.appendChild(nameSpan);
+
+    const statusSpan = document.createElement('span');
+    statusSpan.className = 'ar-doc-specimens-person-status';
+    statusSpan.textContent = s.is_active ? 'Active' : 'Inactive';
+    row.appendChild(statusSpan);
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'ar-btn-chip-add';
+    toggleBtn.textContent = s.is_active ? 'Deactivate' : 'Reactivate';
+    toggleBtn.addEventListener('click', () => toggleSignatureSpecimenActive(s.id, !s.is_active));
+    row.appendChild(toggleBtn);
+
+    const hardDeleteLink = document.createElement('span');
+    hardDeleteLink.className = 'ar-doc-specimens-hard-delete';
+    hardDeleteLink.textContent = '🗑';
+    hardDeleteLink.title = 'Permanently delete — data-entry correction only';
+    hardDeleteLink.addEventListener('click', () => hardDeleteSignatureSpecimen(s.id, s.expected_signatory_name, s.role_name));
+    row.appendChild(hardDeleteLink);
+
+    return row;
+}
+
+function buildSpecimenAddRow(doc, role) {
+    const row = document.createElement('div');
+    row.className = 'ar-doc-specimens-add-row';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = '+ Add person for ' + role;
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); addSignatureSpecimenPerson(doc.id, role, input); }
+    });
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ar-btn-chip-add';
+    btn.textContent = 'Add';
+    btn.addEventListener('click', () => addSignatureSpecimenPerson(doc.id, role, input));
+
+    row.appendChild(input);
+    row.appendChild(btn);
+    return row;
+}
+
+async function addSignatureSpecimenPerson(documentId, roleName, inputEl) {
+    const name = inputEl.value.trim();
+    if (!name) return;
+
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                client_id: parseInt(getSelectedClientId(), 10),
+                document_id: documentId,
+                role_name: roleName,
+                expected_signatory_name: name
+            })
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to add signature specimen');
+
+        showDetailStatus('✅ ' + result.message, 'success');
+        inputEl.value = '';
+        if (currentSpecimensDoc) await loadDocumentSignatureSpecimens(currentSpecimensDoc);
+    } catch (error) {
+        showDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+async function toggleSignatureSpecimenActive(specimenId, activate) {
+    try {
+        const url = API_BASE + '/api/audit-rules/signature-specimens/' + specimenId + (activate ? '/restore' : '');
+        const res = await fetch(url, { method: activate ? 'POST' : 'DELETE' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to update signature specimen');
+
+        showDetailStatus('✅ ' + result.message, 'success');
+        if (currentSpecimensDoc) await loadDocumentSignatureSpecimens(currentSpecimensDoc);
+    } catch (error) {
+        showDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
+async function hardDeleteSignatureSpecimen(specimenId, name, role) {
+    if (!confirm('Permanently delete the signature specimen for "' + name + '" (' + role + ')? This cannot be undone — use Deactivate instead for a normal personnel change.')) return;
+
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens/' + specimenId + '/hard-delete', { method: 'DELETE' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to permanently delete signature specimen');
+
+        showDetailStatus('✅ ' + result.message, 'success');
+        if (currentSpecimensDoc) await loadDocumentSignatureSpecimens(currentSpecimensDoc);
+    } catch (error) {
+        showDetailStatus('❌ Error: ' + error.message, 'error');
+    }
+}
+
 // ---------- WIRE UP EVENT LISTENERS ----------
 arAddNewBtn.addEventListener('click', startNewDocument);
 arShowInactiveCheckbox.addEventListener('change', loadDocuments);
@@ -389,22 +596,20 @@ arRestoreBtn.addEventListener('click', restoreDocument);
 // columns.js/client_settings.js rather than importing them).
 
 // ---------- RAIL / VIEW SWITCHING ----------
-// 'documents', 'cross-checks', 'categories', or 'signature-specimens' — which entity
-// type's list/detail sections are visible.
+// 'documents', 'cross-checks', or 'categories' — which entity type's list/detail sections
+// are visible. Signature Specimens is no longer a switchable top-level entity (moved into
+// Documents detail, see the SIGNATURE SPECIMENS section below Documents' own SAVE logic).
 let currentEntityType = 'documents';
 
 const arRailDocuments = document.getElementById('arRailDocuments');
 const arRailCrossChecks = document.getElementById('arRailCrossChecks');
 const arRailCategories = document.getElementById('arRailCategories');
-const arRailSignatureSpecimens = document.getElementById('arRailSignatureSpecimens');
 const arDocumentsListSection = document.getElementById('arDocumentsListSection');
 const arDocumentsDetailSection = document.getElementById('arDocumentsDetailSection');
 const arCrossChecksListSection = document.getElementById('arCrossChecksListSection');
 const arCrossChecksDetailSection = document.getElementById('arCrossChecksDetailSection');
 const arCategoriesListSection = document.getElementById('arCategoriesListSection');
 const arCategoriesDetailSection = document.getElementById('arCategoriesDetailSection');
-const arSignatureSpecimensListSection = document.getElementById('arSignatureSpecimensListSection');
-const arSignatureSpecimensDetailSection = document.getElementById('arSignatureSpecimensDetailSection');
 const arRailVoucherChecks = document.getElementById('arRailVoucherChecks');
 const arVoucherChecksListSection = document.getElementById('arVoucherChecksListSection');
 const arVoucherChecksDetailSection = document.getElementById('arVoucherChecksDetailSection');
@@ -415,7 +620,6 @@ function switchEntityType(type) {
     arRailDocuments.classList.toggle('active', type === 'documents');
     arRailCrossChecks.classList.toggle('active', type === 'cross-checks');
     arRailCategories.classList.toggle('active', type === 'categories');
-    arRailSignatureSpecimens.classList.toggle('active', type === 'signature-specimens');
 
     arDocumentsListSection.style.display = (type === 'documents') ? 'flex' : 'none';
     arDocumentsDetailSection.style.display = (type === 'documents') ? 'block' : 'none';
@@ -423,8 +627,6 @@ function switchEntityType(type) {
     arCrossChecksDetailSection.style.display = (type === 'cross-checks') ? 'block' : 'none';
     arCategoriesListSection.style.display = (type === 'categories') ? 'flex' : 'none';
     arCategoriesDetailSection.style.display = (type === 'categories') ? 'block' : 'none';
-    arSignatureSpecimensListSection.style.display = (type === 'signature-specimens') ? 'flex' : 'none';
-    arSignatureSpecimensDetailSection.style.display = (type === 'signature-specimens') ? 'block' : 'none';
     // Voucher-level Checks (arVoucherChecksListSection/arVoucherChecksDetailSection) is no
     // longer a switchable top-level entity -- it's permanently embedded in Category detail's
     // Validation Rules box (see buildCategoryValidationRulesSection()), so it's no longer
@@ -449,13 +651,6 @@ function switchEntityType(type) {
             loadAllCrossChecksForCategories(),
             loadVoucherChecks()
         ]).then(loadCategories);
-    } else if (type === 'signature-specimens') {
-        // Refresh the Documents cache (Document picker + per-document auth_roles for the
-        // Role picker) every time this view is opened, same convention as above.
-        loadAllDocumentsForCrossChecks().then(() => {
-            populateSpecimenDocumentSelect();
-            loadSignatureSpecimens();
-        });
     }
 }
 
@@ -939,7 +1134,6 @@ async function restoreCrossCheck() {
 arRailDocuments.addEventListener('click', () => switchEntityType('documents'));
 arRailCrossChecks.addEventListener('click', () => switchEntityType('cross-checks'));
 arRailCategories.addEventListener('click', () => switchEntityType('categories'));
-arRailSignatureSpecimens.addEventListener('click', () => switchEntityType('signature-specimens'));
 // No arRailVoucherChecks click listener -- that rail button is removed entirely by
 // buildCategoryValidationRulesSection() (Voucher-level Checks is now permanently embedded in
 // Category detail, not a switchable top-level entity).
@@ -1041,7 +1235,7 @@ function buildCategoryValidationRulesSection() {
     // layout doesn't fit inside this narrow single-column subsection. Tagged with
     // .ar-embedded-panel so style.css can override their old sidebar-column sizing without
     // touching the base .ar-list-panel/.ar-detail-panel rules the still-separate Documents/
-    // Cross-checks/Categories/Signature Specimens panels use unmodified. Voucher-level checks
+    // Cross-checks/Categories panels use unmodified. Voucher-level checks
     // are global (not per-Category), so this same widget renders identically inside every
     // Category's Validation Rules box — no per-Category filtering here.
     if (arVoucherChecksListSection && arVoucherChecksDetailSection) {
@@ -2150,281 +2344,11 @@ window.onload = async function() {
     }
 };
 
-// ==============================================
-// 🖊️ AUDIT RULES — SIGNATURE SPECIMENS (Validation Rules, Phase 3 of 7)
-// ==============================================
-// Same rail → list → detail duplication pattern as Documents/Cross-checks/Categories above
-// (own markup ids, own state, own functions), per this module's documented "full duplication
-// per entity type" convention. Always scoped to the globally-selected client
-// (getSelectedClientId(), client_context.js) — client selection is enforced on every
-// non-dashboard page, so it's always available here, same assumption Assign Categories above
-// already relies on. No "Show inactive" toggle and no Restore button: signature_specimens has
-// no is_active column (Phase 1 schema), so Delete is a real hard delete.
-
-// ---------- DOM REFS ----------
-const arSpecimenListPanelTitle = document.getElementById('arSpecimenListPanelTitle');
-const arSpecimenListBody = document.getElementById('arSpecimenListBody');
-const arSpecimenListEmptyMessage = document.getElementById('arSpecimenListEmptyMessage');
-const arSpecimenAddNewBtn = document.getElementById('arSpecimenAddNewBtn');
-
-const arSpecimenDetailEmpty = document.getElementById('arSpecimenDetailEmpty');
-const arSpecimenDetailForm = document.getElementById('arSpecimenDetailForm');
-const arSpecimenEditingIdInput = document.getElementById('arSpecimenEditingId');
-const arSpecimenDocumentSelect = document.getElementById('arSpecimenDocumentSelect');
-const arSpecimenRoleSelect = document.getElementById('arSpecimenRoleSelect');
-const arSpecimenNameInput = document.getElementById('arSpecimenNameInput');
-const arSpecimenDetailStatus = document.getElementById('arSpecimenDetailStatus');
-const arSpecimenSaveBtn = document.getElementById('arSpecimenSaveBtn');
-const arSpecimenDeleteBtn = document.getElementById('arSpecimenDeleteBtn');
-
-// ---------- STATE ----------
-// null while creating a new specimen; set to its id while editing an existing one.
-let editingSpecimenId = null;
-// Current client's specimens, refetched every time this view opens (same "refetch on open,
-// don't cache indefinitely" convention as allDocuments/allCrossChecks above).
-let allSpecimens = [];
-
-// ---------- STATUS MESSAGES ----------
-// Standalone duplicate of showDetailStatus()/showCrossCheckDetailStatus()/
-// showCategoryDetailStatus() above, scoped to this entity's own status div.
-function showSpecimenDetailStatus(message, type) {
-    arSpecimenDetailStatus.textContent = message;
-    arSpecimenDetailStatus.className = 'upload-status ' + type;
-    arSpecimenDetailStatus.style.display = 'block';
-    clearTimeout(window.arSpecimenDetailStatusTimeout);
-    window.arSpecimenDetailStatusTimeout = setTimeout(() => {
-        arSpecimenDetailStatus.style.display = 'none';
-    }, 5000);
-}
-
-// ---------- DOCUMENT PICKER ----------
-// Reuses the allDocuments cache (Cross-checks/Categories above) - already active-only, and
-// already carries each Document's auth_roles, which the Role picker below needs.
-function populateSpecimenDocumentSelect() {
-    arSpecimenDocumentSelect.innerHTML = '';
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.disabled = true;
-    placeholder.selected = true;
-    placeholder.textContent = allDocuments.length === 0 ? 'No documents exist yet' : 'Select a document';
-    arSpecimenDocumentSelect.appendChild(placeholder);
-
-    allDocuments.forEach(d => {
-        const opt = document.createElement('option');
-        opt.value = d.id;
-        opt.textContent = d.name;
-        arSpecimenDocumentSelect.appendChild(opt);
-    });
-}
-
-// ---------- ROLE PICKER (dynamic, driven by the selected Document's auth_roles) ----------
-// Mirrors renderCompareFieldDropdown()'s pattern above.
-function renderSpecimenRoleOptions() {
-    const docId = parseInt(arSpecimenDocumentSelect.value, 10);
-    const doc = getDocumentById(docId);
-    const roles = doc ? (doc.auth_roles || []) : [];
-    const previousValue = arSpecimenRoleSelect.value;
-
-    arSpecimenRoleSelect.innerHTML = '';
-
-    if (roles.length === 0) {
-        const opt = document.createElement('option');
-        opt.value = '';
-        opt.disabled = true;
-        opt.selected = true;
-        opt.textContent = doc ? 'This document has no authorisation roles configured' : 'Select a document first';
-        arSpecimenRoleSelect.appendChild(opt);
-        return;
-    }
-
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.disabled = true;
-    placeholder.textContent = 'Select a role';
-    arSpecimenRoleSelect.appendChild(placeholder);
-
-    roles.forEach(role => {
-        const opt = document.createElement('option');
-        opt.value = role;
-        opt.textContent = role;
-        arSpecimenRoleSelect.appendChild(opt);
-    });
-
-    if (roles.includes(previousValue)) {
-        arSpecimenRoleSelect.value = previousValue;
-    } else {
-        placeholder.selected = true;
-    }
-}
-
-// ---------- LOAD & RENDER LIST ----------
-async function loadSignatureSpecimens() {
-    const clientId = getSelectedClientId();
-    arSpecimenListPanelTitle.textContent = 'Signature Specimens — ' + (getSelectedClientName() || '');
-
-    try {
-        const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens?client_id=' + clientId);
-        if (!res.ok) throw new Error('Failed to load signature specimens');
-        allSpecimens = await res.json();
-        renderSpecimenList(allSpecimens);
-    } catch (error) {
-        arSpecimenListBody.innerHTML = '';
-        arSpecimenListEmptyMessage.textContent = '❌ Error loading signature specimens: ' + error.message;
-        arSpecimenListEmptyMessage.style.display = 'block';
-    }
-}
-
-function renderSpecimenList(specimens) {
-    arSpecimenListBody.innerHTML = '';
-
-    if (specimens.length === 0) {
-        arSpecimenListEmptyMessage.textContent = 'No signature specimens found.';
-        arSpecimenListEmptyMessage.style.display = 'block';
-        return;
-    }
-    arSpecimenListEmptyMessage.style.display = 'none';
-
-    specimens.forEach(s => {
-        const row = document.createElement('div');
-        row.className = 'ar-list-row';
-        if (s.id === editingSpecimenId) row.classList.add('ar-list-row-selected');
-
-        const nameSpan = document.createElement('span');
-        nameSpan.className = 'ar-list-row-name';
-        nameSpan.textContent = (s.document_name || ('Document #' + s.document_id)) +
-            ' — ' + s.role_name + ': ' + s.expected_signatory_name;
-        row.appendChild(nameSpan);
-
-        row.addEventListener('click', () => selectSpecimen(s.id));
-        arSpecimenListBody.appendChild(row);
-    });
-}
-
-// ---------- SELECT / NEW / RESET DETAIL PANEL ----------
-async function selectSpecimen(id) {
-    try {
-        const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens/' + id);
-        if (!res.ok) throw new Error('Signature specimen not found');
-        const s = await res.json();
-
-        editingSpecimenId = s.id;
-        arSpecimenEditingIdInput.value = s.id;
-        arSpecimenDocumentSelect.value = s.document_id;
-        renderSpecimenRoleOptions();
-        arSpecimenRoleSelect.value = s.role_name;
-        arSpecimenNameInput.value = s.expected_signatory_name;
-
-        arSpecimenDeleteBtn.style.display = 'inline-block';
-
-        arSpecimenDetailEmpty.style.display = 'none';
-        arSpecimenDetailForm.style.display = 'block';
-
-        // Re-render the list so the selected row highlight moves without a full re-fetch.
-        loadSignatureSpecimens();
-    } catch (error) {
-        showSpecimenDetailStatus('❌ Error: ' + error.message, 'error');
-    }
-}
-
-function startNewSpecimen() {
-    editingSpecimenId = null;
-    arSpecimenEditingIdInput.value = '';
-    arSpecimenDocumentSelect.value = '';
-    renderSpecimenRoleOptions();
-    arSpecimenNameInput.value = '';
-
-    arSpecimenDeleteBtn.style.display = 'none';
-
-    arSpecimenDetailEmpty.style.display = 'none';
-    arSpecimenDetailForm.style.display = 'block';
-    arSpecimenDocumentSelect.focus();
-}
-
-// ---------- SAVE ----------
-async function saveSpecimen() {
-    const clientId = getSelectedClientId();
-    const documentId = arSpecimenDocumentSelect.value;
-    const roleName = arSpecimenRoleSelect.value;
-    const expectedName = arSpecimenNameInput.value.trim();
-
-    if (!documentId) {
-        showSpecimenDetailStatus('❌ A document is required.', 'error');
-        return;
-    }
-    if (!roleName) {
-        showSpecimenDetailStatus('❌ A role is required.', 'error');
-        return;
-    }
-    if (!expectedName) {
-        showSpecimenDetailStatus('❌ Expected signatory name is required.', 'error');
-        return;
-    }
-
-    const payload = {
-        client_id: parseInt(clientId, 10),
-        document_id: parseInt(documentId, 10),
-        role_name: roleName,
-        expected_signatory_name: expectedName
-    };
-
-    try {
-        let url = API_BASE + '/api/audit-rules/signature-specimens';
-        let method = 'POST';
-        if (editingSpecimenId) {
-            url += '/' + editingSpecimenId;
-            method = 'PUT';
-        }
-
-        const res = await fetch(url, {
-            method: method,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save signature specimen');
-
-        showSpecimenDetailStatus('✅ ' + result.message, 'success');
-
-        const savedId = editingSpecimenId || result.specimen_id;
-        await loadSignatureSpecimens();
-        await selectSpecimen(savedId);
-    } catch (error) {
-        showSpecimenDetailStatus('❌ Error: ' + error.message, 'error');
-    }
-}
-
-// ---------- DELETE (hard delete - no is_active/Restore for this entity) ----------
-async function deleteSpecimen() {
-    if (!editingSpecimenId) return;
-    if (!confirm('Are you sure you want to permanently delete this signature specimen? This cannot be undone.')) return;
-
-    try {
-        const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens/' + editingSpecimenId, { method: 'DELETE' });
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to delete signature specimen');
-
-        showSpecimenDetailStatus('✅ ' + result.message, 'success');
-        // Unlike the soft-delete flows above, the row no longer exists - return the detail
-        // panel to its empty state instead of re-selecting the now-deleted id.
-        editingSpecimenId = null;
-        arSpecimenDetailForm.style.display = 'none';
-        arSpecimenDetailEmpty.style.display = 'block';
-        await loadSignatureSpecimens();
-    } catch (error) {
-        showSpecimenDetailStatus('❌ Error: ' + error.message, 'error');
-    }
-}
-
-// ---------- WIRE UP EVENT LISTENERS ----------
-arSpecimenAddNewBtn.addEventListener('click', startNewSpecimen);
-arSpecimenDocumentSelect.addEventListener('change', renderSpecimenRoleOptions);
-arSpecimenSaveBtn.addEventListener('click', saveSpecimen);
-
 // =====================================================================================
 // VOUCHER-LEVEL CHECKS (Generic Voucher-Level Checks, Phase 3 of 6)
 // A 4th reusable entity type: audit_rule_voucher_checks. Ordered by sort_order (server-
 // assigned), NOT alphabetical like Documents/Cross-checks/Categories. Soft-delete/restore
-// like Documents (not hard-delete like Signature Specimens). Name-only (confirmed
+// like Documents. Name-only (confirmed
 // requirement) - no Authorisation Roles field; audit_rule_voucher_check_auth_roles is left
 // in place but unread/unwritten by this entity going forward.
 // Uses its own state (editingVoucherCheckId), distinct from Documents' editingId global,
@@ -2693,4 +2617,3 @@ arVoucherCheckShowInactiveCheckbox.addEventListener('change', loadVoucherChecks)
 arVoucherCheckSaveBtn.addEventListener('click', saveVoucherCheck);
 arVoucherCheckDeleteBtn.addEventListener('click', deleteVoucherCheck);
 arVoucherCheckRestoreBtn.addEventListener('click', restoreVoucherCheck);
-arSpecimenDeleteBtn.addEventListener('click', deleteSpecimen);

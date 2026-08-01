@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"http://localhost:5000/*)",
+      "Bash(curl -s http://127.0.0.1:5000/*)",
+      "Bash(curl -s http://localhost:5000/*)",
+      "Bash(node --check *)",
+      "Bash(python -m py_compile *)",
+      "Bash(curl -s \"http://127.0.0.1:5000/*)",
+      "Bash(curl -s -X POST http://localhost:5000/*)",
+      "Bash(curl -s -X POST http://127.0.0.1:5000/*)",
+      "Bash(curl -s -X POST \"http://localhost:5000/*)",
+      "Bash(curl -s -X POST \"http://127.0.0.1:5000/*)",
+      "Bash(curl -s -X PUT http://localhost:5000/*)",
+      "Bash(curl -s -X PUT http://127.0.0.1:5000/*)",
+      "Bash(curl -s -X PUT \"http://localhost:5000/*)",
+      "Bash(curl -s -X PUT \"http://127.0.0.1:5000/*)",
+      "Bash(curl -s -X DELETE http://localhost:5000/*)",
+      "Bash(curl -s -X DELETE http://127.0.0.1:5000/*)",
+      "Bash(curl -s -X DELETE \"http://localhost:5000/*)",
+      "Bash(curl -s -X DELETE \"http://127.0.0.1:5000/*)"
+    ]
+  }
+}

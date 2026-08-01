@@ -11,6 +11,6 @@
       "Bash(git clean -f:*)",
       "Bash(git branch -D:*)"
     ],
-    "defaultMode": "default"
+    "defaultMode": "auto"
   }
 }

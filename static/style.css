@@ -4273,8 +4273,8 @@ body {
 
 /* ----- Categories list row: rule-count badge (Phase 3 of 3, FINAL) -----
    Scoped to the Categories list row only -- .ar-list-row-name/.ar-list-row-badge above stay
-   untouched for the still-single-line Documents/Cross-checks/Signature Specimens/
-   Voucher-checks rows. .ar-category-row-info wraps the name + new count line in a column so
+   untouched for the still-single-line Documents/Cross-checks/Voucher-checks rows.
+   .ar-category-row-info wraps the name + new count line in a column so
    both sit to the left of the "Inactive" badge (still a direct sibling, still flush-right via
    .ar-list-row's own space-between). */
 .ar-category-row-info {
@@ -4424,7 +4424,7 @@ body {
    overrides neutralize their old fixed-sidebar-column sizing (width/border-right/flex/
    overflow/padding, all meaningless or oversized outside the original flex-row shell)
    without touching the base .ar-list-panel/.ar-detail-panel rules still used unmodified by
-   the separate Documents/Cross-checks/Categories/Signature Specimens panels. */
+   the separate Documents/Cross-checks/Categories panels. */
 .ar-list-panel.ar-embedded-panel {
     width: auto;
     border-right: none;
@@ -4436,6 +4436,89 @@ body {
     flex: none;
     padding: 0;
     overflow-y: visible;
+}
+
+/* ----- Document detail: Signature Specimens (Soft-delete conversion, Phase 4 of 4, FINAL) -----
+   Per-Role grouped list of persons, embedded directly in the Documents detail form (see
+   #arDocSignatureSpecimensContainer in audit_rules.html, renderDocumentSignatureSpecimensSection()
+   in audit_rules.js). Not a .ar-validation-rules-section box — this isn't a cross-Category
+   validation rule, it's Document-scoped reference data, so it stays a plain .ar-field like its
+   siblings (Authorisation Roles, Cross-check-eligible Fields). */
+.ar-doc-specimens-role-group {
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #f1f5f9;
+}
+.ar-doc-specimens-role-group:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+.ar-doc-specimens-role-title {
+    font-weight: 600;
+    font-size: 12px;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 6px;
+}
+.ar-doc-specimens-person-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+}
+/* Inactive people stay visible (never hidden) as a historical record — dimmed rather than
+   removed, same dimming convention as .module-card.coming-soon. */
+.ar-doc-specimens-person-row.inactive {
+    opacity: 0.55;
+}
+.ar-doc-specimens-person-name {
+    flex: 1;
+    font-size: 14px;
+    color: #1a1a2e;
+}
+.ar-doc-specimens-person-row.inactive .ar-doc-specimens-person-name {
+    text-decoration: line-through;
+}
+.ar-doc-specimens-person-status {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: #94a3b8;
+}
+.ar-doc-specimens-person-row.inactive .ar-doc-specimens-person-status {
+    color: #dc2626;
+}
+/* Tiny, low-visibility hard-delete link — a deliberate genuine-mistake-only escape hatch, not
+   the normal action (that's the Deactivate/Reactivate button). Same low-opacity-default/
+   full-on-hover treatment as .ar-tb-force-apply-icon. */
+.ar-doc-specimens-hard-delete {
+    font-size: 13px;
+    cursor: pointer;
+    opacity: 0.35;
+    transition: opacity 0.15s ease;
+}
+.ar-doc-specimens-hard-delete:hover {
+    opacity: 1;
+}
+.ar-doc-specimens-add-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+}
+.ar-doc-specimens-add-row input[type="text"] {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    font-size: 13px;
+}
+.ar-doc-specimens-add-row input[type="text"]:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
 /* ----- Chip editors (Authorisation Roles / Cross-check-eligible Fields) -----
