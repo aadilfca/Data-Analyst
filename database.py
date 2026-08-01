@@ -1451,6 +1451,19 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_signature_specimens_document ON signature_specimens (document_id)")
         print("✅ Created signature_specimens table (Validation Rules, Phase 1 of 7: schema)")
 
+        # Soft-delete conversion (new, confirmed 4-phase requirement), Phase 1 of 4: signature
+        # specimens were originally hard-delete only (no is_active column). Same upgrade-block
+        # pattern as audit_rule_documents.transaction_level_approval above - existing rows
+        # default to is_active = 1 via the ALTER's own DEFAULT, no separate backfill needed.
+        try:
+            cur = conn.execute("PRAGMA table_info(signature_specimens)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'is_active' not in columns:
+                conn.execute("ALTER TABLE signature_specimens ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+                print("✅ Added is_active column to signature_specimens")
+        except Exception as e:
+            print("⚠️ Could not add is_active to signature_specimens:", e)
+
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_document_fields_document ON audit_rule_document_fields (document_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_document_auth_roles_document ON audit_rule_document_auth_roles (document_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_documents_crosscheck ON audit_rule_cross_check_documents (cross_check_id)")

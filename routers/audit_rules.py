@@ -847,10 +847,11 @@ def reorder_voucher_checks(check_ids: List[int] = Body(...)):
 # ==============================================
 # Validation Rules (Phase 2 of 7): expected signatory name per role/document type, name-only,
 # no image handling, per the locked assumption. Always scoped to a client (a client's own
-# staff, not a global list). The signature_specimens table (Phase 1 schema) has no is_active
-# column, so unlike Documents/Cross-checks/Categories above this is a plain 5-endpoint CRUD
-# with a real hard delete, not the six-endpoint soft-delete/restore pattern - a deliberate
-# deviation, not an oversight, matching the "simple name-list management" scope of this phase.
+# staff, not a global list). Soft-delete conversion (new, confirmed 4-phase requirement),
+# Phase 1 of 4: signature_specimens now has is_active (database.py upgrade block above), so
+# this entity follows the same soft-delete/restore pattern as Documents/Cross-checks/
+# Categories/Voucher Checks - the normal "Delete" action deactivates; a separate, low-visibility
+# hard-delete endpoint remains for correcting genuine data-entry mistakes only.
 
 # ---------- DATA MODELS ----------
 class SignatureSpecimenCreate(BaseModel):
@@ -896,13 +897,14 @@ def row_to_signature_specimen(row: dict) -> dict:
         "document_name": row.get("document_name"),
         "role_name": row["role_name"],
         "expected_signatory_name": row["expected_signatory_name"],
+        "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
 
 SIGNATURE_SPECIMEN_SELECT = """
     SELECT s.id, s.client_id, s.document_id, d.name as document_name, s.role_name,
-           s.expected_signatory_name, s.created_at, s.updated_at
+           s.expected_signatory_name, s.is_active, s.created_at, s.updated_at
     FROM signature_specimens s
     JOIN audit_rule_documents d ON s.document_id = d.id
 """
@@ -910,16 +912,20 @@ SIGNATURE_SPECIMEN_SELECT = """
 # ---------- ENDPOINTS ----------
 
 @router.get("/api/audit-rules/signature-specimens")
-def get_signature_specimens(client_id: int, document_id: Optional[int] = None):
+def get_signature_specimens(client_id: int, document_id: Optional[int] = None, include_inactive: bool = False):
     """
     Get all signature specimens for a client, optionally filtered to one Document.
-    client_id is required - specimens are always client-scoped.
+    client_id is required - specimens are always client-scoped. By default, only active
+    specimens are returned. Set include_inactive=True to get all (Soft-delete conversion,
+    Phase 1 of 4).
     """
     query = SIGNATURE_SPECIMEN_SELECT + " WHERE s.client_id = ?"
     params = [client_id]
     if document_id is not None:
         query += " AND s.document_id = ?"
         params.append(document_id)
+    if not include_inactive:
+        query += " AND s.is_active = 1"
     query += " ORDER BY d.name, s.role_name"
     rows = execute_query(query, tuple(params))
     return [row_to_signature_specimen(r) for r in rows]
@@ -974,15 +980,49 @@ def update_signature_specimen(specimen_id: int, specimen: SignatureSpecimenUpdat
 @router.delete("/api/audit-rules/signature-specimens/{specimen_id}")
 def delete_signature_specimen(specimen_id: int):
     """
-    Hard delete - no is_active column exists on signature_specimens (Phase 1 schema), so
-    unlike Documents/Cross-checks/Categories there is no soft-delete/restore for this entity.
+    Soft-delete a signature specimen (set is_active = 0). This is the normal "Delete" action -
+    for a genuine data-entry mistake needing permanent removal, use the separate hard-delete
+    endpoint below.
+    """
+    existing = execute_query(
+        "SELECT expected_signatory_name FROM signature_specimens WHERE id = ? AND is_active = 1",
+        (specimen_id,)
+    )
+    if not existing:
+        raise HTTPException(404, "Active signature specimen not found")
+    execute_write("UPDATE signature_specimens SET is_active = 0 WHERE id = ?", (specimen_id,))
+    log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
+    return {"message": "Signature specimen deleted (soft-delete) successfully"}
+
+@router.post("/api/audit-rules/signature-specimens/{specimen_id}/restore")
+def restore_signature_specimen(specimen_id: int):
+    """
+    Restore a soft-deleted signature specimen.
+    """
+    existing = execute_query(
+        "SELECT expected_signatory_name FROM signature_specimens WHERE id = ? AND is_active = 0",
+        (specimen_id,)
+    )
+    if not existing:
+        raise HTTPException(404, "Inactive signature specimen not found")
+    execute_write("UPDATE signature_specimens SET is_active = 1 WHERE id = ?", (specimen_id,))
+    log_audit("Admin", "Restore", "AuditRules", f"Restored signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
+    return {"message": "Signature specimen restored successfully"}
+
+@router.delete("/api/audit-rules/signature-specimens/{specimen_id}/hard-delete")
+def hard_delete_signature_specimen(specimen_id: int):
+    """
+    Permanent hard delete - deliberately a separate, low-visibility endpoint (not the normal
+    Delete action above) for correcting genuine data-entry mistakes only, not routine personnel
+    changes. Works regardless of current is_active state (an active or already-deactivated row
+    can both be hard-deleted).
     """
     existing = execute_query("SELECT expected_signatory_name FROM signature_specimens WHERE id = ?", (specimen_id,))
     if not existing:
         raise HTTPException(404, "Signature specimen not found")
     execute_write("DELETE FROM signature_specimens WHERE id = ?", (specimen_id,))
-    log_audit("Admin", "Delete", "AuditRules", f"Deleted signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
-    return {"message": "Signature specimen deleted successfully"}
+    log_audit("Admin", "Delete", "AuditRules", f"Hard-deleted (permanent) signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
+    return {"message": "Signature specimen permanently deleted"}
 
 
 # ---------- PER-DOCUMENT APPROVAL-REQUIRED FLAG (Validation Rules, Phase 2 of 7) ----------
