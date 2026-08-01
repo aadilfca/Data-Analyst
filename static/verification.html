@@ -668,6 +668,21 @@
                         <option value="">-- Loading cashbooks... --</option>
                     </select>
                 </div>
+                <!-- Editable search range (confirmed fix): defaults to the most recent month that
+                     actually has cashbook data for this client (see loadCashbooks() in
+                     verification.js), but can be overridden here - restores the flexibility that
+                     existed before commit ad5475b replaced these inputs with a hardcoded
+                     "current calendar month" range. -->
+                <div class="field" style="display:flex; gap:10px;">
+                    <div style="flex:1;">
+                        <label for="popupPeriodStart">Start Date</label>
+                        <input type="date" id="popupPeriodStart">
+                    </div>
+                    <div style="flex:1;">
+                        <label for="popupPeriodEnd">End Date</label>
+                        <input type="date" id="popupPeriodEnd">
+                    </div>
+                </div>
                 <div id="popupError" class="error-msg" style="display:none;"></div>
                 <div class="btn-row">
                     <button class="btn-secondary" id="popupCancelBtn">Cancel</button>

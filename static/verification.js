@@ -70,6 +70,10 @@ const popupCashbookSelect = document.getElementById('popupCashbookSelect');
 const popupStartBtn = document.getElementById('popupStartBtn');
 const popupCancelBtn = document.getElementById('popupCancelBtn');
 const popupError = document.getElementById('popupError');
+// Editable search-range inputs (confirmed fix) - populated with the auto-detected default range
+// by loadCashbooks(), editable afterward to re-trigger the search with a different range.
+const popupPeriodStart = document.getElementById('popupPeriodStart');
+const popupPeriodEnd = document.getElementById('popupPeriodEnd');
 // Client Data Links card strip - populated dynamically by loadDataLinksCards() from the real
 // templates list, so it never needs a hardcoded per-template edit again.
 const dataLinksCardStrip = document.getElementById('dataLinksCardStrip');
@@ -214,8 +218,21 @@ function showDashboardWithMessage(message) {
     }
 }
 
+// Returns the {start, end} (YYYY-MM-DD) of the calendar month containing the given Date.
+function monthBoundsAround(date) {
+    const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
+    const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    return { start: formatDateInput(firstDay), end: formatDateInput(lastDay) };
+}
+
 // ---------- POPUP: LOAD CASHBOOKS ----------
-async function loadCashbooks() {
+// overrideStart/overrideEnd (confirmed fix): when provided (the user edited the popup's date
+// inputs), search that exact range. When omitted, auto-detect the most recent month that
+// actually has cashbook-matching data for this client via GET /api/verification/latest_cashbook_date
+// (falls back to today's calendar month if the client has no matching data at all) - replaces the
+// old hardcoded "always search the current calendar month" default, which failed whenever a
+// client's latest data wasn't in the current month.
+async function loadCashbooks(overrideStart, overrideEnd) {
     const clientId = getClientId();
     if (!clientId) {
         popupCashbookSelect.innerHTML = '<option value="">-- Select client first --</option>';
@@ -223,16 +240,36 @@ async function loadCashbooks() {
         popupStartBtn.disabled = true;
         return;
     }
-    const now = new Date();
-    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    const start = formatDateInput(firstDay);
-    const end = formatDateInput(lastDay);
     // Bank Verification (Phase 8): book-type-specific copy, since this same function serves both
     // Cash and Bank discovery now (only the category_group filter/wording differs).
     const bookWord = currentType === 'bank' ? 'bankbook' : 'cashbook';
     const bookWordCap = currentType === 'bank' ? 'Bankbook' : 'Cashbook';
     const voucherHint = currentType === 'bank' ? 'BPV/BRV' : 'CPV/CRV';
+
+    let start = overrideStart;
+    let end = overrideEnd;
+    if (!start || !end) {
+        let anchorDate = new Date();
+        try {
+            const latestParams = new URLSearchParams({ client_id: clientId, category_group: currentType });
+            const latestRes = await fetch(`${API_BASE}/api/verification/latest_cashbook_date?${latestParams}`);
+            if (latestRes.ok) {
+                const latestData = await latestRes.json();
+                if (latestData.latest_date) {
+                    anchorDate = new Date(latestData.latest_date + 'T00:00:00');
+                }
+            }
+        } catch (e) {
+            console.error(`Error detecting latest ${bookWord} date:`, e);
+            // Fall through to today's month - same behavior as before this fix.
+        }
+        const bounds = monthBoundsAround(anchorDate);
+        start = bounds.start;
+        end = bounds.end;
+    }
+    if (popupPeriodStart) popupPeriodStart.value = start;
+    if (popupPeriodEnd) popupPeriodEnd.value = end;
+
     try {
         const params = new URLSearchParams({
             client_id: clientId,
@@ -2702,6 +2739,18 @@ if (bankVoucherTile) {
     });
 }
 if (popupStartBtn) popupStartBtn.addEventListener('click', openCashbook);
+// Editable search range (confirmed fix): re-run the search with the user's chosen dates once
+// both inputs hold a valid start <= end range - mirrors the existing cashbookStartDate/
+// cashbookEndDate pattern in #cashbookContent.
+function handlePopupPeriodChange() {
+    const start = popupPeriodStart.value;
+    const end = popupPeriodEnd.value;
+    if (start && end && start <= end) {
+        loadCashbooks(start, end);
+    }
+}
+if (popupPeriodStart) popupPeriodStart.addEventListener('change', handlePopupPeriodChange);
+if (popupPeriodEnd) popupPeriodEnd.addEventListener('change', handlePopupPeriodChange);
 if (popupCancelBtn) {
     popupCancelBtn.addEventListener('click', function() {
         popupOverlay.style.display = 'none';

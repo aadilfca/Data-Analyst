@@ -630,6 +630,53 @@ def get_cashbooks(
         }
     return {"cashbooks": sorted(list(cashbooks)), "count": len(cashbooks)}
 
+@router.get("/api/verification/latest_cashbook_date")
+def get_latest_cashbook_date(
+    client_id: int = Query(..., description="Client ID"),
+    category_group: Optional[str] = Query(None, pattern="^(cash|bank)$", description="'cash' or 'bank' - restricts discovery to that category group")
+):
+    """
+    Returns the extract_date of the most recent client_data row that actually
+    resolves to a cashbook/bankbook leg (via extract_cashbook_name(), the same
+    function get_cashbooks() uses) - lets the Start Verification popup default
+    its search range to the real latest month with matching data, instead of
+    "today's calendar month" (which fails whenever the client's latest upload
+    isn't in the current month). Deliberately not a plain MAX(extract_date)
+    over all client_data - that would default to a month that has data for an
+    unrelated template (e.g. Purchase Order) but no actual cashbook rows.
+    """
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    client_prefixes = get_client_voucher_prefixes(client_id)
+    if category_group == 'cash':
+        client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Cash Payment', 'Cash Receipt')}
+    elif category_group == 'bank':
+        client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Bank Payment', 'Bank Receipt')}
+
+    rows = execute_query(
+        """
+        SELECT row_data, extract_date
+        FROM client_data
+        WHERE client_id = ? AND is_deleted = 0 AND change_detection_status != 'deleted'
+        ORDER BY extract_date DESC
+        """,
+        (client_id,)
+    )
+
+    for row in rows:
+        try:
+            row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
+            if not isinstance(row_data, dict):
+                continue
+            if extract_cashbook_name(row_data, client_prefixes):
+                return {"latest_date": row['extract_date']}
+        except Exception:
+            continue
+
+    return {"latest_date": None}
+
 @router.post("/api/verification/start_session")
 def start_verification_session(
     client_id: int = Query(..., description="Client ID"),
