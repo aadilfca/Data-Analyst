@@ -35,6 +35,17 @@ const SETTINGS_DEF = {
         default: '0',
         hint: 'Default number of decimal places for amounts.'
     },
+    rate_precision: {
+        label: 'Rate Precision',
+        type: 'select',
+        options: [
+            { value: '0', label: '0 (e.g., 1,000)' },
+            { value: '2', label: '2 (e.g., 1,000.25)' },
+            { value: '4', label: '4 (e.g., 1,000.2500)' }
+        ],
+        default: '0',
+        hint: 'Decimal places for the derived/imported Rate column, independent of Decimal Precision (Default).'
+    },
     default_date_range: {
         label: 'Default Date Range for Dashboard',
         type: 'select',
