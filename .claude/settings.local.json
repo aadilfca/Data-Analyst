@@ -1,7 +1,16 @@
 {
   "permissions": {
-    "allow": ["Bash"],
-    "deny": ["Bash(rm -rf:*)", "Bash(sudo:*)"],
-    "defaultMode": "bypassPermissions"
+    "allow": ["Bash", "Edit", "Write"],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(rm -r -f:*)",
+      "Bash(sudo:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -f:*)",
+      "Bash(git branch -D:*)"
+    ],
+    "defaultMode": "default"
   }
 }
