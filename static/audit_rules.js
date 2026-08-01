@@ -1024,9 +1024,14 @@ function renderCompareFieldDropdown(preserveValue) {
         opt.value = '';
         opt.disabled = true;
         opt.selected = true;
+        const noneHaveAnyFields = crossCheckDocIds.every(
+            docId => ((getDocumentById(docId) || {}).cross_check_fields || []).length === 0
+        );
         opt.textContent = (crossCheckDocIds.length === 0)
             ? 'Add a document first'
-            : 'No field is common to all selected documents';
+            : noneHaveAnyFields
+                ? 'No eligible fields — add them on the Document'
+                : 'No field is common to all selected documents';
         arCompareFieldSelect.appendChild(opt);
         hideCompareFieldStaleWarning();
         return;
