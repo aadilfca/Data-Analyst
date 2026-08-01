@@ -14,6 +14,8 @@ const modalOverlay = document.getElementById('templateModalOverlay');
 const modal = document.getElementById('templateModal');
 const modalTitle = document.getElementById('modalTitle');
 const templateName = document.getElementById('templateName');
+const rateSourceField = document.getElementById('rateSourceField');
+const rateSourceSelect = document.getElementById('rateSourceSelect');
 const searchInput = document.getElementById('columnSearchInput');
 const clearSearchBtn = document.getElementById('clearSearchBtn');
 const addColumnTriggerBtn = document.getElementById('addColumnTriggerBtn');
@@ -41,6 +43,16 @@ const quickAddModalStatus = document.getElementById('quickAddModalStatus');
 const quickAddCancelBtn = document.getElementById('quickAddCancelBtn');
 const quickAddSaveBtn = document.getElementById('quickAddSaveBtn');
 const quickAddSaveAndNewBtn = document.getElementById('quickAddSaveAndNewBtn');
+
+// Mirrors RATE_SOURCE_ELIGIBLE_TEMPLATES in routers/templates.py -- keep in sync.
+const RATE_SOURCE_ELIGIBLE_TEMPLATES = new Set(['purchase order', 'store receiving', 'vendor bill']);
+
+function updateRateSourceVisibility() {
+    const eligible = RATE_SOURCE_ELIGIBLE_TEMPLATES.has(templateName.value.trim().toLowerCase());
+    rateSourceField.style.display = eligible ? 'block' : 'none';
+}
+
+templateName.addEventListener('input', updateRateSourceVisibility);
 
 let editingId = null;
 let allMasterColumns = [];
@@ -589,6 +601,7 @@ async function openModal(title, templateData = null) {
         editingId = templateData.id;
         templateName.value = templateData.template_name;
         editId.value = templateData.id;
+        rateSourceSelect.value = templateData.rate_source || 'imported';
         // Use templateData.columns (pivot table) instead of selected_columns.
         // GET /api/templates(/{id}) doesn't select master_columns.notes, so
         // look it up from the just-loaded `columns` (GET /api/columns, which
@@ -604,9 +617,11 @@ async function openModal(title, templateData = null) {
         editingId = null;
         templateName.value = '';
         editId.value = '';
+        rateSourceSelect.value = 'imported';
         renderSelectedColumns();
         updateSelectedCount();
     }
+    updateRateSourceVisibility();
 }
 
 function closeModal() {
@@ -680,7 +695,7 @@ document.getElementById('templateForm').addEventListener('submit', async functio
     try {
         let url = API_BASE + '/api/templates';
         let method = 'POST';
-        const payload = { template_name: name, selected_columns: selectedIds };
+        const payload = { template_name: name, selected_columns: selectedIds, rate_source: rateSourceSelect.value };
 
         if (editingId) {
             url += '/' + editingId;
