@@ -3386,6 +3386,15 @@ body {
     font-size: 12px;
 }
 
+/* Rate-derivation requirement, Phase 10 (FINAL): provenance icon (📥 imported / 🧮 derived) shown
+   next to a Rate cell's value, on the Data Bank preview table (static/databank.js) and the
+   Verification Linked Evidence table (static/verification.js) - shared here since both pages
+   already load this stylesheet, mirroring databank.html's own .quality-flag-icon convention. */
+.rate-source-icon {
+    cursor: help;
+    margin-left: 4px;
+}
+
 /* ----- Three-segment panel styling (Supporting Documents redesign, Phase 2; colours corrected to
    match verification_prototype_v7.html's .seg1/.seg2/.seg3 exactly) -----
    Wraps each document panel's Data Table / Audit Procedures / Observation content (built in

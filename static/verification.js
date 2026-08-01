@@ -4322,7 +4322,18 @@ function buildSelectedLinesTable(uid, docId) {
         html += `<td>${idx + 1}</td>`;
         columns.forEach(col => {
             const value = getRowFieldCaseInsensitive(sel.row_data, col.column_name);
-            html += `<td>${escapeHtml(value)}</td>`;
+            // Rate-derivation requirement, Phase 10 (FINAL): same provenance icon as Data Bank
+            // preview's renderPreviewRows() (static/databank.js), sourced per-row from
+            // sel.rate_source (client_data.rate_source, added to this table's GET
+            // voucher_line_documents/{id} response) - never the template-level setting.
+            if (col.column_name.trim().toLowerCase() === 'rate' && value && sel.rate_source) {
+                const icon = sel.rate_source === 'derived'
+                    ? '<span class="rate-source-icon" title="Rate derived as Amount ÷ Quantity">🧮</span>'
+                    : '<span class="rate-source-icon" title="Rate imported directly from the source file">📥</span>';
+                html += `<td>${escapeHtml(value)}${icon}</td>`;
+            } else {
+                html += `<td>${escapeHtml(value)}</td>`;
+            }
         });
         html += `<td><button type="button" class="procedure-unlink-btn" data-assignment-id="${sel.id}" title="Unlink this evidence">✕</button></td>`;
         html += '</tr>';

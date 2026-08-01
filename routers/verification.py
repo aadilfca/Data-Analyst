@@ -2116,7 +2116,7 @@ def get_voucher_line_documents(voucher_line_id: int):
         SELECT vld.id, vld.voucher_line_id, vld.client_data_id, vld.document_id,
                vld.linked_by, vld.linked_at, vld.signature_exception,
                ard.name AS document_name,
-               cd.row_data, cd.extract_date, cd.extract_amount
+               cd.row_data, cd.extract_date, cd.extract_amount, cd.rate_source
         FROM voucher_line_documents vld
         JOIN audit_rule_documents ard ON ard.id = vld.document_id
         JOIN client_data cd ON cd.id = vld.client_data_id
@@ -2142,7 +2142,11 @@ def get_voucher_line_documents(voucher_line_id: int):
             "signature_exception": bool(r['signature_exception']),
             "row_data": row_data,
             "extract_date": r['extract_date'],
-            "extract_amount": r['extract_amount']
+            "extract_amount": r['extract_amount'],
+            # Rate-derivation requirement, Phase 10 (FINAL): per-row provenance for the Rate
+            # column (imported/derived/None), read straight from client_data — see the matching
+            # comment in routers/data.py's GET /api/data/preview.
+            "rate_source": r['rate_source']
         })
     return {"voucher_line_id": voucher_line_id, "documents": result, "count": len(result)}
 

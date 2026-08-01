@@ -1139,7 +1139,27 @@ function renderPreviewRows(rows) {
             // grouping. Every column always shows that specific line's own
             // value.
             const value = row.row_data[h] !== undefined ? row.row_data[h] : '';
-            td.textContent = formatCellValue(value, h);
+            const formatted = formatCellValue(value, h);
+            td.textContent = formatted;
+
+            // Rate-derivation requirement, Phase 10 (FINAL): a small provenance
+            // icon on the Rate column's cells (only when it has a real value),
+            // sourced per-row from row.rate_source (client_data.rate_source) -
+            // never the template-level setting, since a historic row may have
+            // been imported under a since-changed setting. Mirrors the
+            // .quality-flag-icon markup pattern above (span, title, cursor:help).
+            if (h.trim().toLowerCase() === 'rate' && formatted !== '—' && row.rate_source) {
+                const provIcon = document.createElement('span');
+                provIcon.className = 'rate-source-icon';
+                if (row.rate_source === 'derived') {
+                    provIcon.textContent = '🧮';
+                    provIcon.title = 'Rate derived as Amount ÷ Quantity';
+                } else {
+                    provIcon.textContent = '📥';
+                    provIcon.title = 'Rate imported directly from the source file';
+                }
+                td.appendChild(provIcon);
+            }
             tr.appendChild(td);
         });
         previewTableBody.appendChild(tr);

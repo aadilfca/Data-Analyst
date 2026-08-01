@@ -324,7 +324,7 @@ def get_preview_rows(
     # Pagination
     offset = (page - 1) * limit
     data_sql = f"""
-        SELECT cd.id, cd.row_data, cd.extract_amount, cd.extract_date, cd.created_at, cd.data_quality_flag
+        SELECT cd.id, cd.row_data, cd.extract_amount, cd.extract_date, cd.created_at, cd.data_quality_flag, cd.rate_source
         FROM client_data cd
         WHERE {where_sql}
         ORDER BY cd.extract_date DESC, cd.id
@@ -332,7 +332,7 @@ def get_preview_rows(
     """
     data_params = final_params + [limit, offset]
     rows = execute_query(data_sql, data_params)
-    
+
     # Format rows
     result_rows = []
     for r in rows:
@@ -347,6 +347,11 @@ def get_preview_rows(
             "extract_date": r["extract_date"],
             "created_at": format_datetime(r["created_at"]),
             "data_quality_flag": r["data_quality_flag"],
+            # Rate-derivation requirement, Phase 10 (FINAL): per-row provenance for the Rate
+            # column (imported/derived/None), read straight from client_data — not the
+            # template-level rate_source setting, since a historic row may have been imported
+            # under a since-changed template setting.
+            "rate_source": r["rate_source"],
             "document_group_id": compute_preview_document_group_id(row_dict, r["extract_date"], doc_key_column, r["id"])
         })
 
