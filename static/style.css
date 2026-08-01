@@ -4341,6 +4341,61 @@ body {
     margin-top: 4px;
 }
 
+/* ----- Category detail: Validation Rules section (Phase 1 of 4 shell) -----
+   Groups validation-related config (Cross-checks now, Voucher-level Checks in a later phase)
+   into one visually distinct, clearly flagged box within Category detail — same amber/⚠️
+   warning language as .ar-field-warning above, scaled up into a bordered container. Built by
+   audit_rules.js's buildCategoryValidationRulesSection(), which reparents the existing
+   Cross-checks/Document Chains .ar-field nodes in here — the fields themselves keep their own
+   .ar-field styling untouched. */
+.ar-validation-rules-section {
+    border: 2px solid #f59e0b;
+    background: #fffbeb;
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 18px;
+}
+.ar-validation-rules-header {
+    font-weight: 700;
+    font-size: 14px;
+    color: #92400e;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+/* One card per sub-section (Cross-checks, Voucher-level Checks) — same treatment for both, per
+   the confirmed spec, regardless of which currently has real content vs. a placeholder. */
+.ar-validation-subsection {
+    background: white;
+    border: 1px solid #fde68a;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+}
+.ar-validation-subsection:last-child {
+    margin-bottom: 0;
+}
+.ar-validation-subsection-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: #78350f;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 10px;
+}
+/* A sub-section's .ar-field children (once moved in) already carry their own bottom margin —
+   the last one inside a sub-section shouldn't add extra trailing space before the card's own
+   padding. */
+.ar-validation-subsection .ar-field:last-child {
+    margin-bottom: 0;
+}
+.ar-validation-placeholder {
+    color: #94a3b8;
+    font-size: 13px;
+    font-style: italic;
+}
+
 /* ----- Chip editors (Authorisation Roles / Cross-check-eligible Fields) -----
    Independent copy of client_settings.html's inline prefix-chip-* styling — that page's
    rules live in its own <style> block, unreachable from a different page, so redefined

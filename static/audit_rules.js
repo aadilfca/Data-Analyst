@@ -974,6 +974,62 @@ const arCategoryCrossChecksChipList = document.getElementById('arCategoryCrossCh
 const arCategoryAddCrossCheckSelect = document.getElementById('arCategoryAddCrossCheckSelect');
 const arCategoryAddCrossCheckBtn = document.getElementById('arCategoryAddCrossCheckBtn');
 const arCategoryCrossCheckChainPreview = document.getElementById('arCategoryCrossCheckChainPreview');
+
+// ---------- CATEGORY DETAIL: VALIDATION RULES SECTION SHELL (Phase 1 of 4) ----------
+// Groups the Cross-checks field + its Document Chains preview into one visually distinct
+// "Validation Rules" box with two labelled sub-sections (Cross-checks, Voucher-level Checks).
+// Per the confirmed scope, static/audit_rules.html is not touched this phase — the Cross-checks
+// chip list and Document Chains preview stay exactly as declared there; this function reparents
+// those two existing .ar-field nodes (by id, moving them, not cloning) into a new wrapper built
+// here, so every id/listener/render function that already targets them
+// (renderCategoryCrossCheckChips(), renderCategoryCrossCheckChainPreview(), the add/remove
+// handlers) keeps working untouched. Voucher-level Checks has no real content to move yet
+// (Phase 3) — this phase only renders its placeholder sub-section.
+function buildCategoryValidationRulesSection() {
+    const crossChecksField = arCategoryCrossChecksChipList.closest('.ar-field');
+    const chainPreviewField = arCategoryCrossCheckChainPreview.closest('.ar-field');
+    if (!crossChecksField || !chainPreviewField) return;
+
+    const section = document.createElement('div');
+    section.className = 'ar-validation-rules-section';
+    section.id = 'arCategoryValidationRulesSection';
+
+    const header = document.createElement('div');
+    header.className = 'ar-validation-rules-header';
+    header.textContent = '⚠️ Validation Rules';
+    section.appendChild(header);
+
+    const crossChecksSubsection = document.createElement('div');
+    crossChecksSubsection.className = 'ar-validation-subsection';
+    crossChecksSubsection.id = 'arValidationSubsectionCrossChecks';
+    const crossChecksTitle = document.createElement('div');
+    crossChecksTitle.className = 'ar-validation-subsection-title';
+    crossChecksTitle.textContent = 'Cross-checks';
+    crossChecksSubsection.appendChild(crossChecksTitle);
+    section.appendChild(crossChecksSubsection);
+
+    const voucherChecksSubsection = document.createElement('div');
+    voucherChecksSubsection.className = 'ar-validation-subsection';
+    voucherChecksSubsection.id = 'arValidationSubsectionVoucherChecks';
+    const voucherChecksTitle = document.createElement('div');
+    voucherChecksTitle.className = 'ar-validation-subsection-title';
+    voucherChecksTitle.textContent = 'Voucher-level Checks';
+    voucherChecksSubsection.appendChild(voucherChecksTitle);
+    const voucherChecksPlaceholder = document.createElement('div');
+    voucherChecksPlaceholder.className = 'ar-validation-placeholder';
+    voucherChecksPlaceholder.textContent = 'Voucher-level checks will appear here in a later phase.';
+    voucherChecksSubsection.appendChild(voucherChecksPlaceholder);
+    section.appendChild(voucherChecksSubsection);
+
+    // Insert the new section where the Cross-checks field currently sits, then move both
+    // existing fields into the Cross-checks sub-section (appendChild on an existing node moves
+    // it, it does not clone it).
+    crossChecksField.parentNode.insertBefore(section, crossChecksField);
+    crossChecksSubsection.appendChild(crossChecksField);
+    crossChecksSubsection.appendChild(chainPreviewField);
+}
+buildCategoryValidationRulesSection();
+
 const arCategoryDocApprovalsList = document.getElementById('arCategoryDocApprovalsList');
 const arCategoryMatrixVersion = document.getElementById('arCategoryMatrixVersion');
 const arCategoryUsedByRow = document.getElementById('arCategoryUsedByRow');
