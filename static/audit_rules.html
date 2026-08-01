@@ -186,12 +186,17 @@
                         </div>
                     </div>
 
-                    <!-- Cross-check-eligible Fields chip editor -->
+                    <!-- Cross-check-eligible Fields: dropdown sourced from the linked Template's
+                         master columns (ID-based Cross-check-eligible Fields, Phase 2 of 4).
+                         Existing entries that don't match the current template's columns render
+                         flagged (see renderFieldChips() in audit_rules.js). -->
                     <div class="ar-field">
                         <label>Cross-check-eligible Fields</label>
                         <div class="ar-chip-list" id="arFieldsChipList"></div>
                         <div class="ar-chip-input-row">
-                            <input type="text" id="arFieldsInput" placeholder="e.g. Quantity">
+                            <select id="arFieldsSelect">
+                                <option value="">Select a template first</option>
+                            </select>
                             <button type="button" id="arFieldsAddBtn" class="ar-btn-chip-add">Add</button>
                         </div>
                     </div>

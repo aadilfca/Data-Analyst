@@ -4563,6 +4563,14 @@ body {
     color: #94a3b8;
     font-style: italic;
 }
+/* Cross-check-eligible Fields chip that doesn't match the Document's linked template's
+   columns (ID-based Cross-check-eligible Fields, Phase 2 of 4) — same amber warning
+   language as .ar-field-warning above. */
+.ar-chip-warning {
+    background: #fffbeb;
+    border-color: #f59e0b;
+    color: #b45309;
+}
 
 /* ---------- CATEGORY CROSS-CHECK CHAIN PREVIEW (Automated cross-document validation
    engine, Phase 10, FINAL) — config-time pill/arrow preview of a Category's attached
@@ -4618,7 +4626,8 @@ body {
     display: flex;
     gap: 8px;
 }
-.ar-chip-input-row input {
+.ar-chip-input-row input,
+.ar-chip-input-row select {
     flex: 1;
     padding: 6px 10px;
     border: 1px solid #d0d5dd;

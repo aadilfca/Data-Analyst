@@ -36,7 +36,7 @@ const arRolesChipList = document.getElementById('arRolesChipList');
 const arRolesInput = document.getElementById('arRolesInput');
 const arRolesAddBtn = document.getElementById('arRolesAddBtn');
 const arFieldsChipList = document.getElementById('arFieldsChipList');
-const arFieldsInput = document.getElementById('arFieldsInput');
+const arFieldsSelect = document.getElementById('arFieldsSelect');
 const arFieldsAddBtn = document.getElementById('arFieldsAddBtn');
 const arDocSignatureSpecimensHint = document.getElementById('arDocSignatureSpecimensHint');
 const arDocSignatureSpecimensContainer = document.getElementById('arDocSignatureSpecimensContainer');
@@ -143,8 +143,49 @@ function renderChipList(container, items, onRemove) {
 function renderRoleChips() {
     renderChipList(arRolesChipList, rolesState, removeRole);
 }
+
+// Cross-check-eligible Fields (ID-based Cross-check-eligible Fields, Phase 2 of 4): unlike
+// the plain renderChipList() above, each chip is checked against the Document's *current*
+// template's real columns (arTemplateColumnsCache) and rendered flagged if it doesn't
+// match — this mirrors, client-side, the same case-insensitive/trimmed matching
+// routers/audit_rules.py's resolve_field_name_to_master_column_id() does on save, so a
+// flagged chip here is exactly one that would save with a NULL master_column_id.
 function renderFieldChips() {
-    renderChipList(arFieldsChipList, fieldsState, removeField);
+    arFieldsChipList.innerHTML = '';
+    if (fieldsState.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ar-chip-empty';
+        empty.textContent = 'None added.';
+        arFieldsChipList.appendChild(empty);
+        return;
+    }
+
+    const templateId = arTemplateSelect.value;
+    const templateColumns = templateId ? (arTemplateColumnsCache[templateId] || []) : [];
+
+    fieldsState.forEach(item => {
+        const isResolved = templateColumns.some(c => c.column_name.toLowerCase() === item.toLowerCase());
+
+        const chip = document.createElement('span');
+        chip.className = 'ar-chip' + (isResolved ? '' : ' ar-chip-warning');
+        if (!isResolved) {
+            chip.title = 'Doesn\'t match the linked template\'s columns — remove and re-add.';
+        }
+
+        const label = document.createElement('span');
+        label.textContent = (isResolved ? '' : '⚠ ') + item;
+        chip.appendChild(label);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'ar-chip-remove';
+        removeBtn.textContent = '✕';
+        removeBtn.title = 'Remove';
+        removeBtn.addEventListener('click', () => removeField(item));
+        chip.appendChild(removeBtn);
+
+        arFieldsChipList.appendChild(chip);
+    });
 }
 
 function addRole() {
@@ -164,19 +205,19 @@ function removeRole(value) {
 }
 
 function addField() {
-    const value = arFieldsInput.value.trim();
+    const value = arFieldsSelect.value;
     if (!value) return;
     if (fieldsState.some(f => f.toLowerCase() === value.toLowerCase())) {
-        arFieldsInput.value = '';
         return;
     }
     fieldsState.push(value);
-    arFieldsInput.value = '';
     renderFieldChips();
+    renderFieldsDropdown();
 }
 function removeField(value) {
     fieldsState = fieldsState.filter(f => f !== value);
     renderFieldChips();
+    renderFieldsDropdown();
 }
 
 // ---------- TEMPLATES (Phase 9: Document -> Data Bank template link) ----------
@@ -194,6 +235,68 @@ async function loadTemplatesForDocuments() {
         // Non-fatal: the Template field just stays at its "-- None --" default if this fails.
         console.error('Failed to load templates for Documents:', error);
     }
+}
+
+// ---------- CROSS-CHECK-ELIGIBLE FIELDS DROPDOWN (ID-based Cross-check-eligible Fields,
+// Phase 2 of 4) ----------
+// Fetches and caches a template's master columns (id + column_name), mirroring
+// verification.js's fetchTemplateColumns() for its Linked Evidence table, but keeps
+// `id` (the master_column_id) in the cached shape since it's directly relevant to this
+// feature's naming, even though the actual save payload is still by column_name text —
+// see saveDocument(), unchanged this phase.
+let arTemplateColumnsCache = {};
+async function fetchArTemplateColumns(templateId) {
+    if (!templateId) return [];
+    if (Object.prototype.hasOwnProperty.call(arTemplateColumnsCache, templateId)) {
+        return arTemplateColumnsCache[templateId];
+    }
+    try {
+        const res = await fetch(API_BASE + '/api/templates/' + templateId);
+        if (!res.ok) { arTemplateColumnsCache[templateId] = []; return []; }
+        const data = await res.json();
+        const columns = (data.columns || []).map(c => ({ id: c.id, column_name: c.column_name }));
+        arTemplateColumnsCache[templateId] = columns;
+        return columns;
+    } catch (error) {
+        console.error('Failed to load template columns for Cross-check-eligible Fields:', error);
+        arTemplateColumnsCache[templateId] = [];
+        return [];
+    }
+}
+
+// Populates arFieldsSelect from the Document's currently-selected template, excluding
+// columns already present in fieldsState (case-insensitive) — same dedup rule addField()
+// already enforced for free text. Called on template change and whenever fieldsState
+// changes (add/remove), plus on selectDocument()/startNewDocument().
+async function renderFieldsDropdown() {
+    const templateId = arTemplateSelect.value;
+
+    if (!templateId) {
+        arFieldsSelect.innerHTML = '<option value="">Select a template first</option>';
+        arFieldsSelect.disabled = true;
+        arFieldsAddBtn.disabled = true;
+        renderFieldChips();
+        return;
+    }
+
+    const columns = await fetchArTemplateColumns(templateId);
+    // Re-render chips now that arTemplateColumnsCache[templateId] is populated, so the
+    // resolved/flagged state reflects real data rather than a transient empty cache.
+    renderFieldChips();
+
+    const eligible = columns.filter(c => !fieldsState.some(f => f.toLowerCase() === c.column_name.toLowerCase()));
+
+    if (eligible.length === 0) {
+        arFieldsSelect.innerHTML = '<option value="">No more fields available</option>';
+        arFieldsSelect.disabled = true;
+        arFieldsAddBtn.disabled = true;
+        return;
+    }
+
+    arFieldsSelect.innerHTML = '<option value="">-- Select a field --</option>' +
+        eligible.map(c => `<option value="${c.column_name}">${c.column_name}</option>`).join('');
+    arFieldsSelect.disabled = false;
+    arFieldsAddBtn.disabled = false;
 }
 
 // ---------- TRANSACTION LEVEL APPROVAL (new, confirmed requirement) ----------
@@ -237,6 +340,7 @@ async function selectDocument(id) {
         fieldsState = (doc.cross_check_fields || []).slice();
         renderRoleChips();
         renderFieldChips();
+        renderFieldsDropdown();
 
         arUsedByRow.style.display = 'block';
         arUsedByCount.textContent = doc.used_by_categories_count;
@@ -273,6 +377,7 @@ function startNewDocument() {
     fieldsState = [];
     renderRoleChips();
     renderFieldChips();
+    renderFieldsDropdown();
 
     arUsedByRow.style.display = 'none';
     arDeleteBtn.style.display = 'none';
@@ -575,9 +680,12 @@ arRolesInput.addEventListener('keydown', function(e) {
 });
 
 arFieldsAddBtn.addEventListener('click', addField);
-arFieldsInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') { e.preventDefault(); addField(); }
-});
+
+// Switching the linked Template mid-edit re-scopes the eligible-fields dropdown and
+// re-flags any already-added field against the newly-selected template's columns
+// (ID-based Cross-check-eligible Fields, Phase 2 of 4) — existing fields are never
+// auto-removed on a template switch, only re-flagged.
+arTemplateSelect.addEventListener('change', renderFieldsDropdown);
 
 arSaveBtn.addEventListener('click', saveDocument);
 arDeleteBtn.addEventListener('click', deleteDocument);
