@@ -1226,6 +1226,62 @@ def init_db():
             )
         ''')
 
+        # ID-based Cross-check-eligible Fields, Phase 1 of 4: field_name stays free text (the
+        # existing chip UI and Cross-check compare_field equality checks keep reading it
+        # unchanged), but each row now also carries a best-effort resolved master_column_id -
+        # the field's real master_columns row, scoped to the Document's own linked template.
+        # Nothing reads this column yet; it's the data foundation for a later dropdown UI.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_document_fields)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'master_column_id' not in columns:
+                conn.execute("ALTER TABLE audit_rule_document_fields ADD COLUMN master_column_id INTEGER")
+                print("✅ Added master_column_id column to audit_rule_document_fields")
+        except Exception as e:
+            print("⚠️ Could not add master_column_id to audit_rule_document_fields:", e)
+
+        # One-time (rerun-safe) backfill: match each still-unresolved field_name to a
+        # master_columns row mapped onto its own Document's template, case-insensitive/trimmed.
+        # No match (no template_id, or no same-named column on that template) leaves
+        # master_column_id NULL - the row is left exactly as-is, never dropped, flagged for
+        # manual re-selection once a later phase's dropdown UI lands. Only NULL rows are
+        # selected, so this is safe to run on every startup.
+        try:
+            unmatched_rows = conn.execute(
+                """
+                SELECT f.id, f.field_name, d.template_id
+                FROM audit_rule_document_fields f
+                JOIN audit_rule_documents d ON f.document_id = d.id
+                WHERE f.master_column_id IS NULL
+                """
+            ).fetchall()
+            matched_count = 0
+            skipped_count = 0
+            for field_id, field_name, template_id in unmatched_rows:
+                if not template_id:
+                    skipped_count += 1
+                    continue
+                match = conn.execute(
+                    """
+                    SELECT mc.id FROM master_columns mc
+                    JOIN template_column_mappings tcm ON tcm.column_id = mc.id
+                    WHERE tcm.template_id = ? AND LOWER(TRIM(mc.column_name)) = LOWER(TRIM(?))
+                    """,
+                    (template_id, field_name)
+                ).fetchone()
+                if match:
+                    conn.execute(
+                        "UPDATE audit_rule_document_fields SET master_column_id = ? WHERE id = ?",
+                        (match[0], field_id)
+                    )
+                    matched_count += 1
+                else:
+                    skipped_count += 1
+            if matched_count or skipped_count:
+                print(f"✅ Cross-check-eligible field migration: matched {matched_count}, left {skipped_count} unmatched (manual re-selection needed later)")
+        except Exception as e:
+            print("⚠️ Could not backfill master_column_id on audit_rule_document_fields:", e)
+
         # Authorisation roles required on a Document (e.g. "Approved by") - modelled as a
         # list from the start so more roles can be added later with no schema change.
         conn.execute('''

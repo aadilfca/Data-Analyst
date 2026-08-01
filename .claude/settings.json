@@ -20,5 +20,19 @@
       "Bash(curl -s -X DELETE \"http://localhost:5000/*)",
       "Bash(curl -s -X DELETE \"http://127.0.0.1:5000/*)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \".claude/hooks/guard_large_edits.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
   }
 }

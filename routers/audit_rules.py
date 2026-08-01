@@ -100,13 +100,43 @@ def save_document_auth_roles(document_id: int, auth_roles: List[str]):
             (document_id, role_name, idx)
         )
 
+def resolve_field_name_to_master_column_id(template_id: Optional[int], field_name: str) -> Optional[int]:
+    """
+    Best-effort match a free-text field name to a master column mapped onto the given
+    template (case-insensitive/trimmed) - mirrors database.py's own startup migration
+    matching logic (duplicated here per this codebase's established per-router
+    cross-cutting-lookup convention, not cross-imported). Returns None (never raises) if
+    template_id is unset or no same-named column is mapped onto that template.
+    """
+    if not template_id:
+        return None
+    rows = execute_query(
+        """
+        SELECT mc.id FROM master_columns mc
+        JOIN template_column_mappings tcm ON tcm.column_id = mc.id
+        WHERE tcm.template_id = ? AND LOWER(TRIM(mc.column_name)) = LOWER(TRIM(?))
+        """,
+        (template_id, field_name)
+    )
+    return rows[0]["id"] if rows else None
+
 def save_document_cross_check_fields(document_id: int, cross_check_fields: List[str]):
-    """Replace a Document's cross-check-eligible fields list (delete-then-reinsert)."""
+    """
+    Replace a Document's cross-check-eligible fields list (delete-then-reinsert). Each
+    field_name is also best-effort resolved to a master_column_id scoped to the Document's
+    own linked template (ID-based Cross-check-eligible Fields, Phase 1 of 4) - an unmatched
+    name is stored with master_column_id NULL, flagged for manual re-selection once a later
+    phase's dropdown UI lands, never silently dropped. field_name itself is unchanged/still
+    authoritative for the API's existing List[str] contract.
+    """
+    doc_rows = execute_query("SELECT template_id FROM audit_rule_documents WHERE id = ?", (document_id,))
+    template_id = doc_rows[0]["template_id"] if doc_rows else None
     execute_write("DELETE FROM audit_rule_document_fields WHERE document_id = ?", (document_id,))
     for idx, field_name in enumerate(cross_check_fields):
+        master_column_id = resolve_field_name_to_master_column_id(template_id, field_name)
         execute_write(
-            "INSERT INTO audit_rule_document_fields (document_id, field_name, sort_order) VALUES (?, ?, ?)",
-            (document_id, field_name, idx)
+            "INSERT INTO audit_rule_document_fields (document_id, field_name, sort_order, master_column_id) VALUES (?, ?, ?, ?)",
+            (document_id, field_name, idx, master_column_id)
         )
 
 # ---------- ENDPOINTS ----------
