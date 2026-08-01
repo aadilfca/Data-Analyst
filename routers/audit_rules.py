@@ -6,7 +6,6 @@
 # Categories) in the Audit Rules module now have CRUD. Categories is the entity a
 # voucher will eventually reference (wired up in Phase 9).
 
-import sqlite3
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 from typing import Optional, List
@@ -851,7 +850,14 @@ def reorder_voucher_checks(check_ids: List[int] = Body(...)):
 # Phase 1 of 4: signature_specimens now has is_active (database.py upgrade block above), so
 # this entity follows the same soft-delete/restore pattern as Documents/Cross-checks/
 # Categories/Voucher Checks - the normal "Delete" action deactivates; a separate, low-visibility
-# hard-delete endpoint remains for correcting genuine data-entry mistakes only.
+# hard-delete endpoint remains for correcting genuine data-entry mistakes only. Relax uniqueness
+# constraint, Phase 2 of 4: the old table-level UNIQUE(client_id, document_id, role_name)
+# constraint (database.py) is gone - it used to block a replacement specimen once any row, even
+# a deactivated one, existed for the same triple, which broke routine personnel turnover.
+# validate_no_duplicate_active_signatory() below is now the sole enforcement: only one ACTIVE
+# specimen per client+document+role at a time, but multiple inactive/historical rows and
+# multiple concurrently-active rows for genuinely different people (e.g. two people both
+# authorised to sign as "Store Manager") are both allowed.
 
 # ---------- DATA MODELS ----------
 class SignatureSpecimenCreate(BaseModel):
@@ -887,6 +893,34 @@ def validate_signature_specimen_payload(document_id: int, role_name: str):
         raise HTTPException(
             400,
             f"Role '{role_name}' is not a configured authorisation role on Document '{doc_rows[0]['name']}' (ID {document_id})"
+        )
+
+def validate_no_duplicate_active_signatory(client_id: int, document_id: int, role_name: str, expected_signatory_name: str, exclude_id: Optional[int] = None):
+    """
+    Raises HTTPException(400) if an ACTIVE signature specimen already exists for this
+    client+document+role with the SAME person's name (Relax uniqueness constraint, Phase 2 of
+    4 - replaces the old DB-level UNIQUE(client_id, document_id, role_name) constraint, which
+    blocked even a deactivated row's slot from being reused, and would have also blocked
+    genuinely different people). This check is scoped to name too (case-insensitive/trimmed)
+    - it exists to catch an accidental literal duplicate entry for the same person, not to
+    limit a role to one active person: multiple concurrently-active rows for genuinely
+    different people at the same client+document+role are allowed by design (e.g. two people
+    both authorised to sign as "Store Manager"), per the confirmed requirement. exclude_id lets
+    an update to a specimen's own row skip checking itself.
+    """
+    query = (
+        "SELECT id FROM signature_specimens WHERE client_id = ? AND document_id = ? AND role_name = ? "
+        "AND is_active = 1 AND TRIM(LOWER(expected_signatory_name)) = TRIM(LOWER(?))"
+    )
+    params = [client_id, document_id, role_name, expected_signatory_name]
+    if exclude_id is not None:
+        query += " AND id != ?"
+        params.append(exclude_id)
+    existing = execute_query(query, tuple(params))
+    if existing:
+        raise HTTPException(
+            400,
+            f"An active signature specimen for '{expected_signatory_name}' in this client/document/role already exists (ID {existing[0]['id']})"
         )
 
 def row_to_signature_specimen(row: dict) -> dict:
@@ -941,14 +975,12 @@ def get_signature_specimen(specimen_id: int):
 def create_signature_specimen(specimen: SignatureSpecimenCreate):
     validate_client_id(specimen.client_id)
     validate_signature_specimen_payload(specimen.document_id, specimen.role_name)
+    validate_no_duplicate_active_signatory(specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name)
 
-    try:
-        specimen_id = execute_write(
-            "INSERT INTO signature_specimens (client_id, document_id, role_name, expected_signatory_name) VALUES (?, ?, ?, ?)",
-            (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name)
-        )
-    except sqlite3.IntegrityError:
-        raise HTTPException(400, "A signature specimen for this client/document/role already exists")
+    specimen_id = execute_write(
+        "INSERT INTO signature_specimens (client_id, document_id, role_name, expected_signatory_name) VALUES (?, ?, ?, ?)",
+        (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name)
+    )
 
     log_audit(
         "Admin", "Create", "AuditRules",
@@ -964,15 +996,13 @@ def update_signature_specimen(specimen_id: int, specimen: SignatureSpecimenUpdat
 
     validate_client_id(specimen.client_id)
     validate_signature_specimen_payload(specimen.document_id, specimen.role_name)
+    validate_no_duplicate_active_signatory(specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name, exclude_id=specimen_id)
 
-    try:
-        execute_write(
-            "UPDATE signature_specimens SET client_id = ?, document_id = ?, role_name = ?, "
-            "expected_signatory_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name, specimen_id)
-        )
-    except sqlite3.IntegrityError:
-        raise HTTPException(400, "A signature specimen for this client/document/role already exists")
+    execute_write(
+        "UPDATE signature_specimens SET client_id = ?, document_id = ?, role_name = ?, "
+        "expected_signatory_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name, specimen_id)
+    )
 
     log_audit("Admin", "Update", "AuditRules", f"Updated signature specimen ID {specimen_id}")
     return {"message": "Signature specimen updated successfully"}

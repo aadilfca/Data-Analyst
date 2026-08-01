@@ -1433,6 +1433,14 @@ def init_db():
         # used by audit_rule_document_auth_roles.role_name/voucher_line_procedure_checks.role_name
         # (no role id exists anywhere in this app). Brand-new table with no prior data, so a
         # plain CREATE TABLE IF NOT EXISTS is sufficient - no ALTER TABLE upgrade block needed.
+        # Relax-uniqueness requirement (new, confirmed 4-phase requirement), Phase 2 of 4: a
+        # fresh install lands directly on the final desired shape - is_active present, no
+        # table-level UNIQUE(client_id, document_id, role_name) - since that constraint would
+        # otherwise block creating a replacement specimen (routine personnel turnover) once any
+        # row, even a deactivated one, exists for the same triple. Replaced by application-level
+        # validation in routers/audit_rules.py (no duplicate ACTIVE person per client+document+
+        # role; multiple inactive/historical rows and multiple concurrently-active rows for
+        # genuinely different people are both allowed).
         conn.execute('''
             CREATE TABLE IF NOT EXISTS signature_specimens (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1440,13 +1448,55 @@ def init_db():
                 document_id INTEGER NOT NULL,
                 role_name TEXT NOT NULL,
                 expected_signatory_name TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
-                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
-                UNIQUE(client_id, document_id, role_name)
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE
             )
         ''')
+
+        # SQLite can't ALTER/DROP a table constraint in place, so an existing database that
+        # still has the old UNIQUE(client_id, document_id, role_name) constraint needs the same
+        # schema-driven rename -> recreate -> copy -> drop rebuild already used above for
+        # audit_rule_cross_checks.comparison_type's CHECK-constraint expansion - gated on
+        # inspecting sqlite_master's stored CREATE TABLE sql (not data), so a fresh or
+        # already-migrated database is a no-op on every subsequent startup.
+        existing_ss_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='signature_specimens'"
+        ).fetchone()
+        if existing_ss_sql and 'UNIQUE(client_id, document_id, role_name)' in existing_ss_sql[0]:
+            print("⚠️ signature_specimens still has the old UNIQUE(client_id, document_id, role_name) constraint - rebuilding.")
+            conn.execute("DROP TABLE IF EXISTS signature_specimens_old")
+            conn.execute("ALTER TABLE signature_specimens RENAME TO signature_specimens_old")
+            conn.execute('''
+                CREATE TABLE signature_specimens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id INTEGER NOT NULL,
+                    document_id INTEGER NOT NULL,
+                    role_name TEXT NOT NULL,
+                    expected_signatory_name TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                    FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE
+                )
+            ''')
+            # is_active may or may not already exist on the old table depending on whether
+            # Phase 1's ALTER block already ran in an earlier startup - handle both, don't
+            # assume order.
+            old_cols = [row[1] for row in conn.execute("PRAGMA table_info(signature_specimens_old)").fetchall()]
+            is_active_expr = "is_active" if 'is_active' in old_cols else "1"
+            conn.execute(f'''
+                INSERT INTO signature_specimens
+                    (id, client_id, document_id, role_name, expected_signatory_name, is_active, created_at, updated_at)
+                SELECT id, client_id, document_id, role_name, expected_signatory_name, {is_active_expr}, created_at, updated_at
+                FROM signature_specimens_old
+            ''')
+            conn.execute("DROP TABLE signature_specimens_old")
+            print("✅ Rebuilt signature_specimens without the UNIQUE(client_id, document_id, role_name) constraint")
+
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_signature_specimens_client ON signature_specimens (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_signature_specimens_document ON signature_specimens (document_id)")
         print("✅ Created signature_specimens table (Validation Rules, Phase 1 of 7: schema)")
@@ -1455,6 +1505,9 @@ def init_db():
         # specimens were originally hard-delete only (no is_active column). Same upgrade-block
         # pattern as audit_rule_documents.transaction_level_approval above - existing rows
         # default to is_active = 1 via the ALTER's own DEFAULT, no separate backfill needed.
+        # Kept in place after the Phase 2 rebuild above too - for an already-rebuilt table this
+        # is a clean no-op (is_active already present), and it remains correct for any database
+        # state the rebuild block above doesn't touch.
         try:
             cur = conn.execute("PRAGMA table_info(signature_specimens)")
             columns = [row[1] for row in cur.fetchall()]
