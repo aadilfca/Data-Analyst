@@ -782,6 +782,7 @@ def init_db():
             ('date_format', 'DD/MM/YYYY', 'Global date format for display'),
             ('amount_grouping', '000', 'Amount grouping: 000 (thousands) or Lacs'),
             ('decimal_precision', '0', 'Default decimal places for amounts (0, 2, 4)'),
+            ('rate_precision', '0', 'Decimal places for derived/imported Rate column (0, 2, 4)'),
             ('default_date_range', 'Current Month', 'Default date range for dashboards'),
             ('materiality_threshold', '50000', 'Threshold for flagging high-value items'),
         ]
