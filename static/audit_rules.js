@@ -19,6 +19,12 @@ let editingId = null;
 let rolesState = [];
 let fieldsState = [];
 
+// Required Authority (new, confirmed requirement): role_name -> required authority text,
+// only ever relevant for an "Approved by"-type role (see isApprovalRole()). Additive
+// alongside rolesState/auth_roles - kept as a parallel map rather than changing rolesState's
+// shape, so nothing else reading auth_roles as plain strings needs to change.
+let requiredAuthorityState = {};
+
 // ---------- DOM REFS ----------
 const arListBody = document.getElementById('arListBody');
 const arListEmptyMessage = document.getElementById('arListEmptyMessage');
@@ -140,8 +146,61 @@ function renderChipList(container, items, onRemove) {
     });
 }
 
+// Matches an "Approved by"-type role by substring, not an exact string - mirrors
+// routers/audit_rules.py's is_approval_role() (which itself mirrors verification.py's
+// existing 'approv' in role_name.lower() convention).
+function isApprovalRole(roleName) {
+    return (roleName || '').toLowerCase().includes('approv');
+}
+
+// Dedicated implementation (not the shared renderChipList() other chip lists use) since an
+// approval-type role also needs an inline "Required Authority" input beneath its chip - same
+// precedent as renderFieldChips()'s own dedicated implementation for a different reason.
 function renderRoleChips() {
-    renderChipList(arRolesChipList, rolesState, removeRole);
+    arRolesChipList.innerHTML = '';
+    if (rolesState.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ar-chip-empty';
+        empty.textContent = 'None added.';
+        arRolesChipList.appendChild(empty);
+        return;
+    }
+
+    rolesState.forEach(role => {
+        const item = document.createElement('div');
+        item.className = 'ar-role-chip-item';
+
+        const chip = document.createElement('span');
+        chip.className = 'ar-chip';
+
+        const label = document.createElement('span');
+        label.textContent = role;
+        chip.appendChild(label);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'ar-chip-remove';
+        removeBtn.textContent = '✕';
+        removeBtn.title = 'Remove';
+        removeBtn.addEventListener('click', () => removeRole(role));
+        chip.appendChild(removeBtn);
+
+        item.appendChild(chip);
+
+        if (isApprovalRole(role)) {
+            const authorityInput = document.createElement('input');
+            authorityInput.type = 'text';
+            authorityInput.className = 'ar-role-authority-input';
+            authorityInput.placeholder = 'Required Authority (optional)';
+            authorityInput.value = requiredAuthorityState[role] || '';
+            authorityInput.addEventListener('input', () => {
+                requiredAuthorityState[role] = authorityInput.value;
+            });
+            item.appendChild(authorityInput);
+        }
+
+        arRolesChipList.appendChild(item);
+    });
 }
 
 // Cross-check-eligible Fields (ID-based Cross-check-eligible Fields, Phase 2 of 4): unlike
@@ -201,6 +260,7 @@ function addRole() {
 }
 function removeRole(value) {
     rolesState = rolesState.filter(r => r !== value);
+    delete requiredAuthorityState[value];
     renderRoleChips();
 }
 
@@ -337,6 +397,7 @@ async function selectDocument(id) {
         arTemplateSelect.value = doc.template_id || '';
         arRiskRatingSelect.value = doc.risk_rating || '';
         rolesState = (doc.auth_roles || []).slice();
+        requiredAuthorityState = { ...(doc.auth_role_authorities || {}) };
         fieldsState = (doc.cross_check_fields || []).slice();
         renderRoleChips();
         renderFieldChips();
@@ -374,6 +435,7 @@ function startNewDocument() {
     arTemplateSelect.value = '';
     arRiskRatingSelect.value = '';
     rolesState = [];
+    requiredAuthorityState = {};
     fieldsState = [];
     renderRoleChips();
     renderFieldChips();
@@ -407,6 +469,7 @@ async function saveDocument() {
         template_id: arTemplateSelect.value ? parseInt(arTemplateSelect.value) : null,
         risk_rating: arRiskRatingSelect.value || null,
         auth_roles: rolesState,
+        auth_role_authorities: requiredAuthorityState,
         cross_check_fields: fieldsState
     };
 

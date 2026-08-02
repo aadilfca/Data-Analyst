@@ -8,7 +8,7 @@
 
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 from database import execute_query, execute_write, log_audit
 
 router = APIRouter()
@@ -24,6 +24,11 @@ class DocumentCreate(BaseModel):
     # risk rating, surfaced on the main voucher table's Risk column.
     risk_rating: Optional[str] = None
     auth_roles: List[str] = []
+    # Required Authority (new, confirmed requirement): role_name -> required authority text,
+    # additive alongside auth_roles so that field's existing List[str] contract (read by
+    # static/verification.js and signature-specimen role validation) stays untouched. Only
+    # ever persisted for a role matching is_approval_role() below - see save_document_auth_roles().
+    auth_role_authorities: Dict[str, Optional[str]] = {}
     cross_check_fields: List[str] = []
 
 class DocumentUpdate(BaseModel):
@@ -32,6 +37,7 @@ class DocumentUpdate(BaseModel):
     template_id: Optional[int] = None
     risk_rating: Optional[str] = None
     auth_roles: List[str] = []
+    auth_role_authorities: Dict[str, Optional[str]] = {}
     cross_check_fields: List[str] = []
 
 # ---------- HELPERS ----------
@@ -41,6 +47,23 @@ def get_document_auth_roles(document_id: int) -> List[str]:
         (document_id,)
     )
     return [r["role_name"] for r in rows]
+
+def is_approval_role(role_name: str) -> bool:
+    """
+    Matches an "Approved by"-type role by substring, not an exact string - role names are
+    free text (e.g. "Approved By:", "Approved by"). Mirrors routers/verification.py's
+    compute_and_persist_cleared_status() approval-role check ('approv' in role_name.lower()),
+    duplicated here per this codebase's established per-router cross-cutting-check convention.
+    """
+    return 'approv' in (role_name or '').lower()
+
+def get_document_auth_role_authorities(document_id: int) -> dict:
+    """Return {role_name: required_authority} for a Document's roles that have one set."""
+    rows = execute_query(
+        "SELECT role_name, required_authority FROM audit_rule_document_auth_roles WHERE document_id = ? ORDER BY sort_order",
+        (document_id,)
+    )
+    return {r["role_name"]: r["required_authority"] for r in rows if r["required_authority"]}
 
 def get_document_cross_check_fields(document_id: int) -> List[str]:
     rows = execute_query(
@@ -68,6 +91,7 @@ def row_to_document(row: dict) -> dict:
         "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
         "auth_roles": get_document_auth_roles(document_id),
+        "auth_role_authorities": get_document_auth_role_authorities(document_id),
         "cross_check_fields": get_document_cross_check_fields(document_id),
         "used_by_categories_count": get_document_used_by_count(document_id)
     }
@@ -91,13 +115,20 @@ def validate_document_risk_rating(risk_rating: Optional[str]):
     if risk_rating not in RISK_RATINGS:
         raise HTTPException(400, f"Invalid risk rating '{risk_rating}'. Must be one of: {', '.join(RISK_RATINGS)}")
 
-def save_document_auth_roles(document_id: int, auth_roles: List[str]):
-    """Replace a Document's authorisation-roles list (delete-then-reinsert)."""
+def save_document_auth_roles(document_id: int, auth_roles: List[str], required_authority_map: Optional[Dict[str, Optional[str]]] = None):
+    """
+    Replace a Document's authorisation-roles list (delete-then-reinsert). required_authority_map
+    (role_name -> text) is only ever persisted for a role matching is_approval_role() - a value
+    supplied for any other role is silently dropped, enforcing "only applies to Approved by"
+    server-side rather than relying on the UI alone.
+    """
+    required_authority_map = required_authority_map or {}
     execute_write("DELETE FROM audit_rule_document_auth_roles WHERE document_id = ?", (document_id,))
     for idx, role_name in enumerate(auth_roles):
+        required_authority = required_authority_map.get(role_name) if is_approval_role(role_name) else None
         execute_write(
-            "INSERT INTO audit_rule_document_auth_roles (document_id, role_name, sort_order) VALUES (?, ?, ?)",
-            (document_id, role_name, idx)
+            "INSERT INTO audit_rule_document_auth_roles (document_id, role_name, sort_order, required_authority) VALUES (?, ?, ?, ?)",
+            (document_id, role_name, idx, required_authority)
         )
 
 def resolve_field_name_to_master_column_id(template_id: Optional[int], field_name: str) -> Optional[int]:
@@ -169,7 +200,7 @@ def create_document(document: DocumentCreate):
         "INSERT INTO audit_rule_documents (name, kb_note, template_id, risk_rating) VALUES (?, ?, ?, ?)",
         (document.name, document.kb_note, document.template_id, document.risk_rating)
     )
-    save_document_auth_roles(document_id, document.auth_roles)
+    save_document_auth_roles(document_id, document.auth_roles, document.auth_role_authorities)
     save_document_cross_check_fields(document_id, document.cross_check_fields)
 
     log_audit("Admin", "Create", "AuditRules", f"Created Document: {document.name}")
@@ -187,7 +218,7 @@ def update_document(document_id: int, document: DocumentUpdate):
         "UPDATE audit_rule_documents SET name = ?, kb_note = ?, template_id = ?, risk_rating = ? WHERE id = ?",
         (document.name, document.kb_note, document.template_id, document.risk_rating, document_id)
     )
-    save_document_auth_roles(document_id, document.auth_roles)
+    save_document_auth_roles(document_id, document.auth_roles, document.auth_role_authorities)
     save_document_cross_check_fields(document_id, document.cross_check_fields)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated Document ID {document_id}")

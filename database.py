@@ -1295,6 +1295,21 @@ def init_db():
             )
         ''')
 
+        # Required Authority (new, confirmed requirement): a free-text authority level
+        # attached to an "Approved by"-type role entry, for a later phase to compare
+        # against a voucher's actual approver. Scoped to the role row itself, not a new
+        # table. Only ever populated for a role matching the approval pattern (see
+        # routers/audit_rules.py's is_approval_role()) - left NULL for every other role.
+        # Same idempotent upgrade-block pattern as audit_rule_documents.transaction_level_approval.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_document_auth_roles)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'required_authority' not in columns:
+                conn.execute("ALTER TABLE audit_rule_document_auth_roles ADD COLUMN required_authority TEXT")
+                print("✅ Added required_authority column to audit_rule_document_auth_roles")
+        except Exception as e:
+            print("⚠️ Could not add required_authority to audit_rule_document_auth_roles:", e)
+
         # Cross-checks: name, the field being compared, and a comparison type from a fixed
         # set. compare_field is free text (not FK'd to audit_rule_document_fields) since
         # different documents attached to the same cross-check may use differently-named
