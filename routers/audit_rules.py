@@ -519,7 +519,7 @@ class CategoryUpdate(BaseModel):
 def get_category_documents(category_id: int) -> List[dict]:
     rows = execute_query(
         """
-        SELECT d.id as document_id, d.name, cd.is_required
+        SELECT d.id as document_id, d.name, cd.is_required, d.is_active
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
         WHERE cd.category_id = ?
@@ -535,7 +535,13 @@ def get_category_documents(category_id: int) -> List[dict]:
             # Document must be present for the Category to be Cleared. Not yet read by
             # compute_and_persist_cleared_status() - that wiring is Phase 7's job, deliberately
             # deferred so this can be configured in advance with no effect on live vouchers yet.
-            "is_required": bool(r["is_required"])
+            "is_required": bool(r["is_required"]),
+            # Inactive-document indicator (new, confirmed fix): the JOIN above is unfiltered on
+            # d.is_active, so a soft-deleted attached Document's real name already comes through
+            # here - this flag lets the frontend show it greyed/"Inactive" instead of falling
+            # back to a bare "Document #{id}" placeholder, without removing it from the list or
+            # auto-detaching it from the Category.
+            "is_active": bool(r["is_active"])
         }
         for r in rows
     ]

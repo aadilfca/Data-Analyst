@@ -1398,6 +1398,11 @@ let categoryCrossCheckIds = [];
 // categoryDocApprovals/approval_required flag this once sat alongside was hard-removed -
 // confirmed requirement, 2026-08-02.)
 let categoryDocRequired = {};
+// Inactive-document indicator (new, confirmed fix): {document_id: {name, is_active}},
+// populated from cat.documents on selectCategory() alongside categoryDocIds/categoryDocRequired
+// above - the authoritative per-attachment name/active-state, valid even once a document has
+// been soft-deleted and so no longer appears in the active-only allDocuments cache below.
+let categoryDocMeta = {};
 // Cache of all active Cross-checks ({id, name, documents: [{document_id, name}], ...}),
 // mirroring Phase 6's allDocuments cache — used for the "add cross-check" picker's
 // eligibility check and the document-removal warning. No reusable "all cross-checks"
@@ -1512,6 +1517,22 @@ function renderCategoryList(categories) {
 // checkbox for the now-removed approval_required flag - confirmed requirement, 2026-08-02 -
 // approval requirement now lives solely at Document level via the "Approved by" role's
 // Required Authority field.)
+// Resolves {name, is_active} for an attached document, preferring categoryDocMeta (the
+// authoritative per-attachment data from the last-loaded Category, correct even for a
+// since-soft-deleted document) over the active-only allDocuments cache (covers a document
+// just added in the current unsaved edit session, not yet round-tripped through
+// categoryDocMeta) — falls back to a bare id label only if neither source has anything.
+function getCategoryDocDisplayInfo(docId) {
+    if (Object.prototype.hasOwnProperty.call(categoryDocMeta, docId)) {
+        return categoryDocMeta[docId];
+    }
+    const doc = getDocumentById(docId);
+    if (doc) {
+        return { name: doc.name, is_active: true };
+    }
+    return { name: 'Document #' + docId, is_active: true };
+}
+
 function renderCategoryDocsList() {
     arCategoryDocsList.innerHTML = '';
 
@@ -1521,8 +1542,11 @@ function renderCategoryDocsList() {
         empty.textContent = 'None added.';
         arCategoryDocsList.appendChild(empty);
     } else {
+        let activeAttachedCount = 0;
+
         categoryDocIds.forEach(docId => {
-            const doc = getDocumentById(docId);
+            const displayInfo = getCategoryDocDisplayInfo(docId);
+            if (displayInfo.is_active) activeAttachedCount++;
             const isPersisted = Object.prototype.hasOwnProperty.call(categoryDocRequired, docId);
 
             const row = document.createElement('div');
@@ -1532,12 +1556,22 @@ function renderCategoryDocsList() {
             row.style.fontSize = '13px';
             row.style.color = isPersisted ? '#1a1a2e' : '#94a3b8';
             row.style.padding = '4px 0';
+            // Inactive-document indicator (new, confirmed fix) - greyed, never removed from
+            // the list or auto-detached from the Category.
+            if (!displayInfo.is_active) row.style.opacity = '0.55';
 
             const nameSpan = document.createElement('span');
             nameSpan.style.flex = '1';
-            nameSpan.textContent = (doc ? doc.name : ('Document #' + docId)) +
+            nameSpan.textContent = displayInfo.name +
                 (isPersisted ? '' : ' (save the category first)');
             row.appendChild(nameSpan);
+
+            if (!displayInfo.is_active) {
+                const inactiveBadge = document.createElement('span');
+                inactiveBadge.className = 'ar-list-row-badge';
+                inactiveBadge.textContent = 'Inactive';
+                row.appendChild(inactiveBadge);
+            }
 
             // Defaults to checked/required, matching audit_rule_category_documents.is_required's
             // own DB default (TRUE) — a document whose key isn't in categoryDocRequired yet
@@ -1568,6 +1602,17 @@ function renderCategoryDocsList() {
 
             arCategoryDocsList.appendChild(row);
         });
+
+        // Empty-state placeholder (new, confirmed fix): fires whenever nothing currently
+        // active is attached - either nothing was ever attached (handled by the branch above)
+        // or, here, everything attached is now inactive. Rendered alongside the greyed
+        // inactive rows above, not instead of them.
+        if (activeAttachedCount === 0) {
+            const noActiveDoc = document.createElement('span');
+            noActiveDoc.className = 'ar-chip-empty';
+            noActiveDoc.textContent = '--No Document--';
+            arCategoryDocsList.appendChild(noActiveDoc);
+        }
     }
 
     // Rebuild the "add document" picker to exclude documents already attached.
@@ -1841,8 +1886,10 @@ async function selectCategory(id) {
         categoryDocIds = (cat.documents || []).map(d => d.document_id);
         categoryCrossCheckIds = (cat.cross_checks || []).map(c => c.cross_check_id);
         categoryDocRequired = {};
+        categoryDocMeta = {};
         (cat.documents || []).forEach(d => {
             categoryDocRequired[d.document_id] = !!d.is_required;
+            categoryDocMeta[d.document_id] = { name: d.name, is_active: !!d.is_active };
         });
         arCategoryMatrixVersion.textContent = String(cat.matrix_version || 1);
         renderCategoryDocsList();
@@ -1877,6 +1924,7 @@ function startNewCategory() {
     categoryDocIds = [];
     categoryCrossCheckIds = [];
     categoryDocRequired = {};
+    categoryDocMeta = {};
     arCategoryMatrixVersion.textContent = '1';
     renderCategoryDocsList();
     renderCategoryCrossCheckChips();
