@@ -4433,6 +4433,32 @@ body {
     font-style: italic;
 }
 
+/* ----- Category detail: Cleared Requirements summary (Phase 3 of 3, FINAL) -----
+   Sits in its own .ar-validation-subsection card (chrome already covered by
+   .ar-validation-subsection/-title above, first/above the Cross-checks card) — these rules only
+   style the plain-language bullet list and its two hint states (loading / "save the category
+   first"), built by renderCategoryClearedRequirements()/renderClearedRequirementsBullets() in
+   audit_rules.js. Read-only informational text, not a pass/fail status list, so bullets use a
+   plain disc marker rather than a checkmark — same list pattern as .audit-guidance-col ul/li. */
+.ar-cleared-requirements-hint {
+    color: #94a3b8;
+    font-size: 13px;
+    font-style: italic;
+}
+.ar-cleared-requirements-bullets {
+    margin: 0;
+    padding-left: 18px;
+}
+.ar-cleared-requirement-item {
+    font-size: 13px;
+    color: #1a1a2e;
+    margin-bottom: 6px;
+    line-height: 1.4;
+}
+.ar-cleared-requirement-item:last-child {
+    margin-bottom: 0;
+}
+
 /* Phase 2: the Voucher-level Checks admin UI (#arVoucherChecksListSection/
    #arVoucherChecksDetailSection) is reparented from its old top-level rail-entity column
    pair into the Voucher-level Checks .ar-validation-subsection above — buildCategoryValidation
