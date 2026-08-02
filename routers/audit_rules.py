@@ -820,9 +820,13 @@ def restore_category(category_id: int):
 # ---------- DATA MODELS ----------
 class VoucherCheckCreate(BaseModel):
     name: str
+    # Authority/Designation (new, confirmed requirement): free-text, applies uniformly to every
+    # check - no role-specific gating. Informational only, not matched against anything yet.
+    authority: Optional[str] = None
 
 class VoucherCheckUpdate(BaseModel):
     name: str
+    authority: Optional[str] = None
 
 # ---------- HELPERS ----------
 # Confirmed requirement: Voucher-level Checks are now name-only (no Authorisation Roles
@@ -850,6 +854,7 @@ def row_to_voucher_check(row: dict) -> dict:
     return {
         "id": voucher_check_id,
         "name": row["name"],
+        "authority": row.get("authority"),
         "sort_order": row["sort_order"],
         "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
@@ -890,8 +895,8 @@ def get_voucher_check(voucher_check_id: int):
 def create_voucher_check(voucher_check: VoucherCheckCreate):
     sort_order = get_next_voucher_check_sort_order()
     voucher_check_id = execute_write(
-        "INSERT INTO audit_rule_voucher_checks (name, sort_order) VALUES (?, ?)",
-        (voucher_check.name, sort_order)
+        "INSERT INTO audit_rule_voucher_checks (name, sort_order, authority) VALUES (?, ?, ?)",
+        (voucher_check.name, sort_order, voucher_check.authority)
     )
 
     log_audit("Admin", "Create", "AuditRules", f"Created voucher check: {voucher_check.name}")
@@ -904,8 +909,8 @@ def update_voucher_check(voucher_check_id: int, voucher_check: VoucherCheckUpdat
         raise HTTPException(404, "Voucher check not found")
 
     execute_write(
-        "UPDATE audit_rule_voucher_checks SET name = ? WHERE id = ?",
-        (voucher_check.name, voucher_check_id)
+        "UPDATE audit_rule_voucher_checks SET name = ?, authority = ? WHERE id = ?",
+        (voucher_check.name, voucher_check.authority, voucher_check_id)
     )
 
     log_audit("Admin", "Update", "AuditRules", f"Updated voucher check ID {voucher_check_id}")

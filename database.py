@@ -2089,6 +2089,20 @@ def init_db():
         ''')
         print("✅ Created audit_rule_voucher_checks table (Generic Voucher-Level Checks, Phase 1 of 6: schema)")
 
+        # Authority/Designation field (new, confirmed requirement) - applies uniformly to every
+        # check (Prepared by/Checked by/Approved by/any future check), no role-specific gating.
+        # Informational only this phase - not matched/compared against anything yet. Same
+        # idempotent PRAGMA table_info() upgrade-block pattern as audit_rule_documents'
+        # transaction_level_approval/risk_rating additions.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_voucher_checks)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'authority' not in columns:
+                conn.execute("ALTER TABLE audit_rule_voucher_checks ADD COLUMN authority TEXT")
+                print("✅ Added authority column to audit_rule_voucher_checks")
+        except Exception as e:
+            print("⚠️ Could not add authority to audit_rule_voucher_checks:", e)
+
         # Role-gating on a check, modelled identically to audit_rule_document_auth_roles - a
         # list from the start so more than one required role can gate a single check.
         conn.execute('''

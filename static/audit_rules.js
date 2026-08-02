@@ -2450,6 +2450,7 @@ const arVoucherCheckDetailEmpty = document.getElementById('arVoucherCheckDetailE
 const arVoucherCheckDetailForm = document.getElementById('arVoucherCheckDetailForm');
 const arVoucherCheckEditingIdInput = document.getElementById('arVoucherCheckEditingId');
 const arVoucherCheckNameInput = document.getElementById('arVoucherCheckNameInput');
+const arVoucherCheckAuthorityInput = document.getElementById('arVoucherCheckAuthorityInput');
 const arVoucherCheckDetailStatus = document.getElementById('arVoucherCheckDetailStatus');
 const arVoucherCheckSaveBtn = document.getElementById('arVoucherCheckSaveBtn');
 const arVoucherCheckDeleteBtn = document.getElementById('arVoucherCheckDeleteBtn');
@@ -2594,6 +2595,7 @@ async function selectVoucherCheck(id) {
         editingVoucherCheckId = check.id;
         arVoucherCheckEditingIdInput.value = check.id;
         arVoucherCheckNameInput.value = check.name;
+        arVoucherCheckAuthorityInput.value = check.authority || '';
 
         if (check.is_active) {
             arVoucherCheckDeleteBtn.style.display = 'inline-block';
@@ -2616,6 +2618,7 @@ function startNewVoucherCheck() {
     editingVoucherCheckId = null;
     arVoucherCheckEditingIdInput.value = '';
     arVoucherCheckNameInput.value = '';
+    arVoucherCheckAuthorityInput.value = '';
 
     arVoucherCheckDeleteBtn.style.display = 'none';
     arVoucherCheckRestoreBtn.style.display = 'none';
@@ -2633,7 +2636,7 @@ async function saveVoucherCheck() {
         return;
     }
 
-    const payload = { name: name };
+    const payload = { name: name, authority: arVoucherCheckAuthorityInput.value.trim() || null };
 
     try {
         let url = API_BASE + '/api/audit-rules/voucher-checks';
