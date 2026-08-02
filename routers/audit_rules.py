@@ -926,12 +926,17 @@ class SignatureSpecimenCreate(BaseModel):
     document_id: int
     role_name: str
     expected_signatory_name: str
+    # Authority (new, confirmed requirement): free-text authority level for this signatory,
+    # captured alongside expected_signatory_name at add-time. Unconditional - not gated to an
+    # approval-type role. A later phase compares this against a Document's Required Authority.
+    authority: Optional[str] = None
 
 class SignatureSpecimenUpdate(BaseModel):
     client_id: int
     document_id: int
     role_name: str
     expected_signatory_name: str
+    authority: Optional[str] = None
 
 # ---------- HELPERS ----------
 def validate_client_id(client_id: int):
@@ -992,6 +997,7 @@ def row_to_signature_specimen(row: dict) -> dict:
         "document_name": row.get("document_name"),
         "role_name": row["role_name"],
         "expected_signatory_name": row["expected_signatory_name"],
+        "authority": row.get("authority"),
         "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -999,7 +1005,7 @@ def row_to_signature_specimen(row: dict) -> dict:
 
 SIGNATURE_SPECIMEN_SELECT = """
     SELECT s.id, s.client_id, s.document_id, d.name as document_name, s.role_name,
-           s.expected_signatory_name, s.is_active, s.created_at, s.updated_at
+           s.expected_signatory_name, s.authority, s.is_active, s.created_at, s.updated_at
     FROM signature_specimens s
     JOIN audit_rule_documents d ON s.document_id = d.id
 """
@@ -1039,8 +1045,8 @@ def create_signature_specimen(specimen: SignatureSpecimenCreate):
     validate_no_duplicate_active_signatory(specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name)
 
     specimen_id = execute_write(
-        "INSERT INTO signature_specimens (client_id, document_id, role_name, expected_signatory_name) VALUES (?, ?, ?, ?)",
-        (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name)
+        "INSERT INTO signature_specimens (client_id, document_id, role_name, expected_signatory_name, authority) VALUES (?, ?, ?, ?, ?)",
+        (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name, specimen.authority)
     )
 
     log_audit(
@@ -1061,8 +1067,8 @@ def update_signature_specimen(specimen_id: int, specimen: SignatureSpecimenUpdat
 
     execute_write(
         "UPDATE signature_specimens SET client_id = ?, document_id = ?, role_name = ?, "
-        "expected_signatory_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name, specimen_id)
+        "expected_signatory_name = ?, authority = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name, specimen.authority, specimen_id)
     )
 
     log_audit("Admin", "Update", "AuditRules", f"Updated signature specimen ID {specimen_id}")

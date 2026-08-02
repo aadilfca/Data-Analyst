@@ -4481,6 +4481,13 @@ body {
 .ar-doc-specimens-person-row.inactive .ar-doc-specimens-person-name {
     text-decoration: line-through;
 }
+/* Authority (new, confirmed requirement) - the actual signatory's authority level, shown
+   only when set. */
+.ar-doc-specimens-person-authority {
+    font-size: 12px;
+    font-style: italic;
+    color: #64748b;
+}
 .ar-doc-specimens-person-status {
     font-size: 11px;
     font-weight: 600;

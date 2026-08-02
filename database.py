@@ -1588,6 +1588,21 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add is_active to signature_specimens:", e)
 
+        # Authority (new, confirmed requirement): a free-text authority level for the actual
+        # signatory on file, captured alongside Name at add-time - a later phase will compare
+        # this against a Document's Required Authority (audit_rule_document_auth_roles.
+        # required_authority) for the "Approved by" role. Unconditional - every specimen gets
+        # this field, not gated to an approval-type role. Same idempotent upgrade-block
+        # pattern as the is_active addition directly above.
+        try:
+            cur = conn.execute("PRAGMA table_info(signature_specimens)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'authority' not in columns:
+                conn.execute("ALTER TABLE signature_specimens ADD COLUMN authority TEXT")
+                print("✅ Added authority column to signature_specimens")
+        except Exception as e:
+            print("⚠️ Could not add authority to signature_specimens:", e)
+
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_document_fields_document ON audit_rule_document_fields (document_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_document_auth_roles_document ON audit_rule_document_auth_roles (document_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_documents_crosscheck ON audit_rule_cross_check_documents (cross_check_id)")

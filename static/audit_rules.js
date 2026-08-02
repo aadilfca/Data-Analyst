@@ -634,6 +634,13 @@ function buildSpecimenPersonRow(s) {
     nameSpan.textContent = s.expected_signatory_name;
     row.appendChild(nameSpan);
 
+    if (s.authority) {
+        const authoritySpan = document.createElement('span');
+        authoritySpan.className = 'ar-doc-specimens-person-authority';
+        authoritySpan.textContent = s.authority;
+        row.appendChild(authoritySpan);
+    }
+
     const statusSpan = document.createElement('span');
     statusSpan.className = 'ar-doc-specimens-person-status';
     statusSpan.textContent = s.is_active ? 'Active' : 'Inactive';
@@ -664,23 +671,32 @@ function buildSpecimenAddRow(doc, role) {
     input.type = 'text';
     input.placeholder = '+ Add person for ' + role;
     input.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') { e.preventDefault(); addSignatureSpecimenPerson(doc.id, role, input); }
+        if (e.key === 'Enter') { e.preventDefault(); addSignatureSpecimenPerson(doc.id, role, input, authorityInput); }
+    });
+
+    const authorityInput = document.createElement('input');
+    authorityInput.type = 'text';
+    authorityInput.placeholder = 'Authority (optional)';
+    authorityInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); addSignatureSpecimenPerson(doc.id, role, input, authorityInput); }
     });
 
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'ar-btn-chip-add';
     btn.textContent = 'Add';
-    btn.addEventListener('click', () => addSignatureSpecimenPerson(doc.id, role, input));
+    btn.addEventListener('click', () => addSignatureSpecimenPerson(doc.id, role, input, authorityInput));
 
     row.appendChild(input);
+    row.appendChild(authorityInput);
     row.appendChild(btn);
     return row;
 }
 
-async function addSignatureSpecimenPerson(documentId, roleName, inputEl) {
+async function addSignatureSpecimenPerson(documentId, roleName, inputEl, authorityInputEl) {
     const name = inputEl.value.trim();
     if (!name) return;
+    const authority = authorityInputEl ? authorityInputEl.value.trim() : '';
 
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens', {
@@ -690,7 +706,8 @@ async function addSignatureSpecimenPerson(documentId, roleName, inputEl) {
                 client_id: parseInt(getSelectedClientId(), 10),
                 document_id: documentId,
                 role_name: roleName,
-                expected_signatory_name: name
+                expected_signatory_name: name,
+                authority: authority || null
             })
         });
         const result = await res.json();
@@ -698,6 +715,7 @@ async function addSignatureSpecimenPerson(documentId, roleName, inputEl) {
 
         showDetailStatus('✅ ' + result.message, 'success');
         inputEl.value = '';
+        if (authorityInputEl) authorityInputEl.value = '';
         if (currentSpecimensDoc) await loadDocumentSignatureSpecimens(currentSpecimensDoc);
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
