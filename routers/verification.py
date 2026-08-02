@@ -268,26 +268,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     linked_doc_ids = {r['document_id'] for r in linked_rows}
     doc_requirement_met = required_doc_ids.issubset(linked_doc_ids)
 
-    # 2. Per-document approval-required check: each approval_required document among the
-    # required set must have at least one ticked role matching "approv" (case-insensitive
-    # substring) for that specific document_id.
-    approval_required_doc_ids = {d['document_id'] for d in required_docs if d['approval_required']}
-    approval_docs_ok = True
-    if approval_required_doc_ids:
-        check_rows = execute_query(
-            f"""
-            SELECT document_id, role_name FROM voucher_line_procedure_checks
-            WHERE voucher_line_id IN ({placeholders}) AND is_checked = 1
-            """,
-            tuple(sibling_ids)
-        )
-        approved_doc_ids = {
-            r['document_id'] for r in check_rows
-            if 'approv' in (r['role_name'] or '').lower()
-        }
-        approval_docs_ok = approval_required_doc_ids.issubset(approved_doc_ids)
-
-    # 3. Voucher-level checks gate: independent of Category/documents, always required.
+    # 2. Voucher-level checks gate: independent of Category/documents, always required.
     # Generic Voucher-Level Checks (Phase 5 cutover) - reads voucher_check_status/
     # audit_rule_voucher_checks (keyed client_id+transaction_ref, not session-scoped, same
     # rationale as the old voucher_approvals table it replaces) instead of the retired
@@ -310,7 +291,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
         # same as an empty required-documents set already behaves in check #1 above.
         voucher_checks_ok = active_check_ids.issubset(ticked_check_ids)
 
-    # 4. Signature-exception check: defaults OK, fails only on a confirmed flagged mismatch.
+    # 3. Signature-exception check: defaults OK, fails only on a confirmed flagged mismatch.
     sig_rows = execute_query(
         f"""
         SELECT COUNT(*) as cnt FROM voucher_line_documents
@@ -320,7 +301,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     )
     signature_ok = (sig_rows[0]['cnt'] == 0)
 
-    # 5. Cross-document validation engine (Phase 6): any HARD-FAIL rule result blocks Cleared.
+    # 4. Cross-document validation engine (Phase 6): any HARD-FAIL rule result blocks Cleared.
     # category_id is passed through explicitly - already resolved above, via this exact same
     # account_category_assignments lookup - so the engine's own (different) Category-resolution
     # fallback never runs from this call site and the two can never disagree. Shortfalls (soft -
@@ -343,15 +324,23 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     if _write_shortfall_observations(voucher_line_id, cross_check_result):
         sync_line_observations_to_voucher(voucher_line_id)
 
-    # 6. Recommended Account Head must be empty. Unconditional - applies to every voucher line
-    # regardless of whether a Category resolved above (unlike checks 1/2/5), per the confirmed
+    # 5. Recommended Account Head must be empty. Unconditional - applies to every voucher line
+    # regardless of whether a Category resolved above (unlike checks 1/4), per the confirmed
     # Discuss-mode reconciliation. See _has_pending_account_head_note() for what this actually
     # reads - the "Recommended Account Head" UI field itself has no backend persistence; the
     # only real signal is the sentinel Account Head observation note.
     account_head_ok = not _has_pending_account_head_note(voucher_line_id)
 
+    # (Check #2 used to be a per-document approval-required gate reading Category-level
+    # approval_required + a substring-match on ticked procedure-check role names - hard-removed
+    # alongside the audit_rule_category_documents.approval_required column, confirmed
+    # requirement, 2026-08-02. Approval requirement now lives solely at Document level via the
+    # "Approved by" role's Required Authority field (audit_rule_document_auth_roles.
+    # required_authority) - stripped entirely here rather than left as a stub, since it was
+    # built on the substring-match heuristic being retired and no replacement gate has landed
+    # yet.)
     all_ok = (
-        doc_requirement_met and approval_docs_ok and voucher_checks_ok and signature_ok
+        doc_requirement_met and voucher_checks_ok and signature_ok
         and cross_checks_ok and account_head_ok
     )
     cleared_status = "Cleared" if all_ok else "Query"

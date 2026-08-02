@@ -1431,14 +1431,12 @@ let editingCategoryId = null;
 // Flat arrays (insertion order only, no reorder) of the ids currently attached.
 let categoryDocIds = [];
 let categoryCrossCheckIds = [];
-// Validation Rules (Phase 3 of 7): {document_id: approval_required (bool)}, populated from
-// cat.documents on selectCategory() — a document's presence as a KEY here (not its value)
-// is what "this pairing is actually persisted in audit_rule_category_documents" means, since
-// a document just added locally (not yet saved) has no key at all.
-let categoryDocApprovals = {};
 // Automated cross-document validation engine (Phase 4 of 10): {document_id: is_required (bool)},
-// same "key presence = persisted" convention as categoryDocApprovals above, populated
-// alongside it.
+// populated from cat.documents on selectCategory() — a document's presence as a KEY here (not
+// its value) is what "this pairing is actually persisted in audit_rule_category_documents"
+// means, since a document just added locally (not yet saved) has no key at all. (The former
+// categoryDocApprovals/approval_required flag this once sat alongside was hard-removed -
+// confirmed requirement, 2026-08-02.)
 let categoryDocRequired = {};
 // Cache of all active Cross-checks ({id, name, documents: [{document_id, name}], ...}),
 // mirroring Phase 6's allDocuments cache — used for the "add cross-check" picker's
@@ -1598,17 +1596,18 @@ function renderCategoryDocChips() {
     renderCategoryDocApprovalsList();
 }
 
-// ---------- REQUIRED / APPROVAL-REQUIRED PER DOCUMENT ----------
-// (Validation Rules, Phase 3 of 7 added Approval Required; Automated cross-document
-// validation engine, Phase 4 of 10 added Required, same row.) Sits alongside the Documents
+// ---------- REQUIRED PER DOCUMENT ----------
+// (Automated cross-document validation engine, Phase 4 of 10.) Sits alongside the Documents
 // chip list above (not merged into each chip pill) — one row per currently-attached
-// document, each with its own Required/Approved checkbox pair. A row's checkboxes are only
-// enabled once its document is actually persisted in audit_rule_category_documents (i.e.
-// present as a key in categoryDocApprovals/categoryDocRequired) — the PUT .../required and
-// .../approval endpoints both 404 on a pairing that doesn't exist yet (a brand-new category,
-// or a document just added locally but not yet saved). All styling is inline to override
-// .ar-field label's block/bold styling, which would otherwise apply to every nested <label>
-// including these.
+// document, each with its own Required checkbox. A row's checkbox is only enabled once its
+// document is actually persisted in audit_rule_category_documents (i.e. present as a key in
+// categoryDocRequired) — the PUT .../required endpoint 404s on a pairing that doesn't exist
+// yet (a brand-new category, or a document just added locally but not yet saved). All
+// styling is inline to override .ar-field label's block/bold styling, which would otherwise
+// apply to every nested <label> including this one. (This row used to also carry an
+// "Approved" checkbox for the now-removed approval_required flag - confirmed requirement,
+// 2026-08-02 - approval requirement now lives solely at Document level via the "Approved by"
+// role's Required Authority field.)
 function renderCategoryDocApprovalsList() {
     arCategoryDocApprovalsList.innerHTML = '';
 
@@ -1622,7 +1621,7 @@ function renderCategoryDocApprovalsList() {
 
     categoryDocIds.forEach(docId => {
         const doc = getDocumentById(docId);
-        const isPersisted = Object.prototype.hasOwnProperty.call(categoryDocApprovals, docId);
+        const isPersisted = Object.prototype.hasOwnProperty.call(categoryDocRequired, docId);
 
         const row = document.createElement('div');
         row.style.display = 'flex';
@@ -1657,53 +1656,8 @@ function renderCategoryDocApprovalsList() {
         requiredLabel.appendChild(document.createTextNode('Required'));
         row.appendChild(requiredLabel);
 
-        const approvedLabel = document.createElement('label');
-        approvedLabel.style.display = 'flex';
-        approvedLabel.style.alignItems = 'center';
-        approvedLabel.style.gap = '6px';
-        approvedLabel.style.fontWeight = '400';
-        approvedLabel.style.cursor = isPersisted ? 'pointer' : 'default';
-        approvedLabel.style.marginBottom = '0';
-        const approvedCheckbox = document.createElement('input');
-        approvedCheckbox.type = 'checkbox';
-        approvedCheckbox.checked = !!categoryDocApprovals[docId];
-        approvedCheckbox.disabled = !isPersisted;
-        approvedCheckbox.addEventListener('change', () => toggleCategoryDocumentApproval(docId, approvedCheckbox.checked));
-        approvedLabel.appendChild(approvedCheckbox);
-        approvedLabel.appendChild(document.createTextNode('Approved'));
-        row.appendChild(approvedLabel);
-
         arCategoryDocApprovalsList.appendChild(row);
     });
-}
-
-async function toggleCategoryDocumentApproval(docId, checked) {
-    if (!editingCategoryId) return;
-
-    try {
-        const res = await fetch(
-            API_BASE + '/api/audit-rules/categories/' + editingCategoryId + '/documents/' + docId + '/approval',
-            {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ approval_required: checked })
-            }
-        );
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to update approval requirement');
-
-        const changed = !!categoryDocApprovals[docId] !== checked;
-        categoryDocApprovals[docId] = checked;
-        if (changed) {
-            // Mirrors the backend's own no-op-doesn't-bump rule (bump_category_matrix_version()
-            // only fires on an actual value change) — no extra fetch needed to know this.
-            arCategoryMatrixVersion.textContent = String(parseInt(arCategoryMatrixVersion.textContent, 10) + 1);
-        }
-        showCategoryDetailStatus('✅ Approval requirement updated.', 'success');
-    } catch (error) {
-        showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
-        renderCategoryDocApprovalsList();
-    }
 }
 
 async function toggleCategoryDocumentRequired(docId, checked) {
@@ -1724,7 +1678,8 @@ async function toggleCategoryDocumentRequired(docId, checked) {
         const changed = !!categoryDocRequired[docId] !== checked;
         categoryDocRequired[docId] = checked;
         if (changed) {
-            // Mirrors the backend's own no-op-doesn't-bump rule, same as the approval toggle.
+            // Mirrors the backend's own no-op-doesn't-bump rule (bump_category_matrix_version()
+            // only fires on an actual value change) — no extra fetch needed to know this.
             arCategoryMatrixVersion.textContent = String(parseInt(arCategoryMatrixVersion.textContent, 10) + 1);
         }
         // Dimmed/optional pill state in the chain preview depends on categoryDocRequired,
@@ -1953,10 +1908,8 @@ async function selectCategory(id) {
         arCategoryKbOverviewInput.value = cat.kb_overview || '';
         categoryDocIds = (cat.documents || []).map(d => d.document_id);
         categoryCrossCheckIds = (cat.cross_checks || []).map(c => c.cross_check_id);
-        categoryDocApprovals = {};
         categoryDocRequired = {};
         (cat.documents || []).forEach(d => {
-            categoryDocApprovals[d.document_id] = !!d.approval_required;
             categoryDocRequired[d.document_id] = !!d.is_required;
         });
         arCategoryMatrixVersion.textContent = String(cat.matrix_version || 1);
@@ -1991,7 +1944,6 @@ function startNewCategory() {
     arCategoryKbOverviewInput.value = '';
     categoryDocIds = [];
     categoryCrossCheckIds = [];
-    categoryDocApprovals = {};
     categoryDocRequired = {};
     arCategoryMatrixVersion.textContent = '1';
     renderCategoryDocChips();

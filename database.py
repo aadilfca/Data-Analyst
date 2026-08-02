@@ -1446,35 +1446,61 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add matrix_version to audit_rule_categories:", e)
 
-        # Documents a Category uses.
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS audit_rule_category_documents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category_id INTEGER NOT NULL,
-                document_id INTEGER NOT NULL,
-                sort_order INTEGER NOT NULL DEFAULT 0,
-                FOREIGN KEY (category_id) REFERENCES audit_rule_categories(id) ON DELETE CASCADE,
-                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
-                UNIQUE(category_id, document_id)
-            )
-        ''')
-        # Schema upgrade (Validation Rules, Phase 1 of 7): approval_required flags whether
-        # this specific Document, within this specific Category, requires approval sign-off -
-        # a per-(category, document) flag, not a blanket per-Document one, since the same
-        # Document may be optional in one Category's matrix and mandatory in another's.
-        try:
-            cur = conn.execute("PRAGMA table_info(audit_rule_category_documents)")
-            columns = [row[1] for row in cur.fetchall()]
-            if 'approval_required' not in columns:
-                conn.execute("ALTER TABLE audit_rule_category_documents ADD COLUMN approval_required INTEGER DEFAULT 0")
-                print("✅ Added approval_required column to audit_rule_category_documents")
-        except Exception as e:
-            print("⚠️ Could not add approval_required to audit_rule_category_documents:", e)
+        # Documents a Category uses. approval_required (Validation Rules Phase 1 of 7) has since
+        # been hard-removed (confirmed requirement, 2026-08-02) - approval requirement is now
+        # decided entirely at Document level via the "Approved by" role's Required Authority
+        # field (audit_rule_document_auth_roles.required_authority), not configured per Category.
+        # A database still carrying the old column needs the same rename -> recreate -> copy ->
+        # drop rebuild already used for audit_rule_cross_checks.comparison_type's CHECK expansion
+        # above - gated on inspecting sqlite_master's stored CREATE TABLE sql (schema-driven, not
+        # data-driven) so a fresh or already-migrated database is a no-op on every subsequent
+        # startup.
+        existing_acd_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='audit_rule_category_documents'"
+        ).fetchone()
+
+        if existing_acd_sql and 'approval_required' in existing_acd_sql[0]:
+            print("⚠️ audit_rule_category_documents still has the retired approval_required column - rebuilding.")
+            conn.execute("DROP TABLE IF EXISTS audit_rule_category_documents_old")
+            conn.execute("ALTER TABLE audit_rule_category_documents RENAME TO audit_rule_category_documents_old")
+            conn.execute('''
+                CREATE TABLE audit_rule_category_documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category_id INTEGER NOT NULL,
+                    document_id INTEGER NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_required INTEGER NOT NULL DEFAULT 1,
+                    FOREIGN KEY (category_id) REFERENCES audit_rule_categories(id) ON DELETE CASCADE,
+                    FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+                    UNIQUE(category_id, document_id)
+                )
+            ''')
+            conn.execute('''
+                INSERT INTO audit_rule_category_documents (id, category_id, document_id, sort_order, is_required)
+                SELECT id, category_id, document_id, sort_order, is_required FROM audit_rule_category_documents_old
+            ''')
+            conn.execute("DROP TABLE audit_rule_category_documents_old")
+            print("✅ Rebuilt audit_rule_category_documents without approval_required")
+        else:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS audit_rule_category_documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category_id INTEGER NOT NULL,
+                    document_id INTEGER NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    is_required INTEGER NOT NULL DEFAULT 1,
+                    FOREIGN KEY (category_id) REFERENCES audit_rule_categories(id) ON DELETE CASCADE,
+                    FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+                    UNIQUE(category_id, document_id)
+                )
+            ''')
 
         # Schema upgrade (Cross-Document Validation Engine, Phase 1 of 10): is_required flags
         # whether this Document is mandatory for this Category (vs. optional/informational).
         # Defaults to TRUE (1) so every existing Category-Document pairing keeps behaving
         # exactly as it does today, where every configured document is implicitly required.
+        # Kept as a defensive upgrade block too (in case a database predates is_required and
+        # never carried approval_required to begin with, so the rebuild branch above never fired).
         try:
             cur = conn.execute("PRAGMA table_info(audit_rule_category_documents)")
             columns = [row[1] for row in cur.fetchall()]
