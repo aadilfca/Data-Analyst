@@ -1366,7 +1366,7 @@ const arCategoryDetailForm = document.getElementById('arCategoryDetailForm');
 const arCategoryEditingIdInput = document.getElementById('arCategoryEditingId');
 const arCategoryNameInput = document.getElementById('arCategoryNameInput');
 const arCategoryKbOverviewInput = document.getElementById('arCategoryKbOverviewInput');
-const arCategoryDocsChipList = document.getElementById('arCategoryDocsChipList');
+const arCategoryDocsList = document.getElementById('arCategoryDocsList');
 const arCategoryAddDocumentSelect = document.getElementById('arCategoryAddDocumentSelect');
 const arCategoryAddDocumentBtn = document.getElementById('arCategoryAddDocumentBtn');
 const arCategoryCrossChecksChipList = document.getElementById('arCategoryCrossChecksChipList');
@@ -1416,7 +1416,6 @@ function buildCategoryValidationRulesSection() {
 }
 buildCategoryValidationRulesSection();
 
-const arCategoryDocApprovalsList = document.getElementById('arCategoryDocApprovalsList');
 const arCategoryMatrixVersion = document.getElementById('arCategoryMatrixVersion');
 const arCategoryUsedByRow = document.getElementById('arCategoryUsedByRow');
 const arCategoryUsedByCount = document.getElementById('arCategoryUsedByCount');
@@ -1541,24 +1540,62 @@ function renderCategoryList(categories) {
     });
 }
 
-// ---------- DOCUMENTS TAG LIST (add / remove, with a removal warning) ----------
-function renderCategoryDocChips() {
-    arCategoryDocsChipList.innerHTML = '';
+// ---------- DOCUMENTS LIST (merged: name + Required checkbox + remove, one row per document) ----------
+// Merges what used to be two separate blocks (a chip list for add/remove, and a standalone
+// Document Requirements list for the Required checkbox) into one row-based list — both acted
+// on the exact same categoryDocIds array, so this is a pure UI merge, no new data source.
+// A row's Required checkbox is only enabled once its document is actually persisted in
+// audit_rule_category_documents (i.e. present as a key in categoryDocRequired) — the PUT
+// .../required endpoint 404s on a pairing that doesn't exist yet (a brand-new category, or a
+// document just added locally but not yet saved). (This row used to also carry an "Approved"
+// checkbox for the now-removed approval_required flag - confirmed requirement, 2026-08-02 -
+// approval requirement now lives solely at Document level via the "Approved by" role's
+// Required Authority field.)
+function renderCategoryDocsList() {
+    arCategoryDocsList.innerHTML = '';
 
     if (categoryDocIds.length === 0) {
         const empty = document.createElement('span');
         empty.className = 'ar-chip-empty';
         empty.textContent = 'None added.';
-        arCategoryDocsChipList.appendChild(empty);
+        arCategoryDocsList.appendChild(empty);
     } else {
         categoryDocIds.forEach(docId => {
             const doc = getDocumentById(docId);
-            const chip = document.createElement('span');
-            chip.className = 'ar-chip';
+            const isPersisted = Object.prototype.hasOwnProperty.call(categoryDocRequired, docId);
 
-            const label = document.createElement('span');
-            label.textContent = doc ? doc.name : ('Document #' + docId);
-            chip.appendChild(label);
+            const row = document.createElement('div');
+            row.style.display = 'flex';
+            row.style.alignItems = 'center';
+            row.style.gap = '16px';
+            row.style.fontSize = '13px';
+            row.style.color = isPersisted ? '#1a1a2e' : '#94a3b8';
+            row.style.padding = '4px 0';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.style.flex = '1';
+            nameSpan.textContent = (doc ? doc.name : ('Document #' + docId)) +
+                (isPersisted ? '' : ' (save the category first)');
+            row.appendChild(nameSpan);
+
+            // Defaults to checked/required, matching audit_rule_category_documents.is_required's
+            // own DB default (TRUE) — a document whose key isn't in categoryDocRequired yet
+            // (not persisted) still shows checked, so nothing looks "unrequired" before save.
+            const requiredLabel = document.createElement('label');
+            requiredLabel.style.display = 'flex';
+            requiredLabel.style.alignItems = 'center';
+            requiredLabel.style.gap = '6px';
+            requiredLabel.style.fontWeight = '400';
+            requiredLabel.style.cursor = isPersisted ? 'pointer' : 'default';
+            requiredLabel.style.marginBottom = '0';
+            const requiredCheckbox = document.createElement('input');
+            requiredCheckbox.type = 'checkbox';
+            requiredCheckbox.checked = isPersisted ? !!categoryDocRequired[docId] : true;
+            requiredCheckbox.disabled = !isPersisted;
+            requiredCheckbox.addEventListener('change', () => toggleCategoryDocumentRequired(docId, requiredCheckbox.checked));
+            requiredLabel.appendChild(requiredCheckbox);
+            requiredLabel.appendChild(document.createTextNode('Required'));
+            row.appendChild(requiredLabel);
 
             const removeBtn = document.createElement('button');
             removeBtn.type = 'button';
@@ -1566,9 +1603,9 @@ function renderCategoryDocChips() {
             removeBtn.textContent = '✕';
             removeBtn.title = 'Remove';
             removeBtn.addEventListener('click', () => removeCategoryDocument(docId));
-            chip.appendChild(removeBtn);
+            row.appendChild(removeBtn);
 
-            arCategoryDocsChipList.appendChild(chip);
+            arCategoryDocsList.appendChild(row);
         });
     }
 
@@ -1592,72 +1629,6 @@ function renderCategoryDocChips() {
         });
         arCategoryAddDocumentBtn.disabled = false;
     }
-
-    renderCategoryDocApprovalsList();
-}
-
-// ---------- REQUIRED PER DOCUMENT ----------
-// (Automated cross-document validation engine, Phase 4 of 10.) Sits alongside the Documents
-// chip list above (not merged into each chip pill) — one row per currently-attached
-// document, each with its own Required checkbox. A row's checkbox is only enabled once its
-// document is actually persisted in audit_rule_category_documents (i.e. present as a key in
-// categoryDocRequired) — the PUT .../required endpoint 404s on a pairing that doesn't exist
-// yet (a brand-new category, or a document just added locally but not yet saved). All
-// styling is inline to override .ar-field label's block/bold styling, which would otherwise
-// apply to every nested <label> including this one. (This row used to also carry an
-// "Approved" checkbox for the now-removed approval_required flag - confirmed requirement,
-// 2026-08-02 - approval requirement now lives solely at Document level via the "Approved by"
-// role's Required Authority field.)
-function renderCategoryDocApprovalsList() {
-    arCategoryDocApprovalsList.innerHTML = '';
-
-    if (categoryDocIds.length === 0) {
-        const empty = document.createElement('span');
-        empty.className = 'ar-chip-empty';
-        empty.textContent = 'No documents attached yet.';
-        arCategoryDocApprovalsList.appendChild(empty);
-        return;
-    }
-
-    categoryDocIds.forEach(docId => {
-        const doc = getDocumentById(docId);
-        const isPersisted = Object.prototype.hasOwnProperty.call(categoryDocRequired, docId);
-
-        const row = document.createElement('div');
-        row.style.display = 'flex';
-        row.style.alignItems = 'center';
-        row.style.gap = '16px';
-        row.style.fontSize = '13px';
-        row.style.color = isPersisted ? '#1a1a2e' : '#94a3b8';
-        row.style.padding = '4px 0';
-
-        const nameSpan = document.createElement('span');
-        nameSpan.style.flex = '1';
-        nameSpan.textContent = (doc ? doc.name : ('Document #' + docId)) +
-            (isPersisted ? '' : ' (save the category first)');
-        row.appendChild(nameSpan);
-
-        // Defaults to checked/required, matching audit_rule_category_documents.is_required's
-        // own DB default (TRUE) — a document whose key isn't in categoryDocRequired yet
-        // (not persisted) still shows checked, so nothing looks "unrequired" before save.
-        const requiredLabel = document.createElement('label');
-        requiredLabel.style.display = 'flex';
-        requiredLabel.style.alignItems = 'center';
-        requiredLabel.style.gap = '6px';
-        requiredLabel.style.fontWeight = '400';
-        requiredLabel.style.cursor = isPersisted ? 'pointer' : 'default';
-        requiredLabel.style.marginBottom = '0';
-        const requiredCheckbox = document.createElement('input');
-        requiredCheckbox.type = 'checkbox';
-        requiredCheckbox.checked = isPersisted ? !!categoryDocRequired[docId] : true;
-        requiredCheckbox.disabled = !isPersisted;
-        requiredCheckbox.addEventListener('change', () => toggleCategoryDocumentRequired(docId, requiredCheckbox.checked));
-        requiredLabel.appendChild(requiredCheckbox);
-        requiredLabel.appendChild(document.createTextNode('Required'));
-        row.appendChild(requiredLabel);
-
-        arCategoryDocApprovalsList.appendChild(row);
-    });
 }
 
 async function toggleCategoryDocumentRequired(docId, checked) {
@@ -1688,7 +1659,7 @@ async function toggleCategoryDocumentRequired(docId, checked) {
         showCategoryDetailStatus('✅ Required flag updated.', 'success');
     } catch (error) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
-        renderCategoryDocApprovalsList();
+        renderCategoryDocsList();
     }
 }
 
@@ -1696,7 +1667,7 @@ function addCategoryDocument() {
     const value = arCategoryAddDocumentSelect.value;
     if (!value) return;
     categoryDocIds.push(parseInt(value, 10));
-    renderCategoryDocChips();
+    renderCategoryDocsList();
     // A newly-added document may make a previously-ineligible cross-check selectable.
     renderCategoryCrossCheckChips();
 }
@@ -1723,7 +1694,7 @@ function removeCategoryDocument(docId) {
         if (!proceed) return;
     }
     categoryDocIds = categoryDocIds.filter(id => id !== docId);
-    renderCategoryDocChips();
+    renderCategoryDocsList();
     // Removing a document can make an already-attached cross-check ineligible again —
     // re-render so the picker's disabled/hint state (and the chip list) stay accurate.
     renderCategoryCrossCheckChips();
@@ -1913,7 +1884,7 @@ async function selectCategory(id) {
             categoryDocRequired[d.document_id] = !!d.is_required;
         });
         arCategoryMatrixVersion.textContent = String(cat.matrix_version || 1);
-        renderCategoryDocChips();
+        renderCategoryDocsList();
         renderCategoryCrossCheckChips();
 
         arCategoryUsedByRow.style.display = 'block';
@@ -1946,7 +1917,7 @@ function startNewCategory() {
     categoryCrossCheckIds = [];
     categoryDocRequired = {};
     arCategoryMatrixVersion.textContent = '1';
-    renderCategoryDocChips();
+    renderCategoryDocsList();
     renderCategoryCrossCheckChips();
 
     arCategoryUsedByRow.style.display = 'none';

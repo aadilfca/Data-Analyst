@@ -331,16 +331,18 @@
                         <textarea id="arCategoryKbOverviewInput" rows="3"></textarea>
                     </div>
 
-                    <!-- Documents tag list. Removing a document that an already-attached
-                         Cross-check depends on warns first (see removeCategoryDocument() in
-                         audit_rules.js) — a client-side mirror of the server's containment rule. -->
+                    <!-- Documents: merged row-based list (name + Required checkbox + remove),
+                         one row per attached document. The "Add document" picker stays separate
+                         above the list. Removing a document that an already-attached Cross-check
+                         depends on warns first (see removeCategoryDocument() in audit_rules.js) —
+                         a client-side mirror of the server's containment rule. -->
                     <div class="ar-field">
                         <label>Documents</label>
-                        <div class="ar-chip-list" id="arCategoryDocsChipList"></div>
                         <div class="ar-add-doc-row">
                             <select id="arCategoryAddDocumentSelect"></select>
                             <button type="button" id="arCategoryAddDocumentBtn" class="ar-btn-chip-add">Add</button>
                         </div>
+                        <div id="arCategoryDocsList"></div>
                     </div>
 
                     <!-- Cross-checks tag list. The add-picker only enables a cross-check once
@@ -366,16 +368,6 @@
                         <div id="arCategoryCrossCheckChainPreview"></div>
                     </div>
 
-                    <!-- Per-document Required/Approved flags (Validation Rules Phase 3 of 7 added
-                         Approval Required; Automated cross-document validation engine Phase 4 of 10
-                         added Required, same row, same visual pattern). Sits alongside the
-                         Documents chip list above, not merged into it - both checkboxes on a row
-                         only enable once that document is actually persisted in
-                         audit_rule_category_documents (i.e. the category has been saved). -->
-                    <div class="ar-field">
-                        <label>Document Requirements</label>
-                        <div id="arCategoryDocApprovalsList"></div>
-                    </div>
                     <div id="arCategoryMatrixVersionRow" style="margin-bottom:18px;">
                         <span class="ar-used-by-label">Matrix version: <span id="arCategoryMatrixVersion">1</span></span>
                     </div>
