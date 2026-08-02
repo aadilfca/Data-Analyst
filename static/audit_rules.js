@@ -704,9 +704,10 @@ arRestoreBtn.addEventListener('click', restoreDocument);
 // columns.js/client_settings.js rather than importing them).
 
 // ---------- RAIL / VIEW SWITCHING ----------
-// 'documents', 'cross-checks', or 'categories' — which entity type's list/detail sections
-// are visible. Signature Specimens is no longer a switchable top-level entity (moved into
-// Documents detail, see the SIGNATURE SPECIMENS section below Documents' own SAVE logic).
+// 'documents', 'cross-checks', 'categories', or 'voucher-checks' — which entity type's
+// list/detail sections are visible. Signature Specimens is no longer a switchable top-level
+// entity (moved into Documents detail, see the SIGNATURE SPECIMENS section below Documents'
+// own SAVE logic).
 let currentEntityType = 'documents';
 
 const arRailDocuments = document.getElementById('arRailDocuments');
@@ -728,6 +729,7 @@ function switchEntityType(type) {
     arRailDocuments.classList.toggle('active', type === 'documents');
     arRailCrossChecks.classList.toggle('active', type === 'cross-checks');
     arRailCategories.classList.toggle('active', type === 'categories');
+    arRailVoucherChecks.classList.toggle('active', type === 'voucher-checks');
 
     arDocumentsListSection.style.display = (type === 'documents') ? 'flex' : 'none';
     arDocumentsDetailSection.style.display = (type === 'documents') ? 'block' : 'none';
@@ -735,10 +737,8 @@ function switchEntityType(type) {
     arCrossChecksDetailSection.style.display = (type === 'cross-checks') ? 'block' : 'none';
     arCategoriesListSection.style.display = (type === 'categories') ? 'flex' : 'none';
     arCategoriesDetailSection.style.display = (type === 'categories') ? 'block' : 'none';
-    // Voucher-level Checks (arVoucherChecksListSection/arVoucherChecksDetailSection) is no
-    // longer a switchable top-level entity -- it's permanently embedded in Category detail's
-    // Validation Rules box (see buildCategoryValidationRulesSection()), so it's no longer
-    // toggled here.
+    arVoucherChecksListSection.style.display = (type === 'voucher-checks') ? 'flex' : 'none';
+    arVoucherChecksDetailSection.style.display = (type === 'voucher-checks') ? 'block' : 'none';
 
     if (type === 'cross-checks') {
         // Refresh the Documents cache every time this view is opened, so the "add
@@ -751,14 +751,18 @@ function switchEntityType(type) {
         // all reflect the latest state. loadVoucherChecks() is chained here (not fired in
         // parallel/uncoordinated) so allVoucherChecksCache is populated before loadCategories()
         // renders the list -- otherwise the badge would race an independent fetch and could
-        // read a stale/empty cache on first entry into this view. Voucher-level Checks is
-        // global (not per-Category), so it only needs refreshing once per view-entry -- not on
-        // every individual selectCategory()/startNewCategory() call.
+        // read a stale/empty cache on first entry into this view. Voucher-level Checks is no
+        // longer embedded in this view's own detail panel (restored to its own rail tab), but
+        // this call stays -- it's what keeps the rule-count badge's voucher-check count
+        // accurate on first entry, independent of whether the Voucher-level Checks tab has
+        // been visited yet this session.
         Promise.all([
             loadAllDocumentsForCrossChecks(),
             loadAllCrossChecksForCategories(),
             loadVoucherChecks()
         ]).then(loadCategories);
+    } else if (type === 'voucher-checks') {
+        loadVoucherChecks();
     }
 }
 
@@ -1247,9 +1251,7 @@ async function restoreCrossCheck() {
 arRailDocuments.addEventListener('click', () => switchEntityType('documents'));
 arRailCrossChecks.addEventListener('click', () => switchEntityType('cross-checks'));
 arRailCategories.addEventListener('click', () => switchEntityType('categories'));
-// No arRailVoucherChecks click listener -- that rail button is removed entirely by
-// buildCategoryValidationRulesSection() (Voucher-level Checks is now permanently embedded in
-// Category detail, not a switchable top-level entity).
+arRailVoucherChecks.addEventListener('click', () => switchEntityType('voucher-checks'));
 
 arCrossCheckAddNewBtn.addEventListener('click', startNewCrossCheck);
 arCrossCheckShowInactiveCheckbox.addEventListener('change', loadCrossChecks);
@@ -1292,16 +1294,15 @@ const arCategoryAddCrossCheckBtn = document.getElementById('arCategoryAddCrossCh
 const arCategoryCrossCheckChainPreview = document.getElementById('arCategoryCrossCheckChainPreview');
 
 // ---------- CATEGORY DETAIL: VALIDATION RULES SECTION SHELL (Phase 1 of 3) ----------
-// Groups the Cross-checks field + its Document Chains preview, and (Phase 2) the
-// Voucher-level Checks admin UI, into one visually distinct "Validation Rules" box with two
-// labelled sub-sections. Per the confirmed scope, static/audit_rules.html is not touched —
-// the Cross-checks chip list/Document Chains preview and the Voucher-level Checks
-// list/detail sections all stay exactly as declared there; this function reparents those
-// existing nodes (moving them, not cloning) into a new wrapper built here, so every
-// id/listener/render function that already targets them
-// (renderCategoryCrossCheckChips(), renderCategoryCrossCheckChainPreview(),
-// loadVoucherChecks(), the Sortable instance bound to arVoucherCheckListBody, etc.) keeps
-// working untouched.
+// Groups the Cross-checks field + its Document Chains preview into one visually distinct
+// "Validation Rules" box. Per the confirmed scope, static/audit_rules.html is not touched —
+// the Cross-checks chip list/Document Chains preview stay exactly as declared there; this
+// function reparents those existing nodes (moving them, not cloning) into a new wrapper
+// built here, so every id/listener/render function that already targets them
+// (renderCategoryCrossCheckChips(), renderCategoryCrossCheckChainPreview(), etc.) keeps
+// working untouched. Voucher-level Checks was briefly embedded here too (a since-reverted
+// change) — it's back to being its own top-level rail entity (see the VOUCHER-LEVEL CHECKS
+// section further down), so this box now only ever has one sub-section.
 function buildCategoryValidationRulesSection() {
     const crossChecksField = arCategoryCrossChecksChipList.closest('.ar-field');
     const chainPreviewField = arCategoryCrossCheckChainPreview.closest('.ar-field');
@@ -1325,46 +1326,12 @@ function buildCategoryValidationRulesSection() {
     crossChecksSubsection.appendChild(crossChecksTitle);
     section.appendChild(crossChecksSubsection);
 
-    const voucherChecksSubsection = document.createElement('div');
-    voucherChecksSubsection.className = 'ar-validation-subsection';
-    voucherChecksSubsection.id = 'arValidationSubsectionVoucherChecks';
-    const voucherChecksTitle = document.createElement('div');
-    voucherChecksTitle.className = 'ar-validation-subsection-title';
-    voucherChecksTitle.textContent = 'Voucher-level Checks';
-    voucherChecksSubsection.appendChild(voucherChecksTitle);
-    section.appendChild(voucherChecksSubsection);
-
     // Insert the new section where the Cross-checks field currently sits, then move both
     // existing fields into the Cross-checks sub-section (appendChild on an existing node moves
     // it, it does not clone it).
     crossChecksField.parentNode.insertBefore(section, crossChecksField);
     crossChecksSubsection.appendChild(crossChecksField);
     crossChecksSubsection.appendChild(chainPreviewField);
-
-    // Phase 2: reparent the Voucher-level Checks admin UI (formerly its own top-level rail
-    // entity — a name-only check list with sort_order/Sortable drag-reorder + Save/Delete/
-    // Restore, see the VOUCHER-LEVEL CHECKS section further down) into the sub-section above.
-    // List first, then detail form, stacked vertically — the original side-by-side rail
-    // layout doesn't fit inside this narrow single-column subsection. Tagged with
-    // .ar-embedded-panel so style.css can override their old sidebar-column sizing without
-    // touching the base .ar-list-panel/.ar-detail-panel rules the still-separate Documents/
-    // Cross-checks/Categories panels use unmodified. Voucher-level checks
-    // are global (not per-Category), so this same widget renders identically inside every
-    // Category's Validation Rules box — no per-Category filtering here.
-    if (arVoucherChecksListSection && arVoucherChecksDetailSection) {
-        arVoucherChecksListSection.classList.add('ar-embedded-panel');
-        arVoucherChecksDetailSection.classList.add('ar-embedded-panel');
-        arVoucherChecksListSection.style.display = 'flex';
-        arVoucherChecksDetailSection.style.display = 'block';
-        voucherChecksSubsection.appendChild(arVoucherChecksListSection);
-        voucherChecksSubsection.appendChild(arVoucherChecksDetailSection);
-    }
-
-    // The old rail entry no longer switches to anything (Voucher-level Checks is now
-    // permanently embedded above, not a standalone switchable entity) — remove it entirely.
-    if (arRailVoucherChecks) {
-        arRailVoucherChecks.remove();
-    }
 }
 buildCategoryValidationRulesSection();
 
