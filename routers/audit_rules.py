@@ -65,6 +65,63 @@ def get_document_auth_role_authorities(document_id: int) -> dict:
     )
     return {r["role_name"]: r["required_authority"] for r in rows if r["required_authority"]}
 
+def get_required_documents_with_authority(category_id: int) -> List[dict]:
+    """
+    Category's documents flagged is_required=1 (Automated cross-document validation engine,
+    Phase 4 of 10), each with its Approved-by-role(s)' Required Authority (only ever set for a
+    role matching is_approval_role() - see save_document_auth_roles()). Used by
+    routers/verification.py's compute_and_persist_cleared_status() for the Document-level
+    Approved-by authority gate (new, confirmed requirement).
+    """
+    rows = execute_query(
+        """
+        SELECT d.id as document_id, d.name
+        FROM audit_rule_category_documents cd
+        JOIN audit_rule_documents d ON cd.document_id = d.id
+        WHERE cd.category_id = ? AND cd.is_required = 1
+        """,
+        (category_id,)
+    )
+    result = []
+    for r in rows:
+        authorities = get_document_auth_role_authorities(r["document_id"])
+        if authorities:
+            result.append({"document_id": r["document_id"], "name": r["name"], "required_authorities": authorities})
+    return result
+
+def has_matching_active_specimen(client_id: int, document_id: int, role_name: str, required_authority: str) -> bool:
+    """
+    True if an ACTIVE Signature Specimen exists for this client+document+role whose Authority
+    exactly matches (case/whitespace-insensitive) required_authority.
+    """
+    rows = execute_query(
+        """
+        SELECT id FROM signature_specimens
+        WHERE client_id = ? AND document_id = ? AND role_name = ? AND is_active = 1
+          AND TRIM(LOWER(authority)) = TRIM(LOWER(?))
+        """,
+        (client_id, document_id, role_name, required_authority)
+    )
+    return bool(rows)
+
+def check_approved_by_authority_gate(client_id: int, category_id: int) -> bool:
+    """
+    Document-level Approved-by authority gate (new, confirmed requirement) for Cleared/Query
+    computation - replaces the retired Category-level approval_required substring-match gate.
+    For every Document required by this Category whose Approved-by role has a Required
+    Authority set, requires at least one ACTIVE Signature Specimen on file for that
+    client+document+role whose Authority exactly matches. This is an existence check ("a
+    qualified signatory is on file"), not a match against a specific recorded signer - nothing
+    in this app records who actually signed a particular voucher line's document (confirmed
+    with the user). A Document/role with no Required Authority set imposes no requirement;
+    vacuously True if no required Document has any Required Authority configured at all.
+    """
+    for doc in get_required_documents_with_authority(category_id):
+        for role_name, required_authority in doc["required_authorities"].items():
+            if not has_matching_active_specimen(client_id, doc["document_id"], role_name, required_authority):
+                return False
+    return True
+
 def get_document_cross_check_fields(document_id: int) -> List[str]:
     rows = execute_query(
         "SELECT field_name FROM audit_rule_document_fields WHERE document_id = ? ORDER BY sort_order",

@@ -21,7 +21,7 @@ from rapidfuzz import fuzz, utils as fuzz_utils
 from routers.import_export import get_document_group_id
 # Phase 9 (Audit Rules): audit guidance now sources from Audit Rules Categories instead of
 # the old hardcoded audit_procedure_library table — same cross-router import pattern as above.
-from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate
 
 router = APIRouter()
 
@@ -336,12 +336,19 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     # alongside the audit_rule_category_documents.approval_required column, confirmed
     # requirement, 2026-08-02. Approval requirement now lives solely at Document level via the
     # "Approved by" role's Required Authority field (audit_rule_document_auth_roles.
-    # required_authority) - stripped entirely here rather than left as a stub, since it was
-    # built on the substring-match heuristic being retired and no replacement gate has landed
-    # yet.)
+    # required_authority) - stripped entirely here since it was built on the substring-match
+    # heuristic being retired; now replaced by check #6 below.)
+
+    # 6. Document-level Approved-by authority gate (new, confirmed requirement): replaces the
+    # retired Category-level approval_required substring-match gate. See
+    # check_approved_by_authority_gate()'s own docstring - this is an existence check ("a
+    # qualified signatory is on file"), not a match against a specific recorded signer, since
+    # nothing in this app records who actually signed a particular voucher's document.
+    approval_authority_ok = check_approved_by_authority_gate(client_id, category_id)
+
     all_ok = (
         doc_requirement_met and voucher_checks_ok and signature_ok
-        and cross_checks_ok and account_head_ok
+        and cross_checks_ok and account_head_ok and approval_authority_ok
     )
     cleared_status = "Cleared" if all_ok else "Query"
 
