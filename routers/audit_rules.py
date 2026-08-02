@@ -567,6 +567,23 @@ def get_category_cross_checks(category_id: int) -> List[dict]:
     )
     return [{"cross_check_id": r["cross_check_id"], "name": r["name"]} for r in rows]
 
+def get_category_active_cross_checks_count(category_id: int) -> int:
+    """
+    Count of active Cross-checks attached to a Category - a soft-deleted Cross-check that's
+    still attached doesn't count as 'required' (mirrors what the evaluation engine in
+    routers/verification.py actually evaluates).
+    """
+    rows = execute_query(
+        """
+        SELECT COUNT(*) as cnt
+        FROM audit_rule_category_cross_checks cc
+        JOIN audit_rule_cross_checks c ON cc.cross_check_id = c.id
+        WHERE cc.category_id = ? AND c.is_active = 1
+        """,
+        (category_id,)
+    )
+    return rows[0]["cnt"] if rows else 0
+
 # Phase 9: fuller Document/Cross-check shapes for verification.js's audit-guidance panel and
 # Supporting column - the Categories CRUD response only needs id/name (above), but the
 # verification module needs template_id/kb_note/roles/fields per Document and
@@ -810,6 +827,34 @@ def restore_category(category_id: int):
     execute_write("UPDATE audit_rule_categories SET is_active = 1 WHERE id = ?", (category_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Category: {existing[0]['name']} (ID: {category_id})")
     return {"message": "Category restored successfully"}
+
+@router.get("/api/audit-rules/categories/{category_id}/cleared-requirements")
+def get_category_cleared_requirements(category_id: int):
+    """
+    Read-only 'what does Cleared require for this Category' summary (new, confirmed
+    requirement) - reflects live backend state, no manual toggles. Reuses
+    get_category_documents() (already filters/exposes is_required + is_active per document,
+    the same data compute_and_persist_cleared_status()'s check #1 in routers/verification.py
+    reads) and get_category_active_cross_checks_count() above. Voucher-level checks and
+    Account Head are global gates (not category-specific), always required.
+    """
+    existing = execute_query("SELECT id FROM audit_rule_categories WHERE id = ?", (category_id,))
+    if not existing:
+        raise HTTPException(404, "Category not found")
+
+    required_documents = [
+        {"document_id": d["document_id"], "name": d["name"], "is_active": d["is_active"]}
+        for d in get_category_documents(category_id)
+        if d["is_required"]
+    ]
+
+    return {
+        "category_id": category_id,
+        "voucher_level_checks_required": True,
+        "account_head_required": True,
+        "cross_checks_required": get_category_active_cross_checks_count(category_id) > 0,
+        "required_documents": required_documents,
+    }
 
 
 # ==============================================

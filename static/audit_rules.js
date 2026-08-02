@@ -800,7 +800,6 @@ function switchEntityType(type) {
         // been visited yet this session.
         Promise.all([
             loadAllDocumentsForCrossChecks(),
-            loadAllDocumentsAllStatusesForCategories(),
             loadAllCrossChecksForCategories(),
             loadVoucherChecks()
         ]).then(loadCategories);
@@ -844,22 +843,6 @@ let crossCheckDocIds = [];
 // for crossCheckDocIds, populate the "add document" picker, and compute field
 // eligibility. Refreshed each time the Cross-checks view is opened (switchEntityType()).
 let allDocuments = [];
-
-// Cache of Documents of EVERY status (active + inactive), used only by the Category
-// detail "Documents" add-picker (confirmed fix) so an inactive Document can be shown
-// there greyed/disabled rather than silently omitted like allDocuments (above) does.
-// Kept separate from allDocuments so the Cross-checks view's own document picker
-// (which still should only ever offer active documents) is unaffected.
-let allDocumentsAllStatuses = [];
-async function loadAllDocumentsAllStatusesForCategories() {
-    try {
-        const res = await fetch(API_BASE + '/api/audit-rules/documents?include_inactive=true');
-        if (!res.ok) throw new Error('Failed to load documents');
-        allDocumentsAllStatuses = await res.json();
-    } catch (error) {
-        allDocumentsAllStatuses = [];
-    }
-}
 
 // ---------- STATUS MESSAGES ----------
 // Standalone duplicate of showDetailStatus() above, scoped to the Cross-checks detail
@@ -1559,11 +1542,14 @@ function renderCategoryDocsList() {
         empty.textContent = 'None added.';
         arCategoryDocsList.appendChild(empty);
     } else {
-        let activeAttachedCount = 0;
-
+        // Inactive attached documents are fully hidden from this list (confirmed fix) —
+        // never rendered as a row (no name/Inactive badge/Required checkbox/✕ button), and
+        // no "--No Document--" placeholder either. Still attached in categoryDocIds/on the
+        // server either way — this is display-only, never auto-detached.
         categoryDocIds.forEach(docId => {
             const displayInfo = getCategoryDocDisplayInfo(docId);
-            if (displayInfo.is_active) activeAttachedCount++;
+            if (!displayInfo.is_active) return;
+
             const isPersisted = Object.prototype.hasOwnProperty.call(categoryDocRequired, docId);
 
             const row = document.createElement('div');
@@ -1573,22 +1559,12 @@ function renderCategoryDocsList() {
             row.style.fontSize = '13px';
             row.style.color = isPersisted ? '#1a1a2e' : '#94a3b8';
             row.style.padding = '4px 0';
-            // Inactive-document indicator (new, confirmed fix) - greyed, never removed from
-            // the list or auto-detached from the Category.
-            if (!displayInfo.is_active) row.style.opacity = '0.55';
 
             const nameSpan = document.createElement('span');
             nameSpan.style.flex = '1';
             nameSpan.textContent = displayInfo.name +
                 (isPersisted ? '' : ' (save the category first)');
             row.appendChild(nameSpan);
-
-            if (!displayInfo.is_active) {
-                const inactiveBadge = document.createElement('span');
-                inactiveBadge.className = 'ar-list-row-badge';
-                inactiveBadge.textContent = 'Inactive';
-                row.appendChild(inactiveBadge);
-            }
 
             // Defaults to checked/required, matching audit_rule_category_documents.is_required's
             // own DB default (TRUE) — a document whose key isn't in categoryDocRequired yet
@@ -1619,48 +1595,26 @@ function renderCategoryDocsList() {
 
             arCategoryDocsList.appendChild(row);
         });
-
-        // Empty-state placeholder (new, confirmed fix): fires whenever nothing currently
-        // active is attached - either nothing was ever attached (handled by the branch above)
-        // or, here, everything attached is now inactive. Rendered alongside the greyed
-        // inactive rows above, not instead of them.
-        if (activeAttachedCount === 0) {
-            const noActiveDoc = document.createElement('span');
-            noActiveDoc.className = 'ar-chip-empty';
-            noActiveDoc.textContent = '--No Document--';
-            arCategoryDocsList.appendChild(noActiveDoc);
-        }
     }
 
     // Rebuild the "add document" picker to exclude documents already attached (confirmed
-    // fix): sourced from allDocumentsAllStatuses (active + inactive) rather than the
-    // active-only allDocuments, so an inactive Document still shows up here — greyed/
-    // disabled, labelled "Inactive", listed after every active option — instead of being
-    // silently omitted. Always starts on a "No Document" placeholder; the Add button
-    // (hidden by default here) only reappears once the change listener below sees a real,
-    // selectable option chosen.
+    // fix): sourced from allDocuments, which is already active-only — an inactive
+    // (soft-deleted) Document is fully excluded from this dropdown, not just disabled/
+    // greyed. Always starts on a "No Document" placeholder; the Add button (hidden by
+    // default here) only reappears once the change listener below sees a real option chosen.
     arCategoryAddDocumentSelect.innerHTML = '';
-    const availableAll = allDocumentsAllStatuses.filter(d => !categoryDocIds.includes(d.id));
-    const availableActive = availableAll.filter(d => d.is_active);
-    const availableInactive = availableAll.filter(d => !d.is_active);
+    const available = allDocuments.filter(d => !categoryDocIds.includes(d.id));
 
     const placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = allDocumentsAllStatuses.length === 0 ? 'No documents exist yet' : 'No Document';
+    placeholder.textContent = allDocuments.length === 0 ? 'No documents exist yet' : 'No Document';
     placeholder.selected = true;
     arCategoryAddDocumentSelect.appendChild(placeholder);
 
-    availableActive.forEach(d => {
+    available.forEach(d => {
         const opt = document.createElement('option');
         opt.value = d.id;
         opt.textContent = d.name;
-        arCategoryAddDocumentSelect.appendChild(opt);
-    });
-    availableInactive.forEach(d => {
-        const opt = document.createElement('option');
-        opt.value = d.id;
-        opt.disabled = true;
-        opt.textContent = d.name + ' (Inactive)';
         arCategoryAddDocumentSelect.appendChild(opt);
     });
 
