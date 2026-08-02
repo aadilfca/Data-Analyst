@@ -800,6 +800,7 @@ function switchEntityType(type) {
         // been visited yet this session.
         Promise.all([
             loadAllDocumentsForCrossChecks(),
+            loadAllDocumentsAllStatusesForCategories(),
             loadAllCrossChecksForCategories(),
             loadVoucherChecks()
         ]).then(loadCategories);
@@ -843,6 +844,22 @@ let crossCheckDocIds = [];
 // for crossCheckDocIds, populate the "add document" picker, and compute field
 // eligibility. Refreshed each time the Cross-checks view is opened (switchEntityType()).
 let allDocuments = [];
+
+// Cache of Documents of EVERY status (active + inactive), used only by the Category
+// detail "Documents" add-picker (confirmed fix) so an inactive Document can be shown
+// there greyed/disabled rather than silently omitted like allDocuments (above) does.
+// Kept separate from allDocuments so the Cross-checks view's own document picker
+// (which still should only ever offer active documents) is unaffected.
+let allDocumentsAllStatuses = [];
+async function loadAllDocumentsAllStatusesForCategories() {
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/documents?include_inactive=true');
+        if (!res.ok) throw new Error('Failed to load documents');
+        allDocumentsAllStatuses = await res.json();
+    } catch (error) {
+        allDocumentsAllStatuses = [];
+    }
+}
 
 // ---------- STATUS MESSAGES ----------
 // Standalone duplicate of showDetailStatus() above, scoped to the Cross-checks detail
@@ -1615,26 +1632,39 @@ function renderCategoryDocsList() {
         }
     }
 
-    // Rebuild the "add document" picker to exclude documents already attached.
+    // Rebuild the "add document" picker to exclude documents already attached (confirmed
+    // fix): sourced from allDocumentsAllStatuses (active + inactive) rather than the
+    // active-only allDocuments, so an inactive Document still shows up here — greyed/
+    // disabled, labelled "Inactive", listed after every active option — instead of being
+    // silently omitted. Always starts on a "No Document" placeholder; the Add button
+    // (hidden by default here) only reappears once the change listener below sees a real,
+    // selectable option chosen.
     arCategoryAddDocumentSelect.innerHTML = '';
-    const available = allDocuments.filter(d => !categoryDocIds.includes(d.id));
-    if (available.length === 0) {
+    const availableAll = allDocumentsAllStatuses.filter(d => !categoryDocIds.includes(d.id));
+    const availableActive = availableAll.filter(d => d.is_active);
+    const availableInactive = availableAll.filter(d => !d.is_active);
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = allDocumentsAllStatuses.length === 0 ? 'No documents exist yet' : 'No Document';
+    placeholder.selected = true;
+    arCategoryAddDocumentSelect.appendChild(placeholder);
+
+    availableActive.forEach(d => {
         const opt = document.createElement('option');
-        opt.value = '';
-        opt.disabled = true;
-        opt.selected = true;
-        opt.textContent = allDocuments.length === 0 ? 'No documents exist yet' : 'All documents added';
+        opt.value = d.id;
+        opt.textContent = d.name;
         arCategoryAddDocumentSelect.appendChild(opt);
-        arCategoryAddDocumentBtn.disabled = true;
-    } else {
-        available.forEach(d => {
-            const opt = document.createElement('option');
-            opt.value = d.id;
-            opt.textContent = d.name;
-            arCategoryAddDocumentSelect.appendChild(opt);
-        });
-        arCategoryAddDocumentBtn.disabled = false;
-    }
+    });
+    availableInactive.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.disabled = true;
+        opt.textContent = d.name + ' (Inactive)';
+        arCategoryAddDocumentSelect.appendChild(opt);
+    });
+
+    arCategoryAddDocumentBtn.style.display = 'none';
 }
 
 async function toggleCategoryDocumentRequired(docId, checked) {
@@ -2025,6 +2055,12 @@ arCategoryAddNewBtn.addEventListener('click', startNewCategory);
 arCategoryShowInactiveCheckbox.addEventListener('change', loadCategories);
 
 arCategoryAddDocumentBtn.addEventListener('click', addCategoryDocument);
+// Confirmed fix: Add button stays hidden until a real, selectable (non-placeholder,
+// non-disabled/inactive) Document is chosen.
+arCategoryAddDocumentSelect.addEventListener('change', () => {
+    const selected = arCategoryAddDocumentSelect.selectedOptions[0];
+    arCategoryAddDocumentBtn.style.display = (selected && selected.value && !selected.disabled) ? '' : 'none';
+});
 arCategoryAddCrossCheckBtn.addEventListener('click', addCategoryCrossCheck);
 
 arCategorySaveBtn.addEventListener('click', saveCategory);
