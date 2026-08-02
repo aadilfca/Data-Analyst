@@ -1359,6 +1359,21 @@ function buildCategoryValidationRulesSection() {
     header.textContent = '⚠️ Validation Rules';
     section.appendChild(header);
 
+    // Cleared Requirements summary (new, confirmed requirement, Phase 2 of 3) — read-only,
+    // no manual toggles, sits first/above the Cross-checks subsection per the confirmed scope.
+    const clearedReqSubsection = document.createElement('div');
+    clearedReqSubsection.className = 'ar-validation-subsection';
+    clearedReqSubsection.id = 'arValidationSubsectionClearedRequirements';
+    const clearedReqTitle = document.createElement('div');
+    clearedReqTitle.className = 'ar-validation-subsection-title';
+    clearedReqTitle.textContent = 'What Cleared Requires';
+    clearedReqSubsection.appendChild(clearedReqTitle);
+    const clearedReqList = document.createElement('div');
+    clearedReqList.id = 'arCategoryClearedRequirementsList';
+    clearedReqList.className = 'ar-cleared-requirements-list';
+    clearedReqSubsection.appendChild(clearedReqList);
+    section.appendChild(clearedReqSubsection);
+
     const crossChecksSubsection = document.createElement('div');
     crossChecksSubsection.className = 'ar-validation-subsection';
     crossChecksSubsection.id = 'arValidationSubsectionCrossChecks';
@@ -1376,6 +1391,74 @@ function buildCategoryValidationRulesSection() {
     crossChecksSubsection.appendChild(chainPreviewField);
 }
 buildCategoryValidationRulesSection();
+
+const arCategoryClearedRequirementsList = document.getElementById('arCategoryClearedRequirementsList');
+
+// ---------- CATEGORY DETAIL: CLEARED REQUIREMENTS SUMMARY (Phase 2 of 3) ----------
+// Read-only "what does Cleared require for this Category" bullets, fetched fresh from the
+// Phase 1 backend endpoint (routers/audit_rules.py) on every Category detail open — no manual
+// toggles, no local/cached state, reflects live backend state exactly. A brand-new/unsaved
+// Category has no id yet, so it shows a "save first" hint instead (same convention as the
+// Signature Specimens section's "Save the document first" hint).
+async function renderCategoryClearedRequirements(categoryId) {
+    if (!arCategoryClearedRequirementsList) return;
+
+    if (!categoryId) {
+        arCategoryClearedRequirementsList.innerHTML = '';
+        const hint = document.createElement('div');
+        hint.className = 'ar-cleared-requirements-hint';
+        hint.textContent = 'Save the category first to see what Cleared requires.';
+        arCategoryClearedRequirementsList.appendChild(hint);
+        return;
+    }
+
+    arCategoryClearedRequirementsList.innerHTML = '';
+    const loading = document.createElement('div');
+    loading.className = 'ar-cleared-requirements-hint';
+    loading.textContent = 'Loading...';
+    arCategoryClearedRequirementsList.appendChild(loading);
+
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/categories/' + categoryId + '/cleared-requirements');
+        if (!res.ok) throw new Error('Failed to load cleared-requirements summary');
+        const data = await res.json();
+        renderClearedRequirementsBullets(data);
+    } catch (error) {
+        arCategoryClearedRequirementsList.innerHTML = '';
+        console.warn('Failed to load cleared-requirements summary:', error);
+    }
+}
+
+function renderClearedRequirementsBullets(data) {
+    arCategoryClearedRequirementsList.innerHTML = '';
+    const ul = document.createElement('ul');
+    ul.className = 'ar-cleared-requirements-bullets';
+
+    const addBullet = (text) => {
+        const li = document.createElement('li');
+        li.className = 'ar-cleared-requirement-item';
+        li.textContent = text;
+        ul.appendChild(li);
+    };
+
+    addBullet('Voucher-level checks — always required');
+    addBullet('Account Head — always required');
+    addBullet(
+        data.cross_checks_required
+            ? 'Cross-checks — required (active cross-check attached)'
+            : 'Cross-checks — not required (no active cross-check attached)'
+    );
+
+    const docs = data.required_documents || [];
+    if (docs.length === 0) {
+        addBullet('Required documents — none');
+    } else {
+        const names = docs.map(d => d.is_active ? d.name : `${d.name} (inactive)`).join(', ');
+        addBullet('Required documents — ' + names);
+    }
+
+    arCategoryClearedRequirementsList.appendChild(ul);
+}
 
 const arCategoryMatrixVersion = document.getElementById('arCategoryMatrixVersion');
 const arCategoryUsedByRow = document.getElementById('arCategoryUsedByRow');
@@ -1878,6 +1961,7 @@ async function selectCategory(id) {
         arCategoryMatrixVersion.textContent = String(cat.matrix_version || 1);
         renderCategoryDocsList();
         renderCategoryCrossCheckChips();
+        renderCategoryClearedRequirements(cat.id);
 
         arCategoryUsedByRow.style.display = 'block';
         arCategoryUsedByCount.textContent = cat.used_by_vouchers_count;
@@ -1912,6 +1996,7 @@ function startNewCategory() {
     arCategoryMatrixVersion.textContent = '1';
     renderCategoryDocsList();
     renderCategoryCrossCheckChips();
+    renderCategoryClearedRequirements(null);
 
     arCategoryUsedByRow.style.display = 'none';
     arCategoryDeleteBtn.style.display = 'none';
