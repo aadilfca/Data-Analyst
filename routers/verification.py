@@ -236,15 +236,49 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     if not account_code:
         return None
 
-    cat_rows = execute_query(
+    # Category resolution mirrors get_category_for_account() (2026-07-30 fix): prefer the
+    # client's latest parsed Trial Balance's own category_id for this account_code - that's
+    # what Assign Categories itself shows/edits, and account_category_assignments (below) is
+    # a persisted mirror that can drift stale relative to it. The live TB wins whenever the
+    # account is present in it; the assignments table is used only as a fallback for an
+    # account not in the latest TB. Applied here too so the status engine can't disagree
+    # with what the Verification UI's Type column is already showing for the same line.
+    cat_rows = None
+    upload_rows = execute_query(
         """
-        SELECT aca.category_id, arc.name AS category_name, arc.matrix_version
-        FROM account_category_assignments aca
-        LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = 1
-        WHERE aca.client_id = ? AND aca.account_code = ?
+        SELECT id FROM trial_balance_uploads
+        WHERE client_id = ? AND status = 'parsed'
+        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
+        LIMIT 1
         """,
-        (client_id, account_code)
+        (client_id,)
     )
+    if upload_rows:
+        tb_rows = execute_query(
+            """
+            SELECT a.category_id, c.name AS category_name, c.matrix_version
+            FROM trial_balance_accounts a
+            LEFT JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = 1
+            WHERE a.upload_id = ? AND a.account_code = ?
+            """,
+            (upload_rows[0]['id'], account_code)
+        )
+        if tb_rows and tb_rows[0]['category_name']:
+            cat_rows = tb_rows
+
+    if cat_rows is None:
+        assignment_rows = execute_query(
+            """
+            SELECT aca.category_id, arc.name AS category_name, arc.matrix_version
+            FROM account_category_assignments aca
+            LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = 1
+            WHERE aca.client_id = ? AND aca.account_code = ?
+            """,
+            (client_id, account_code)
+        )
+        if assignment_rows and assignment_rows[0]['category_name']:
+            cat_rows = assignment_rows
+
     if not cat_rows or not cat_rows[0]['category_id'] or not cat_rows[0]['category_name']:
         return None
 
