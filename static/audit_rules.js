@@ -148,59 +148,20 @@ function renderChipList(container, items, onRemove) {
 
 // Matches an "Approved by"-type role by substring, not an exact string - mirrors
 // routers/audit_rules.py's is_approval_role() (which itself mirrors verification.py's
-// existing 'approv' in role_name.lower() convention).
+// existing 'approv' in role_name.lower() convention). Kept defined but unused (non-destructive
+// convention) now that renderRoleChips() no longer renders a per-role Required Authority input
+// (confirmed fix) — requiredAuthorityState is still populated from/sent to the backend
+// unchanged, just no longer editable from this section's UI.
 function isApprovalRole(roleName) {
     return (roleName || '').toLowerCase().includes('approv');
 }
 
-// Dedicated implementation (not the shared renderChipList() other chip lists use) since an
-// approval-type role also needs an inline "Required Authority" input beneath its chip - same
-// precedent as renderFieldChips()'s own dedicated implementation for a different reason.
+// Plain chip render (Required Authority input removed, confirmed fix — it was a stray field
+// duplicating the Signature Specimens section's own separate "Authority (optional)" input,
+// which is untouched). No longer needs a dedicated implementation now that there's nothing
+// beyond a chip to render per role — reuses the shared renderChipList() other chip lists use.
 function renderRoleChips() {
-    arRolesChipList.innerHTML = '';
-    if (rolesState.length === 0) {
-        const empty = document.createElement('span');
-        empty.className = 'ar-chip-empty';
-        empty.textContent = 'None added.';
-        arRolesChipList.appendChild(empty);
-        return;
-    }
-
-    rolesState.forEach(role => {
-        const item = document.createElement('div');
-        item.className = 'ar-role-chip-item';
-
-        const chip = document.createElement('span');
-        chip.className = 'ar-chip';
-
-        const label = document.createElement('span');
-        label.textContent = role;
-        chip.appendChild(label);
-
-        const removeBtn = document.createElement('button');
-        removeBtn.type = 'button';
-        removeBtn.className = 'ar-chip-remove';
-        removeBtn.textContent = '✕';
-        removeBtn.title = 'Remove';
-        removeBtn.addEventListener('click', () => removeRole(role));
-        chip.appendChild(removeBtn);
-
-        item.appendChild(chip);
-
-        if (isApprovalRole(role)) {
-            const authorityInput = document.createElement('input');
-            authorityInput.type = 'text';
-            authorityInput.className = 'ar-role-authority-input';
-            authorityInput.placeholder = 'Required Authority (optional)';
-            authorityInput.value = requiredAuthorityState[role] || '';
-            authorityInput.addEventListener('input', () => {
-                requiredAuthorityState[role] = authorityInput.value;
-            });
-            item.appendChild(authorityInput);
-        }
-
-        arRolesChipList.appendChild(item);
-    });
+    renderChipList(arRolesChipList, rolesState, removeRole);
 }
 
 // Cross-check-eligible Fields (ID-based Cross-check-eligible Fields, Phase 2 of 4): unlike

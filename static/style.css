@@ -4353,6 +4353,22 @@ body {
     font-weight: 500;
 }
 
+/* Plain in-form section divider/heading (Documents detail panel reorder — confirmed fix):
+   groups related fields (Authorisation, Cross-Checks) into visually distinct clusters within
+   the same single-column .ar-detail-form, without the heavier amber "Validation Rules" box
+   treatment used on the Category screen (.ar-validation-rules-section) — this is a plain
+   organizational label, not a warning. */
+.ar-detail-section-title {
+    font-weight: 700;
+    font-size: 12px;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding-top: 10px;
+    margin-bottom: 14px;
+    border-top: 1px solid #e2e8f0;
+}
+
 /* Persistent stale-value warning under Cross-checks' Field to Compare dropdown — see
    arCompareFieldStaleWarning in audit_rules.html/.js. Unlike arCrossCheckDetailStatus
    (auto-dismissing toast), this stays visible for as long as the condition holds. */
@@ -4579,21 +4595,10 @@ body {
     color: #b45309;
 }
 
-/* Required Authority (new, confirmed requirement) - each role chip wraps in its own column
-   so an "Approved by"-type role's optional authority input sits directly beneath its chip,
-   without disturbing the flex-wrap layout of the surrounding .ar-chip-list row. */
-.ar-role-chip-item {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-.ar-role-authority-input {
-    width: 160px;
-    padding: 4px 8px;
-    border: 1px solid #d0d5dd;
-    border-radius: 6px;
-    font-size: 12px;
-}
+/* .ar-role-chip-item / .ar-role-authority-input (Authorisation Roles' per-role Required
+   Authority input) removed as dead code — confirmed fix — the field itself was removed from
+   renderRoleChips() in audit_rules.js, since it duplicated the separate, untouched
+   "Authority (optional)" input in the Signature Specimens section. */
 
 /* ---------- CATEGORY CROSS-CHECK CHAIN PREVIEW (Automated cross-document validation
    engine, Phase 10, FINAL) — config-time pill/arrow preview of a Category's attached
