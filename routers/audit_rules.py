@@ -596,7 +596,7 @@ def get_category_guidance_documents(category_id: int) -> List[dict]:
         SELECT d.id as document_id, d.name, d.kb_note, d.template_id, d.risk_rating, d.transaction_level_approval
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
-        WHERE cd.category_id = ?
+        WHERE cd.category_id = ? AND d.is_active = 1
         ORDER BY cd.sort_order
         """,
         (category_id,)
@@ -621,7 +621,7 @@ def get_category_guidance_cross_checks(category_id: int) -> List[dict]:
         SELECT c.id as cross_check_id, c.name, c.compare_field, c.comparison_type
         FROM audit_rule_category_cross_checks cc
         JOIN audit_rule_cross_checks c ON cc.cross_check_id = c.id
-        WHERE cc.category_id = ?
+        WHERE cc.category_id = ? AND c.is_active = 1
         ORDER BY cc.sort_order
         """,
         (category_id,)
