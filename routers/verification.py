@@ -289,8 +289,16 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     placeholders = ",".join("?" for _ in sibling_ids)
 
     # 1. Document requirement check: Category's required documents vs linked (active) documents.
+    # get_category_documents() is deliberately unfiltered on is_active (it also backs the
+    # Category detail admin display, which shows an inactive attached document greyed rather
+    # than hiding it) - filtered to active documents here, the actual gating use, so a
+    # deactivated Document can never permanently block Cleared status for a line that never
+    # got a chance to link evidence against it before it was deactivated (Inactive items
+    # excluded from selection contexts, Phase 5 of 5: it has already been removed from every
+    # selection surface - Audit Rules pickers, Verification's Supporting Documents tab list -
+    # so requiring it here would be an unfulfillable requirement, not a real gate).
     required_docs = get_category_documents(category_id)
-    required_doc_ids = {d['document_id'] for d in required_docs}
+    required_doc_ids = {d['document_id'] for d in required_docs if d['is_active']}
 
     linked_rows = execute_query(
         f"""

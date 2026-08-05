@@ -78,7 +78,7 @@ def get_required_documents_with_authority(category_id: int) -> List[dict]:
         SELECT d.id as document_id, d.name
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
-        WHERE cd.category_id = ? AND cd.is_required = 1
+        WHERE cd.category_id = ? AND cd.is_required = 1 AND d.is_active = 1
         """,
         (category_id,)
     )
