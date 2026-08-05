@@ -2192,7 +2192,7 @@ def get_voucher_line_documents(voucher_line_id: int):
         f"""
         SELECT vld.id, vld.voucher_line_id, vld.client_data_id, vld.document_id,
                vld.linked_by, vld.linked_at, vld.signature_exception,
-               ard.name AS document_name,
+               ard.name AS document_name, ard.is_active AS document_is_active,
                cd.row_data, cd.extract_date, cd.extract_amount, cd.rate_source
         FROM voucher_line_documents vld
         JOIN audit_rule_documents ard ON ard.id = vld.document_id
@@ -2212,6 +2212,9 @@ def get_voucher_line_documents(voucher_line_id: int):
             "client_data_id": r['client_data_id'],
             "document_id": r['document_id'],
             "document_name": r['document_name'],
+            # Inactive-document handling: lets the frontend detect/lock a tab whose
+            # Document was deactivated after evidence was already linked to it.
+            "is_active": bool(r['document_is_active']),
             "linked_by": r['linked_by'],
             "linked_at": r['linked_at'],
             # Validation Rules Phase 5: default OK (0/False) - only ever set to True on a
@@ -2327,9 +2330,11 @@ def get_procedure_checks(voucher_line_id: int):
     placeholders = ",".join("?" for _ in sibling_ids)
     rows = execute_query(
         f"""
-        SELECT document_id, role_name, is_checked, checked_by, checked_at
-        FROM voucher_line_procedure_checks
-        WHERE voucher_line_id IN ({placeholders})
+        SELECT vlpc.document_id, vlpc.role_name, vlpc.is_checked, vlpc.checked_by, vlpc.checked_at,
+               ard.name AS document_name, ard.is_active AS document_is_active
+        FROM voucher_line_procedure_checks vlpc
+        LEFT JOIN audit_rule_documents ard ON ard.id = vlpc.document_id
+        WHERE vlpc.voucher_line_id IN ({placeholders})
         """,
         tuple(sibling_ids)
     )
@@ -2349,7 +2354,12 @@ def get_procedure_checks(voucher_line_id: int):
             "role_name": r['role_name'],
             "is_checked": bool(r['is_checked']),
             "checked_by": r['checked_by'],
-            "checked_at": r['checked_at']
+            "checked_at": r['checked_at'],
+            "document_name": r['document_name'],
+            # Inactive-document handling: LEFT JOIN so a document_id is never dropped;
+            # None (not False) is preserved when there's no matching audit_rule_documents
+            # row at all, distinguishing "no real document" from "real, deactivated".
+            "is_active": r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])
         }
         for r in latest_by_key.values()
     ]
@@ -2601,9 +2611,12 @@ def get_line_observations(voucher_line_id: int):
     placeholders = ",".join("?" for _ in sibling_ids)
     rows = execute_query(
         f"""
-        SELECT document_id, observation_text, synced, last_synced_text, updated_by, updated_at
-        FROM voucher_line_observations
-        WHERE voucher_line_id IN ({placeholders})
+        SELECT vlo.document_id, vlo.observation_text, vlo.synced, vlo.last_synced_text,
+               vlo.updated_by, vlo.updated_at,
+               ard.name AS document_name, ard.is_active AS document_is_active
+        FROM voucher_line_observations vlo
+        LEFT JOIN audit_rule_documents ard ON ard.id = vlo.document_id
+        WHERE vlo.voucher_line_id IN ({placeholders})
         """,
         tuple(sibling_ids)
     )
@@ -2622,7 +2635,14 @@ def get_line_observations(voucher_line_id: int):
             "synced": bool(r['synced']),
             "last_synced_text": r['last_synced_text'],
             "updated_by": r['updated_by'],
-            "updated_at": r['updated_at']
+            "updated_at": r['updated_at'],
+            # Inactive-document handling: LEFT JOIN so reserved sentinel document_ids
+            # (ACCOUNT_HEAD_OBSERVATION_DOC_ID, CROSS_CHECK_SHORTFALL_DOC_ID_BASE range,
+            # neither a real audit_rule_documents row) are never dropped. document_name/
+            # is_active come back None for those - never coerced to False - so the
+            # frontend can tell "not a real document" apart from "real, deactivated".
+            "document_name": r['document_name'],
+            "is_active": r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])
         }
         for r in latest_by_doc.values()
     ]
