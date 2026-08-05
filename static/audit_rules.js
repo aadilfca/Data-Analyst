@@ -2283,6 +2283,22 @@ function buildAssignCategoriesRow(account) {
         if (account.category_id === cat.id) opt.selected = true;
         select.appendChild(opt);
     });
+
+    // Inactive-selection requirement, Phase 4: an account can already be assigned a
+    // Category that's since been deactivated (assignCategoriesCategoryOptions is
+    // active-only, per the "never select an inactive item" rule) — without this, no
+    // real <option> above would ever match account.category_id, and the browser
+    // would silently default the <select> to "-- Not assigned --", misrepresenting
+    // a real (frozen) assignment. This extra option exists purely to display that
+    // frozen assignment correctly; it's never added to assignCategoriesCategoryOptions
+    // itself, so it can't be picked for a *different* row's fresh assignment.
+    if (account.category_id && !assignCategoriesCategoryOptions.some(cat => cat.id === account.category_id)) {
+        const inactiveOpt = document.createElement('option');
+        inactiveOpt.value = account.category_id;
+        inactiveOpt.textContent = (account.category_name || 'Unknown category') + ' (inactive)';
+        inactiveOpt.selected = true;
+        select.appendChild(inactiveOpt);
+    }
     tdCategory.appendChild(select);
 
     // Force-apply icon: parent rows only, omitted entirely (not just hidden/disabled)
@@ -2308,7 +2324,13 @@ function getAssignCategoriesAccountById(id) {
 function getAssignCategoriesCategoryName(id) {
     if (!id) return 'Not assigned';
     const cat = assignCategoriesCategoryOptions.find(c => c.id === id);
-    return cat ? cat.name : null;
+    if (cat) return cat.name;
+    // Inactive-selection requirement, Phase 4: id may point at a Category that's
+    // since been deactivated (not in the active-only assignCategoriesCategoryOptions
+    // list) — fall back to any account row that already carries this id, since the
+    // backend returns category_name regardless of active state (a display value).
+    const accountWithCategory = assignCategoriesAccounts.find(a => a.category_id === id);
+    return accountWithCategory ? (accountWithCategory.category_name || 'Unknown category') : null;
 }
 
 // ---------- ASSIGN (smart-fill default / force-apply explicit) ----------

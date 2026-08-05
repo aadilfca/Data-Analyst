@@ -1052,8 +1052,18 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
         # [child rows] map, then walk down from the target's own code to
         # collect every descendant (parents and leaves alike), not just
         # direct children.
+        # LEFT JOIN in the category's own is_active state (inactive-selection
+        # requirement, Phase 4) so smart-fill below can tell a descendant's
+        # existing assignment apart from a stale one pointing at a since-
+        # deactivated Category - the two are treated identically ("empty").
         sibling_rows = execute_query(
-            "SELECT id, account_code, parent_account_code, category_id FROM trial_balance_accounts WHERE upload_id = ?",
+            """
+            SELECT s.id, s.account_code, s.parent_account_code, s.category_id,
+                   c.is_active AS category_is_active
+            FROM trial_balance_accounts s
+            LEFT JOIN audit_rule_categories c ON c.id = s.category_id
+            WHERE s.upload_id = ?
+            """,
             (target["upload_id"],)
         )
         children_by_parent_code = {}
@@ -1070,7 +1080,12 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
             stack.extend(children_by_parent_code.get(row["account_code"], []))
 
         for row in descendants:
-            if payload.force_apply or row["category_id"] is None:
+            # A descendant with no category, or whose current category has
+            # since been deactivated, counts as "empty" for smart-fill - a
+            # stale assignment pointing at an inactive Category is no more
+            # a real categorization than no assignment at all (confirmed).
+            currently_empty = row["category_id"] is None or not row["category_is_active"]
+            if payload.force_apply or currently_empty:
                 descendants_updated.append(row["id"])
             else:
                 descendants_skipped.append(row["id"])

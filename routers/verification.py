@@ -1791,6 +1791,14 @@ def get_category_for_account(
     given client + account code. Returns a clean "no match" shape rather than
     a 404 when nothing is assigned - not having a mapping yet is a normal,
     expected state, not an error.
+
+    This is a read-only display lookup (feeds Verification's per-line Type
+    auto-fill), not a selection UI - so a Category since deactivated is still
+    returned as a real match rather than degraded to "no match". Freezing a
+    since-deactivated assignment's visibility this way mirrors the same
+    "display contexts keep showing an already-referenced inactive item"
+    convention used elsewhere in this codebase (e.g. the Supporting Documents
+    modal's locked tab for an already-referenced inactive Document).
     """
     client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
     if not client:
@@ -1818,7 +1826,7 @@ def get_category_for_account(
             """
             SELECT a.category_id, c.name AS category_name
             FROM trial_balance_accounts a
-            LEFT JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = 1
+            LEFT JOIN audit_rule_categories c ON c.id = a.category_id
             WHERE a.upload_id = ? AND a.account_code = ?
             """,
             (upload_rows[0]['id'], account_code)
@@ -1830,17 +1838,17 @@ def get_category_for_account(
                 "category_name": tb_rows[0]['category_name']
             }
 
-    # LEFT JOIN (with the category's own is_active check folded into the ON
-    # clause) means category_name comes back NULL for every "no match" case
-    # in one query: no assignment row at all, an assignment explicitly
-    # cleared to NULL, or an assignment pointing at a since-soft-deleted
-    # category (no FK enforcement in this app, so a stale id is possible).
+    # LEFT JOIN means category_name comes back NULL for every genuine
+    # "no match" case in one query: no assignment row at all, or an
+    # assignment explicitly cleared to NULL. A category's own is_active
+    # state is deliberately NOT folded into this join - a since-deactivated
+    # category is still a real, displayable match here (see docstring).
     rows = execute_query(
         """
         SELECT aca.category_id, arc.name AS category_name
         FROM account_category_assignments aca
         LEFT JOIN audit_rule_categories arc
-            ON arc.id = aca.category_id AND arc.is_active = 1
+            ON arc.id = aca.category_id
         WHERE aca.client_id = ? AND aca.account_code = ?
         """,
         (client_id, account_code)
