@@ -3262,6 +3262,31 @@ async function navigateProcedureModalLine(delta) {
     await openProcedureModal(newUid);
 }
 
+// Finds the next *unverified* line of the currently loaded voucher, searching forward only from
+// fromIdx + 1. "Unverified" is cleared_status !== 'Cleared' — the Validation Rules verdict already
+// rendered as the Cleared/Query badge on each table row, recomputed server-side on every
+// saveLineItems() call and mirrored straight back into currentVoucherLines, so the value tested
+// here is always fresh by the time Verify & Next consults it.
+//
+// Forward-only (never wraps back to an earlier line) by deliberate design: a line can legitimately
+// never reach Cleared — a required document that genuinely doesn't exist, for instance — and a
+// wrapping search would trap the auditor inside that voucher with no way out. Falling through to
+// the next voucher instead always makes progress.
+//
+// Lines with no assigned Category are skipped: openProcedureModal() already no-ops on a falsy type
+// (this module's existing documented rule), so targeting one would silently freeze the modal on the
+// previous line's content. Returns -1 when no qualifying line remains.
+function findNextUnverifiedLineIndex(fromIdx) {
+    for (let i = fromIdx + 1; i < currentVoucherLines.length; i++) {
+        const line = currentVoucherLines[i];
+        if (line.cleared_status === 'Cleared') continue;
+        const lineState = voucherLineState[line.detail_id];
+        if (!lineState || !lineState.transactionType) continue;
+        return i;
+    }
+    return -1;
+}
+
 // Pure teardown — hides the modal(s) and clears the "currently open" marker, with no save of any
 // kind. Factored out of closeProcedureModal() so the Verify & Next/Close button (which already
 // explicitly saves via saveLineItems() before calling verify_voucher_checks) can tear down the
@@ -3287,32 +3312,46 @@ async function closeProcedureModal() {
     hideProcedureModalOnly();
 }
 
-// Sets the footer's "Verify & Next/Close" button label and disabled state. Label is driven purely
-// by voucher position — the same pos.index/pos.total check renderVoucherHeader() already uses to
-// disable the main page's own Next-voucher arrow — so the label always agrees with whether there
-// really is a next voucher to advance to. Disabled is driven solely by isVoucherChecksAllTouched()
-// (every active voucher-level check marked done or not_done); it is intentionally independent of
-// document/procedure completeness elsewhere in the modal. Called on modal open and after every
-// voucher-check toggle (renderVoucherChecksBar()).
+// Sets the footer's "Verify & Next/Close" button label and disabled state. The label has three
+// states so it always says what the button will actually do: if an unverified line remains below
+// this one in the same voucher, pressing it steps there ("Verify & Next Line"); otherwise it leaves
+// the voucher, and the wording then comes from voucher position — the same pos.index/pos.total
+// check renderVoucherHeader() already uses to disable the main page's own Next-voucher arrow — so
+// it always agrees with whether there really is a next voucher to advance to. Disabled is driven
+// solely by isVoucherChecksAllTouched() (every active voucher-level check marked done or not_done);
+// it is intentionally independent of document/procedure completeness elsewhere in the modal. Called
+// on modal open and after every voucher-check toggle (renderVoucherChecksBar()).
 function updateVerifyFooterButton(uid) {
     const btn = document.getElementById('procedureModalVerifyBtn');
     if (!btn) return;
+    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const hasNextLine = lineIdx !== -1 && findNextUnverifiedLineIndex(lineIdx) !== -1;
     const pos = getVoucherPosition();
     const isLastVoucher = !(pos.total > 0 && pos.index < pos.total);
-    btn.textContent = isLastVoucher ? '✅ Verify & Close' : '✅ Verify & Next';
+    if (hasNextLine) {
+        btn.textContent = '✅ Verify & Next Line';
+    } else {
+        btn.textContent = isLastVoucher ? '✅ Verify & Close' : '✅ Verify & Next';
+    }
     const checks = voucherChecksCache[currentVoucherId] || [];
     const allTouched = isVoucherChecksAllTouched(checks);
     btn.disabled = !allTouched;
     btn.title = allTouched ? '' : 'Mark every check before verifying';
 }
 
-// Click handler for the footer's "Verify & Next/Close" button — replaces the old per-line "Next"
-// nav (Voucher-level Checks simplified to name-only, Phase 3 of 4). Operates at voucher
-// granularity, not line granularity: saves the current line, verifies this voucher's checks
-// (server-side pushes any not-done check into Observations), then advances the main page to the
-// next voucher — or, on the last voucher, just closes. To review another line of the same
-// voucher, close the modal (✕, unchanged) and reopen that line's own Supporting Documents entry
-// from the table.
+// Click handler for the footer's "Verify & Next/Close" button. Saves the current line and verifies
+// this voucher's checks (server-side pushes any not-done check into Observations), then steps
+// line-first: if an unverified line remains below the current one in the same voucher, the modal
+// stays open and moves there; only once none remains does it leave for the next voucher (or close,
+// on the last one). The confirmed fix supersedes the button's original voucher-only granularity,
+// which forced the auditor to close the modal and re-enter from the table for every line.
+//
+// verify_voucher_checks is POSTed on every press, including the in-voucher steps: it's
+// voucher-scoped (client_id + transaction_ref) and idempotent — it recomputes
+// flagged_in_observations fresh each call rather than appending — so re-calling it keeps the
+// voucher's Observations in sync with the live check state and keeps the backend's own 400
+// safety net applying to every press. Its next-voucher payload is simply left unread while
+// stepping within the voucher.
 async function verifyAndAdvanceVoucher() {
     const uid = currentProcedureModalUid;
     if (!uid) return;
@@ -3334,6 +3373,23 @@ async function verifyAndAdvanceVoucher() {
             return;
         }
         const data = await res.json();
+
+        // Line-first stepping: saveLineItems() above already refreshed this line's cleared_status
+        // in currentVoucherLines, so the search below sees this press's own result, not a stale one.
+        // String()-normalized lookup for the same reason openProcedureModal() does it — uid can be
+        // a string from a table click while detail_id is a number from JSON.
+        const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+        const nextLineIdx = lineIdx === -1 ? -1 : findNextUnverifiedLineIndex(lineIdx);
+        if (nextLineIdx !== -1) {
+            // Stay in the voucher: keep the modal open and re-run the full fetch/render pipeline
+            // for the target line, same as navigateProcedureModalLine() does (which re-saves; we
+            // already saved above, so openProcedureModal() is called directly instead).
+            await openProcedureModal(currentVoucherLines[nextLineIdx].detail_id);
+            await updateProgressDisplay();
+            return;
+        }
+
+        // No unverified line left below this one — leave the voucher, unchanged behaviour.
         // Already saved above — hide only, don't re-save via closeProcedureModal().
         hideProcedureModalOnly();
         if (data.boundary) {
