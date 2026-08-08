@@ -30,6 +30,12 @@ class DocumentCreate(BaseModel):
     # ever persisted for a role matching is_approval_role() below - see save_document_auth_roles().
     auth_role_authorities: Dict[str, Optional[str]] = {}
     cross_check_fields: List[str] = []
+    # Physical Bill evidence type (Phase 2 of 8): how this Document's evidence is satisfied -
+    # 'linked_template' (a linked Data Bank row, or ticked procedure roles when there's no
+    # template) or 'physical_bill' (manually-keyed Bill No/Date/Amount/Vendor name, captured
+    # per voucher line in Phase 5). Optional/None rather than a literal default here so
+    # resolve_document_type() below stays the single place the default lives.
+    document_type: Optional[str] = None
 
 class DocumentUpdate(BaseModel):
     name: str
@@ -39,6 +45,7 @@ class DocumentUpdate(BaseModel):
     auth_roles: List[str] = []
     auth_role_authorities: Dict[str, Optional[str]] = {}
     cross_check_fields: List[str] = []
+    document_type: Optional[str] = None
 
 # ---------- HELPERS ----------
 def get_document_auth_roles(document_id: int) -> List[str]:
@@ -144,6 +151,9 @@ def row_to_document(row: dict) -> dict:
         "kb_note": row.get("kb_note"),
         "template_id": row.get("template_id"),
         "risk_rating": row.get("risk_rating"),
+        # Physical Bill evidence type (Phase 2 of 8). The `or` fallback is defensive only -
+        # Phase 1's ALTER backfilled every existing row to 'linked_template'.
+        "document_type": row.get("document_type") or 'linked_template',
         "transaction_level_approval": bool(row.get("transaction_level_approval") or 0),
         "is_active": bool(row["is_active"]),
         "created_at": row["created_at"],
@@ -171,6 +181,57 @@ def validate_document_risk_rating(risk_rating: Optional[str]):
         return
     if risk_rating not in RISK_RATINGS:
         raise HTTPException(400, f"Invalid risk rating '{risk_rating}'. Must be one of: {', '.join(RISK_RATINGS)}")
+
+# Physical Bill evidence type (Phase 2 of 8). Validated here rather than by a DB CHECK: Phase 1
+# could only attach a real CHECK to the CREATE TABLE, since a post-hoc ALTER can't retrofit one
+# without a full table rebuild - so on an already-initialized database this is the only
+# enforcement. Same accepted trade-off, and same code-level-validator shape, as RISK_RATINGS above.
+DOCUMENT_TYPES = ('linked_template', 'physical_bill')
+
+def resolve_document_type(document_type: Optional[str]) -> str:
+    """
+    Resolve a Document's type, raising HTTPException(400) on an unrecognised value.
+
+    Both an omitted field and an explicit null resolve to 'linked_template' - deliberately a
+    resolver rather than a bare validator (mirroring resolve_rate_source() in
+    routers/templates.py) so create/update each get one already-disciplined value instead of
+    repeating the fallback.
+
+    'linked_template' is the safe default: it's what all existing Documents already are, so an
+    API caller that doesn't know about this field yet (static/audit_rules.js until Phase 4)
+    keeps working unchanged. Confirmed with the user - forcing an explicit choice at create time
+    belongs in Phase 4, alongside the picker that makes the choice possible; the "no silent
+    assumption" rule stays on Categories' evidence_type, which is what actually drives the gate.
+    """
+    if document_type is None:
+        return 'linked_template'
+    if document_type not in DOCUMENT_TYPES:
+        raise HTTPException(400, f"Invalid document type '{document_type}'. Must be one of: {', '.join(DOCUMENT_TYPES)}")
+    return document_type
+
+def apply_document_type_constraints(document_type: str, template_id: Optional[int], cross_check_fields: List[str]):
+    """
+    Return the (template_id, cross_check_fields) a Document of this type is actually allowed to
+    have. A 'physical_bill' has neither: its field set (Bill No / Date / Amount / Vendor name) is
+    fixed by type rather than drawn from a Data Bank template, so there's no template to link and
+    no field list to configure.
+
+    Both are forced rather than rejected - the same discipline-server-side convention as
+    resolve_rate_source() (routers/templates.py) forcing NULL for an ineligible template, and
+    save_document_auth_roles() dropping required_authority on a non-approval role. Forcing
+    template_id is safety-critical, not cosmetic: compute_and_persist_cleared_status()'s check #1
+    (routers/verification.py) branches on template_id, so a physical_bill that carried one would
+    be routed down the template-linked branch and demand a linked Data Bank evidence row that can
+    never exist for a physical bill.
+
+    auth_roles are deliberately NOT stripped - a physical_bill still supports them (confirmed
+    against check #1's actual logic, not assumed: a template-less Document is currently satisfied
+    only by having every configured role ticked, so stripping roles would make one permanently
+    unsatisfiable until Phase 6 intercepts this type).
+    """
+    if document_type == 'physical_bill':
+        return None, []
+    return template_id, cross_check_fields
 
 def save_document_auth_roles(document_id: int, auth_roles: List[str], required_authority_map: Optional[Dict[str, Optional[str]]] = None):
     """
@@ -251,14 +312,18 @@ def get_document(document_id: int):
 
 @router.post("/api/audit-rules/documents")
 def create_document(document: DocumentCreate):
-    validate_document_template_id(document.template_id)
+    document_type = resolve_document_type(document.document_type)
+    template_id, cross_check_fields = apply_document_type_constraints(
+        document_type, document.template_id, document.cross_check_fields
+    )
+    validate_document_template_id(template_id)
     validate_document_risk_rating(document.risk_rating)
     document_id = execute_write(
-        "INSERT INTO audit_rule_documents (name, kb_note, template_id, risk_rating) VALUES (?, ?, ?, ?)",
-        (document.name, document.kb_note, document.template_id, document.risk_rating)
+        "INSERT INTO audit_rule_documents (name, kb_note, template_id, risk_rating, document_type) VALUES (?, ?, ?, ?, ?)",
+        (document.name, document.kb_note, template_id, document.risk_rating, document_type)
     )
     save_document_auth_roles(document_id, document.auth_roles, document.auth_role_authorities)
-    save_document_cross_check_fields(document_id, document.cross_check_fields)
+    save_document_cross_check_fields(document_id, cross_check_fields)
 
     log_audit("Admin", "Create", "AuditRules", f"Created Document: {document.name}")
     return {"message": f"Document '{document.name}' created successfully", "document_id": document_id}
@@ -268,15 +333,21 @@ def update_document(document_id: int, document: DocumentUpdate):
     existing = execute_query("SELECT id FROM audit_rule_documents WHERE id = ?", (document_id,))
     if not existing:
         raise HTTPException(404, "Document not found")
-    validate_document_template_id(document.template_id)
+    document_type = resolve_document_type(document.document_type)
+    template_id, cross_check_fields = apply_document_type_constraints(
+        document_type, document.template_id, document.cross_check_fields
+    )
+    validate_document_template_id(template_id)
     validate_document_risk_rating(document.risk_rating)
 
     execute_write(
-        "UPDATE audit_rule_documents SET name = ?, kb_note = ?, template_id = ?, risk_rating = ? WHERE id = ?",
-        (document.name, document.kb_note, document.template_id, document.risk_rating, document_id)
+        "UPDATE audit_rule_documents SET name = ?, kb_note = ?, template_id = ?, risk_rating = ?, document_type = ? WHERE id = ?",
+        (document.name, document.kb_note, template_id, document.risk_rating, document_type, document_id)
     )
     save_document_auth_roles(document_id, document.auth_roles, document.auth_role_authorities)
-    save_document_cross_check_fields(document_id, document.cross_check_fields)
+    # save_document_cross_check_fields() is still called unconditionally (one write path), but
+    # receives an empty list for a physical_bill, so nothing is persisted for it.
+    save_document_cross_check_fields(document_id, cross_check_fields)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated Document ID {document_id}")
     return {"message": "Document updated successfully"}
