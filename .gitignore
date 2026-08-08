@@ -1,0 +1,35 @@
+# ---------- DEVELOPMENT DATABASE ----------
+# test.db (database.py's DB_NAME) is local development scratch data, deliberately NOT
+# version-controlled: it is a ~23 MB SQLite file that changed on almost every commit, and
+# since SQLite doesn't delta-compress, git stored a full fresh copy each time. That is what
+# grew .git to 512 MB and made pushes to GitHub time out.
+# audit_app.db / data.db / database.db are dead leftovers from earlier naming.
+*.db
+
+# SQLite writes these sidecar files alongside the database while it is open.
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Automatic pre-migration backups, created at runtime by database.py's own
+# shutil.copy2(DB_NAME, f"{DB_NAME}.bak-premigrate-...") calls — so new ones appear on their
+# own whenever a schema upgrade runs. Never useful to commit.
+*.bak
+*.db.bak*
+
+# ---------- UPLOADED CLIENT FILES ----------
+# Real client spreadsheets saved by import_export.py's /api/import-excel endpoint. The folder
+# is recreated automatically on first upload (os.makedirs(upload_dir, exist_ok=True)), so
+# ignoring it wholesale is safe — nothing needs a .gitkeep placeholder.
+uploads/
+
+# ---------- PYTHON RUNTIME ARTEFACTS ----------
+__pycache__/
+*.pyc
+*.pyo
+venv/
+
+# ---------- LOGS ----------
+uvicorn_err.log
+uvicorn_out.log
+*.log
