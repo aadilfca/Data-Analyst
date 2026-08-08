@@ -22,6 +22,10 @@ from routers.import_export import get_document_group_id
 # Phase 9 (Audit Rules): audit guidance now sources from Audit Rules Categories instead of
 # the old hardcoded audit_procedure_library table — same cross-router import pattern as above.
 from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate
+# "Why is this line Query?" gate breakdown only (see compute_and_persist_cleared_status()'s
+# detail mode) — the pass/fail answer itself still comes from check_approved_by_authority_gate()
+# above, so the explanation can never disagree with the real gate.
+from routers.audit_rules import get_required_documents_with_authority, has_matching_active_specimen
 
 router = APIRouter()
 
@@ -194,7 +198,21 @@ def _write_shortfall_observations(voucher_line_id: int, cross_check_result: dict
         return False
 
 
-def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
+def _clear_status_gate(key: str, label: str, ok: bool, detail: str = "", not_applicable: bool = False) -> dict:
+    """
+    One row of compute_and_persist_cleared_status()'s optional gate breakdown ("Why is this line
+    Query?"). Labels are plain English for the auditor, never internal variable names.
+    """
+    return {
+        "key": key,
+        "label": label,
+        "status": "not_applicable" if not_applicable else ("pass" if ok else "fail"),
+        "detail": detail,
+    }
+
+
+def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = False,
+                                       persist: bool = True) -> Optional[dict]:
     """
     Validation Rules Phase 4: compute this line's Cleared/Query status. Automated
     cross-document validation engine Phase 7 added a 5th (cross-document evaluation) and 6th
@@ -208,7 +226,22 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     as it was (NULL for a never-computed line) rather than written to, since "not yet
     classified" is a normal state (a line with no resolved Category can't even open
     Supporting Documents today, per the existing Verification workflow convention).
+
+    Two optional params, both defaulting to today's exact behaviour so the existing
+    save_line_items() call site is untouched ("Why is this line Query?" fix):
+
+      detail=True  - additionally returns a "gates" list (one entry per gate, via
+                     _clear_status_gate()) explaining WHICH gate failed and why, and turns the
+                     three early "can't classify this line" returns from a bare None into a
+                     {"cleared_status": None, "reason": "..."} dict so a caller can tell those
+                     apart from a genuinely missing line. Affects nothing else - the gate
+                     booleans, all_ok, and the persisted value are computed identically either
+                     way.
+      persist=False - skips the final UPDATE and the shortfall-observation write/re-sync, so a
+                     read-only caller (GET /api/verification/line_status_reason) can ask "why?"
+                     without a GET request writing to the database.
     """
+    gates: List[dict] = []
     line = execute_query(
         """
         SELECT vd.id, vd.transaction_ref, cd.row_data, vs.client_id
@@ -220,6 +253,9 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
         (voucher_line_id,)
     )
     if not line:
+        # detail mode returns None here too - "no such voucher line" is the one case a caller
+        # must be able to tell apart from "line exists but can't be classified" (the two
+        # reason-carrying returns below), since only this one is a 404.
         return None
     row = line[0]
     client_id = row['client_id']
@@ -234,6 +270,10 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
 
     account_code = get_column_value(row_data, ACCOUNT_CODE_ALIASES)
     if not account_code:
+        if detail:
+            return {"cleared_status": None, "matrix_version_applied": None, "gates": [],
+                    "reason": "This line has no account code, so no Category could be resolved - "
+                              "Cleared/Query is not computed for it."}
         return None
 
     # Category resolution mirrors get_category_for_account() (2026-07-30 fix): prefer the
@@ -280,6 +320,11 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
             cat_rows = assignment_rows
 
     if not cat_rows or not cat_rows[0]['category_id'] or not cat_rows[0]['category_name']:
+        if detail:
+            return {"cleared_status": None, "matrix_version_applied": None, "gates": [],
+                    "reason": f"Account code {account_code} has no active Category assigned, so "
+                              "Cleared/Query is not computed for this line. Assign one under "
+                              "Audit Rules → Assign Categories."}
         return None
 
     category_id = cat_rows[0]['category_id']
@@ -310,6 +355,16 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     linked_doc_ids = {r['document_id'] for r in linked_rows}
     doc_requirement_met = required_doc_ids.issubset(linked_doc_ids)
 
+    if detail:
+        missing_names = [d['name'] for d in required_docs
+                         if d['is_active'] and d['document_id'] not in linked_doc_ids]
+        gates.append(_clear_status_gate(
+            "documents", "Required documents linked", doc_requirement_met,
+            detail=("Not linked yet: " + ", ".join(missing_names)) if missing_names
+                   else f"All {len(required_doc_ids)} required document(s) are linked.",
+            not_applicable=(not required_doc_ids)
+        ))
+
     # 2. Voucher-level checks gate: independent of Category/documents, always required.
     # Generic Voucher-Level Checks (Phase 5 cutover) - reads voucher_check_status/
     # audit_rule_voucher_checks (keyed client_id+transaction_ref, not session-scoped, same
@@ -320,10 +375,13 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     # state doesn't pass the gate" convention used elsewhere in this function). No transaction_ref
     # = fail.
     voucher_checks_ok = False
+    active_checks = []
+    ticked_check_ids = set()
     if transaction_ref:
-        active_check_ids = {
-            c['id'] for c in execute_query("SELECT id FROM audit_rule_voucher_checks WHERE is_active = 1")
-        }
+        # `name` is selected purely for detail mode's plain-English gate text - the gate logic
+        # itself still only ever compares ids, exactly as before.
+        active_checks = execute_query("SELECT id, name FROM audit_rule_voucher_checks WHERE is_active = 1")
+        active_check_ids = {c['id'] for c in active_checks}
         ticked_rows = execute_query(
             "SELECT check_id FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ? AND state = 'done'",
             (client_id, transaction_ref)
@@ -332,6 +390,19 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
         # Vacuously true when zero checks are configured (nothing required = nothing to satisfy),
         # same as an empty required-documents set already behaves in check #1 above.
         voucher_checks_ok = active_check_ids.issubset(ticked_check_ids)
+
+    if detail:
+        if not transaction_ref:
+            vc_detail = "This line has no voucher reference, so the voucher-level checks can't be read."
+        else:
+            untick = [c['name'] for c in active_checks if c['id'] not in ticked_check_ids]
+            vc_detail = ("(voucher-wide) Not yet marked done: " + ", ".join(untick)) if untick \
+                else "(voucher-wide) Every voucher-level check is marked done."
+        gates.append(_clear_status_gate(
+            "voucher_checks", "Voucher-level checks complete", voucher_checks_ok,
+            detail=vc_detail,
+            not_applicable=(bool(transaction_ref) and not active_checks)
+        ))
 
     # 3. Signature-exception check: defaults OK, fails only on a confirmed flagged mismatch.
     sig_rows = execute_query(
@@ -342,6 +413,14 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
         tuple(sibling_ids)
     )
     signature_ok = (sig_rows[0]['cnt'] == 0)
+
+    if detail:
+        gates.append(_clear_status_gate(
+            "signature", "No signature exceptions", signature_ok,
+            detail="No linked evidence row is flagged with a signature exception."
+                   if signature_ok
+                   else f"{sig_rows[0]['cnt']} linked evidence row(s) are flagged with a signature exception."
+        ))
 
     # 4. Cross-document validation engine (Phase 6): any HARD-FAIL rule result blocks Cleared.
     # category_id is passed through explicitly - already resolved above, via this exact same
@@ -355,6 +434,27 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     cross_check_result = evaluate_cross_checks_for_line(voucher_line_id, category_id=category_id)
     cross_checks_ok = not any(r['status'] == 'fail' for r in cross_check_result['results'])
 
+    if detail:
+        cc_results = cross_check_result['results']
+        failed = [r for r in cc_results if r['status'] == 'fail']
+        # Shortfalls and not_evaluated deliberately do NOT gate (Phase 6/8 contract) - reported
+        # here as non-blocking notes so the auditor isn't left thinking they caused the Query.
+        soft = [r for r in cc_results if r['status'] in ('shortfall', 'not_evaluated')]
+        if failed:
+            cc_detail = "Failed: " + "; ".join(f"{r['name']} — {r['message']}" for r in failed)
+        elif cc_results:
+            cc_detail = "All cross-document checks passed."
+        else:
+            cc_detail = "No cross-document checks are configured for this Category."
+        if soft:
+            cc_detail += " Not blocking: " + "; ".join(
+                f"{r['name']} ({r['status'].replace('_', ' ')}) — {r['message']}" for r in soft
+            )
+        gates.append(_clear_status_gate(
+            "cross_checks", "Cross-document checks passed", cross_checks_ok,
+            detail=cc_detail, not_applicable=(not cc_results)
+        ))
+
     # Phase 8 of 10: auto-log/self-clear a shortfall observation from the SAME cross_check_result
     # just computed above - never re-runs the engine. Purely a side effect (does not affect
     # cross_checks_ok/all_ok) - see _write_shortfall_observations()'s own docstring. Re-syncs
@@ -363,7 +463,9 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     # this function - without this, a freshly-appearing shortfall would be one save-cycle stale
     # in the Observations column, the same class of bug already fixed once for manual
     # observations (2026-07-25, "roll-up doesn't fire until an unrelated later action").
-    if _write_shortfall_observations(voucher_line_id, cross_check_result):
+    # persist=False (the read-only "why is this Query?" endpoint) skips this entirely - a GET
+    # must not write, and this block is the function's only write other than the UPDATE below.
+    if persist and _write_shortfall_observations(voucher_line_id, cross_check_result):
         sync_line_observations_to_voucher(voucher_line_id)
 
     # 5. Recommended Account Head must be empty. Unconditional - applies to every voucher line
@@ -372,6 +474,15 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     # reads - the "Recommended Account Head" UI field itself has no backend persistence; the
     # only real signal is the sentinel Account Head observation note.
     account_head_ok = not _has_pending_account_head_note(voucher_line_id)
+
+    if detail:
+        gates.append(_clear_status_gate(
+            "account_head", "No pending Account Head note", account_head_ok,
+            detail="No 'no suitable account exists' note is recorded for this line."
+                   if account_head_ok
+                   else "A 'no suitable account exists' Account Head note is recorded for this "
+                        "line — clear it once a proper account head is assigned."
+        ))
 
     # (Check #2 used to be a per-document approval-required gate reading Category-level
     # approval_required + a substring-match on ticked procedure-check role names - hard-removed
@@ -388,17 +499,46 @@ def compute_and_persist_cleared_status(voucher_line_id: int) -> Optional[dict]:
     # nothing in this app records who actually signed a particular voucher's document.
     approval_authority_ok = check_approved_by_authority_gate(client_id, category_id)
 
+    if detail:
+        # Re-walks the same data check_approved_by_authority_gate() walks, purely to name WHICH
+        # document/role is missing a specimen. The pass/fail answer above is NOT recomputed from
+        # this - it still comes from the gate function itself, so the two can't drift apart.
+        auth_docs = get_required_documents_with_authority(category_id)
+        missing_auth = []
+        for doc in auth_docs:
+            for role_name, required_authority in doc['required_authorities'].items():
+                if not has_matching_active_specimen(client_id, doc['document_id'], role_name, required_authority):
+                    missing_auth.append(f"{doc['name']} / {role_name} (needs '{required_authority}')")
+        gates.append(_clear_status_gate(
+            "approval_authority", "Approved-by authority on file", approval_authority_ok,
+            detail=("No active signature specimen on file for: " + "; ".join(missing_auth))
+                   if missing_auth
+                   else ("A qualified signatory is on file for every required document."
+                         if auth_docs
+                         else "No required document has a Required Authority configured."),
+            not_applicable=(not auth_docs)
+        ))
+
     all_ok = (
         doc_requirement_met and voucher_checks_ok and signature_ok
         and cross_checks_ok and account_head_ok and approval_authority_ok
     )
     cleared_status = "Cleared" if all_ok else "Query"
 
-    execute_write(
-        "UPDATE verification_details SET cleared_status = ?, matrix_version_applied = ? WHERE id = ?",
-        (cleared_status, matrix_version, voucher_line_id)
-    )
-    return {"cleared_status": cleared_status, "matrix_version_applied": matrix_version}
+    if persist:
+        execute_write(
+            "UPDATE verification_details SET cleared_status = ?, matrix_version_applied = ? WHERE id = ?",
+            (cleared_status, matrix_version, voucher_line_id)
+        )
+
+    result = {"cleared_status": cleared_status, "matrix_version_applied": matrix_version}
+    if detail:
+        # Failing gates first, then not_applicable, then passing - a stable sort, so gates stay
+        # in their original evaluation order within each band.
+        rank = {"fail": 0, "not_applicable": 1, "pass": 2}
+        result["gates"] = sorted(gates, key=lambda g: rank.get(g['status'], 3))
+        result["reason"] = None
+    return result
 
 def extract_cashbook_name(row_data: dict, client_prefixes: dict) -> Optional[str]:
     # Define aliases for required columns
@@ -3418,3 +3558,31 @@ def get_cross_check_results(voucher_line_id: int):
     error" convention for read endpoints (e.g. category-for-account).
     """
     return evaluate_cross_checks_for_line(voucher_line_id)
+
+
+@router.get("/api/verification/line_status_reason/{voucher_line_id}")
+def get_line_status_reason(voucher_line_id: int):
+    """
+    Read-only "why is this line Cleared/Query?" breakdown ("Why is this line Query?" fix).
+
+    Runs compute_and_persist_cleared_status() in detail mode with persistence OFF, so this GET
+    computes the same six gates the real status engine does but writes nothing at all - no
+    cleared_status/matrix_version_applied UPDATE, no shortfall-observation re-stamp. The gate
+    values themselves are produced by the unchanged engine code, so this can never report a
+    different verdict from the one that actually gated the line.
+
+    404s only on a genuinely unknown voucher_line_id. A line that exists but can't be classified
+    (no account code / no active Category) is a normal outcome, returned as cleared_status: null
+    plus a plain-English `reason` - same "absence is not an error" convention as
+    category-for-account.
+    """
+    result = compute_and_persist_cleared_status(voucher_line_id, detail=True, persist=False)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Voucher line not found")
+    return {
+        "voucher_line_id": voucher_line_id,
+        "cleared_status": result.get("cleared_status"),
+        "matrix_version_applied": result.get("matrix_version_applied"),
+        "reason": result.get("reason"),
+        "gates": result.get("gates") or [],
+    }

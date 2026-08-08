@@ -1393,6 +1393,114 @@ function updateClearedStatusBadgeForLine(uid, clearedStatus) {
     if (slot) slot.innerHTML = getClearedStatusBadgeHtml(clearedStatus);
 }
 
+// ---------- "Why is this line Cleared/Query?" popover ----------
+// The engine (compute_and_persist_cleared_status(), routers/verification.py) ANDs six independent
+// gates into a bare Cleared/Query string; this popover asks the read-only
+// GET /api/verification/line_status_reason/{id} endpoint which gate actually failed and shows the
+// breakdown. Anchored to the whole .voucher-line-status-cell rather than the Cleared/Query badge,
+// since that badge renders nothing at all for a line whose status hasn't been computed yet — the
+// exact case most worth explaining. Fetched fresh on every open, never cached.
+let lineStatusReasonUid = null;
+
+// The popover element is created here rather than declared in verification.html, so this feature
+// needs no markup change. Created once, reused for every line.
+function getLineStatusReasonPopover() {
+    let popover = document.getElementById('lineStatusReasonPopover');
+    if (!popover) {
+        popover = document.createElement('div');
+        popover.id = 'lineStatusReasonPopover';
+        popover.className = 'line-status-reason-popover';
+        popover.style.display = 'none';
+        document.body.appendChild(popover);
+    }
+    return popover;
+}
+
+function hideLineStatusReasonPopover() {
+    const popover = document.getElementById('lineStatusReasonPopover');
+    if (popover) popover.style.display = 'none';
+    lineStatusReasonUid = null;
+}
+
+// One row per gate. Failing gates are already ordered first by the endpoint — this only renders.
+function buildLineStatusReasonBody(data) {
+    if (data.reason) {
+        return `<p class="lsr-reason">${escapeHtml(data.reason)}</p>`;
+    }
+    const gates = data.gates || [];
+    if (!gates.length) {
+        return '<p class="lsr-reason">No gate breakdown available for this line.</p>';
+    }
+    const icon = { pass: '✔', fail: '✘', not_applicable: '–' };
+    const rows = gates.map(g => `
+        <div class="lsr-gate ${g.status}">
+            <div class="lsr-gate-label"><span class="lsr-gate-icon">${icon[g.status] || '–'}</span>${escapeHtml(g.label)}</div>
+            ${g.detail ? `<div class="lsr-gate-detail">${escapeHtml(g.detail)}</div>` : ''}
+        </div>
+    `).join('');
+    return rows;
+}
+
+async function showLineStatusReasonPopover(cell, uid) {
+    const popover = getLineStatusReasonPopover();
+    popover.innerHTML = `
+        <div class="popover-header">Why this status?</div>
+        <div class="popover-body"><p class="lsr-reason">Loading…</p></div>
+    `;
+
+    // Position near the cell, clamped so it stays within the viewport — same logic as
+    // showAuditGuidancePopover()/showVoucherChangePopover().
+    const rect = cell.getBoundingClientRect();
+    const popoverWidth = 380;
+    let left = rect.left;
+    if (left + popoverWidth > window.innerWidth) {
+        left = Math.max(8, window.innerWidth - popoverWidth - 8);
+    }
+    popover.style.left = left + 'px';
+
+    const popoverMaxHeight = 340;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow >= popoverMaxHeight + 6) {
+        popover.style.top = (rect.bottom + 6) + 'px';
+        popover.style.bottom = 'auto';
+    } else {
+        popover.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+        popover.style.top = 'auto';
+    }
+
+    popover.style.display = 'block';
+    lineStatusReasonUid = uid;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/verification/line_status_reason/${uid}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        // Discard a stale response if the popover was closed or switched to another line while
+        // this fetch was in flight.
+        if (lineStatusReasonUid !== uid) return;
+        const status = data.cleared_status || 'Not computed';
+        const header = popover.querySelector('.popover-header');
+        if (header) header.textContent = `Why this line is ${status}`;
+        const body = popover.querySelector('.popover-body');
+        if (body) body.innerHTML = buildLineStatusReasonBody(data);
+    } catch (e) {
+        if (lineStatusReasonUid !== uid) return;
+        // Fail soft — never break the table over an explanatory popover.
+        console.warn('Unable to load line status reason:', e);
+        const body = popover.querySelector('.popover-body');
+        if (body) body.innerHTML = '<p class="lsr-reason">Unable to load the status breakdown.</p>';
+    }
+}
+
+// Close on any click outside the popover (the status cell's own click stops propagating, so this
+// only fires for clicks elsewhere — clicks inside the popover leave it open).
+document.addEventListener('click', function(e) {
+    const popover = document.getElementById('lineStatusReasonPopover');
+    if (popover && popover.style.display === 'block' && !popover.contains(e.target)) {
+        hideLineStatusReasonPopover();
+    }
+});
+
 // ---------- VOUCHER LINE STATE (Phase 3) ----------
 // Seeds voucherLineState fresh from a voucher's lines. Accepts either a /next line object
 // (has transaction_type + procedure_data + change_detection_status/old_row_data) or an
@@ -1536,7 +1644,7 @@ function renderVoucherLines(lines) {
                         <span class="voucher-line-risk-dot" data-uid="${uid}"></span>
                     </span>
                     <span class="voucher-line-observations-cell" data-detail-id="${uid}"></span>
-                    <span class="voucher-line-status-cell" data-detail-id="${uid}">
+                    <span class="voucher-line-status-cell voucher-line-status-clickable" data-detail-id="${uid}" title="Click to see why this line is Cleared or Query">
                         <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
                         <span class="voucher-line-cleared-badge-slot" data-detail-id="${uid}">${getClearedStatusBadgeHtml(line.cleared_status)}</span>
                     </span>
@@ -1630,6 +1738,23 @@ function renderVoucherLines(lines) {
         chip.addEventListener('click', function(e) {
             e.stopPropagation();
             if (typeof openDfdModal === 'function') openDfdModal();
+        });
+    });
+
+    // Status cell → "why is this Cleared/Query?" popover ("Why is this line Query?" fix).
+    // Wired here per render alongside every other row control rather than as a document-level
+    // delegated listener: the row itself has a click-to-lock handler that fires first on bubble,
+    // so this needs its own e.stopPropagation() to open the popover without also toggling the
+    // line lock — the same pattern every other in-row control in this loop already uses.
+    container.querySelectorAll('.voucher-line-status-clickable').forEach(cell => {
+        cell.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const uid = this.dataset.detailId;
+            if (lineStatusReasonUid === uid) {
+                hideLineStatusReasonPopover();
+            } else {
+                showLineStatusReasonPopover(this, uid);
+            }
         });
     });
 

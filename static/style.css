@@ -1768,6 +1768,82 @@ body {
     padding: 10px 12px;
 }
 
+/* "Why is this line Cleared/Query?" popover — same card shell as .audit-guidance-popover above,
+   narrower since it lists one short gate row per check. Created by JS (see
+   showLineStatusReasonPopover() in verification.js), not declared in verification.html. */
+.line-status-reason-popover {
+    position: fixed;
+    z-index: 1100;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    width: 380px;
+    max-height: 340px;
+    overflow-y: auto;
+    font-size: 12px;
+}
+.line-status-reason-popover .popover-header {
+    font-weight: 600;
+    padding: 8px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    color: #1a1a2e;
+    position: sticky;
+    top: 0;
+    background: white;
+}
+.line-status-reason-popover .popover-body {
+    padding: 8px 12px 10px;
+}
+/* Shown for a line that can't be classified at all (no account code / no Category), and for the
+   loading + failed-fetch states — plain muted text, not a gate row. */
+.lsr-reason {
+    margin: 0;
+    color: #64748b;
+    line-height: 1.5;
+}
+/* One gate. Colors reuse the app's existing semantic trio (pass/fail/muted) rather than
+   introducing new values. */
+.lsr-gate {
+    padding: 6px 0;
+    border-bottom: 1px solid #f1f5f9;
+}
+.lsr-gate:last-child {
+    border-bottom: none;
+}
+.lsr-gate-label {
+    font-weight: 600;
+    color: #1a1a2e;
+}
+.lsr-gate-icon {
+    display: inline-block;
+    width: 16px;
+    font-weight: 700;
+}
+.lsr-gate.pass .lsr-gate-icon {
+    color: #16a34a;
+}
+.lsr-gate.fail .lsr-gate-icon {
+    color: #dc2626;
+}
+.lsr-gate.not_applicable .lsr-gate-icon,
+.lsr-gate.not_applicable .lsr-gate-label {
+    color: #94a3b8;
+}
+.lsr-gate-detail {
+    margin-top: 2px;
+    padding-left: 16px;
+    color: #64748b;
+    line-height: 1.45;
+}
+/* Click affordance on the Status cell that opens the popover above. */
+.voucher-line-status-clickable {
+    cursor: pointer;
+}
+.voucher-line-status-clickable:hover {
+    background: #f8fafc;
+}
+
 /* ----- Voucher Panel -----
    Spans the full visible width — .main-container.verification-active already has zero padding, so
    100% is the true available width. Was previously capped at 65%; widened per direct request once
