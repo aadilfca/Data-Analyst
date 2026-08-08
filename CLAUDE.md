@@ -110,6 +110,27 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 - **Trial Balance upload page (`static/trial_balance.html`/`.js`)**: the old standalone "As of Date" field is gone. Period Start/End (Section 2) are now the sole date source — Period End's value is what actually gets sent to the backend as `as_of_date` (the backend Form field itself was not renamed/touched). `updateClientDependentUI()`/`uploadTrialBalance()` gate the Upload button and the upload request on Period Start+End both being present, not on any as-of-date input. Do not reintroduce a separate as-of-date input without checking this — it would create two competing date sources.
 
 
+## Code Health Review (recurring)
+
+**Purpose:** Rotating quality check across the app — no full-code reads, fixed budget, findings-only (no code changes during review).
+
+**Cadence:** Weekly, one pass type per session (rotate 1→4 below). Monthly: `File_Map.md` accuracy check.
+
+**Rules:**
+- Max 5–8 files per session.
+- Output = findings list only. No same-session fixes except one-line safe changes.
+- Every finding logged to `KNOWN_ISSUES.md` with: date, module, description, severity (Fix / Feature / Defer).
+- Never touches functionality — review is read-only.
+
+**Rotation:**
+1. **Module correctness pass** — one module's core logic files.
+2. **Cross-cutting pattern pass** — search whole codebase for one known risk pattern.
+3. **Dead code / drift pass** — `File_Map.md` vs actual files.
+4. **Regression pass** — re-check past bug areas (per `CHANGELOG_ARCHIVE.md`) still hold.
+
+**Known Issues / Tech Debt log** — lives in `KNOWN_ISSUES.md` (same folder as this file, git-tracked alongside it), format: `YYYY-MM-DD | Module | Finding | Severity`. Kept out of this file deliberately, since it grows on every review — same reasoning as `CHANGELOG_ARCHIVE.md`.
+
+
 ## Status log
 <!--
 RULE: one line per phase. Date + phase name + outcome only.
@@ -462,8 +483,11 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 
 - 2026-08-08: **Repo compaction via `git gc` (no code, no history rewrite, no project file touched)** done — follow-up to the `.gitignore` entry directly above, and a correction to two claims made in that session's own summary. (1) **Pushes were already fully fixed, not merely "no longer degrading"** — the accumulated history already lives on GitHub's servers and is never re-uploaded, so once the database stopped being committed every push became a small text diff (measured: 5 seconds). (2) **The local bulk did NOT require a history rewrite.** `git fsck --unreachable` found only 11 unreachable objects, i.e. essentially nothing was garbage — the 492 MiB was simply **loose** (individually stored, uncompressed, never deltified) because git's automatic maintenance only triggers at `gc.auto`'s default of 6700 loose objects and this repo had 1380 large ones, so auto-gc had never once fired in 424 commits. A plain `git gc --prune=now` (66 seconds) compacted them: **513 MB → 28 MB `.git`**, loose objects 1389 → 0, pack 16.17 MiB → 27.22 MiB holding 3545 objects. 974 historical `test.db` blobs deduplicated/deltified down into that pack, confirming SQLite versions compress well against each other once actually packed. Verified: `git fsck --no-progress --no-dangling` returned completely clean (no corruption); all 424 commits and all four branches intact with unchanged hashes and unchanged upstream tracking (`main` still in sync with `origin/main` at `96a0155`); the 6 long-standing orphaned `.idx` warnings and `garbage: 6` are gone (`garbage: 0`); working tree clean, `test.db` still 23,015,424 bytes on disk with all 18 `uploads/` files present; `git cat-file -s f821ab4:test.db` still returns 23015424, proving pre-cutoff history remains fully readable (the `git show HEAD:test.db` recovery trick still works for anything committed *before* 2026-08-08, just not after); and `curl http://localhost:5000/api/audit-rules/categories` against the user's already-running `--reload` dev server (port 5000, same PID 6384 throughout, never restarted) still returned live Category data. **A true history rewrite (`filter-repo`-class) was explicitly considered and rejected** with the user: it would rewrite every commit hash across all four branches and break existing clones, and the only remaining benefit would be a smaller first-time clone — not worth it for a solo-developer repo. `gc.auto` deliberately left at its default; now that the database is gitignored, loose-object growth is ordinary text-sized and normal automatic maintenance will keep up.
 
+- 2026-08-08: **Code Health Review protocol added (documentation only — `CLAUDE.md` + new `KNOWN_ISSUES.md` + `File_Map.md`)** done. New `## Code Health Review (recurring)` section sits between Workflow rules and the Status log — a weekly, read-only, findings-only quality pass capped at 5–8 files per session, rotating through 4 pass types (module correctness / cross-cutting pattern / dead code drift vs `File_Map.md` / regression re-check per `CHANGELOG_ARCHIVE.md`), with a monthly `File_Map.md` accuracy check. No same-session fixes except one-line safe changes. The Known Issues / Tech Debt log lives in a **new root `KNOWN_ISSUES.md`** rather than inline in this file — flagged and confirmed with the user before implementing, since `CLAUDE.md` was already 469 lines (dominated by a ~200-entry Status log) and is loaded into context every session, so an append-forever findings log would compound exactly the growth problem `CHANGELOG_ARCHIVE.md` was created to solve; `CLAUDE.md` carries only a one-line pointer to it. A `## Self-maintenance` bullet was added directing review findings to `KNOWN_ISSUES.md` rather than the Status log (changes-made vs. issues-found). No Conventions bullet added (no mistake prompted this) and no `CHANGELOG_ARCHIVE.md` entry (nothing forensic to archive for a docs change). Verified structurally, since no code runs: `git status` shows exactly the 2 modified files + `KNOWN_ISSUES.md` as the only new file, `grep -c` confirms the new section heading appears exactly once and every pre-existing `##` heading survives (8 → 9, the new one being the only addition), the new section sits between `## Workflow rules` and `## Status log` as intended, and the `File_Map.md` row landed inside the Root Directory table rather than after it. No dev server or database was touched at any point.
+
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed
+- Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found
 - If new files were created, add them to the Architecture/file map (this file's own Architecture section) AND to `File_Map.md` (same folder as this file, git-tracked alongside it — a separate, more detailed one-line-per-file reference) if a file was added, removed, or repurposed. This is the only File_Map.md in the project — do not create or update a second copy elsewhere.
 - If a new convention or rule emerges from a mistake, add it under Conventions
 Do this automatically at the end of the session without being asked.
