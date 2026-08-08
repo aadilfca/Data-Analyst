@@ -1154,6 +1154,8 @@ def init_db():
                 kb_note TEXT,
                 template_id INTEGER,
                 is_active INTEGER DEFAULT 1,
+                document_type TEXT NOT NULL DEFAULT 'linked_template'
+                    CHECK (document_type IN ('linked_template', 'physical_bill')),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (template_id) REFERENCES templates(id)
             )
@@ -1212,6 +1214,31 @@ def init_db():
                 print("✅ Added transaction_level_approval column to audit_rule_documents")
         except Exception as e:
             print("⚠️ Could not add transaction_level_approval to audit_rule_documents:", e)
+
+        # Physical Bill evidence type (new, confirmed 8-phase requirement, Phase 1 of 8):
+        # document_type says HOW a Document's evidence is satisfied - 'linked_template' is
+        # today's behaviour (a linked Data Bank row, or ticked procedure roles when the
+        # Document has no template), 'physical_bill' is the new manually-keyed Bill No /
+        # Date / Amount / Vendor name captured during verification (see
+        # voucher_line_physical_bills below). Nothing reads this column yet - the gate that
+        # acts on it lands in Phase 6.
+        #
+        # The CREATE TABLE above carries a real CHECK constraint, but a post-hoc ALTER
+        # cannot retrofit one onto an existing table without a full rebuild - so on an
+        # already-initialized database this column has no DB-level CHECK. Same deliberate
+        # trade-off (and same wording) as risk_rating above: validity is enforced in Python,
+        # in routers/audit_rules.py, from Phase 2 onward.
+        #
+        # The ALTER's own DEFAULT backfills every existing row to 'linked_template', so no
+        # separate backfill pass is needed - same mechanism as signature_specimens.is_active.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'document_type' not in columns:
+                conn.execute("ALTER TABLE audit_rule_documents ADD COLUMN document_type TEXT DEFAULT 'linked_template'")
+                print("✅ Added document_type column to audit_rule_documents")
+        except Exception as e:
+            print("⚠️ Could not add document_type to audit_rule_documents:", e)
 
         # Fields on a Document available for cross-checks (e.g. Quantity, Amount, Date) -
         # stored here so they're a controlled per-document list, not free-typed elsewhere.
@@ -1416,6 +1443,7 @@ def init_db():
                 name TEXT NOT NULL,
                 kb_overview TEXT,
                 is_active INTEGER DEFAULT 1,
+                evidence_type TEXT CHECK (evidence_type IN ('billable', 'non_billable')),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -1445,6 +1473,27 @@ def init_db():
                 print("✅ Added matrix_version column to audit_rule_categories")
         except Exception as e:
             print("⚠️ Could not add matrix_version to audit_rule_categories:", e)
+
+        # Physical Bill evidence type (Phase 1 of 8): evidence_type says WHAT kind of evidence
+        # this Category requires - 'billable' requires a Physical Bill Document (whose Amount
+        # is later hard-matched against the voucher line's own amount), 'non_billable' keeps
+        # today's procedure-role gate. Deliberately nullable with NO default: every existing
+        # Category stays NULL, i.e. "not yet classified", and needs a manual backfill before
+        # Phase 6 turns the gate on - silently defaulting historic Categories to either value
+        # would hide that decision rather than surface it.
+        #
+        # NULL always passes a SQL CHECK in SQLite, so nullable and CHECK-constrained coexist
+        # correctly in the CREATE TABLE above. On an already-initialized database this ALTER
+        # carries no DB-level CHECK (same post-hoc-ALTER limitation, and same Python-side
+        # enforcement plan, as audit_rule_documents.document_type / risk_rating).
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_categories)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'evidence_type' not in columns:
+                conn.execute("ALTER TABLE audit_rule_categories ADD COLUMN evidence_type TEXT")
+                print("✅ Added evidence_type column to audit_rule_categories")
+        except Exception as e:
+            print("⚠️ Could not add evidence_type to audit_rule_categories:", e)
 
         # Documents a Category uses. approval_required (Validation Rules Phase 1 of 7) has since
         # been hard-removed (confirmed requirement, 2026-08-02) - approval requirement is now
@@ -2035,6 +2084,49 @@ def init_db():
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_procedure_checks_line ON voucher_line_procedure_checks (voucher_line_id)")
         print("✅ Created voucher_line_procedure_checks table (Phase 5 of 6: audit procedures checklist)")
+
+        # ---------- PHYSICAL BILL EVIDENCE (new, confirmed 8-phase requirement, Phase 1 of 8) ----------
+        # One manually-keyed physical bill per voucher line per Physical Bill Document - the
+        # evidence a 'billable' Category (audit_rule_categories.evidence_type) requires, in place
+        # of a linked Data Bank row. Captured during verification in a later phase; Phase 6 will
+        # hard-block Cleared status when `amount` doesn't match the voucher line's own amount.
+        # Schema only here - nothing reads or writes this table yet.
+        #
+        # document_id is carried alongside voucher_line_id (rather than one bare row per line):
+        # a Billable Category can attach more than one Physical Bill Document, and Phase 6's
+        # check #1 iterates per required Document, so it needs to know which Document a given
+        # bill satisfies. UNIQUE(voucher_line_id, document_id) still means one bill per line
+        # per Document.
+        #
+        # voucher_line_id keys to the session-scoped verification_details.id, matching every
+        # other voucher_line_* table. Reads in later phases MUST therefore go through
+        # _resolve_sibling_voucher_line_ids() (routers/verification.py) the way
+        # voucher_line_documents/_observations/_procedure_checks already do - reopening a
+        # cashbook creates fresh verification_details rows, and skipping that resolution is the
+        # exact orphaning bug this module has already fixed three times.
+        #
+        # Brand-new table with no prior data, so a plain CREATE TABLE IF NOT EXISTS is
+        # sufficient - no ALTER TABLE upgrade block needed. FOREIGN KEY clauses are
+        # documentation/intent only: this app never sets PRAGMA foreign_keys = ON, so the
+        # routers validate each referenced id explicitly.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_line_physical_bills (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                voucher_line_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                bill_no TEXT,
+                bill_date TEXT,
+                amount REAL,
+                vendor_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (voucher_line_id) REFERENCES verification_details(id) ON DELETE CASCADE,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id),
+                UNIQUE(voucher_line_id, document_id)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_physical_bills_line ON voucher_line_physical_bills (voucher_line_id)")
+        print("✅ Created voucher_line_physical_bills table (Physical Bill evidence, Phase 1 of 8)")
 
         # ---------- VOUCHER-LEVEL APPROVAL (Validation Rules, Phase 1 addendum) ----------
         # Prepared By / Checked By / Approved By as one independent, mandatory record per
