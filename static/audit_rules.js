@@ -12,6 +12,11 @@
 // null while creating a new Document; set to the Document's id while editing an
 // existing one (mirrors columns.js's editingId convention).
 let editingId = null;
+// Physical Bill evidence type (Phase 4 of 8): the document_type as it stands ON THE SERVER for the
+// Document currently open. Kept separate from arDocumentTypeSelect.value, which changes the moment
+// the user touches the picker - so the picker can't serve as its own "what was it before?" baseline
+// for the destructive-switch confirm in saveDocument(). null while creating a new Document.
+let savedDocumentType = null;
 
 // Two independent flat string arrays edited by the chip editors below, sent as
 // auth_roles/cross_check_fields on save. Reset on both selectDocument() and
@@ -38,6 +43,12 @@ const arNameInput = document.getElementById('arNameInput');
 const arKbNoteInput = document.getElementById('arKbNoteInput');
 const arTemplateSelect = document.getElementById('arTemplateSelect');
 const arRiskRatingSelect = document.getElementById('arRiskRatingSelect');
+// Physical Bill evidence type (Phase 4 of 8): the type picker plus the three blocks it hides.
+const arDocumentTypeSelect = document.getElementById('arDocumentTypeSelect');
+const arDocumentTypeHint = document.getElementById('arDocumentTypeHint');
+const arDocTemplateField = document.getElementById('arDocTemplateField');
+const arDocFieldsField = document.getElementById('arDocFieldsField');
+const arDocCrossChecksSectionTitle = document.getElementById('arDocCrossChecksSectionTitle');
 const arRolesChipList = document.getElementById('arRolesChipList');
 const arRolesInput = document.getElementById('arRolesInput');
 const arRolesAddBtn = document.getElementById('arRolesAddBtn');
@@ -320,6 +331,20 @@ async function renderFieldsDropdown() {
     arFieldsAddBtn.disabled = false;
 }
 
+// ---------- DOCUMENT TYPE (Physical Bill evidence type, Phase 4 of 8) ----------
+function updateDocumentTypeVisibility() {
+    // A Physical Bill has no linked Data Bank template and no configurable field list - its fields
+    // (Bill No / Date / Amount / Vendor name) are fixed by type. The Cross-Checks section heading
+    // is hidden alongside its only field so the form doesn't show an empty section header.
+    const isPhysicalBill = arDocumentTypeSelect.value === 'physical_bill';
+    const display = isPhysicalBill ? 'none' : '';
+
+    arDocTemplateField.style.display = display;
+    arDocFieldsField.style.display = display;
+    arDocCrossChecksSectionTitle.style.display = display;
+    arDocumentTypeHint.style.display = isPhysicalBill ? 'block' : 'none';
+}
+
 // ---------- TRANSACTION LEVEL APPROVAL (new, confirmed requirement) ----------
 // UI checkbox intentionally hidden (see CLAUDE.md Conventions) — this function is kept so
 // reactivating the feature later is a pure markup+wiring change, no backend/schema work needed.
@@ -357,6 +382,11 @@ async function selectDocument(id) {
         arKbNoteInput.value = doc.kb_note || '';
         arTemplateSelect.value = doc.template_id || '';
         arRiskRatingSelect.value = doc.risk_rating || '';
+        // Physical Bill evidence type (Phase 4 of 8): reflect the stored type and record it as the
+        // baseline for saveDocument()'s destructive-switch confirm.
+        savedDocumentType = doc.document_type || 'linked_template';
+        arDocumentTypeSelect.value = savedDocumentType;
+        updateDocumentTypeVisibility();
         rolesState = (doc.auth_roles || []).slice();
         requiredAuthorityState = { ...(doc.auth_role_authorities || {}) };
         fieldsState = (doc.cross_check_fields || []).slice();
@@ -395,6 +425,11 @@ function startNewDocument() {
     arKbNoteInput.value = '';
     arTemplateSelect.value = '';
     arRiskRatingSelect.value = '';
+    // Forced choice: a brand-new Document starts with no type selected and can't be saved until
+    // one is picked (see saveDocument()). No saved baseline exists yet, so no switch confirm.
+    savedDocumentType = null;
+    arDocumentTypeSelect.value = '';
+    updateDocumentTypeVisibility();
     rolesState = [];
     requiredAuthorityState = {};
     fieldsState = [];
@@ -424,14 +459,56 @@ async function saveDocument() {
         return;
     }
 
+    // Physical Bill evidence type (Phase 4 of 8): forced choice, no default. The backend still
+    // defaults a missing document_type to 'linked_template' (resolve_document_type(),
+    // routers/audit_rules.py) - this UI is deliberately stricter, so the choice is always explicit.
+    const documentType = arDocumentTypeSelect.value;
+    if (!documentType) {
+        showDetailStatus('❌ Document type is required.', 'error');
+        return;
+    }
+
+    const isPhysicalBill = documentType === 'physical_bill';
+
+    // Destructive-switch guard (the confirm step Phase 2 deferred to this phase): turning an
+    // existing linked-template Document into a Physical Bill clears its template and its
+    // cross-check-eligible fields server-side. Only asks when there's actually something to lose.
+    // A native confirm(), matching this codebase's convention for a single flat destructive action
+    // (Assign Categories' force-apply, Clear Saved Mapping) - custom modals here are reserved for
+    // multi-step flows.
+    if (editingId && savedDocumentType === 'linked_template' && isPhysicalBill) {
+        const losing = [];
+        if (arTemplateSelect.value) {
+            const templateName = arTemplateSelect.options[arTemplateSelect.selectedIndex].text;
+            losing.push('its linked template (' + templateName + ')');
+        }
+        if (fieldsState.length) {
+            losing.push('its cross-check-eligible field(s): ' + fieldsState.join(', '));
+        }
+        if (losing.length) {
+            const proceed = confirm(
+                'Switching "' + name + '" to Physical Bill will permanently clear ' + losing.join(' and ') + '.\n\n' +
+                'A Physical Bill has fixed fields (Bill No, Date, Amount, Vendor name), so it cannot keep either. ' +
+                'Any Cross-check comparing a field from this document will stop validating.\n\n' +
+                'Continue?'
+            );
+            if (!proceed) return;
+        }
+    }
+
     const payload = {
         name: name,
         kb_note: arKbNoteInput.value.trim() || null,
-        template_id: arTemplateSelect.value ? parseInt(arTemplateSelect.value) : null,
+        // Send what will actually be stored rather than whatever the now-hidden controls still
+        // hold. The backend forces both empty for a physical_bill anyway
+        // (apply_document_type_constraints()), but sending the real outcome keeps the UI from
+        // briefly implying a template/field survived the switch.
+        template_id: (!isPhysicalBill && arTemplateSelect.value) ? parseInt(arTemplateSelect.value) : null,
         risk_rating: arRiskRatingSelect.value || null,
         auth_roles: rolesState,
         auth_role_authorities: requiredAuthorityState,
-        cross_check_fields: fieldsState
+        cross_check_fields: isPhysicalBill ? [] : fieldsState,
+        document_type: documentType
     };
 
     try {
@@ -728,6 +805,9 @@ arFieldsAddBtn.addEventListener('click', addField);
 // (ID-based Cross-check-eligible Fields, Phase 2 of 4) — existing fields are never
 // auto-removed on a template switch, only re-flagged.
 arTemplateSelect.addEventListener('change', renderFieldsDropdown);
+// Physical Bill evidence type (Phase 4 of 8): show/hide Template + Cross-check fields live as the
+// type changes, so the form always reflects what the chosen type can actually carry.
+arDocumentTypeSelect.addEventListener('change', updateDocumentTypeVisibility);
 
 arSaveBtn.addEventListener('click', saveDocument);
 arDeleteBtn.addEventListener('click', deleteDocument);
@@ -1327,6 +1407,8 @@ const arCategoryDetailForm = document.getElementById('arCategoryDetailForm');
 const arCategoryEditingIdInput = document.getElementById('arCategoryEditingId');
 const arCategoryNameInput = document.getElementById('arCategoryNameInput');
 const arCategoryKbOverviewInput = document.getElementById('arCategoryKbOverviewInput');
+// Physical Bill evidence type (Phase 4 of 8): forced choice, no default - see saveCategory().
+const arCategoryEvidenceTypeSelect = document.getElementById('arCategoryEvidenceTypeSelect');
 const arCategoryDocsList = document.getElementById('arCategoryDocsList');
 const arCategoryAddDocumentSelect = document.getElementById('arCategoryAddDocumentSelect');
 const arCategoryAddDocumentBtn = document.getElementById('arCategoryAddDocumentBtn');
@@ -1441,6 +1523,12 @@ function renderClearedRequirementsBullets(data) {
         ul.appendChild(li);
     };
 
+    // Physical Bill evidence type (Phase 4 of 8): surfaced first, since it's what decides which
+    // kind of evidence the rest of the list means. "not set" is shown plainly rather than hidden —
+    // an unclassified Category is exactly what Phase 6's gate won't be able to classify.
+    const EVIDENCE_TYPE_LABELS = { billable: 'Billable', non_billable: 'Non-billable' };
+    addBullet('Evidence type — ' + (EVIDENCE_TYPE_LABELS[data.evidence_type] || 'not set'));
+
     addBullet('Voucher-level checks — always required');
     addBullet('Account Head — always required');
     addBullet(
@@ -1453,7 +1541,14 @@ function renderClearedRequirementsBullets(data) {
     if (docs.length === 0) {
         addBullet('Required documents — none');
     } else {
-        const names = docs.map(d => d.is_active ? d.name : `${d.name} (inactive)`).join(', ');
+        // Each document is marked Physical Bill where applicable (Phase 4 of 8) alongside the
+        // pre-existing inactive marker — the two compose, so a document can carry both.
+        const names = docs.map(d => {
+            const markers = [];
+            if (d.document_type === 'physical_bill') markers.push('Physical Bill');
+            if (!d.is_active) markers.push('inactive');
+            return markers.length ? `${d.name} (${markers.join(', ')})` : d.name;
+        }).join(', ');
         addBullet('Required documents — ' + names);
     }
 
@@ -1971,6 +2066,10 @@ async function selectCategory(id) {
         arCategoryEditingIdInput.value = cat.id;
         arCategoryNameInput.value = cat.name;
         arCategoryKbOverviewInput.value = cat.kb_overview || '';
+        // Physical Bill evidence type (Phase 4 of 8): the `|| ''` is the backfill mechanism - a
+        // Category predating this field opens with the picker genuinely UNSET rather than
+        // defaulted to either value, and saveCategory() then blocks until one is chosen.
+        arCategoryEvidenceTypeSelect.value = cat.evidence_type || '';
         categoryDocIds = (cat.documents || []).map(d => d.document_id);
         categoryCrossCheckIds = (cat.cross_checks || []).map(c => c.cross_check_id);
         categoryDocRequired = {};
@@ -2010,6 +2109,7 @@ function startNewCategory() {
     arCategoryEditingIdInput.value = '';
     arCategoryNameInput.value = '';
     arCategoryKbOverviewInput.value = '';
+    arCategoryEvidenceTypeSelect.value = '';
     categoryDocIds = [];
     categoryCrossCheckIds = [];
     categoryDocRequired = {};
@@ -2036,11 +2136,22 @@ async function saveCategory() {
         return;
     }
 
+    // Physical Bill evidence type (Phase 4 of 8): mirrors the backend's own reject-if-missing rule
+    // (validate_category_evidence_type(), routers/audit_rules.py) on both create AND edit, so the
+    // user gets an inline message here rather than a bare 400 from the server. Sending this field
+    // is also what un-breaks Category saving, which has been 400ing since Phase 3.
+    const evidenceType = arCategoryEvidenceTypeSelect.value;
+    if (!evidenceType) {
+        showCategoryDetailStatus('❌ Evidence type is required — choose Billable or Non-billable.', 'error');
+        return;
+    }
+
     const payload = {
         name: name,
         kb_overview: arCategoryKbOverviewInput.value.trim() || null,
         document_ids: categoryDocIds,
-        cross_check_ids: categoryCrossCheckIds
+        cross_check_ids: categoryCrossCheckIds,
+        evidence_type: evidenceType
     };
 
     try {

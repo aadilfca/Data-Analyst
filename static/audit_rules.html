@@ -154,14 +154,35 @@
                         <input type="text" id="arNameInput" required>
                     </div>
 
+                    <!-- Physical Bill evidence type (Phase 4 of 8): how this Document's evidence
+                         is satisfied. Placed directly after Name because it governs what the rest
+                         of this form shows — a Physical Bill hides Template and Cross-check-eligible
+                         Fields entirely (see updateDocumentTypeVisibility() in audit_rules.js).
+                         Forced choice, no pre-selection: the placeholder is disabled+selected so a
+                         new Document can't be saved until a type is picked. -->
+                    <div class="ar-field">
+                        <label for="arDocumentTypeSelect">Document Type</label>
+                        <select id="arDocumentTypeSelect">
+                            <option value="" disabled selected>-- Select a document type --</option>
+                            <option value="linked_template">Linked Template</option>
+                            <option value="physical_bill">Physical Bill</option>
+                        </select>
+                        <div id="arDocumentTypeHint" class="ar-field-warning"
+                            style="display:none; color:#64748b;">
+                            A Physical Bill's fields (Bill No, Date, Amount, Vendor name) are fixed by
+                            type — there's no template to link and no field list to configure.
+                        </div>
+                    </div>
+
                     <div class="ar-field">
                         <label for="arKbNoteInput">Knowledge Base</label>
                         <textarea id="arKbNoteInput" rows="3"></textarea>
                     </div>
 
                     <!-- Phase 9: which Data Bank template this Document's supporting evidence
-                         is searched in (drives the Supporting column's search modal). -->
-                    <div class="ar-field">
+                         is searched in (drives the Supporting column's search modal). Hidden for a
+                         Physical Bill (Phase 4 of 8). -->
+                    <div class="ar-field" id="arDocTemplateField">
                         <label for="arTemplateSelect">Template (for Supporting search)</label>
                         <select id="arTemplateSelect">
                             <option value="">-- None --</option>
@@ -212,13 +233,15 @@
                     <!-- Cross-Checks section: moved to its own labelled group after Authorisation
                          so it reads as distinct from the Authorisation cluster above (confirmed
                          fix — pure reorder + labelling, no field/logic changes). -->
-                    <div class="ar-detail-section-title">Cross-Checks</div>
+                    <!-- Hidden alongside its only field for a Physical Bill (Phase 4 of 8), so the
+                         form doesn't show an empty section header. -->
+                    <div class="ar-detail-section-title" id="arDocCrossChecksSectionTitle">Cross-Checks</div>
 
                     <!-- Cross-check-eligible Fields: dropdown sourced from the linked Template's
                          master columns (ID-based Cross-check-eligible Fields, Phase 2 of 4).
                          Existing entries that don't match the current template's columns render
                          flagged (see renderFieldChips() in audit_rules.js). -->
-                    <div class="ar-field">
+                    <div class="ar-field" id="arDocFieldsField">
                         <label>Cross-check-eligible Fields</label>
                         <div class="ar-chip-list" id="arFieldsChipList"></div>
                         <div class="ar-chip-input-row">
@@ -339,6 +362,22 @@
                     <div class="ar-field">
                         <label for="arCategoryNameInput">Name</label>
                         <input type="text" id="arCategoryNameInput" required>
+                    </div>
+
+                    <!-- Physical Bill evidence type (Phase 4 of 8): what kind of evidence this
+                         Category requires. Forced choice with NO default — the placeholder is
+                         disabled+selected, and saveCategory() blocks on an empty value, mirroring
+                         the backend's own reject-if-missing rule (validate_category_evidence_type(),
+                         routers/audit_rules.py) on both create AND edit. An existing Category that
+                         predates this field opens with the picker genuinely unset, which is the
+                         confirmed backfill mechanism — not a separate migration screen. -->
+                    <div class="ar-field">
+                        <label for="arCategoryEvidenceTypeSelect">Evidence Type</label>
+                        <select id="arCategoryEvidenceTypeSelect">
+                            <option value="" disabled selected>-- Select an evidence type --</option>
+                            <option value="billable">Billable</option>
+                            <option value="non_billable">Non-billable</option>
+                        </select>
                     </div>
 
                     <div class="ar-field">
