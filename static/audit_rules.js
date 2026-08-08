@@ -1548,8 +1548,11 @@ function renderCategoryList(categories) {
     arCategoryListEmptyMessage.style.display = 'none';
 
     categories.forEach(cat => {
+        // ar-category-list-card gives this row a card surface (border/radius/padding) so the
+        // two-line name + rule-count block reads as a discrete item — Categories only, the other
+        // entity lists keep the plain .ar-list-row treatment.
         const row = document.createElement('div');
-        row.className = 'ar-list-row' + (cat.is_active ? '' : ' ar-list-row-inactive');
+        row.className = 'ar-list-row ar-category-list-card' + (cat.is_active ? '' : ' ar-list-row-inactive');
         if (cat.id === editingCategoryId) row.classList.add('ar-list-row-selected');
 
         // Rule-count badge (Phase 3 of 3, FINAL). Cross-check count comes straight from this
@@ -1619,65 +1622,83 @@ function getCategoryDocDisplayInfo(docId) {
 function renderCategoryDocsList() {
     arCategoryDocsList.innerHTML = '';
 
-    if (categoryDocIds.length === 0) {
-        const empty = document.createElement('span');
-        empty.className = 'ar-chip-empty';
-        empty.textContent = 'None added.';
+    // Inactive attached documents are fully hidden from this list (confirmed fix) — never
+    // rendered as a row (no name/Inactive badge/Required checkbox/✕ button), and no
+    // "--No Document--" placeholder either. Still attached in categoryDocIds/on the server
+    // either way — this is display-only, never auto-detached. Computed up front so an
+    // all-inactive attachment set still shows the empty state rather than an empty table.
+    const visibleDocIds = categoryDocIds.filter(docId => getCategoryDocDisplayInfo(docId).is_active);
+
+    if (visibleDocIds.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'ar-category-empty-state';
+        empty.textContent = 'No documents attached yet.';
         arCategoryDocsList.appendChild(empty);
     } else {
-        // Inactive attached documents are fully hidden from this list (confirmed fix) —
-        // never rendered as a row (no name/Inactive badge/Required checkbox/✕ button), and
-        // no "--No Document--" placeholder either. Still attached in categoryDocIds/on the
-        // server either way — this is display-only, never auto-detached.
-        categoryDocIds.forEach(docId => {
-            const displayInfo = getCategoryDocDisplayInfo(docId);
-            if (!displayInfo.is_active) return;
+        const table = document.createElement('table');
+        table.className = 'ar-category-doc-table';
 
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        ['Document', 'Required', ''].forEach(text => {
+            const th = document.createElement('th');
+            th.textContent = text;
+            headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement('tbody');
+
+        visibleDocIds.forEach(docId => {
+            const displayInfo = getCategoryDocDisplayInfo(docId);
             const isPersisted = Object.prototype.hasOwnProperty.call(categoryDocRequired, docId);
 
-            const row = document.createElement('div');
-            row.style.display = 'flex';
-            row.style.alignItems = 'center';
-            row.style.gap = '16px';
-            row.style.fontSize = '13px';
-            row.style.color = isPersisted ? '#1a1a2e' : '#94a3b8';
-            row.style.padding = '4px 0';
+            const row = document.createElement('tr');
+            if (!isPersisted) row.className = 'ar-category-doc-row-unsaved';
 
-            const nameSpan = document.createElement('span');
-            nameSpan.style.flex = '1';
-            nameSpan.textContent = displayInfo.name +
+            const nameCell = document.createElement('td');
+            nameCell.className = 'ar-category-doc-name';
+            nameCell.textContent = displayInfo.name +
                 (isPersisted ? '' : ' (save the category first)');
-            row.appendChild(nameSpan);
+            row.appendChild(nameCell);
 
             // Defaults to checked/required, matching audit_rule_category_documents.is_required's
             // own DB default (TRUE) — a document whose key isn't in categoryDocRequired yet
             // (not persisted) still shows checked, so nothing looks "unrequired" before save.
-            const requiredLabel = document.createElement('label');
-            requiredLabel.style.display = 'flex';
-            requiredLabel.style.alignItems = 'center';
-            requiredLabel.style.gap = '6px';
-            requiredLabel.style.fontWeight = '400';
-            requiredLabel.style.cursor = isPersisted ? 'pointer' : 'default';
-            requiredLabel.style.marginBottom = '0';
+            // Still a real checkbox (it drives a live PUT), just presented as a badge-style pill.
+            const requiredCell = document.createElement('td');
             const requiredCheckbox = document.createElement('input');
             requiredCheckbox.type = 'checkbox';
             requiredCheckbox.checked = isPersisted ? !!categoryDocRequired[docId] : true;
             requiredCheckbox.disabled = !isPersisted;
             requiredCheckbox.addEventListener('change', () => toggleCategoryDocumentRequired(docId, requiredCheckbox.checked));
+
+            const requiredLabel = document.createElement('label');
+            requiredLabel.className = 'ar-category-doc-required' +
+                (requiredCheckbox.checked ? ' checked' : '') +
+                (isPersisted ? '' : ' disabled');
             requiredLabel.appendChild(requiredCheckbox);
             requiredLabel.appendChild(document.createTextNode('Required'));
-            row.appendChild(requiredLabel);
+            requiredCell.appendChild(requiredLabel);
+            row.appendChild(requiredCell);
 
+            const actionCell = document.createElement('td');
+            actionCell.className = 'ar-category-doc-action';
             const removeBtn = document.createElement('button');
             removeBtn.type = 'button';
-            removeBtn.className = 'ar-chip-remove';
+            removeBtn.className = 'ar-category-doc-remove';
             removeBtn.textContent = '✕';
             removeBtn.title = 'Remove';
             removeBtn.addEventListener('click', () => removeCategoryDocument(docId));
-            row.appendChild(removeBtn);
+            actionCell.appendChild(removeBtn);
+            row.appendChild(actionCell);
 
-            arCategoryDocsList.appendChild(row);
+            tbody.appendChild(row);
         });
+
+        table.appendChild(tbody);
+        arCategoryDocsList.appendChild(table);
     }
 
     // Rebuild the "add document" picker to exclude documents already attached (confirmed
@@ -1787,9 +1808,9 @@ function renderCategoryCrossCheckChainPreview() {
     arCategoryCrossCheckChainPreview.innerHTML = '';
 
     if (categoryCrossCheckIds.length === 0) {
-        const empty = document.createElement('span');
-        empty.className = 'ar-chip-empty';
-        empty.textContent = 'No cross-checks attached yet.';
+        const empty = document.createElement('div');
+        empty.className = 'ar-category-empty-state';
+        empty.textContent = 'No chains to preview — attach a cross-check above.';
         arCategoryCrossCheckChainPreview.appendChild(empty);
         return;
     }
@@ -1859,9 +1880,9 @@ function renderCategoryCrossCheckChips() {
     arCategoryCrossChecksChipList.innerHTML = '';
 
     if (categoryCrossCheckIds.length === 0) {
-        const empty = document.createElement('span');
-        empty.className = 'ar-chip-empty';
-        empty.textContent = 'None added.';
+        const empty = document.createElement('div');
+        empty.className = 'ar-category-empty-state';
+        empty.textContent = 'No cross-checks attached — this category has no cross-document validation rules.';
         arCategoryCrossChecksChipList.appendChild(empty);
     } else {
         categoryCrossCheckIds.forEach(ccId => {

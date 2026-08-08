@@ -89,17 +89,21 @@
             <div id="arCategoriesListSection" class="ar-list-panel" style="display:none;">
                 <div class="ar-list-panel-header">
                     <span class="ar-list-panel-title">Categories</span>
-                    <!-- Assign Categories (Section 2, Phase 5): opens the full-page TB
-                         account-assignment view below, immediately left of "+ Add New"
-                         per the confirmed brief. -->
-                    <button type="button" id="arAssignCategoriesBtn" class="ar-btn-assign-categories">Assign
-                        Categories</button>
                     <button type="button" id="arCategoryAddNewBtn" class="ar-btn-add-new">+ Add New</button>
                 </div>
-                <label class="ar-show-inactive-toggle">
-                    <input type="checkbox" id="arCategoryShowInactiveCheckbox">
-                    <span>Show inactive</span>
-                </label>
+                <!-- Secondary controls row: keeps the "Assign Categories" navigation action and
+                     the "Show inactive" filter visually separate from the title/+ Add New header
+                     above, instead of all three competing in one space-between row. -->
+                <div class="ar-category-list-toolbar">
+                    <!-- Assign Categories (Section 2, Phase 5): opens the full-page TB
+                         account-assignment view below. -->
+                    <button type="button" id="arAssignCategoriesBtn" class="ar-btn-assign-categories">Assign
+                        Categories</button>
+                    <label class="ar-show-inactive-toggle">
+                        <input type="checkbox" id="arCategoryShowInactiveCheckbox">
+                        <span>Show inactive</span>
+                    </label>
+                </div>
                 <div id="arCategoryListBody" class="ar-list-body"></div>
                 <div id="arCategoryListEmptyMessage" class="ar-list-empty" style="display:none;">No categories found.
                 </div>
@@ -379,22 +383,35 @@
                         <div id="arCategoryCrossCheckChainPreview"></div>
                     </div>
 
-                    <div id="arCategoryMatrixVersionRow" style="margin-bottom:18px;">
-                        <span class="ar-used-by-label">Matrix version: <span id="arCategoryMatrixVersion">1</span></span>
+                    <!-- Read-only metadata strip: matrix version + usage count sit together on
+                         their own muted line, separate from the action buttons in the footer
+                         below (they are facts about the category, not things you can act on). -->
+                    <div class="ar-category-detail-meta">
+                        <div id="arCategoryMatrixVersionRow">
+                            <span class="ar-used-by-label">Matrix version: <span
+                                    id="arCategoryMatrixVersion">1</span></span>
+                        </div>
+
+                        <div id="arCategoryUsedByRow" style="display:none;">
+                            <span class="ar-used-by-label">Used by <span id="arCategoryUsedByCount">0</span>
+                                vouchers</span>
+                        </div>
                     </div>
 
-                    <div class="ar-field" id="arCategoryUsedByRow" style="display:none;">
-                        <span class="ar-used-by-label">Used by <span id="arCategoryUsedByCount">0</span> vouchers</span>
-                    </div>
+                    <!-- Sticky footer: Save/Delete/Restore stay pinned to the bottom of the
+                         (scrolling) detail panel so they're reachable without scrolling past the
+                         Validation Rules box. Scoped via .ar-category-detail-footer so the other
+                         three detail panels keep their existing inline action row. -->
+                    <div class="ar-category-detail-footer">
+                        <div id="arCategoryDetailStatus" class="upload-status" style="display:none;"></div>
 
-                    <div id="arCategoryDetailStatus" class="upload-status" style="display:none;"></div>
-
-                    <div class="ar-detail-actions">
-                        <button type="button" id="arCategorySaveBtn" class="ar-btn-save">Save</button>
-                        <button type="button" id="arCategoryDeleteBtn" class="ar-btn-delete"
-                            style="display:none;">Delete</button>
-                        <button type="button" id="arCategoryRestoreBtn" class="ar-btn-restore"
-                            style="display:none;">Restore</button>
+                        <div class="ar-detail-actions">
+                            <button type="button" id="arCategorySaveBtn" class="ar-btn-save">Save</button>
+                            <button type="button" id="arCategoryDeleteBtn" class="ar-btn-delete"
+                                style="display:none;">Delete</button>
+                            <button type="button" id="arCategoryRestoreBtn" class="ar-btn-restore"
+                                style="display:none;">Restore</button>
+                        </div>
                     </div>
                 </form>
             </div>

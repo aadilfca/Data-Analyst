@@ -4165,31 +4165,54 @@ body {
     gap: 2px;
 }
 
+/* Icon buttons, not a plain text list: each entity gets a bordered tile with the icon stacked
+   above its label, so the rail reads as four selectable buttons at a glance. Labels are kept
+   (rather than icon-only + tooltip) so a glyph never has to be guessed at. */
+.ar-rail {
+    padding: 16px 12px;
+    gap: 8px;
+}
 .ar-rail-item {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 20px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 12px 14px;
     font-size: 14px;
     font-weight: 600;
     color: #475569;
-    background: none;
-    border: none;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
     text-align: left;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 .ar-rail-item:hover:not(.coming-soon) {
     background: #eef2f6;
+    border-color: #cbd5e1;
 }
 .ar-rail-item.active {
     background: #dbeafe;
     color: #1e40af;
-    border-right: 3px solid #3b82f6;
+    border-color: #3b82f6;
+    box-shadow: inset 3px 0 0 #3b82f6;
 }
 .ar-rail-icon {
-    font-size: 18px;
+    font-size: 22px;
     line-height: 1;
+    opacity: 0.75;
+}
+.ar-rail-item.active .ar-rail-icon {
+    opacity: 1;
+}
+/* Previously unstyled — "Voucher-level Checks" needs to wrap inside the tile rather than
+   overflow it. */
+.ar-rail-label {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    word-break: break-word;
 }
 
 /* Cross-checks/Categories placeholders reuse the app's existing coming-soon dimming
@@ -4482,6 +4505,198 @@ body {
 }
 .ar-cleared-requirement-item:last-child {
     margin-bottom: 0;
+}
+
+/* =============================================
+   AUDIT RULES — CATEGORIES SCREEN LAYOUT (visual restructure)
+   Everything below is scoped to the Categories screen only (new ar-category-* classes, or
+   selectors anchored on #arCategoriesListSection / #arCategoryDetailForm /
+   #arValidationSubsectionClearedRequirements). The shared .ar-list-row / .ar-detail-actions /
+   .ar-field rules above are deliberately untouched, so the Documents, Cross-checks and
+   Voucher-level Checks screens render exactly as before.
+   ============================================= */
+
+/* ----- List pane: secondary controls row -----
+   Splits "Assign Categories" (a navigation action) and "Show inactive" (a filter) out of the
+   title/+ Add New header row, where three space-between items spread awkwardly. */
+.ar-category-list-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+/* The toggle carries its own 12px bottom margin for the other lists, where it sits alone —
+   inside this row the row itself provides the spacing. */
+.ar-category-list-toolbar .ar-show-inactive-toggle {
+    margin-bottom: 0;
+}
+
+/* ----- List pane: category rows as cards -----
+   Each row already renders name + rule-count on two lines (.ar-category-row-info); this gives
+   that block a card edge so rows read as discrete items instead of a run-together column. */
+#arCategoriesListSection .ar-list-body {
+    gap: 8px;
+}
+.ar-list-row.ar-category-list-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px 14px;
+    align-items: flex-start;
+}
+.ar-list-row.ar-category-list-card:hover {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+}
+.ar-list-row.ar-category-list-card.ar-list-row-selected {
+    background: #dbeafe;
+    border-color: #3b82f6;
+}
+.ar-list-row.ar-category-list-card .ar-list-row-name {
+    font-weight: 600;
+}
+
+/* ----- Detail pane: attached documents table -----
+   Replaces the old inline-styled flex rows. Visual language borrowed from .ar-tb-table further
+   down this file so the module's two tables match. */
+.ar-category-doc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.ar-category-doc-table th,
+.ar-category-doc-table td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+    vertical-align: middle;
+}
+.ar-category-doc-table th {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: #64748b;
+    background: #f8fafc;
+    border-bottom: 2px solid #e2e8f0;
+}
+.ar-category-doc-table tbody tr:last-child td {
+    border-bottom: none;
+}
+.ar-category-doc-name {
+    color: #1a1a2e;
+}
+/* A document added locally but not yet saved: its Required toggle can't be persisted until the
+   pairing exists server-side, so the whole row reads as provisional. */
+.ar-category-doc-row-unsaved .ar-category-doc-name {
+    color: #94a3b8;
+}
+.ar-category-doc-table td.ar-category-doc-action {
+    width: 36px;
+    text-align: right;
+}
+
+/* Required control — still a real checkbox (it drives a live PUT), presented as a badge pill so
+   it reads as a status rather than a loose form control in a text row. */
+.ar-category-doc-required {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border: 1px solid #d0d5dd;
+    border-radius: 999px;
+    background: #f1f5f9;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    cursor: pointer;
+    margin-bottom: 0;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.ar-category-doc-required.checked {
+    background: #dcfce7;
+    border-color: #86efac;
+    color: #166534;
+}
+.ar-category-doc-required.disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+.ar-category-doc-required input {
+    cursor: inherit;
+}
+
+.ar-category-doc-remove {
+    background: none;
+    border: none;
+    color: #94a3b8;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 6px;
+    line-height: 1;
+    border-radius: 4px;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.ar-category-doc-remove:hover {
+    background: #fee2e2;
+    color: #dc2626;
+}
+
+/* ----- Shared empty state (attached documents / cross-checks / chain preview) -----
+   A deliberate bordered block rather than the bare italic .ar-chip-empty span, so "nothing is
+   configured here" reads as a state instead of stray text. */
+.ar-category-empty-state {
+    border: 1px dashed #cbd5e1;
+    border-radius: 8px;
+    background: #f8fafc;
+    padding: 12px 14px;
+    font-size: 13px;
+    color: #94a3b8;
+    font-style: italic;
+}
+
+/* ----- "What Cleared Requires" callout -----
+   Sits inside the amber Validation Rules box but is read-only information, not editable config —
+   a blue info-callout treatment separates it from the Cross-checks sub-section below it. The
+   subsection element itself is built by buildCategoryValidationRulesSection() in audit_rules.js
+   and already carries this id, so no JS change was needed here. */
+#arValidationSubsectionClearedRequirements {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+    border-left: 4px solid #3b82f6;
+}
+#arValidationSubsectionClearedRequirements .ar-validation-subsection-title {
+    color: #1e40af;
+}
+
+/* ----- Detail pane: metadata strip + anchored footer -----
+   Matrix version / usage count are facts about the category, so they sit together on their own
+   muted line, above (and visually apart from) the action buttons. */
+.ar-category-detail-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 20px;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+}
+
+/* The detail panel already scrolls (.ar-detail-panel is overflow-y:auto), so sticky pins Save/
+   Delete to the bottom of the scroll area — reachable without scrolling past the Validation
+   Rules box. Negative side margins let the bar span the form's full width. */
+.ar-category-detail-footer {
+    position: sticky;
+    bottom: 0;
+    background: #ffffff;
+    border-top: 1px solid #e2e8f0;
+    margin: 14px -30px 0;
+    padding: 14px 30px 4px;
+}
+.ar-category-detail-footer .ar-detail-actions {
+    margin-top: 0;
 }
 
 /* Phase 2: the Voucher-level Checks admin UI (#arVoucherChecksListSection/
