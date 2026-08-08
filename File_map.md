@@ -66,6 +66,7 @@ This document lists all source files in the project, grouped by directory, with 
 | File | Purpose |
 |------|---------|
 | `client_context.js` | Global client-selection state shared by every page — navbar client dropdown/badge, `localStorage` persistence, client-selection enforcement, `setNavModule`/`setNavStats`, the global quick-navigation `⊞` dropdown + search field (`NAV_MANIFEST`-driven), and the back-arrow/home-icon navigation (`getBackTarget`, `setBackOverride` for pages with JS-driven in-page views). |
+| `search_index.js` | Hand-maintained `FEATURE_SEARCH_INDEX` registry of in-module features (label / module breadcrumb / `?feature=<slug>` deep link / keywords / state) so the navbar search can find features inside pages, not just the pages `NAV_MANIFEST` lists. Data only — matching and slug handling live elsewhere. |
 | `utils.js` | Shared formatting helpers — `formatDate` and `formatAmount`, both driven by cached `/api/settings` data. |
 | `script.js` | Dashboard stats loading, keyboard shortcuts, `MODULE_CARD_DESTINATIONS`-driven card navigation, and click-feedback animation (excluding inert "coming soon" cards). |
 | `clients.js` | Client CRUD: load, render table with sorting/filtering, add/edit modal, delete/restore, and the ⚙️ Client Settings link. |
