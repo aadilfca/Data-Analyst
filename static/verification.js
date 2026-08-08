@@ -1501,6 +1501,59 @@ document.addEventListener('click', function(e) {
     }
 });
 
+// ---------- "Why is this line Cleared/Query?" inline panel (Supporting Documents modal) ----------
+// Same GET /api/verification/line_status_reason/{id} payload as the Status-pill popover above,
+// and reuses that popover's own buildLineStatusReasonBody() for the gate rows — one rendering
+// path, not two. Toggled by #procedureModalValidateBtn; collapsed by default and reset on every
+// openProcedureModal() (see the hideValidatePanel() call there) so stale gate data from a
+// previous line can never carry over.
+let validatePanelLoadingUid = null;
+
+function hideValidatePanel() {
+    const panel = document.getElementById('procedureValidatePanel');
+    if (panel) {
+        panel.style.display = 'none';
+        panel.innerHTML = '';
+    }
+    validatePanelLoadingUid = null;
+}
+
+async function toggleValidatePanel() {
+    const panel = document.getElementById('procedureValidatePanel');
+    if (!panel) return;
+    if (panel.style.display !== 'none') {
+        hideValidatePanel();
+        return;
+    }
+    const uid = currentProcedureModalUid;
+    if (!uid) return;
+
+    panel.innerHTML = '<p class="lsr-reason">Loading…</p>';
+    panel.style.display = 'block';
+    validatePanelLoadingUid = uid;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/verification/line_status_reason/${uid}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        // Discard a stale response if the panel was closed or the modal moved to a different
+        // line while this fetch was in flight.
+        if (validatePanelLoadingUid !== uid) return;
+        const status = data.cleared_status || 'Not computed';
+        const pillClass = data.cleared_status === 'Cleared' ? 'cleared' : (data.cleared_status === 'Query' ? 'query' : 'unknown');
+        panel.innerHTML = `
+            <div class="procedure-validate-panel-header">
+                <span class="procedure-validate-status-pill ${pillClass}">${escapeHtml(status)}</span>
+            </div>
+            <div class="procedure-validate-panel-body">${buildLineStatusReasonBody(data)}</div>
+        `;
+    } catch (e) {
+        if (validatePanelLoadingUid !== uid) return;
+        console.warn('Unable to load line status reason:', e);
+        panel.innerHTML = '<p class="lsr-reason">Unable to load the status breakdown.</p>';
+    }
+}
+
 // ---------- VOUCHER LINE STATE (Phase 3) ----------
 // Seeds voucherLineState fresh from a voucher's lines. Accepts either a /next line object
 // (has transaction_type + procedure_data + change_detection_status/old_row_data) or an
@@ -3301,6 +3354,10 @@ async function openProcedureModal(uid, initialDocId = null) {
     procedureModalState[uid].activeDocId = activeDocId;
 
     currentProcedureModalUid = uid;
+
+    // "Why is this line Cleared/Query?" panel always resets to collapsed on open (new line or
+    // reopen) — stale gate data for a different line must never carry over.
+    hideValidatePanel();
 
     // Header: line position/account name, type, amount, risk (Supporting Documents modal
     // redesign follow-up) — srNo/totalLines mirror the same order renderVoucherLines() numbers
@@ -5266,6 +5323,9 @@ if (procedureBrowseModal) {
     });
 }
 
+document.getElementById('procedureModalValidateBtn')?.addEventListener('click', function() {
+    toggleValidatePanel();
+});
 if (procedureModalClose) {
     procedureModalClose.addEventListener('click', closeProcedureModal);
 }

@@ -845,6 +845,7 @@
                         <h3 id="procedureModalTitle">📎 Supporting Documents</h3>
                         <div id="procedureModalMeta" class="procedure-modal-meta"></div>
                     </div>
+                    <button type="button" class="btn-ghost procedure-validate-btn" id="procedureModalValidateBtn">🔍 Validate</button>
                     <button class="close-btn" id="procedureModalClose"
                         style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
                 </div>
@@ -855,6 +856,13 @@
                      verification.js, same "no static per-item markup" convention as the rail/panels
                      below. -->
                 <div id="procedureVoucherChecksBar" class="procedure-voucher-checks-bar"></div>
+                <!-- "Why is this line Cleared/Query?" inline panel (Validate button, above) — same
+                     GET /api/verification/line_status_reason/{id} payload and gate-row rendering as
+                     the Status-pill popover in the main voucher table (buildLineStatusReasonBody() in
+                     verification.js, reused here so there is exactly one gate-list rendering path).
+                     Collapsed by default; toggled open/closed by #procedureModalValidateBtn via
+                     toggleValidatePanel(). Content is 100% JS-rendered. -->
+                <div id="procedureValidatePanel" class="procedure-validate-panel" style="display:none;"></div>
                 <div class="procedure-modal-body">
                     <div id="procedureModalTabs" class="procedure-doc-rail"></div>
                     <div id="procedureModalPanels" class="procedure-tab-panels"></div>

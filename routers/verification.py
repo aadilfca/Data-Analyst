@@ -26,6 +26,11 @@ from routers.audit_rules import get_category_guidance_documents, get_category_gu
 # detail mode) — the pass/fail answer itself still comes from check_approved_by_authority_gate()
 # above, so the explanation can never disagree with the real gate.
 from routers.audit_rules import get_required_documents_with_authority, has_matching_active_specimen
+# Check #1's no-template-Document satisfaction rule (2026-08-08 fix) needs a Document's full
+# role list, not just the ones with a Required Authority set (get_document_auth_role_authorities
+# above only returns the latter) - already used identically by static/verification.js's own
+# isProcedureDocumentComplete() no-template branch.
+from routers.audit_rules import get_document_auth_roles
 
 router = APIRouter()
 
@@ -333,7 +338,8 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id) or [voucher_line_id]
     placeholders = ",".join("?" for _ in sibling_ids)
 
-    # 1. Document requirement check: Category's required documents vs linked (active) documents.
+    # 1. Document requirement check: Category's required documents, each satisfied one of two
+    # ways depending on whether it has a linked Data Bank template.
     # get_category_documents() is deliberately unfiltered on is_active (it also backs the
     # Category detail admin display, which shows an inactive attached document greyed rather
     # than hiding it) - filtered to active documents here, the actual gating use, so a
@@ -353,15 +359,91 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         tuple(sibling_ids)
     )
     linked_doc_ids = {r['document_id'] for r in linked_rows}
-    doc_requirement_met = required_doc_ids.issubset(linked_doc_ids)
+
+    # Confirmed fix (2026-08-08): a required Document with NO linked template has no
+    # evidence-linking step in the Supporting Documents modal at all (Supporting Documents modal
+    # redesign, Phase 1-3's "no-template Documents" design) - it can never appear in
+    # voucher_line_documents, so testing it against linked_doc_ids alone made it permanently
+    # unsatisfiable regardless of how complete it actually was. Its real completion signal is the
+    # Audit Procedures role checklist (voucher_line_procedure_checks), exactly as
+    # static/verification.js's own isProcedureDocumentComplete() already defines for its
+    # no-template branch (roles.length > 0 && every role ticked - zero configured roles is
+    # deliberately unsatisfiable too, mirroring that same rule, not a new inconsistency).
+    required_template_ids = {}
+    if required_doc_ids:
+        doc_ph = ",".join("?" for _ in required_doc_ids)
+        template_rows = execute_query(
+            f"SELECT id, template_id FROM audit_rule_documents WHERE id IN ({doc_ph})",
+            tuple(required_doc_ids)
+        )
+        required_template_ids = {r['id']: r['template_id'] for r in template_rows}
+
+    no_template_required_ids = {did for did in required_doc_ids if not required_template_ids.get(did)}
+
+    # role_ticks_by_doc: {document_id: {role_name: is_checked}} - only fetched when at least one
+    # required document is template-less, and only for those documents' rows. Same "most
+    # recently checked/unchecked sibling row wins" dedup get_procedure_checks() already uses, so
+    # this can't disagree with what the Supporting Documents modal itself shows for the same line.
+    role_ticks_by_doc: Dict[int, Dict[str, bool]] = {}
+    if no_template_required_ids:
+        nt_ph = ",".join("?" for _ in no_template_required_ids)
+        tick_rows = execute_query(
+            f"""
+            SELECT document_id, role_name, is_checked, checked_at
+            FROM voucher_line_procedure_checks
+            WHERE voucher_line_id IN ({placeholders}) AND document_id IN ({nt_ph})
+            """,
+            tuple(sibling_ids) + tuple(no_template_required_ids)
+        )
+        latest_tick: Dict[tuple, dict] = {}
+        for r in tick_rows:
+            key = (r['document_id'], r['role_name'])
+            existing = latest_tick.get(key)
+            if existing is None or (r['checked_at'] or '') > (existing['checked_at'] or ''):
+                latest_tick[key] = r
+        for (did, role_name), r in latest_tick.items():
+            role_ticks_by_doc.setdefault(did, {})[role_name] = bool(r['is_checked'])
+
+    def _no_template_doc_roles(document_id: int) -> List[str]:
+        return get_document_auth_roles(document_id)
+
+    def _no_template_doc_satisfied(document_id: int) -> bool:
+        roles = _no_template_doc_roles(document_id)
+        if not roles:
+            return False
+        ticks = role_ticks_by_doc.get(document_id, {})
+        return all(ticks.get(role) for role in roles)
+
+    satisfied_doc_ids = set()
+    for did in required_doc_ids:
+        if required_template_ids.get(did):
+            if did in linked_doc_ids:
+                satisfied_doc_ids.add(did)
+        elif _no_template_doc_satisfied(did):
+            satisfied_doc_ids.add(did)
+
+    doc_requirement_met = required_doc_ids.issubset(satisfied_doc_ids)
 
     if detail:
-        missing_names = [d['name'] for d in required_docs
-                         if d['is_active'] and d['document_id'] not in linked_doc_ids]
+        outstanding_parts = []
+        for d in required_docs:
+            did = d['document_id']
+            if not d['is_active'] or did in satisfied_doc_ids:
+                continue
+            if required_template_ids.get(did):
+                outstanding_parts.append(f"{d['name']} (not linked)")
+            else:
+                roles = _no_template_doc_roles(did)
+                if not roles:
+                    outstanding_parts.append(f"{d['name']} (no roles configured)")
+                else:
+                    ticks = role_ticks_by_doc.get(did, {})
+                    done = sum(1 for role in roles if ticks.get(role))
+                    outstanding_parts.append(f"{d['name']} ({done} of {len(roles)} required roles ticked)")
         gates.append(_clear_status_gate(
             "documents", "Required documents linked", doc_requirement_met,
-            detail=("Not linked yet: " + ", ".join(missing_names)) if missing_names
-                   else f"All {len(required_doc_ids)} required document(s) are linked.",
+            detail=("Outstanding: " + "; ".join(outstanding_parts)) if outstanding_parts
+                   else f"All {len(required_doc_ids)} required document(s) are complete.",
             not_applicable=(not required_doc_ids)
         ))
 
