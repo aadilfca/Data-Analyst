@@ -3265,7 +3265,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!procedureModalState[uid].tabs[docId]) {
-        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBill: null, physicalBillSaved: false, physicalBillErrors: {}, physicalBillSaving: false };
+        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBill: null, physicalBillSaved: false, physicalBillErrors: {}, physicalBillSaving: false, physicalBillSourceDocumentRowId: null, physicalBillSourceTemplate: null };
     }
     return procedureModalState[uid].tabs[docId];
 }
@@ -3475,11 +3475,18 @@ async function openProcedureModal(uid, initialDocId = null) {
                     bill_no: savedBill.bill_no || '',
                     bill_date: savedBill.bill_date || '',
                     amount: savedBill.amount != null ? String(savedBill.amount) : '',
-                    vendor_name: savedBill.vendor_name || ''
+                    vendor_name: savedBill.vendor_name || '',
+                    quantity: savedBill.quantity != null ? String(savedBill.quantity) : '',
+                    rate: savedBill.rate != null ? String(savedBill.rate) : ''
                 }
-                : { bill_no: '', bill_date: '', amount: '', vendor_name: '' };
+                : { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
             tabState.physicalBillSaved = !!savedBill;
             tabState.physicalBillErrors = {};
+            // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): re-seed the source
+            // pointer too, so reopening the modal on an already-populated-from-source bill shows
+            // the same readonly/computed Amount state, not just the four original fields.
+            tabState.physicalBillSourceDocumentRowId = savedBill ? (savedBill.source_document_row_id || null) : null;
+            tabState.physicalBillSourceTemplate = savedBill ? (savedBill.source_template || null) : null;
         }
     });
 
@@ -4635,6 +4642,15 @@ function renderProcedureModalPanel(uid, docId) {
             });
         });
 
+        // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): rendered on both a Store
+        // Receiving/GRN and an ERP Vendor Bill document's rows (see buildSelectedLinesTable()'s
+        // canPopulatePhysicalBill gate) — harmless no-op query when none are present.
+        container.querySelectorAll('.procedure-bill-populate-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                populatePhysicalBillFromSource(uid, parseInt(this.dataset.clientDataId), this.dataset.sourceType, this);
+            });
+        });
+
         // Phase 9 of 10: expand/collapse is a plain class toggle, not persisted state — it
         // simply resets on the next re-render (tab switch, modal reopen), same as this being a
         // lightweight disclosure rather than durable UI state like tabState.selections.
@@ -4762,13 +4778,50 @@ function updateAmountMatchTick(uid, rawValue) {
     tick.style.display = matches ? '' : 'none';
 }
 
+// Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): Quantity/Rate are always-
+// visible fields now (not just when populated via the trigger — confirmed with the user). Amount
+// becomes read-only and live-computed as Qty × Rate whenever both are currently valid non-blank
+// numbers; otherwise it reverts to a normal editable field, preserving today's pure-manual-entry
+// behavior when there's no source row to compute from. This is a live UI preview only — the
+// authoritative rounding (rate_precision) happens server-side in save_physical_bill(), same
+// convention as the rest of this app's client-side "computed" fields.
+function updatePhysicalBillAmount(uid, docId) {
+    const qtyEl = document.getElementById('procedureBillQuantityInput');
+    const rateEl = document.getElementById('procedureBillRateInput');
+    const amountEl = document.getElementById('procedureBillAmountInput');
+    if (!amountEl) return;
+    const qtyStr = qtyEl ? qtyEl.value : '';
+    const rateStr = rateEl ? rateEl.value : '';
+    const qty = parseFloat(qtyStr);
+    const rate = parseFloat(rateStr);
+    const bothValid = qtyStr !== '' && rateStr !== '' && !isNaN(qty) && !isNaN(rate);
+    if (bothValid) {
+        const computedStr = (qty * rate).toFixed(2);
+        amountEl.value = computedStr;
+        amountEl.readOnly = true;
+        const tabState = getProcedureTabState(uid, docId);
+        if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
+        tabState.physicalBill.amount = computedStr;
+    } else {
+        amountEl.readOnly = false;
+    }
+    updateAmountMatchTick(uid, amountEl.value);
+}
+
 function renderPhysicalBillDocumentPanel(uid, doc) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
     const tabState = getProcedureTabState(uid, doc.id);
-    const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '' };
+    const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
     const errors = tabState.physicalBillErrors || {};
     const fieldError = (field) => errors[field] ? `<div class="procedure-bill-field-error">${escapeHtml(errors[field])}</div>` : '';
+
+    // Initial readonly state for the very first paint, before any input listener has run —
+    // avoids a flash of an editable Amount field on a tab that was pre-filled from a source row
+    // or reopened with a previously-saved quantity/rate pair.
+    const initialQtyValid = bill.quantity !== '' && bill.quantity != null && !isNaN(parseFloat(bill.quantity));
+    const initialRateValid = bill.rate !== '' && bill.rate != null && !isNaN(parseFloat(bill.rate));
+    const amountReadonly = initialQtyValid && initialRateValid;
 
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${doc.id}">
@@ -4786,10 +4839,18 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                         ${fieldError('bill_date')}
                     </div>
                     <div class="procedure-voucher-approval-field">
+                        <label for="procedureBillQuantityInput">Quantity</label>
+                        <input type="number" step="any" id="procedureBillQuantityInput" class="procedure-search-input" value="${escapeHtml(bill.quantity)}">
+                    </div>
+                    <div class="procedure-voucher-approval-field">
+                        <label for="procedureBillRateInput">Rate</label>
+                        <input type="number" step="any" id="procedureBillRateInput" class="procedure-search-input" value="${escapeHtml(bill.rate)}">
+                    </div>
+                    <div class="procedure-voucher-approval-field">
                         <label for="procedureBillAmountInput">Amount</label>
                         <div class="procedure-bill-amount-row">
                             <span id="procedureBillAmountTick" class="procedure-amount-match-tick" style="display:none;" title="Matches voucher line amount">✓</span>
-                            <input type="number" step="any" id="procedureBillAmountInput" class="procedure-search-input" value="${escapeHtml(bill.amount)}">
+                            <input type="number" step="any" id="procedureBillAmountInput" class="procedure-search-input" value="${escapeHtml(bill.amount)}" ${amountReadonly ? 'readonly' : ''}>
                         </div>
                         ${fieldError('amount')}
                     </div>
@@ -4817,6 +4878,8 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
     const fieldInputs = {
         bill_no: document.getElementById('procedureBillNoInput'),
         bill_date: document.getElementById('procedureBillDateInput'),
+        quantity: document.getElementById('procedureBillQuantityInput'),
+        rate: document.getElementById('procedureBillRateInput'),
         amount: document.getElementById('procedureBillAmountInput'),
         vendor_name: document.getElementById('procedureBillVendorInput')
     };
@@ -4824,16 +4887,20 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
         const el = fieldInputs[field];
         if (el) {
             el.addEventListener('input', function() {
-                if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '' };
+                if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
                 tabState.physicalBill[field] = this.value;
-                if (field === 'amount') updateAmountMatchTick(uid, this.value);
+                if (field === 'quantity' || field === 'rate') {
+                    updatePhysicalBillAmount(uid, doc.id);
+                } else if (field === 'amount') {
+                    updateAmountMatchTick(uid, this.value);
+                }
             });
             if (field === 'amount') {
                 el.addEventListener('blur', function() { updateAmountMatchTick(uid, this.value); });
             }
         }
     });
-    updateAmountMatchTick(uid, bill.amount);
+    updatePhysicalBillAmount(uid, doc.id);
 
     const saveBtn = document.getElementById('procedureBillSaveBtn');
     if (saveBtn) {
@@ -4851,7 +4918,7 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
 // and the panel's Save/Update button+status both reflect committed truth immediately.
 async function savePhysicalBillEntry(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
-    const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '' };
+    const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
     const errors = validatePhysicalBillFields(bill);
     if (Object.keys(errors).length) {
         tabState.physicalBillErrors = errors;
@@ -4863,6 +4930,13 @@ async function savePhysicalBillEntry(uid, docId) {
     tabState.physicalBillSaving = true;
     renderProcedureModalPanel(uid, docId);
 
+    // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): quantity/rate/source_* are
+    // all optional on the backend — a manually-entered bill with no source row sends null/null/
+    // null/null here and gets byte-identical behavior to before this phase (save_physical_bill()
+    // then requires and uses the typed Amount as-is).
+    const quantityVal = (bill.quantity !== '' && bill.quantity != null) ? parseFloat(bill.quantity) : null;
+    const rateVal = (bill.rate !== '' && bill.rate != null) ? parseFloat(bill.rate) : null;
+
     try {
         const res = await fetch(`${API_BASE}/api/verification/save_physical_bill`, {
             method: 'POST',
@@ -4873,7 +4947,11 @@ async function savePhysicalBillEntry(uid, docId) {
                 bill_no: bill.bill_no.trim(),
                 bill_date: bill.bill_date,
                 amount: parseFloat(bill.amount),
-                vendor_name: bill.vendor_name.trim()
+                vendor_name: bill.vendor_name.trim(),
+                quantity: quantityVal,
+                rate: rateVal,
+                source_document_row_id: tabState.physicalBillSourceDocumentRowId || null,
+                source_template: tabState.physicalBillSourceTemplate || null
             })
         });
         if (!res.ok) {
@@ -4890,6 +4968,67 @@ async function savePhysicalBillEntry(uid, docId) {
         tabState.physicalBillSaving = false;
         tabState.physicalBillErrors = { _general: e.message || 'Save failed — please try again.' };
         renderProcedureModalPanel(uid, docId);
+    }
+}
+
+// Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): triggered by the
+// procedure-bill-populate-btn on a GRN (Store Receiving) or ERP Vendor Bill evidence row
+// (buildSelectedLinesTable()). Fetches the read-only preview (Phase 2's
+// physical_bill_source_preview endpoint) and pre-fills the target physical_bill Document's tab
+// state with it — Bill No/Vendor Name/Quantity/Rate from the source row, Date always left blank
+// for manual entry (never resolved server-side either), Amount left for
+// updatePhysicalBillAmount() to compute live once the panel renders. Nothing is saved here —
+// the intern reviews/edits then clicks the existing Save Bill button, same savePhysicalBillEntry()
+// path as a fully manual entry.
+//
+// Target Document: the first physical_bill Document in this line's currently-loaded documents
+// array (same order the tab rail renders in) — confirmed with the user as the intended behavior
+// for the rare case a Category has more than one Physical Bill Document attached; no picker UI.
+async function populatePhysicalBillFromSource(uid, sourceClientDataId, sourceType, btn) {
+    if (!sourceClientDataId) return;
+    const lineState = procedureModalState[uid];
+    const targetDoc = lineState && (lineState.documents || []).find(d => d.document_type === 'physical_bill');
+    if (!targetDoc) {
+        showStatus('No Physical Bill document is configured for this category.', 'error');
+        return;
+    }
+
+    const originalText = btn ? btn.textContent : null;
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '…';
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/physical_bill_source_preview/${sourceClientDataId}?source_type=${encodeURIComponent(sourceType)}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data.detail || 'Unable to load source row for Physical Bill.');
+        }
+
+        const tabState = getProcedureTabState(uid, targetDoc.id);
+        tabState.physicalBill = {
+            bill_no: data.bill_no || '',
+            bill_date: '', // always manual — never resolved by the preview or the backend
+            amount: '', // updatePhysicalBillAmount() computes this once the panel renders
+            vendor_name: data.vendor_name || '',
+            quantity: data.quantity != null ? String(data.quantity) : '',
+            rate: data.rate != null ? String(data.rate) : ''
+        };
+        tabState.physicalBillSourceDocumentRowId = sourceClientDataId;
+        tabState.physicalBillSourceTemplate = sourceType;
+        tabState.physicalBillErrors = {};
+
+        activateProcedureTab(uid, targetDoc.id);
+        showStatus('Physical Bill form pre-filled from source row — review and Save.', 'success');
+    } catch (e) {
+        console.error('Failed to populate Physical Bill from source:', e);
+        showStatus(e.message || 'Unable to load source row for Physical Bill.', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
     }
 }
 
@@ -5104,6 +5243,16 @@ function buildSelectedLinesTable(uid, docId) {
     const templateName = (doc && templateNameCache[doc.template_id]) || '';
     const isGrnDocument = templateName.trim().toLowerCase() === 'store receiving';
 
+    // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): both a Store Receiving/GRN
+    // and an ERP Vendor Bill document's rows get the "Populate Physical Bill" action — matched the
+    // same case-insensitive way resolve_physical_bill_fields_from_source() (routers/verification.py)
+    // checks its own source template via PHYSICAL_BILL_SOURCE_TEMPLATE_NAMES. Distinct from (and
+    // coexists with) isGrnDocument's older, single-purpose "Create Vendor Bill from GRN" action
+    // above — that one creates a brand-new client_data row; this one populates the Physical Bill
+    // entry form already built for a physical_bill Document elsewhere in this same Category.
+    const isVendorBillDocument = templateName.trim().toLowerCase() === 'vendor bill';
+    const canPopulatePhysicalBill = isGrnDocument || isVendorBillDocument;
+
     // Trailing "" header for the unlink icon column (Unassign requirement) - no label, matching
     // this app's existing convention for icon-only action columns (e.g. Data Bank's Actions column).
     let html = '<div class="procedure-selected-table-wrapper"><table class="procedure-selected-table"><thead><tr>';
@@ -5130,6 +5279,9 @@ function buildSelectedLinesTable(uid, docId) {
             }
         });
         html += '<td>';
+        if (canPopulatePhysicalBill) {
+            html += `<button type="button" class="procedure-bill-populate-btn" data-client-data-id="${sel.client_data_id}" data-source-type="${isGrnDocument ? 'grn' : 'vendor_bill'}" title="Populate Physical Bill from this row">🧾⬅</button>`;
+        }
         if (isGrnDocument) {
             html += `<button type="button" class="procedure-grn-vendorbill-btn" data-client-data-id="${sel.client_data_id}" title="Create Vendor Bill from this GRN row">📄→🧾</button>`;
         }

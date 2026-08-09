@@ -3253,6 +3253,15 @@ body {
 .procedure-bill-amount-row .procedure-search-input {
     flex: 0 0 auto;
 }
+/* Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): Quantity/Rate are now always-
+   visible fields, and Amount becomes read-only/live-computed (Qty × Rate) whenever both are
+   valid numbers (see updatePhysicalBillAmount() in verification.js) — this visual cue makes a
+   computed Amount look distinct from a normal editable one at a glance. */
+.procedure-bill-amount-row .procedure-search-input[readonly] {
+    background: #f1f5f9;
+    color: #475569;
+    cursor: not-allowed;
+}
 .procedure-amount-match-tick {
     color: #16a34a;
     font-size: 16px;
@@ -3593,6 +3602,33 @@ body {
 .procedure-unlink-btn:hover {
     color: #dc2626;
     background: #fee2e2;
+}
+
+/* ----- Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4: frontend trigger) -----
+   Trigger button sits beside (before) the ✕ unlink icon and the older, separate "Create Vendor
+   Bill from GRN" button — rendered on both a Store Receiving/GRN and an ERP Vendor Bill
+   document's rows (see buildSelectedLinesTable()'s canPopulatePhysicalBill gate in
+   verification.js). Same neutral icon-button treatment as .procedure-unlink-btn/
+   .procedure-grn-vendorbill-btn, kept as its own block per this file's per-button convention. */
+.procedure-bill-populate-btn {
+    background: none;
+    border: none;
+    color: #64748b;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-right: 2px;
+    transition: color 0.15s, background 0.15s;
+}
+.procedure-bill-populate-btn:hover:not(:disabled) {
+    color: #1a1a2e;
+    background: #f1f5f9;
+}
+.procedure-bill-populate-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* ----- Create Vendor Bill from GRN (Phase 2: frontend trigger + field-copy UI) -----
