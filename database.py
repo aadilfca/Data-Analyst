@@ -897,6 +897,21 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add rate_source to client_data:", e)
 
+        # Schema upgrade: add source_grn_row_id column (Create Vendor Bill from
+        # GRN requirement, Phase 1) -- a plain self-referential pointer to another
+        # client_data.id, set only when this row was created by copying fields
+        # from a Store Receiving/GRN row rather than imported from Excel. No FK
+        # clause (PRAGMA foreign_keys is never enabled), no uniqueness constraint
+        # -- more than one Vendor Bill row may be derived from the same GRN row.
+        try:
+            cur = conn.execute("PRAGMA table_info(client_data)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'source_grn_row_id' not in columns:
+                conn.execute("ALTER TABLE client_data ADD COLUMN source_grn_row_id INTEGER DEFAULT NULL")
+                print("✅ Added source_grn_row_id column to client_data")
+        except Exception as e:
+            print("⚠️ Could not add source_grn_row_id to client_data:", e)
+
         print("✅ Created indexes on client_data")
 
         # ---------- RATE COLUMN DEFINITION (Phase 8 of the Rate-derivation requirement) ----------

@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
-from database import execute_query, execute_write, log_audit, get_raw_conn, get_client_voucher_prefixes
+from database import execute_query, execute_write, log_audit, log_data_audit, get_raw_conn, get_client_voucher_prefixes
 from datetime import datetime
 import json
 import re
@@ -19,6 +19,14 @@ from rapidfuzz import fuzz, utils as fuzz_utils
 # Reused for voucher/line grouping in get_next_transaction (Phase 1) — same document-key
 # logic already used by import's compare_transactions, applied at query time.
 from routers.import_export import get_document_group_id
+# Create Vendor Bill from GRN (Phase 1): reused as-is rather than duplicated, since this
+# feature must build a client_data row that behaves identically to a real import - same
+# rationale as the cross-router imports below.
+from routers.import_export import (
+    find_named_column, get_rate_precision, reorder_row_data_by_template,
+    extract_columns_from_row, get_critical_field_columns, compute_data_quality_flag,
+    DEFAULT_DATE_DELIMITER, DEFAULT_DATE_ORDER,
+)
 # Phase 9 (Audit Rules): audit guidance now sources from Audit Rules Categories instead of
 # the old hardcoded audit_procedure_library table — same cross-router import pattern as above.
 from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate
@@ -840,6 +848,194 @@ def get_document_field_value(client_data_id: int, field_name: str) -> Optional[A
 
     value = row_data[row_key]
     return value if value not in (None, '') else None
+
+
+# ---------- CREATE VENDOR BILL FROM GRN (Phase 1: backend) ----------
+
+def resolve_vendor_bill_fields_from_grn(source_client_data_id: int) -> dict:
+    """
+    Resolves what a derived Vendor Bill client_data row's field values would be from a
+    given Store Receiving/GRN client_data row - pure computation, no writes. Shared by
+    both the preview and create endpoints below (one resolver, two callers - mirrors
+    evaluate_cross_checks_for_line()'s own "one engine, multiple readers" shape).
+
+    Field mapping (locked with the user, see CLAUDE.md's Rate-derivation/Create-Vendor-Bill
+    history): Vendor/Quantity/Rate are copied verbatim; Amount is always computed
+    (Qty x Rate, never copied); "vendor Bill no" is copied from the GRN row's own "Bill no"
+    only when non-blank; UoM is dropped (neither template has such a column); Date is never
+    auto-copied - Transaction Date/Due Date/Vendor Bill Date are always left unset.
+
+    Every field lookup goes through find_named_column() defensively - a template column
+    missing on either side is skipped (recorded in fields_skipped), never a hard error,
+    matching apply_rate_derivation()'s own no-op-on-missing-column convention.
+    """
+    source_rows = execute_query(
+        "SELECT id, client_id, template_id, upload_id, row_data, is_deleted FROM client_data WHERE id = ?",
+        (source_client_data_id,)
+    )
+    if not source_rows:
+        raise HTTPException(404, "Source row not found.")
+    source_row = source_rows[0]
+    if source_row['is_deleted']:
+        raise HTTPException(400, "Source row has been deleted.")
+
+    source_template = execute_query("SELECT id, template_name FROM templates WHERE id = ?", (source_row['template_id'],))
+    if not source_template or source_template[0]['template_name'].strip().lower() != 'store receiving':
+        actual_name = source_template[0]['template_name'] if source_template else 'Unknown'
+        raise HTTPException(400, f"Source row's template is '{actual_name}', expected Store Receiving.")
+
+    try:
+        source_data = json.loads(source_row['row_data']) if isinstance(source_row['row_data'], str) else (source_row['row_data'] or {})
+    except Exception:
+        source_data = {}
+
+    source_cols = get_template_columns(source_row['template_id'])
+
+    target_template = execute_query(
+        "SELECT id, template_name FROM templates WHERE is_active = 1 AND LOWER(TRIM(template_name)) = 'vendor bill'"
+    )
+    if not target_template:
+        raise HTTPException(404, "No active 'Vendor Bill' template is configured.")
+    target_template_id = target_template[0]['id']
+    target_cols = get_template_columns(target_template_id)
+
+    target_row_data: Dict[str, Any] = {}
+    fields_copied = []
+    fields_skipped = []
+
+    def _copy_verbatim(field_name: str):
+        src_col = find_named_column(source_cols, field_name)
+        tgt_col = find_named_column(target_cols, field_name)
+        if not src_col or not tgt_col:
+            fields_skipped.append({"field": field_name, "reason": "column not configured on source or target template"})
+            return
+        value = source_data.get(src_col['column_name'])
+        if value in (None, ''):
+            fields_skipped.append({"field": field_name, "reason": "blank on source row"})
+            return
+        target_row_data[tgt_col['column_name']] = value
+        fields_copied.append(field_name)
+
+    _copy_verbatim('Vendor')
+    _copy_verbatim('Quantity')
+    _copy_verbatim('Rate')
+
+    # Amount: always computed (Qty x Rate), never copied.
+    amount_col = find_named_column(target_cols, 'Amount')
+    qty_col = find_named_column(source_cols, 'Quantity')
+    rate_col = find_named_column(source_cols, 'Rate')
+    if amount_col and qty_col and rate_col:
+        try:
+            qty_raw = source_data.get(qty_col['column_name'])
+            rate_raw = source_data.get(rate_col['column_name'])
+            qty_val = float(qty_raw) if qty_raw not in (None, '') else None
+            rate_val = float(rate_raw) if rate_raw not in (None, '') else None
+        except (TypeError, ValueError):
+            qty_val = rate_val = None
+        if qty_val is not None and rate_val is not None:
+            target_row_data[amount_col['column_name']] = round(qty_val * rate_val, get_rate_precision())
+            fields_copied.append('Amount')
+        else:
+            fields_skipped.append({"field": "Amount", "reason": "Quantity/Rate missing or non-numeric on source row"})
+    else:
+        fields_skipped.append({"field": "Amount", "reason": "Amount/Quantity/Rate column not configured on source or target template"})
+
+    # vendor Bill no: copied from GRN's own "Bill no", only when present.
+    grn_billno_col = find_named_column(source_cols, 'Bill no')
+    vendor_billno_col = find_named_column(target_cols, 'vendor Bill no')
+    if grn_billno_col and vendor_billno_col:
+        billno_val = source_data.get(grn_billno_col['column_name'])
+        if billno_val not in (None, ''):
+            target_row_data[vendor_billno_col['column_name']] = billno_val
+            fields_copied.append('vendor Bill no')
+        else:
+            fields_skipped.append({"field": "vendor Bill no", "reason": "GRN row's Bill no is blank"})
+    else:
+        fields_skipped.append({"field": "vendor Bill no", "reason": "Bill no/vendor Bill no column not configured on source or target template"})
+
+    target_row_data = reorder_row_data_by_template(target_row_data, target_cols)
+
+    return {
+        "source_client_data_id": source_row['id'],
+        "source_client_id": source_row['client_id'],
+        "source_upload_id": source_row['upload_id'],
+        "source_template_name": source_template[0]['template_name'],
+        "target_template_id": target_template_id,
+        "target_template_name": target_template[0]['template_name'],
+        "row_data": target_row_data,
+        "fields_copied": fields_copied,
+        "fields_skipped": fields_skipped,
+    }
+
+
+@router.get("/api/verification/grn_to_vendor_bill_preview/{client_data_id}")
+def preview_vendor_bill_from_grn(client_data_id: int):
+    """
+    Read-only preview of what create_vendor_bill_from_grn() would produce for a given
+    Store Receiving/GRN row - no writes. Lets a future frontend show the computed fields
+    before the auditor confirms creation.
+    """
+    return resolve_vendor_bill_fields_from_grn(client_data_id)
+
+
+@router.post("/api/verification/create_vendor_bill_from_grn")
+def create_vendor_bill_from_grn(
+    source_client_data_id: int = Body(..., embed=True, description="client_data.id of the Store Receiving/GRN row to derive from"),
+    created_by: str = Body("Analyst", embed=True)
+):
+    """
+    Creates a new Vendor Bill client_data row derived from a Store Receiving/GRN row -
+    a normal client_data row, same table/shape, behaves identically to an imported row
+    everywhere else in the app (Data Bank, exports, template viewer, etc.). No multi-GRN
+    consolidation this phase - one GRN row produces exactly one Vendor Bill row. Does not
+    touch voucher_line_documents/voucher evidence linkage - that's a later phase.
+    """
+    resolved = resolve_vendor_bill_fields_from_grn(source_client_data_id)
+    target_row_data = resolved['row_data']
+    target_template_id = resolved['target_template_id']
+    target_cols = get_template_columns(target_template_id)
+
+    extract_amount, extract_date = extract_columns_from_row(
+        target_row_data, target_cols, DEFAULT_DATE_DELIMITER, DEFAULT_DATE_ORDER
+    )
+    document_group_id = get_document_group_id(target_cols, target_row_data, target_template_id)
+    critical_cols = get_critical_field_columns(target_cols)
+    data_quality_flag = compute_data_quality_flag(target_row_data, critical_cols)
+
+    # Rate's provenance for this row is "copied from an existing value" (the GRN row),
+    # not derived by this feature - kept 'imported' so the existing Rate-provenance icon
+    # renders sensibly, distinct from templates.rate_source (the Vendor Bill template's
+    # own import-time setting, untouched by this feature).
+    rate_source = 'imported'
+
+    row_id = execute_write(
+        """
+        INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date,
+                                  created_by, version, change_detection_status, document_group_id,
+                                  data_quality_flag, rate_source, source_grn_row_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'active', ?, ?, ?, ?)
+        """,
+        (resolved['source_client_id'], target_template_id, resolved['source_upload_id'],
+         json.dumps(target_row_data), extract_amount, extract_date, created_by,
+         document_group_id, data_quality_flag, rate_source, source_client_data_id)
+    )
+
+    log_data_audit(row_id, created_by, "INSERT", None, target_row_data)
+    log_audit(created_by, "Create Vendor Bill from GRN", "Verification",
+               f"Created client_data {row_id} (Vendor Bill) from GRN client_data {source_client_data_id}.")
+
+    created_row = execute_query(
+        """
+        SELECT id, client_id, template_id, row_data, extract_amount, extract_date,
+               document_group_id, data_quality_flag, rate_source, source_grn_row_id
+        FROM client_data WHERE id = ?
+        """,
+        (row_id,)
+    )[0]
+    result = dict(created_row)
+    result['row_data'] = json.loads(result['row_data'])
+    return result
+
 
 def flatten_procedure_data(proc_data: dict) -> dict:
     """Extract standard procedure fields from JSON."""
