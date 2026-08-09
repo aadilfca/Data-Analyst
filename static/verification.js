@@ -1408,6 +1408,15 @@ function getVoucherLineStatusIcon(validationStatus) {
     return `<span class="voucher-line-status-dot ${statusClass}" title="${status}"></span>`;
 }
 
+// Suppresses the "Pending" text label once a line's cleared_status is Cleared — the Cleared/Query
+// badge already says so, and "Pending" no longer reflects reality once the required checks are
+// satisfied. Only the Pending case is affected; Failed/Passed labels are always shown as-is.
+function getVoucherLineStatusText(validationStatus, clearedStatus) {
+    const status = (validationStatus || 'Pending').toLowerCase();
+    if (status === 'pending' && clearedStatus === 'Cleared') return '';
+    return status;
+}
+
 // Validation Rules Phase 5: Cleared/Query badge, a sibling pill next to the existing
 // validation-status dot+label inside .voucher-line-status — not a new column, styled on the
 // existing .procedure-mismatch-badge/.status-badge.passed convention (see style.css). Renders
@@ -1425,6 +1434,13 @@ function getClearedStatusBadgeHtml(clearedStatus) {
 function updateClearedStatusBadgeForLine(uid, clearedStatus) {
     const slot = document.querySelector(`.voucher-line-cleared-badge-slot[data-detail-id="${uid}"]`);
     if (slot) slot.innerHTML = getClearedStatusBadgeHtml(clearedStatus);
+    // Suppress/restore the "Pending" text label alongside the badge, same rule as initial render —
+    // this is the live path a save takes when cleared_status flips without a full line re-render.
+    const statusSpan = document.querySelector(`.voucher-line-status-cell[data-detail-id="${uid}"] .voucher-line-status`);
+    if (statusSpan) {
+        const validationStatus = statusSpan.dataset.validationStatus || 'pending';
+        statusSpan.innerHTML = `${getVoucherLineStatusIcon(validationStatus)} ${getVoucherLineStatusText(validationStatus, clearedStatus)}`;
+    }
 }
 
 // ---------- "Why is this line Cleared/Query?" popover ----------
@@ -1732,7 +1748,7 @@ function renderVoucherLines(lines) {
                     </span>
                     <span class="voucher-line-observations-cell" data-detail-id="${uid}"></span>
                     <span class="voucher-line-status-cell voucher-line-status-clickable" data-detail-id="${uid}" title="Click to see why this line is Cleared or Query">
-                        <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${validationStatus}</span>
+                        <span class="voucher-line-status status-${validationStatus}" data-validation-status="${validationStatus}">${getVoucherLineStatusIcon(line.validation_status)} ${getVoucherLineStatusText(line.validation_status, line.cleared_status)}</span>
                         <span class="voucher-line-cleared-badge-slot" data-detail-id="${uid}">${getClearedStatusBadgeHtml(line.cleared_status)}</span>
                     </span>
                 </div>
@@ -2773,7 +2789,9 @@ async function validateTransaction() {
             const status = data.validation_status.toLowerCase();
             statusCell.className = `voucher-line-status status-${status}`;
             statusCell.dataset.validationStatus = status;
-            statusCell.innerHTML = `${getVoucherLineStatusIcon(data.validation_status)} ${status}`;
+            const cachedLine = currentVoucherLines.find(l => String(l.detail_id) === String(currentDetailId));
+            const clearedStatus = cachedLine ? cachedLine.cleared_status : null;
+            statusCell.innerHTML = `${getVoucherLineStatusIcon(data.validation_status)} ${getVoucherLineStatusText(data.validation_status, clearedStatus)}`;
         }
         // Keep the cached sessionTransactions entry in sync — it's fetched once by
         // loadTransactionList() and otherwise never patched, so isCurrentVoucherValidated()
