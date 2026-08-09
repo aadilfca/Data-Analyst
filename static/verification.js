@@ -4642,15 +4642,6 @@ function renderProcedureModalPanel(uid, docId) {
             });
         });
 
-        // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): rendered on both a Store
-        // Receiving/GRN and an ERP Vendor Bill document's rows (see buildSelectedLinesTable()'s
-        // canPopulatePhysicalBill gate) — harmless no-op query when none are present.
-        container.querySelectorAll('.procedure-bill-populate-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                populatePhysicalBillFromSource(uid, parseInt(this.dataset.clientDataId), this.dataset.sourceType, this);
-            });
-        });
-
         // Phase 9 of 10: expand/collapse is a plain class toggle, not persisted state — it
         // simply resets on the next re-render (tab switch, modal reopen), same as this being a
         // lightweight disclosure rather than durable UI state like tabState.selections.
@@ -4823,11 +4814,20 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
     const initialRateValid = bill.rate !== '' && bill.rate != null && !isNaN(parseFloat(bill.rate));
     const amountReadonly = initialQtyValid && initialRateValid;
 
+    // Copy from lines (Phase 3 amendment): every GRN/Vendor Bill row already linked as evidence
+    // elsewhere on this voucher line — button disabled with none, auto-fills directly with
+    // exactly one (handled in the click listener below), opens a small picker for 2+.
+    const eligibleSourceRows = getEligiblePhysicalBillSourceRows(uid);
+
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${doc.id}">
             <div class="procedure-segment procedure-segment-data">
                 <h4 class="procedure-segment-header">🧾 Physical Bill</h4>
                 <div class="procedure-segment-body">
+                    <div class="procedure-bill-copy-row">
+                        <button type="button" id="procedureBillCopyBtn" class="procedure-bill-copy-btn" ${!eligibleSourceRows.length ? 'disabled' : ''} title="${!eligibleSourceRows.length ? 'No GRN or Vendor Bill evidence linked to this voucher line yet' : 'Copy Vendor/Qty/Rate from a linked GRN or Vendor Bill row'}">📋 Copy from lines</button>
+                    </div>
+                    <div id="procedureBillCopyPicker" class="procedure-search-dropdown" style="display:none;"></div>
                     <div class="procedure-voucher-approval-field">
                         <label for="procedureBillNoInput">Bill No</label>
                         <input type="text" id="procedureBillNoInput" class="procedure-search-input" value="${escapeHtml(bill.bill_no)}">
@@ -4902,6 +4902,19 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
     });
     updatePhysicalBillAmount(uid, doc.id);
 
+    const copyBtn = document.getElementById('procedureBillCopyBtn');
+    if (copyBtn) {
+        copyBtn.addEventListener('click', function() {
+            const eligible = getEligiblePhysicalBillSourceRows(uid);
+            if (!eligible.length) return;
+            if (eligible.length === 1) {
+                applyPhysicalBillSource(uid, doc.id, eligible[0].client_data_id, eligible[0].source_type, this);
+            } else {
+                togglePhysicalBillCopyPicker(uid, doc.id, eligible);
+            }
+        });
+    }
+
     const saveBtn = document.getElementById('procedureBillSaveBtn');
     if (saveBtn) {
         saveBtn.addEventListener('click', function() {
@@ -4971,28 +4984,58 @@ async function savePhysicalBillEntry(uid, docId) {
     }
 }
 
-// Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): triggered by the
-// procedure-bill-populate-btn on a GRN (Store Receiving) or ERP Vendor Bill evidence row
-// (buildSelectedLinesTable()). Fetches the read-only preview (Phase 2's
-// physical_bill_source_preview endpoint) and pre-fills the target physical_bill Document's tab
-// state with it — Bill No/Vendor Name/Quantity/Rate from the source row, Date always left blank
-// for manual entry (never resolved server-side either), Amount left for
-// updatePhysicalBillAmount() to compute live once the panel renders. Nothing is saved here —
-// the intern reviews/edits then clicks the existing Save Bill button, same savePhysicalBillEntry()
-// path as a fully manual entry.
-//
-// Target Document: the first physical_bill Document in this line's currently-loaded documents
-// array (same order the tab rail renders in) — confirmed with the user as the intended behavior
-// for the rare case a Category has more than one Physical Bill Document attached; no picker UI.
-async function populatePhysicalBillFromSource(uid, sourceClientDataId, sourceType, btn) {
-    if (!sourceClientDataId) return;
-    const lineState = procedureModalState[uid];
-    const targetDoc = lineState && (lineState.documents || []).find(d => d.document_type === 'physical_bill');
-    if (!targetDoc) {
-        showStatus('No Physical Bill document is configured for this category.', 'error');
-        return;
-    }
+// ---------- COPY FROM LINES (Phase 3 amendment, iDempiere-style) ----------
+// Replaces the earlier per-source-row trigger design: a single "Copy from lines" button lives on
+// the Physical Bill panel itself instead of on each GRN/Vendor Bill evidence row. Resolves the
+// source template (GRN vs ERP Vendor Bill) purely from templateNameCache — same case-insensitive
+// match resolve_physical_bill_fields_from_source() (routers/verification.py) uses via its own
+// PHYSICAL_BILL_SOURCE_TEMPLATE_NAMES.
+function resolvePhysicalBillSourceType(templateId) {
+    const templateName = (templateNameCache[templateId] || '').trim().toLowerCase();
+    if (templateName === 'store receiving') return 'grn';
+    if (templateName === 'vendor bill') return 'vendor_bill';
+    return null;
+}
 
+// Every GRN/Vendor Bill row currently linked as evidence anywhere in this line's Category — no
+// new fetch needed: openProcedureModal() already seeds every document's tabState.selections (not
+// just the active tab's) from the batch assignedRecords fetch, and already warms
+// templateNameCache for every document's template_id before any tab renders. Bill No is read via
+// the same per-source-type field the backend itself resolves (PHYSICAL_BILL_SOURCE_BILL_NO_FIELD)
+// so the picker's label always matches what a click on that row would actually populate.
+// extract_date is display-only here — the backend never resolves a date automatically.
+function getEligiblePhysicalBillSourceRows(uid) {
+    const lineState = procedureModalState[uid];
+    if (!lineState) return [];
+    const rows = [];
+    (lineState.documents || []).forEach(otherDoc => {
+        const sourceType = resolvePhysicalBillSourceType(otherDoc.template_id);
+        if (!sourceType) return;
+        const tabState = getProcedureTabState(uid, otherDoc.id);
+        (tabState.selections || []).forEach(sel => {
+            rows.push({
+                client_data_id: sel.client_data_id,
+                source_type: sourceType,
+                document_name: otherDoc.name,
+                vendor: getRowFieldCaseInsensitive(sel.row_data, 'Vendor'),
+                bill_no: getRowFieldCaseInsensitive(sel.row_data, sourceType === 'grn' ? 'Bill no' : 'vendor Bill no'),
+                extract_date: sel.extract_date
+            });
+        });
+    });
+    return rows;
+}
+
+// Fetches the read-only preview (Phase 2's physical_bill_source_preview endpoint) and pre-fills
+// docId's own tab state with it — Bill No/Vendor Name/Quantity/Rate from the source row, Date
+// always left blank for manual entry (never resolved server-side either), Amount left for
+// updatePhysicalBillAmount() to compute live once the panel renders. Nothing is saved here — the
+// intern reviews/edits then clicks the existing Save Bill button, same savePhysicalBillEntry()
+// path as a fully manual entry. docId is always the Physical Bill Document whose own panel this
+// was clicked from, so unlike the earlier per-row-trigger design there's no target-document
+// lookup and no tab switch — the panel being re-rendered is already the one showing.
+async function applyPhysicalBillSource(uid, docId, sourceClientDataId, sourceType, btn) {
+    if (!sourceClientDataId) return;
     const originalText = btn ? btn.textContent : null;
     if (btn) {
         btn.disabled = true;
@@ -5006,7 +5049,7 @@ async function populatePhysicalBillFromSource(uid, sourceClientDataId, sourceTyp
             throw new Error(data.detail || 'Unable to load source row for Physical Bill.');
         }
 
-        const tabState = getProcedureTabState(uid, targetDoc.id);
+        const tabState = getProcedureTabState(uid, docId);
         tabState.physicalBill = {
             bill_no: data.bill_no || '',
             bill_date: '', // always manual — never resolved by the preview or the backend
@@ -5019,17 +5062,53 @@ async function populatePhysicalBillFromSource(uid, sourceClientDataId, sourceTyp
         tabState.physicalBillSourceTemplate = sourceType;
         tabState.physicalBillErrors = {};
 
-        activateProcedureTab(uid, targetDoc.id);
+        renderProcedureModalPanel(uid, docId);
         showStatus('Physical Bill form pre-filled from source row — review and Save.', 'success');
     } catch (e) {
         console.error('Failed to populate Physical Bill from source:', e);
         showStatus(e.message || 'Unable to load source row for Physical Bill.', 'error');
-    } finally {
         if (btn) {
             btn.disabled = false;
             btn.textContent = originalText;
         }
     }
+}
+
+// Small picker row list — reuses .procedure-result-item/.procedure-result-main/
+// .procedure-result-label/.procedure-result-meta as-is (already-existing search-dropdown row
+// styling), no new CSS needed for the rows themselves.
+function buildPhysicalBillCopyPickerHtml(rows) {
+    return rows.map((r, idx) => `
+        <div class="procedure-result-item procedure-bill-copy-picker-item" data-idx="${idx}">
+            <div class="procedure-result-main">
+                <span class="procedure-result-label">${escapeHtml(r.vendor || '(no vendor)')}${r.bill_no ? ' — ' + escapeHtml(r.bill_no) : ''}</span>
+                <span class="procedure-result-meta">${escapeHtml(r.document_name)}${r.extract_date ? ' · ' + escapeHtml(r.extract_date) : ''}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+// Toggles the inline picker open/closed — plain show/hide within the panel's own flow, not a
+// floating popover, since it renders directly beneath the Copy from lines button.
+function togglePhysicalBillCopyPicker(uid, docId, eligibleRows) {
+    const picker = document.getElementById('procedureBillCopyPicker');
+    if (!picker) return;
+    const isOpen = picker.style.display !== 'none' && picker.innerHTML !== '';
+    if (isOpen) {
+        picker.style.display = 'none';
+        picker.innerHTML = '';
+        return;
+    }
+    picker.innerHTML = buildPhysicalBillCopyPickerHtml(eligibleRows);
+    picker.style.display = 'block';
+    picker.querySelectorAll('.procedure-bill-copy-picker-item').forEach(item => {
+        item.addEventListener('click', function() {
+            const row = eligibleRows[parseInt(this.dataset.idx)];
+            picker.style.display = 'none';
+            picker.innerHTML = '';
+            if (row) applyPhysicalBillSource(uid, docId, row.client_data_id, row.source_type, document.getElementById('procedureBillCopyBtn'));
+        });
+    });
 }
 
 // ---------- SEARCH (debounced, stale-response-guarded) ----------
@@ -5243,16 +5322,6 @@ function buildSelectedLinesTable(uid, docId) {
     const templateName = (doc && templateNameCache[doc.template_id]) || '';
     const isGrnDocument = templateName.trim().toLowerCase() === 'store receiving';
 
-    // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): both a Store Receiving/GRN
-    // and an ERP Vendor Bill document's rows get the "Populate Physical Bill" action — matched the
-    // same case-insensitive way resolve_physical_bill_fields_from_source() (routers/verification.py)
-    // checks its own source template via PHYSICAL_BILL_SOURCE_TEMPLATE_NAMES. Distinct from (and
-    // coexists with) isGrnDocument's older, single-purpose "Create Vendor Bill from GRN" action
-    // above — that one creates a brand-new client_data row; this one populates the Physical Bill
-    // entry form already built for a physical_bill Document elsewhere in this same Category.
-    const isVendorBillDocument = templateName.trim().toLowerCase() === 'vendor bill';
-    const canPopulatePhysicalBill = isGrnDocument || isVendorBillDocument;
-
     // Trailing "" header for the unlink icon column (Unassign requirement) - no label, matching
     // this app's existing convention for icon-only action columns (e.g. Data Bank's Actions column).
     let html = '<div class="procedure-selected-table-wrapper"><table class="procedure-selected-table"><thead><tr>';
@@ -5279,9 +5348,6 @@ function buildSelectedLinesTable(uid, docId) {
             }
         });
         html += '<td>';
-        if (canPopulatePhysicalBill) {
-            html += `<button type="button" class="procedure-bill-populate-btn" data-client-data-id="${sel.client_data_id}" data-source-type="${isGrnDocument ? 'grn' : 'vendor_bill'}" title="Populate Physical Bill from this row">🧾⬅</button>`;
-        }
         if (isGrnDocument) {
             html += `<button type="button" class="procedure-grn-vendorbill-btn" data-client-data-id="${sel.client_data_id}" title="Create Vendor Bill from this GRN row">📄→🧾</button>`;
         }
