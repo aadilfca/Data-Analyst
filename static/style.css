@@ -3230,6 +3230,16 @@ body {
     align-items: center;
     gap: 6px;
 }
+/* .procedure-search-input's shared flex:1 (flex-basis:0%) is meant for the search-row context,
+   where the input is meant to stretch/shrink to fill whatever space is left beside a fixed-width
+   button. Here it had the opposite, unwanted effect — it silently shrank/grew the Amount input off
+   its natural intrinsic width, unlike Bill No/Date/Vendor (plain, non-flex boxes that always render
+   at their default intrinsic width). flex: 0 0 auto restores exactly that intrinsic-width sizing
+   for this one instance, so all four fields render identically wide again — the tick sits beside it
+   as a fixed-width sibling, taking no width from the input itself. */
+.procedure-bill-amount-row .procedure-search-input {
+    flex: 0 0 auto;
+}
 .procedure-amount-match-tick {
     color: #16a34a;
     font-size: 16px;
