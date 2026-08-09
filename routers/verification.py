@@ -249,7 +249,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     gates: List[dict] = []
     line = execute_query(
         """
-        SELECT vd.id, vd.transaction_ref, cd.row_data, vs.client_id
+        SELECT vd.id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id
         FROM verification_details vd
         JOIN client_data cd ON cd.id = vd.client_data_id
         JOIN verification_sessions vs ON vs.id = vd.session_id
@@ -272,6 +272,10 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         except Exception:
             row_data = {}
     row_data = row_data or {}
+    # Physical Bill evidence type, Phase 6 of 8: same coercion helper
+    # evaluate_cross_checks_for_line()'s own compare_to_voucher_line block already uses against
+    # this exact column, so a physical bill's Amount is compared to the voucher line the same way.
+    voucher_amount = _cross_check_numeric(row['extract_amount'])
 
     account_code = get_column_value(row_data, ACCOUNT_CODE_ALIASES)
     if not account_code:
@@ -350,6 +354,12 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # so requiring it here would be an unfulfillable requirement, not a real gate).
     required_docs = get_category_documents(category_id)
     required_doc_ids = {d['document_id'] for d in required_docs if d['is_active']}
+    # Physical Bill evidence type, Phase 6 of 8: per-document type, keyed off the Document's own
+    # document_type - NOT the Category's evidence_type. This intercepts a physical_bill Document
+    # unconditionally, before it can fall into the no-template role-tick branch below (the trap
+    # flagged since Phase 2/3: a physical_bill Document has no template_id, so without this it
+    # would silently resolve "satisfied" via role ticks alone, with no bill data ever checked).
+    required_doc_types = {d['document_id']: d['document_type'] for d in required_docs if d['is_active']}
 
     linked_rows = execute_query(
         f"""
@@ -378,7 +388,13 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         )
         required_template_ids = {r['id']: r['template_id'] for r in template_rows}
 
-    no_template_required_ids = {did for did in required_doc_ids if not required_template_ids.get(did)}
+    # Physical Bill evidence type, Phase 6 of 8: a physical_bill Document never goes through the
+    # role-tick path (its own dedicated check below handles it), regardless of what its auth_roles
+    # happen to be configured as.
+    no_template_required_ids = {
+        did for did in required_doc_ids
+        if not required_template_ids.get(did) and required_doc_types.get(did) != 'physical_bill'
+    }
 
     # role_ticks_by_doc: {document_id: {role_name: is_checked}} - only fetched when at least one
     # required document is template-less, and only for those documents' rows. Same "most
@@ -414,9 +430,41 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         ticks = role_ticks_by_doc.get(document_id, {})
         return all(ticks.get(role) for role in roles)
 
+    # Physical Bill evidence type, Phase 6 of 8: fetch every physical bill recorded for this line
+    # (sibling-session-resolved, same as every other voucher_line_* read in this file) once, only
+    # when at least one required document actually needs one - zero extra query otherwise.
+    physical_bill_required_ids = {did for did, dt in required_doc_types.items() if dt == 'physical_bill'}
+    bills_by_doc: Dict[int, dict] = {}
+    if physical_bill_required_ids:
+        bills_by_doc = {b['document_id']: b for b in get_voucher_line_physical_bills(voucher_line_id)['bills']}
+
+    def _physical_bill_satisfied(document_id: int) -> bool:
+        """
+        Hard-lock check, no partial credit: Bill No/Date/Vendor all non-blank AND Amount exactly
+        equal (float-safety epsilon only, no business rounding tolerance) to the voucher line's
+        own extract_amount - matches compare_to_voucher_line's own "exact equality" convention in
+        the cross-document validation engine below.
+        """
+        bill = bills_by_doc.get(document_id)
+        if not bill:
+            return False
+        if not (bill['bill_no'] or '').strip():
+            return False
+        if not (bill['bill_date'] or '').strip():
+            return False
+        if not (bill['vendor_name'] or '').strip():
+            return False
+        bill_amount = _cross_check_numeric(bill['amount'])
+        if bill_amount is None or voucher_amount is None:
+            return False
+        return _cross_check_values_equal(bill_amount, voucher_amount)
+
     satisfied_doc_ids = set()
     for did in required_doc_ids:
-        if required_template_ids.get(did):
+        if required_doc_types.get(did) == 'physical_bill':
+            if _physical_bill_satisfied(did):
+                satisfied_doc_ids.add(did)
+        elif required_template_ids.get(did):
             if did in linked_doc_ids:
                 satisfied_doc_ids.add(did)
         elif _no_template_doc_satisfied(did):
@@ -430,7 +478,19 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
             did = d['document_id']
             if not d['is_active'] or did in satisfied_doc_ids:
                 continue
-            if required_template_ids.get(did):
+            if required_doc_types.get(did) == 'physical_bill':
+                bill = bills_by_doc.get(did)
+                if not bill:
+                    outstanding_parts.append(f"{d['name']} (no physical bill entered)")
+                elif not ((bill['bill_no'] or '').strip() and (bill['bill_date'] or '').strip()
+                          and (bill['vendor_name'] or '').strip()):
+                    outstanding_parts.append(f"{d['name']} (physical bill missing Bill No/Date/Vendor)")
+                else:
+                    outstanding_parts.append(
+                        f"{d['name']} (physical bill amount {bill['amount']} does not match "
+                        f"voucher amount {row['extract_amount']})"
+                    )
+            elif required_template_ids.get(did):
                 outstanding_parts.append(f"{d['name']} (not linked)")
             else:
                 roles = _no_template_doc_roles(did)
