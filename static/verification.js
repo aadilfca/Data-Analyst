@@ -4664,6 +4664,20 @@ function validatePhysicalBillFields(bill) {
 // always has template_id: null, and its auth_roles — if any — are no longer read by the Cleared/
 // Query gate for this doc type, so no Audit Procedures segment is rendered here either). The
 // Observation segment is unchanged, same as every other document type.
+// Live, purely visual signal — shows a small green tick beside the Physical Bill Amount field the
+// instant its value exactly matches the voucher line's own amount (same 0.005 epsilon
+// _physical_bill_satisfied() uses server-side). Never touches physicalBillSaved/the Save button/
+// any backend call — the tick is just a hint while typing, independent of what's actually saved.
+function updateAmountMatchTick(uid, rawValue) {
+    const tick = document.getElementById('procedureBillAmountTick');
+    if (!tick) return;
+    const lineState = procedureModalState[uid];
+    const voucherAmount = (lineState && lineState.voucherLineAmount) || 0;
+    const parsed = parseFloat(rawValue);
+    const matches = !isNaN(parsed) && Math.abs(parsed - voucherAmount) <= 0.005;
+    tick.style.display = matches ? '' : 'none';
+}
+
 function renderPhysicalBillDocumentPanel(uid, doc) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
@@ -4689,7 +4703,10 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                     </div>
                     <div class="procedure-voucher-approval-field">
                         <label for="procedureBillAmountInput">Amount</label>
-                        <input type="number" step="any" id="procedureBillAmountInput" class="procedure-search-input" value="${escapeHtml(bill.amount)}">
+                        <div class="procedure-bill-amount-row">
+                            <span id="procedureBillAmountTick" class="procedure-amount-match-tick" style="display:none;" title="Matches voucher line amount">✓</span>
+                            <input type="number" step="any" id="procedureBillAmountInput" class="procedure-search-input" value="${escapeHtml(bill.amount)}">
+                        </div>
                         ${fieldError('amount')}
                     </div>
                     <div class="procedure-voucher-approval-field">
@@ -4725,9 +4742,14 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
             el.addEventListener('input', function() {
                 if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '' };
                 tabState.physicalBill[field] = this.value;
+                if (field === 'amount') updateAmountMatchTick(uid, this.value);
             });
+            if (field === 'amount') {
+                el.addEventListener('blur', function() { updateAmountMatchTick(uid, this.value); });
+            }
         }
     });
+    updateAmountMatchTick(uid, bill.amount);
 
     const saveBtn = document.getElementById('procedureBillSaveBtn');
     if (saveBtn) {

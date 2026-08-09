@@ -3221,6 +3221,22 @@ body {
     color: #16a34a;
 }
 
+/* Live Amount-match tick (confirmed fix) — a purely visual signal shown immediately left of the
+   Amount input the instant its typed value exactly matches the voucher line's own amount, toggled
+   by updateAmountMatchTick() in verification.js on every input/blur. Same green (#16a34a) already
+   used by .procedure-bill-save-status/.procedure-match-badge for a "good" state in this modal. */
+.procedure-bill-amount-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.procedure-amount-match-tick {
+    color: #16a34a;
+    font-size: 16px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
 /* ----- Supporting Documents: search box + results dropdown (Voucher Supporting-Document
    Linking, Phase 4 of 6) ----- */
 .procedure-search-row {
