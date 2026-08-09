@@ -3508,12 +3508,6 @@ async function openProcedureModal(uid, initialDocId = null) {
     // reopen) — stale gate data for a different line must never carry over.
     hideValidatePanel();
 
-    // GRN-to-Vendor-Bill copy: the popover is a page-level element (document.body-appended, not
-    // scoped inside #procedureModalPanels), so switching lines/tabs underneath it wouldn't
-    // otherwise close it — hide it here so it can never point at a client_data_id from a
-    // different line/document than what's now on screen.
-    hideGrnVendorBillPopover();
-
     // Header: line position/account name, type, amount, risk (Supporting Documents modal
     // redesign follow-up) — srNo/totalLines mirror the same order renderVoucherLines() numbers
     // the table with; risk reuses computeLineRiskData() against the guidance already fetched
@@ -3636,7 +3630,6 @@ function hideProcedureModalOnly() {
     // Defensive — the browse modal is nested on top of this one, so it should never remain open
     // once the parent closes.
     closeProcedureBrowseModal();
-    hideGrnVendorBillPopover();
     currentProcedureModalUid = null;
 }
 
@@ -4632,16 +4625,6 @@ function renderProcedureModalPanel(uid, docId) {
             });
         });
 
-        // GRN-to-Vendor-Bill copy (Phase 2/3): only rendered on a Store Receiving/GRN document's
-        // rows (see buildSelectedLinesTable()'s isGrnDocument gate) — harmless no-op query when
-        // none are present. uid is threaded through from this closure so a successful create can
-        // update THIS voucher line's own modal state (Phase 3's auto-attach refresh).
-        container.querySelectorAll('.procedure-grn-vendorbill-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                openGrnVendorBillPopover(this, uid, parseInt(this.dataset.clientDataId));
-            });
-        });
-
         // Phase 9 of 10: expand/collapse is a plain class toggle, not persisted state — it
         // simply resets on the next re-render (tab switch, modal reopen), same as this being a
         // lightweight disclosure rather than durable UI state like tabState.selections.
@@ -5315,13 +5298,6 @@ function buildSelectedLinesTable(uid, docId) {
         columns = unionKeys.map(name => ({ column_name: name, data_type: null }));
     }
 
-    // GRN-to-Vendor-Bill copy (Phase 2, frontend trigger): only a Store Receiving/GRN document's
-    // rows get the "Create Vendor Bill from GRN" action — matched the same case-insensitive way
-    // the backend resolver (resolve_vendor_bill_fields_from_grn(), routers/verification.py) checks
-    // its own source template.
-    const templateName = (doc && templateNameCache[doc.template_id]) || '';
-    const isGrnDocument = templateName.trim().toLowerCase() === 'store receiving';
-
     // Trailing "" header for the unlink icon column (Unassign requirement) - no label, matching
     // this app's existing convention for icon-only action columns (e.g. Data Bank's Actions column).
     let html = '<div class="procedure-selected-table-wrapper"><table class="procedure-selected-table"><thead><tr>';
@@ -5348,9 +5324,6 @@ function buildSelectedLinesTable(uid, docId) {
             }
         });
         html += '<td>';
-        if (isGrnDocument) {
-            html += `<button type="button" class="procedure-grn-vendorbill-btn" data-client-data-id="${sel.client_data_id}" title="Create Vendor Bill from this GRN row">📄→🧾</button>`;
-        }
         html += `<button type="button" class="procedure-unlink-btn" data-assignment-id="${sel.id}" title="Unlink this evidence">✕</button>`;
         html += '</td>';
         html += '</tr>';
@@ -5386,226 +5359,6 @@ function buildSelectedLinesTable(uid, docId) {
     `;
     return html;
 }
-
-// ---------- CREATE VENDOR BILL FROM GRN (Phase 2: frontend trigger + field-copy UI) ----------
-// Backend (Phase 1, routers/verification.py) already computes every field — GET
-// grn_to_vendor_bill_preview/{client_data_id} returns exactly what POST
-// create_vendor_bill_from_grn would write, and the create endpoint itself takes only
-// source_client_data_id/created_by (it always re-derives from the source row, no field overrides
-// accepted) — so this preview is read-only display, not an editable form; "Amount computed live"
-// per the brief just means Amount is always the resolver's own Qty x Rate calculation, shown as
-// computed rather than copied like the other fields. Same fixed-position/viewport-clamp/outside-
-// click-close/stale-response-guard popover pattern as showLineStatusReasonPopover() above — the
-// element is created here rather than declared in verification.html, so this feature needs no
-// markup change.
-let grnVendorBillClientDataId = null;
-
-function getGrnVendorBillPopover() {
-    let popover = document.getElementById('grnVendorBillPopover');
-    if (!popover) {
-        popover = document.createElement('div');
-        popover.id = 'grnVendorBillPopover';
-        popover.className = 'line-status-reason-popover grn-vendorbill-popover';
-        popover.style.display = 'none';
-        document.body.appendChild(popover);
-    }
-    return popover;
-}
-
-function hideGrnVendorBillPopover() {
-    const popover = document.getElementById('grnVendorBillPopover');
-    if (popover) popover.style.display = 'none';
-    grnVendorBillClientDataId = null;
-}
-
-// One label+value row — reuses .procedure-voucher-approval-field's existing label styling and
-// .procedure-account-head-current span's read-only value styling (both already established for
-// this modal), rather than inventing new field-row CSS.
-function grnFieldRowHtml(label, value, blankNote) {
-    const displayValue = (value !== '' && value != null) ? escapeHtml(value) : `<span class="grn-vendorbill-blank">${escapeHtml(blankNote || '—')}</span>`;
-    return `
-        <div class="procedure-voucher-approval-field procedure-account-head-current">
-            <label>${escapeHtml(label)}</label>
-            <span>${displayValue}</span>
-        </div>
-    `;
-}
-
-function buildGrnVendorBillPreviewBody(clientDataId, data) {
-    const vendorName = getRowFieldCaseInsensitive(data.row_data, 'Vendor');
-    const quantity = getRowFieldCaseInsensitive(data.row_data, 'Quantity');
-    const rate = getRowFieldCaseInsensitive(data.row_data, 'Rate');
-    const amount = getRowFieldCaseInsensitive(data.row_data, 'Amount');
-    const vendorBillNo = getRowFieldCaseInsensitive(data.row_data, 'vendor Bill no');
-
-    return `
-        <div class="grn-vendorbill-fields">
-            ${grnFieldRowHtml('Vendor Name', vendorName)}
-            ${grnFieldRowHtml('Quantity', quantity)}
-            ${grnFieldRowHtml('Rate', rate)}
-            ${grnFieldRowHtml('Amount (computed)', amount)}
-            ${grnFieldRowHtml('Vendor Bill No.', vendorBillNo, 'blank — GRN row had no Bill No')}
-            <div class="procedure-voucher-approval-field">
-                <label>Vendor Bill Date</label>
-                <span class="grn-vendorbill-blank">left blank — enter manually after creation</span>
-            </div>
-        </div>
-        <div class="grn-vendorbill-actions">
-            <button type="button" id="grnVendorBillCreateBtn" class="procedure-account-head-suggest-btn grn-vendorbill-create-btn" data-client-data-id="${clientDataId}">Create Vendor Bill</button>
-            <button type="button" id="grnVendorBillCancelBtn" class="procedure-account-head-suggest-btn">Cancel</button>
-        </div>
-    `;
-}
-
-async function openGrnVendorBillPopover(triggerBtn, uid, clientDataId) {
-    if (!clientDataId) return;
-    const popover = getGrnVendorBillPopover();
-    popover.innerHTML = `
-        <div class="popover-header">Create Vendor Bill from GRN</div>
-        <div class="popover-body"><p class="lsr-reason">Loading…</p></div>
-    `;
-
-    // Position near the trigger button, clamped so it stays within the viewport — same logic as
-    // showLineStatusReasonPopover()/showAuditGuidancePopover().
-    const rect = triggerBtn.getBoundingClientRect();
-    const popoverWidth = 340;
-    let left = rect.left;
-    if (left + popoverWidth > window.innerWidth) {
-        left = Math.max(8, window.innerWidth - popoverWidth - 8);
-    }
-    popover.style.left = left + 'px';
-
-    const popoverMaxHeight = 380;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    if (spaceBelow >= popoverMaxHeight + 6) {
-        popover.style.top = (rect.bottom + 6) + 'px';
-        popover.style.bottom = 'auto';
-    } else {
-        popover.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
-        popover.style.top = 'auto';
-    }
-
-    popover.style.display = 'block';
-    grnVendorBillClientDataId = clientDataId;
-
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/grn_to_vendor_bill_preview/${clientDataId}`);
-        const data = await res.json().catch(() => ({}));
-        if (grnVendorBillClientDataId !== clientDataId) return; // stale — popover moved on
-        if (!res.ok) {
-            const body = popover.querySelector('.popover-body');
-            if (body) body.innerHTML = `<p class="lsr-reason">${escapeHtml(data.detail || 'Unable to build a Vendor Bill preview for this row.')}</p>`;
-            return;
-        }
-        const body = popover.querySelector('.popover-body');
-        if (body) body.innerHTML = buildGrnVendorBillPreviewBody(clientDataId, data);
-
-        const createBtn = document.getElementById('grnVendorBillCreateBtn');
-        if (createBtn) {
-            createBtn.addEventListener('click', function() {
-                submitGrnVendorBillCreate(uid, clientDataId, this);
-            });
-        }
-        const cancelBtn = document.getElementById('grnVendorBillCancelBtn');
-        if (cancelBtn) {
-            cancelBtn.addEventListener('click', hideGrnVendorBillPopover);
-        }
-    } catch (e) {
-        if (grnVendorBillClientDataId !== clientDataId) return;
-        console.warn('Unable to load GRN-to-Vendor-Bill preview:', e);
-        const body = popover.querySelector('.popover-body');
-        if (body) body.innerHTML = '<p class="lsr-reason">Unable to load the Vendor Bill preview.</p>';
-    }
-}
-
-// Phase 3, FINAL: pushes the newly-created Vendor Bill row straight into the target Document
-// tab's local state — same shape selectProcedureDocument() already pushes after a manual
-// search-and-select assign, so the rail dot/Linked Evidence table/totals all recompute exactly
-// as if the row had been found and linked by hand, no extra fetch needed. Returns true only when
-// the row was actually reflected locally (the backend auto-attached it AND that Document is one
-// of this line's currently-loaded tabs) — the caller uses this to word its confirmation message.
-function attachCreatedVendorBillToState(uid, data) {
-    if (!data || !data.auto_attached || !data.assigned_document_id) return false;
-    const lineState = procedureModalState[uid];
-    if (!lineState) return false;
-    const targetDocId = data.assigned_document_id;
-    if (!(lineState.documents || []).some(d => d.id === targetDocId)) return false;
-
-    const tabState = getProcedureTabState(uid, targetDocId);
-    tabState.selections = tabState.selections || [];
-    tabState.selections.push({
-        id: data.assignment_id,
-        client_data_id: data.id,
-        document_id: targetDocId,
-        row_data: data.row_data,
-        extract_date: data.extract_date,
-        extract_amount: data.extract_amount,
-        rate_source: data.rate_source
-    });
-    lineState.assignedDocIds.add(targetDocId);
-    renderProcedureModalTabs(uid);
-    // Only re-render the panel if the Vendor Bill tab happens to be the one currently on screen —
-    // the GRN tab this action was triggered from stays in place otherwise, per the confirmed "no
-    // forced tab switch" behavior; the new row shows up the moment the auditor clicks over to it.
-    if (lineState.activeDocId === targetDocId) {
-        renderProcedureModalPanel(uid, targetDocId);
-    }
-    return true;
-}
-
-async function submitGrnVendorBillCreate(uid, clientDataId, btn) {
-    const cancelBtn = document.getElementById('grnVendorBillCancelBtn');
-    btn.disabled = true;
-    btn.textContent = 'Creating…';
-    if (cancelBtn) cancelBtn.disabled = true;
-
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/create_vendor_bill_from_grn`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ source_client_data_id: clientDataId, created_by: 'Analyst' })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            throw new Error(data.detail || 'Failed to create Vendor Bill.');
-        }
-
-        const attached = attachCreatedVendorBillToState(uid, data);
-        const confirmationLine = attached
-            ? '✅ Vendor Bill created and linked to this voucher line.'
-            : `✅ Vendor Bill created (row #${data.id}).${data.auto_attach_skipped_reason ? ' ' + escapeHtml(data.auto_attach_skipped_reason) : ''}`;
-
-        const popover = document.getElementById('grnVendorBillPopover');
-        if (popover && grnVendorBillClientDataId === clientDataId) {
-            const body = popover.querySelector('.popover-body');
-            if (body) {
-                body.innerHTML = `
-                    <p class="lsr-reason">${confirmationLine}</p>
-                    <div class="grn-vendorbill-actions">
-                        <button type="button" id="grnVendorBillDoneBtn" class="procedure-account-head-suggest-btn">Close</button>
-                    </div>
-                `;
-                const doneBtn = document.getElementById('grnVendorBillDoneBtn');
-                if (doneBtn) doneBtn.addEventListener('click', hideGrnVendorBillPopover);
-            }
-        }
-        showStatus(attached ? '✅ Vendor Bill created and linked as evidence.' : 'Vendor Bill created from GRN row.', 'success');
-    } catch (e) {
-        console.error('Failed to create Vendor Bill from GRN:', e);
-        showStatus(e.message || 'Failed to create Vendor Bill from GRN.', 'error');
-        btn.disabled = false;
-        btn.textContent = 'Create Vendor Bill';
-        if (cancelBtn) cancelBtn.disabled = false;
-    }
-}
-
-// Close on any click outside the popover — same convention as the Status-pill popover above.
-document.addEventListener('click', function(e) {
-    const popover = document.getElementById('grnVendorBillPopover');
-    if (popover && popover.style.display === 'block' && !popover.contains(e.target) && !e.target.closest('.procedure-grn-vendorbill-btn')) {
-        hideGrnVendorBillPopover();
-    }
-});
 
 // ---------- AUDIT PROCEDURES CHECKLIST (Phase 5 of 6) ----------
 // Renders one checkbox per auth role already configured on the Document (doc.auth_roles, sourced

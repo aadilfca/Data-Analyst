@@ -3212,7 +3212,7 @@ body {
    Single labeled button at the top of the Physical Bill form, replacing the earlier per-source-
    row trigger design — same labeled-action-button treatment as
    .procedure-account-head-suggest-btn/.procedure-observation-suggest-btn (a text label, not an
-   icon-only button like .procedure-unlink-btn/.procedure-grn-vendorbill-btn), own block per this
+   icon-only button like .procedure-unlink-btn), own block per this
    file's per-button convention. The picker itself (#procedureBillCopyPicker,
    togglePhysicalBillCopyPicker() in verification.js) reuses .procedure-search-dropdown/
    .procedure-result-item as-is — no new CSS needed for its rows. */
@@ -3635,59 +3635,6 @@ body {
 .procedure-unlink-btn:hover {
     color: #dc2626;
     background: #fee2e2;
-}
-
-/* ----- Create Vendor Bill from GRN (Phase 2: frontend trigger + field-copy UI) -----
-   Trigger button sits beside the ✕ unlink icon, only rendered on a Store Receiving/GRN
-   document's rows (see buildSelectedLinesTable()'s isGrnDocument gate in verification.js). Same
-   neutral icon-button treatment as .procedure-unlink-btn, just without the destructive-hover
-   red — this action creates something, it doesn't remove anything. */
-.procedure-grn-vendorbill-btn {
-    background: none;
-    border: none;
-    color: #64748b;
-    font-size: 13px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 4px;
-    margin-right: 2px;
-    transition: color 0.15s, background 0.15s;
-}
-.procedure-grn-vendorbill-btn:hover {
-    color: #1a1a2e;
-    background: #f1f5f9;
-}
-
-/* Popover shell reuses .line-status-reason-popover's card/header/body rules as-is (see the
-   grn-vendorbill-popover class added alongside it in verification.js) — only the width/max-height
-   and the small form's own field/action styling below are new. */
-.grn-vendorbill-popover {
-    width: 340px;
-    max-height: 380px;
-}
-.grn-vendorbill-fields {
-    margin-bottom: 4px;
-}
-.grn-vendorbill-blank {
-    color: #94a3b8;
-    font-style: italic;
-    font-size: 13px;
-}
-.grn-vendorbill-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 10px;
-}
-.grn-vendorbill-create-btn {
-    background: #22c55e;
-    border-color: #22c55e;
-    color: white;
-}
-.grn-vendorbill-create-btn:hover:not(:disabled) {
-    background: #16a34a;
-    border-color: #16a34a;
-    color: white;
 }
 
 .procedure-total-summary {
