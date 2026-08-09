@@ -546,21 +546,61 @@ def extract_columns_from_row(row_data: dict, template_cols: list,
     """
     Extracts the first numeric and first date value from a row based on template column types.
     Returns (amount, date_str) where amount is float or None, date_str is ISO date or None.
+
+    amount/date are tracked with independent found-flags -- confirmed live (2026-08-09) that a
+    shared `break` here previously exited the loop the moment EITHER was found, so any template
+    listing its Date column before its Amount column (i.e. nearly all of them) permanently lost
+    the amount, since the Date column matches first and the loop never reaches the later Numeric
+    column at all. Do not reintroduce a single shared break for both branches.
+
+    A literal 0 in a Numeric column is also treated as "no value here" and skipped -- confirmed
+    live (2026-08-09) the Transaction Report template's Debit Amount/Credit Amount columns always
+    store BOTH as a real number, never blank (a receipt-type voucher has Debit Amount: 0.0), so
+    without this a Debit-side 0 would permanently win over the real Credit Amount for ~62% of
+    real cashbook rows. Matches the existing debit/credit-side convention already established by
+    is_cashbook_leg_row() (routers/verification.py), which treats a 0 the same way.
+
+    A column literally named "Amount" (case-insensitive/trimmed, via find_named_column()) is
+    preferred over the generic "first Numeric column" rule below when one exists -- confirmed
+    with the user, 2026-08-09. Purchase Order/Store Receiving/Vendor Bill templates all have
+    Quantity as a Numeric column before Amount in sort_order, and GET /api/data/preview's
+    amount_min/amount_max filter reads extract_amount directly, so "first numeric" would
+    silently resolve to Quantity there. A blank/zero named-Amount value falls through to the
+    generic ordered search below, same as any other unresolved Numeric column.
     """
     amount = None
     date_str = None
+    amount_found = False
+    date_found = False
+
+    amount_col = find_named_column(template_cols, 'Amount')
+    if amount_col and amount_col['data_type'] == 'Numeric':
+        named_value = row_data.get(amount_col['column_name'])
+        if named_value is not None and named_value != '':
+            try:
+                parsed_named_amount = float(named_value)
+                if parsed_named_amount != 0:
+                    amount = parsed_named_amount
+                    amount_found = True
+            except:
+                pass
+
     for col in template_cols:
+        if amount_found and date_found:
+            break
         col_name = col['column_name']
         value = row_data.get(col_name)
         if value is None or value == '':
             continue
-        if col['data_type'] == 'Numeric':
+        if col['data_type'] == 'Numeric' and not amount_found:
             try:
-                amount = float(value)
-                break  # take first numeric
+                parsed_amount = float(value)
+                if parsed_amount != 0:
+                    amount = parsed_amount
+                    amount_found = True  # take first non-zero numeric
             except:
                 pass
-        elif col['data_type'] == 'Date':
+        elif col['data_type'] == 'Date' and not date_found:
             try:
                 kind = classify_date_cell(value)
                 if kind == 'native':
@@ -577,7 +617,7 @@ def extract_columns_from_row(row_data: dict, template_cols: list,
                         date_str = dt.strftime('%Y-%m-%d')
                     except:
                         pass
-                break  # take first date
+                date_found = True  # take first date
             except:
                 pass
     return amount, date_str
@@ -1437,13 +1477,18 @@ def validate_and_import(request: ImportRequest):
             # recomputed from the new row_data -- a force-included row with a still-blank
             # critical field is flagged 'incomplete', otherwise cleared back to NULL.
             data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
+            # extract_amount/extract_date (confirmed fix, 2026-08-09) are recomputed from the
+            # new row_data too -- this UPDATE previously left both columns untouched on a
+            # changed-row re-upload, so a row's amount/date would never refresh even after the
+            # extraction bug above was fixed.
+            amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
             execute_write(
                 """
                 UPDATE client_data
-                SET row_data = ?, version = ?, document_group_id = ?, change_detection_status = 'updated', data_quality_flag = ?, rate_source = ?
+                SET row_data = ?, version = ?, document_group_id = ?, change_detection_status = 'updated', data_quality_flag = ?, rate_source = ?, extract_amount = ?, extract_date = ?
                 WHERE id = ?
                 """,
-                (json.dumps(new_row_data), new_version, doc_group_id, data_quality_flag, rate_source, cid)
+                (json.dumps(new_row_data), new_version, doc_group_id, data_quality_flag, rate_source, amount, date_str, cid)
             )
 
             # Log the old values for audit trail
