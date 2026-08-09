@@ -897,20 +897,25 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add rate_source to client_data:", e)
 
-        # Schema upgrade: add source_grn_row_id column (Create Vendor Bill from
-        # GRN requirement, Phase 1) -- a plain self-referential pointer to another
-        # client_data.id, set only when this row was created by copying fields
-        # from a Store Receiving/GRN row rather than imported from Excel. No FK
-        # clause (PRAGMA foreign_keys is never enabled), no uniqueness constraint
-        # -- more than one Vendor Bill row may be derived from the same GRN row.
+        # Schema cleanup: drop source_grn_row_id column (Populate Physical Bill from
+        # GRN/ERP Vendor Bill requirement, Phase 4 of 4, FINAL) -- this column belonged to
+        # the "Create Vendor Bill from GRN" feature, which has been fully superseded and
+        # removed (frontend in Phase 3, backend resolver/endpoints alongside this same
+        # cleanup) in favour of the Physical Bill entry work. Confirmed 0 rows had this
+        # column set on real data before dropping. DROP COLUMN is a plain, direct ALTER
+        # here (no CHECK constraint/index depends on this column, so the rename/recreate/
+        # copy/drop table-rebuild pattern used elsewhere in this file for CHECK-constraint
+        # changes isn't needed) -- supported by SQLite 3.35+, well below what this project
+        # ships with. Idempotent: a database that never had the column (a fresh install, or
+        # one already migrated by this block) is a safe no-op.
         try:
             cur = conn.execute("PRAGMA table_info(client_data)")
             columns = [row[1] for row in cur.fetchall()]
-            if 'source_grn_row_id' not in columns:
-                conn.execute("ALTER TABLE client_data ADD COLUMN source_grn_row_id INTEGER DEFAULT NULL")
-                print("✅ Added source_grn_row_id column to client_data")
+            if 'source_grn_row_id' in columns:
+                conn.execute("ALTER TABLE client_data DROP COLUMN source_grn_row_id")
+                print("✅ Dropped source_grn_row_id column from client_data")
         except Exception as e:
-            print("⚠️ Could not add source_grn_row_id to client_data:", e)
+            print("⚠️ Could not drop source_grn_row_id from client_data:", e)
 
         print("✅ Created indexes on client_data")
 
