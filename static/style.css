@@ -3179,6 +3179,48 @@ body {
     color: #2563eb;
 }
 
+/* ----- Physical Bill entry (evidence type, Phase 7 of 8) -----
+   Field layout reuses .procedure-voucher-approval-field (label+input row) and
+   .procedure-search-input (input styling) as-is, both already generic enough for text/date/number
+   inputs — only the error/status/button pieces below are new. Own-block button, not shared with
+   .procedure-account-head-suggest-btn, per this file's established per-button convention. */
+.procedure-bill-field-error {
+    margin-top: 3px;
+    font-size: 11px;
+    color: #dc2626;
+}
+.procedure-bill-general-error {
+    margin-bottom: 10px;
+    font-size: 12px;
+    color: #dc2626;
+}
+.procedure-bill-save-btn {
+    padding: 6px 14px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    background: white;
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.procedure-bill-save-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+    color: #1a1a2e;
+}
+.procedure-bill-save-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.procedure-bill-save-status {
+    margin-left: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #16a34a;
+}
+
 /* ----- Supporting Documents: search box + results dropdown (Voucher Supporting-Document
    Linking, Phase 4 of 6) ----- */
 .procedure-search-row {

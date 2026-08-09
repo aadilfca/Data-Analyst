@@ -3145,7 +3145,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!procedureModalState[uid].tabs[docId]) {
-        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {} };
+        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBill: null, physicalBillSaved: false, physicalBillErrors: {}, physicalBillSaving: false };
     }
     return procedureModalState[uid].tabs[docId];
 }
@@ -3263,6 +3263,17 @@ async function openProcedureModal(uid, initialDocId = null) {
         documents.push({ id: docId, name, __inactive: true, auth_roles: [] });
     });
 
+    // Physical Bill evidence type, Phase 7 of 8: every saved Physical Bill entry for this line,
+    // across all documents - same fail-soft-to-empty, re-fetched-fresh-on-every-open convention
+    // as assignedRecords/procedureChecks/observationEntries above.
+    let physicalBillEntries = [];
+    try {
+        const pbRes = await fetch(`${API_BASE}/api/verification/physical_bills/${uid}`);
+        if (pbRes.ok) physicalBillEntries = (await pbRes.json()).bills || [];
+    } catch (e) {
+        console.error('Failed to load physical bill entries:', e);
+    }
+
     // Automated cross-document validation engine, Phase 9 of 10: this line's Cross-check
     // evaluation results (Phase 6/7's already-computed structure - zero new evaluation logic,
     // this just fetches it), for the Data Table segment's collapsible pass/fail rollup. Same
@@ -3338,6 +3349,22 @@ async function openProcedureModal(uid, initialDocId = null) {
             tabState.observation = savedEntry.observation_text;
             tabState.suggestionApplied = true;
             tabState.lastSyncedText = savedEntry.last_synced_text || null;
+        }
+
+        // Physical Bill evidence type, Phase 7 of 8: server truth always wins on reopen, same
+        // convention as observation/lastSyncedText above — never trust a stale local draft.
+        if (doc.document_type === 'physical_bill') {
+            const savedBill = physicalBillEntries.find(b => b.document_id === doc.id);
+            tabState.physicalBill = savedBill
+                ? {
+                    bill_no: savedBill.bill_no || '',
+                    bill_date: savedBill.bill_date || '',
+                    amount: savedBill.amount != null ? String(savedBill.amount) : '',
+                    vendor_name: savedBill.vendor_name || ''
+                }
+                : { bill_no: '', bill_date: '', amount: '', vendor_name: '' };
+            tabState.physicalBillSaved = !!savedBill;
+            tabState.physicalBillErrors = {};
         }
     });
 
@@ -3757,7 +3784,19 @@ function isProcedureDocumentComplete(uid, doc) {
         return true;
     }
     let baseComplete;
-    if (doc.template_id) {
+    // Physical Bill evidence type, Phase 7 of 8: checked BEFORE doc.template_id (always null for
+    // this doc type) - mirrors compute_and_persist_cleared_status()'s own document_type-first
+    // branch order (Phase 6), so a physical_bill Document never silently falls into the
+    // no-template role-tick branch below, the same trap Phase 6 closed server-side. Reflects
+    // SAVED state only (not an unsaved draft edit) - same "dot reflects committed truth"
+    // convention every other document type already follows. Deliberately does NOT replicate the
+    // backend's Amount-vs-voucher-line-amount check - that comparison is Phase 8's job.
+    if (doc.document_type === 'physical_bill') {
+        const tabState = getProcedureTabState(uid, doc.id);
+        const b = tabState.physicalBill;
+        baseComplete = tabState.physicalBillSaved && !!(b && b.bill_no && b.bill_date && b.vendor_name
+            && b.amount !== '' && b.amount != null && !isNaN(parseFloat(b.amount)));
+    } else if (doc.template_id) {
         const lineState = procedureModalState[uid];
         baseComplete = !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(doc.id));
     } else {
@@ -3818,14 +3857,23 @@ function renderProcedureModalTabs(uid) {
             `;
         }
 
-        const dotTitle = doc.template_id
-            ? (isComplete ? 'Evidence linked' : 'No evidence linked yet')
-            : (isComplete ? 'All procedures confirmed' : 'Procedures pending');
+        // Physical Bill evidence type, Phase 7 of 8: dot title/subtext for this doc type, checked
+        // first since doc.template_id is always null for a physical_bill Document (same
+        // document_type-first branch order as isProcedureDocumentComplete() above).
+        const isPhysicalBill = doc.document_type === 'physical_bill';
+        const dotTitle = isPhysicalBill
+            ? (isComplete ? 'Bill entered' : 'Bill not yet entered')
+            : doc.template_id
+                ? (isComplete ? 'Evidence linked' : 'No evidence linked yet')
+                : (isComplete ? 'All procedures confirmed' : 'Procedures pending');
 
         // "X/Y roles" subtext — same checklist state the completion dot itself reads.
         const tabState = getProcedureTabState(uid, doc.id);
         const roles = doc.auth_roles || [];
         const rolesDone = roles.filter(r => tabState.checklist[r] && tabState.checklist[r].is_checked).length;
+        const subText = isPhysicalBill
+            ? (tabState.physicalBillSaved ? 'Bill saved' : 'Bill pending')
+            : `${rolesDone}/${roles.length} roles`;
 
         // Mismatch tag — has-template documents only, and only once evidence is actually linked
         // (same gating buildSelectedLinesTable()'s own summary line uses, so the rail never
@@ -3841,7 +3889,7 @@ function renderProcedureModalTabs(uid) {
                 <span class="procedure-tab-dot${isComplete ? ' complete' : ''}" title="${dotTitle}"></span>
                 <span class="procedure-tab-text">
                     <span class="procedure-tab-label">${escapeHtml(doc.name)}</span>
-                    <span class="procedure-tab-sub">${rolesDone}/${roles.length} roles</span>
+                    <span class="procedure-tab-sub">${subText}</span>
                     ${mismatchTagHtml}
                 </span>
             </button>
@@ -4357,6 +4405,14 @@ function renderProcedureModalPanel(uid, docId) {
         return;
     }
 
+    // Physical Bill evidence type, Phase 7 of 8: a physical_bill Document always has
+    // template_id: null, so it's intercepted here before hasTemplate/hasRoles are computed —
+    // its own dedicated 4-field entry form, not the has-template/no-template layouts below.
+    if (doc.document_type === 'physical_bill') {
+        renderPhysicalBillDocumentPanel(uid, doc);
+        return;
+    }
+
     const tabState = getProcedureTabState(uid, docId);
     const hasTemplate = !!doc.template_id;
     const hasRoles = !!(doc.auth_roles && doc.auth_roles.length);
@@ -4521,6 +4577,155 @@ function renderInactiveDocumentPanel(uid, doc) {
             unassignSupportingDocument(uid, doc.id, parseInt(this.dataset.assignmentId));
         });
     });
+}
+
+// ---------- PHYSICAL BILL ENTRY (evidence type, Phase 7 of 8) ----------
+// Client-side mirror of Phase 5's backend validation (save_physical_bill, routers/verification.py):
+// Bill No/Vendor name non-blank, Amount numeric, Date non-blank and a valid date. Fails soft — the
+// caller renders these as inline messages under each field, never a blocking alert(). Returns a
+// {field: message} object; empty means valid.
+function validatePhysicalBillFields(bill) {
+    const errors = {};
+    if (!bill.bill_no || !bill.bill_no.trim()) errors.bill_no = 'Bill No is required.';
+    if (!bill.vendor_name || !bill.vendor_name.trim()) errors.vendor_name = 'Vendor name is required.';
+    if (bill.amount === '' || bill.amount == null || isNaN(parseFloat(bill.amount))) {
+        errors.amount = 'Amount must be numeric.';
+    }
+    if (!bill.bill_date) {
+        errors.bill_date = 'Date is required.';
+    } else if (isNaN(Date.parse(bill.bill_date))) {
+        errors.bill_date = 'Invalid date.';
+    }
+    return errors;
+}
+
+// Dedicated panel for a physical_bill Document — a 4-field entry form (Bill No/Date/Amount/Vendor
+// name) instead of the has-template search/evidence table or the no-template role checklist,
+// since neither concept applies to this doc type (Phase 6 backend note: a physical_bill Document
+// always has template_id: null, and its auth_roles — if any — are no longer read by the Cleared/
+// Query gate for this doc type, so no Audit Procedures segment is rendered here either). The
+// Observation segment is unchanged, same as every other document type.
+function renderPhysicalBillDocumentPanel(uid, doc) {
+    const container = document.getElementById('procedureModalPanels');
+    if (!container) return;
+    const tabState = getProcedureTabState(uid, doc.id);
+    const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '' };
+    const errors = tabState.physicalBillErrors || {};
+    const fieldError = (field) => errors[field] ? `<div class="procedure-bill-field-error">${escapeHtml(errors[field])}</div>` : '';
+
+    container.innerHTML = `
+        <div class="procedure-tab-panel" data-doc-id="${doc.id}">
+            <div class="procedure-segment procedure-segment-data">
+                <h4 class="procedure-segment-header">🧾 Physical Bill</h4>
+                <div class="procedure-segment-body">
+                    <div class="procedure-voucher-approval-field">
+                        <label for="procedureBillNoInput">Bill No</label>
+                        <input type="text" id="procedureBillNoInput" class="procedure-search-input" value="${escapeHtml(bill.bill_no)}">
+                        ${fieldError('bill_no')}
+                    </div>
+                    <div class="procedure-voucher-approval-field">
+                        <label for="procedureBillDateInput">Date</label>
+                        <input type="date" id="procedureBillDateInput" class="procedure-search-input" value="${escapeHtml(bill.bill_date)}">
+                        ${fieldError('bill_date')}
+                    </div>
+                    <div class="procedure-voucher-approval-field">
+                        <label for="procedureBillAmountInput">Amount</label>
+                        <input type="number" step="any" id="procedureBillAmountInput" class="procedure-search-input" value="${escapeHtml(bill.amount)}">
+                        ${fieldError('amount')}
+                    </div>
+                    <div class="procedure-voucher-approval-field">
+                        <label for="procedureBillVendorInput">Vendor name</label>
+                        <input type="text" id="procedureBillVendorInput" class="procedure-search-input" value="${escapeHtml(bill.vendor_name)}">
+                        ${fieldError('vendor_name')}
+                    </div>
+                    ${errors._general ? `<div class="procedure-bill-general-error">${escapeHtml(errors._general)}</div>` : ''}
+                    <div>
+                        <button type="button" id="procedureBillSaveBtn" class="procedure-bill-save-btn" ${tabState.physicalBillSaving ? 'disabled' : ''}>
+                            ${tabState.physicalBillSaving ? 'Saving…' : (tabState.physicalBillSaved ? '💾 Update Bill' : '💾 Save Bill')}
+                        </button>
+                        <span class="procedure-bill-save-status">${(!tabState.physicalBillSaving && tabState.physicalBillSaved) ? '✓ Saved' : ''}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="procedure-segment procedure-segment-observation">
+                <h4 class="procedure-segment-header">📝 Observation</h4>
+                <div class="procedure-segment-body">${buildObservationSection(uid, doc.id)}</div>
+            </div>
+        </div>
+    `;
+
+    const fieldInputs = {
+        bill_no: document.getElementById('procedureBillNoInput'),
+        bill_date: document.getElementById('procedureBillDateInput'),
+        amount: document.getElementById('procedureBillAmountInput'),
+        vendor_name: document.getElementById('procedureBillVendorInput')
+    };
+    Object.keys(fieldInputs).forEach(field => {
+        const el = fieldInputs[field];
+        if (el) {
+            el.addEventListener('input', function() {
+                if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '' };
+                tabState.physicalBill[field] = this.value;
+            });
+        }
+    });
+
+    const saveBtn = document.getElementById('procedureBillSaveBtn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', function() {
+            savePhysicalBillEntry(uid, doc.id);
+        });
+    }
+
+    wireProcedureChecklistAndObservation(container, uid, doc.id, tabState);
+}
+
+// Saves one Physical Bill entry (POST save_physical_bill, upsert). Validates client-side first —
+// on a validation failure, sets physicalBillErrors and re-renders with inline messages, no network
+// call and no blocking alert(). On success, marks physicalBillSaved so the tab dot/subtext (rail)
+// and the panel's Save/Update button+status both reflect committed truth immediately.
+async function savePhysicalBillEntry(uid, docId) {
+    const tabState = getProcedureTabState(uid, docId);
+    const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '' };
+    const errors = validatePhysicalBillFields(bill);
+    if (Object.keys(errors).length) {
+        tabState.physicalBillErrors = errors;
+        renderProcedureModalPanel(uid, docId);
+        return;
+    }
+
+    tabState.physicalBillErrors = {};
+    tabState.physicalBillSaving = true;
+    renderProcedureModalPanel(uid, docId);
+
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/save_physical_bill`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                voucher_line_id: parseInt(uid),
+                document_id: docId,
+                bill_no: bill.bill_no.trim(),
+                bill_date: bill.bill_date,
+                amount: parseFloat(bill.amount),
+                vendor_name: bill.vendor_name.trim()
+            })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save physical bill.');
+        }
+        tabState.physicalBillSaved = true;
+        tabState.physicalBillSaving = false;
+        tabState.physicalBillErrors = {};
+        renderProcedureModalTabs(uid);
+        renderProcedureModalPanel(uid, docId);
+    } catch (e) {
+        console.error('Failed to save physical bill:', e);
+        tabState.physicalBillSaving = false;
+        tabState.physicalBillErrors = { _general: e.message || 'Save failed — please try again.' };
+        renderProcedureModalPanel(uid, docId);
+    }
 }
 
 // ---------- SEARCH (debounced, stale-response-guarded) ----------

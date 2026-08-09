@@ -707,7 +707,7 @@ def get_category_active_cross_checks_count(category_id: int) -> int:
 def get_category_guidance_documents(category_id: int) -> List[dict]:
     rows = execute_query(
         """
-        SELECT d.id as document_id, d.name, d.kb_note, d.template_id, d.risk_rating, d.transaction_level_approval
+        SELECT d.id as document_id, d.name, d.kb_note, d.template_id, d.risk_rating, d.transaction_level_approval, d.document_type
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
         WHERE cd.category_id = ? AND d.is_active = 1
@@ -724,7 +724,13 @@ def get_category_guidance_documents(category_id: int) -> List[dict]:
             "risk_rating": r["risk_rating"],
             "transaction_level_approval": bool(r["transaction_level_approval"]),
             "auth_roles": get_document_auth_roles(r["document_id"]),
-            "cross_check_fields": get_document_cross_check_fields(r["document_id"])
+            "cross_check_fields": get_document_cross_check_fields(r["document_id"]),
+            # Physical Bill evidence type, Phase 7 of 8: lets the Verification frontend tell a
+            # physical_bill Document apart from an ordinary no-template one when rendering the
+            # procedure window's document rail - get_category_documents() above already exposes
+            # this same field for the Category admin display; this is the guidance-endpoint
+            # sibling Verification itself actually reads.
+            "document_type": r["document_type"] or 'linked_template'
         }
         for r in rows
     ]
