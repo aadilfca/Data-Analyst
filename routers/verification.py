@@ -968,6 +968,57 @@ def resolve_vendor_bill_fields_from_grn(source_client_data_id: int) -> dict:
     }
 
 
+def _resolve_vendor_bill_target_document_id(
+    source_document_id: int, target_template_id: int, target_template_name: str
+) -> Optional[int]:
+    """
+    Create Vendor Bill from GRN, Phase 3 (FINAL): given the Document slot the source GRN row is
+    linked under (its own audit_rule_documents.id), finds the sibling Document - in the same
+    Category/Categories as the source Document - that represents the newly-created Vendor Bill
+    row's own template. This is the evidence "slot" the derived row should be auto-attached to on
+    the same voucher line.
+
+    Two-step match, confirmed against the live data before choosing this over a template_id-only
+    match: first prefer a Document whose own template_id equals the Vendor Bill template's id
+    (the strongest signal, when configured); if none is found, fall back to a Document named the
+    same as the target template (case-insensitive/trimmed) in the same Category/Categories - the
+    live Audit Rules configuration for this app currently has its "Vendor Bill" Document with
+    template_id left NULL (it's a no-template Document today, gating only on Audit Procedures
+    roles rather than a linked Data Bank evidence search), so a template_id-only match would
+    silently find nothing on real data. Both steps stay scoped to is_active=1.
+
+    Returns None (never raises) when neither step finds anything - a Category with no Vendor Bill
+    Document configured at all, or a source Document not attached to any Category - since that's
+    a normal "nothing to auto-attach to" outcome, not an error; the caller
+    (create_vendor_bill_from_grn()) still creates the Vendor Bill row either way, it just skips
+    the auto-attach step and reports why.
+    """
+    category_filter = "cd.category_id IN (SELECT category_id FROM audit_rule_category_documents WHERE document_id = ?)"
+
+    by_template = execute_query(
+        f"""
+        SELECT DISTINCT d.id
+        FROM audit_rule_category_documents cd
+        JOIN audit_rule_documents d ON d.id = cd.document_id
+        WHERE {category_filter} AND d.template_id = ? AND d.is_active = 1
+        """,
+        (source_document_id, target_template_id)
+    )
+    if by_template:
+        return by_template[0]['id']
+
+    by_name = execute_query(
+        f"""
+        SELECT DISTINCT d.id
+        FROM audit_rule_category_documents cd
+        JOIN audit_rule_documents d ON d.id = cd.document_id
+        WHERE {category_filter} AND LOWER(TRIM(d.name)) = LOWER(TRIM(?)) AND d.is_active = 1
+        """,
+        (source_document_id, target_template_name)
+    )
+    return by_name[0]['id'] if by_name else None
+
+
 @router.get("/api/verification/grn_to_vendor_bill_preview/{client_data_id}")
 def preview_vendor_bill_from_grn(client_data_id: int):
     """
@@ -1034,6 +1085,50 @@ def create_vendor_bill_from_grn(
     )[0]
     result = dict(created_row)
     result['row_data'] = json.loads(result['row_data'])
+
+    # Phase 3, FINAL: auto-attach the new Vendor Bill row as evidence on the same voucher line the
+    # source GRN row is itself linked under - reuses assign_supporting_document() directly (the
+    # same function a manual search-and-select goes through, called here as a plain Python
+    # function, not over HTTP) rather than duplicating its validation/insert logic. Never fails
+    # the creation itself - the row above is already committed by the time this runs, so any
+    # reason auto-attach can't proceed is reported back as a skip, not an error surfaced to the
+    # caller. Deliberately keyed off the GRN row's own active voucher_line_documents row (not a
+    # voucher_line_id passed in by the caller) - the "Create Vendor Bill from GRN" action is only
+    # reachable, per Phase 2's UI, from a GRN row that's already showing as linked evidence in the
+    # Supporting Documents modal, so this lookup is always expected to find one.
+    result['auto_attached'] = False
+    result['assigned_voucher_line_id'] = None
+    result['assigned_document_id'] = None
+    result['assignment_id'] = None
+    result['auto_attach_skipped_reason'] = None
+
+    source_assignment = execute_query(
+        "SELECT voucher_line_id, document_id FROM voucher_line_documents WHERE client_data_id = ? AND status = 'active'",
+        (source_client_data_id,)
+    )
+    if not source_assignment:
+        result['auto_attach_skipped_reason'] = "Source GRN row is not currently linked as evidence on any voucher line."
+    else:
+        target_document_id = _resolve_vendor_bill_target_document_id(
+            source_assignment[0]['document_id'], target_template_id, resolved['target_template_name']
+        )
+        if target_document_id is None:
+            result['auto_attach_skipped_reason'] = "No 'Vendor Bill' document is configured on this voucher line's Category — link the new row manually."
+        else:
+            try:
+                assignment = assign_supporting_document(
+                    voucher_line_id=source_assignment[0]['voucher_line_id'],
+                    client_data_id=row_id,
+                    document_id=target_document_id,
+                    linked_by=created_by
+                )
+                result['auto_attached'] = True
+                result['assigned_voucher_line_id'] = assignment['voucher_line_id']
+                result['assigned_document_id'] = assignment['document_id']
+                result['assignment_id'] = assignment['id']
+            except HTTPException as e:
+                result['auto_attach_skipped_reason'] = e.detail
+
     return result
 
 

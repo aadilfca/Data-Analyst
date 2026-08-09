@@ -4625,12 +4625,13 @@ function renderProcedureModalPanel(uid, docId) {
             });
         });
 
-        // GRN-to-Vendor-Bill copy (Phase 2): only rendered on a Store Receiving/GRN document's
+        // GRN-to-Vendor-Bill copy (Phase 2/3): only rendered on a Store Receiving/GRN document's
         // rows (see buildSelectedLinesTable()'s isGrnDocument gate) — harmless no-op query when
-        // none are present.
+        // none are present. uid is threaded through from this closure so a successful create can
+        // update THIS voucher line's own modal state (Phase 3's auto-attach refresh).
         container.querySelectorAll('.procedure-grn-vendorbill-btn').forEach(btn => {
             btn.addEventListener('click', function() {
-                openGrnVendorBillPopover(this, parseInt(this.dataset.clientDataId));
+                openGrnVendorBillPopover(this, uid, parseInt(this.dataset.clientDataId));
             });
         });
 
@@ -5238,7 +5239,7 @@ function buildGrnVendorBillPreviewBody(clientDataId, data) {
     `;
 }
 
-async function openGrnVendorBillPopover(triggerBtn, clientDataId) {
+async function openGrnVendorBillPopover(triggerBtn, uid, clientDataId) {
     if (!clientDataId) return;
     const popover = getGrnVendorBillPopover();
     popover.innerHTML = `
@@ -5284,7 +5285,7 @@ async function openGrnVendorBillPopover(triggerBtn, clientDataId) {
         const createBtn = document.getElementById('grnVendorBillCreateBtn');
         if (createBtn) {
             createBtn.addEventListener('click', function() {
-                submitGrnVendorBillCreate(clientDataId, this);
+                submitGrnVendorBillCreate(uid, clientDataId, this);
             });
         }
         const cancelBtn = document.getElementById('grnVendorBillCancelBtn');
@@ -5299,7 +5300,42 @@ async function openGrnVendorBillPopover(triggerBtn, clientDataId) {
     }
 }
 
-async function submitGrnVendorBillCreate(clientDataId, btn) {
+// Phase 3, FINAL: pushes the newly-created Vendor Bill row straight into the target Document
+// tab's local state — same shape selectProcedureDocument() already pushes after a manual
+// search-and-select assign, so the rail dot/Linked Evidence table/totals all recompute exactly
+// as if the row had been found and linked by hand, no extra fetch needed. Returns true only when
+// the row was actually reflected locally (the backend auto-attached it AND that Document is one
+// of this line's currently-loaded tabs) — the caller uses this to word its confirmation message.
+function attachCreatedVendorBillToState(uid, data) {
+    if (!data || !data.auto_attached || !data.assigned_document_id) return false;
+    const lineState = procedureModalState[uid];
+    if (!lineState) return false;
+    const targetDocId = data.assigned_document_id;
+    if (!(lineState.documents || []).some(d => d.id === targetDocId)) return false;
+
+    const tabState = getProcedureTabState(uid, targetDocId);
+    tabState.selections = tabState.selections || [];
+    tabState.selections.push({
+        id: data.assignment_id,
+        client_data_id: data.id,
+        document_id: targetDocId,
+        row_data: data.row_data,
+        extract_date: data.extract_date,
+        extract_amount: data.extract_amount,
+        rate_source: data.rate_source
+    });
+    lineState.assignedDocIds.add(targetDocId);
+    renderProcedureModalTabs(uid);
+    // Only re-render the panel if the Vendor Bill tab happens to be the one currently on screen —
+    // the GRN tab this action was triggered from stays in place otherwise, per the confirmed "no
+    // forced tab switch" behavior; the new row shows up the moment the auditor clicks over to it.
+    if (lineState.activeDocId === targetDocId) {
+        renderProcedureModalPanel(uid, targetDocId);
+    }
+    return true;
+}
+
+async function submitGrnVendorBillCreate(uid, clientDataId, btn) {
     const cancelBtn = document.getElementById('grnVendorBillCancelBtn');
     btn.disabled = true;
     btn.textContent = 'Creating…';
@@ -5315,12 +5351,18 @@ async function submitGrnVendorBillCreate(clientDataId, btn) {
         if (!res.ok) {
             throw new Error(data.detail || 'Failed to create Vendor Bill.');
         }
+
+        const attached = attachCreatedVendorBillToState(uid, data);
+        const confirmationLine = attached
+            ? '✅ Vendor Bill created and linked to this voucher line.'
+            : `✅ Vendor Bill created (row #${data.id}).${data.auto_attach_skipped_reason ? ' ' + escapeHtml(data.auto_attach_skipped_reason) : ''}`;
+
         const popover = document.getElementById('grnVendorBillPopover');
         if (popover && grnVendorBillClientDataId === clientDataId) {
             const body = popover.querySelector('.popover-body');
             if (body) {
                 body.innerHTML = `
-                    <p class="lsr-reason">✅ Vendor Bill created (row #${data.id}).</p>
+                    <p class="lsr-reason">${confirmationLine}</p>
                     <div class="grn-vendorbill-actions">
                         <button type="button" id="grnVendorBillDoneBtn" class="procedure-account-head-suggest-btn">Close</button>
                     </div>
@@ -5329,7 +5371,7 @@ async function submitGrnVendorBillCreate(clientDataId, btn) {
                 if (doneBtn) doneBtn.addEventListener('click', hideGrnVendorBillPopover);
             }
         }
-        showStatus('Vendor Bill created from GRN row.', 'success');
+        showStatus(attached ? '✅ Vendor Bill created and linked as evidence.' : 'Vendor Bill created from GRN row.', 'success');
     } catch (e) {
         console.error('Failed to create Vendor Bill from GRN:', e);
         showStatus(e.message || 'Failed to create Vendor Bill from GRN.', 'error');
