@@ -3347,14 +3347,149 @@ def save_line_observation(
 # fixed three times for voucher_line_documents/_observations/_procedure_checks.
 # ==============================================
 
+# ---------- POPULATE PHYSICAL BILL FROM GRN/ERP VENDOR BILL (new, confirmed 4-phase
+# requirement, Phase 2 of 4: backend preview + populate) ----------
+# Lets an intern pre-fill a Physical Bill entry from an existing Store Receiving (GRN) or
+# Vendor Bill (ERP) client_data row instead of typing Vendor Name/Bill No/Quantity/Rate by
+# hand. source_type is supplied explicitly by the caller - this code never guesses which
+# template a row belongs to, it only confirms the claim is correct. Amount is always
+# computed (Qty x Rate) at save time, never trusted from a source column - same rule the
+# now-superseded resolve_vendor_bill_fields_from_grn() (above) already established. Date is
+# never resolved here - it stays a manual field, unaffected by this feature.
+PHYSICAL_BILL_SOURCE_TYPES = ('grn', 'vendor_bill')
+
+# Expected templates.template_name (case-insensitive/trimmed) for each source_type - same
+# comparison convention resolve_vendor_bill_fields_from_grn() already uses for 'store receiving'/
+# 'vendor bill'.
+PHYSICAL_BILL_SOURCE_TEMPLATE_NAMES = {
+    'grn': 'store receiving',
+    'vendor_bill': 'vendor bill',
+}
+
+# Which column holds the source row's own bill number, per source type - a GRN's own
+# "Bill no" field vs. the Vendor Bill template's own "vendor Bill no" field (the same column
+# name the old resolver's target side already confirmed exists on that template).
+PHYSICAL_BILL_SOURCE_BILL_NO_FIELD = {
+    'grn': 'Bill no',
+    'vendor_bill': 'vendor Bill no',
+}
+
+
+def resolve_physical_bill_fields_from_source(source_client_data_id: int, source_type: str) -> dict:
+    """
+    Read-only resolution of Vendor Name/Bill No/Quantity/Rate from a source GRN (Store
+    Receiving) or ERP Vendor Bill client_data row, for populating a Physical Bill entry.
+    No writes. Amount is deliberately NOT resolved here (computed at save time from
+    Qty x Rate in save_physical_bill()); bill_date is never resolved here either - always
+    left to manual entry.
+    """
+    if source_type not in PHYSICAL_BILL_SOURCE_TYPES:
+        raise HTTPException(400, f"Invalid source_type '{source_type}'. Must be one of: {', '.join(PHYSICAL_BILL_SOURCE_TYPES)}")
+
+    source_rows = execute_query(
+        "SELECT id, client_id, template_id, row_data, is_deleted FROM client_data WHERE id = ?",
+        (source_client_data_id,)
+    )
+    if not source_rows:
+        raise HTTPException(404, "Source row not found.")
+    source_row = source_rows[0]
+    if source_row['is_deleted']:
+        raise HTTPException(400, "Source row has been deleted.")
+
+    source_template = execute_query("SELECT id, template_name FROM templates WHERE id = ?", (source_row['template_id'],))
+    expected_name = PHYSICAL_BILL_SOURCE_TEMPLATE_NAMES[source_type]
+    if not source_template or source_template[0]['template_name'].strip().lower() != expected_name:
+        actual_name = source_template[0]['template_name'] if source_template else 'Unknown'
+        raise HTTPException(400, f"Source row's template is '{actual_name}', expected '{expected_name.title()}' for source_type '{source_type}'.")
+
+    try:
+        source_data = json.loads(source_row['row_data']) if isinstance(source_row['row_data'], str) else (source_row['row_data'] or {})
+    except Exception:
+        source_data = {}
+
+    source_cols = get_template_columns(source_row['template_id'])
+
+    def _resolve_value(field_name):
+        col = find_named_column(source_cols, field_name)
+        if not col:
+            return None, f"column '{field_name}' not configured on this template"
+        value = source_data.get(col['column_name'])
+        if value in (None, ''):
+            return None, "blank on source row"
+        return value, None
+
+    vendor_name, vendor_skip_reason = _resolve_value('Vendor')
+    bill_no, bill_no_skip_reason = _resolve_value(PHYSICAL_BILL_SOURCE_BILL_NO_FIELD[source_type])
+
+    qty_raw, qty_skip_reason = _resolve_value('Quantity')
+    rate_raw, rate_skip_reason = _resolve_value('Rate')
+    try:
+        quantity = float(qty_raw) if qty_raw is not None else None
+    except (TypeError, ValueError):
+        quantity = None
+        qty_skip_reason = "non-numeric on source row"
+    try:
+        rate = float(rate_raw) if rate_raw is not None else None
+    except (TypeError, ValueError):
+        rate = None
+        rate_skip_reason = "non-numeric on source row"
+
+    amount_preview = None
+    if quantity is not None and rate is not None:
+        amount_preview = round(quantity * rate, get_rate_precision())
+
+    fields_resolved = []
+    fields_skipped = []
+    for label, value, reason in (
+        ("Vendor Name", vendor_name, vendor_skip_reason),
+        ("Bill No", bill_no, bill_no_skip_reason),
+        ("Quantity", quantity, qty_skip_reason),
+        ("Rate", rate, rate_skip_reason),
+    ):
+        if value is not None:
+            fields_resolved.append(label)
+        else:
+            fields_skipped.append({"field": label, "reason": reason or "not available"})
+
+    return {
+        "source_client_data_id": source_row['id'],
+        "source_client_id": source_row['client_id'],
+        "source_type": source_type,
+        "source_template_id": source_row['template_id'],
+        "source_template_name": source_template[0]['template_name'],
+        "vendor_name": vendor_name,
+        "bill_no": bill_no,
+        "quantity": quantity,
+        "rate": rate,
+        "amount_preview": amount_preview,
+        "fields_resolved": fields_resolved,
+        "fields_skipped": fields_skipped,
+    }
+
+
+@router.get("/api/verification/physical_bill_source_preview/{client_data_id}")
+def preview_physical_bill_from_source(client_data_id: int, source_type: str):
+    """
+    Read-only preview of what populating a Physical Bill entry from this GRN/ERP Vendor
+    Bill row would produce - no writes. source_type ('grn'/'vendor_bill') is supplied
+    explicitly by the caller, since this endpoint doesn't try to guess which template a
+    row belongs to.
+    """
+    return resolve_physical_bill_fields_from_source(client_data_id, source_type)
+
+
 @router.post("/api/verification/save_physical_bill")
 def save_physical_bill(
     voucher_line_id: int = Body(..., embed=True, description="verification_details.id (the voucher line 'uid')"),
     document_id: int = Body(..., embed=True, description="audit_rule_documents.id (a physical_bill Document this bill belongs to)"),
     bill_no: str = Body(..., embed=True),
     bill_date: str = Body(..., embed=True, description="ISO format, YYYY-MM-DD"),
-    amount: Any = Body(..., embed=True),
+    amount: Any = Body(None, embed=True, description="Required unless quantity+rate are both given, in which case it's computed and this is ignored"),
     vendor_name: str = Body(..., embed=True),
+    quantity: Any = Body(None, embed=True, description="Populate-from-source only; blank for a manually-entered bill"),
+    rate: Any = Body(None, embed=True, description="Populate-from-source only; blank for a manually-entered bill"),
+    source_document_row_id: Optional[int] = Body(None, embed=True, description="client_data.id of the GRN/ERP Vendor Bill row this entry was populated from, if any"),
+    source_template: Optional[str] = Body(None, embed=True, description="'grn' or 'vendor_bill' - which source type populated this entry, if any"),
     updated_by: str = Body("Analyst", embed=True)
 ):
     """
@@ -3365,6 +3500,15 @@ def save_physical_bill(
     Writes always target the literal voucher_line_id passed in, never fanned out across
     sibling sessions - _resolve_sibling_voucher_line_ids()'s own documented contract (writes
     are unaffected by it, only reads are), same as every other voucher_line_* table.
+
+    quantity/rate/source_document_row_id/source_template (Populate Physical Bill from
+    GRN/ERP Vendor Bill, Phase 2 of 4) are all optional and default to None - a manual-entry
+    caller that omits them gets byte-identical behaviour to before this phase. When quantity
+    and rate are BOTH provided, amount is computed here (Qty x Rate, rounded to
+    get_rate_precision()) and whatever amount was sent is ignored; otherwise amount is
+    required and validated exactly as before. This is a full-replace upsert like the other
+    fields - a caller resaving an already-populated bill must resend quantity/rate/source_*
+    to keep them, or send them blank to intentionally clear provenance.
 
     Basic field validation only this phase, no cross-field business logic: bill_no/vendor_name
     non-blank, amount numeric, bill_date a valid date. No check here that amount matches the
@@ -3386,10 +3530,29 @@ def save_physical_bill(
     if not vendor_name:
         raise HTTPException(400, "Vendor name is required.")
 
-    try:
-        amount = float(amount)
-    except (TypeError, ValueError):
-        raise HTTPException(400, "Amount must be numeric.")
+    def _parse_optional_float(value, field_label):
+        if value in (None, ''):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"{field_label} must be numeric.")
+
+    quantity = _parse_optional_float(quantity, "Quantity")
+    rate = _parse_optional_float(rate, "Rate")
+
+    if quantity is not None and rate is not None:
+        amount = round(quantity * rate, get_rate_precision())
+    else:
+        if amount in (None, ''):
+            raise HTTPException(400, "Amount is required when Quantity/Rate are not both provided.")
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Amount must be numeric.")
+
+    if source_template is not None and source_template not in PHYSICAL_BILL_SOURCE_TYPES:
+        raise HTTPException(400, f"Invalid source_template '{source_template}'. Must be one of: {', '.join(PHYSICAL_BILL_SOURCE_TYPES)} or omitted.")
 
     try:
         datetime.fromisoformat(bill_date)
@@ -3398,14 +3561,20 @@ def save_physical_bill(
 
     execute_write(
         """
-        INSERT INTO voucher_line_physical_bills (voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO voucher_line_physical_bills
+            (voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name,
+             quantity, rate, source_document_row_id, source_template, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(voucher_line_id, document_id)
         DO UPDATE SET bill_no = excluded.bill_no, bill_date = excluded.bill_date,
                       amount = excluded.amount, vendor_name = excluded.vendor_name,
+                      quantity = excluded.quantity, rate = excluded.rate,
+                      source_document_row_id = excluded.source_document_row_id,
+                      source_template = excluded.source_template,
                       updated_at = CURRENT_TIMESTAMP
         """,
-        (voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name)
+        (voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name,
+         quantity, rate, source_document_row_id, source_template)
     )
 
     log_audit(updated_by, "Save Physical Bill", "Verification",
@@ -3413,7 +3582,8 @@ def save_physical_bill(
 
     saved = execute_query(
         """
-        SELECT id, voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name, created_at, updated_at
+        SELECT id, voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name,
+               quantity, rate, source_document_row_id, source_template, created_at, updated_at
         FROM voucher_line_physical_bills
         WHERE voucher_line_id = ? AND document_id = ?
         """,
@@ -3449,7 +3619,9 @@ def get_voucher_line_physical_bills(voucher_line_id: int):
     rows = execute_query(
         f"""
         SELECT vpb.id, vpb.voucher_line_id, vpb.document_id, vpb.bill_no, vpb.bill_date,
-               vpb.amount, vpb.vendor_name, vpb.created_at, vpb.updated_at,
+               vpb.amount, vpb.vendor_name, vpb.quantity, vpb.rate,
+               vpb.source_document_row_id, vpb.source_template,
+               vpb.created_at, vpb.updated_at,
                ard.name AS document_name, ard.is_active AS document_is_active
         FROM voucher_line_physical_bills vpb
         LEFT JOIN audit_rule_documents ard ON ard.id = vpb.document_id
@@ -3473,6 +3645,10 @@ def get_voucher_line_physical_bills(voucher_line_id: int):
             "bill_date": r['bill_date'],
             "amount": r['amount'],
             "vendor_name": r['vendor_name'],
+            "quantity": r['quantity'],
+            "rate": r['rate'],
+            "source_document_row_id": r['source_document_row_id'],
+            "source_template": r['source_template'],
             "created_at": r['created_at'],
             "updated_at": r['updated_at'],
             "document_name": r['document_name'],
