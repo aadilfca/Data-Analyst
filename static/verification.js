@@ -1473,6 +1473,19 @@ function hideLineStatusReasonPopover() {
     lineStatusReasonUid = null;
 }
 
+// One gate row. Shared by the Status-pill popover (buildLineStatusReasonBody, all gates) and the
+// Validate panel (buildValidatePanelBody, N/A gates hidden by default) so both surfaces render a
+// gate identically.
+const LSR_GATE_ICON = { pass: '✔', fail: '✘', not_applicable: '–' };
+function renderGateRowHtml(g) {
+    return `
+        <div class="lsr-gate ${g.status}">
+            <div class="lsr-gate-label"><span class="lsr-gate-icon">${LSR_GATE_ICON[g.status] || '–'}</span>${escapeHtml(g.label)}</div>
+            ${g.detail ? `<div class="lsr-gate-detail">${escapeHtml(g.detail)}</div>` : ''}
+        </div>
+    `;
+}
+
 // One row per gate. Failing gates are already ordered first by the endpoint — this only renders.
 function buildLineStatusReasonBody(data) {
     if (data.reason) {
@@ -1482,14 +1495,7 @@ function buildLineStatusReasonBody(data) {
     if (!gates.length) {
         return '<p class="lsr-reason">No gate breakdown available for this line.</p>';
     }
-    const icon = { pass: '✔', fail: '✘', not_applicable: '–' };
-    const rows = gates.map(g => `
-        <div class="lsr-gate ${g.status}">
-            <div class="lsr-gate-label"><span class="lsr-gate-icon">${icon[g.status] || '–'}</span>${escapeHtml(g.label)}</div>
-            ${g.detail ? `<div class="lsr-gate-detail">${escapeHtml(g.detail)}</div>` : ''}
-        </div>
-    `).join('');
-    return rows;
+    return gates.map(renderGateRowHtml).join('');
 }
 
 async function showLineStatusReasonPopover(cell, uid) {
@@ -1559,6 +1565,11 @@ document.addEventListener('click', function(e) {
 // openProcedureModal() (see the hideValidatePanel() call there) so stale gate data from a
 // previous line can never carry over.
 let validatePanelLoadingUid = null;
+// Local-only view state for this panel: the last fetched payload (so the N/A toggle can re-render
+// without refetching) and whether N/A gates are currently revealed. Both reset every time the
+// panel is closed/reopened — never persisted, matching hideValidatePanel()'s existing reset rule.
+let validatePanelData = null;
+let validatePanelShowNA = false;
 
 function hideValidatePanel() {
     const panel = document.getElementById('procedureValidatePanel');
@@ -1567,6 +1578,58 @@ function hideValidatePanel() {
         panel.innerHTML = '';
     }
     validatePanelLoadingUid = null;
+    validatePanelData = null;
+    validatePanelShowNA = false;
+}
+
+// Splits gates into visible (pass/fail/query) vs N/A, hiding N/A by default behind a
+// "Show N/A (n)" toggle link. Reuses renderGateRowHtml() — same row markup as the popover.
+function buildValidatePanelBody(data) {
+    if (data.reason) {
+        return `<p class="lsr-reason">${escapeHtml(data.reason)}</p>`;
+    }
+    const gates = data.gates || [];
+    if (!gates.length) {
+        return '<p class="lsr-reason">No gate breakdown available for this line.</p>';
+    }
+    const visible = gates.filter(g => g.status !== 'not_applicable');
+    const naGates = gates.filter(g => g.status === 'not_applicable');
+
+    let html = visible.length
+        ? visible.map(renderGateRowHtml).join('')
+        : '<p class="lsr-reason">No applicable checks for this line.</p>';
+
+    if (naGates.length) {
+        if (validatePanelShowNA) {
+            html += naGates.map(renderGateRowHtml).join('');
+            html += `<a href="#" id="procedureValidateNAToggle" class="procedure-validate-na-toggle">Hide N/A (${naGates.length})</a>`;
+        } else {
+            html += `<a href="#" id="procedureValidateNAToggle" class="procedure-validate-na-toggle">Show N/A (${naGates.length})</a>`;
+        }
+    }
+    return html;
+}
+
+function renderValidatePanel() {
+    const panel = document.getElementById('procedureValidatePanel');
+    if (!panel || !validatePanelData) return;
+    const data = validatePanelData;
+    const status = data.cleared_status || 'Not computed';
+    const pillClass = data.cleared_status === 'Cleared' ? 'cleared' : (data.cleared_status === 'Query' ? 'query' : 'unknown');
+    panel.innerHTML = `
+        <div class="procedure-validate-panel-header">
+            <span class="procedure-validate-status-pill ${pillClass}">${escapeHtml(status)}</span>
+        </div>
+        <div class="procedure-validate-panel-body">${buildValidatePanelBody(data)}</div>
+    `;
+    const toggleLink = panel.querySelector('#procedureValidateNAToggle');
+    if (toggleLink) {
+        toggleLink.addEventListener('click', function(e) {
+            e.preventDefault();
+            validatePanelShowNA = !validatePanelShowNA;
+            renderValidatePanel();
+        });
+    }
 }
 
 async function toggleValidatePanel() {
@@ -1590,14 +1653,9 @@ async function toggleValidatePanel() {
         // Discard a stale response if the panel was closed or the modal moved to a different
         // line while this fetch was in flight.
         if (validatePanelLoadingUid !== uid) return;
-        const status = data.cleared_status || 'Not computed';
-        const pillClass = data.cleared_status === 'Cleared' ? 'cleared' : (data.cleared_status === 'Query' ? 'query' : 'unknown');
-        panel.innerHTML = `
-            <div class="procedure-validate-panel-header">
-                <span class="procedure-validate-status-pill ${pillClass}">${escapeHtml(status)}</span>
-            </div>
-            <div class="procedure-validate-panel-body">${buildLineStatusReasonBody(data)}</div>
-        `;
+        validatePanelData = data;
+        validatePanelShowNA = false;
+        renderValidatePanel();
     } catch (e) {
         if (validatePanelLoadingUid !== uid) return;
         console.warn('Unable to load line status reason:', e);

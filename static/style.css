@@ -1892,6 +1892,19 @@ body {
     background: #f1f5f9;
     color: #64748b;
 }
+/* "Show N/A (n)" / "Hide N/A (n)" toggle link, bottom of the Validate panel's gate list. */
+.procedure-validate-na-toggle {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #3b82f6;
+    text-decoration: none;
+    cursor: pointer;
+}
+.procedure-validate-na-toggle:hover {
+    text-decoration: underline;
+}
 
 /* ----- Voucher Panel -----
    Spans the full visible width — .main-container.verification-active already has zero padding, so
