@@ -2971,6 +2971,157 @@ def save_line_observation(
     }
 
 
+# ==============================================
+# VOUCHER LINE PHYSICAL BILLS
+# Physical Bill evidence type, Phase 5 of 8: save/read the manually-keyed Bill No/Date/
+# Amount/Vendor name captured against a voucher line for a Billable Category's "physical_bill"
+# Document(s). Plain CRUD only - no Amount-vs-voucher-line matching/gate logic here, that's
+# Phase 6's job. Mirrors the voucher_line_observations endpoints directly above exactly:
+# same Body(..., embed=True) param style (no Pydantic model - none exist anywhere in this
+# file), same ON CONFLICT(...) DO UPDATE upsert (the table has a real
+# UNIQUE(voucher_line_id, document_id) constraint, same shape as voucher_line_observations'
+# own), and - critically - the same _resolve_sibling_voucher_line_ids() read pattern, per the
+# schema's own comment in database.py: reopening a cashbook creates fresh verification_details
+# rows, and skipping sibling resolution is the exact orphaning bug this module has already
+# fixed three times for voucher_line_documents/_observations/_procedure_checks.
+# ==============================================
+
+@router.post("/api/verification/save_physical_bill")
+def save_physical_bill(
+    voucher_line_id: int = Body(..., embed=True, description="verification_details.id (the voucher line 'uid')"),
+    document_id: int = Body(..., embed=True, description="audit_rule_documents.id (a physical_bill Document this bill belongs to)"),
+    bill_no: str = Body(..., embed=True),
+    bill_date: str = Body(..., embed=True, description="ISO format, YYYY-MM-DD"),
+    amount: Any = Body(..., embed=True),
+    vendor_name: str = Body(..., embed=True),
+    updated_by: str = Body("Analyst", embed=True)
+):
+    """
+    Save (upsert) one Document's Physical Bill data for a voucher line. One bill per
+    voucher line per Document (UNIQUE(voucher_line_id, document_id)) - a repeat save for
+    the same pair updates the existing row in place, never appends a duplicate.
+
+    Writes always target the literal voucher_line_id passed in, never fanned out across
+    sibling sessions - _resolve_sibling_voucher_line_ids()'s own documented contract (writes
+    are unaffected by it, only reads are), same as every other voucher_line_* table.
+
+    Basic field validation only this phase, no cross-field business logic: bill_no/vendor_name
+    non-blank, amount numeric, bill_date a valid date. No check here that amount matches the
+    voucher line's own amount - that's Phase 6's gate, not this endpoint's job.
+    """
+    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    if not line:
+        raise HTTPException(404, "Voucher line not found.")
+
+    doc = execute_query("SELECT id FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
+    if not doc:
+        raise HTTPException(404, "Document not found or inactive.")
+
+    bill_no = (bill_no or "").strip()
+    if not bill_no:
+        raise HTTPException(400, "Bill No is required.")
+
+    vendor_name = (vendor_name or "").strip()
+    if not vendor_name:
+        raise HTTPException(400, "Vendor name is required.")
+
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Amount must be numeric.")
+
+    try:
+        datetime.fromisoformat(bill_date)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+
+    execute_write(
+        """
+        INSERT INTO voucher_line_physical_bills (voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(voucher_line_id, document_id)
+        DO UPDATE SET bill_no = excluded.bill_no, bill_date = excluded.bill_date,
+                      amount = excluded.amount, vendor_name = excluded.vendor_name,
+                      updated_at = CURRENT_TIMESTAMP
+        """,
+        (voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name)
+    )
+
+    log_audit(updated_by, "Save Physical Bill", "Verification",
+               f"Saved physical bill for document {document_id} on voucher line {voucher_line_id}.")
+
+    saved = execute_query(
+        """
+        SELECT id, voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name, created_at, updated_at
+        FROM voucher_line_physical_bills
+        WHERE voucher_line_id = ? AND document_id = ?
+        """,
+        (voucher_line_id, document_id)
+    )[0]
+
+    return dict(saved)
+
+
+@router.get("/api/verification/physical_bills/{voucher_line_id}")
+def get_voucher_line_physical_bills(voucher_line_id: int):
+    """
+    Batch fetch every Physical Bill entry recorded for a voucher line, across all documents -
+    one call per Supporting Documents modal open, mirroring get_line_observations()/
+    get_voucher_line_documents().
+
+    Looks up across every verification_details.id that shares this line's own client_data_id
+    (_resolve_sibling_voucher_line_ids()), not just voucher_line_id itself, so a bill saved in
+    an earlier verification session still shows up when the same voucher line is reopened in a
+    new one. Two sibling sessions could each have their own row for the same document_id (the
+    UNIQUE constraint only prevents duplicates within one session) - the most recently updated
+    one wins, same dedup convention as get_line_observations().
+
+    LEFT JOIN (not INNER) so a bill against a since-deactivated Document still surfaces with
+    is_active: false rather than disappearing - matches this module's established
+    "already-referenced inactive item stays visible, greyed" convention.
+    """
+    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+    if sibling_ids is None:
+        raise HTTPException(404, "Voucher line not found.")
+
+    placeholders = ",".join("?" for _ in sibling_ids)
+    rows = execute_query(
+        f"""
+        SELECT vpb.id, vpb.voucher_line_id, vpb.document_id, vpb.bill_no, vpb.bill_date,
+               vpb.amount, vpb.vendor_name, vpb.created_at, vpb.updated_at,
+               ard.name AS document_name, ard.is_active AS document_is_active
+        FROM voucher_line_physical_bills vpb
+        LEFT JOIN audit_rule_documents ard ON ard.id = vpb.document_id
+        WHERE vpb.voucher_line_id IN ({placeholders})
+        """,
+        tuple(sibling_ids)
+    )
+
+    latest_by_doc: Dict[int, dict] = {}
+    for r in rows:
+        existing = latest_by_doc.get(r['document_id'])
+        if existing is None or (r['updated_at'] or '') > (existing['updated_at'] or ''):
+            latest_by_doc[r['document_id']] = r
+
+    bills = [
+        {
+            "id": r['id'],
+            "voucher_line_id": r['voucher_line_id'],
+            "document_id": r['document_id'],
+            "bill_no": r['bill_no'],
+            "bill_date": r['bill_date'],
+            "amount": r['amount'],
+            "vendor_name": r['vendor_name'],
+            "created_at": r['created_at'],
+            "updated_at": r['updated_at'],
+            "document_name": r['document_name'],
+            "is_active": r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])
+        }
+        for r in latest_by_doc.values()
+    ]
+    return {"voucher_line_id": voucher_line_id, "bills": bills, "count": len(bills)}
+
+
 def _resolve_line_srno(session_id: int, target_voucher_line_id: int, session_details_cache: Dict[int, list]) -> int:
     """
     Voucher Supporting-Document Linking follow-up, Phase 2 of 4: backend equivalent of Phase 1's
