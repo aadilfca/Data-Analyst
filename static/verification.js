@@ -969,6 +969,22 @@ async function fetchProcedureChecksForLine(uid) {
     }
 }
 
+// Fetch of a line's saved Physical Bill entries, across all documents — shared by
+// openProcedureModal() (Phase 7) and updateProceduresCellForLine()'s standalone completion check
+// below (Phase: rail dot + Procedures badge amount-match fix). Same fail-soft-to-[] convention as
+// fetchAssignedDocumentRecords()/fetchProcedureChecksForLine().
+async function fetchPhysicalBillsForLine(uid) {
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/physical_bills/${uid}`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.bills || [];
+    } catch (e) {
+        console.error('Failed to load physical bills for Procedures cell:', e);
+        return [];
+    }
+}
+
 // Small SVG completion ring, adapted from the v7 prototype's ring() helper — pct is 0-100, cls is
 // 'pending'/'progress'/'done' (drives the stroke color via the CSS class, matching this file's
 // existing traffic-light convention rather than the prototype's own separate palette).
@@ -1055,21 +1071,39 @@ async function updateProceduresCellForLine(uid, type) {
     // Checks cutover): only fetch/await the voucher-level checks list when at least one of this
     // Category's Documents is actually flagged — avoids an extra network call for the common
     // unflagged case. Warms the same voucherChecksCache openProcedureModal() reads, via the shared
-    // ensureVoucherChecksLoaded().
+    // ensureVoucherChecksLoaded(). Physical Bill evidence type: same lazy-fetch pattern for the
+    // saved bill entries, only when at least one of this Category's Documents is physical_bill.
     const needsVoucherChecks = documents.some(doc => doc.transaction_level_approval);
-    const [assignedRecords, procedureChecks, checks] = await Promise.all([
+    const needsPhysicalBills = documents.some(doc => doc.document_type === 'physical_bill');
+    const [assignedRecords, procedureChecks, checks, physicalBills] = await Promise.all([
         fetchAssignedDocumentRecords(uid),
         fetchProcedureChecksForLine(uid),
-        needsVoucherChecks ? ensureVoucherChecksLoaded(getClientId(), currentVoucherId) : Promise.resolve(null)
+        needsVoucherChecks ? ensureVoucherChecksLoaded(getClientId(), currentVoucherId) : Promise.resolve(null),
+        needsPhysicalBills ? fetchPhysicalBillsForLine(uid) : Promise.resolve([])
     ]);
     // Re-check the stale guard after these awaits, same reason as above.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
     const assignedDocIds = new Set(assignedRecords.map(r => r.document_id));
+    // This line's own amount, for the physical_bill amount-match check below — same lookup
+    // openProcedureModal() already uses (currentVoucherLines is populated by seedVoucherLineState()
+    // before renderVoucherLines()/this function can ever run).
+    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const voucherLine = lineIdx !== -1 ? currentVoucherLines[lineIdx] : null;
+    const voucherLineAmount = voucherLine ? parseVoucherAmount(getVoucherLineAmount(voucherLine.row_data || {})) : 0;
     // Mirrors isProcedureDocumentComplete()'s base-then-gate shape so this standalone badge never
     // disagrees with the modal tab's own completion dot for a flagged Document.
     const isDocDone = doc => {
         let base;
-        if (doc.template_id) {
+        // Physical Bill evidence type: checked BEFORE doc.template_id (always null for this doc
+        // type), same document_type-first branch order as isProcedureDocumentComplete() and the
+        // backend gate — a physical_bill Document must never fall into the generic no-template
+        // auth_roles check below, which is not its real completion signal.
+        if (doc.document_type === 'physical_bill') {
+            const bill = physicalBills.find(b => b.document_id === doc.id);
+            const fieldsComplete = !!(bill && (bill.bill_no || '').trim() && (bill.bill_date || '').trim()
+                && (bill.vendor_name || '').trim() && bill.amount !== '' && bill.amount != null && !isNaN(parseFloat(bill.amount)));
+            base = fieldsComplete && Math.abs(parseFloat(bill.amount) - voucherLineAmount) <= 0.005;
+        } else if (doc.template_id) {
             base = assignedDocIds.has(doc.id);
         } else {
             const roles = doc.auth_roles || [];
@@ -3265,14 +3299,9 @@ async function openProcedureModal(uid, initialDocId = null) {
 
     // Physical Bill evidence type, Phase 7 of 8: every saved Physical Bill entry for this line,
     // across all documents - same fail-soft-to-empty, re-fetched-fresh-on-every-open convention
-    // as assignedRecords/procedureChecks/observationEntries above.
-    let physicalBillEntries = [];
-    try {
-        const pbRes = await fetch(`${API_BASE}/api/verification/physical_bills/${uid}`);
-        if (pbRes.ok) physicalBillEntries = (await pbRes.json()).bills || [];
-    } catch (e) {
-        console.error('Failed to load physical bill entries:', e);
-    }
+    // as assignedRecords/procedureChecks/observationEntries above. Shared helper (see
+    // fetchPhysicalBillsForLine() above) since updateProceduresCellForLine() also needs this now.
+    const physicalBillEntries = await fetchPhysicalBillsForLine(uid);
 
     // Automated cross-document validation engine, Phase 9 of 10: this line's Cross-check
     // evaluation results (Phase 6/7's already-computed structure - zero new evaluation logic,
@@ -3789,13 +3818,24 @@ function isProcedureDocumentComplete(uid, doc) {
     // branch order (Phase 6), so a physical_bill Document never silently falls into the
     // no-template role-tick branch below, the same trap Phase 6 closed server-side. Reflects
     // SAVED state only (not an unsaved draft edit) - same "dot reflects committed truth"
-    // convention every other document type already follows. Deliberately does NOT replicate the
-    // backend's Amount-vs-voucher-line-amount check - that comparison is Phase 8's job.
+    // convention every other document type already follows. Also requires the saved bill's Amount
+    // to match this line's own amount (procedureModalState[uid].voucherLineAmount, already
+    // computed by openProcedureModal() before this function can be called), within the same
+    // epsilon the backend gate uses (CROSS_CHECK_FLOAT_EPSILON = 0.005, routers/verification.py's
+    // _physical_bill_satisfied()) — closes the gap the original Phase 7 comment deferred to
+    // "Phase 8", which turned out not to touch this indicator.
     if (doc.document_type === 'physical_bill') {
         const tabState = getProcedureTabState(uid, doc.id);
         const b = tabState.physicalBill;
-        baseComplete = tabState.physicalBillSaved && !!(b && b.bill_no && b.bill_date && b.vendor_name
+        const fieldsComplete = tabState.physicalBillSaved && !!(b && b.bill_no && b.bill_date && b.vendor_name
             && b.amount !== '' && b.amount != null && !isNaN(parseFloat(b.amount)));
+        if (fieldsComplete) {
+            const lineState = procedureModalState[uid];
+            const voucherLineAmount = (lineState && lineState.voucherLineAmount) || 0;
+            baseComplete = Math.abs(parseFloat(b.amount) - voucherLineAmount) <= 0.005;
+        } else {
+            baseComplete = false;
+        }
     } else if (doc.template_id) {
         const lineState = procedureModalState[uid];
         baseComplete = !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(doc.id));
