@@ -1819,6 +1819,7 @@ def get_audited_cashbook(session_id: int):
         SELECT vd.id, vd.client_data_id, vd.transaction_ref, vd.line_items, vd.procedure_data,
                vd.validation_status, vd.validation_message, vd.status as verification_status,
                vd.comments, vd.observations, vd.verified_by, vd.verified_at,
+               vd.cleared_status, vd.matrix_version_applied,
                cd.row_data, cd.extract_amount, cd.extract_date
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
@@ -1865,7 +1866,16 @@ def get_audited_cashbook(session_id: int):
             "validation_message": d['validation_message'],
             "verification_status": d['verification_status'],
             "verified_by": d['verified_by'],
-            "verified_at": d['verified_at']
+            "verified_at": d['verified_at'],
+            # Confirmed fix, 2026-08-09: previously never selected/returned here, so any line
+            # rendered via this list (hard-refresh restore-to-voucher, Prev navigation, the 🔍
+            # popover — all route through navigateToTransaction(), which renders directly from
+            # this endpoint's data) showed the Pending pill even for an already-Cleared line,
+            # since cleared_status was undefined rather than the persisted value. Mirrors
+            # _build_verification_line()'s own d.get('cleared_status')/d.get('matrix_version_applied')
+            # — same already-computed columns, no change to how cleared_status is computed.
+            "cleared_status": d['cleared_status'],
+            "matrix_version_applied": d['matrix_version_applied']
         }
         transactions.append(trans)
     
