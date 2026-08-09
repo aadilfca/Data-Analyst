@@ -2143,6 +2143,33 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_physical_bills_line ON voucher_line_physical_bills (voucher_line_id)")
         print("✅ Created voucher_line_physical_bills table (Physical Bill evidence, Phase 1 of 8)")
 
+        # Populate Physical Bill from GRN/ERP Vendor Bill (new, confirmed multi-phase
+        # requirement, Phase 1: schema). Adds quantity/rate (matching Amount, since a real
+        # bill's Amount is often Qty x Rate) plus traceability of which source row/template a
+        # given entry was populated from - source_document_row_id (the client_data.id of the
+        # GRN/ERP Vendor Bill row) and source_template (which template it came from). Both
+        # traceability columns are nullable and stay blank for a manually-entered bill (no
+        # source document available). No FOREIGN KEY on source_document_row_id, matching this
+        # table's own existing convention for document_id/voucher_line_id - this app never sets
+        # PRAGMA foreign_keys = ON, so referenced ids are validated in the router, not schema.
+        try:
+            cur = conn.execute("PRAGMA table_info(voucher_line_physical_bills)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'quantity' not in columns:
+                conn.execute("ALTER TABLE voucher_line_physical_bills ADD COLUMN quantity REAL")
+                print("✅ Added quantity column to voucher_line_physical_bills")
+            if 'rate' not in columns:
+                conn.execute("ALTER TABLE voucher_line_physical_bills ADD COLUMN rate REAL")
+                print("✅ Added rate column to voucher_line_physical_bills")
+            if 'source_document_row_id' not in columns:
+                conn.execute("ALTER TABLE voucher_line_physical_bills ADD COLUMN source_document_row_id INTEGER")
+                print("✅ Added source_document_row_id column to voucher_line_physical_bills")
+            if 'source_template' not in columns:
+                conn.execute("ALTER TABLE voucher_line_physical_bills ADD COLUMN source_template TEXT")
+                print("✅ Added source_template column to voucher_line_physical_bills")
+        except Exception as e:
+            print("⚠️ Could not add Qty/Rate/source columns to voucher_line_physical_bills:", e)
+
         # ---------- VOUCHER-LEVEL APPROVAL (Validation Rules, Phase 1 addendum) ----------
         # Prepared By / Checked By / Approved By as one independent, mandatory record per
         # real-world voucher - separate from (not replacing) the per-document approval_required
