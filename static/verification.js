@@ -3146,6 +3146,19 @@ async function saveLineItems(detailId = currentDetailId) {
                 cachedLine.cleared_status = data.cleared_status;
                 cachedLine.matrix_version_applied = data.matrix_version_applied;
             }
+            // sessionTransactions is a SEPARATE cache from currentVoucherLines — fetched once by
+            // loadTransactionList()/loadTransactionListPreservingPosition() at session start and
+            // otherwise never patched. isCurrentVoucherValidated() (the Next/Prev "Transaction Not
+            // Validated" gate) reads cleared_status from THIS array, not currentVoucherLines, so
+            // without this patch a voucher's live status change (e.g. from completing a line other
+            // than the one that happened to be active when the session was loaded) never reaches
+            // the value the Next/Prev check reads, even though the Status column (which reads
+            // currentVoucherLines/the rendered DOM) already shows the correct, current status.
+            const cachedTransaction = sessionTransactions.find(t => String(t.detail_id) === String(detailId));
+            if (cachedTransaction) {
+                cachedTransaction.cleared_status = data.cleared_status;
+                cachedTransaction.matrix_version_applied = data.matrix_version_applied;
+            }
             updateClearedStatusBadgeForLine(detailId, data.cleared_status);
         }
         // Success – no status bar message
