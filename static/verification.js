@@ -88,6 +88,10 @@ const popupPeriodEnd = document.getElementById('popupPeriodEnd');
 const dataLinksCardStrip = document.getElementById('dataLinksCardStrip');
 
 const statusDiv = document.getElementById('verificationStatus');
+// Transient toast (bottom-right overlay) for momentary positive feedback on an action itself -
+// distinct from statusDiv above, which is the persistent page-level status bar used for
+// everything else. See showVerifyToast() below.
+const voucherVerifyToast = document.getElementById('voucherVerifyToast');
 // Phase 2: standalone transaction view removed — prevBtn/nextBtn/verifyBtn/saveProgressBtn/exitBtn
 // elements no longer exist in verification.html (the nav controls are now in #voucherHeaderBar).
 // Their JS references and listener blocks have been removed alongside the old view.
@@ -138,6 +142,22 @@ function showStatus(msg, type = 'info') {
     window.statusTimeout = setTimeout(() => {
         if (statusDiv) statusDiv.style.display = 'none';
     }, 5000);
+}
+
+// Small auto-dismissing toast for momentary positive feedback on a single action (e.g. the
+// plain "Verify" button) - unlike showStatus() above, this doesn't write into the persistent
+// page-level status bar, since the VERIFIED count and each line's Cleared/Query badge already
+// cover the standing status. Kept on its own timer variable so it never clobbers/gets clobbered
+// by showStatus()'s window.statusTimeout.
+let voucherVerifyToastTimeout = null;
+function showVerifyToast(msg) {
+    if (!voucherVerifyToast) return;
+    voucherVerifyToast.textContent = msg;
+    voucherVerifyToast.classList.add('show');
+    clearTimeout(voucherVerifyToastTimeout);
+    voucherVerifyToastTimeout = setTimeout(() => {
+        voucherVerifyToast.classList.remove('show');
+    }, 2000);
 }
 
 function showPopupError(msg) {
@@ -4119,7 +4139,7 @@ async function verifyAndStay() {
     if (!data) return;
     // Already saved above — hide only, don't re-save via closeProcedureModal().
     hideProcedureModalOnly();
-    showStatus('Voucher checks verified.', 'success');
+    showVerifyToast('Voucher checks verified.');
     await updateProgressDisplay();
 }
 
