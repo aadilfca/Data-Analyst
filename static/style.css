@@ -3192,40 +3192,154 @@ body {
     color: #2563eb;
 }
 
-/* ----- Physical Bill entry (evidence type, Phase 7 of 8) -----
-   Field layout reuses .procedure-voucher-approval-field (label+input row) and
-   .procedure-search-input (input styling) as-is, both already generic enough for text/date/number
-   inputs — only the error/status/button pieces below are new. Own-block button, not shared with
-   .procedure-account-head-suggest-btn, per this file's established per-button convention. */
+/* ----- Physical Bill entry (evidence type, Phase 7 of 8; restyle: professional grouped layout,
+   confirmed fix) -----
+   Dedicated .procedure-bill-* input/field classes replace the earlier reuse of the generic
+   .procedure-voucher-approval-field/.procedure-search-input pair, so this form can be restyled
+   freely without affecting the Voucher Line/Account Head/search-box surfaces that still use those
+   shared classes elsewhere in this modal. Markup: renderPhysicalBillDocumentPanel() in
+   verification.js. */
+.procedure-bill-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.procedure-bill-toolbar {
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* Grouped sub-panels — "Bill Details" and "Quantity & Amount" each read as a distinct card rather
+   than one continuous form. */
+.procedure-bill-section {
+    background: #fafbfc;
+    border: 1px solid #e6e9ed;
+    border-radius: 10px;
+    padding: 14px 16px;
+}
+.procedure-bill-section-amounts {
+    background: #f8fafc;
+    border-color: #dbe3ec;
+}
+.procedure-bill-section-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+}
+
+.procedure-bill-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 16px;
+}
+.procedure-bill-grid-3 {
+    grid-template-columns: 1fr 1fr 1fr;
+}
+.procedure-bill-field-full {
+    grid-column: 1 / -1;
+}
+.procedure-bill-field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    margin-bottom: 4px;
+}
+.procedure-bill-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    font-size: 14px;
+    background: white;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+.procedure-bill-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+/* Amount is always auto-calculated (Quantity × Rate) — never manually typed, per the confirmed
+   restyle. Greyed to read clearly as computed/non-interactive at a glance. */
+.procedure-bill-input-computed,
+.procedure-bill-input[readonly] {
+    background: #eef1f4;
+    color: #475569;
+    cursor: not-allowed;
+}
 .procedure-bill-field-error {
     margin-top: 3px;
     font-size: 11px;
     color: #dc2626;
 }
 .procedure-bill-general-error {
-    margin-bottom: 10px;
     font-size: 12px;
     color: #dc2626;
 }
 
-/* ----- Copy from lines (Phase 3 amendment, iDempiere-style) -----
-   Single labeled button at the top of the Physical Bill form, replacing the earlier per-source-
-   row trigger design — same labeled-action-button treatment as
-   .procedure-account-head-suggest-btn/.procedure-observation-suggest-btn (a text label, not an
-   icon-only button like .procedure-unlink-btn), own block per this
-   file's per-button convention. The picker itself (#procedureBillCopyPicker,
-   togglePhysicalBillCopyPicker() in verification.js) reuses .procedure-search-dropdown/
-   .procedure-result-item as-is — no new CSS needed for its rows. */
-.procedure-bill-copy-row {
-    margin-bottom: 12px;
+.procedure-bill-amount-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
+.procedure-bill-amount-row .procedure-bill-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+/* Live Amount-match tick (confirmed fix) — a purely visual signal shown the instant the computed
+   Amount exactly matches the voucher line's own amount, toggled by updateAmountMatchTick() in
+   verification.js. Same green (#16a34a) used by .procedure-bill-save-status/.procedure-match-badge
+   for a "good" state elsewhere in this modal. */
+.procedure-amount-match-tick {
+    color: #16a34a;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Prominent Total Amount readout — a clearer, larger restatement of the same Amount value, sitting
+   below the field grid as the sub-section's own footer line. */
+.procedure-bill-total-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed #cbd5e1;
+}
+.procedure-bill-total-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+.procedure-bill-total-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1a1a2e;
+}
+
+/* ----- Copy from lines (Phase 3 amendment, iDempiere-style) -----
+   Small ghost/outline action at the top-right of the form. The picker itself
+   (#procedureBillCopyPicker, togglePhysicalBillCopyPicker() in verification.js) reuses
+   .procedure-search-dropdown/.procedure-result-item as-is — no new CSS needed for its rows. */
 .procedure-bill-copy-btn {
-    padding: 6px 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
     border: 1px solid #d0d5dd;
     border-radius: 6px;
     background: white;
     color: #64748b;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition: background 0.2s, border-color 0.2s, color 0.2s;
@@ -3240,69 +3354,57 @@ body {
     cursor: not-allowed;
 }
 
-.procedure-bill-save-btn {
-    padding: 6px 14px;
-    border: 1px solid #d0d5dd;
-    border-radius: 6px;
-    background: white;
-    color: #64748b;
-    font-size: 13px;
-    font-weight: 600;
+/* Full-width primary Save action, bottom of the form — a deliberate visual step up from the
+   ghost-style Copy button above, since this is the form's one committing action. */
+.procedure-bill-save-primary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 11px 16px;
+    border: none;
+    border-radius: 8px;
+    background: #2563eb;
+    color: white;
+    font-size: 14px;
+    font-weight: 700;
     cursor: pointer;
-    transition: background 0.2s, border-color 0.2s, color 0.2s;
+    transition: background 0.2s;
 }
-.procedure-bill-save-btn:hover:not(:disabled) {
-    background: #f1f5f9;
-    border-color: #94a3b8;
-    color: #1a1a2e;
+.procedure-bill-save-primary:hover:not(:disabled) {
+    background: #1d4ed8;
 }
-.procedure-bill-save-btn:disabled {
-    opacity: 0.5;
+.procedure-bill-save-primary:disabled {
+    opacity: 0.6;
     cursor: not-allowed;
 }
 .procedure-bill-save-status {
-    margin-left: 8px;
+    margin-top: 6px;
+    text-align: center;
     font-size: 12px;
     font-weight: 600;
     color: #16a34a;
-}
-
-/* Live Amount-match tick (confirmed fix) — a purely visual signal shown immediately left of the
-   Amount input the instant its typed value exactly matches the voucher line's own amount, toggled
-   by updateAmountMatchTick() in verification.js on every input/blur. Same green (#16a34a) already
-   used by .procedure-bill-save-status/.procedure-match-badge for a "good" state in this modal. */
-.procedure-bill-amount-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: center;
+    gap: 4px;
+    min-height: 16px;
 }
-/* .procedure-search-input's shared flex:1 (flex-basis:0%) is meant for the search-row context,
-   where the input is meant to stretch/shrink to fill whatever space is left beside a fixed-width
-   button. Here it had the opposite, unwanted effect — it silently shrank/grew the Amount input off
-   its natural intrinsic width, unlike Bill No/Date/Vendor (plain, non-flex boxes that always render
-   at their default intrinsic width). flex: 0 0 auto restores exactly that intrinsic-width sizing
-   for this one instance, so all four fields render identically wide again — the tick sits beside it
-   as a fixed-width sibling, taking no width from the input itself. */
-.procedure-bill-amount-row .procedure-search-input {
-    flex: 0 0 auto;
-}
-/* Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): Quantity/Rate are now always-
-   visible fields, and Amount becomes read-only/live-computed (Qty × Rate) whenever both are
-   valid numbers (see updatePhysicalBillAmount() in verification.js) — this visual cue makes a
-   computed Amount look distinct from a normal editable one at a glance. */
-.procedure-bill-amount-row .procedure-search-input[readonly] {
-    background: #f1f5f9;
-    color: #475569;
-    cursor: not-allowed;
-}
-.procedure-amount-match-tick {
-    color: #16a34a;
-    font-size: 16px;
-    font-weight: 700;
+
+/* Shared sizing/alignment for every inline SVG line-icon in this form (header, buttons, tick,
+   save status) — replaces the emoji this form previously used throughout. */
+.pb-icon {
+    display: inline-block;
+    vertical-align: middle;
     flex-shrink: 0;
-    /* Markup order is tick-then-input (unchanged) — order:1 moves it after the input visually,
-       to the right and outside the input's box, without touching verification.js. */
-    order: 1;
+}
+
+@media (max-width: 768px) {
+    .procedure-bill-grid,
+    .procedure-bill-grid-3 {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* ----- Supporting Documents: search box + results dropdown (Voucher Supporting-Document

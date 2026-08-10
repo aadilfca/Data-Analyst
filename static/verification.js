@@ -4931,6 +4931,15 @@ function renderProcedureModalPanel(uid, docId) {
 }
 
 // ---------- PHYSICAL BILL ENTRY (evidence type, Phase 7 of 8) ----------
+// Small line-style SVG icons (stroke=currentColor, no fill) used throughout this form in place of
+// emoji — purely decorative, sized/aligned via the shared .pb-icon wrapper class in style.css.
+const PB_ICON_RECEIPT = '<svg class="pb-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/></svg>';
+const PB_ICON_DETAILS = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>';
+const PB_ICON_CALC = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="14" x2="8.01" y2="14"/><line x1="12" y1="14" x2="12.01" y2="14"/><line x1="16" y1="14" x2="16" y2="18"/><line x1="8" y1="18" x2="8.01" y2="18"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>';
+const PB_ICON_COPY = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+const PB_ICON_SAVE = '<svg class="pb-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>';
+const PB_ICON_CHECK = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+
 // Client-side mirror of Phase 5's backend validation (save_physical_bill, routers/verification.py):
 // Bill No/Vendor name non-blank, Amount numeric, Date non-blank and a valid date. Fails soft — the
 // caller renders these as inline messages under each field, never a blocking alert(). Returns a
@@ -4970,17 +4979,28 @@ function updateAmountMatchTick(uid, rawValue) {
     tick.style.display = matches ? '' : 'none';
 }
 
-// Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): Quantity/Rate are always-
-// visible fields now (not just when populated via the trigger — confirmed with the user). Amount
-// becomes read-only and live-computed as Qty × Rate whenever both are currently valid non-blank
-// numbers; otherwise it reverts to a normal editable field, preserving today's pure-manual-entry
-// behavior when there's no source row to compute from. This is a live UI preview only — the
-// authoritative rounding (rate_precision) happens server-side in save_physical_bill(), same
-// convention as the rest of this app's client-side "computed" fields.
+// Formats a raw amount value for the prominent "Total Amount" readout at the bottom of the
+// Quantity/Rate/Amount sub-section — display only, never fed back into what gets saved.
+function formatBillTotalDisplay(value) {
+    const num = parseFloat(value);
+    if (isNaN(num)) return '—';
+    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4); restyle (confirmed fix): Amount
+// is now always a read-only, greyed field — never manually typed — live-computed as Qty × Rate
+// whenever both are currently valid non-blank numbers. When they aren't (a brand-new entry with
+// nothing typed yet, or a legacy bill saved before Quantity/Rate existed), the field simply keeps
+// showing whatever value is already there (blank, or the originally-saved Amount) rather than
+// becoming editable — there is no manual-entry path for Amount any more. This is a live UI preview
+// only — the authoritative rounding (rate_precision) happens server-side in save_physical_bill(),
+// same convention as the rest of this app's client-side "computed" fields. Also drives the
+// prominent Total Amount readout beneath the field grid, which always mirrors this same value.
 function updatePhysicalBillAmount(uid, docId) {
     const qtyEl = document.getElementById('procedureBillQuantityInput');
     const rateEl = document.getElementById('procedureBillRateInput');
     const amountEl = document.getElementById('procedureBillAmountInput');
+    const totalEl = document.getElementById('procedureBillTotalValue');
     if (!amountEl) return;
     const qtyStr = qtyEl ? qtyEl.value : '';
     const rateStr = rateEl ? rateEl.value : '';
@@ -4990,13 +5010,11 @@ function updatePhysicalBillAmount(uid, docId) {
     if (bothValid) {
         const computedStr = (qty * rate).toFixed(2);
         amountEl.value = computedStr;
-        amountEl.readOnly = true;
         const tabState = getProcedureTabState(uid, docId);
         if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
         tabState.physicalBill.amount = computedStr;
-    } else {
-        amountEl.readOnly = false;
     }
+    if (totalEl) totalEl.textContent = formatBillTotalDisplay(amountEl.value);
     updateAmountMatchTick(uid, amountEl.value);
 }
 
@@ -5008,64 +5026,75 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
     const errors = tabState.physicalBillErrors || {};
     const fieldError = (field) => errors[field] ? `<div class="procedure-bill-field-error">${escapeHtml(errors[field])}</div>` : '';
 
-    // Initial readonly state for the very first paint, before any input listener has run —
-    // avoids a flash of an editable Amount field on a tab that was pre-filled from a source row
-    // or reopened with a previously-saved quantity/rate pair.
-    const initialQtyValid = bill.quantity !== '' && bill.quantity != null && !isNaN(parseFloat(bill.quantity));
-    const initialRateValid = bill.rate !== '' && bill.rate != null && !isNaN(parseFloat(bill.rate));
-    const amountReadonly = initialQtyValid && initialRateValid;
-
     // Copy from lines (Phase 3 amendment): every GRN/Vendor Bill row already linked as evidence
     // elsewhere on this voucher line — button disabled with none, auto-fills directly with
     // exactly one (handled in the click listener below), opens a small picker for 2+.
     const eligibleSourceRows = getEligiblePhysicalBillSourceRows(uid);
+    const initialTotalDisplay = formatBillTotalDisplay(bill.amount);
 
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${doc.id}">
             <div class="procedure-segment procedure-segment-data">
-                <h4 class="procedure-segment-header">🧾 Physical Bill</h4>
+                <h4 class="procedure-segment-header">${PB_ICON_RECEIPT} Physical Bill</h4>
                 <div class="procedure-segment-body">
-                    <div class="procedure-bill-copy-row">
-                        <button type="button" id="procedureBillCopyBtn" class="procedure-bill-copy-btn" ${!eligibleSourceRows.length ? 'disabled' : ''} title="${!eligibleSourceRows.length ? 'No GRN or Vendor Bill evidence linked to this voucher line yet' : 'Copy Vendor/Qty/Rate from a linked GRN or Vendor Bill row'}">📋 Copy from lines</button>
-                    </div>
-                    <div id="procedureBillCopyPicker" class="procedure-search-dropdown" style="display:none;"></div>
-                    <div class="procedure-voucher-approval-field">
-                        <label for="procedureBillNoInput">Bill No</label>
-                        <input type="text" id="procedureBillNoInput" class="procedure-search-input" value="${escapeHtml(bill.bill_no)}">
-                        ${fieldError('bill_no')}
-                    </div>
-                    <div class="procedure-voucher-approval-field">
-                        <label for="procedureBillDateInput">Date</label>
-                        <input type="date" id="procedureBillDateInput" class="procedure-search-input" value="${escapeHtml(bill.bill_date)}">
-                        ${fieldError('bill_date')}
-                    </div>
-                    <div class="procedure-voucher-approval-field">
-                        <label for="procedureBillQuantityInput">Quantity</label>
-                        <input type="number" step="any" id="procedureBillQuantityInput" class="procedure-search-input" value="${escapeHtml(bill.quantity)}">
-                    </div>
-                    <div class="procedure-voucher-approval-field">
-                        <label for="procedureBillRateInput">Rate</label>
-                        <input type="number" step="any" id="procedureBillRateInput" class="procedure-search-input" value="${escapeHtml(bill.rate)}">
-                    </div>
-                    <div class="procedure-voucher-approval-field">
-                        <label for="procedureBillAmountInput">Amount</label>
-                        <div class="procedure-bill-amount-row">
-                            <span id="procedureBillAmountTick" class="procedure-amount-match-tick" style="display:none;" title="Matches voucher line amount">✓</span>
-                            <input type="number" step="any" id="procedureBillAmountInput" class="procedure-search-input" value="${escapeHtml(bill.amount)}" ${amountReadonly ? 'readonly' : ''}>
+                    <div class="procedure-bill-form">
+                        <div class="procedure-bill-toolbar">
+                            <button type="button" id="procedureBillCopyBtn" class="procedure-bill-copy-btn" ${!eligibleSourceRows.length ? 'disabled' : ''} title="${!eligibleSourceRows.length ? 'No GRN or Vendor Bill evidence linked to this voucher line yet' : 'Copy Vendor/Qty/Rate from a linked GRN or Vendor Bill row'}">${PB_ICON_COPY} Copy from lines</button>
                         </div>
-                        ${fieldError('amount')}
-                    </div>
-                    <div class="procedure-voucher-approval-field">
-                        <label for="procedureBillVendorInput">Vendor name</label>
-                        <input type="text" id="procedureBillVendorInput" class="procedure-search-input" value="${escapeHtml(bill.vendor_name)}">
-                        ${fieldError('vendor_name')}
-                    </div>
-                    ${errors._general ? `<div class="procedure-bill-general-error">${escapeHtml(errors._general)}</div>` : ''}
-                    <div>
-                        <button type="button" id="procedureBillSaveBtn" class="procedure-bill-save-btn" ${tabState.physicalBillSaving ? 'disabled' : ''}>
-                            ${tabState.physicalBillSaving ? 'Saving…' : (tabState.physicalBillSaved ? '💾 Update Bill' : '💾 Save Bill')}
+                        <div id="procedureBillCopyPicker" class="procedure-search-dropdown" style="display:none;"></div>
+
+                        <div class="procedure-bill-section">
+                            <div class="procedure-bill-section-title">${PB_ICON_DETAILS} Bill Details</div>
+                            <div class="procedure-bill-grid">
+                                <div class="procedure-bill-field">
+                                    <label for="procedureBillNoInput">Bill No</label>
+                                    <input type="text" id="procedureBillNoInput" class="procedure-bill-input" value="${escapeHtml(bill.bill_no)}">
+                                    ${fieldError('bill_no')}
+                                </div>
+                                <div class="procedure-bill-field">
+                                    <label for="procedureBillDateInput">Date</label>
+                                    <input type="date" id="procedureBillDateInput" class="procedure-bill-input" value="${escapeHtml(bill.bill_date)}">
+                                    ${fieldError('bill_date')}
+                                </div>
+                                <div class="procedure-bill-field procedure-bill-field-full">
+                                    <label for="procedureBillVendorInput">Vendor Name</label>
+                                    <input type="text" id="procedureBillVendorInput" class="procedure-bill-input" value="${escapeHtml(bill.vendor_name)}">
+                                    ${fieldError('vendor_name')}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="procedure-bill-section procedure-bill-section-amounts">
+                            <div class="procedure-bill-section-title">${PB_ICON_CALC} Quantity &amp; Amount</div>
+                            <div class="procedure-bill-grid procedure-bill-grid-3">
+                                <div class="procedure-bill-field">
+                                    <label for="procedureBillQuantityInput">Quantity</label>
+                                    <input type="number" step="any" id="procedureBillQuantityInput" class="procedure-bill-input" value="${escapeHtml(bill.quantity)}">
+                                </div>
+                                <div class="procedure-bill-field">
+                                    <label for="procedureBillRateInput">Rate</label>
+                                    <input type="number" step="any" id="procedureBillRateInput" class="procedure-bill-input" value="${escapeHtml(bill.rate)}">
+                                </div>
+                                <div class="procedure-bill-field">
+                                    <label for="procedureBillAmountInput">Amount</label>
+                                    <div class="procedure-bill-amount-row">
+                                        <input type="number" step="any" id="procedureBillAmountInput" class="procedure-bill-input procedure-bill-input-computed" value="${escapeHtml(bill.amount)}" readonly title="Auto-calculated as Quantity × Rate">
+                                        <span id="procedureBillAmountTick" class="procedure-amount-match-tick" style="display:none;" title="Matches voucher line amount">${PB_ICON_CHECK}</span>
+                                    </div>
+                                    ${fieldError('amount')}
+                                </div>
+                            </div>
+                            <div class="procedure-bill-total-row">
+                                <span class="procedure-bill-total-label">Total Amount</span>
+                                <span class="procedure-bill-total-value" id="procedureBillTotalValue">${initialTotalDisplay}</span>
+                            </div>
+                        </div>
+
+                        ${errors._general ? `<div class="procedure-bill-general-error">${escapeHtml(errors._general)}</div>` : ''}
+                        <button type="button" id="procedureBillSaveBtn" class="procedure-bill-save-primary" ${tabState.physicalBillSaving ? 'disabled' : ''}>
+                            ${tabState.physicalBillSaving ? 'Saving…' : `${PB_ICON_SAVE} ${tabState.physicalBillSaved ? 'Update Bill' : 'Save Bill'}`}
                         </button>
-                        <span class="procedure-bill-save-status">${(!tabState.physicalBillSaving && tabState.physicalBillSaved) ? '✓ Saved' : ''}</span>
+                        <div class="procedure-bill-save-status">${(!tabState.physicalBillSaving && tabState.physicalBillSaved) ? `${PB_ICON_CHECK} Saved` : ''}</div>
                     </div>
                 </div>
             </div>
@@ -5076,12 +5105,12 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
         </div>
     `;
 
+    // Amount is always read-only/computed now — only these 5 fields are ever user-typed.
     const fieldInputs = {
         bill_no: document.getElementById('procedureBillNoInput'),
         bill_date: document.getElementById('procedureBillDateInput'),
         quantity: document.getElementById('procedureBillQuantityInput'),
         rate: document.getElementById('procedureBillRateInput'),
-        amount: document.getElementById('procedureBillAmountInput'),
         vendor_name: document.getElementById('procedureBillVendorInput')
     };
     Object.keys(fieldInputs).forEach(field => {
@@ -5092,13 +5121,8 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                 tabState.physicalBill[field] = this.value;
                 if (field === 'quantity' || field === 'rate') {
                     updatePhysicalBillAmount(uid, doc.id);
-                } else if (field === 'amount') {
-                    updateAmountMatchTick(uid, this.value);
                 }
             });
-            if (field === 'amount') {
-                el.addEventListener('blur', function() { updateAmountMatchTick(uid, this.value); });
-            }
         }
     });
     updatePhysicalBillAmount(uid, doc.id);
