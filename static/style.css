@@ -3204,11 +3204,6 @@ body {
     flex-direction: column;
     gap: 14px;
 }
-.procedure-bill-toolbar {
-    display: flex;
-    justify-content: flex-end;
-}
-
 /* Grouped sub-panels — "Bill Details" and "Quantity & Amount" each read as a distinct card rather
    than one continuous form. */
 .procedure-bill-section {
@@ -3231,6 +3226,19 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 12px;
+}
+/* "Copy from lines" (confirmed fix: relocated out of the modal header) now sits in the same row
+   as the "Bill Details" section's own title, right-aligned — this wrapper carries the row's own
+   margin-bottom so the nested .procedure-bill-section-title doesn't double it up. */
+.procedure-bill-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.procedure-bill-section-header .procedure-bill-section-title {
+    margin-bottom: 0;
 }
 
 .procedure-bill-grid {
@@ -3398,6 +3406,115 @@ body {
     display: inline-block;
     vertical-align: middle;
     flex-shrink: 0;
+}
+
+/* ----- Quantity/Rate calculator triggers (confirmed fix) -----
+   Quantity and Rate are read-only fields that open the calculator popover on click — styled to
+   read as tappable, not disabled, which is why they override the generic
+   .procedure-bill-input[readonly] greyed-out treatment below. */
+.procedure-bill-calc-field {
+    position: relative;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+.procedure-bill-calc-field .procedure-bill-input.procedure-bill-calc-input[readonly] {
+    background: white;
+    color: #1a1a2e;
+    cursor: pointer;
+    padding-right: 30px;
+}
+.procedure-bill-calc-field:hover .procedure-bill-input.procedure-bill-calc-input[readonly] {
+    border-color: #94a3b8;
+}
+.procedure-bill-calc-icon {
+    position: absolute;
+    right: 9px;
+    color: #94a3b8;
+    display: inline-flex;
+    pointer-events: none;
+}
+
+/* ----- Calculator popover (confirmed fix) -----
+   Created/appended to <body> lazily by getPhysicalBillCalcPopover() in verification.js — same
+   dynamic-creation pattern as #lineStatusReasonPopover — since it must float above the modal and
+   outlive whichever tab panel happened to spawn it. */
+.pb-calc-popover {
+    position: fixed;
+    z-index: 1300;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+    width: 220px;
+    padding: 10px;
+}
+.pb-calc-display {
+    background: #1a1a2e;
+    color: white;
+    font-size: 20px;
+    font-weight: 700;
+    text-align: right;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+.pb-calc-pad {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.pb-calc-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+}
+.pb-calc-btn {
+    padding: 10px 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #f8fafc;
+    color: #1a1a2e;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.pb-calc-btn:hover {
+    background: #eef1f4;
+}
+.pb-calc-btn:active {
+    transform: scale(0.96);
+}
+.pb-calc-btn-op {
+    background: #eff6ff;
+    color: #2563eb;
+}
+.pb-calc-btn-op:hover {
+    background: #dbeafe;
+}
+.pb-calc-btn-fn {
+    background: #fef2f2;
+    color: #dc2626;
+}
+.pb-calc-btn-fn:hover {
+    background: #fee2e2;
+}
+.pb-calc-btn-equals {
+    background: #2563eb;
+    color: white;
+}
+.pb-calc-btn-equals:hover {
+    background: #1d4ed8;
+}
+.pb-calc-btn-done {
+    background: #16a34a;
+    color: white;
+}
+.pb-calc-btn-done:hover {
+    background: #15803d;
 }
 
 @media (max-width: 768px) {

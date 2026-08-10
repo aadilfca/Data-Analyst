@@ -5038,13 +5038,12 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                 <h4 class="procedure-segment-header">${PB_ICON_RECEIPT} Physical Bill</h4>
                 <div class="procedure-segment-body">
                     <div class="procedure-bill-form">
-                        <div class="procedure-bill-toolbar">
-                            <button type="button" id="procedureBillCopyBtn" class="procedure-bill-copy-btn" ${!eligibleSourceRows.length ? 'disabled' : ''} title="${!eligibleSourceRows.length ? 'No GRN or Vendor Bill evidence linked to this voucher line yet' : 'Copy Vendor/Qty/Rate from a linked GRN or Vendor Bill row'}">${PB_ICON_COPY} Copy from lines</button>
-                        </div>
-                        <div id="procedureBillCopyPicker" class="procedure-search-dropdown" style="display:none;"></div>
-
                         <div class="procedure-bill-section">
-                            <div class="procedure-bill-section-title">${PB_ICON_DETAILS} Bill Details</div>
+                            <div class="procedure-bill-section-header">
+                                <div class="procedure-bill-section-title">${PB_ICON_DETAILS} Bill Details</div>
+                                <button type="button" id="procedureBillCopyBtn" class="procedure-bill-copy-btn" ${!eligibleSourceRows.length ? 'disabled' : ''} title="${!eligibleSourceRows.length ? 'No GRN or Vendor Bill evidence linked to this voucher line yet' : 'Copy Vendor/Qty/Rate from a linked GRN or Vendor Bill row'}">${PB_ICON_COPY} Copy from lines</button>
+                            </div>
+                            <div id="procedureBillCopyPicker" class="procedure-search-dropdown" style="display:none;"></div>
                             <div class="procedure-bill-grid">
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillNoInput">Bill No</label>
@@ -5069,11 +5068,17 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                             <div class="procedure-bill-grid procedure-bill-grid-3">
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillQuantityInput">Quantity</label>
-                                    <input type="number" step="any" id="procedureBillQuantityInput" class="procedure-bill-input" value="${escapeHtml(bill.quantity)}">
+                                    <div class="procedure-bill-calc-field" data-calc-field="quantity">
+                                        <input type="text" inputmode="none" id="procedureBillQuantityInput" class="procedure-bill-input procedure-bill-calc-input" value="${escapeHtml(bill.quantity)}" readonly placeholder="0" title="Tap to open calculator">
+                                        <span class="procedure-bill-calc-icon">${PB_ICON_CALC}</span>
+                                    </div>
                                 </div>
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillRateInput">Rate</label>
-                                    <input type="number" step="any" id="procedureBillRateInput" class="procedure-bill-input" value="${escapeHtml(bill.rate)}">
+                                    <div class="procedure-bill-calc-field" data-calc-field="rate">
+                                        <input type="text" inputmode="none" id="procedureBillRateInput" class="procedure-bill-input procedure-bill-calc-input" value="${escapeHtml(bill.rate)}" readonly placeholder="0" title="Tap to open calculator">
+                                        <span class="procedure-bill-calc-icon">${PB_ICON_CALC}</span>
+                                    </div>
                                 </div>
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillAmountInput">Amount</label>
@@ -5105,12 +5110,11 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
         </div>
     `;
 
-    // Amount is always read-only/computed now — only these 5 fields are ever user-typed.
+    // Amount is always read-only/computed; Quantity/Rate are now read-only, tap-to-open calculator
+    // triggers (wired below) — only these 3 fields are ever directly typed into.
     const fieldInputs = {
         bill_no: document.getElementById('procedureBillNoInput'),
         bill_date: document.getElementById('procedureBillDateInput'),
-        quantity: document.getElementById('procedureBillQuantityInput'),
-        rate: document.getElementById('procedureBillRateInput'),
         vendor_name: document.getElementById('procedureBillVendorInput')
     };
     Object.keys(fieldInputs).forEach(field => {
@@ -5119,13 +5123,21 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
             el.addEventListener('input', function() {
                 if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
                 tabState.physicalBill[field] = this.value;
-                if (field === 'quantity' || field === 'rate') {
-                    updatePhysicalBillAmount(uid, doc.id);
-                }
             });
         }
     });
     updatePhysicalBillAmount(uid, doc.id);
+
+    // Quantity/Rate calculator triggers — clicking either field (or its icon) opens the shared
+    // calculator popover pre-seeded with that field's current value; "Done" writes the result back
+    // into the field/tabState and recalculates Amount (see openPhysicalBillCalculator()/
+    // pbCalcApplyDone() below).
+    container.querySelectorAll('.procedure-bill-calc-field').forEach(wrapper => {
+        wrapper.addEventListener('click', function() {
+            const field = this.dataset.calcField;
+            openPhysicalBillCalculator(uid, doc.id, field, this);
+        });
+    });
 
     const copyBtn = document.getElementById('procedureBillCopyBtn');
     if (copyBtn) {
@@ -5149,6 +5161,237 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
 
     wireProcedureChecklistAndObservation(container, uid, doc.id, tabState);
 }
+
+// ---------- QUANTITY/RATE CALCULATOR POPOVER (confirmed fix) ----------
+// Quantity and Rate are read-only, tap-to-open fields — this is the shared 4-function calculator
+// popover that opens on click. Single global instance (only one field's calculator can be open at
+// a time, mirroring togglePhysicalBillCopyPicker()'s one-at-a-time convention); pbCalcState holds
+// which uid/docId/field it's editing plus the standard accumulator/pendingOp/waitingForOperand
+// state every basic calculator app uses (operator applies to the running accumulator immediately,
+// not full order-of-operations — matches a physical desk calculator, not a scientific one).
+let pbCalcState = null;
+
+const PB_CALC_KEYPAD = [
+    ['C', '⌫', '%', '÷'],
+    ['7', '8', '9', '×'],
+    ['4', '5', '6', '-'],
+    ['1', '2', '3', '+'],
+    ['0', '.', '=', 'Done']
+];
+
+function pbCalcButtonClass(key) {
+    if (key === 'Done') return 'pb-calc-btn-done';
+    if (key === '=') return 'pb-calc-btn-equals';
+    if (key === 'C' || key === '⌫') return 'pb-calc-btn-fn';
+    if (key === '+' || key === '-' || key === '×' || key === '÷' || key === '%') return 'pb-calc-btn-op';
+    return 'pb-calc-btn-digit';
+}
+
+// Rounds to 12 significant digits to shed floating-point artifacts (e.g. 0.1+0.2) while still
+// allowing genuinely precise results, then renders as a plain string.
+function pbCalcFormat(num) {
+    if (num == null || isNaN(num) || !isFinite(num)) return 'Error';
+    return String(parseFloat(num.toPrecision(12)));
+}
+
+function pbCalcCompute(a, b, op) {
+    switch (op) {
+        case '+': return a + b;
+        case '-': return a - b;
+        case '×': return a * b;
+        case '÷': return b === 0 ? NaN : a / b;
+        default: return b;
+    }
+}
+
+function getPhysicalBillCalcPopover() {
+    let popover = document.getElementById('pbCalcPopover');
+    if (!popover) {
+        popover = document.createElement('div');
+        popover.id = 'pbCalcPopover';
+        popover.className = 'pb-calc-popover';
+        popover.style.display = 'none';
+        document.body.appendChild(popover);
+    }
+    return popover;
+}
+
+function closePhysicalBillCalculator() {
+    const popover = document.getElementById('pbCalcPopover');
+    if (popover) {
+        popover.style.display = 'none';
+        popover.innerHTML = '';
+    }
+    pbCalcState = null;
+}
+
+// Positions the popover near the tapped field, clamped to the viewport — same pattern as
+// showVoucherChangePopover()/showAuditGuidancePopover() elsewhere in this file.
+function positionPhysicalBillCalculator(anchorEl) {
+    const popover = getPhysicalBillCalcPopover();
+    const rect = anchorEl.getBoundingClientRect();
+    const popoverWidth = 220;
+    let left = rect.left;
+    if (left + popoverWidth > window.innerWidth) {
+        left = Math.max(8, window.innerWidth - popoverWidth - 8);
+    }
+    popover.style.left = left + 'px';
+
+    const popoverHeight = 300;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow >= popoverHeight + 6) {
+        popover.style.top = (rect.bottom + 6) + 'px';
+        popover.style.bottom = 'auto';
+    } else {
+        popover.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+        popover.style.top = 'auto';
+    }
+    popover.style.display = 'block';
+}
+
+function renderPhysicalBillCalculator() {
+    if (!pbCalcState) return;
+    const popover = getPhysicalBillCalcPopover();
+    const rows = PB_CALC_KEYPAD.map(row => `
+        <div class="pb-calc-row">
+            ${row.map(key => `<button type="button" class="pb-calc-btn ${pbCalcButtonClass(key)}" data-key="${escapeHtml(key)}">${escapeHtml(key)}</button>`).join('')}
+        </div>
+    `).join('');
+    popover.innerHTML = `
+        <div class="pb-calc-display">${escapeHtml(pbCalcState.display)}</div>
+        <div class="pb-calc-pad">${rows}</div>
+    `;
+    popover.querySelectorAll('.pb-calc-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            handlePbCalcKey(this.dataset.key);
+        });
+    });
+}
+
+// Opens (or, if the same field's popover is already open, closes) the calculator for `field`
+// ('quantity'/'rate') on doc `docId`'s Physical Bill tab — pre-seeds the display from the field's
+// current value so re-opening to make a small correction doesn't start from zero.
+function openPhysicalBillCalculator(uid, docId, field, triggerEl) {
+    if (pbCalcState && pbCalcState.triggerEl === triggerEl) {
+        closePhysicalBillCalculator();
+        return;
+    }
+    const tabState = getProcedureTabState(uid, docId);
+    const bill = tabState.physicalBill || {};
+    const currentVal = bill[field];
+    const startDisplay = (currentVal !== '' && currentVal != null && !isNaN(parseFloat(currentVal)))
+        ? pbCalcFormat(parseFloat(currentVal))
+        : '0';
+    pbCalcState = {
+        uid, docId, field, triggerEl,
+        display: startDisplay,
+        accumulator: null,
+        pendingOp: null,
+        // Waiting-for-operand means the next digit typed replaces (rather than appends to) the
+        // display — true here so tapping a digit after reopening starts a fresh number instead of
+        // appending onto the pre-filled value.
+        waitingForOperand: true
+    };
+    renderPhysicalBillCalculator();
+    positionPhysicalBillCalculator(triggerEl);
+}
+
+function handlePbCalcKey(key) {
+    if (!pbCalcState) return;
+    if (key === 'Done') {
+        pbCalcApplyDone();
+        return;
+    }
+    if (key === 'C') {
+        pbCalcState.display = '0';
+        pbCalcState.accumulator = null;
+        pbCalcState.pendingOp = null;
+        pbCalcState.waitingForOperand = false;
+        renderPhysicalBillCalculator();
+        return;
+    }
+    if (key === '⌫') {
+        if (!pbCalcState.waitingForOperand) {
+            pbCalcState.display = pbCalcState.display.length > 1 ? pbCalcState.display.slice(0, -1) : '0';
+        }
+        renderPhysicalBillCalculator();
+        return;
+    }
+    if (key === '.') {
+        if (pbCalcState.waitingForOperand) {
+            pbCalcState.display = '0.';
+            pbCalcState.waitingForOperand = false;
+        } else if (pbCalcState.display.indexOf('.') === -1) {
+            pbCalcState.display += '.';
+        }
+        renderPhysicalBillCalculator();
+        return;
+    }
+    if (key === '%') {
+        const val = parseFloat(pbCalcState.display) || 0;
+        pbCalcState.display = pbCalcFormat(val / 100);
+        pbCalcState.waitingForOperand = true;
+        renderPhysicalBillCalculator();
+        return;
+    }
+    if (key === '+' || key === '-' || key === '×' || key === '÷' || key === '=') {
+        // Pressing an operator right after another operator (no new digit typed yet) just swaps
+        // which operator is pending, rather than computing against an unchanged operand twice.
+        if (pbCalcState.pendingOp && pbCalcState.waitingForOperand) {
+            pbCalcState.pendingOp = key === '=' ? null : key;
+            renderPhysicalBillCalculator();
+            return;
+        }
+        const inputValue = parseFloat(pbCalcState.display) || 0;
+        if (pbCalcState.accumulator === null) {
+            pbCalcState.accumulator = inputValue;
+        } else if (pbCalcState.pendingOp) {
+            pbCalcState.accumulator = pbCalcCompute(pbCalcState.accumulator, inputValue, pbCalcState.pendingOp);
+        }
+        pbCalcState.display = pbCalcFormat(pbCalcState.accumulator);
+        pbCalcState.pendingOp = key === '=' ? null : key;
+        pbCalcState.waitingForOperand = true;
+        renderPhysicalBillCalculator();
+        return;
+    }
+    // A digit 0-9.
+    if (pbCalcState.waitingForOperand) {
+        pbCalcState.display = key;
+        pbCalcState.waitingForOperand = false;
+    } else {
+        pbCalcState.display = pbCalcState.display === '0' ? key : pbCalcState.display + key;
+    }
+    renderPhysicalBillCalculator();
+}
+
+// "Done" — commits the calculator's current display into the target field (both the visible input
+// and tabState.physicalBill), closes the popover, then recalculates Amount exactly as if the value
+// had been typed directly (updatePhysicalBillAmount() is unchanged, still Qty × Rate).
+function pbCalcApplyDone() {
+    if (!pbCalcState) return;
+    const { uid, docId, field, triggerEl } = pbCalcState;
+    const finalValue = parseFloat(pbCalcState.display);
+    const valueStr = isNaN(finalValue) ? '' : pbCalcFormat(finalValue);
+    const tabState = getProcedureTabState(uid, docId);
+    if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
+    tabState.physicalBill[field] = valueStr;
+    if (triggerEl) triggerEl.value = valueStr;
+    closePhysicalBillCalculator();
+    updatePhysicalBillAmount(uid, docId);
+}
+
+// Close on any click outside the popover and outside the field that opened it (that field's own
+// click handler already handles the "click again to close" toggle case — see
+// openPhysicalBillCalculator() above).
+document.addEventListener('click', function(e) {
+    if (!pbCalcState) return;
+    const popover = document.getElementById('pbCalcPopover');
+    if (!popover || popover.style.display !== 'block') return;
+    if (popover.contains(e.target)) return;
+    if (pbCalcState.triggerEl && pbCalcState.triggerEl.contains(e.target)) return;
+    closePhysicalBillCalculator();
+});
 
 // Saves one Physical Bill entry (POST save_physical_bill, upsert). Validates client-side first —
 // on a validation failure, sets physicalBillErrors and re-renders with inline messages, no network
