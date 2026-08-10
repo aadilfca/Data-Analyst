@@ -4987,6 +4987,18 @@ function formatBillTotalDisplay(value) {
     return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Strips a Quantity/Rate input's typed value down to digits and at most one decimal point (confirmed
+// fix) — used on every 'input' event so pasted/typed letters and symbols never survive, and a second
+// '.' collapses away rather than producing an unparseable string like "1.2.3".
+function pbSanitizeNumericInput(str) {
+    let cleaned = str.replace(/[^0-9.]/g, '');
+    const firstDot = cleaned.indexOf('.');
+    if (firstDot !== -1) {
+        cleaned = cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, '');
+    }
+    return cleaned;
+}
+
 // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4); restyle (confirmed fix): Amount
 // is now always a read-only, greyed field — never manually typed — live-computed as Qty × Rate
 // whenever both are currently valid non-blank numbers. When they aren't (a brand-new entry with
@@ -5133,26 +5145,52 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
     };
     Object.keys(calcFieldInputs).forEach(field => {
         const el = calcFieldInputs[field];
-        if (el) {
-            el.addEventListener('input', function() {
-                if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
-                tabState.physicalBill[field] = this.value;
-                updatePhysicalBillAmount(uid, doc.id);
-            });
-        }
+        if (!el) return;
+        // Manual typing is restricted to digits and a single decimal point — strip anything else
+        // (letters, symbols, a second '.') on every input, including paste, not just keystrokes.
+        el.addEventListener('input', function() {
+            const cleaned = pbSanitizeNumericInput(this.value);
+            if (cleaned !== this.value) this.value = cleaned;
+            if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
+            tabState.physicalBill[field] = cleaned;
+            updatePhysicalBillAmount(uid, doc.id);
+        });
     });
+    // Enter-key flow: Quantity's Enter confirms the value and moves focus to Rate (the next field
+    // in this group); Rate's Enter confirms the value, recalculates Amount, and blurs entirely (no
+    // destination field) since Rate is the last field. Amount is already kept in sync live by the
+    // 'input' listener above — the explicit updatePhysicalBillAmount() call here just guarantees a
+    // correct recalculation even for an Enter press with no preceding value change.
+    if (calcFieldInputs.quantity) {
+        calcFieldInputs.quantity.addEventListener('keydown', function(e) {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            updatePhysicalBillAmount(uid, doc.id);
+            if (calcFieldInputs.rate) calcFieldInputs.rate.focus();
+        });
+    }
+    if (calcFieldInputs.rate) {
+        calcFieldInputs.rate.addEventListener('keydown', function(e) {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            updatePhysicalBillAmount(uid, doc.id);
+            this.blur();
+        });
+    }
     updatePhysicalBillAmount(uid, doc.id);
 
-    // Quantity/Rate calculator triggers — clicking either field (or its icon) opens the shared
-    // calculator popover pre-seeded with that field's current value; "Done" writes the result back
-    // into the field/tabState and recalculates Amount (see openPhysicalBillCalculator()/
-    // pbCalcApplyDone() below). triggerEl is the actual <input> (not the wrapper div) so Done's
-    // `triggerEl.value = ...` visibly updates the field, and so a click landing on/near the input
-    // also gives it focus for direct typing at the same time the popover opens.
-    container.querySelectorAll('.procedure-bill-calc-field').forEach(wrapper => {
-        wrapper.addEventListener('click', function() {
-            const field = this.dataset.calcField;
-            const input = this.querySelector('input');
+    // Quantity/Rate calculator trigger — opens only via the small calculator icon next to the field
+    // (confirmed fix), never by clicking the field itself, since the field is a normal typable input.
+    // "Done" writes the result back into the field/tabState and recalculates Amount (see
+    // openPhysicalBillCalculator()/pbCalcApplyDone() below). triggerEl is the actual <input> (not the
+    // wrapper div) so Done's `triggerEl.value = ...` visibly updates the field.
+    container.querySelectorAll('.procedure-bill-calc-icon').forEach(icon => {
+        icon.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const wrapper = this.closest('.procedure-bill-calc-field');
+            if (!wrapper) return;
+            const field = wrapper.dataset.calcField;
+            const input = wrapper.querySelector('input');
             openPhysicalBillCalculator(uid, doc.id, field, input);
         });
     });

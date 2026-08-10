@@ -3409,15 +3409,14 @@ body {
 }
 
 /* ----- Quantity/Rate calculator triggers (confirmed fix) -----
-   Quantity and Rate are normal editable inputs (not readonly) — a click anywhere in the field opens
-   the calculator popover as a convenience AND focuses the input for direct typing at the same time;
-   both entry routes write the same field/tabState value. padding-right leaves room for the overlaid
-   calculator icon so typed text never runs under it. */
+   Quantity and Rate are normal editable inputs — typing directly is the primary route; the small
+   calculator icon is a separate, explicit click target (only it opens the popover, per the confirmed
+   fix — clicking elsewhere in the field just places a text cursor like any other input). padding-
+   right on the input leaves room for the overlaid icon so typed text never runs under it. */
 .procedure-bill-calc-field {
     position: relative;
     display: flex;
     align-items: center;
-    cursor: pointer;
 }
 .procedure-bill-calc-field .procedure-bill-calc-input {
     padding-right: 30px;
@@ -3427,7 +3426,14 @@ body {
     right: 9px;
     color: #94a3b8;
     display: inline-flex;
-    pointer-events: none;
+    cursor: pointer;
+    border-radius: 4px;
+    padding: 2px;
+    transition: color 0.15s, background 0.15s;
+}
+.procedure-bill-calc-icon:hover {
+    color: #2563eb;
+    background: #eff6ff;
 }
 
 /* ----- Calculator popover (confirmed fix) -----
