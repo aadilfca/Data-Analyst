@@ -190,6 +190,11 @@ function initDateRangePicker(container, onChange) {
     let rangeEnd = null;   // Date or null
     let hoverDate = null;  // Date or null — only meaningful while rangeStart set & rangeEnd null
     let isOpen = false;
+    // {date, el} pairs for the currently-rendered month's real day cells (never the blank leading
+    // cells) — repopulated on every renderCalendar() rebuild, read by updateDayHighlights() so a
+    // hover/click state change can restyle the existing cells without recreating them (see the
+    // confirmed-fix note on renderCalendar() below).
+    let dayCellElements = [];
 
     function parseYmd(s) {
         if (!s) return null;
@@ -232,8 +237,44 @@ function initDateRangePicker(container, onChange) {
         return day >= rangeStart && day <= rangeEnd;
     }
 
+    // Confirmed fix: restyles the already-rendered day cells in place (classList only, no
+    // innerHTML/createElement) instead of the full renderCalendar() rebuild every hover/click
+    // used to trigger. That rebuild was destroying and recreating the very cell the user was
+    // mid-hover/mid-click on, which is what made the second click of a range (and a click right
+    // after navigating to a different month, since month-nav also rebuilds) unreliable. Only
+    // genuine structural changes (which dates exist at all) still go through renderCalendar().
+    function updateDayHighlights() {
+        dayCellElements.forEach(function(entry) {
+            const cell = entry.el;
+            const day = entry.date;
+            cell.classList.remove('drp-day-endpoint', 'drp-day-in-range');
+            if (sameDay(day, rangeStart) || sameDay(day, rangeEnd)) {
+                cell.classList.add('drp-day-endpoint');
+            } else if (inCommittedRange(day) || inPreviewRange(day)) {
+                cell.classList.add('drp-day-in-range');
+            }
+        });
+    }
+
+    // Confirmed fix (viewport clipping): flips the dropdown to open upward when there isn't
+    // enough room below the trigger — measured fresh against the current window size, same
+    // "measure the anchor against window.innerWidth/innerHeight at open time" approach this app's
+    // own .nav-menu-panel (positionNavPanel() in client_context.js) already uses. Called from the
+    // end of renderCalendar() (guarded on isOpen) rather than only once at open, since a month
+    // navigation can change the grid from 4 rows to 6 rows and change whether it still fits below.
+    function positionCalendar() {
+        const anchorRect = container.getBoundingClientRect();
+        const calendarHeight = calendar.offsetHeight;
+        const margin = 4; // matches .drp-calendar's own margin-top/-bottom
+        const spaceBelow = window.innerHeight - anchorRect.bottom;
+        const spaceAbove = anchorRect.top;
+        const flipUp = spaceBelow < (calendarHeight + margin) && spaceAbove > spaceBelow;
+        calendar.classList.toggle('drp-calendar-flip-up', flipUp);
+    }
+
     function renderCalendar() {
         calendar.innerHTML = '';
+        dayCellElements = [];
 
         const header = document.createElement('div');
         header.className = 'drp-header';
@@ -277,7 +318,7 @@ function initDateRangePicker(container, onChange) {
         daysGrid.addEventListener('mouseleave', function() {
             if (rangeStart && !rangeEnd && hoverDate) {
                 hoverDate = null;
-                renderCalendar();
+                updateDayHighlights();
             }
         });
         const year = visibleMonth.getFullYear();
@@ -294,6 +335,7 @@ function initDateRangePicker(container, onChange) {
             const cell = document.createElement('span');
             cell.textContent = String(d);
             cell.className = 'drp-day';
+            dayCellElements.push({ date: dayDate, el: cell });
             if (sameDay(dayDate, rangeStart) || sameDay(dayDate, rangeEnd)) {
                 cell.classList.add('drp-day-endpoint');
             } else if (inCommittedRange(dayDate) || inPreviewRange(dayDate)) {
@@ -306,12 +348,14 @@ function initDateRangePicker(container, onChange) {
             cell.addEventListener('mouseenter', function() {
                 if (rangeStart && !rangeEnd) {
                     hoverDate = dayDate;
-                    renderCalendar();
+                    updateDayHighlights();
                 }
             });
             daysGrid.appendChild(cell);
         }
         calendar.appendChild(daysGrid);
+        updateDayHighlights();
+        if (isOpen) positionCalendar();
     }
 
     function handleDayClick(day) {
@@ -320,7 +364,7 @@ function initDateRangePicker(container, onChange) {
             rangeEnd = null;
             hoverDate = null;
             renderTrigger();
-            renderCalendar();
+            updateDayHighlights();
         } else {
             if (day < rangeStart) {
                 rangeEnd = rangeStart;
@@ -330,6 +374,7 @@ function initDateRangePicker(container, onChange) {
             }
             hoverDate = null;
             renderTrigger();
+            updateDayHighlights();
             const committedStart = rangeStart;
             const committedEnd = rangeEnd;
             closeCalendar();

@@ -5517,6 +5517,16 @@ body {
     width: 240px;
 }
 
+/* Viewport-clipping fix: applied by positionCalendar() (static/verification.js) when there isn't
+   enough room below the trigger to open downward - flips the dropdown to open upward instead,
+   using the same 4px gap the default below-placement already uses. */
+.drp-calendar.drp-calendar-flip-up {
+    top: auto;
+    bottom: 100%;
+    margin-top: 0;
+    margin-bottom: 4px;
+}
+
 .drp-header {
     display: flex;
     justify-content: space-between;
