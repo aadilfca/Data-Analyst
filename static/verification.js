@@ -2913,14 +2913,14 @@ function showNavigationConfirm() {
 // Phase B: Prev/Next now move by whole voucher, so "has the current work been validated"
 // must consider every line of the current voucher, not just one arbitrary line — reuses the
 // same per-voucher aggregation computeVoucherStats() already does.
+// Source of truth is cleared_status (compute_and_persist_cleared_status(), Validation Rules
+// module) — the same field the Status column's Cleared/Query badge reads — not the older
+// validation_status (passed/verified), which predates that module and can disagree with it.
 function isCurrentVoucherValidated() {
     if (!sessionTransactions.length || !currentVoucherId) return false;
     const voucherLines = sessionTransactions.filter(t => t.voucher_id === currentVoucherId);
     if (!voucherLines.length) return false;
-    return voucherLines.every(t => {
-        const status = (t.validation_status || '').toLowerCase();
-        return status === 'passed' || status === 'verified';
-    });
+    return voucherLines.every(t => t.cleared_status === 'Cleared');
 }
 
 // Phase B: 1-based position of currentVoucherId among sessionTransactions' distinct voucher_ids,
