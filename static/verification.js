@@ -3973,43 +3973,50 @@ async function closeProcedureModal() {
 // on modal open and after every voucher-check toggle (renderVoucherChecksBar()).
 function updateVerifyFooterButton(uid) {
     const btn = document.getElementById('procedureModalVerifyBtn');
-    if (!btn) return;
+    const verifyOnlyBtn = document.getElementById('procedureModalVerifyOnlyBtn');
+    if (!btn && !verifyOnlyBtn) return;
     const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
     const hasNextLine = lineIdx !== -1 && findNextUnverifiedLineIndex(lineIdx) !== -1;
     const pos = getVoucherPosition();
     const isLastVoucher = !(pos.total > 0 && pos.index < pos.total);
-    if (hasNextLine) {
-        btn.textContent = '✅ Verify & Next Line';
-    } else {
-        btn.textContent = isLastVoucher ? '✅ Verify & Close' : '✅ Verify & Next';
+    if (btn) {
+        if (hasNextLine) {
+            btn.textContent = '✅ Verify & Next Line';
+        } else {
+            btn.textContent = isLastVoucher ? '✅ Verify & Close' : '✅ Verify & Next';
+        }
     }
+    // Both buttons hit the same backend precondition (verify_voucher_checks 400s if any active
+    // check is untouched), so they share this one gate — the plain "Verify" button's label never
+    // changes, unlike Verify & Next's three-state wording, since it never describes "what's next".
     const checks = voucherChecksCache[currentVoucherId] || [];
     const allTouched = isVoucherChecksAllTouched(checks);
-    btn.disabled = !allTouched;
-    btn.title = allTouched ? '' : 'Mark every check before verifying';
+    const title = allTouched ? '' : 'Mark every check before verifying';
+    if (btn) {
+        btn.disabled = !allTouched;
+        btn.title = title;
+    }
+    if (verifyOnlyBtn) {
+        verifyOnlyBtn.disabled = !allTouched;
+        verifyOnlyBtn.title = title;
+    }
 }
 
-// Click handler for the footer's "Verify & Next/Close" button. Saves the current line and verifies
-// this voucher's checks (server-side pushes any not-done check into Observations), then steps
-// line-first: if an unverified line remains below the current one in the same voucher, the modal
-// stays open and moves there; only once none remains does it leave for the next voucher (or close,
-// on the last one). The confirmed fix supersedes the button's original voucher-only granularity,
-// which forced the auditor to close the modal and re-enter from the table for every line.
-//
-// verify_voucher_checks is POSTed on every press, including the in-voucher steps: it's
-// voucher-scoped (client_id + transaction_ref) and idempotent — it recomputes
-// flagged_in_observations fresh each call rather than appending — so re-calling it keeps the
-// voucher's Observations in sync with the live check state and keeps the backend's own 400
-// safety net applying to every press. Its next-voucher payload is simply left unread while
-// stepping within the voucher.
-async function verifyAndAdvanceVoucher() {
-    const uid = currentProcedureModalUid;
-    if (!uid) return;
+// Shared save+verify call used by both footer verify buttons (Verify & Next/Close and the plain
+// Verify). Saves the current line (existing chokepoint — flushes observations/account-head note)
+// then POSTs verify_voucher_checks, which is voucher-scoped (client_id + transaction_ref) and
+// idempotent — it recomputes flagged_in_observations fresh each call rather than appending, so
+// re-calling it keeps the voucher's Observations in sync with the live check state. Returns the
+// parsed response body on success, or null on failure (after showing the error status itself) —
+// callers that don't need the next-voucher payload (e.g. the plain Verify button) simply leave it
+// unread. Disables/re-enables BOTH verify-type buttons around the request, not just the one
+// clicked, so a click on the other button can't double-submit while this one is in flight.
+async function performVerifyVoucherChecks(uid) {
     const btn = document.getElementById('procedureModalVerifyBtn');
-    if (btn && btn.disabled) return;
+    const verifyOnlyBtn = document.getElementById('procedureModalVerifyOnlyBtn');
     if (btn) btn.disabled = true;
+    if (verifyOnlyBtn) verifyOnlyBtn.disabled = true;
     try {
-        // Existing chokepoint — flushes observations/account-head note before verifying.
         await saveLineItems(uid);
         const res = await fetch(`${API_BASE}/api/verification/verify_voucher_checks`, {
             method: 'POST',
@@ -4019,40 +4026,78 @@ async function verifyAndAdvanceVoucher() {
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             showStatus(err.detail || 'Could not verify voucher-level checks — please try again.', 'error');
-            if (btn) btn.disabled = false;
-            return;
+            return null;
         }
-        const data = await res.json();
-
-        // Line-first stepping: saveLineItems() above already refreshed this line's cleared_status
-        // in currentVoucherLines, so the search below sees this press's own result, not a stale one.
-        // String()-normalized lookup for the same reason openProcedureModal() does it — uid can be
-        // a string from a table click while detail_id is a number from JSON.
-        const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
-        const nextLineIdx = lineIdx === -1 ? -1 : findNextUnverifiedLineIndex(lineIdx);
-        if (nextLineIdx !== -1) {
-            // Stay in the voucher: keep the modal open and re-run the full fetch/render pipeline
-            // for the target line, same as navigateProcedureModalLine() does (which re-saves; we
-            // already saved above, so openProcedureModal() is called directly instead).
-            await openProcedureModal(currentVoucherLines[nextLineIdx].detail_id);
-            await updateProgressDisplay();
-            return;
-        }
-
-        // No unverified line left below this one — leave the voucher, unchanged behaviour.
-        // Already saved above — hide only, don't re-save via closeProcedureModal().
-        hideProcedureModalOnly();
-        if (data.boundary) {
-            showStatus('Voucher verified. No more vouchers in this session.', 'success');
-        } else {
-            applyVoucherNavRenderData(data);
-        }
-        await updateProgressDisplay();
+        return await res.json();
     } catch (e) {
         console.error('Error verifying voucher checks:', e);
         showStatus('Could not verify voucher-level checks — please try again.', 'error');
-        if (btn) btn.disabled = false;
+        return null;
+    } finally {
+        // Restores each button to its real gate-driven state (isVoucherChecksAllTouched()) rather
+        // than blindly re-enabling — updateVerifyFooterButton() is the single source of truth for
+        // both buttons' disabled state, called by every caller of this helper right after.
+        updateVerifyFooterButton(uid);
     }
+}
+
+// Click handler for the footer's "Verify & Next/Close" button. Verifies this voucher's checks via
+// the shared helper above, then steps line-first: if an unverified line remains below the current
+// one in the same voucher, the modal stays open and moves there; only once none remains does it
+// leave for the next voucher (or close, on the last one). The confirmed fix supersedes the
+// button's original voucher-only granularity, which forced the auditor to close the modal and
+// re-enter from the table for every line.
+async function verifyAndAdvanceVoucher() {
+    const uid = currentProcedureModalUid;
+    if (!uid) return;
+    const btn = document.getElementById('procedureModalVerifyBtn');
+    if (btn && btn.disabled) return;
+    const data = await performVerifyVoucherChecks(uid);
+    if (!data) return;
+
+    // Line-first stepping: saveLineItems() inside the helper above already refreshed this line's
+    // cleared_status in currentVoucherLines, so the search below sees this press's own result, not
+    // a stale one. String()-normalized lookup for the same reason openProcedureModal() does it —
+    // uid can be a string from a table click while detail_id is a number from JSON.
+    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const nextLineIdx = lineIdx === -1 ? -1 : findNextUnverifiedLineIndex(lineIdx);
+    if (nextLineIdx !== -1) {
+        // Stay in the voucher: keep the modal open and re-run the full fetch/render pipeline
+        // for the target line, same as navigateProcedureModalLine() does (which re-saves; we
+        // already saved above, so openProcedureModal() is called directly instead).
+        await openProcedureModal(currentVoucherLines[nextLineIdx].detail_id);
+        await updateProgressDisplay();
+        return;
+    }
+
+    // No unverified line left below this one — leave the voucher, unchanged behaviour.
+    // Already saved above — hide only, don't re-save via closeProcedureModal().
+    hideProcedureModalOnly();
+    if (data.boundary) {
+        showStatus('Voucher verified. No more vouchers in this session.', 'success');
+    } else {
+        applyVoucherNavRenderData(data);
+    }
+    await updateProgressDisplay();
+}
+
+// Click handler for the plain footer "Verify" button (confirmed requirement): performs the exact
+// same save+verify action as Verify & Next above, via the same shared helper, but never advances —
+// it always just closes the modal back onto the grid at the current voucher, regardless of how
+// many lines the voucher has or whether more remain unverified. The current line's Cleared/Query
+// badge is already live in the grid by the time this returns (saveLineItems(), inside the helper,
+// already refreshes it), so there is nothing further to re-render here.
+async function verifyAndStay() {
+    const uid = currentProcedureModalUid;
+    if (!uid) return;
+    const verifyOnlyBtn = document.getElementById('procedureModalVerifyOnlyBtn');
+    if (verifyOnlyBtn && verifyOnlyBtn.disabled) return;
+    const data = await performVerifyVoucherChecks(uid);
+    if (!data) return;
+    // Already saved above — hide only, don't re-save via closeProcedureModal().
+    hideProcedureModalOnly();
+    showStatus('Voucher checks verified.', 'success');
+    await updateProgressDisplay();
 }
 
 // Shared "are all currently-active voucher-level checks marked done" check — used by any real
@@ -6601,6 +6646,9 @@ if (procedureModal) {
 }
 document.getElementById('procedureModalBackBtn')?.addEventListener('click', function() {
     navigateProcedureModalLine(-1);
+});
+document.getElementById('procedureModalVerifyOnlyBtn')?.addEventListener('click', function() {
+    verifyAndStay();
 });
 document.getElementById('procedureModalVerifyBtn')?.addEventListener('click', function() {
     verifyAndAdvanceVoucher();

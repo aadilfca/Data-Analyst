@@ -875,6 +875,12 @@
                     <span id="procedureModalSavedNote" class="procedure-modal-saved-note"></span>
                     <div class="procedure-modal-footnav">
                         <button type="button" id="procedureModalBackBtn" class="btn-ghost">← Back</button>
+                        <!-- Plain "Verify" (confirmed requirement): same save+verify action as Verify & Next
+                             below, but never auto-advances — always closes back onto the grid at the current
+                             voucher. Shares the same disabled/title gate as Verify & Next
+                             (updateVerifyFooterButton() in verification.js), since both hit the same backend
+                             precondition. -->
+                        <button type="button" id="procedureModalVerifyOnlyBtn" class="btn-ghost">✅ Verify</button>
                         <!-- Voucher-level Checks simplified to name-only (Phase 3 of 4): replaces the old
                              per-line "Next →" nav. Label/disabled state are fully JS-driven
                              (updateVerifyFooterButton() in verification.js) — see that function for why. -->
