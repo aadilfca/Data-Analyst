@@ -3417,31 +3417,6 @@ body {
     white-space: nowrap;
 }
 
-/* ----- Inactive-document handling: locked/dimmed tab + read-only panel banner + checklist rows
-   for a Document deactivated after evidence/checks/observations were already recorded against
-   it (static/verification.js's __inactive tab/renderInactiveDocumentPanel()). Reuses the same
-   amber "locked" color tokens as .procedure-result-locked above rather than introducing a new
-   palette. ----- */
-.procedure-tab-btn.procedure-tab-locked {
-    opacity: 0.6;
-}
-.procedure-tab-btn.procedure-tab-locked .procedure-tab-sub {
-    color: #92400e;
-    font-weight: 600;
-}
-.procedure-locked-banner {
-    font-size: 13px;
-    font-weight: 600;
-    color: #92400e;
-    background: #fef3c7;
-    padding: 10px 14px;
-    border-radius: 8px;
-    margin-bottom: 12px;
-}
-.procedure-checklist-item-locked {
-    opacity: 0.7;
-}
-
 /* ----- Supporting Documents: selected-lines table + totals (Phase 4 of 6) ----- */
 .procedure-selected-section {
     margin-top: 4px;

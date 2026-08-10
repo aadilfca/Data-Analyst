@@ -3693,34 +3693,14 @@ async function openProcedureModal(uid, initialDocId = null) {
         console.error('Failed to load voucher line observations:', e);
     }
 
-    // Inactive-document handling: a Document deactivated after evidence/checks/observations were
-    // already recorded against it no longer appears in `guidanceDocuments` (that list is correctly
-    // is_active=1-filtered server-side) — without this, its tab would silently vanish along with
-    // everything tied to it. Detect any document_id referenced by assignedRecords/procedureChecks/
-    // observationEntries but absent from `documents`, and synthesize a locked, read-only tab for
-    // it so existing data stays visible (frozen, not erased) per the confirmed requirement.
-    // Sentinel document_ids (ACCOUNT_HEAD_OBSERVATION_DOC_ID, the CROSS_CHECK_SHORTFALL_DOC_ID_BASE
-    // range) are never real audit_rule_documents rows — both ranges are negative, and no real
-    // document id ever is, so a plain `id < 0` guard excludes them without needing a second
-    // cross-file constant.
-    const knownDocIds = new Set(documents.map(d => d.id));
-    const orphanDocIds = new Set();
-    [...assignedRecords, ...procedureChecks, ...observationEntries].forEach(r => {
-        const docId = r.document_id;
-        if (typeof docId === 'number' && docId >= 0 && !knownDocIds.has(docId)) {
-            orphanDocIds.add(docId);
-        }
-    });
-    orphanDocIds.forEach(docId => {
-        const fromAssigned = assignedRecords.find(r => r.document_id === docId);
-        const fromChecks = procedureChecks.find(c => c.document_id === docId);
-        const fromObs = observationEntries.find(e => e.document_id === docId);
-        const name = (fromAssigned && fromAssigned.document_name)
-            || (fromChecks && fromChecks.document_name)
-            || (fromObs && fromObs.document_name)
-            || `Document #${docId}`;
-        documents.push({ id: docId, name, __inactive: true, auth_roles: [] });
-    });
+    // Confirmed fix: tabs for Documents not applicable to this line's Category are fully hidden,
+    // not rendered greyed-out — `documents` (built from guidanceDocuments above) already IS that
+    // per-Category applicable list (audit_rule_category_documents, is_active=1-filtered server-
+    // side), so no further filtering is needed here. This supersedes the earlier "synthesize a
+    // locked tab for a Document deactivated after evidence was already recorded against it"
+    // design — that tab is now simply omitted; the underlying voucher_line_documents/
+    // voucher_line_procedure_checks/voucher_line_observations rows are left untouched (data is
+    // not deleted, just no longer reachable from this rail).
 
     // Physical Bill evidence type, Phase 7 of 8: every saved Physical Bill entry for this line,
     // across all documents - same fail-soft-to-empty, re-fetched-fresh-on-every-open convention
@@ -4238,12 +4218,6 @@ function isProcedureDocumentComplete(uid, doc) {
     if (doc.__voucherTab) {
         return true;
     }
-    // Inactive-document handling: a synthesized tab for a deactivated Document is frozen
-    // historical data — it must never gate or block overall voucher-line completion, same
-    // neutral-dot treatment as the Voucher Line tab above.
-    if (doc.__inactive) {
-        return true;
-    }
     let baseComplete;
     // Physical Bill evidence type, Phase 7 of 8: checked BEFORE doc.template_id (always null for
     // this doc type) - mirrors compute_and_persist_cleared_status()'s own document_type-first
@@ -4306,24 +4280,6 @@ function renderProcedureModalTabs(uid) {
                     <span class="procedure-tab-dot complete" title="Account Head Recommendation"></span>
                     <span class="procedure-tab-text">
                         <span class="procedure-tab-label">${escapeHtml(doc.name)}</span>
-                    </span>
-                </button>
-            `;
-        }
-
-        // Inactive-document handling: a locked, dimmed tab for a Document that was deactivated
-        // after evidence/checks/observations were already recorded against it — the dot is
-        // fixed-neutral (per isProcedureDocumentComplete()'s __inactive branch above) and the
-        // usual "X/Y roles" subtext is replaced with a plain "deactivated" note, since doc.auth_roles
-        // is always empty for a synthesized tab (its checklist state, not the guidance list, is
-        // what the panel below reads).
-        if (doc.__inactive) {
-            return `
-                <button type="button" class="procedure-tab-btn procedure-tab-locked${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
-                    <span class="procedure-tab-dot complete" title="Deactivated document — historical data only"></span>
-                    <span class="procedure-tab-text">
-                        <span class="procedure-tab-label">${escapeHtml(doc.name)}</span>
-                        <span class="procedure-tab-sub">deactivated</span>
                     </span>
                 </button>
             `;
@@ -4870,13 +4826,6 @@ function renderProcedureModalPanel(uid, docId) {
         return;
     }
 
-    // Inactive-document handling: a synthesized tab for a deactivated Document — dedicated
-    // read-only render, not the has-template/no-template layouts below.
-    if (doc.__inactive) {
-        renderInactiveDocumentPanel(uid, doc);
-        return;
-    }
-
     // Physical Bill evidence type, Phase 7 of 8: a physical_bill Document always has
     // template_id: null, so it's intercepted here before hasTemplate/hasRoles are computed —
     // its own dedicated 4-field entry form, not the has-template/no-template layouts below.
@@ -4979,76 +4928,6 @@ function renderProcedureModalPanel(uid, docId) {
     if (tabState.searchResults && tabState.searchResults.length) {
         renderProcedureSearchDropdown(uid, docId);
     }
-}
-
-// Inactive-document handling: dedicated read-only panel for a Document that was deactivated
-// after evidence/checks/observations were already recorded against it — kept as its own,
-// self-contained render path rather than a `readOnly` flag threaded through
-// buildSelectedLinesTable()/buildProcedureChecklist()/buildObservationSection() (also used by
-// the normal active-document path above), a smaller, more contained diff for a rarely-hit state.
-// Reuses buildSelectedLinesTable() as-is — unassign stays live, matching the backend's own
-// unassign_document(), which never re-checks is_active. The checklist is rendered from
-// tabState.checklist's own keys (the roles actually answered) rather than doc.auth_roles, which
-// is always empty for a synthesized tab (the guidance list no longer has this Document at all).
-function renderInactiveDocumentPanel(uid, doc) {
-    const container = document.getElementById('procedureModalPanels');
-    if (!container) return;
-    const tabState = getProcedureTabState(uid, doc.id);
-
-    const evidenceHtml = (tabState.selections && tabState.selections.length) ? `
-        <div class="procedure-segment procedure-segment-data">
-            <h4 class="procedure-segment-header">🗂️ Data Table</h4>
-            <div class="procedure-segment-body">
-                <div class="procedure-selected-section">
-                    <h4 class="procedure-selected-heading">Linked evidence</h4>
-                    ${buildSelectedLinesTable(uid, doc.id)}
-                </div>
-            </div>
-        </div>
-    ` : '';
-
-    const checklistRoles = Object.keys(tabState.checklist || {});
-    const checklistBodyHtml = checklistRoles.length ? `
-        <div class="procedure-checklist-list">
-            ${checklistRoles.map(role => {
-                const checked = !!(tabState.checklist[role] && tabState.checklist[role].is_checked);
-                return `
-                    <label class="procedure-checklist-item procedure-checklist-item-locked">
-                        <input type="checkbox" disabled ${checked ? 'checked' : ''}>
-                        <span>${escapeHtml(role)}</span>
-                        <span class="procedure-checklist-source">locked — document deactivated</span>
-                    </label>
-                `;
-            }).join('')}
-        </div>
-    ` : '<p class="procedure-checklist-empty">No recorded procedure ticks.</p>';
-
-    container.innerHTML = `
-        <div class="procedure-tab-panel" data-doc-id="${doc.id}">
-            <div class="procedure-locked-banner">
-                🔒 "${escapeHtml(doc.name)}" has been deactivated — contact admin. Existing data below is preserved and read-only.
-            </div>
-            ${evidenceHtml}
-            <div class="procedure-segment procedure-segment-procedures">
-                <h4 class="procedure-segment-header">✅ Audit Procedures</h4>
-                <div class="procedure-segment-body">${checklistBodyHtml}</div>
-            </div>
-            <div class="procedure-segment procedure-segment-observation">
-                <h4 class="procedure-segment-header">📝 Observation</h4>
-                <div class="procedure-segment-body">
-                    <textarea class="procedure-observation-textarea" rows="4" disabled>${escapeHtml(tabState.observation || '')}</textarea>
-                </div>
-            </div>
-        </div>
-    `;
-
-    // Unassign requirement: unlink stays live even for a deactivated document — no writes are
-    // attempted against the Document itself, only against the voucher_line_documents link row.
-    container.querySelectorAll('.procedure-unlink-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            unassignSupportingDocument(uid, doc.id, parseInt(this.dataset.assignmentId));
-        });
-    });
 }
 
 // ---------- PHYSICAL BILL ENTRY (evidence type, Phase 7 of 8) ----------
