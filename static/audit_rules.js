@@ -411,6 +411,8 @@ async function selectDocument(id) {
         arDetailEmpty.style.display = 'none';
         arDetailForm.style.display = 'block';
 
+        updateAuditRulesUrl();
+
         // Re-render the list so the selected row highlight moves without a full re-fetch.
         loadDocuments();
     } catch (error) {
@@ -449,6 +451,8 @@ function startNewDocument() {
     arDetailEmpty.style.display = 'none';
     arDetailForm.style.display = 'block';
     arNameInput.focus();
+
+    updateAuditRulesUrl();
 }
 
 // ---------- SAVE ----------
@@ -862,11 +866,17 @@ function switchEntityType(type) {
     arVoucherChecksListSection.style.display = (type === 'voucher-checks') ? 'flex' : 'none';
     arVoucherChecksDetailSection.style.display = (type === 'voucher-checks') ? 'block' : 'none';
 
+    // URL state persistence (confirmed fix): reflect the newly-active entity type (and
+    // whatever item, if any, was last selected within it — editingCrossCheckId etc. are
+    // untouched by a plain rail switch, so this naturally restores the right selection too).
+    updateAuditRulesUrl();
+
     if (type === 'cross-checks') {
         // Refresh the Documents cache every time this view is opened, so the "add
         // document" picker and field-eligibility logic reflect any Documents-side
-        // edits made since the last visit.
-        loadAllDocumentsForCrossChecks().then(loadCrossChecks);
+        // edits made since the last visit. Returned (not just fired) so the URL-restore
+        // path in window.onload can await these caches before selecting a specific item.
+        return loadAllDocumentsForCrossChecks().then(loadCrossChecks);
     } else if (type === 'categories') {
         // Refresh all three caches every time this view is opened, so the Documents/
         // Cross-checks pickers, the eligibility check, and the rule-count badge (Phase 3 of 3)
@@ -878,14 +888,15 @@ function switchEntityType(type) {
         // this call stays -- it's what keeps the rule-count badge's voucher-check count
         // accurate on first entry, independent of whether the Voucher-level Checks tab has
         // been visited yet this session.
-        Promise.all([
+        return Promise.all([
             loadAllDocumentsForCrossChecks(),
             loadAllCrossChecksForCategories(),
             loadVoucherChecks()
         ]).then(loadCategories);
     } else if (type === 'voucher-checks') {
-        loadVoucherChecks();
+        return loadVoucherChecks();
     }
+    return Promise.resolve();
 }
 
 // ---------- DOM REFS ----------
@@ -1253,6 +1264,8 @@ async function selectCrossCheck(id) {
         arCrossCheckDetailEmpty.style.display = 'none';
         arCrossCheckDetailForm.style.display = 'block';
 
+        updateAuditRulesUrl();
+
         // Re-render the list so the selected row highlight moves without a full re-fetch.
         loadCrossChecks();
     } catch (error) {
@@ -1278,6 +1291,8 @@ function startNewCrossCheck() {
     arCrossCheckDetailEmpty.style.display = 'none';
     arCrossCheckDetailForm.style.display = 'block';
     arCrossCheckNameInput.focus();
+
+    updateAuditRulesUrl();
 }
 
 // ---------- SAVE ----------
@@ -2097,6 +2112,8 @@ async function selectCategory(id) {
         arCategoryDetailEmpty.style.display = 'none';
         arCategoryDetailForm.style.display = 'block';
 
+        updateAuditRulesUrl();
+
         // Re-render the list so the selected row highlight moves without a full re-fetch.
         loadCategories();
     } catch (error) {
@@ -2126,6 +2143,8 @@ function startNewCategory() {
     arCategoryDetailEmpty.style.display = 'none';
     arCategoryDetailForm.style.display = 'block';
     arCategoryNameInput.focus();
+
+    updateAuditRulesUrl();
 }
 
 // ---------- SAVE ----------
@@ -2270,6 +2289,43 @@ let assignCategoriesAccounts = [];
 // Active Categories ({id, name}) for the per-row dropdown options, refreshed alongside
 // the accounts on every open so a Category added/renamed elsewhere is picked up.
 let assignCategoriesCategoryOptions = [];
+// Whether the whole-shell Assign Categories view is currently open — drives
+// updateAuditRulesUrl()'s view=assign-categories vs entity/id branch below.
+let assignCategoriesViewOpen = false;
+
+// ---------- URL STATE PERSISTENCE (confirmed fix) ----------
+// Mirrors verification.js's setVerificationUrl()/window.onload hard-refresh persistence:
+// reflects the current view in the URL via history.replaceState() (no new history entries —
+// this page manages its own navigation via the global navbar back-arrow, not the browser's
+// native back button) so a hard refresh restores the same view instead of always dropping
+// back to the Documents rail default. Only ever called after the whole script has run (event
+// handlers / window.onload), so referencing editingCrossCheckId/editingCategoryId/
+// editingVoucherCheckId here — declared with `let` further down the file — is safe, same
+// forward-reference reasoning switchEntityType() below already relies on for
+// allDocuments/allCrossChecks.
+function updateAuditRulesUrl() {
+    const url = new URL(window.location.href);
+    if (assignCategoriesViewOpen) {
+        url.searchParams.set('view', 'assign-categories');
+        url.searchParams.delete('entity');
+        url.searchParams.delete('id');
+    } else {
+        url.searchParams.delete('view');
+        url.searchParams.set('entity', currentEntityType);
+        const selectedId = {
+            documents: editingId,
+            'cross-checks': editingCrossCheckId,
+            categories: editingCategoryId,
+            'voucher-checks': editingVoucherCheckId
+        }[currentEntityType];
+        if (selectedId) {
+            url.searchParams.set('id', String(selectedId));
+        } else {
+            url.searchParams.delete('id');
+        }
+    }
+    history.replaceState(null, '', url);
+}
 
 // ---------- STATUS MESSAGES ----------
 // Same timeout-based show/hide pattern as showDetailStatus()/showCategoryDetailStatus().
@@ -2291,12 +2347,25 @@ function showAssignCategoriesStatus(message, type) {
 async function openAssignCategoriesView() {
     arShellContainer.style.display = 'none';
     arAssignCategoriesSection.style.display = 'block';
+    assignCategoriesViewOpen = true;
+    updateAuditRulesUrl();
     await loadAssignCategoriesData();
 }
 
 function closeAssignCategoriesView() {
     arAssignCategoriesSection.style.display = 'none';
     arShellContainer.style.display = 'flex';
+    assignCategoriesViewOpen = false;
+    // Necessary side-fix: checkAssignCategoriesDeepLink() triggers purely on client_id+
+    // account_code being present in the URL, with no expiry — left in place, they'd make
+    // every future hard refresh keep reopening Assign Categories even after the user has
+    // navigated elsewhere in this page. Only relevant to clear here (not on every
+    // updateAuditRulesUrl() call) since this is the one place the user is done with them.
+    const url = new URL(window.location.href);
+    url.searchParams.delete('client_id');
+    url.searchParams.delete('account_code');
+    history.replaceState(null, '', url);
+    updateAuditRulesUrl();
 }
 
 // ---------- LOAD ----------
@@ -2654,15 +2723,51 @@ arAssignCategoriesTableBody.addEventListener('click', function(e) {
 });
 
 // ---------- INIT ----------
+// URL state persistence (confirmed fix): restores whichever view (entity type + selected
+// item, or the Assign Categories full-page view) was showing before a hard refresh, using
+// the same ?entity=&id=/?view= params updateAuditRulesUrl() writes throughout this file —
+// mirrors verification.js's own hard-refresh restore pattern in window.onload.
+const AR_VALID_ENTITY_TYPES = ['documents', 'cross-checks', 'categories', 'voucher-checks'];
+
 window.onload = async function() {
     // Verification deep link (Phase 5, FINAL): a ?client_id=&account_code= URL means Verification's
     // recycle-arrow icon opened this page — skip the normal Documents-rail default entirely and go
     // straight to the highlighted Assign Categories row. A plain/in-app page load (no params) is
-    // completely unaffected, matching the confirmed brief.
+    // completely unaffected, matching the confirmed brief. Takes priority over the URL-restore
+    // logic below.
     const isDeepLink = await checkAssignCategoriesDeepLink();
-    if (!isDeepLink) {
-        loadDocuments();
-        loadTemplatesForDocuments();
+    if (isDeepLink) return;
+
+    // The Documents form's Template dropdown is needed regardless of which entity/view ends
+    // up restored below.
+    loadTemplatesForDocuments();
+
+    const restoreParams = new URLSearchParams(window.location.search);
+    const viewParam = restoreParams.get('view');
+
+    if (viewParam === 'assign-categories') {
+        await openAssignCategoriesView();
+        return;
+    }
+
+    const entityParam = restoreParams.get('entity');
+    const idParam = restoreParams.get('id');
+    const restoredEntity = AR_VALID_ENTITY_TYPES.includes(entityParam) ? entityParam : 'documents';
+
+    if (restoredEntity === 'documents') {
+        await loadDocuments();
+        if (idParam) await selectDocument(parseInt(idParam, 10));
+    } else {
+        // switchEntityType() now returns its cache-load promise (see the ENTITY TYPE SWITCH
+        // section above) so the relevant select*() call below only fires once the cache it
+        // needs (allDocuments/allCrossChecks/etc.) is actually populated.
+        await switchEntityType(restoredEntity);
+        if (idParam) {
+            const id = parseInt(idParam, 10);
+            if (restoredEntity === 'cross-checks') await selectCrossCheck(id);
+            else if (restoredEntity === 'categories') await selectCategory(id);
+            else if (restoredEntity === 'voucher-checks') await selectVoucherCheck(id);
+        }
     }
 };
 
@@ -2846,6 +2951,8 @@ async function selectVoucherCheck(id) {
         arVoucherCheckDetailEmpty.style.display = 'none';
         arVoucherCheckDetailForm.style.display = 'block';
 
+        updateAuditRulesUrl();
+
         loadVoucherChecks(); // refresh selected-row highlight, same pattern as Documents
     } catch (error) {
         showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
@@ -2864,6 +2971,8 @@ function startNewVoucherCheck() {
     arVoucherCheckDetailEmpty.style.display = 'none';
     arVoucherCheckDetailForm.style.display = 'block';
     arVoucherCheckNameInput.focus();
+
+    updateAuditRulesUrl();
 }
 
 // ---------- SAVE / DELETE / RESTORE ----------
