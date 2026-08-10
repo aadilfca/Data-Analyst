@@ -5069,14 +5069,14 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillQuantityInput">Quantity</label>
                                     <div class="procedure-bill-calc-field" data-calc-field="quantity">
-                                        <input type="text" inputmode="none" id="procedureBillQuantityInput" class="procedure-bill-input procedure-bill-calc-input" value="${escapeHtml(bill.quantity)}" readonly placeholder="0" title="Tap to open calculator">
+                                        <input type="text" inputmode="decimal" id="procedureBillQuantityInput" class="procedure-bill-input procedure-bill-calc-input" value="${escapeHtml(bill.quantity)}" placeholder="0" title="Type a value, or tap the calculator icon">
                                         <span class="procedure-bill-calc-icon">${PB_ICON_CALC}</span>
                                     </div>
                                 </div>
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillRateInput">Rate</label>
                                     <div class="procedure-bill-calc-field" data-calc-field="rate">
-                                        <input type="text" inputmode="none" id="procedureBillRateInput" class="procedure-bill-input procedure-bill-calc-input" value="${escapeHtml(bill.rate)}" readonly placeholder="0" title="Tap to open calculator">
+                                        <input type="text" inputmode="decimal" id="procedureBillRateInput" class="procedure-bill-input procedure-bill-calc-input" value="${escapeHtml(bill.rate)}" placeholder="0" title="Type a value, or tap the calculator icon">
                                         <span class="procedure-bill-calc-icon">${PB_ICON_CALC}</span>
                                     </div>
                                 </div>
@@ -5110,8 +5110,9 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
         </div>
     `;
 
-    // Amount is always read-only/computed; Quantity/Rate are now read-only, tap-to-open calculator
-    // triggers (wired below) — only these 3 fields are ever directly typed into.
+    // Amount is always read-only/computed. Quantity/Rate are normal editable inputs with two entry
+    // routes (confirmed fix): typing directly (this loop) or the calculator popover (below) — both
+    // write into tabState.physicalBill the same way and both recalculate Amount.
     const fieldInputs = {
         bill_no: document.getElementById('procedureBillNoInput'),
         bill_date: document.getElementById('procedureBillDateInput'),
@@ -5126,16 +5127,33 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
             });
         }
     });
+    const calcFieldInputs = {
+        quantity: document.getElementById('procedureBillQuantityInput'),
+        rate: document.getElementById('procedureBillRateInput')
+    };
+    Object.keys(calcFieldInputs).forEach(field => {
+        const el = calcFieldInputs[field];
+        if (el) {
+            el.addEventListener('input', function() {
+                if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
+                tabState.physicalBill[field] = this.value;
+                updatePhysicalBillAmount(uid, doc.id);
+            });
+        }
+    });
     updatePhysicalBillAmount(uid, doc.id);
 
     // Quantity/Rate calculator triggers — clicking either field (or its icon) opens the shared
     // calculator popover pre-seeded with that field's current value; "Done" writes the result back
     // into the field/tabState and recalculates Amount (see openPhysicalBillCalculator()/
-    // pbCalcApplyDone() below).
+    // pbCalcApplyDone() below). triggerEl is the actual <input> (not the wrapper div) so Done's
+    // `triggerEl.value = ...` visibly updates the field, and so a click landing on/near the input
+    // also gives it focus for direct typing at the same time the popover opens.
     container.querySelectorAll('.procedure-bill-calc-field').forEach(wrapper => {
         wrapper.addEventListener('click', function() {
             const field = this.dataset.calcField;
-            openPhysicalBillCalculator(uid, doc.id, field, this);
+            const input = this.querySelector('input');
+            openPhysicalBillCalculator(uid, doc.id, field, input);
         });
     });
 

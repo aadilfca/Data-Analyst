@@ -3409,23 +3409,18 @@ body {
 }
 
 /* ----- Quantity/Rate calculator triggers (confirmed fix) -----
-   Quantity and Rate are read-only fields that open the calculator popover on click — styled to
-   read as tappable, not disabled, which is why they override the generic
-   .procedure-bill-input[readonly] greyed-out treatment below. */
+   Quantity and Rate are normal editable inputs (not readonly) — a click anywhere in the field opens
+   the calculator popover as a convenience AND focuses the input for direct typing at the same time;
+   both entry routes write the same field/tabState value. padding-right leaves room for the overlaid
+   calculator icon so typed text never runs under it. */
 .procedure-bill-calc-field {
     position: relative;
     display: flex;
     align-items: center;
     cursor: pointer;
 }
-.procedure-bill-calc-field .procedure-bill-input.procedure-bill-calc-input[readonly] {
-    background: white;
-    color: #1a1a2e;
-    cursor: pointer;
+.procedure-bill-calc-field .procedure-bill-calc-input {
     padding-right: 30px;
-}
-.procedure-bill-calc-field:hover .procedure-bill-input.procedure-bill-calc-input[readonly] {
-    border-color: #94a3b8;
 }
 .procedure-bill-calc-icon {
     position: absolute;
@@ -3438,10 +3433,16 @@ body {
 /* ----- Calculator popover (confirmed fix) -----
    Created/appended to <body> lazily by getPhysicalBillCalcPopover() in verification.js — same
    dynamic-creation pattern as #lineStatusReasonPopover — since it must float above the modal and
-   outlive whichever tab panel happened to spawn it. */
+   outlive whichever tab panel happened to spawn it. position:fixed is relative to the viewport
+   regardless of DOM placement, so appending to <body> (rather than nesting inside #procedureModal)
+   is fine on its own — what actually caused the "renders below the table" bug was z-index: 1300,
+   which sits BELOW #procedureModal's own z-index:3000 semi-transparent backdrop, so the popover was
+   rendering behind the modal's overlay instead of above it. Bumped past every other overlay this
+   modal can stack on top of (#procedureBrowseModal is the highest at 3500) so the calculator is
+   always the topmost layer regardless of which nested modal/popover is open underneath it. */
 .pb-calc-popover {
     position: fixed;
-    z-index: 1300;
+    z-index: 3600;
     background: white;
     border: 1px solid #e2e8f0;
     border-radius: 10px;
