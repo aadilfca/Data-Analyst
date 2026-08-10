@@ -2349,7 +2349,14 @@ async function openAssignCategoriesView() {
     arAssignCategoriesSection.style.display = 'block';
     assignCategoriesViewOpen = true;
     updateAuditRulesUrl();
-    await loadAssignCategoriesData();
+    if (assignCategoriesAccounts.length > 0) {
+        // Already loaded once this page session — a full reload here would wipe+rebuild the
+        // whole table and lose scroll position just to pick up a category added/renamed
+        // elsewhere; only the dropdown options actually need refreshing (confirmed fix).
+        await refreshAssignCategoriesCategoryOptions();
+    } else {
+        await loadAssignCategoriesData();
+    }
 }
 
 function closeAssignCategoriesView() {
@@ -2441,6 +2448,30 @@ function renderAssignCategoriesTable() {
         arAssignCategoriesTableBody.appendChild(buildAssignCategoriesRow(account));
     });
     updateAssignCategoriesUnassignedBadge();
+    restoreLastEditedAssignCategoriesHighlight();
+}
+
+// Confirmed fix: reopening this view after it's already been loaded once this session must
+// NOT re-fetch accounts / wipe+rebuild the whole table (loses scroll position) — only the
+// Category dropdown options can meaningfully have changed (added/renamed/deactivated via the
+// separate Categories pane), so just refresh assignCategoriesCategoryOptions and patch each
+// already-rendered row's <select> in place via buildAssignCategoriesRow()+replaceWith(), same
+// per-row-swap technique applyCategoryToRows() already uses — this never touches the table's
+// scroll container itself, so scroll position is naturally preserved.
+async function refreshAssignCategoriesCategoryOptions() {
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/categories?include_inactive=false');
+        if (!res.ok) throw new Error('Failed to load categories');
+        const categories = await res.json();
+        assignCategoriesCategoryOptions = categories.map(c => ({ id: c.id, name: c.name }));
+        assignCategoriesAccounts.forEach(account => {
+            const oldRow = arAssignCategoriesTableBody.querySelector('tr[data-account-id="' + account.id + '"]');
+            if (oldRow) oldRow.replaceWith(buildAssignCategoriesRow(account));
+        });
+        updateAssignCategoriesUnassignedBadge();
+    } catch (error) {
+        console.warn('Failed to refresh category options:', error);
+    }
 }
 
 // ---------- UNASSIGNED SUMMARY BADGE (confirmed fix) ----------
@@ -2581,6 +2612,34 @@ function getAssignCategoriesCategoryName(id) {
     // backend returns category_name regardless of active state (a display value).
     const accountWithCategory = assignCategoriesAccounts.find(a => a.category_id === id);
     return accountWithCategory ? (accountWithCategory.category_name || 'Unknown category') : null;
+}
+
+// ---------- LAST-EDITED ROW: SCROLL/HIGHLIGHT RESTORE (confirmed fix) ----------
+// sessionStorage (survives a hard browser refresh, unlike a plain JS variable) remembers the
+// last account row the user edited a Category for, so that after any full table rebuild (first
+// open, hard refresh, Reset) we can scroll back to it and briefly flag it — consumed once per
+// restore so it doesn't keep re-highlighting on every later reopen.
+const AR_ASSIGN_CATEGORIES_LAST_EDITED_KEY = 'arAssignCategoriesLastEditedAccountId';
+
+function setLastEditedAssignCategoriesAccount(accountId) {
+    try {
+        sessionStorage.setItem(AR_ASSIGN_CATEGORIES_LAST_EDITED_KEY, String(accountId));
+    } catch (e) { /* sessionStorage unavailable — purely a UX nicety, safe to skip */ }
+}
+
+function restoreLastEditedAssignCategoriesHighlight() {
+    let storedId;
+    try {
+        storedId = sessionStorage.getItem(AR_ASSIGN_CATEGORIES_LAST_EDITED_KEY);
+    } catch (e) { return; }
+    if (!storedId) return;
+    const row = arAssignCategoriesTableBody.querySelector('tr[data-account-id="' + storedId + '"]');
+    if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        row.classList.add('ar-tb-restore-highlight');
+        setTimeout(() => row.classList.remove('ar-tb-restore-highlight'), 2000);
+    }
+    try { sessionStorage.removeItem(AR_ASSIGN_CATEGORIES_LAST_EDITED_KEY); } catch (e) {}
 }
 
 // ---------- ASSIGN (smart-fill default / force-apply explicit) ----------
@@ -2756,6 +2815,7 @@ arAssignCategoriesTableBody.addEventListener('change', function(e) {
     if (row) row.classList.remove('ar-tb-deep-link-highlight');
     const categoryId = parseAssignCategoriesSelectValue(e.target.value);
     const accountId = parseInt(e.target.dataset.accountId, 10);
+    setLastEditedAssignCategoriesAccount(accountId);
     assignCategory(accountId, categoryId, false);
 });
 
@@ -2777,6 +2837,7 @@ arAssignCategoriesTableBody.addEventListener('click', function(e) {
         ', overwriting any category already assigned to them? This cannot be undone.'
     );
     if (!proceed) return;
+    setLastEditedAssignCategoriesAccount(accountId);
     assignCategory(accountId, categoryId, true);
 });
 

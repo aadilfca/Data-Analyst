@@ -5700,6 +5700,19 @@ body {
     outline-offset: -2px;
 }
 
+/* Confirmed fix: brief post-reload flash so the user can find the row they last edited after
+   a full table rebuild (hard refresh, Reset). Distinct from .ar-tb-deep-link-highlight (a
+   persistent outline cleared only by user action) — this fades on its own via the animation,
+   and the class is also removed by JS shortly after (restoreLastEditedAssignCategoriesHighlight()
+   in audit_rules.js) so it never lingers. */
+@keyframes ar-tb-restore-flash {
+    0% { background-color: #bfdbfe; }
+    100% { background-color: transparent; }
+}
+.ar-tb-table tbody tr.ar-tb-restore-highlight {
+    animation: ar-tb-restore-flash 2s ease-out;
+}
+
 /* ----- Single-Calendar Date Range Picker (Verification module, Phase 3, FINAL) -----
    Styling for initDateRangePicker() (static/verification.js), mounted in two places -
    #sessionPopup's open-cashbook dialog and the in-session cashbook filter bar's Date Range
