@@ -543,6 +543,11 @@ function monthBoundsAround(date) {
 // old hardcoded "always search the current calendar month" default, which failed whenever a
 // client's latest data wasn't in the current month.
 async function loadCashbooks(overrideStart, overrideEnd) {
+    // Confirmed fix: the two fields are independent — changing the date range (via
+    // handlePopupPeriodChange(), which calls this function on every Place-1 range edit) must not
+    // reset an already-made cashbook selection. Captured before anything below rebuilds the
+    // <select>, then re-applied after the rebuild if it's still a valid option for the new range.
+    const previousSelection = popupCashbookSelect.value;
     const clientId = getClientId();
     if (!clientId) {
         popupCashbookSelect.innerHTML = '<option value="">-- Select client first --</option>';
@@ -600,6 +605,11 @@ async function loadCashbooks(overrideStart, overrideEnd) {
                 opt.textContent = cb;
                 popupCashbookSelect.appendChild(opt);
             });
+            // Re-apply the previous selection if it's still valid for this range — if it's
+            // genuinely not present anymore, the placeholder stays selected, same as before.
+            if (previousSelection && data.cashbooks.includes(previousSelection)) {
+                popupCashbookSelect.value = previousSelection;
+            }
             popupCashbookSelect.disabled = false;
             popupStartBtn.disabled = false;
         } else {
