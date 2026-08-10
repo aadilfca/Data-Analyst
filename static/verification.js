@@ -60,6 +60,10 @@ let cashbookCurrentPage = 1;
 let cashbookPageSize = 50;
 let cashbookTotalRows = 0;
 let totalTransactions = 0;
+// Single-calendar date range picker (Phase 1): the reusable initDateRangePicker() instance
+// mounted in place of the old two-input Start/End Date fields in the open-cashbook dialog
+// (#sessionPopup). Set once by mountPopupDateRangePicker() in the event-listener wiring below.
+let popupDateRangePicker = null;
 
 // DOM refs
 const dashboardContent = document.getElementById('dashboardContent');
@@ -153,6 +157,247 @@ function formatDateInput(d) {
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
+}
+
+// ---------- REUSABLE SINGLE-CALENDAR DATE RANGE PICKER ----------
+// initDateRangePicker(container, onChange) builds a self-contained date-range picker inside
+// `container` (cleared first) and returns { setRange(startStr, endStr), getRange() }. One
+// reusable component, mounted separately wherever Verification needs a date range (the
+// open-cashbook dialog this phase; the in-session filter bar in a later phase) so both stay
+// visually/behaviorally identical.
+//
+// Interaction: first click on a day sets the start date; hovering (while a start is set and no
+// end yet) previews the in-between range without committing; a second click sets the end date
+// (swapping if it precedes the start — a single-day range, start === end, is valid) and fires
+// onChange(startStr, endStr), both 'YYYY-MM-DD'; a third click starts a brand-new range. Dates
+// outside the visible month are not shown/selectable — the user navigates months via the
+// prev/next arrows (confirmed out of scope for a wider net).
+//
+// Styling this phase is inline/functional only (positioning, grid, existing app color tokens) —
+// matching the app's visual language is a later phase's job, done in static/style.css.
+function initDateRangePicker(container, onChange) {
+    if (!container) return null;
+    container.innerHTML = '';
+    container.style.position = 'relative';
+    container.style.display = 'inline-block';
+
+    let visibleMonth = new Date(); // only getFullYear()/getMonth() are read off this
+    let rangeStart = null; // Date or null
+    let rangeEnd = null;   // Date or null
+    let hoverDate = null;  // Date or null — only meaningful while rangeStart set & rangeEnd null
+    let isOpen = false;
+
+    function parseYmd(s) {
+        if (!s) return null;
+        const parts = s.split('-').map(Number);
+        return new Date(parts[0], parts[1] - 1, parts[2]);
+    }
+    function fmt(d) {
+        return formatDateInput(d);
+    }
+    function sameDay(a, b) {
+        return !!a && !!b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    }
+
+    const trigger = document.createElement('div');
+    trigger.className = 'drp-trigger';
+    trigger.style.cssText = 'border:2px solid #e2e8f0; border-radius:8px; padding:8px 12px; font-size:14px; background:#fff; cursor:pointer; white-space:nowrap;';
+    const calendar = document.createElement('div');
+    calendar.className = 'drp-calendar';
+    calendar.style.cssText = 'display:none; position:absolute; top:100%; left:0; margin-top:4px; z-index:1100; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:10px; box-shadow:0 8px 24px rgba(0,0,0,0.15); width:220px;';
+    container.appendChild(trigger);
+    container.appendChild(calendar);
+
+    function renderTrigger() {
+        if (rangeStart && rangeEnd) {
+            trigger.textContent = `📅 ${fmt(rangeStart)}  →  ${fmt(rangeEnd)}`;
+        } else if (rangeStart) {
+            trigger.textContent = `📅 ${fmt(rangeStart)}  →  ...`;
+        } else {
+            trigger.textContent = '📅 Select date range';
+        }
+    }
+
+    function inPreviewRange(day) {
+        if (!rangeStart || rangeEnd) return false;
+        const hover = hoverDate || rangeStart;
+        const lo = hover < rangeStart ? hover : rangeStart;
+        const hi = hover < rangeStart ? rangeStart : hover;
+        return day >= lo && day <= hi;
+    }
+    function inCommittedRange(day) {
+        if (!rangeStart || !rangeEnd) return false;
+        return day >= rangeStart && day <= rangeEnd;
+    }
+
+    function renderCalendar() {
+        calendar.innerHTML = '';
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;';
+        const prevBtn = document.createElement('button');
+        prevBtn.type = 'button';
+        prevBtn.textContent = '‹';
+        prevBtn.style.cssText = 'border:none; background:none; cursor:pointer; font-size:16px; padding:2px 8px;';
+        prevBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            visibleMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1);
+            renderCalendar();
+        });
+        const nextBtn = document.createElement('button');
+        nextBtn.type = 'button';
+        nextBtn.textContent = '›';
+        nextBtn.style.cssText = 'border:none; background:none; cursor:pointer; font-size:16px; padding:2px 8px;';
+        nextBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            visibleMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1);
+            renderCalendar();
+        });
+        const monthLabel = document.createElement('span');
+        monthLabel.style.cssText = 'font-weight:600; font-size:13px; color:#1e293b;';
+        monthLabel.textContent = visibleMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        header.appendChild(prevBtn);
+        header.appendChild(monthLabel);
+        header.appendChild(nextBtn);
+        calendar.appendChild(header);
+
+        const weekdays = document.createElement('div');
+        weekdays.style.cssText = 'display:grid; grid-template-columns:repeat(7, 1fr); gap:2px; margin-bottom:4px;';
+        ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].forEach(function(w) {
+            const cell = document.createElement('span');
+            cell.textContent = w;
+            cell.style.cssText = 'font-size:11px; color:#94a3b8; text-align:center;';
+            weekdays.appendChild(cell);
+        });
+        calendar.appendChild(weekdays);
+
+        const daysGrid = document.createElement('div');
+        daysGrid.style.cssText = 'display:grid; grid-template-columns:repeat(7, 1fr); gap:2px;';
+        daysGrid.addEventListener('mouseleave', function() {
+            if (rangeStart && !rangeEnd && hoverDate) {
+                hoverDate = null;
+                renderCalendar();
+            }
+        });
+        const year = visibleMonth.getFullYear();
+        const month = visibleMonth.getMonth();
+        const firstWeekday = new Date(year, month, 1).getDay();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+        for (let i = 0; i < firstWeekday; i++) {
+            const blank = document.createElement('span');
+            daysGrid.appendChild(blank);
+        }
+        for (let d = 1; d <= daysInMonth; d++) {
+            const dayDate = new Date(year, month, d);
+            const cell = document.createElement('span');
+            cell.textContent = String(d);
+            let bg = 'transparent';
+            let color = '#1e293b';
+            let fontWeight = '400';
+            if (sameDay(dayDate, rangeStart) || sameDay(dayDate, rangeEnd)) {
+                bg = '#3b82f6';
+                color = '#fff';
+                fontWeight = '600';
+            } else if (inCommittedRange(dayDate) || inPreviewRange(dayDate)) {
+                bg = '#dbeafe';
+            }
+            cell.style.cssText = `display:flex; align-items:center; justify-content:center; height:28px; font-size:12px; cursor:pointer; border-radius:4px; background:${bg}; color:${color}; font-weight:${fontWeight};`;
+            cell.addEventListener('click', function(e) {
+                e.stopPropagation();
+                handleDayClick(dayDate);
+            });
+            cell.addEventListener('mouseenter', function() {
+                if (rangeStart && !rangeEnd) {
+                    hoverDate = dayDate;
+                    renderCalendar();
+                }
+            });
+            daysGrid.appendChild(cell);
+        }
+        calendar.appendChild(daysGrid);
+    }
+
+    function handleDayClick(day) {
+        if (!rangeStart || rangeEnd) {
+            rangeStart = day;
+            rangeEnd = null;
+            hoverDate = null;
+            renderTrigger();
+            renderCalendar();
+        } else {
+            if (day < rangeStart) {
+                rangeEnd = rangeStart;
+                rangeStart = day;
+            } else {
+                rangeEnd = day;
+            }
+            hoverDate = null;
+            renderTrigger();
+            const committedStart = rangeStart;
+            const committedEnd = rangeEnd;
+            closeCalendar();
+            if (typeof onChange === 'function') onChange(fmt(committedStart), fmt(committedEnd));
+        }
+    }
+
+    function openCalendar() {
+        isOpen = true;
+        const anchor = rangeStart || new Date();
+        visibleMonth = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+        calendar.style.display = 'block';
+        renderCalendar();
+    }
+    function closeCalendar() {
+        isOpen = false;
+        calendar.style.display = 'none';
+    }
+    trigger.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (isOpen) closeCalendar(); else openCalendar();
+    });
+    document.addEventListener('click', function(e) {
+        if (isOpen && !container.contains(e.target)) closeCalendar();
+    });
+
+    renderTrigger();
+
+    return {
+        setRange: function(startStr, endStr) {
+            rangeStart = parseYmd(startStr);
+            rangeEnd = parseYmd(endStr);
+            hoverDate = null;
+            renderTrigger();
+            if (isOpen) {
+                visibleMonth = new Date((rangeStart || new Date()).getFullYear(), (rangeStart || new Date()).getMonth(), 1);
+                renderCalendar();
+            }
+        },
+        getRange: function() {
+            return { start: rangeStart ? fmt(rangeStart) : null, end: rangeEnd ? fmt(rangeEnd) : null };
+        }
+    };
+}
+
+// ---------- POPUP: MOUNT DATE RANGE PICKER ----------
+// Replaces the two-input Start/End Date fields (#popupPeriodStart/#popupPeriodEnd) with the
+// reusable initDateRangePicker() component, mounted in place inside their shared wrapper -
+// runtime DOM surgery rather than an HTML edit, since this phase is scoped to verification.js
+// only. The two original <input type="date"> elements end up detached (never re-attached, never
+// read again); popupPeriodStart/popupPeriodEnd stay only as the (now-inert) means of locating
+// that wrapper before it's cleared.
+function mountPopupDateRangePicker() {
+    if (!popupPeriodStart) return null;
+    const wrapper = popupPeriodStart.closest('.field');
+    if (!wrapper) return null;
+    wrapper.removeAttribute('style'); // was "display:flex; gap:10px" for the old two-input layout
+    wrapper.innerHTML = '';
+    const label = document.createElement('label');
+    label.textContent = 'Date Range';
+    const mount = document.createElement('div');
+    wrapper.appendChild(label);
+    wrapper.appendChild(mount);
+    return initDateRangePicker(mount, handlePopupPeriodChange);
 }
 
 // ---------- HARD-REFRESH VIEW PERSISTENCE ----------
@@ -267,8 +512,7 @@ async function loadCashbooks(overrideStart, overrideEnd) {
         start = bounds.start;
         end = bounds.end;
     }
-    if (popupPeriodStart) popupPeriodStart.value = start;
-    if (popupPeriodEnd) popupPeriodEnd.value = end;
+    if (popupDateRangePicker) popupDateRangePicker.setRange(start, end);
 
     try {
         const params = new URLSearchParams({
@@ -3037,18 +3281,19 @@ if (bankVoucherTile) {
     });
 }
 if (popupStartBtn) popupStartBtn.addEventListener('click', openCashbook);
-// Editable search range (confirmed fix): re-run the search with the user's chosen dates once
-// both inputs hold a valid start <= end range - mirrors the existing cashbookStartDate/
-// cashbookEndDate pattern in #cashbookContent.
-function handlePopupPeriodChange() {
-    const start = popupPeriodStart.value;
-    const end = popupPeriodEnd.value;
+// Editable search range (confirmed fix): re-run the search with the user's chosen dates once a
+// full range is picked - mirrors the existing cashbookStartDate/cashbookEndDate pattern in
+// #cashbookContent. Now fired directly as the date-range picker's onChange callback (Phase 1 of
+// the single-calendar range-picker rollout) instead of a DOM 'change' listener on two inputs.
+function handlePopupPeriodChange(start, end) {
     if (start && end && start <= end) {
         loadCashbooks(start, end);
     }
 }
-if (popupPeriodStart) popupPeriodStart.addEventListener('change', handlePopupPeriodChange);
-if (popupPeriodEnd) popupPeriodEnd.addEventListener('change', handlePopupPeriodChange);
+// Replaces the old two-input Start/End Date fields with the reusable date-range picker, mounted
+// in place inside their shared wrapper (static/verification.html is not edited this phase - see
+// mountPopupDateRangePicker()).
+popupDateRangePicker = mountPopupDateRangePicker();
 if (popupCancelBtn) {
     popupCancelBtn.addEventListener('click', function() {
         popupOverlay.style.display = 'none';
