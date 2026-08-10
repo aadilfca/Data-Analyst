@@ -64,6 +64,11 @@ let totalTransactions = 0;
 // mounted in place of the old two-input Start/End Date fields in the open-cashbook dialog
 // (#sessionPopup). Set once by mountPopupDateRangePicker() in the event-listener wiring below.
 let popupDateRangePicker = null;
+// Single-calendar date range picker (Phase 2): the in-session cashbook filter bar's own,
+// independently-editable instance — mirrored to popupDateRangePicker above (see
+// handleCashbookDateRangeChange()), never fetches on its own (that stays gated behind the
+// existing "📊 Apply" button/applyCashbookPreview()). Set once by mountCashbookDateRangePicker().
+let cashbookDateRangePicker = null;
 
 // DOM refs
 const dashboardContent = document.getElementById('dashboardContent');
@@ -400,6 +405,30 @@ function mountPopupDateRangePicker() {
     return initDateRangePicker(mount, handlePopupPeriodChange);
 }
 
+// ---------- CASHBOOK FILTER BAR: MOUNT DATE RANGE PICKER ----------
+// Replaces the two-input Start/End Date fields (#cashbookStartDate/#cashbookEndDate) with the
+// same reusable initDateRangePicker() component, in place of the "Start Date" wrapper div - this
+// bar has no shared wrapper around just the two date fields (unlike #sessionPopup's .field), so
+// the now-redundant "End Date" wrapper div is removed from the DOM entirely rather than reused.
+// Runtime DOM surgery, not an HTML edit, same as mountPopupDateRangePicker() above.
+// cashbookStartDate/cashbookEndDate stay only as the (now-inert) means of locating these wrapper
+// divs before they're cleared/removed.
+function mountCashbookDateRangePicker() {
+    if (!cashbookStartDate || !cashbookEndDate) return null;
+    const startWrapper = cashbookStartDate.parentElement;
+    const endWrapper = cashbookEndDate.parentElement;
+    if (!startWrapper || !endWrapper) return null;
+    startWrapper.innerHTML = '';
+    const label = document.createElement('label');
+    label.style.cssText = 'font-weight:600; font-size:12px; display:block; margin-bottom:2px;';
+    label.textContent = 'Date Range';
+    const mount = document.createElement('div');
+    startWrapper.appendChild(label);
+    startWrapper.appendChild(mount);
+    if (endWrapper.parentElement) endWrapper.parentElement.removeChild(endWrapper);
+    return initDateRangePicker(mount, handleCashbookDateRangeChange);
+}
+
 // ---------- HARD-REFRESH VIEW PERSISTENCE ----------
 // Reflects the current view + its identifying id in the URL (state=<view>&id=<id>&type=<currentType>)
 // so a hard refresh can restore the right view (see window.onload below) instead of always dropping
@@ -604,8 +633,7 @@ async function activateCashbookView(cashbook) {
     const now = new Date();
     const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
     const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    cashbookStartDate.value = formatDateInput(firstDay);
-    cashbookEndDate.value = formatDateInput(lastDay);
+    if (cashbookDateRangePicker) cashbookDateRangePicker.setRange(formatDateInput(firstDay), formatDateInput(lastDay));
     setVerificationUrl('cashbook', cashbook);
     await fetchCashbookData();
 }
@@ -665,8 +693,9 @@ async function fetchCashbookData() {
         cashbookStatus.textContent = '⚠️ No client selected';
         return;
     }
-    const start = cashbookStartDate.value;
-    const end = cashbookEndDate.value;
+    const cashbookRange = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : { start: null, end: null };
+    const start = cashbookRange.start;
+    const end = cashbookRange.end;
     if (!start || !end) {
         cashbookStatus.textContent = '⚠️ Please select date range';
         return;
@@ -760,8 +789,9 @@ async function startSessionFromCashbook() {
         showStatus('⚠️ No cashbook selected.', 'error');
         return;
     }
-    const start = cashbookStartDate.value;
-    const end = cashbookEndDate.value;
+    const sessionRange = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : { start: null, end: null };
+    const start = sessionRange.start;
+    const end = sessionRange.end;
     if (!start || !end) {
         showStatus('⚠️ Please select date range.', 'error');
         return;
@@ -3294,6 +3324,14 @@ function handlePopupPeriodChange(start, end) {
 // in place inside their shared wrapper (static/verification.html is not edited this phase - see
 // mountPopupDateRangePicker()).
 popupDateRangePicker = mountPopupDateRangePicker();
+// Cashbook filter bar's own picker instance (Phase 2 of the single-calendar range-picker
+// rollout) - independently editable, deliberately does NOT trigger a fetch itself (that stays
+// gated behind the existing "📊 Apply" button/applyCashbookPreview(), unchanged); only mirrors
+// the picked range into Place 1's picker so it stays in sync if that dialog is reopened.
+function handleCashbookDateRangeChange(start, end) {
+    if (popupDateRangePicker) popupDateRangePicker.setRange(start, end);
+}
+cashbookDateRangePicker = mountCashbookDateRangePicker();
 if (popupCancelBtn) {
     popupCancelBtn.addEventListener('click', function() {
         popupOverlay.style.display = 'none';
