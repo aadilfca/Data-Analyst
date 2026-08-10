@@ -2396,6 +2396,7 @@ async function loadAssignCategoriesData() {
             assignCategoriesAccounts = [];
             arAssignCategoriesEmpty.textContent = result.detail || 'No parsed trial balance found for this client.';
             arAssignCategoriesEmpty.style.display = 'block';
+            updateAssignCategoriesUnassignedBadge();
             return;
         }
         if (!accountsRes.ok) throw new Error('Failed to load trial balance accounts');
@@ -2411,6 +2412,7 @@ async function loadAssignCategoriesData() {
         if (assignCategoriesAccounts.length === 0) {
             arAssignCategoriesEmpty.textContent = 'This trial balance has no accounts.';
             arAssignCategoriesEmpty.style.display = 'block';
+            updateAssignCategoriesUnassignedBadge();
             return;
         }
 
@@ -2428,6 +2430,7 @@ async function loadAssignCategoriesData() {
         assignCategoriesAccounts = [];
         arAssignCategoriesEmpty.textContent = '❌ Error loading data: ' + error.message;
         arAssignCategoriesEmpty.style.display = 'block';
+        updateAssignCategoriesUnassignedBadge();
     }
 }
 
@@ -2437,6 +2440,31 @@ function renderAssignCategoriesTable() {
     assignCategoriesAccounts.forEach(account => {
         arAssignCategoriesTableBody.appendChild(buildAssignCategoriesRow(account));
     });
+    updateAssignCategoriesUnassignedBadge();
+}
+
+// ---------- UNASSIGNED SUMMARY BADGE (confirmed fix) ----------
+// "X of Y unassigned" count in the section header, recomputed from the currently loaded
+// assignCategoriesAccounts list — kept in sync by every place that mutates that list or
+// rebuilds the table (renderAssignCategoriesTable(), applyCategoryToRows(), and the two
+// early-return branches in loadAssignCategoriesData() below that never reach
+// renderAssignCategoriesTable() at all). Lazily creates its own element once, inserted right
+// after the existing subtitle span — no static/audit_rules.html change needed.
+function updateAssignCategoriesUnassignedBadge() {
+    let badge = document.getElementById('arAssignCategoriesUnassignedBadge');
+    if (!badge) {
+        badge = document.createElement('span');
+        badge.id = 'arAssignCategoriesUnassignedBadge';
+        badge.className = 'ar-assign-categories-unassigned-badge';
+        arAssignCategoriesSubtitle.insertAdjacentElement('afterend', badge);
+    }
+    if (assignCategoriesAccounts.length === 0) {
+        badge.style.display = 'none';
+        return;
+    }
+    const unassignedCount = assignCategoriesAccounts.filter(a => !a.category_id).length;
+    badge.textContent = unassignedCount + ' of ' + assignCategoriesAccounts.length + ' unassigned';
+    badge.style.display = 'inline-block';
 }
 
 // Builds one <tr> for an account. createElement/textContent throughout (no innerHTML)
@@ -2445,6 +2473,14 @@ function renderAssignCategoriesTable() {
 function buildAssignCategoriesRow(account) {
     const tr = document.createElement('tr');
     tr.dataset.accountId = account.id;
+
+    // Unassigned-flag requirement (confirmed fix): amber row tint for any account with no
+    // category_id, driven purely by that one field — see also the placeholder option below
+    // and updateAssignCategoriesUnassignedBadge()'s header count.
+    const isUnassigned = !account.category_id;
+    if (isUnassigned) {
+        tr.classList.add('ar-tb-row-unassigned');
+    }
 
     const tdCode = document.createElement('td');
     tdCode.textContent = account.account_code;
@@ -2468,13 +2504,26 @@ function buildAssignCategoriesRow(account) {
     select.className = 'ar-tb-category-select';
     select.dataset.accountId = account.id;
 
+    // Unassigned-flag requirement (confirmed fix): a disabled, selected placeholder is shown
+    // first for a genuinely unassigned account, nudging the user to pick one. The real
+    // "-- Not assigned --" option below it (still real/selectable, per the 2026-07-23 fix)
+    // is unaffected — it's simply no longer the pre-selected option when there's no category,
+    // since this placeholder takes that role instead.
+    if (isUnassigned) {
+        const placeholderOption = document.createElement('option');
+        placeholderOption.value = '';
+        placeholderOption.disabled = true;
+        placeholderOption.selected = true;
+        placeholderOption.textContent = '— Select category —';
+        select.appendChild(placeholderOption);
+    }
+
     // Confirmed fix: "Not assigned" is now a real, selectable option (value="none"),
     // not a disabled placeholder — picking it clears the account's category the same
     // way picking a real category assigns one (see the change listener below).
     const notAssignedOption = document.createElement('option');
     notAssignedOption.value = 'none';
     notAssignedOption.textContent = '-- Not assigned --';
-    if (!account.category_id) notAssignedOption.selected = true;
     select.appendChild(notAssignedOption);
 
     assignCategoriesCategoryOptions.forEach(cat => {
@@ -2571,19 +2620,25 @@ async function assignCategory(accountId, categoryId, forceApply) {
             );
         }
     } catch (error) {
-        // Revert the target row's dropdown to its pre-change value — state was never
-        // optimistically updated, so only the native <select>'s own visible value (which
-        // the browser already changed on user selection) needs correcting back.
-        const select = arAssignCategoriesTableBody.querySelector('select[data-account-id="' + accountId + '"]');
-        if (select) select.value = previousCategoryId || 'none';
+        // Revert the target row to its pre-change appearance — account data was never
+        // optimistically mutated (targetAccount.category_id still holds previousCategoryId),
+        // so rebuilding from it restores select value, unassigned tint, and the placeholder
+        // option all at once (see buildAssignCategoriesRow()) rather than only patching
+        // select.value, which can't correctly add/remove the placeholder option itself.
+        const oldRow = arAssignCategoriesTableBody.querySelector('tr[data-account-id="' + accountId + '"]');
+        if (oldRow && targetAccount) {
+            oldRow.replaceWith(buildAssignCategoriesRow(targetAccount));
+        }
         showAssignCategoriesStatus('❌ Error: ' + error.message, 'error');
     }
 }
 
-// Updates both the in-memory account list and the visible <select> value for a set of
-// account ids, after a successful assignment call. categoryId may be null/falsy (the
-// account was cleared to "Not assigned") — the <select>'s "none" option value is used
-// in that case, since a real <select> element has no concept of a null value.
+// Updates the in-memory account list and rebuilds the affected <tr>(s) for a set of account
+// ids, after a successful assignment call. categoryId may be null/falsy (the account was
+// cleared to "Not assigned"). A full row rebuild (via buildAssignCategoriesRow(), rather than
+// patching just select.value) is used so the unassigned-flag placeholder option and amber row
+// tint stay correct too — arAssignCategoriesTableBody's change/click listeners are delegated
+// on the container, not per-row, so swapping a row's DOM node is safe.
 function applyCategoryToRows(accountIds, categoryId, categoryName) {
     accountIds.forEach(id => {
         const account = getAssignCategoriesAccountById(id);
@@ -2591,9 +2646,12 @@ function applyCategoryToRows(accountIds, categoryId, categoryName) {
             account.category_id = categoryId || null;
             account.category_name = categoryName;
         }
-        const select = arAssignCategoriesTableBody.querySelector('select[data-account-id="' + id + '"]');
-        if (select) select.value = categoryId || 'none';
+        const oldRow = arAssignCategoriesTableBody.querySelector('tr[data-account-id="' + id + '"]');
+        if (oldRow && account) {
+            oldRow.replaceWith(buildAssignCategoriesRow(account));
+        }
     });
+    updateAssignCategoriesUnassignedBadge();
 }
 
 // Converts a <select>'s raw string value ("none" or a numeric category id string)
