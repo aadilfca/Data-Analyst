@@ -5473,3 +5473,132 @@ body {
     outline: 2px solid #fca5a5;
     outline-offset: -2px;
 }
+
+/* ----- Single-Calendar Date Range Picker (Verification module, Phase 3, FINAL) -----
+   Styling for initDateRangePicker() (static/verification.js), mounted in two places -
+   #sessionPopup's open-cashbook dialog and the in-session cashbook filter bar's Date Range
+   field. Was inline/functional-only styling in Phases 1-2; moved here to match this app's
+   existing dropdown/popover conventions (border/radius language from .template-dropdown,
+   box-shadow/z-index from .audit-guidance-popover/.line-status-reason-popover/.nav-menu-panel).
+   No positioning JS was needed - both mount contexts (#sessionPopup, the Date Range Selector
+   bar) have no clipping ancestor and enough width for the fixed 240px dropdown. */
+.drp-container {
+    position: relative;
+    display: inline-block;
+}
+
+.drp-trigger {
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 14px;
+    background: #fff;
+    color: #1a1a2e;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.2s;
+}
+.drp-trigger:hover {
+    border-color: #94a3b8;
+}
+
+.drp-calendar {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    z-index: 1100;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    width: 240px;
+}
+
+.drp-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.drp-nav-btn {
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 2px 8px;
+    color: #475569;
+    border-radius: 4px;
+    transition: background 0.15s;
+}
+.drp-nav-btn:hover {
+    background: #f1f5f9;
+}
+
+.drp-month-label {
+    font-weight: 600;
+    font-size: 13px;
+    color: #1e293b;
+}
+
+.drp-weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+    margin-bottom: 4px;
+}
+.drp-weekdays span {
+    font-size: 11px;
+    color: #94a3b8;
+    text-align: center;
+}
+
+.drp-days {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+}
+
+.drp-day {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    color: #1e293b;
+    font-weight: 400;
+    background: transparent;
+    transition: background 0.15s;
+}
+.drp-day:hover {
+    background: #f1f5f9;
+}
+.drp-day.drp-day-in-range {
+    background: #dbeafe;
+}
+.drp-day.drp-day-in-range:hover {
+    background: #bfdbfe;
+}
+.drp-day.drp-day-endpoint {
+    background: #3b82f6;
+    color: #fff;
+    font-weight: 600;
+}
+.drp-day.drp-day-endpoint:hover {
+    background: #2563eb;
+}
+
+/* Place 2's (cashbook filter bar) own "Date Range" label - matches the exact style its former
+   sibling Start/End Date labels already used, so it still lines up with the Cashbook selector
+   label beside it. Place 1's label relies on #sessionPopup label's own existing rule instead. */
+.drp-field-label {
+    font-weight: 600;
+    font-size: 12px;
+    display: block;
+    margin-bottom: 2px;
+}

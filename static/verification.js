@@ -183,8 +183,7 @@ function formatDateInput(d) {
 function initDateRangePicker(container, onChange) {
     if (!container) return null;
     container.innerHTML = '';
-    container.style.position = 'relative';
-    container.style.display = 'inline-block';
+    container.classList.add('drp-container');
 
     let visibleMonth = new Date(); // only getFullYear()/getMonth() are read off this
     let rangeStart = null; // Date or null
@@ -206,10 +205,8 @@ function initDateRangePicker(container, onChange) {
 
     const trigger = document.createElement('div');
     trigger.className = 'drp-trigger';
-    trigger.style.cssText = 'border:2px solid #e2e8f0; border-radius:8px; padding:8px 12px; font-size:14px; background:#fff; cursor:pointer; white-space:nowrap;';
     const calendar = document.createElement('div');
     calendar.className = 'drp-calendar';
-    calendar.style.cssText = 'display:none; position:absolute; top:100%; left:0; margin-top:4px; z-index:1100; background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:10px; box-shadow:0 8px 24px rgba(0,0,0,0.15); width:220px;';
     container.appendChild(trigger);
     container.appendChild(calendar);
 
@@ -239,11 +236,11 @@ function initDateRangePicker(container, onChange) {
         calendar.innerHTML = '';
 
         const header = document.createElement('div');
-        header.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;';
+        header.className = 'drp-header';
         const prevBtn = document.createElement('button');
         prevBtn.type = 'button';
         prevBtn.textContent = '‹';
-        prevBtn.style.cssText = 'border:none; background:none; cursor:pointer; font-size:16px; padding:2px 8px;';
+        prevBtn.className = 'drp-nav-btn';
         prevBtn.addEventListener('click', function(e) {
             e.stopPropagation();
             visibleMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1);
@@ -252,14 +249,14 @@ function initDateRangePicker(container, onChange) {
         const nextBtn = document.createElement('button');
         nextBtn.type = 'button';
         nextBtn.textContent = '›';
-        nextBtn.style.cssText = 'border:none; background:none; cursor:pointer; font-size:16px; padding:2px 8px;';
+        nextBtn.className = 'drp-nav-btn';
         nextBtn.addEventListener('click', function(e) {
             e.stopPropagation();
             visibleMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1);
             renderCalendar();
         });
         const monthLabel = document.createElement('span');
-        monthLabel.style.cssText = 'font-weight:600; font-size:13px; color:#1e293b;';
+        monthLabel.className = 'drp-month-label';
         monthLabel.textContent = visibleMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
         header.appendChild(prevBtn);
         header.appendChild(monthLabel);
@@ -267,17 +264,16 @@ function initDateRangePicker(container, onChange) {
         calendar.appendChild(header);
 
         const weekdays = document.createElement('div');
-        weekdays.style.cssText = 'display:grid; grid-template-columns:repeat(7, 1fr); gap:2px; margin-bottom:4px;';
+        weekdays.className = 'drp-weekdays';
         ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].forEach(function(w) {
             const cell = document.createElement('span');
             cell.textContent = w;
-            cell.style.cssText = 'font-size:11px; color:#94a3b8; text-align:center;';
             weekdays.appendChild(cell);
         });
         calendar.appendChild(weekdays);
 
         const daysGrid = document.createElement('div');
-        daysGrid.style.cssText = 'display:grid; grid-template-columns:repeat(7, 1fr); gap:2px;';
+        daysGrid.className = 'drp-days';
         daysGrid.addEventListener('mouseleave', function() {
             if (rangeStart && !rangeEnd && hoverDate) {
                 hoverDate = null;
@@ -297,17 +293,12 @@ function initDateRangePicker(container, onChange) {
             const dayDate = new Date(year, month, d);
             const cell = document.createElement('span');
             cell.textContent = String(d);
-            let bg = 'transparent';
-            let color = '#1e293b';
-            let fontWeight = '400';
+            cell.className = 'drp-day';
             if (sameDay(dayDate, rangeStart) || sameDay(dayDate, rangeEnd)) {
-                bg = '#3b82f6';
-                color = '#fff';
-                fontWeight = '600';
+                cell.classList.add('drp-day-endpoint');
             } else if (inCommittedRange(dayDate) || inPreviewRange(dayDate)) {
-                bg = '#dbeafe';
+                cell.classList.add('drp-day-in-range');
             }
-            cell.style.cssText = `display:flex; align-items:center; justify-content:center; height:28px; font-size:12px; cursor:pointer; border-radius:4px; background:${bg}; color:${color}; font-weight:${fontWeight};`;
             cell.addEventListener('click', function(e) {
                 e.stopPropagation();
                 handleDayClick(dayDate);
@@ -420,7 +411,7 @@ function mountCashbookDateRangePicker() {
     if (!startWrapper || !endWrapper) return null;
     startWrapper.innerHTML = '';
     const label = document.createElement('label');
-    label.style.cssText = 'font-weight:600; font-size:12px; display:block; margin-bottom:2px;';
+    label.className = 'drp-field-label';
     label.textContent = 'Date Range';
     const mount = document.createElement('div');
     startWrapper.appendChild(label);
