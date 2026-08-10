@@ -3052,6 +3052,36 @@ body {
     font-weight: 500;
 }
 
+/* ----- Select-all / clear-all toggle icon (roles bar + Audit Procedures checklist header) -----
+   Icon-only circular-hover button (Tabler "checks" outline icon) — same circular-hover-background
+   language as .nav-menu-toggle/.nav-home-icon. Colour/fill reflects current state: muted/outline
+   by default, solid green + full opacity once every eligible item is already selected (reuses the
+   "done" accent already used elsewhere in this modal, e.g. .procedure-voucher-check-btn.tick.selected). */
+.procedure-select-all-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    border: none;
+    background: none;
+    color: currentColor;
+    opacity: 0.5;
+    border-radius: 50%;
+    cursor: pointer;
+    padding: 4px;
+    transition: background 0.15s ease, opacity 0.15s ease, color 0.15s ease;
+}
+.procedure-select-all-btn:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.08);
+}
+.procedure-select-all-btn.all-selected {
+    opacity: 1;
+    color: #16a34a;
+}
+
 /* ----- Voucher Line tab: Account Head Recommendation field layout (Validation Rules Phase 5/7) -----
    Label + text input rows inside the tab's segment body — reuses .procedure-search-input for the
    inputs themselves (see renderAccountHeadCard() in verification.js), only the label/spacing
@@ -3894,6 +3924,14 @@ body {
     font-size: 13px;
     font-weight: 700;
     letter-spacing: 0.3px;
+}
+/* Modifier for a header that also carries an inline action (the Audit Procedures select-all icon)
+   — sits immediately after the title text, not pushed to the far edge (which clips against the
+   card's rounded corner), so no justify-content:space-between here. */
+.procedure-segment-header-with-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 .procedure-segment-body {
     padding: 12px 14px;

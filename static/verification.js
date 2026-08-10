@@ -4121,6 +4121,12 @@ async function ensureVoucherChecksLoaded(clientId, transactionRef) {
     }
 }
 
+// Tabler "checks" (double-check) outline icon — shared by both select-all/clear-all toggle
+// buttons below (roles bar + Audit Procedures checklist header), matching this modal's existing
+// inline-SVG-icon convention (e.g. the PB_ICON_* constants) rather than a Tabler icon font/CDN,
+// which isn't loaded anywhere in this app.
+const ICON_SELECT_ALL_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 12l5 5l10 -10"/><path d="M2 12l5 5m5 -5l5 -5"/></svg>';
+
 // Renders the persistent voucher-level checks bar, shown once per voucher above the document rail
 // (#procedureVoucherChecksBar, static/verification.html) — not duplicated per tab/line, since these
 // checks apply to the whole voucher (client_id+transaction_ref), not one line. Voucher-level
@@ -4146,7 +4152,18 @@ function renderVoucherChecksBar(uid) {
         ? `<div class="procedure-voucher-checks-warning">⚠️ ${notDone.map(c => `<strong>${escapeHtml(c.name)}</strong>`).join(', ')} marked not done — observation will auto-note on close.</div>`
         : '';
 
-    container.innerHTML = checks.map(check => `
+    // Select-all/clear-all toggle: only ever acts on checks NOT currently marked ✗ (not_done) — a
+    // deliberate ✗ never gets silently overwritten by a bulk action in either direction. "All
+    // selected" (icon filled) means every such check is currently 'done'.
+    const selectAllTargets = checks.filter(c => c.state !== 'not_done');
+    const allChecksSelected = selectAllTargets.length > 0 && selectAllTargets.every(c => c.state === 'done');
+    const selectAllBtnHtml = `
+        <button type="button" id="procedureVoucherChecksSelectAllBtn"
+            class="procedure-select-all-btn${allChecksSelected ? ' all-selected' : ''}"
+            title="${allChecksSelected ? 'Clear all' : 'Mark all done'}">${ICON_SELECT_ALL_SVG}</button>
+    `;
+
+    container.innerHTML = selectAllBtnHtml + checks.map(check => `
         <div class="procedure-voucher-check-row" data-check-id="${check.id}">
             <span class="procedure-voucher-check-label">${escapeHtml(check.name)}</span>
             <div class="procedure-voucher-check-toggle">
@@ -4157,6 +4174,13 @@ function renderVoucherChecksBar(uid) {
             </div>
         </div>
     `).join('') + warningHtml;
+
+    const selectAllBtn = document.getElementById('procedureVoucherChecksSelectAllBtn');
+    if (selectAllBtn) {
+        selectAllBtn.addEventListener('click', function() {
+            toggleAllVoucherChecks(uid);
+        });
+    }
 
     container.querySelectorAll('.procedure-voucher-check-btn').forEach(btn => {
         btn.addEventListener('click', async function() {
@@ -4198,6 +4222,51 @@ function renderVoucherChecksBar(uid) {
     });
 
     updateVerifyFooterButton(uid);
+}
+
+// Bulk-toggles the roles bar's ✓ state — see renderVoucherChecksBar()'s selectAllTargets comment
+// for the "never touch ✗" rule. Mirrors the per-check button's own optimistic-save/revert-on-
+// failure shape, batched via Promise.all rather than one save per check.
+async function toggleAllVoucherChecks(uid) {
+    const transactionRef = currentVoucherId;
+    const checks = voucherChecksCache[transactionRef] || [];
+    const targets = checks.filter(c => c.state !== 'not_done');
+    if (!targets.length) return;
+    const allSelected = targets.every(c => c.state === 'done');
+    const newState = allSelected ? 'untouched' : 'done';
+    const toChange = targets.filter(c => c.state !== newState);
+    if (!toChange.length) return;
+
+    const previousStates = {};
+    toChange.forEach(c => { previousStates[c.id] = c.state; c.state = newState; });
+    renderVoucherChecksBar(uid);
+
+    try {
+        const responses = await Promise.all(toChange.map(c => fetch(`${API_BASE}/api/verification/save_voucher_check`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                client_id: getClientId(),
+                transaction_ref: transactionRef,
+                check_id: c.id,
+                state: newState
+            })
+        })));
+        for (const res of responses) {
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || 'Failed to save voucher check.');
+            }
+        }
+        renderVoucherChecksBar(uid);
+        renderProcedureModalTabs(uid);
+        await saveAllVoucherLines();
+    } catch (e) {
+        console.error('Failed to save all voucher checks:', e);
+        toChange.forEach(c => { c.state = previousStates[c.id]; });
+        showStatus('Failed to update all checks — please try again.', 'error');
+        renderVoucherChecksBar(uid);
+    }
 }
 
 // Shared completeness check for one document within one voucher line's modal — used both by the
@@ -4366,6 +4435,13 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
             toggleProcedureCheck(uid, docId, this.dataset.role, this.checked);
         });
     });
+
+    const selectAllChecklistBtn = document.getElementById('procedureChecklistSelectAllBtn');
+    if (selectAllChecklistBtn) {
+        selectAllChecklistBtn.addEventListener('click', function() {
+            toggleAllProcedureChecks(uid, docId);
+        });
+    }
 
     // The observation textarea is local-only on every keystroke (no network call) —
     // flushProcedureObservations() still persists any dirty tab automatically on
@@ -4870,9 +4946,17 @@ function renderProcedureModalPanel(uid, docId) {
         </div>
     ` : '';
 
+    // Select-all/clear-all icon: "all selected" means every configured role is currently ticked
+    // (same roles.length>0 && every(...) rule isProcedureDocumentComplete() already uses).
+    const allRolesChecked = hasRoles && doc.auth_roles.every(r => tabState.checklist[r] && tabState.checklist[r].is_checked);
     const proceduresSegmentHtml = hasRoles ? `
         <div class="procedure-segment procedure-segment-procedures">
-            <h4 class="procedure-segment-header">✅ Audit Procedures</h4>
+            <h4 class="procedure-segment-header procedure-segment-header-with-toggle">
+                <span>✅ Audit Procedures</span>
+                <button type="button" id="procedureChecklistSelectAllBtn"
+                    class="procedure-select-all-btn${allRolesChecked ? ' all-selected' : ''}"
+                    title="${allRolesChecked ? 'Untick all' : 'Tick all'}">${ICON_SELECT_ALL_SVG}</button>
+            </h4>
             <div class="procedure-segment-body">${buildProcedureChecklist(uid, docId)}</div>
         </div>
     ` : '';
@@ -4927,6 +5011,73 @@ function renderProcedureModalPanel(uid, docId) {
     // lose unsaved work" to cover search results too) — re-renders from tabState, no new fetch.
     if (tabState.searchResults && tabState.searchResults.length) {
         renderProcedureSearchDropdown(uid, docId);
+    }
+}
+
+// Bulk-toggles every configured role's tick for one document's Audit Procedures checklist. Not a
+// per-role toggleProcedureCheck() loop (that function individually re-renders the whole panel on
+// failure, which would race against the other in-flight calls) — instead applies the optimistic
+// update once, batches the saves, and re-renders once on success or failure, same shape as
+// toggleAllVoucherChecks() above.
+async function toggleAllProcedureChecks(uid, docId) {
+    const lineState = procedureModalState[uid];
+    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
+    const roles = (doc && doc.auth_roles) || [];
+    if (!roles.length) return;
+    const tabState = getProcedureTabState(uid, docId);
+    const allChecked = roles.every(r => tabState.checklist[r] && tabState.checklist[r].is_checked);
+    const newChecked = !allChecked;
+    const toChange = roles.filter(r => !!(tabState.checklist[r] && tabState.checklist[r].is_checked) !== newChecked);
+    if (!toChange.length) return;
+
+    const previousStates = {};
+    toChange.forEach(role => {
+        previousStates[role] = tabState.checklist[role] ? { ...tabState.checklist[role] } : null;
+        if (!tabState.checklist[role]) tabState.checklist[role] = {};
+        tabState.checklist[role].is_checked = newChecked;
+    });
+    renderProcedureModalPanel(uid, docId);
+    renderProcedureModalTabs(uid);
+
+    try {
+        const responses = await Promise.all(toChange.map(role => fetch(`${API_BASE}/api/verification/procedure_checks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                voucher_line_id: parseInt(uid),
+                document_id: docId,
+                role_name: role,
+                is_checked: newChecked
+            })
+        })));
+        for (const res of responses) {
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || 'Failed to save procedure check.');
+            }
+        }
+        const updatedList = await Promise.all(responses.map(res => res.json()));
+        toChange.forEach((role, i) => {
+            const updated = updatedList[i];
+            tabState.checklist[role] = {
+                is_checked: updated.is_checked,
+                checked_by: updated.checked_by,
+                checked_at: updated.checked_at
+            };
+        });
+        renderProcedureModalTabs(uid);
+    } catch (e) {
+        console.error('Failed to save all audit procedure checks:', e);
+        toChange.forEach(role => {
+            if (previousStates[role]) {
+                tabState.checklist[role] = previousStates[role];
+            } else {
+                delete tabState.checklist[role];
+            }
+        });
+        showStatus('Failed to update all procedures — please try again.', 'error');
+        renderProcedureModalPanel(uid, docId);
+        renderProcedureModalTabs(uid);
     }
 }
 
