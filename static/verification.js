@@ -666,10 +666,23 @@ async function activateCashbookView(cashbook) {
             });
         cashbookSelector.value = cashbook;
     }
-    const now = new Date();
-    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    if (cashbookDateRangePicker) cashbookDateRangePicker.setRange(formatDateInput(firstDay), formatDateInput(lastDay));
+    // Confirmed fix: seed Place 2's picker from Place 1's own final range (whatever the user last
+    // picked/left in the dialog, or its own auto-detected default) instead of always hardcoding
+    // "today's calendar month" — the previous hardcode is what silently discarded a Place-1
+    // selection the instant the dialog closed, regardless of any live mirroring. Falls back to
+    // today's month only if popupDateRangePicker somehow has no range yet (defensive - both
+    // callers of this function already run loadCashbooks(), which seeds it, before reaching here).
+    const popupRange = popupDateRangePicker ? popupDateRangePicker.getRange() : { start: null, end: null };
+    let cashbookViewStart = popupRange.start;
+    let cashbookViewEnd = popupRange.end;
+    if (!cashbookViewStart || !cashbookViewEnd) {
+        const now = new Date();
+        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        cashbookViewStart = formatDateInput(firstDay);
+        cashbookViewEnd = formatDateInput(lastDay);
+    }
+    if (cashbookDateRangePicker) cashbookDateRangePicker.setRange(cashbookViewStart, cashbookViewEnd);
     setVerificationUrl('cashbook', cashbook);
     await fetchCashbookData();
 }
@@ -3351,7 +3364,14 @@ if (popupStartBtn) popupStartBtn.addEventListener('click', openCashbook);
 // full range is picked - mirrors the existing cashbookStartDate/cashbookEndDate pattern in
 // #cashbookContent. Now fired directly as the date-range picker's onChange callback (Phase 1 of
 // the single-calendar range-picker rollout) instead of a DOM 'change' listener on two inputs.
+// Confirmed fix: also mirrors into Place 2's picker (cashbookDateRangePicker) here, symmetric
+// with handleCashbookDateRangeChange()'s existing Place 2 → Place 1 mirror below - previously
+// this direction had no mirror call at all. Safe against a mirroring loop since setRange() never
+// fires onChange. The real value carrier for the "Open Cashbook" transition is
+// activateCashbookView() reading popupDateRangePicker.getRange() directly, but this keeps the two
+// pickers in sync live too, matching the confirmed "keep both places mirrored" requirement.
 function handlePopupPeriodChange(start, end) {
+    if (cashbookDateRangePicker) cashbookDateRangePicker.setRange(start, end);
     if (start && end && start <= end) {
         loadCashbooks(start, end);
     }
