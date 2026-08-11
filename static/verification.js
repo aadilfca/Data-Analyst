@@ -1371,7 +1371,7 @@ async function fetchPhysicalBillsForLine(uid) {
 }
 
 // Small SVG completion ring, adapted from the v7 prototype's ring() helper — pct is 0-100, cls is
-// 'pending'/'progress'/'done' (drives the stroke color via the CSS class, matching this file's
+// 'pending'/'partial'/'done' (drives the stroke color via the CSS class, matching this file's
 // existing traffic-light convention rather than the prototype's own separate palette).
 function buildProcedureRingSvg(pct, cls) {
     const r = 6, c = 2 * Math.PI * r;
@@ -1520,7 +1520,7 @@ async function updateProceduresCellForLine(uid, type) {
     const done = documents.filter(isDocDone).length;
     const total = documents.length;
     const pct = total ? Math.round((done / total) * 100) : 0;
-    const cls = done === 0 ? 'pending' : (done === total ? 'done' : 'progress');
+    const cls = done === 0 ? 'pending' : (done === total ? 'done' : 'partial');
 
     cell.innerHTML = `
         <span class="voucher-line-procedures-badge ${cls}" data-uid="${uid}" title="${done} of ${total} documents complete">

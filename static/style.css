@@ -2374,9 +2374,13 @@ body {
     background: #f0f1f4;
     color: #94a3b8;
 }
-.voucher-line-procedures-badge.progress {
-    background: #fef3c7;
-    color: #92400e;
+/* Some-but-not-all procedures ticked — deliberately a distinct light red from the Query pill's
+   #fee2e2/#991b1b (used by .voucher-line-cleared-badge.query/.status-badge.failed/.cc-badge-fail
+   elsewhere in this file), so procedure-completion state can never be visually confused with
+   voucher line/Cleared-Query status. */
+.voucher-line-procedures-badge.partial {
+    background: #fecaca;
+    color: #b91c1c;
 }
 .voucher-line-procedures-badge.done {
     background: #dcfce7;
@@ -2393,8 +2397,8 @@ body {
 .voucher-line-proc-ring-fill.pending {
     stroke: #94a3b8;
 }
-.voucher-line-proc-ring-fill.progress {
-    stroke: #92400e;
+.voucher-line-proc-ring-fill.partial {
+    stroke: #b91c1c;
 }
 .voucher-line-proc-ring-fill.done {
     stroke: #166534;
