@@ -859,10 +859,10 @@ function exitCashbookView() {
 // the page header, then reuses fetchCashbookData() unchanged for the actual reload.
 // Session date-range reconciliation, Phase 2 of 4: when reached with an active session
 // (currentSessionId set - only possible now that returnToCashbookFromSession() keeps one alive),
-// Apply instead reconciles that session's voucher list against the new range and returns to
-// Place 3, rather than reloading Place 2's own preview table. The cashbook-switch block above is
-// skipped in that case (also enforced by activateCashbookView() disabling the dropdown) - reconcile
-// is keyed to the session's own fixed cashbook, switching isn't supported mid-session.
+// Apply instead reconciles that session's voucher list against the new range - silently, staying
+// on Place 2 - rather than reloading Place 2's own preview table. The cashbook-switch block above
+// is skipped in that case (also enforced by activateCashbookView() disabling the dropdown) -
+// reconcile is keyed to the session's own fixed cashbook, switching isn't supported mid-session.
 async function applyCashbookPreview() {
     if (!cashbookSelector) {
         if (currentSessionId) {
@@ -888,15 +888,16 @@ async function applyCashbookPreview() {
 }
 
 // ---------- RECONCILE AN ACTIVE SESSION AGAINST A NEW DATE RANGE ----------
-// Session date-range reconciliation, Phase 2 of 4: calls Phase 1's backend reconcile endpoint,
-// then re-renders Place 3 from the result. Newly-in-range/reactivated/excluded lines are all
-// handled server-side (see reconcile_session_range() in routers/verification.py) - this is
-// call-and-render only, no client-side range-status logic.
-// Where the auditor lands afterward: if the voucher they were viewing (currentDetailId) is still
-// in the reconciled active set, resume it exactly via navigateToTransaction() - the common case
-// (range widened, or the current voucher untouched). If it dropped out of range, fall back to
-// loadNextTransaction() (jumps to the reconciled set's first Pending voucher) as a safe,
-// non-crashing default - this is a placeholder, not real orphaned-voucher handling; that's Phase 3.
+// Session date-range reconciliation, Phase 2 of 4: calls Phase 1's backend reconcile endpoint.
+// Newly-in-range/reactivated/excluded lines are all handled server-side (see
+// reconcile_session_range() in routers/verification.py) - this is call-and-refresh only, no
+// client-side range-status logic.
+// Confirmed fix (regressions found right after Phase 2 landed): this deliberately does NOT
+// navigate anywhere and shows no message of any kind - Apply only refreshes the underlying data
+// and stays on Place 2, silently, regardless of outcome. Navigating to Place 3 is not this
+// function's job. sessionTransactions is still force-refreshed (a data-only update, no visual
+// side effect) so Place 3 reflects the reconciled set whenever the auditor does eventually
+// return to it, rather than staying silently stale until some later action happens to refetch.
 async function reconcileActiveSessionRange() {
     if (!currentSessionId) return;
     const range = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : { start: null, end: null };
@@ -921,19 +922,11 @@ async function reconcileActiveSessionRange() {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to apply new range');
         }
-        const result = await res.json();
-        // The reconcile endpoint doesn't return the line list itself - force-refresh
-        // sessionTransactions fresh, since it's already populated from before the reconcile and
+        // The reconcile endpoint's response isn't needed here - force-refresh sessionTransactions
+        // fresh instead, since it's already populated from before the reconcile and
         // loadTransactionList()'s normal cache guard would otherwise skip re-fetching.
         await loadTransactionList(false, true);
-        returnToSessionFromCashbook();
-        const stillInRange = sessionTransactions.some(t => t.detail_id === currentDetailId);
-        if (stillInRange) {
-            navigateToTransaction(currentDetailId);
-        } else {
-            await loadNextTransaction();
-        }
-        showStatus(`Range updated — ${result.total_active} voucher line(s) in range.`, 'success');
+        cashbookStatus.textContent = '';
     } catch (error) {
         console.error('Error reconciling session range:', error);
         cashbookStatus.textContent = `⚠️ ${error.message}`;
