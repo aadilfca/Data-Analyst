@@ -555,6 +555,49 @@ function monthBoundsAround(date) {
     return { start: formatDateInput(firstDay), end: formatDateInput(lastDay) };
 }
 
+// ---------- DATE RANGE: SESSIONSTORAGE PERSISTENCE (confirmed fix) ----------
+// Place 1's popup (openSessionPopup()) only ever opens via a fresh page load, so there is no
+// in-memory picker state left to capture the way exitSession() does for Place 2 - the user's last
+// committed range has to survive across navigation/reload within the tab instead. Tab-scoped only
+// (sessionStorage, not localStorage) per the confirmed requirement - cleared on tab/app close, not
+// persisted across app restarts. Mirrors static/upload.js's UPLOAD_SESSION_STORAGE_KEY/
+// saveUploadSessionState()/restoreUploadSessionState() error-handling shape (try/catch, warn-only,
+// clear-on-parse-error) - distinct key, no collision with that page's own 'uploadPageState' or
+// client_context.js's own STORAGE_KEY (selected client id).
+const VERIFICATION_DATE_RANGE_STORAGE_KEY = 'verificationDateRange';
+
+function saveVerificationDateRange(start, end) {
+    try {
+        sessionStorage.setItem(VERIFICATION_DATE_RANGE_STORAGE_KEY, JSON.stringify({ start, end }));
+    } catch (error) {
+        console.warn('⚠️ Could not save verification date range:', error);
+    }
+}
+
+// Returns {start, end} if a valid, previously-committed range is on record, else null (covers
+// first-ever load with nothing saved yet, a corrupted/tampered value, or a malformed range) - the
+// "genuinely empty" case callers fall back to today's auto-detect for.
+function getPersistedVerificationDateRange() {
+    let raw;
+    try {
+        raw = sessionStorage.getItem(VERIFICATION_DATE_RANGE_STORAGE_KEY);
+    } catch (error) {
+        console.warn('⚠️ Could not read verification date range:', error);
+        return null;
+    }
+    if (!raw) return null;
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    } catch (error) {
+        console.warn('⚠️ Could not parse verification date range:', error);
+        sessionStorage.removeItem(VERIFICATION_DATE_RANGE_STORAGE_KEY);
+        return null;
+    }
+    if (!parsed || !parsed.start || !parsed.end || parsed.start > parsed.end) return null;
+    return { start: parsed.start, end: parsed.end };
+}
+
 // ---------- POPUP: LOAD CASHBOOKS ----------
 // overrideStart/overrideEnd (confirmed fix): when provided (the user edited the popup's date
 // inputs), search that exact range. When omitted, auto-detect the most recent month that
@@ -3451,7 +3494,17 @@ function openSessionPopup() {
         if (popupStartBtn) popupStartBtn.textContent = '🚀 Open Cashbook';
     }
     popupOverlay.style.display = 'flex';
-    loadCashbooks();
+    // Confirmed fix: reopening the popup is always a fresh page load (this is the only caller of
+    // openSessionPopup(), and it only ever fires from window.onload), so there is no in-memory
+    // range left to fall back on - use the persisted range as an explicit override (same mechanism
+    // handlePopupPeriodChange()/exitSession() already use) when one exists, falling back to
+    // loadCashbooks()'s own today's-auto-detect only when genuinely empty (first-ever load).
+    const persisted = getPersistedVerificationDateRange();
+    if (persisted) {
+        loadCashbooks(persisted.start, persisted.end);
+    } else {
+        loadCashbooks();
+    }
 }
 
 // ---------- EVENT LISTENERS ----------
@@ -3485,6 +3538,7 @@ if (popupStartBtn) popupStartBtn.addEventListener('click', openCashbook);
 function handlePopupPeriodChange(start, end) {
     if (cashbookDateRangePicker) cashbookDateRangePicker.setRange(start, end);
     if (start && end && start <= end) {
+        saveVerificationDateRange(start, end);
         loadCashbooks(start, end);
     }
 }
@@ -3498,6 +3552,9 @@ popupDateRangePicker = mountPopupDateRangePicker();
 // the picked range into Place 1's picker so it stays in sync if that dialog is reopened.
 function handleCashbookDateRangeChange(start, end) {
     if (popupDateRangePicker) popupDateRangePicker.setRange(start, end);
+    if (start && end && start <= end) {
+        saveVerificationDateRange(start, end);
+    }
 }
 cashbookDateRangePicker = mountCashbookDateRangePicker();
 if (popupCancelBtn) {
