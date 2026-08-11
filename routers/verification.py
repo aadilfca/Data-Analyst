@@ -1295,7 +1295,7 @@ def _fetch_session_details_grouped(session_id: int) -> list:
                cd.template_id, cd.row_data, cd.extract_date
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
-        WHERE vd.session_id = ?
+        WHERE vd.session_id = ? AND vd.range_status = 'active'
         ORDER BY cd.id ASC
         """,
         (session_id,)
@@ -1872,7 +1872,7 @@ def get_audited_cashbook(session_id: int):
                cd.row_data, cd.extract_amount, cd.extract_date
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
-        WHERE vd.session_id = ?
+        WHERE vd.session_id = ? AND vd.range_status = 'active'
         ORDER BY vd.id
         """,
         (session_id,)
@@ -1988,7 +1988,7 @@ def get_voucher_stats(session_id: int):
         raise HTTPException(404, "Session not found or cancelled.")
 
     rows = execute_query(
-        "SELECT transaction_ref, cleared_status FROM verification_details WHERE session_id = ?",
+        "SELECT transaction_ref, cleared_status FROM verification_details WHERE session_id = ? AND range_status = 'active'",
         (session_id,)
     )
 
@@ -2010,6 +2010,251 @@ def get_voucher_stats(session_id: int):
 
     total = len(lines_by_voucher)
     return {"total": total, "cleared": cleared, "query": query, "pending": pending}
+
+
+@router.post("/api/verification/session/{session_id}/reconcile_range")
+def reconcile_session_range(
+    session_id: int,
+    period_start: str = Query(..., description="New start date (YYYY-MM-DD)"),
+    period_end: str = Query(..., description="New end date (YYYY-MM-DD)"),
+    created_by: str = "Analyst"
+):
+    """
+    Re-resolves an already-active session's voucher list against a new date range (Place 2's
+    date-range picker, edited mid-session) - a reconcile, not a new session start. Nothing is
+    ever deleted: a voucher that falls out of the new range has its verification_details
+    row(s) soft-excluded (range_status='excluded', excluded_at stamped) rather than removed,
+    so its line_items/procedure_data/cleared_status survive intact if the range is later
+    widened back to include it again (reactivation restores the exact same row, never a
+    duplicate). A voucher newly in range that was never in this session before gets a fresh
+    Pending row, exactly like start_verification_session() creates on a first session start.
+
+    range_status is what actually keeps an excluded row out of the active voucher list -
+    _fetch_session_details_grouped()/get_audited_cashbook()/get_voucher_stats() all filter to
+    range_status='active', so this endpoint only needs to flip that flag, not touch those
+    endpoints' own logic further.
+    """
+    session = execute_query(
+        "SELECT id, client_id, cashbook_name FROM verification_sessions WHERE id = ? AND status != 'Cancelled'",
+        (session_id,)
+    )
+    if not session:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+    s = session[0]
+    client_id = s['client_id']
+    cashbook_name = s['cashbook_name']
+
+    try:
+        datetime.fromisoformat(period_start)
+        datetime.fromisoformat(period_end)
+    except ValueError:
+        raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+    if period_start > period_end:
+        raise HTTPException(400, "Start date must be before or equal to end date.")
+
+    # --- Re-run the same voucher-discovery logic as start_verification_session(), against the
+    # session's existing client_id/cashbook_name but the new date range. Deliberately duplicated
+    # rather than shared via a helper, to keep this addition purely additive - see the plan note.
+    client_prefixes = get_client_voucher_prefixes(client_id)
+    rows = execute_query(
+        """
+        SELECT id, row_data, extract_date, extract_amount
+        FROM client_data
+        WHERE client_id = ? AND is_deleted = 0 AND change_detection_status != 'deleted'
+          AND extract_date BETWEEN ? AND ?
+        ORDER BY extract_date
+        """,
+        (client_id, period_start, period_end)
+    )
+
+    voucher_aliases = ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher', 'Invoice No', 'Invoice Number']
+    account_aliases = ['Account Name', 'Account', 'Account Detail', 'Account Code', 'Ledger', 'Head']
+    debit_aliases = ['Debit', 'Debit Amount', 'Dr', 'Dr Amount', 'Debit (Dr)', 'Dr. Amount']
+    credit_aliases = ['Credit', 'Credit Amount', 'Cr', 'Cr Amount', 'Credit (Cr)', 'Cr. Amount']
+
+    def get_col_value(row_data, aliases):
+        for alias in aliases:
+            if alias in row_data:
+                val = row_data[alias]
+                if val is not None and val != '':
+                    return val
+        return None
+
+    vouchers = {}
+    for row in rows:
+        try:
+            rd = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
+            if not isinstance(rd, dict):
+                continue
+            voucher_id = get_col_value(rd, voucher_aliases)
+            if not voucher_id:
+                continue
+            category = match_voucher_category(voucher_id, client_prefixes)
+            if category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
+                continue
+            debit_str = get_col_value(rd, debit_aliases)
+            credit_str = get_col_value(rd, credit_aliases)
+            debit = float(debit_str) if debit_str else 0.0
+            credit = float(credit_str) if credit_str else 0.0
+            account_name = get_col_value(rd, account_aliases)
+            if not account_name:
+                continue
+            if voucher_id not in vouchers:
+                vouchers[voucher_id] = {'category': category, 'rows': []}
+            vouchers[voucher_id]['rows'].append({
+                'row_id': row['id'],
+                'account_name': account_name,
+                'debit': debit,
+                'credit': credit,
+            })
+        except:
+            continue
+
+    target: Dict[int, str] = {}  # client_data_id -> transaction_ref
+    for vid, data in vouchers.items():
+        cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])), None)
+        if cashbook_row is None:
+            continue
+        vtype = voucher_type_label(data['category'])
+        if vtype is None:
+            continue
+        for row in data['rows']:
+            if vtype in ('CPV', 'BPV') and row['debit'] > 0 and row['credit'] == 0:
+                target[row['row_id']] = vid
+            elif vtype in ('CRV', 'BRV') and row['credit'] > 0 and row['debit'] == 0:
+                target[row['row_id']] = vid
+
+    target_ids = set(target.keys())
+
+    # --- Existing verification_details rows for this session, regardless of range_status.
+    existing = execute_query(
+        "SELECT id, client_data_id, range_status FROM verification_details WHERE session_id = ?",
+        (session_id,)
+    )
+    existing_by_client_data_id = {r['client_data_id']: r for r in existing}
+    existing_ids_all = set(existing_by_client_data_id.keys())
+
+    new_client_data_ids = target_ids - existing_ids_all
+    reactivate_ids = [
+        cdid for cdid in (target_ids & existing_ids_all)
+        if existing_by_client_data_id[cdid]['range_status'] == 'excluded'
+    ]
+    exclude_detail_rows = [
+        r for r in existing
+        if r['range_status'] == 'active' and r['client_data_id'] not in target_ids
+    ]
+
+    # --- New rows: insert, then seed cleared_status from a prior sibling session exactly like
+    # start_verification_session() does - scoped to only the freshly inserted rows, since (unlike
+    # a brand-new session) this session may already have active rows whose own cleared_status
+    # must not be clobbered by a sibling-session copy.
+    added_count = 0
+    if new_client_data_ids:
+        detail_params = [(session_id, cdid, target[cdid]) for cdid in new_client_data_ids]
+        conn = get_raw_conn()
+        try:
+            conn.executemany(
+                """
+                INSERT INTO verification_details (session_id, client_data_id, transaction_ref, status, validation_status, range_status)
+                VALUES (?, ?, ?, 'Pending', 'Pending', 'active')
+                """,
+                detail_params
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        added_count = len(new_client_data_ids)
+
+        placeholders = ",".join("?" * len(new_client_data_ids))
+        new_rows = execute_query(
+            f"""
+            SELECT id FROM verification_details
+            WHERE session_id = ? AND range_status = 'active' AND client_data_id IN ({placeholders})
+            """,
+            (session_id, *new_client_data_ids)
+        )
+        new_detail_ids = [r['id'] for r in new_rows]
+        if new_detail_ids:
+            id_placeholders = ",".join("?" * len(new_detail_ids))
+            execute_write(
+                f"""
+                UPDATE verification_details
+                SET cleared_status = (
+                        SELECT vd2.cleared_status FROM verification_details vd2
+                        WHERE vd2.client_data_id = verification_details.client_data_id
+                          AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                        ORDER BY vd2.id DESC LIMIT 1
+                    ),
+                    matrix_version_applied = (
+                        SELECT vd2.matrix_version_applied FROM verification_details vd2
+                        WHERE vd2.client_data_id = verification_details.client_data_id
+                          AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                        ORDER BY vd2.id DESC LIMIT 1
+                    )
+                WHERE id IN ({id_placeholders})
+                  AND EXISTS (
+                        SELECT 1 FROM verification_details vd2
+                        WHERE vd2.client_data_id = verification_details.client_data_id
+                          AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                    )
+                """,
+                (session_id, session_id, *new_detail_ids, session_id)
+            )
+
+    # --- Reactivate rows that fell out of range before and are now back in.
+    reactivated_count = 0
+    if reactivate_ids:
+        placeholders = ",".join("?" * len(reactivate_ids))
+        execute_write(
+            f"""
+            UPDATE verification_details
+            SET range_status = 'active', excluded_at = NULL
+            WHERE session_id = ? AND client_data_id IN ({placeholders})
+            """,
+            (session_id, *reactivate_ids)
+        )
+        reactivated_count = len(reactivate_ids)
+
+    # --- Exclude rows that are no longer in range.
+    excluded_detail_ids = [r['id'] for r in exclude_detail_rows]
+    if excluded_detail_ids:
+        placeholders = ",".join("?" * len(excluded_detail_ids))
+        execute_write(
+            f"""
+            UPDATE verification_details
+            SET range_status = 'excluded', excluded_at = CURRENT_TIMESTAMP
+            WHERE id IN ({placeholders})
+            """,
+            tuple(excluded_detail_ids)
+        )
+
+    total_active = execute_query(
+        "SELECT COUNT(*) as c FROM verification_details WHERE session_id = ? AND range_status = 'active'",
+        (session_id,)
+    )[0]['c']
+
+    execute_write(
+        "UPDATE verification_sessions SET period_start = ?, period_end = ?, total_transactions = ? WHERE id = ?",
+        (period_start, period_end, total_active, session_id)
+    )
+
+    log_audit(
+        created_by, "Reconcile Session Range", "Verification",
+        f"Session {session_id}: range set to {period_start}..{period_end} - "
+        f"{added_count} added, {reactivated_count} reactivated, {len(excluded_detail_ids)} excluded, {total_active} active"
+    )
+
+    return {
+        "session_id": session_id,
+        "period_start": period_start,
+        "period_end": period_end,
+        "added_count": added_count,
+        "reactivated_count": reactivated_count,
+        "excluded_count": len(excluded_detail_ids),
+        "total_active": total_active,
+        "excluded_detail_ids": excluded_detail_ids
+    }
+
 
 @router.get("/api/verification/print_sheet/{session_id}")
 def get_print_data(

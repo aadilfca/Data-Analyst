@@ -479,6 +479,25 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add cleared_status/matrix_version_applied to verification_details:", e)
 
+        # Schema upgrade (session date-range reconciliation): lets an active verification
+        # session's voucher list be re-resolved against a new Place 2 date range without
+        # deleting anything. range_status mirrors voucher_line_documents.status ('active'/
+        # 'unassigned') + unassigned_at exactly - 'active' rows are the session's current
+        # voucher set, 'excluded' rows are a voucher that fell out of the reconciled range,
+        # left intact (not deleted) so the row's data survives if the range is widened back.
+        # No CHECK constraint (can't add one via post-hoc ALTER) - validated in Python only.
+        try:
+            cur = conn.execute("PRAGMA table_info(verification_details)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'range_status' not in columns:
+                conn.execute("ALTER TABLE verification_details ADD COLUMN range_status TEXT NOT NULL DEFAULT 'active'")
+                print("✅ Added range_status column to verification_details (backfilled existing rows as 'active')")
+            if 'excluded_at' not in columns:
+                conn.execute("ALTER TABLE verification_details ADD COLUMN excluded_at TIMESTAMP")
+                print("✅ Added excluded_at column to verification_details")
+        except Exception as e:
+            print("⚠️ Could not add range_status/excluded_at to verification_details:", e)
+
         conn.execute('''
             CREATE TABLE IF NOT EXISTS audit_procedure_library (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
