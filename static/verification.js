@@ -479,6 +479,11 @@ function mountCashbookDateRangePicker() {
     label.className = 'drp-field-label';
     label.textContent = 'Date Range';
     const mount = document.createElement('div');
+    // Confirmed fix (Place 3 sync investigation, 2026-08-11): a verification session's voucher
+    // list is a fixed snapshot taken at start_session time (see handleCashbookDateRangeChange()
+    // below) - changing this range while a session is already active has no effect on it. This
+    // tooltip surfaces that to the user directly, not just to a future developer reading the code.
+    mount.title = 'Changes here only affect a new session — an active verification session keeps the date range it was started with.';
     startWrapper.appendChild(label);
     startWrapper.appendChild(mount);
     if (endWrapper.parentElement) endWrapper.parentElement.removeChild(endWrapper);
@@ -3585,6 +3590,14 @@ popupDateRangePicker = mountPopupDateRangePicker();
 // rollout) - independently editable, deliberately does NOT trigger a fetch itself (that stays
 // gated behind the existing "📊 Apply" button/applyCashbookPreview(), unchanged); only mirrors
 // the picked range into Place 1's picker so it stays in sync if that dialog is reopened.
+// Confirmed via investigation (2026-08-11): this deliberately has NO effect on an already-active
+// verification session's voucher grid (Place 3). start_verification_session() (routers/verification.py)
+// snapshots matching vouchers into fixed verification_details rows exactly once, at session
+// creation; get_audited_cashbook(session_id) (the sole source of Place 3's data) only ever reads
+// WHERE session_id = ?, never re-querying client_data by date range again. A session's voucher
+// list is a fixed audit snapshot, not a live filter - editing this range mid-session is a
+// preview/lookup control only. To use a different range, start a new session (see CLAUDE.md
+// Status log, 2026-08-11, for a flagged-but-unscheduled follow-up to make that flow explicit).
 function handleCashbookDateRangeChange(start, end) {
     if (popupDateRangePicker) popupDateRangePicker.setRange(start, end);
     if (start && end && start <= end) {
