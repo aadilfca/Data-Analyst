@@ -3988,12 +3988,28 @@ function findNextUnverifiedLineIndex(fromIdx) {
 // in place (not cleared here) — reopening the same line's modal within the same voucher should
 // show tab state exactly as it was left; it's only reset on voucher navigation, in
 // seedVoucherLineState().
+//
+// Confirmed fix: the main table's Procedures (and Observations) badges were never wired to
+// refresh after anything done inside this modal (ticking a checklist role, linking/unlinking
+// evidence, saving a Physical Bill, or pressing Verify) — they're computed once when the line's
+// Category first resolves and otherwise only ever recomputed by a full page reload. Since every
+// close/verify path (✕, outside-click, Verify & Next/Close, plain Verify) already funnels through
+// this one shared teardown function, refreshing both cells here — for the line the modal is
+// actually leaving, captured before currentProcedureModalUid is cleared below — covers all of
+// them with one change. Fire-and-forget, matching the existing convention at this function's own
+// two other call sites (applyCategoryToTypeCell/toggleColumnsExpanded never await it either).
 function hideProcedureModalOnly() {
     if (procedureModal) procedureModal.style.display = 'none';
     // Defensive — the browse modal is nested on top of this one, so it should never remain open
     // once the parent closes.
     closeProcedureBrowseModal();
+    const uid = currentProcedureModalUid;
     currentProcedureModalUid = null;
+    const type = uid && voucherLineState[uid] && voucherLineState[uid].transactionType;
+    if (type) {
+        updateProceduresCellForLine(uid, type);
+        updateObservationsCellForLine(uid, type);
+    }
 }
 
 async function closeProcedureModal() {
