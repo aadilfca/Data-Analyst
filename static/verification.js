@@ -479,11 +479,12 @@ function mountCashbookDateRangePicker() {
     label.className = 'drp-field-label';
     label.textContent = 'Date Range';
     const mount = document.createElement('div');
-    // Confirmed fix (Place 3 sync investigation, 2026-08-11): a verification session's voucher
-    // list is a fixed snapshot taken at start_session time (see handleCashbookDateRangeChange()
-    // below) - changing this range while a session is already active has no effect on it. This
-    // tooltip surfaces that to the user directly, not just to a future developer reading the code.
-    mount.title = 'Changes here only affect a new session — an active verification session keeps the date range it was started with.';
+    // Session date-range reconciliation, Phase 2 of 4: supersedes the 2026-08-11 "no effect on an
+    // active session" tooltip - picking a new range here and clicking Apply now reconciles an
+    // active session's voucher list against it (see reconcileActiveSessionRange()). Picking a
+    // range alone (this picker's onChange, handleCashbookDateRangeChange() below) still has no
+    // effect by itself - Apply is what commits it, same as the non-session preview case.
+    mount.title = 'Click Apply to update the voucher list to this date range.';
     startWrapper.appendChild(label);
     startWrapper.appendChild(mount);
     if (endWrapper.parentElement) endWrapper.parentElement.removeChild(endWrapper);
@@ -562,7 +563,7 @@ function monthBoundsAround(date) {
 
 // ---------- DATE RANGE: SESSIONSTORAGE PERSISTENCE (confirmed fix) ----------
 // Place 1's popup (openSessionPopup()) only ever opens via a fresh page load, so there is no
-// in-memory picker state left to capture the way exitSession() does for Place 2 - the user's last
+// in-memory picker state left to capture the way returnToCashbookFromSession() does for Place 2 - the user's last
 // committed range has to survive across navigation/reload within the tab instead. Tab-scoped only
 // (sessionStorage, not localStorage) per the confirmed requirement - cleared on tab/app close, not
 // persisted across app restarts. Mirrors static/upload.js's UPLOAD_SESSION_STORAGE_KEY/
@@ -748,9 +749,18 @@ async function activateCashbookView(cashbook) {
     dashboardContent.style.display = 'none';
     sessionContent.style.display = 'none';
     cashbookContent.style.display = 'block';
-    // Global navbar back-arrow should return to the Verification module's entry view (not
-    // index.html) while viewing a cashbook's transactions.
-    if (typeof setBackOverride === 'function') setBackOverride(exitCashbookView);
+    // Session date-range reconciliation, Phase 2 of 4: this view can now be reached either fresh
+    // (no session) or mid-session (currentSessionId still set, via returnToCashbookFromSession() -
+    // the old exitSession() no longer tears the session down) - always restore Place 2's own
+    // padding/layout here rather than relying on the caller to have done it, since a mid-session
+    // visit arrives with .verification-active still applied from activateSessionView().
+    const verificationContainer = document.getElementById('verificationContainer');
+    if (verificationContainer) verificationContainer.classList.remove('verification-active');
+    // Global navbar back-arrow: resumes the still-open session (no re-fetch) if one is active,
+    // otherwise returns to the Verification module's entry view (not index.html), unchanged.
+    if (typeof setBackOverride === 'function') {
+        setBackOverride(currentSessionId ? returnToSessionFromCashbook : exitCashbookView);
+    }
     // Bank Verification (Phase 8): relabel the page header to match currentType.
     const headerLabel = document.getElementById('cashbookHeaderLabel');
     if (headerLabel) headerLabel.textContent = currentType === 'bank' ? '🏦 Bankbook:' : '📒 Cashbook:';
@@ -771,6 +781,20 @@ async function activateCashbookView(cashbook) {
                 cashbookSelector.appendChild(clone);
             });
         cashbookSelector.value = cashbook;
+        // Session date-range reconciliation, Phase 2 of 4: reconcile_range is keyed to the
+        // session's own fixed cashbook - switching cashbooks isn't supported while one is active.
+        cashbookSelector.disabled = !!currentSessionId;
+        cashbookSelector.title = currentSessionId
+            ? 'A verification session is already open — switching cashbooks isn\'t supported while one is active.'
+            : '';
+    }
+    // Same reasoning as the selector above - starting a second session while one is already open
+    // isn't supported here; use Apply to change the active session's date range instead.
+    if (startVerificationBtn) {
+        startVerificationBtn.disabled = !!currentSessionId;
+        startVerificationBtn.title = currentSessionId
+            ? 'A verification session is already open — use Apply above to change its date range.'
+            : '';
     }
     // Confirmed fix: seed Place 2's picker from Place 1's own final range (whatever the user last
     // picked/left in the dialog, or its own auto-detected default) instead of always hardcoding
@@ -801,7 +825,7 @@ async function activateCashbookView(cashbook) {
 // already renders a graceful "No transactions found" state for that case.
 // overrideStart/overrideEnd (confirmed fix): when provided, forwarded straight into
 // loadCashbooks() so its own auto-detect logic is bypassed - lets a caller that already has a
-// live/meaningful date range (exitSession(), returning from an active session) preserve it
+// live/meaningful date range (returnToCashbookFromSession(), returning from an active session) preserve it
 // instead of losing it to the auto-detected default. Omitted by the hard-refresh restore caller
 // (window.onload's ?state=cashbook handling, below), where no prior in-memory range exists and
 // auto-detect is exactly the desired behavior - that path is unchanged.
@@ -815,7 +839,7 @@ async function restoreCashbookView(cashbookName, overrideStart, overrideEnd) {
 }
 
 // ---------- EXIT CASHBOOK VIEW (return to Verification module's entry view) ----------
-// Shared by the global navbar back-arrow override (set in openCashbook()/exitSession()) — there
+// Shared by the global navbar back-arrow override (set in openCashbook()/returnToCashbookFromSession()) — there
 // is no separate in-body "Back to Verification" link/handler anymore, this is the single place
 // that logic lives.
 function exitCashbookView() {
@@ -833,20 +857,89 @@ function exitCashbookView() {
 // the single-source-of-truth `selectedCashbook` global (also read by startSessionFromCashbook(),
 // so starting a session after switching here correctly targets the newly selected account) and
 // the page header, then reuses fetchCashbookData() unchanged for the actual reload.
-function applyCashbookPreview() {
+// Session date-range reconciliation, Phase 2 of 4: when reached with an active session
+// (currentSessionId set - only possible now that returnToCashbookFromSession() keeps one alive),
+// Apply instead reconciles that session's voucher list against the new range and returns to
+// Place 3, rather than reloading Place 2's own preview table. The cashbook-switch block above is
+// skipped in that case (also enforced by activateCashbookView() disabling the dropdown) - reconcile
+// is keyed to the session's own fixed cashbook, switching isn't supported mid-session.
+async function applyCashbookPreview() {
     if (!cashbookSelector) {
-        fetchCashbookData();
+        if (currentSessionId) {
+            await reconcileActiveSessionRange();
+        } else {
+            fetchCashbookData();
+        }
         return;
     }
     const chosen = cashbookSelector.value;
-    if (chosen && chosen !== selectedCashbook) {
+    if (!currentSessionId && chosen && chosen !== selectedCashbook) {
         selectedCashbook = chosen;
         cashbookNameDisplay.textContent = chosen;
         // Confirmed fix: mirrors handleCashbookDateRangeChange()'s existing Place 2 -> Place 1
         // persistence for dates, so a cashbook switched here also survives a reload back to Place 1.
         saveSelectedCashbook(chosen);
     }
-    fetchCashbookData();
+    if (currentSessionId) {
+        await reconcileActiveSessionRange();
+    } else {
+        fetchCashbookData();
+    }
+}
+
+// ---------- RECONCILE AN ACTIVE SESSION AGAINST A NEW DATE RANGE ----------
+// Session date-range reconciliation, Phase 2 of 4: calls Phase 1's backend reconcile endpoint,
+// then re-renders Place 3 from the result. Newly-in-range/reactivated/excluded lines are all
+// handled server-side (see reconcile_session_range() in routers/verification.py) - this is
+// call-and-render only, no client-side range-status logic.
+// Where the auditor lands afterward: if the voucher they were viewing (currentDetailId) is still
+// in the reconciled active set, resume it exactly via navigateToTransaction() - the common case
+// (range widened, or the current voucher untouched). If it dropped out of range, fall back to
+// loadNextTransaction() (jumps to the reconciled set's first Pending voucher) as a safe,
+// non-crashing default - this is a placeholder, not real orphaned-voucher handling; that's Phase 3.
+async function reconcileActiveSessionRange() {
+    if (!currentSessionId) return;
+    const range = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : { start: null, end: null };
+    const start = range.start;
+    const end = range.end;
+    if (!start || !end) {
+        cashbookStatus.textContent = '⚠️ Please select date range';
+        return;
+    }
+    if (start > end) {
+        cashbookStatus.textContent = '⚠️ Start must be ≤ end';
+        return;
+    }
+    cashbookStatus.textContent = '⏳ Applying new range...';
+    cashbookFetchBtn.disabled = true;
+    try {
+        const params = new URLSearchParams({ period_start: start, period_end: end });
+        const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/reconcile_range?${params}`, {
+            method: 'POST'
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Failed to apply new range');
+        }
+        const result = await res.json();
+        // The reconcile endpoint doesn't return the line list itself - force-refresh
+        // sessionTransactions fresh, since it's already populated from before the reconcile and
+        // loadTransactionList()'s normal cache guard would otherwise skip re-fetching.
+        await loadTransactionList(false, true);
+        returnToSessionFromCashbook();
+        const stillInRange = sessionTransactions.some(t => t.detail_id === currentDetailId);
+        if (stillInRange) {
+            navigateToTransaction(currentDetailId);
+        } else {
+            await loadNextTransaction();
+        }
+        showStatus(`Range updated — ${result.total_active} voucher line(s) in range.`, 'success');
+    } catch (error) {
+        console.error('Error reconciling session range:', error);
+        cashbookStatus.textContent = `⚠️ ${error.message}`;
+    } finally {
+        cashbookFetchBtn.disabled = false;
+    }
 }
 
 // ---------- CASHBOOK DATA FETCH ----------
@@ -1018,8 +1111,8 @@ async function activateSessionView(sessionId, targetVoucherId = null) {
     cashbookContent.style.display = 'none';
     sessionContent.style.display = 'block';
     // Global navbar back-arrow should return to the Cashbook selection screen (not index.html)
-    // while a session is active — reuse the same exit flow as the "Cashbook" button.
-    if (typeof setBackOverride === 'function') setBackOverride(exitSession);
+    // while a session is active — reuse the same flow as the "Cashbook" button.
+    if (typeof setBackOverride === 'function') setBackOverride(returnToCashbookFromSession);
     // Remove padding from main container when verification session is active
     const container = document.getElementById('verificationContainer');
     if (container) container.classList.add('verification-active');
@@ -1154,7 +1247,7 @@ async function loadNextTransaction(detailId = null) {
 // Cashbook return button on the right — all page-level info/actions, not scoped to "this voucher"
 // the way Prev/Next are. No manual Save Progress button — progress already autosaves via
 // saveAllVoucherLines() on Prev/Next/Complete/Exit (see saveCurrentTransaction(),
-// completeTransaction(), exitSession()), so a manual save had no effect a user could rely on. The
+// completeTransaction(), returnToCashbookFromSession()), so a manual save had no effect a user could rely on. The
 // per-line collapsed/expand rows (renderVoucherLines()) own everything else below this header.
 function renderVoucherHeader(voucherId, voucherDate, lines) {
     const bar = document.getElementById('voucherHeaderBar');
@@ -1212,7 +1305,7 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
             <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">${bookIcon}</span> ${bookLabel}</button>
         `;
         document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
-            if (typeof exitSession === 'function') exitSession();
+            if (typeof returnToCashbookFromSession === 'function') returnToCashbookFromSession();
         });
     }
 
@@ -2759,14 +2852,18 @@ let currentTransactionIndex = -1;
 // with the full list rather than a stale filter.
 let transactionSearchTerm = '';
 
-async function loadTransactionList(showPopover = false) {
+// forceRefresh (Session date-range reconciliation, Phase 2 of 4): bypasses the "already loaded,
+// skip re-fetch" guard below - needed after reconcileActiveSessionRange() changes what's active
+// server-side, since sessionTransactions being non-empty from before the reconcile would otherwise
+// make this a no-op and silently keep showing the pre-reconcile voucher list.
+async function loadTransactionList(showPopover = false, forceRefresh = false) {
     if (!currentSessionId) {
         showStatus('No active session.', 'error');
         return;
     }
 
     // If already loaded and we want to show popover, just render it
-    if (sessionTransactions.length > 0) {
+    if (sessionTransactions.length > 0 && !forceRefresh) {
         if (showPopover) {
             renderTransactionPopover();
         }
@@ -2786,8 +2883,11 @@ async function loadTransactionList(showPopover = false) {
         if (currentDetailId) {
             currentTransactionIndex = sessionTransactions.findIndex(t => t.detail_id === currentDetailId);
         }
-        // Update totalTransactions if not set
-        if (totalTransactions === 0 && sessionTransactions.length > 0) {
+        // Update totalTransactions: normal load only ever grows it from 0 (first load); a forced
+        // refresh always recomputes it, since a reconcile can shrink the active set too.
+        if (forceRefresh) {
+            totalTransactions = sessionTransactions.length;
+        } else if (totalTransactions === 0 && sessionTransactions.length > 0) {
             totalTransactions = sessionTransactions.length;
         }
         if (showPopover) {
@@ -3329,7 +3429,7 @@ async function saveLineItems(detailId = currentDetailId) {
 // Saves every line currently loaded in the voucher via the existing save_line_items endpoint, one
 // call per line, instead of a single call for just the active line. Called automatically before
 // Prev/Next navigation, on complete, and on exit (see saveCurrentTransaction(),
-// completeTransaction(), exitSession()) so edits on any expanded line aren't lost — there is no
+// completeTransaction(), returnToCashbookFromSession()) so edits on any expanded line aren't lost — there is no
 // manual save button.
 async function saveAllVoucherLines() {
     const uids = Object.keys(voucherLineState);
@@ -3403,9 +3503,18 @@ async function completeTransaction() {
     }
 }
 
-// ---------- EXIT SESSION ----------
+// ---------- RETURN TO CASHBOOK VIEW FROM AN ACTIVE SESSION ----------
+// Renamed from exitSession() (Session date-range reconciliation, Phase 2 of 4): this used to be a
+// destructive "end the session" action (confirm dialog, nulled currentSessionId/currentDetailId,
+// cleared the voucher header) - it no longer is. Reaching Place 2 (the cashbook view) from an
+// active session now keeps the session alive in the background (currentSessionId/currentDetailId
+// untouched, sessionContent's DOM left intact, just hidden) so Apply's new range-reconcile flow
+// (applyCashbookPreview() -> reconcileActiveSessionRange()) has a session to reconcile against,
+// and so leaving Place 2 again without touching Apply (returnToSessionFromCashbook()) can cheaply
+// resume exactly where the auditor left off - no re-fetch, no confirm dialog, since nothing is
+// actually lost.
 // This is what runs on both the "🏦/📒 Cashbook" button and the global navbar back-arrow (its
-// setBackOverride() target, set in activateSessionView()). Returning to the cashbook view now
+// setBackOverride() target, set in activateSessionView()). Returning to the cashbook view still
 // reuses restoreCashbookView() — the exact same fresh load/render path a hard refresh into
 // ?state=cashbook goes through (loadCashbooks() then activateCashbookView(), which itself handles
 // hiding dashboard/session, showing cashbookContent, the back-override, header labels, the
@@ -3414,28 +3523,40 @@ async function completeTransaction() {
 // blank cashbook whenever the session had been reached via a direct ?state=session URL restore
 // (restoreSessionView()), since that path never populates cashbookStartDate/cashbookEndDate/the
 // selector - fetchCashbookData() would then bail out early on an empty date range.
-async function exitSession() {
-    if (confirm('Are you sure you want to exit this verification session? Progress will be saved.')) {
-        // Confirmed fix: capture Place 2's live range before teardown so restoreCashbookView()
-        // can preserve it, instead of letting its own loadCashbooks() call silently overwrite it
-        // with a freshly auto-detected default (the "resets to session-start range" bug). Only a
-        // defensive fallback (picker/range genuinely missing - shouldn't occur, since a session
-        // can't be started without a valid range) falls through to the existing auto-detect
-        // behavior by omitting the override args.
-        const preservedRange = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : null;
-        saveAllVoucherLines(); // Phase 4: saves every line, not just the active one
-        clearVoucherHeader();
-        currentSessionId = null;
-        currentDetailId = null;
-        // Restore padding when session ends
-        const container = document.getElementById('verificationContainer');
-        if (container) container.classList.remove('verification-active');
-        if (preservedRange && preservedRange.start && preservedRange.end) {
-            await restoreCashbookView(selectedCashbook, preservedRange.start, preservedRange.end);
-        } else {
-            await restoreCashbookView(selectedCashbook);
-        }
+// Known accepted gap (confirmed with the user): there is currently no separate "fully end this
+// session" action distinct from this navigate-to-cashbook one - flagged as a follow-up decision,
+// not built this phase.
+async function returnToCashbookFromSession() {
+    // Confirmed fix: capture Place 2's live range before navigating away so restoreCashbookView()
+    // can preserve it, instead of letting its own loadCashbooks() call silently overwrite it
+    // with a freshly auto-detected default (the "resets to session-start range" bug). Only a
+    // defensive fallback (picker/range genuinely missing - shouldn't occur, since a session
+    // can't be started without a valid range) falls through to the existing auto-detect
+    // behavior by omitting the override args.
+    const preservedRange = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : null;
+    saveAllVoucherLines(); // Phase 4: saves every line, not just the active one
+    if (preservedRange && preservedRange.start && preservedRange.end) {
+        await restoreCashbookView(selectedCashbook, preservedRange.start, preservedRange.end);
+    } else {
+        await restoreCashbookView(selectedCashbook);
     }
+}
+
+// ---------- RESUME AN ACTIVE SESSION FROM PLACE 2 (no re-fetch) ----------
+// Session date-range reconciliation, Phase 2 of 4: the back-arrow target while viewing Place 2
+// with a still-open session (set by activateCashbookView()) - and the tail end of a successful
+// reconcileActiveSessionRange(). sessionContent's DOM/state was only ever hidden by
+// activateCashbookView(), never destroyed, so this is just the reverse view-swap (mirrors
+// activateSessionView()'s own swap/back-override/URL lines) with no network call of its own -
+// callers that need fresh data (reconcileActiveSessionRange()) fetch it themselves first.
+function returnToSessionFromCashbook() {
+    dashboardContent.style.display = 'none';
+    cashbookContent.style.display = 'none';
+    sessionContent.style.display = 'block';
+    if (typeof setBackOverride === 'function') setBackOverride(returnToCashbookFromSession);
+    const container = document.getElementById('verificationContainer');
+    if (container) container.classList.add('verification-active');
+    if (currentSessionId) setVerificationUrl('session', currentSessionId);
 }
 
 // ---------- SUPPORTING DOCUMENTS MODAL ----------
@@ -3533,7 +3654,7 @@ function openSessionPopup() {
     // Confirmed fix: reopening the popup is always a fresh page load (this is the only caller of
     // openSessionPopup(), and it only ever fires from window.onload), so there is no in-memory
     // range left to fall back on - use the persisted range as an explicit override (same mechanism
-    // handlePopupPeriodChange()/exitSession() already use) when one exists, falling back to
+    // handlePopupPeriodChange()/returnToCashbookFromSession() already use) when one exists, falling back to
     // loadCashbooks()'s own today's-auto-detect only when genuinely empty (first-ever load).
     // Confirmed fix: same reasoning applies to the cashbook selection itself (previously missed) -
     // read the persisted pick and pass it through as loadCashbooks()'s overrideCashbook so its
@@ -3590,14 +3711,16 @@ popupDateRangePicker = mountPopupDateRangePicker();
 // rollout) - independently editable, deliberately does NOT trigger a fetch itself (that stays
 // gated behind the existing "📊 Apply" button/applyCashbookPreview(), unchanged); only mirrors
 // the picked range into Place 1's picker so it stays in sync if that dialog is reopened.
-// Confirmed via investigation (2026-08-11): this deliberately has NO effect on an already-active
-// verification session's voucher grid (Place 3). start_verification_session() (routers/verification.py)
-// snapshots matching vouchers into fixed verification_details rows exactly once, at session
-// creation; get_audited_cashbook(session_id) (the sole source of Place 3's data) only ever reads
-// WHERE session_id = ?, never re-querying client_data by date range again. A session's voucher
-// list is a fixed audit snapshot, not a live filter - editing this range mid-session is a
-// preview/lookup control only. To use a different range, start a new session (see CLAUDE.md
-// Status log, 2026-08-11, for a flagged-but-unscheduled follow-up to make that flow explicit).
+// Superseded (Session date-range reconciliation, Phase 2 of 4): the 2026-08-11 investigation
+// found a session's voucher list was a fixed snapshot with no way to change it short of starting
+// a new session - that's no longer true. Phase 1 (routers/verification.py) added
+// POST /api/verification/session/{id}/reconcile_range, which re-resolves an active session's
+// voucher list against a new range without losing anything (soft-excludes what falls out,
+// reactivates what comes back, adds what's newly in range); this phase wires it up so clicking
+// Apply on this picker's currently-set range calls it when a session is active
+// (reconcileActiveSessionRange(), applyCashbookPreview()). Picking a date here still only mirrors
+// the range into Place 1's picker and persists it - by itself, still no fetch/reconcile; that
+// only happens on Apply, same as it always has for the non-session preview case.
 function handleCashbookDateRangeChange(start, end) {
     if (popupDateRangePicker) popupDateRangePicker.setRange(start, end);
     if (start && end && start <= end) {
@@ -6916,7 +7039,7 @@ window.onload = function() {
     // no book name in the link, so the furthest this can jump straight to is the same pre-filled
     // popup ?type= already opens; the user picks a specific book and clicks "Open
     // Cashbook/Bankbook" from there (openCashbook()), same as today. No setBackOverride() call is
-    // needed here: openCashbook()/startSessionFromCashbook()/exitSession() already register the
+    // needed here: openCashbook()/startSessionFromCashbook()/returnToCashbookFromSession() already register the
     // correct back-arrow override once the user actually reaches a real view.
     const arrivalParams = new URLSearchParams(window.location.search);
 
