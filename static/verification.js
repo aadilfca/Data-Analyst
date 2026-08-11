@@ -1770,13 +1770,14 @@ function getVoucherLineStatusIcon(validationStatus) {
     return `<span class="voucher-line-status-dot ${statusClass}" title="${status}"></span>`;
 }
 
-// Suppresses the whole Pending pill (dot + text) once a line's cleared_status is Cleared — the
-// Cleared/Query badge already says so, and a "pending" dot no longer reflects reality once the
-// required checks are satisfied. Only the Pending case is affected; Failed/Passed pills are
-// always shown as-is (icon + text, unchanged).
+// Suppresses the whole Pending pill (dot + text) once a line's cleared_status has been computed
+// (Cleared or Query) — the Cleared/Query badge already says so, and a "pending" dot alongside it
+// is a leftover from validation_status, a separate axis that hasn't caught up. The three statuses
+// (Pending/Cleared/Query) are meant to be mutually exclusive on screen. Only the Pending case is
+// affected; Failed/Passed pills are always shown as-is (icon + text, unchanged).
 function getVoucherLineStatusPillHtml(validationStatus, clearedStatus) {
     const status = (validationStatus || 'Pending').toLowerCase();
-    if (status === 'pending' && clearedStatus === 'Cleared') return '';
+    if (status === 'pending' && (clearedStatus === 'Cleared' || clearedStatus === 'Query')) return '';
     return `${getVoucherLineStatusIcon(validationStatus)} ${status}`;
 }
 
