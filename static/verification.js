@@ -598,6 +598,30 @@ function getPersistedVerificationDateRange() {
     return { start: parsed.start, end: parsed.end };
 }
 
+// ---------- CASHBOOK SELECTION: SESSIONSTORAGE PERSISTENCE (confirmed fix) ----------
+// Same gap as the date range above, for the selected cashbook: openSessionPopup() only ever
+// fires from a fresh page load, so loadCashbooks()'s own in-memory previousSelection capture
+// (popupCashbookSelect.value, read at the top of that function) is always empty by then - the
+// last-picked cashbook has to survive across reload the same way the date range now does.
+const VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY = 'verificationSelectedCashbook';
+
+function saveSelectedCashbook(name) {
+    try {
+        sessionStorage.setItem(VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY, name);
+    } catch (error) {
+        console.warn('⚠️ Could not save selected cashbook:', error);
+    }
+}
+
+function getPersistedSelectedCashbook() {
+    try {
+        return sessionStorage.getItem(VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY) || null;
+    } catch (error) {
+        console.warn('⚠️ Could not read selected cashbook:', error);
+        return null;
+    }
+}
+
 // ---------- POPUP: LOAD CASHBOOKS ----------
 // overrideStart/overrideEnd (confirmed fix): when provided (the user edited the popup's date
 // inputs), search that exact range. When omitted, auto-detect the most recent month that
@@ -605,12 +629,16 @@ function getPersistedVerificationDateRange() {
 // (falls back to today's calendar month if the client has no matching data at all) - replaces the
 // old hardcoded "always search the current calendar month" default, which failed whenever a
 // client's latest data wasn't in the current month.
-async function loadCashbooks(overrideStart, overrideEnd) {
+async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
     // Confirmed fix: the two fields are independent — changing the date range (via
     // handlePopupPeriodChange(), which calls this function on every Place-1 range edit) must not
     // reset an already-made cashbook selection. Captured before anything below rebuilds the
     // <select>, then re-applied after the rebuild if it's still a valid option for the new range.
-    const previousSelection = popupCashbookSelect.value;
+    // overrideCashbook (confirmed fix): lets a fresh-page-load caller (openSessionPopup()) inject
+    // the sessionStorage-persisted selection here too, since popupCashbookSelect.value is always
+    // empty at that point - same "override wins, else fall back to live state" shape as
+    // overrideStart/overrideEnd above.
+    const previousSelection = overrideCashbook || popupCashbookSelect.value;
     const clientId = getClientId();
     if (!clientId) {
         popupCashbookSelect.innerHTML = '<option value="">-- Select client first --</option>';
@@ -809,6 +837,9 @@ function applyCashbookPreview() {
     if (chosen && chosen !== selectedCashbook) {
         selectedCashbook = chosen;
         cashbookNameDisplay.textContent = chosen;
+        // Confirmed fix: mirrors handleCashbookDateRangeChange()'s existing Place 2 -> Place 1
+        // persistence for dates, so a cashbook switched here also survives a reload back to Place 1.
+        saveSelectedCashbook(chosen);
     }
     fetchCashbookData();
 }
@@ -3499,11 +3530,15 @@ function openSessionPopup() {
     // range left to fall back on - use the persisted range as an explicit override (same mechanism
     // handlePopupPeriodChange()/exitSession() already use) when one exists, falling back to
     // loadCashbooks()'s own today's-auto-detect only when genuinely empty (first-ever load).
+    // Confirmed fix: same reasoning applies to the cashbook selection itself (previously missed) -
+    // read the persisted pick and pass it through as loadCashbooks()'s overrideCashbook so its
+    // existing "reapply if still valid" logic picks it back up.
     const persisted = getPersistedVerificationDateRange();
+    const persistedCashbook = getPersistedSelectedCashbook();
     if (persisted) {
-        loadCashbooks(persisted.start, persisted.end);
+        loadCashbooks(persisted.start, persisted.end, persistedCashbook);
     } else {
-        loadCashbooks();
+        loadCashbooks(undefined, undefined, persistedCashbook);
     }
 }
 
@@ -3560,6 +3595,14 @@ cashbookDateRangePicker = mountCashbookDateRangePicker();
 if (popupCancelBtn) {
     popupCancelBtn.addEventListener('click', function() {
         popupOverlay.style.display = 'none';
+    });
+}
+// Confirmed fix: persist Place 1's cashbook selection the moment it's picked, mirroring
+// handlePopupPeriodChange()'s immediate-save-on-pick for the date range - not gated behind
+// clicking "Open Cashbook", so a reload before starting a session still remembers the pick.
+if (popupCashbookSelect) {
+    popupCashbookSelect.addEventListener('change', function() {
+        if (popupCashbookSelect.value) saveSelectedCashbook(popupCashbookSelect.value);
     });
 }
 
