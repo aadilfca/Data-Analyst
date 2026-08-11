@@ -723,12 +723,18 @@ async function activateCashbookView(cashbook) {
 // activateCashbookView()'s own fetchCashbookData() call), never a cached/frozen snapshot. A
 // cashbook name that no longer matches any data isn't treated as a hard failure - fetchCashbookData()
 // already renders a graceful "No transactions found" state for that case.
-async function restoreCashbookView(cashbookName) {
+// overrideStart/overrideEnd (confirmed fix): when provided, forwarded straight into
+// loadCashbooks() so its own auto-detect logic is bypassed - lets a caller that already has a
+// live/meaningful date range (exitSession(), returning from an active session) preserve it
+// instead of losing it to the auto-detected default. Omitted by the hard-refresh restore caller
+// (window.onload's ?state=cashbook handling, below), where no prior in-memory range exists and
+// auto-detect is exactly the desired behavior - that path is unchanged.
+async function restoreCashbookView(cashbookName, overrideStart, overrideEnd) {
     if (!getClientId()) {
         showDashboardWithMessage('Please select a client to view this cashbook.');
         return;
     }
-    await loadCashbooks();
+    await loadCashbooks(overrideStart, overrideEnd);
     await activateCashbookView(cashbookName);
 }
 
@@ -3331,6 +3337,13 @@ async function completeTransaction() {
 // selector - fetchCashbookData() would then bail out early on an empty date range.
 async function exitSession() {
     if (confirm('Are you sure you want to exit this verification session? Progress will be saved.')) {
+        // Confirmed fix: capture Place 2's live range before teardown so restoreCashbookView()
+        // can preserve it, instead of letting its own loadCashbooks() call silently overwrite it
+        // with a freshly auto-detected default (the "resets to session-start range" bug). Only a
+        // defensive fallback (picker/range genuinely missing - shouldn't occur, since a session
+        // can't be started without a valid range) falls through to the existing auto-detect
+        // behavior by omitting the override args.
+        const preservedRange = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : null;
         saveAllVoucherLines(); // Phase 4: saves every line, not just the active one
         clearVoucherHeader();
         currentSessionId = null;
@@ -3338,7 +3351,11 @@ async function exitSession() {
         // Restore padding when session ends
         const container = document.getElementById('verificationContainer');
         if (container) container.classList.remove('verification-active');
-        await restoreCashbookView(selectedCashbook);
+        if (preservedRange && preservedRange.start && preservedRange.end) {
+            await restoreCashbookView(selectedCashbook, preservedRange.start, preservedRange.end);
+        } else {
+            await restoreCashbookView(selectedCashbook);
+        }
     }
 }
 
