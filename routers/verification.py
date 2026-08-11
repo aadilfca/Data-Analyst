@@ -1964,6 +1964,53 @@ def get_session_progress(session_id: int):
         "verified_count": session[0]['verified_count']
     }
 
+
+@router.get("/api/verification/session/{session_id}/voucher_stats")
+def get_voucher_stats(session_id: int):
+    """
+    Voucher-wise Cleared/Query/Pending counts for a session's whole cashbook (not just the
+    currently open voucher) - powers the header's Total/Cleared/Query/Pending stat (new,
+    confirmed 3-phase requirement, this is Phase 1/backend), replacing the old line-based
+    "Verified" counter. Groups by transaction_ref, matching the same grouping
+    computeVoucherStats() (static/verification.js) already uses for "Total Vouchers" - not
+    the _doc_group_id grouping _fetch_session_details_grouped()/get_next_transaction() use for
+    line navigation - so this endpoint's `total` agrees with the existing header number exactly.
+
+    Rollup rule per voucher: all lines cleared_status == 'Cleared' -> Cleared; else any line
+    cleared_status == 'Query' -> Query (Query takes priority over Pending); else -> Pending
+    (covers NULL/unclassified). cleared + query + pending always equals total.
+    """
+    session = execute_query(
+        "SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'",
+        (session_id,)
+    )
+    if not session:
+        raise HTTPException(404, "Session not found or cancelled.")
+
+    rows = execute_query(
+        "SELECT transaction_ref, cleared_status FROM verification_details WHERE session_id = ?",
+        (session_id,)
+    )
+
+    lines_by_voucher: Dict[str, list] = {}
+    for r in rows:
+        ref = r['transaction_ref']
+        if not ref:
+            continue
+        lines_by_voucher.setdefault(ref, []).append(r['cleared_status'])
+
+    cleared = query = pending = 0
+    for statuses in lines_by_voucher.values():
+        if all(s == 'Cleared' for s in statuses):
+            cleared += 1
+        elif any(s == 'Query' for s in statuses):
+            query += 1
+        else:
+            pending += 1
+
+    total = len(lines_by_voucher)
+    return {"total": total, "cleared": cleared, "query": query, "pending": pending}
+
 @router.get("/api/verification/print_sheet/{session_id}")
 def get_print_data(
     session_id: int,
