@@ -23,6 +23,18 @@ const currentType = (viewParam === 'bankbook') ? 'bank'
 
 let currentSessionId = null;
 let currentDetailId = null;
+// Header format cleanup: the active session's own date range (YYYY-MM-DD, same format the
+// header displays directly, no reformatting needed) - distinct from any individual voucher's own
+// date. Set from GET audited_cashbook's session.period_start/period_end wherever that's fetched
+// fresh (loadTransactionList(), restoreSessionView()); read by renderVoucherHeader().
+let currentSessionPeriodStart = null;
+let currentSessionPeriodEnd = null;
+// Header format cleanup: one-shot caption text for the fixed-height slot under "Voucher X of Y"
+// (#voucherNavCaption) - set immediately before a navigateToTransaction() call that should show
+// it (currently only the orphaned-voucher auto-navigate case in reconcileActiveSessionRange()),
+// then reset to '' by renderVoucherHeader() right after it's consumed, so every other navigation
+// path naturally renders it blank with no per-call-site clearing needed.
+let voucherNavCaptionText = '';
 // The voucher line uid currently shown in #procedureModal, or null when it's closed — lets
 // closeProcedureModal() flush any unsaved observation text without needing a uid parameter,
 // since its callers (the ✕ button and the outside-click listener) don't have one either.
@@ -887,17 +899,47 @@ async function applyCashbookPreview() {
     }
 }
 
+// Orphaned-voucher auto-navigation: given a reference date, finds the closest voucher (by
+// absolute date distance, ties broken toward the later one) among sessionTransactions' distinct
+// voucher_ids - called against the already-reconciled list, so "nearest" here always means
+// "nearest still-active voucher". Returns null only if sessionTransactions is empty.
+function findNearestInRangeVoucherId(targetDate) {
+    const seen = new Set();
+    const uniqueVouchers = [];
+    for (const t of sessionTransactions) {
+        if (t.voucher_id && !seen.has(t.voucher_id)) {
+            seen.add(t.voucher_id);
+            uniqueVouchers.push({ voucher_id: t.voucher_id, extract_date: t.extract_date });
+        }
+    }
+    if (!uniqueVouchers.length) return null;
+    if (!targetDate) return uniqueVouchers[0].voucher_id;
+    let best = uniqueVouchers[0];
+    let bestDiff = Infinity;
+    const targetTime = new Date(targetDate).getTime();
+    for (const v of uniqueVouchers) {
+        const diff = Math.abs(new Date(v.extract_date).getTime() - targetTime);
+        if (diff < bestDiff || (diff === bestDiff && v.extract_date > best.extract_date)) {
+            bestDiff = diff;
+            best = v;
+        }
+    }
+    return best.voucher_id;
+}
+
 // ---------- RECONCILE AN ACTIVE SESSION AGAINST A NEW DATE RANGE ----------
 // Session date-range reconciliation, Phase 2 of 4: calls Phase 1's backend reconcile endpoint.
 // Newly-in-range/reactivated/excluded lines are all handled server-side (see
 // reconcile_session_range() in routers/verification.py) - this is call-and-refresh only, no
 // client-side range-status logic.
-// Confirmed fix (regressions found right after Phase 2 landed): this deliberately does NOT
-// navigate anywhere and shows no message of any kind - Apply only refreshes the underlying data
-// and stays on Place 2, silently, regardless of outcome. Navigating to Place 3 is not this
-// function's job. sessionTransactions is still force-refreshed (a data-only update, no visual
-// side effect) so Place 3 reflects the reconciled set whenever the auditor does eventually
-// return to it, rather than staying silently stale until some later action happens to refetch.
+// Confirmed fix (regressions found right after Phase 2 landed): this deliberately never switches
+// which view is visible and shows no message of any kind - Apply only refreshes the underlying
+// data and stays on Place 2, silently, regardless of outcome.
+// Orphaned-voucher auto-navigation: navigateToTransaction() (called below) only updates in-memory
+// state and re-renders #voucherHeaderBar/#voucherLinesContainer - it never toggles which view is
+// visible, unlike returnToSessionFromCashbook() (which this function still never calls). So
+// calling it here keeps Place 3's hidden DOM correct and, when the auditor's voucher fell out of
+// range, already showing the "moved" caption - all without ever making Place 3 visible.
 async function reconcileActiveSessionRange() {
     if (!currentSessionId) return;
     const range = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : { start: null, end: null };
@@ -922,10 +964,42 @@ async function reconcileActiveSessionRange() {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to apply new range');
         }
+        // Capture the current voucher's identity/date before sessionTransactions is overwritten -
+        // needed as the "target date" for findNearestInRangeVoucherId() if it turns out to have
+        // fallen out of range.
+        const previousVoucherId = currentVoucherId;
+        const previousLine = sessionTransactions.find(t => t.detail_id === currentDetailId);
+        const previousVoucherDate = previousLine ? previousLine.extract_date : null;
+
         // The reconcile endpoint's response isn't needed here - force-refresh sessionTransactions
         // fresh instead, since it's already populated from before the reconcile and
         // loadTransactionList()'s normal cache guard would otherwise skip re-fetching.
         await loadTransactionList(false, true);
+
+        const stillInRange = previousVoucherId && sessionTransactions.some(t => t.voucher_id === previousVoucherId);
+        if (stillInRange) {
+            // Unaffected - resume exactly where the auditor was, no caption.
+            if (sessionTransactions.some(t => t.detail_id === currentDetailId)) {
+                navigateToTransaction(currentDetailId);
+            } else {
+                // Rare: same voucher_id survived but this specific line didn't - land on
+                // whichever of that voucher's lines remains.
+                const firstRemainingLine = sessionTransactions.find(t => t.voucher_id === previousVoucherId);
+                navigateToTransaction(firstRemainingLine.detail_id);
+            }
+        } else if (sessionTransactions.length > 0) {
+            // Orphaned - auto-navigate to the nearest remaining in-range voucher and caption it.
+            const nearestVoucherId = findNearestInRangeVoucherId(previousVoucherDate);
+            const nearestLine = sessionTransactions.find(t => t.voucher_id === nearestVoucherId);
+            if (nearestLine) {
+                voucherNavCaptionText = 'Moved from a voucher now outside the selected range';
+                navigateToTransaction(nearestLine.detail_id);
+            }
+        } else {
+            // Reconciled to zero active vouchers - nothing to navigate to.
+            clearVoucherHeader();
+            await updateProgressDisplay();
+        }
         cashbookStatus.textContent = '';
     } catch (error) {
         console.error('Error reconciling session range:', error);
@@ -1151,6 +1225,12 @@ async function restoreSessionView(sessionId) {
         const data = await res.json();
         // get_audited_cashbook() nests session fields under data.session, not top-level.
         selectedCashbook = (data.session && data.session.cashbook_name) || null;
+        // Header format cleanup: set directly here (not left to the nested loadTransactionList()
+        // call inside activateSessionView() below) - that call's own "already loaded, skip
+        // re-fetch" guard short-circuits once sessionTransactions is already populated, which it
+        // is by the very next line, so it would never reach the code that sets this otherwise.
+        currentSessionPeriodStart = (data.session && data.session.period_start) || null;
+        currentSessionPeriodEnd = (data.session && data.session.period_end) || null;
         sessionTransactions = data.transactions || [];
         totalTransactions = sessionTransactions.length;
         // Voucher hard-refresh restore: a `voucher` param means the auditor was on a specific
@@ -1245,8 +1325,6 @@ async function loadNextTransaction(detailId = null) {
 function renderVoucherHeader(voucherId, voucherDate, lines) {
     const bar = document.getElementById('voucherHeaderBar');
     if (!bar) return;
-    const lineCount = lines ? lines.length : 0;
-    const total = computeVoucherTotal(lines);
     // Phase B: disabled state is voucher-level (getVoucherPosition()), not line-level — a
     // multi-line voucher no longer has to be "the last line" for Next to disable correctly.
     // Position unknown (sessionTransactions not loaded yet) defaults both disabled, same safe
@@ -1254,6 +1332,22 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
     const pos = getVoucherPosition();
     const prevDisabled = !(pos.total > 0 && pos.index > 1);
     const nextDisabled = !(pos.total > 0 && pos.index < pos.total);
+    // Header format cleanup: subtitle is now "[session date range] · Voucher X of Y" - the old
+    // "N line(s) · Amount X" segments duplicated the table body/total row below and were dropped.
+    // The date range is the ACTIVE SESSION's own range (currentSessionPeriodStart/End), not the
+    // individual voucher's own date - falls back to the voucher's date only if the range isn't
+    // known yet (shouldn't normally happen - every entry path sets it before the first render).
+    const rangeText = (currentSessionPeriodStart && currentSessionPeriodEnd)
+        ? (currentSessionPeriodStart === currentSessionPeriodEnd
+            ? currentSessionPeriodStart
+            : `${currentSessionPeriodStart} – ${currentSessionPeriodEnd}`)
+        : (voucherDate || '—');
+    // The leading " · " lives inside the dynamic text itself (not static markup around the span),
+    // same convention updateProgressDisplay() already uses - so an unknown/blank position shows
+    // nothing dangling. Computed synchronously from `pos` (already available above) rather than
+    // starting blank, so there's no flash of emptiness before updateProgressDisplay()'s async
+    // confirmation lands.
+    const posText = (pos.total > 0) ? ` · Voucher ${pos.index} of ${pos.total}` : '';
     bar.innerHTML = `
         <div class="verification-header-row voucher-nav-row">
             <button class="btn-voucher-nav" id="prevArrow" ${prevDisabled ? 'disabled' : ''} title="Previous transaction">← Prev voucher</button>
@@ -1264,11 +1358,16 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
                         <span class="vh-icon-symbol">🔍</span>
                     </span>
                 </div>
-                <div class="voucher-subtitle">${voucherDate || '—'} · ${lineCount} line${lineCount === 1 ? '' : 's'} · Amount ${total}<span id="voucherPositionCounter"></span></div>
+                <div class="voucher-subtitle">${rangeText}<span id="voucherPositionCounter">${posText}</span></div>
+                <div class="voucher-nav-caption" id="voucherNavCaption">${voucherNavCaptionText}</div>
             </div>
             <button class="btn-voucher-nav" id="nextArrow" ${nextDisabled ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
         </div>
     `;
+    // One-shot: this render just consumed whatever caption was queued (if any) - reset so the
+    // next render (any other navigation) shows the reserved slot blank, with no explicit
+    // per-call-site clearing needed anywhere else.
+    voucherNavCaptionText = '';
 
     const cashbookBar = document.getElementById('cashbookBar');
     if (cashbookBar) {
@@ -2613,7 +2712,7 @@ async function refreshVoucherStats() {
     }
 }
 
-// Update the voucher position counter (small "· voucher n/total" suffix on the header subtitle,
+// Update the voucher position counter (small " · Voucher X of Y" suffix on the header subtitle,
 // written by renderVoucherHeader()).
 async function updateProgressDisplay() {
     refreshVoucherStats();
@@ -2647,10 +2746,10 @@ async function updateProgressDisplay() {
                     }
                 }
                 const displayIndex = (index >= 0) ? index + 1 : '?';
-                counterEl.textContent = total > 0 ? ` · voucher ${displayIndex}/${total}` : '';
+                counterEl.textContent = total > 0 ? ` · Voucher ${displayIndex} of ${total}` : '';
             } else {
                 const displayIndex = (voucherIndex >= 0) ? voucherIndex + 1 : '?';
-                counterEl.textContent = ` · voucher ${displayIndex}/${voucherTotal}`;
+                counterEl.textContent = ` · Voucher ${displayIndex} of ${voucherTotal}`;
             }
         }
     }
@@ -2872,6 +2971,12 @@ async function loadTransactionList(showPopover = false, forceRefresh = false) {
         }
         const data = await res.json();
         sessionTransactions = data.transactions || [];
+        // Header format cleanup: keep the header's date-range text in sync with the session's
+        // real current range (this endpoint already returns it - previously discarded).
+        if (data.session) {
+            currentSessionPeriodStart = data.session.period_start || null;
+            currentSessionPeriodEnd = data.session.period_end || null;
+        }
         // Also store the current index based on currentDetailId
         if (currentDetailId) {
             currentTransactionIndex = sessionTransactions.findIndex(t => t.detail_id === currentDetailId);

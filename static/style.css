@@ -1497,6 +1497,20 @@ body {
     color: #64748b;
     margin-top: 2px;
 }
+/* Orphaned-voucher auto-navigation caption ("Moved from a voucher now outside the selected
+   range") — always present (see renderVoucherHeader() in verification.js), text toggled between
+   empty and the message. min-height reserves one line's worth of space at this font-size/
+   line-height regardless of content, so the slot never causes layout shift when the text
+   appears/disappears — the one hard requirement for this element. Muted/italic, no border or
+   background — deliberately not alert/banner styling. */
+.voucher-nav-caption {
+    font-size: 11px;
+    color: #94a3b8;
+    font-style: italic;
+    line-height: 1.4;
+    min-height: 16px;
+    margin-top: 2px;
+}
 /* Bordered, button-like Prev/Next — previously plain text links with no visible affordance. */
 .btn-voucher-nav {
     padding: 6px 14px;
