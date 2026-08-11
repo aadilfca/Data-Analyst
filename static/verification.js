@@ -793,21 +793,13 @@ async function activateCashbookView(cashbook) {
                 cashbookSelector.appendChild(clone);
             });
         cashbookSelector.value = cashbook;
-        // Session date-range reconciliation, Phase 2 of 4: reconcile_range is keyed to the
-        // session's own fixed cashbook - switching cashbooks isn't supported while one is active.
-        cashbookSelector.disabled = !!currentSessionId;
-        cashbookSelector.title = currentSessionId
-            ? 'A verification session is already open — switching cashbooks isn\'t supported while one is active.'
-            : '';
     }
-    // Same reasoning as the selector above - starting a second session while one is already open
-    // isn't supported here; use Apply to change the active session's date range instead.
-    if (startVerificationBtn) {
-        startVerificationBtn.disabled = !!currentSessionId;
-        startVerificationBtn.title = currentSessionId
-            ? 'A verification session is already open — use Apply above to change its date range.'
-            : '';
-    }
+    // Confirmed fix: sessions are flexible - neither the cashbook dropdown nor Start Verification
+    // is force-disabled while a session is already active (the 2026-08-11 lock that did this is
+    // removed). Picking a different cashbook and clicking Apply still only switches when no
+    // session is active (see applyCashbookPreview()'s own guard, unchanged); clicking Start
+    // Verification mid-session simply starts a fresh session via startSessionFromCashbook(), which
+    // already works standalone regardless of currentSessionId.
     // Confirmed fix: seed Place 2's picker from Place 1's own final range (whatever the user last
     // picked/left in the dialog, or its own auto-detected default) instead of always hardcoding
     // "today's calendar month" — the previous hardcode is what silently discarded a Place-1
@@ -871,10 +863,13 @@ function exitCashbookView() {
 // the page header, then reuses fetchCashbookData() unchanged for the actual reload.
 // Session date-range reconciliation, Phase 2 of 4: when reached with an active session
 // (currentSessionId set - only possible now that returnToCashbookFromSession() keeps one alive),
-// Apply instead reconciles that session's voucher list against the new range - silently, staying
-// on Place 2 - rather than reloading Place 2's own preview table. The cashbook-switch block above
-// is skipped in that case (also enforced by activateCashbookView() disabling the dropdown) -
-// reconcile is keyed to the session's own fixed cashbook, switching isn't supported mid-session.
+// Apply instead reconciles that session's voucher list against the new range, staying on Place 2 -
+// reconcileActiveSessionRange() itself now also refreshes Place 2's own visible preview table
+// (confirmed fix), so this no longer looks unresponsive from Place 2's perspective. The
+// cashbook-switch block below is still skipped in that case - reconcile is keyed to the session's
+// own fixed cashbook, switching which cashbook a session targets isn't supported mid-session (the
+// dropdown itself is no longer force-disabled while a session is active - confirmed fix - but
+// picking a different value here still has no effect until a new session is started for it).
 async function applyCashbookPreview() {
     if (!cashbookSelector) {
         if (currentSessionId) {
@@ -933,13 +928,20 @@ function findNearestInRangeVoucherId(targetDate) {
 // reconcile_session_range() in routers/verification.py) - this is call-and-refresh only, no
 // client-side range-status logic.
 // Confirmed fix (regressions found right after Phase 2 landed): this deliberately never switches
-// which view is visible and shows no message of any kind - Apply only refreshes the underlying
-// data and stays on Place 2, silently, regardless of outcome.
+// which view is visible - Apply only refreshes data and stays on Place 2.
 // Orphaned-voucher auto-navigation: navigateToTransaction() (called below) only updates in-memory
 // state and re-renders #voucherHeaderBar/#voucherLinesContainer - it never toggles which view is
 // visible, unlike returnToSessionFromCashbook() (which this function still never calls). So
 // calling it here keeps Place 3's hidden DOM correct and, when the auditor's voucher fell out of
 // range, already showing the "moved" caption - all without ever making Place 3 visible.
+// Confirmed fix: also refreshes Place 2's own visible preview table (fetchCashbookData()) - the
+// original reconcile-only version updated sessionTransactions (Place 3's data, hidden behind this
+// view) but never touched the on-screen cashbook table the auditor is actually looking at, so
+// Apply looked completely unresponsive from Place 2 even though the reconcile itself worked.
+// fetchCashbookData() sets its own cashbookStatus text (row count / error) on completion, same as
+// it always has outside a session - that's the visible confirmation Apply was missing, not a
+// reintroduced banner/toast (the earlier "stay silent" fix was about not navigating away, not
+// about suppressing this table's own always-present status line).
 async function reconcileActiveSessionRange() {
     if (!currentSessionId) return;
     const range = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : { start: null, end: null };
@@ -975,6 +977,10 @@ async function reconcileActiveSessionRange() {
         // fresh instead, since it's already populated from before the reconcile and
         // loadTransactionList()'s normal cache guard would otherwise skip re-fetching.
         await loadTransactionList(false, true);
+        // Confirmed fix: also refresh Place 2's own visible preview table (see the comment above
+        // this function) - independent of the session-nav branching below, since this table isn't
+        // tied to session state at all, only to selectedCashbook/the current date range.
+        await fetchCashbookData();
 
         const stillInRange = previousVoucherId && sessionTransactions.some(t => t.voucher_id === previousVoucherId);
         if (stillInRange) {
@@ -1000,7 +1006,8 @@ async function reconcileActiveSessionRange() {
             clearVoucherHeader();
             await updateProgressDisplay();
         }
-        cashbookStatus.textContent = '';
+        // No explicit blank-out here - fetchCashbookData() above already set cashbookStatus to its
+        // own final row-count text, which is the visible confirmation this fix restores.
     } catch (error) {
         console.error('Error reconciling session range:', error);
         cashbookStatus.textContent = `⚠️ ${error.message}`;
