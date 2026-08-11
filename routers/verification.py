@@ -1152,7 +1152,47 @@ def start_verification_session(
         conn.commit()
     finally:
         conn.close()
-    
+
+    # Bug fix ("Cleared" reverting to "Pending" on module switch/restart): start_verification_session()
+    # has no "resume an existing session" logic (see _resolve_sibling_voucher_line_ids()'s own
+    # docstring) - every re-open of the same cashbook/period inserts a brand-new verification_details
+    # row per line, which starts with cleared_status = NULL ("Pending") and previously stayed that
+    # way until the NEXT explicit save touched that specific new row - looking exactly like a real
+    # Cleared status had been lost (and, since nothing ever re-saved it, surviving a restart too).
+    # Seeded here via a single UPDATE that copies cleared_status/matrix_version_applied straight from
+    # each line's most recent prior sibling session that had a real (non-NULL) value - not a live
+    # recompute (confirmed with the user: a real recompute via compute_and_persist_cleared_status()
+    # costs ~150ms/line, which would add tens of seconds to Start Verification for a large cashbook).
+    # A copy can go stale if the Category's requirements changed since that prior computation, but
+    # this introduces no new class of staleness - compute_and_persist_cleared_status() already never
+    # proactively reclassifies an already-Cleared line when its matrix_version changes; this just
+    # extends that same existing tolerance across a session restart. The next real save on this line
+    # still recomputes it fresh, exactly as before.
+    execute_write(
+        """
+        UPDATE verification_details
+        SET cleared_status = (
+                SELECT vd2.cleared_status FROM verification_details vd2
+                WHERE vd2.client_data_id = verification_details.client_data_id
+                  AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                ORDER BY vd2.id DESC LIMIT 1
+            ),
+            matrix_version_applied = (
+                SELECT vd2.matrix_version_applied FROM verification_details vd2
+                WHERE vd2.client_data_id = verification_details.client_data_id
+                  AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                ORDER BY vd2.id DESC LIMIT 1
+            )
+        WHERE session_id = ?
+          AND EXISTS (
+                SELECT 1 FROM verification_details vd2
+                WHERE vd2.client_data_id = verification_details.client_data_id
+                  AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+            )
+        """,
+        (session_id, session_id, session_id, session_id)
+    )
+
     log_audit(created_by, "Start Verification Session", "Verification", f"Session {session_id}: {cashbook_name}, {len(transactions_to_verify)} transactions")
     
     return {
