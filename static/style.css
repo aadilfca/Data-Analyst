@@ -1455,6 +1455,13 @@ body {
     font-weight: 700;
     color: #1a1a2e;
 }
+/* Header voucher-wise stats (Phase 2 of 3, replacing the old dead "Verified" counter) — Cleared/
+   Query/Pending value colors, reusing this app's already-established semantic palette (same
+   tokens as .voucher-line-cleared-badge.cleared/.query and .status-badge.pending) rather than
+   introducing new colors. */
+.cashbook-stat-value.cleared { color: #166534; }
+.cashbook-stat-value.query { color: #991b1b; }
+.cashbook-stat-value.pending { color: #92400e; }
 
 /* ----- Voucher Header Row -----
    Scoped to the voucher panel's own (60%) width: Prev voucher / centered title (+ inline 🔍

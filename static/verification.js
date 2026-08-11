@@ -920,6 +920,9 @@ async function startSessionFromCashbook() {
 // startSessionFromCashbook() (a freshly-started session) omits this, so its behavior is unchanged.
 async function activateSessionView(sessionId, targetVoucherId = null) {
     currentSessionId = sessionId;
+    // Header voucher-wise stats (Phase 2 of 3): kick off the session-load fetch in parallel with
+    // the render path below — not awaited, so it never blocks getting the first voucher on screen.
+    refreshVoucherStats();
     // Explicitly hide the dashboard/module-selection view here too (not just cashbookContent) -
     // matches activateCashbookView()'s own hide of dashboardContent. Previously this only ever ran
     // as the tail of startSessionFromCashbook(), which is always reached after
@@ -1099,15 +1102,27 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
     const cashbookBar = document.getElementById('cashbookBar');
     if (cashbookBar) {
         const cashbookName = window._currentCashbook || selectedCashbook || '—';
-        const stats = computeVoucherStats();
+        // Header voucher-wise stats (Phase 2 of 3): Total/Cleared/Query/Pending, sourced from
+        // voucherStatsCache (GET /api/verification/session/{id}/voucher_stats, refreshVoucherStats()
+        // below) instead of the old dead "Verified" counter. Total falls back to the synchronous,
+        // client-side computeVoucherStats().totalVouchers until the first fetch resolves — Phase 1
+        // confirmed this agrees exactly with the endpoint's own `total`, so the fallback is never
+        // wrong, just momentarily sourced differently; Cleared/Query/Pending default to 0 until
+        // then, mirroring the old counter's default "Verified 0" state.
+        const statsTotal = voucherStatsCache ? voucherStatsCache.total : computeVoucherStats().totalVouchers;
+        const statsCleared = voucherStatsCache ? voucherStatsCache.cleared : 0;
+        const statsQuery = voucherStatsCache ? voucherStatsCache.query : 0;
+        const statsPending = voucherStatsCache ? voucherStatsCache.pending : 0;
         // Bank Verification (Phase 8): "Cashbook"/📒 vs "Bankbook"/🏦 label, driven by currentType.
         const bookLabel = currentType === 'bank' ? 'Bankbook' : 'Cashbook';
         const bookIcon = currentType === 'bank' ? '🏦' : '📒';
         cashbookBar.innerHTML = `
             <div class="cashbook-stats">
                 <span class="cashbook-stat"><span class="cashbook-stat-label">${bookLabel}</span><span class="cashbook-stat-value">${cashbookName}</span></span>
-                <span class="cashbook-stat"><span class="cashbook-stat-label">Total Vouchers</span><span class="cashbook-stat-value">${stats.totalVouchers}</span></span>
-                <span class="cashbook-stat"><span class="cashbook-stat-label">Verified</span><span class="cashbook-stat-value">${stats.verifiedVouchers}</span></span>
+                <span class="cashbook-stat"><span class="cashbook-stat-label">Total</span><span class="cashbook-stat-value" id="voucherStatTotal">${statsTotal}</span></span>
+                <span class="cashbook-stat"><span class="cashbook-stat-label">Cleared</span><span class="cashbook-stat-value cleared" id="voucherStatCleared">${statsCleared}</span></span>
+                <span class="cashbook-stat"><span class="cashbook-stat-label">Query</span><span class="cashbook-stat-value query" id="voucherStatQuery">${statsQuery}</span></span>
+                <span class="cashbook-stat"><span class="cashbook-stat-label">Pending</span><span class="cashbook-stat-value pending" id="voucherStatPending">${statsPending}</span></span>
             </div>
             <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">${bookIcon}</span> ${bookLabel}</button>
         `;
@@ -1140,6 +1155,8 @@ function clearVoucherHeader() {
     if (bar) bar.innerHTML = '';
     const cashbookBar = document.getElementById('cashbookBar');
     if (cashbookBar) cashbookBar.innerHTML = '';
+    // Reset so a later session's first render doesn't briefly show this session's stale counts.
+    voucherStatsCache = null;
 }
 
 // ---------- VOUCHER LINE ALIAS HELPERS (Phase 3) ----------
@@ -1168,6 +1185,12 @@ let voucherChecksCache = {};
 // Confirmed fix (2026-07-30): keyed by transaction_ref, holds the in-flight fetch Promise while
 // one is outstanding for that voucher — see ensureVoucherChecksLoaded() below for why this exists.
 let voucherChecksLoadingPromises = {};
+
+// Header voucher-wise stats (Phase 2 of 3) — last-fetched {total, cleared, query, pending} for
+// the whole cashbook session (GET /api/verification/session/{id}/voucher_stats), not just the
+// open voucher. null until refreshVoucherStats() resolves at least once for the current session.
+// See refreshVoucherStats() and renderVoucherHeader() below.
+let voucherStatsCache = null;
 const VOUCHER_LINE_DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars'];
 const VOUCHER_LINE_DEBIT_ALIASES = ['Debit Amount', 'Debit', 'Dr Amount', 'Dr'];
 const VOUCHER_LINE_CREDIT_ALIASES = ['Credit Amount', 'Credit', 'Cr Amount', 'Cr'];
@@ -2392,9 +2415,37 @@ function buildAuditGuidanceTable(data) {
 
 // buildAuditGuidanceTable()/escapeHtml() are now consumed only by showAuditGuidancePopover().
 
+// Header voucher-wise stats (Phase 2 of 3): fetches Total/Cleared/Query/Pending for the whole
+// cashbook session and patches the four #voucherStat* spans in place (no full header re-render,
+// so #cashbookReturnBtn's listener isn't redundantly rebound). Called once on session load
+// (activateSessionView()) and from updateProgressDisplay() below — the latter already runs after
+// every save/verify/navigation action, which is what keeps these counts live through a work
+// session rather than freezing at whatever they were when the session was first opened. Fails
+// soft (console.warn only, cache left as-is) — same convention as this file's other non-fatal
+// background fetches, e.g. refreshDateFormatPreview().
+async function refreshVoucherStats() {
+    if (!currentSessionId) return;
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/voucher_stats`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        voucherStatsCache = await res.json();
+        const totalEl = document.getElementById('voucherStatTotal');
+        const clearedEl = document.getElementById('voucherStatCleared');
+        const queryEl = document.getElementById('voucherStatQuery');
+        const pendingEl = document.getElementById('voucherStatPending');
+        if (totalEl) totalEl.textContent = voucherStatsCache.total;
+        if (clearedEl) clearedEl.textContent = voucherStatsCache.cleared;
+        if (queryEl) queryEl.textContent = voucherStatsCache.query;
+        if (pendingEl) pendingEl.textContent = voucherStatsCache.pending;
+    } catch (e) {
+        console.warn('Could not fetch voucher stats for header:', e);
+    }
+}
+
 // Update the voucher position counter (small "· voucher n/total" suffix on the header subtitle,
 // written by renderVoucherHeader()).
 async function updateProgressDisplay() {
+    refreshVoucherStats();
     const counterEl = document.getElementById('voucherPositionCounter');
     if (counterEl) {
         if (!currentSessionId) {
