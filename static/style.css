@@ -6075,16 +6075,44 @@ body {
     overflow: hidden;
 }
 
+/* Line-grain restructure, Phase 3 of 3, FINAL (styling): table-layout:fixed + explicit per-column
+   widths on the header row's cells is what actually fixes column alignment — with `auto` layout,
+   the voucher header band's colspan="6" cell let the browser's column-width algorithm drift row
+   to row, which is why line/subtotal rows didn't line up under the <thead> labels. Under `fixed`
+   layout only the header row's own widths govern every column, so the band rows below can no
+   longer distort it. Column proportions (Account/Reference/Amount/Procedures/Observations/Status)
+   sized so Reference (free text) and Observations (can hold an expanded entries list) get the
+   most room; Amount/Procedures/Status are compact pill/ring/number content. */
 .aw-table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
 }
+.aw-table th:nth-child(1) { width: 12%; }
+.aw-table th:nth-child(2) { width: 27%; }
+.aw-table th:nth-child(3) { width: 12%; }
+.aw-table th:nth-child(4) { width: 14%; }
+.aw-table th:nth-child(5) { width: 23%; }
+.aw-table th:nth-child(6) { width: 12%; }
+
 .aw-table th,
 .aw-table td {
     text-align: left;
     padding: 10px 16px;
     border-bottom: 1px solid #e2e8f0;
+    /* Light vertical divider (not the heavier #94a3b8 used for the two landmark row types below)
+       so 300+ line rows read as a structured grid without every single cell carrying a hard
+       border — that heavier treatment is reserved for the voucher band/subtotal rows, which are
+       what actually need to stand out. */
+    border-right: 1px solid #e2e8f0;
     font-size: 13px;
+    /* Fixed-width columns need this or long Reference/Observations text would overflow its cell
+       instead of wrapping. */
+    overflow-wrap: break-word;
+}
+.aw-table th:last-child,
+.aw-table td:last-child {
+    border-right: none;
 }
 .aw-table th {
     background: #f8fafc;
@@ -6094,11 +6122,51 @@ body {
     font-size: 11px;
     letter-spacing: 0.03em;
 }
-.aw-table tbody tr:hover {
+/* Amount is a number (right-aligned, matching this app's other amount columns, e.g.
+   .voucher-line-amount); Procedures/Status hold a centered pill/ring, not flowing text. */
+.aw-table td:nth-child(3) {
+    text-align: right;
+}
+.aw-table td:nth-child(4),
+.aw-table td:nth-child(6) {
+    text-align: center;
+}
+/* :not(.aw-subtotal-row) — a subtotal row carries no data-voucher-no/click handler (Phase 2), so
+   it should never show a hover state; the voucher header band and line rows are both clickable. */
+.aw-table tbody tr:not(.aw-subtotal-row):hover {
     background: #f8fafc;
 }
 .aw-table tbody tr.aw-row-clickable {
     cursor: pointer;
+}
+
+/* Voucher header band — a grouping label (not a rollup/total), so it gets its own muted shade
+   rather than reusing the total-row's #dbeafe below, which would make the two landmark row types
+   indistinguishable from each other. #f1f5f9/#94a3b8 mirror this app's own established
+   "muted section"/"grid structural border" colors (see the Verification voucher-lines "All
+   Borders" grid, static/style.css ~2035-2268), not new values. */
+.aw-voucher-header-row td {
+    background: #f1f5f9;
+    color: #1a1a2e;
+    font-weight: 700;
+    border-top: 2px solid #94a3b8;
+    border-bottom: 1px solid #cbd5e1;
+}
+.aw-table tbody tr.aw-voucher-header-row:hover td {
+    /* A dedicated (slightly darker) hover shade — the generic #f8fafc hover above would visually
+       lighten this already-shaded row instead of highlighting it. */
+    background: #e2e8f0;
+}
+
+/* Subtotal row — this app's established total/rollup-row treatment (#dbeafe + bold, same as
+   .aw-total-row/.voucher-line-total-row), plus explicit top+bottom borders per the confirmed
+   brief. Only rendered by audit_workbook.js when line_count > 1 (Phase 2). */
+.aw-subtotal-row td {
+    background: #dbeafe;
+    color: #1a1a2e;
+    font-weight: 700;
+    border-top: 2px solid #94a3b8;
+    border-bottom: 2px solid #94a3b8;
 }
 
 /* Same green/red/amber pill palette as .voucher-line-cleared-badge/.status-badge.pending
