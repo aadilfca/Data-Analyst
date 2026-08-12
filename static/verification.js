@@ -124,6 +124,10 @@ const cashbookNextPage = document.getElementById('cashbookNextPage');
 const cashbookPageInfo = document.getElementById('cashbookPageInfo');
 const cashbookRowCount = document.getElementById('cashbookRowCount');
 const startVerificationBtn = document.getElementById('startVerificationBtn');
+// Audit Workbook peer nav button on the Cashbook preview screen (mirrors #cashbookBar's own copy
+// in the session header) - see navigateToAuditWorkbook() and its enable/disable logic in
+// activateCashbookView().
+const cashbookAuditWorkbookBtn = document.getElementById('cashbookAuditWorkbookBtn');
 
 const supportingModal = document.getElementById('supportingModal');
 const supportingSearchInput = document.getElementById('supportingSearchInput');
@@ -782,6 +786,12 @@ async function activateCashbookView(cashbook) {
     // Start-Verification popup (openCashbook()) or by restoreCashbookView()'s own loadCashbooks()
     // call - both callers guarantee that list is already loaded before this function runs.
     if (cashbookSelectorLabel) cashbookSelectorLabel.textContent = currentType === 'bank' ? '🏦 Bankbook' : '📒 Cashbook';
+    // Audit Workbook is session-scoped (navigateToAuditWorkbook() no-ops with no currentSessionId) -
+    // this screen can be reached with or without an active session, so reflect that here each time
+    // it's (re)entered rather than leaving the button silently inert with no visual feedback.
+    if (cashbookAuditWorkbookBtn) {
+        cashbookAuditWorkbookBtn.disabled = !currentSessionId;
+    }
     if (cashbookSelector) {
         cashbookSelector.innerHTML = '';
         Array.from(popupCashbookSelect.options)
@@ -3914,6 +3924,7 @@ if (cashbookNextPage) {
     });
 }
 if (startVerificationBtn) startVerificationBtn.addEventListener('click', startSessionFromCashbook);
+if (cashbookAuditWorkbookBtn) cashbookAuditWorkbookBtn.addEventListener('click', navigateToAuditWorkbook);
 
 // Phase 2: standalone transaction view removed — prevBtn/nextBtn/verifyBtn/saveProgressBtn/exitBtn
 // are no longer static DOM elements (nav controls are dynamically rendered in #voucherHeaderBar).

@@ -709,6 +709,14 @@
                     <button id="startVerificationBtn"
                         style="padding:6px 16px; background:#22c55e; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">✅
                         Verification</button>
+                    <!-- Same peer-button pattern as #cashbookBar's own "Audit Workbook" button
+                         (session header, renderVoucherHeader() in verification.js) - reuses
+                         navigateToAuditWorkbook() verbatim. Disabled here (with a tooltip) when no
+                         verification session is active, since this screen can be reached before one
+                         is started - see activateCashbookView() for the enable/disable logic. -->
+                    <button id="cashbookAuditWorkbookBtn" class="btn-cashbook"
+                        title="Open the Audit Workbook for the active session">
+                        <span class="btn-icon">📗</span> Audit Workbook</button>
                 </div>
             </div>
             <!-- Date Range Selector -->
