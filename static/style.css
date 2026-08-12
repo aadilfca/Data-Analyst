@@ -6023,11 +6023,24 @@ body {
 }
 
 /* =============================================
-   AUDIT WORKBOOK MODULE (new, confirmed 5-phase requirement)
-   Phase 2 of 5: static page shell (static/audit_workbook.html) — no live data yet.
+   AUDIT WORKBOOK MODULE (restyle requirement, Phase 2 of 2, FINAL)
+   Phase 1 restructured rows into Sr / Voucher No. / Account / Reference / Amount /
+   Procedures / Observations / Status (8 columns), removing the old voucher-header banner row
+   entirely — grouping now reads from Sr (shown once per voucher) + Voucher No. (repeated per
+   line) plus this phase's zebra striping / voucher-first border. This phase lightens the
+   table: hairline 1px borders throughout, a lighter (not bold/heavy) subtotal row, and a
+   slightly-stronger top border only where a new voucher group begins.
    Own classes, visually matched (not shared) to .ar-tb-table/.voucher-line-cleared-badge/
    .voucher-line-total-row's existing look, per this codebase's established "visually matched,
    physically duplicated" convention for a new page's own list.
+
+   Zebra striping per voucher group (not per line) needs a group-parity marker plain CSS can't
+   derive on its own for variable-sized groups — confirmed with the user to extend this
+   phase's file list by one: audit_workbook.js's renderAuditWorkbookRows() now stamps every
+   line/subtotal row belonging to the same voucher group with a shared aw-group-even/
+   aw-group-odd class (purely a CSS hook — no DOM structure, data flow, or logic change). The
+   voucher-first top border needed no such hook — it's derived in pure CSS from the Sr cell
+   already being empty on every line but a voucher's first, via :has().
    ============================================= */
 
 /* Peer nav buttons (Phase 5, FINAL) — reuses .btn-cashbook/.btn-cashbook.active from
@@ -6075,35 +6088,34 @@ body {
     overflow: hidden;
 }
 
-/* Line-grain restructure, Phase 3 of 3, FINAL (styling): table-layout:fixed + explicit per-column
-   widths on the header row's cells is what actually fixes column alignment — with `auto` layout,
-   the voucher header band's colspan="6" cell let the browser's column-width algorithm drift row
-   to row, which is why line/subtotal rows didn't line up under the <thead> labels. Under `fixed`
-   layout only the header row's own widths govern every column, so the band rows below can no
-   longer distort it. Column proportions (Account/Reference/Amount/Procedures/Observations/Status)
+/* table-layout:fixed + explicit per-column widths on the header row's cells is what keeps
+   line/subtotal rows aligned under the <thead> labels regardless of any row's own content.
+   Column proportions (Sr/Voucher No./Account/Reference/Amount/Procedures/Observations/Status)
    sized so Reference (free text) and Observations (can hold an expanded entries list) get the
-   most room; Amount/Procedures/Status are compact pill/ring/number content. */
+   most room; Sr/Amount/Procedures/Status are compact number/pill/ring content. */
 .aw-table {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
 }
-.aw-table th:nth-child(1) { width: 12%; }
-.aw-table th:nth-child(2) { width: 27%; }
-.aw-table th:nth-child(3) { width: 12%; }
-.aw-table th:nth-child(4) { width: 14%; }
-.aw-table th:nth-child(5) { width: 23%; }
+.aw-table th:nth-child(1) { width: 6%; }
+.aw-table th:nth-child(2) { width: 12%; }
+.aw-table th:nth-child(3) { width: 10%; }
+.aw-table th:nth-child(4) { width: 22%; }
+.aw-table th:nth-child(5) { width: 10%; }
 .aw-table th:nth-child(6) { width: 12%; }
+.aw-table th:nth-child(7) { width: 18%; }
+.aw-table th:nth-child(8) { width: 10%; }
 
 .aw-table th,
 .aw-table td {
     text-align: left;
     padding: 10px 16px;
     border-bottom: 1px solid #e2e8f0;
-    /* Light vertical divider (not the heavier #94a3b8 used for the two landmark row types below)
-       so 300+ line rows read as a structured grid without every single cell carrying a hard
-       border — that heavier treatment is reserved for the voucher band/subtotal rows, which are
-       what actually need to stand out. */
+    /* Hairline low-contrast divider throughout — 300+ line rows read as a structured grid
+       without any cell carrying a heavy border; the deliberately-stronger lines are the
+       voucher-first top border and the subtotal row's own top border below, both of which
+       mark a real structural boundary rather than an ordinary cell edge. */
     border-right: 1px solid #e2e8f0;
     font-size: 13px;
     /* Fixed-width columns need this or long Reference/Observations text would overflow its cell
@@ -6122,51 +6134,63 @@ body {
     font-size: 11px;
     letter-spacing: 0.03em;
 }
-/* Amount is a number (right-aligned, matching this app's other amount columns, e.g.
-   .voucher-line-amount); Procedures/Status hold a centered pill/ring, not flowing text. */
-.aw-table td:nth-child(3) {
-    text-align: right;
-}
-.aw-table td:nth-child(4),
-.aw-table td:nth-child(6) {
+/* Sr is a short number, centered like the pill/ring columns; Amount is a number (right-aligned,
+   matching this app's other amount columns, e.g. .voucher-line-amount); Procedures/Status hold a
+   centered pill/ring, not flowing text. Voucher No./Account/Reference/Observations stay
+   left-aligned via the base .aw-table td rule above. */
+.aw-table td:nth-child(1) {
     text-align: center;
 }
-/* :not(.aw-subtotal-row) — a subtotal row carries no data-voucher-no/click handler (Phase 2), so
-   it should never show a hover state; the voucher header band and line rows are both clickable. */
-.aw-table tbody tr:not(.aw-subtotal-row):hover {
+.aw-table td:nth-child(5) {
+    text-align: right;
+}
+.aw-table td:nth-child(6),
+.aw-table td:nth-child(8) {
+    text-align: center;
+}
+
+/* Zebra striping — per voucher GROUP, not per line, via the aw-group-even/aw-group-odd classes
+   audit_workbook.js stamps on every row of a group. Scoped to .aw-line-row specifically so
+   .aw-subtotal-row's own distinct #dbeafe background below is never overridden even though it
+   carries the same parity class for simplicity in the JS. Reuses #f8fafc, the same subtle tint
+   already used elsewhere in this file (including this table's own header background above) — no
+   new colour. Odd groups are left as the table's plain white default, so only even needs a rule. */
+.aw-table tbody tr.aw-line-row.aw-group-even {
     background: #f8fafc;
+}
+
+/* Row hover — a shade visibly distinct from both the plain-white and zebra-tinted rows above.
+   Reuses #f1f5f9, already used throughout this file for the same purpose (e.g.
+   .nav-menu-item:hover). :not(.aw-subtotal-row) — a subtotal row carries no data-voucher-no/
+   click handler, so it should never show a hover state; every line row is clickable. */
+.aw-table tbody tr:not(.aw-subtotal-row):hover {
+    background: #f1f5f9;
 }
 .aw-table tbody tr.aw-row-clickable {
     cursor: pointer;
 }
 
-/* Voucher header band — a grouping label (not a rollup/total), so it gets its own muted shade
-   rather than reusing the total-row's #dbeafe below, which would make the two landmark row types
-   indistinguishable from each other. #f1f5f9/#94a3b8 mirror this app's own established
-   "muted section"/"grid structural border" colors (see the Verification voucher-lines "All
-   Borders" grid, static/style.css ~2035-2268), not new values. */
-.aw-voucher-header-row td {
-    background: #f1f5f9;
-    color: #1a1a2e;
-    font-weight: 700;
-    border-top: 2px solid #94a3b8;
-    border-bottom: 1px solid #cbd5e1;
-}
-.aw-table tbody tr.aw-voucher-header-row:hover td {
-    /* A dedicated (slightly darker) hover shade — the generic #f8fafc hover above would visually
-       lighten this already-shaded row instead of highlighting it. */
-    background: #e2e8f0;
+/* Voucher-first row — a slightly stronger (but still 1px hairline-family) top border only where
+   a new voucher group begins, giving a visual break without a full banner row. Derived in pure
+   CSS from the Sr cell already being empty on every line but a voucher's first (see
+   buildLineRowHtml() in audit_workbook.js) — no extra class/hook needed for this one. #cbd5e1 is
+   an already-used, slightly-more-visible-than-hairline grey elsewhere in this file (e.g.
+   .module-card.admin-card's hover border) for the same "a bit stronger than default" purpose. */
+.aw-line-row:has(td:first-child:not(:empty)) td {
+    border-top: 1px solid #cbd5e1;
 }
 
-/* Subtotal row — this app's established total/rollup-row treatment (#dbeafe + bold, same as
-   .aw-total-row/.voucher-line-total-row), plus explicit top+bottom borders per the confirmed
-   brief. Only rendered by audit_workbook.js when line_count > 1 (Phase 2). */
+/* Subtotal row — lighter than a full total-row treatment: a thin (1px) top border and medium
+   (not bold) weight, while the #dbeafe tint (already this app's established total/rollup-row
+   colour, same as .aw-total-row/.voucher-line-total-row below) keeps it reading as a total.
+   #94a3b8 is this file's existing "stronger structural border" token (see the Verification
+   voucher-lines "All Borders" grid, static/style.css ~2035-2268) — most visible of this table's
+   three border tiers, but still only 1px. Only rendered by audit_workbook.js when line_count > 1. */
 .aw-subtotal-row td {
     background: #dbeafe;
     color: #1a1a2e;
-    font-weight: 700;
-    border-top: 2px solid #94a3b8;
-    border-bottom: 2px solid #94a3b8;
+    font-weight: 600;
+    border-top: 1px solid #94a3b8;
 }
 
 /* Same green/red/amber pill palette as .voucher-line-cleared-badge/.status-badge.pending
@@ -6192,7 +6216,9 @@ body {
 }
 
 /* Running total footer row — same #dbeafe dim-blue background already established by
-   .voucher-line-total-row and reused across several other tables in this app. */
+   .voucher-line-total-row and reused across several other tables in this app. Left unchanged by
+   this phase's lighter-subtotal-row treatment — this is the page-level grand total (tfoot), a
+   distinct concept from the per-voucher .aw-subtotal-row (tbody) above. */
 .aw-total-row td {
     background: #dbeafe;
     font-weight: 700;

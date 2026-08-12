@@ -1,5 +1,9 @@
-// Audit Workbook page — restyle (new, confirmed 2-phase follow-on requirement), Phase 1 of 2
-// (row restructure: Sr/Voucher No. columns, remove the voucher header banner row).
+// Audit Workbook page — restyle (new, confirmed 2-phase follow-on requirement).
+// Phase 1: row restructure (Sr/Voucher No. columns, remove the voucher header banner row).
+// Phase 2, FINAL: lighter styling (style.css) — this file's own addition for that phase is
+// small and confirmed via AskUserQuestion: renderAuditWorkbookRows() stamps each voucher
+// group's line/subtotal rows with a shared aw-group-even/aw-group-odd class, a pure CSS hook
+// for zebra striping (variable-sized groups can't be alternated in plain CSS with no marker).
 //
 // GET /api/verification/session/{session_id}/audit_workbook returns one voucher group per
 // voucher — {sr, voucher_no, date, line_count, amount, status, lines: [...]}, each line
@@ -134,9 +138,13 @@ function getAwObservationsCellHtml(line) {
 
 // Sr is shown only on a voucher's first line (isFirstLine); Voucher No. repeats on every line —
 // both are how a voucher's lines read as a group now that the banner row is gone.
-function buildLineRowHtml(v, line, isFirstLine) {
+// groupParityClass ('aw-group-even'/'aw-group-odd') is a pure CSS hook — style.css's zebra
+// striping needs it since variable-sized voucher groups can't be alternated in plain CSS with
+// no marker; the voucher-first top border needs no such hook (style.css derives it from the Sr
+// cell's own empty/non-empty state via :has()).
+function buildLineRowHtml(v, line, isFirstLine, groupParityClass) {
     return `
-        <tr class="aw-line-row aw-row-clickable" data-voucher-no="${escapeHtml(v.voucher_no)}" data-detail-id="${line.detail_id}">
+        <tr class="aw-line-row aw-row-clickable ${groupParityClass}" data-voucher-no="${escapeHtml(v.voucher_no)}" data-detail-id="${line.detail_id}">
             <td>${isFirstLine ? escapeHtml(String(v.sr)) : ''}</td>
             <td>${escapeHtml(v.voucher_no)}</td>
             <td>${escapeHtml(line.account_code || '—')}</td>
@@ -150,10 +158,13 @@ function buildLineRowHtml(v, line, isFirstLine) {
 }
 
 // Only rendered when line_count > 1 — a single-line voucher's own line row already carries the
-// voucher's whole amount/status, so a subtotal would just duplicate it.
-function buildSubtotalRowHtml(v) {
+// voucher's whole amount/status, so a subtotal would just duplicate it. Carries the same
+// groupParityClass as its group's line rows for consistency, though style.css's zebra rule is
+// scoped to .aw-line-row only, so it has no visual effect here — the subtotal keeps its own
+// distinct #dbeafe tint regardless of parity.
+function buildSubtotalRowHtml(v, groupParityClass) {
     return `
-        <tr class="aw-subtotal-row">
+        <tr class="aw-subtotal-row ${groupParityClass}">
             <td colspan="4">Subtotal</td>
             <td>${formatAwAmount(v.amount)}</td>
             <td colspan="2"></td>
@@ -170,9 +181,10 @@ function renderAuditWorkbookRows(vouchers, emptyMessage) {
         return;
     }
 
-    const rowsHtml = vouchers.map(v => {
-        const lineRowsHtml = (v.lines || []).map((line, idx) => buildLineRowHtml(v, line, idx === 0)).join('');
-        const subtotalHtml = v.line_count > 1 ? buildSubtotalRowHtml(v) : '';
+    const rowsHtml = vouchers.map((v, groupIdx) => {
+        const groupParityClass = groupIdx % 2 === 0 ? 'aw-group-even' : 'aw-group-odd';
+        const lineRowsHtml = (v.lines || []).map((line, idx) => buildLineRowHtml(v, line, idx === 0, groupParityClass)).join('');
+        const subtotalHtml = v.line_count > 1 ? buildSubtotalRowHtml(v, groupParityClass) : '';
         return lineRowsHtml + subtotalHtml;
     }).join('');
 
