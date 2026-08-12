@@ -2315,6 +2315,13 @@ body {
     background: #fee2e2;
     color: #991b1b;
 }
+/* Pending (getPendingBadgeHtml() in verification.js) — reuses this app's existing
+   .status-badge.pending amber pair so Pending reads at the same visual weight as
+   .cleared/.query rather than a plain dot+text leftover. */
+.voucher-line-cleared-badge.pending {
+    background: #fef3c7;
+    color: #92400e;
+}
 
 /* Change-alert icon (⚠️) — placed inline next to the account name; a functional signal, not
    decoration, so it's kept even though the badge/type indicators around it were dropped. */

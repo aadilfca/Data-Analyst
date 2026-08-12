@@ -2080,8 +2080,19 @@ function getVoucherLineStatusIcon(validationStatus) {
 // affected; Failed/Passed pills are always shown as-is (icon + text, unchanged).
 function getVoucherLineStatusPillHtml(validationStatus, clearedStatus) {
     const status = (validationStatus || 'Pending').toLowerCase();
-    if (status === 'pending' && (clearedStatus === 'Cleared' || clearedStatus === 'Query')) return '';
+    if (status === 'pending') {
+        if (clearedStatus === 'Cleared' || clearedStatus === 'Query') return '';
+        return getPendingBadgeHtml();
+    }
     return `${getVoucherLineStatusIcon(validationStatus)} ${status}`.trim();
+}
+
+// Pending rendered as a badge matching the visual weight of the Cleared/Query badges
+// (.voucher-line-cleared-badge) — same class/pill treatment, distinct amber palette (this app's
+// existing .status-badge.pending convention) so Pending reads as the same "weight" of status
+// indicator instead of the old plain dot+text leftover from validation_status.
+function getPendingBadgeHtml() {
+    return `<span class="voucher-line-cleared-badge pending">Pending</span>`;
 }
 
 // Validation Rules Phase 5: Cleared/Query badge, a sibling pill next to the existing
@@ -3011,13 +3022,13 @@ async function loadTransactionList(showPopover = false, forceRefresh = false) {
 
 // Builds the Status cell shared by every transaction row in the popover — reuses the exact same
 // helpers the main voucher table's Status column already uses (getClearedStatusBadgeHtml() for
-// Cleared/Query, getVoucherLineStatusIcon() for the Pending dot) so this popover never drifts out
+// Cleared/Query, getPendingBadgeHtml() for the Pending badge) so this popover never drifts out
 // of sync with what the main table actually shows, per the 2026-08-09/2026-08-10 cutover from the
 // legacy validation_status field to cleared_status.
 function buildPopoverStatusHtml(clearedStatus) {
     const badge = getClearedStatusBadgeHtml(clearedStatus);
     if (badge) return badge;
-    return `${getVoucherLineStatusIcon('Pending')} Pending`.trim();
+    return getPendingBadgeHtml();
 }
 
 // Returns the subset of sessionTransactions whose Voucher ID, Date, Account Name, Amount, or
