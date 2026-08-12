@@ -1481,6 +1481,16 @@ body {
 }
 .voucher-title-block {
     flex: 1 1 auto;
+    /* Row of two flex items: the centered two-line title/subtitle stack, plus the
+       orphaned-voucher caption (only present in flow when populated - see
+       .voucher-nav-caption:empty below). With no caption, this is a single centered
+       flex child and looks identical to the old text-align:center block layout. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+.voucher-title-content {
     text-align: center;
 }
 .voucher-title {
@@ -1498,18 +1508,21 @@ body {
     margin-top: 2px;
 }
 /* Orphaned-voucher auto-navigation caption ("Moved from a voucher now outside the selected
-   range") — always present (see renderVoucherHeader() in verification.js), text toggled between
-   empty and the message. min-height reserves one line's worth of space at this font-size/
-   line-height regardless of content, so the slot never causes layout shift when the text
-   appears/disappears — the one hard requirement for this element. Muted/italic, no border or
-   background — deliberately not alert/banner styling. */
+   range") — always rendered (see renderVoucherHeader() in verification.js), text toggled between
+   empty and the message. Sits inline beside .voucher-title-content as a second flex item in
+   .voucher-title-block, vertically centered against the two-line title/subtitle stack. The
+   :empty rule below removes it from the flex row entirely when there's no message, so it only
+   ever occupies space when populated — no more permanently reserved third line. Muted/italic, no
+   border or background — deliberately not alert/banner styling. */
 .voucher-nav-caption {
     font-size: 11px;
     color: #94a3b8;
     font-style: italic;
     line-height: 1.4;
-    min-height: 16px;
-    margin-top: 2px;
+    white-space: nowrap;
+}
+.voucher-nav-caption:empty {
+    display: none;
 }
 /* Bordered, button-like Prev/Next — previously plain text links with no visible affordance. */
 .btn-voucher-nav {

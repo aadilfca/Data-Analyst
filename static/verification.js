@@ -1359,13 +1359,15 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
         <div class="verification-header-row voucher-nav-row">
             <button class="btn-voucher-nav" id="prevArrow" ${prevDisabled ? 'disabled' : ''} title="Previous transaction">← Prev voucher</button>
             <div class="voucher-title-block">
-                <div class="voucher-title">
-                    Voucher ${voucherId || '—'}
-                    <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
-                        <span class="vh-icon-symbol">🔍</span>
-                    </span>
+                <div class="voucher-title-content">
+                    <div class="voucher-title">
+                        Voucher ${voucherId || '—'}
+                        <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
+                            <span class="vh-icon-symbol">🔍</span>
+                        </span>
+                    </div>
+                    <div class="voucher-subtitle">${rangeText}<span id="voucherPositionCounter">${posText}</span></div>
                 </div>
-                <div class="voucher-subtitle">${rangeText}<span id="voucherPositionCounter">${posText}</span></div>
                 <div class="voucher-nav-caption" id="voucherNavCaption">${voucherNavCaptionText}</div>
             </div>
             <button class="btn-voucher-nav" id="nextArrow" ${nextDisabled ? 'disabled' : ''} title="Next transaction">Next voucher →</button>
