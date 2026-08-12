@@ -8,13 +8,15 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
-<!-- Audit Workbook — line-grain restructure (new, confirmed 3-phase follow-on requirement),
-     Phase 2 of 3 (this rewrite of static/audit_workbook.js consumes the new grouped/line-grain
-     response: a voucher header band row + unnumbered line rows + a subtotal row for any
-     line_count > 1 voucher). Styling polish is Phase 3 — this markup deliberately reuses only
-     already-existing global classes (.voucher-line-procedures-badge/.voucher-line-obs-flag/etc.
-     from the Verification module, .aw-status-badge/.aw-row-clickable already defined below in
-     style.css), no new CSS this phase. -->
+<!-- Audit Workbook — restyle (new, confirmed 2-phase follow-on requirement), Phase 1 of 2
+     (row restructure). The voucher header band row is gone entirely — grouping now comes from
+     Sr (shown once, on a voucher's first line only) and Voucher No. (repeated on every line of
+     that voucher) as real leading columns, plus a subtotal row for any line_count > 1 voucher.
+     Styling polish (hairline borders, zebra striping, lighter subtotal row) is Phase 2 — this
+     markup deliberately reuses only already-existing global classes
+     (.voucher-line-procedures-badge/.voucher-line-obs-flag/etc. from the Verification module,
+     .aw-status-badge/.aw-row-clickable already defined below in style.css), no new CSS this
+     phase. -->
 <body data-nav-module="Audit Workbook" data-nav-parent="verification.html">
     <!-- Top Navigation Bar -->
     <nav class="navbar">
@@ -57,15 +59,18 @@
             <button type="button" class="aw-filter-chip" id="awFilterPending" data-status="Pending">Pending</button>
         </div>
 
-        <!-- Table: Account / Reference / Amount / Procedures / Observations / Status, line-grain,
-             grouped under a voucher header band row (Sr + voucher no. + date + description) with
-             an optional subtotal row per voucher (line_count > 1 only). awTableBody's rows are
-             entirely JS-rendered from the Phase 1 endpoint — the row below is just the initial
-             loading state so nothing stale flashes before the script runs. -->
+        <!-- Table: Sr / Voucher No. / Account / Reference / Amount / Procedures / Observations /
+             Status, line-grain. Sr appears only on a voucher's first line; Voucher No. repeats on
+             every line of that voucher. An optional subtotal row follows any voucher with more
+             than one line. awTableBody's rows are entirely JS-rendered from the Phase 1 endpoint —
+             the row below is just the initial loading state so nothing stale flashes before the
+             script runs. -->
         <div class="aw-table-wrapper">
             <table class="aw-table">
                 <thead>
                     <tr>
+                        <th>Sr</th>
+                        <th>Voucher No.</th>
                         <th>Account</th>
                         <th>Reference</th>
                         <th>Amount</th>
@@ -76,12 +81,12 @@
                 </thead>
                 <tbody id="awTableBody">
                     <tr>
-                        <td colspan="6" style="text-align:center; color:#94a3b8;">Loading vouchers…</td>
+                        <td colspan="8" style="text-align:center; color:#94a3b8;">Loading vouchers…</td>
                     </tr>
                 </tbody>
                 <tfoot>
                     <tr class="aw-total-row">
-                        <td colspan="2">Total</td>
+                        <td colspan="4">Total</td>
                         <td id="awTotalAmount">0.00</td>
                         <td colspan="2"></td>
                         <td></td>

@@ -1,15 +1,15 @@
-// Audit Workbook page — line-grain restructure (new, confirmed 3-phase follow-on requirement),
-// Phase 2 of 3 (frontend: restructure table rendering).
+// Audit Workbook page — restyle (new, confirmed 2-phase follow-on requirement), Phase 1 of 2
+// (row restructure: Sr/Voucher No. columns, remove the voucher header banner row).
 //
-// Phase 1 changed GET /api/verification/session/{session_id}/audit_workbook from one row per
-// voucher to one row per accounting LINE grouped under its voucher — each voucher group is now
-// {sr, voucher_no, date, line_count, amount, status, lines: [...]}, each line
+// GET /api/verification/session/{session_id}/audit_workbook returns one voucher group per
+// voucher — {sr, voucher_no, date, line_count, amount, status, lines: [...]}, each line
 // {detail_id, client_data_id, account_code, description, amount, status,
-//  procedures: {done, total}, observations: {count, entries}}. This phase rewrites rendering to
-// consume that shape: a voucher header band row (Sr shown once, not per line), unnumbered line
-// rows with new Procedures/Observations columns, and a subtotal row for any voucher with more
-// than one line. Styling polish is a separate, later phase — this file deliberately reuses only
-// already-existing global CSS classes (no style.css changes this phase):
+//  procedures: {done, total}, observations: {count, entries}}. This phase renders that shape as:
+// Sr shown once (a voucher's first line only) and Voucher No. repeated on every line, both as
+// real leading columns — no more full-width banner row — plus a subtotal row for any voucher
+// with more than one line. Further styling polish (hairline borders, zebra striping, lighter
+// subtotal row) is a separate, later phase — this file deliberately reuses only already-existing
+// global CSS classes (no style.css changes this phase):
 //   - .voucher-line-procedures-badge/.voucher-line-proc-ring(-fill) and
 //     .voucher-line-obs-flag/.voucher-line-obs-none/.voucher-line-obs-expanded-list(-item/-doc/-text)
 //     from static/verification.js's own Procedures/Observations column classes (defined globally
@@ -132,20 +132,13 @@ function getAwObservationsCellHtml(line) {
 
 // ---------- RENDER ----------
 
-function buildVoucherHeaderRowHtml(v) {
-    // No group-level description field exists in the Phase 1 response (only per-line) — borrowed
-    // from the voucher's own first line, per the confirmed design (no backend change needed).
-    const firstDescription = (v.lines && v.lines[0] && v.lines[0].description) || '—';
-    return `
-        <tr class="aw-voucher-header-row aw-row-clickable" data-voucher-no="${escapeHtml(v.voucher_no)}">
-            <td colspan="6">Sr ${v.sr} · <strong>${escapeHtml(v.voucher_no)}</strong> · ${escapeHtml(v.date || '—')} · ${escapeHtml(firstDescription)}</td>
-        </tr>
-    `;
-}
-
-function buildLineRowHtml(v, line) {
+// Sr is shown only on a voucher's first line (isFirstLine); Voucher No. repeats on every line —
+// both are how a voucher's lines read as a group now that the banner row is gone.
+function buildLineRowHtml(v, line, isFirstLine) {
     return `
         <tr class="aw-line-row aw-row-clickable" data-voucher-no="${escapeHtml(v.voucher_no)}" data-detail-id="${line.detail_id}">
+            <td>${isFirstLine ? escapeHtml(String(v.sr)) : ''}</td>
+            <td>${escapeHtml(v.voucher_no)}</td>
             <td>${escapeHtml(line.account_code || '—')}</td>
             <td>${escapeHtml(line.description || '—')}</td>
             <td>${formatAwAmount(line.amount)}</td>
@@ -161,7 +154,7 @@ function buildLineRowHtml(v, line) {
 function buildSubtotalRowHtml(v) {
     return `
         <tr class="aw-subtotal-row">
-            <td colspan="2">Subtotal</td>
+            <td colspan="4">Subtotal</td>
             <td>${formatAwAmount(v.amount)}</td>
             <td colspan="2"></td>
             <td>${getAwStatusBadgeHtml(v.status)}</td>
@@ -172,15 +165,15 @@ function buildSubtotalRowHtml(v) {
 function renderAuditWorkbookRows(vouchers, emptyMessage) {
     if (!vouchers || vouchers.length === 0) {
         awTableBody.innerHTML = `
-            <tr><td colspan="6" style="text-align:center; color:#94a3b8;">${escapeHtml(emptyMessage)}</td></tr>
+            <tr><td colspan="8" style="text-align:center; color:#94a3b8;">${escapeHtml(emptyMessage)}</td></tr>
         `;
         return;
     }
 
     const rowsHtml = vouchers.map(v => {
-        const lineRowsHtml = (v.lines || []).map(line => buildLineRowHtml(v, line)).join('');
+        const lineRowsHtml = (v.lines || []).map((line, idx) => buildLineRowHtml(v, line, idx === 0)).join('');
         const subtotalHtml = v.line_count > 1 ? buildSubtotalRowHtml(v) : '';
-        return buildVoucherHeaderRowHtml(v) + lineRowsHtml + subtotalHtml;
+        return lineRowsHtml + subtotalHtml;
     }).join('');
 
     awTableBody.innerHTML = rowsHtml;
