@@ -1102,6 +1102,20 @@ function getCashbookStatusBadgeHtml(status) {
     return `<span style="display:inline-block; padding:2px 10px; border-radius:12px; font-weight:600; font-size:11px; white-space:nowrap; background:${p.bg}; color:${p.color};">${label}</span>`;
 }
 
+// Cashbook Amount column (Phase 3 of 3, FINAL): collapses Debit/Credit into one signed value —
+// right-aligned, 2-decimal formatted, colour-coded so the sign isn't the only signal. Positive
+// (CPV/BPV, a Payment) uses the table's own default text colour; negative (CRV/BRV, a Receipt)
+// uses a distinct violet accent (#7c3aed, already used elsewhere in this app for .btn-template,
+// carries no existing status meaning) — deliberately not red/green, since those already mean
+// Query/Cleared on the adjacent Status column (Phase 2) and reusing them here would visually
+// collide with that column's own meaning on the same row.
+function getCashbookAmountHtml(amount) {
+    const value = typeof amount === 'number' ? amount : 0;
+    const color = value < 0 ? '#7c3aed' : '#1a1a2e';
+    const formatted = value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `<span style="font-weight:600; color:${color};">${formatted}</span>`;
+}
+
 // ---------- RENDER CASHBOOK TABLE ----------
 function renderCashbookTable(rows) {
     if (!rows || rows.length === 0) {
@@ -1109,20 +1123,45 @@ function renderCashbookTable(rows) {
         return;
     }
     const firstRow = rows[0].row_data;
-    const headers = firstRow ? Object.keys(firstRow) : [];
+    const originalKeys = firstRow ? Object.keys(firstRow) : [];
+    // Debit/Credit columns (Phase 3): collapsed into one "Amount" column, inserted in place of
+    // the first Debit/Credit key so it lands in its natural reading position instead of being
+    // appended at the end. debit_credit_keys comes from the backend (the literal keys it matched
+    // for this row), not a separate frontend alias list, so it can't drift out of sync.
+    const dcKeys = new Set(rows[0].debit_credit_keys || []);
+    const headers = [];
+    let amountInserted = false;
+    originalKeys.forEach(k => {
+        if (dcKeys.has(k)) {
+            if (!amountInserted) {
+                headers.push('__AMOUNT__');
+                amountInserted = true;
+            }
+        } else {
+            headers.push(k);
+        }
+    });
+    if (!amountInserted) headers.push('__AMOUNT__');
+
     let html = `<table style="width:100%; border-collapse:collapse; font-size:13px;">
         <thead style="background:#f8fafc; position:sticky; top:0; z-index:1; border-bottom:2px solid #e2e8f0;">
             <tr>`;
     headers.forEach(h => {
-        html += `<th style="padding:6px 10px; text-align:left; font-weight:600; white-space:nowrap;">${h}</th>`;
+        const label = h === '__AMOUNT__' ? 'Amount' : h;
+        const align = h === '__AMOUNT__' ? 'right' : 'left';
+        html += `<th style="padding:6px 10px; text-align:${align}; font-weight:600; white-space:nowrap;">${label}</th>`;
     });
     html += `<th style="padding:6px 10px; text-align:left; font-weight:600; white-space:nowrap;">Status</th>`;
     html += `</tr></thead><tbody>`;
     rows.forEach(row => {
         html += `<tr style="border-bottom:1px solid #f0f2f5;">`;
         headers.forEach(h => {
-            const val = row.row_data[h] !== undefined ? row.row_data[h] : '';
-            html += `<td style="padding:6px 10px;">${val}</td>`;
+            if (h === '__AMOUNT__') {
+                html += `<td style="padding:6px 10px; text-align:right;">${getCashbookAmountHtml(row.amount)}</td>`;
+            } else {
+                const val = row.row_data[h] !== undefined ? row.row_data[h] : '';
+                html += `<td style="padding:6px 10px;">${val}</td>`;
+            }
         });
         html += `<td style="padding:6px 10px;">${getCashbookStatusBadgeHtml(row.status)}</td>`;
         html += `</tr>`;

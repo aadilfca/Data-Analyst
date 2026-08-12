@@ -1754,6 +1754,14 @@ def preview_cashbook(
                     return val
         return None
 
+    # Cashbook screen Phase 3 of 3, FINAL: literal row_data key names (as they actually appear
+    # on this row, not a hardcoded guess) that matched debit_aliases/credit_aliases - lets the
+    # frontend strip exactly the right column(s) when collapsing Debit/Credit into one signed
+    # Amount column, without needing its own separate alias list that could drift from this one.
+    def find_debit_credit_keys(row_data, debit_aliases, credit_aliases):
+        dc_aliases = set(debit_aliases) | set(credit_aliases)
+        return [k for k in row_data.keys() if k in dc_aliases]
+
     for row in rows:
         try:
             rd = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
@@ -1809,7 +1817,12 @@ def preview_cashbook(
                     'row_data': row['row_data'],
                     'voucher_id': vid,
                     'extract_date': row['extract_date'],
-                    'extract_amount': row['extract_amount']
+                    'extract_amount': row['extract_amount'],
+                    # Signed Amount (Cashbook Phase 3): positive for a Payment (CPV/BPV, debit
+                    # side), negative for a Receipt (CRV/BRV, credit side) - same vtype/side
+                    # condition already gating this branch, just applying a sign to the value.
+                    'amount': row['debit'],
+                    'debit_credit_keys': find_debit_credit_keys(row['row_data'], debit_aliases, credit_aliases)
                 })
             elif vtype in ('CRV', 'BRV') and row['credit'] > 0 and row['debit'] == 0:
                 transactions.append({
@@ -1817,7 +1830,9 @@ def preview_cashbook(
                     'row_data': row['row_data'],
                     'voucher_id': vid,
                     'extract_date': row['extract_date'],
-                    'extract_amount': row['extract_amount']
+                    'extract_amount': row['extract_amount'],
+                    'amount': -row['credit'],
+                    'debit_credit_keys': find_debit_credit_keys(row['row_data'], debit_aliases, credit_aliases)
                 })
 
     # Status column (Cashbook screen Phase 2 of 3): computed over the FULL (unpaginated)
@@ -1878,7 +1893,9 @@ def preview_cashbook(
             'row_data': rd,
             'extract_date': trans['extract_date'],
             'extract_amount': trans['extract_amount'],
-            'status': voucher_status_map.get(trans['voucher_id'], 'Not Started')
+            'status': voucher_status_map.get(trans['voucher_id'], 'Not Started'),
+            'amount': trans['amount'],
+            'debit_credit_keys': trans['debit_credit_keys']
         })
 
     return {
