@@ -1819,13 +1819,57 @@ def preview_cashbook(
                     'extract_date': row['extract_date'],
                     'extract_amount': row['extract_amount']
                 })
-    
+
+    # Status column (Cashbook screen Phase 2 of 3): computed over the FULL (unpaginated)
+    # transactions list, not just the current page, so a voucher whose lines straddle two
+    # pages still gets one consistent status. This is line-level filtering identical to
+    # start_verification_session()'s own row-building, so the client_data_ids collected here
+    # are exactly the set that would become verification_details rows for this cashbook - the
+    # lookup below reuses that fact rather than re-deriving it.
+    voucher_status_map: Dict[str, str] = {}
+    all_client_data_ids = [t['client_data_id'] for t in transactions]
+    if all_client_data_ids:
+        placeholders = ",".join("?" for _ in all_client_data_ids)
+        vd_rows = execute_query(
+            f"""
+            SELECT client_data_id, cleared_status, id
+            FROM verification_details
+            WHERE client_data_id IN ({placeholders}) AND range_status = 'active'
+            ORDER BY id ASC
+            """,
+            tuple(all_client_data_ids)
+        )
+        # Dedup per client_data_id, keeping the highest id (most recently created session's
+        # row) - this table has no updated_at, so id order is the best available proxy for
+        # recency. A client_data_id absent from this dict was never captured into any
+        # session's verification_details at all (distinct from a row that exists with a NULL
+        # cleared_status - see the empty-list handling below).
+        latest_status_by_cdid: Dict[int, Optional[str]] = {}
+        for r in vd_rows:
+            latest_status_by_cdid[r['client_data_id']] = r['cleared_status']
+
+        # Group by voucher_id, using only lines that actually have a verification_details row.
+        statuses_by_voucher: Dict[str, list] = {}
+        for t in transactions:
+            cdid = t['client_data_id']
+            if cdid in latest_status_by_cdid:
+                statuses_by_voucher.setdefault(t['voucher_id'], []).append(latest_status_by_cdid[cdid])
+            else:
+                statuses_by_voucher.setdefault(t['voucher_id'], [])
+
+        for vid, statuses in statuses_by_voucher.items():
+            # _rollup_voucher_status([]) would wrongly return 'Cleared' (Python's all() on an
+            # empty list is True) - a voucher with zero verification_details rows across any of
+            # its lines has simply never been touched, a distinct case from _rollup_voucher_status()'s
+            # own 'Pending' (which means a row exists but isn't yet Cleared/Query).
+            voucher_status_map[vid] = _rollup_voucher_status(statuses) if statuses else 'Not Started'
+
     # Pagination
     total = len(transactions)
     start_idx = (page - 1) * limit
     end_idx = start_idx + limit
     paginated = transactions[start_idx:end_idx]
-    
+
     # Build response rows with row_data as dict
     result_rows = []
     for trans in paginated:
@@ -1833,9 +1877,10 @@ def preview_cashbook(
         result_rows.append({
             'row_data': rd,
             'extract_date': trans['extract_date'],
-            'extract_amount': trans['extract_amount']
+            'extract_amount': trans['extract_amount'],
+            'status': voucher_status_map.get(trans['voucher_id'], 'Not Started')
         })
-    
+
     return {
         'total_rows': total,
         'page': page,

@@ -1084,6 +1084,24 @@ async function fetchCashbookData() {
     }
 }
 
+// Cashbook Status column (Phase 2 of 3) — small inline-styled pill, same palette already
+// established for .aw-status-badge/.voucher-line-cleared-badge/.status-badge.pending elsewhere
+// in this app (Cleared #dcfce7/#166534, Query #fee2e2/#991b1b, Pending #fef3c7/#92400e), plus a
+// new muted gray pair for "Not Started" (a voucher with zero verification activity at all,
+// distinct from Pending). Kept as inline styles, matching renderCashbookTable()'s own existing
+// 100%-inline-styled convention rather than introducing a new CSS class.
+function getCashbookStatusBadgeHtml(status) {
+    const palettes = {
+        'Cleared': { bg: '#dcfce7', color: '#166534' },
+        'Query': { bg: '#fee2e2', color: '#991b1b' },
+        'Pending': { bg: '#fef3c7', color: '#92400e' },
+        'Not Started': { bg: '#f1f5f9', color: '#64748b' }
+    };
+    const p = palettes[status] || palettes['Not Started'];
+    const label = status || 'Not Started';
+    return `<span style="display:inline-block; padding:2px 10px; border-radius:12px; font-weight:600; font-size:11px; white-space:nowrap; background:${p.bg}; color:${p.color};">${label}</span>`;
+}
+
 // ---------- RENDER CASHBOOK TABLE ----------
 function renderCashbookTable(rows) {
     if (!rows || rows.length === 0) {
@@ -1098,6 +1116,7 @@ function renderCashbookTable(rows) {
     headers.forEach(h => {
         html += `<th style="padding:6px 10px; text-align:left; font-weight:600; white-space:nowrap;">${h}</th>`;
     });
+    html += `<th style="padding:6px 10px; text-align:left; font-weight:600; white-space:nowrap;">Status</th>`;
     html += `</tr></thead><tbody>`;
     rows.forEach(row => {
         html += `<tr style="border-bottom:1px solid #f0f2f5;">`;
@@ -1105,6 +1124,7 @@ function renderCashbookTable(rows) {
             const val = row.row_data[h] !== undefined ? row.row_data[h] : '';
             html += `<td style="padding:6px 10px;">${val}</td>`;
         });
+        html += `<td style="padding:6px 10px;">${getCashbookStatusBadgeHtml(row.status)}</td>`;
         html += `</tr>`;
     });
     html += `</tbody></table>`;
