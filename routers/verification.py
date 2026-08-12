@@ -2095,37 +2095,117 @@ def get_voucher_stats(session_id: int):
     return {"total": total, "cleared": cleared, "query": query, "pending": pending}
 
 
+def _audit_workbook_resolve_categories(client_id: int, account_codes: set) -> Dict[str, Optional[int]]:
+    """
+    Batched version of compute_and_persist_cleared_status()'s per-line Category resolution
+    (TB-first, account_category_assignments-fallback) - resolved once for every distinct account
+    code in a session's line set, instead of once per line, so get_audit_workbook() doesn't run
+    N separate lookups for a 300-line session. Same rule, same precedence: the client's latest
+    parsed Trial Balance wins whenever the code is present there with a non-null active category;
+    account_category_assignments is used only as a fallback for a code the TB doesn't resolve.
+
+    Returns {account_code: category_id or None} - every requested code is present in the result.
+    """
+    resolved: Dict[str, Optional[int]] = {code: None for code in account_codes}
+    if not account_codes:
+        return resolved
+
+    codes = list(account_codes)
+    placeholders = ",".join("?" for _ in codes)
+
+    upload_rows = execute_query(
+        """
+        SELECT id FROM trial_balance_uploads
+        WHERE client_id = ? AND status = 'parsed'
+        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
+        LIMIT 1
+        """,
+        (client_id,)
+    )
+    if upload_rows:
+        tb_rows = execute_query(
+            f"""
+            SELECT a.account_code, a.category_id
+            FROM trial_balance_accounts a
+            JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = 1
+            WHERE a.upload_id = ? AND a.account_code IN ({placeholders})
+            """,
+            tuple([upload_rows[0]['id']] + codes)
+        )
+        for r in tb_rows:
+            resolved[r['account_code']] = r['category_id']
+
+    remaining = [code for code, cat_id in resolved.items() if cat_id is None]
+    if remaining:
+        rem_ph = ",".join("?" for _ in remaining)
+        assignment_rows = execute_query(
+            f"""
+            SELECT aca.account_code, aca.category_id
+            FROM account_category_assignments aca
+            JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = 1
+            WHERE aca.client_id = ? AND aca.account_code IN ({rem_ph})
+            """,
+            tuple([client_id] + remaining)
+        )
+        for r in assignment_rows:
+            resolved[r['account_code']] = r['category_id']
+
+    return resolved
+
+
 @router.get("/api/verification/session/{session_id}/audit_workbook")
 def get_audit_workbook(session_id: int):
     """
-    Audit Workbook Phase 1 of 5 (backend): read-only per-voucher rollup rows for a session -
-    voucher no., date, description, amount, status - for the new Audit Workbook list view
-    (distinct from the existing Cashbook selection screen). Same session scope/grouping as
-    get_voucher_stats() (transaction_ref, not the _doc_group_id line-navigation grouping), so
-    this endpoint's total/status breakdown always agrees with that one exactly.
+    Audit Workbook Phase 1 of 5 (per-voucher, original) / Phase 1 of a confirmed 3-phase
+    line-grain restructure (this version): read-only rows for a session's Audit Workbook list
+    view, now one row per ACCOUNTING LINE grouped under its voucher, rather than one row per
+    voucher - a voucher's Sr number, date, and rollup amount/status live on the voucher GROUP
+    object, not repeated per line. Same session scope/grouping as get_voucher_stats()
+    (transaction_ref, not the _doc_group_id line-navigation grouping), so this endpoint's
+    per-voucher status still agrees with that one exactly.
 
-    One row per voucher, not per line:
-    - date: the voucher's first line's extract_date (chronologically first by client_data.id).
-    - description: resolved via DESCRIPTION_ALIASES against the first line's row_data, same
-      alias convention ACCOUNT_CODE_ALIASES already uses for account codes.
-    - amount: sum of extract_amount across every line of the voucher (client_data.extract_amount
-      is already the resolved Debit/Credit-side value - see the 2026-08-09 extract_amount
-      backfill fix - so no re-derivation from row_data is needed here).
-    - status: _rollup_voucher_status() over the voucher's lines' cleared_status.
+    Per line:
+    - account_code / description: resolved via ACCOUNT_CODE_ALIASES / DESCRIPTION_ALIASES
+      against that line's own row_data (same aliases used elsewhere in this file).
+    - amount: client_data.extract_amount (already the resolved Debit/Credit-side value - see
+      the 2026-08-09 extract_amount backfill fix).
+    - status: this line's own cleared_status verbatim, None mapped to "Pending" - the same
+      three-way vocabulary _rollup_voucher_status() already establishes for "not yet computed".
+    - procedures: {"done", "total"} over the line's resolved Category's active attached
+      Documents, using the SAME per-document-type "done" rule static/verification.js's
+      isDocDone() applies for the main grid's Procedures badge (physical_bill exact-amount
+      match / template-linked evidence presence / no-template role ticks, each additionally
+      gated on voucher-level checks when transaction_level_approval is set) - so this column
+      can never disagree with what the auditor already sees for the same line in Verification.
+      {"done": 0, "total": 0} for a line with no resolved Category.
+    - observations: {"count", "entries": [{document_id, document_name, text}]} - every
+      voucher_line_observations entry for the line with non-blank text, same filter
+      updateObservationsCellForLine()'s nonEmpty already applies.
 
-    No sort applied beyond first-appearance (chronological, cd.id ASC) order - a later phase
-    (filter chips / sortable columns) can layer real sorting on top of this.
+    Per voucher group: sr (1-based, first-appearance/chronological order), voucher_no, date
+    (first line's extract_date), line_count, amount (sum of its lines' amount), status
+    (_rollup_voucher_status() over its lines' cleared_status) - amount/status here ARE the
+    subtotal/rollup values a later frontend phase renders as a subtotal row, only when
+    line_count > 1; deliberately not duplicated under a separate "subtotal" key.
+
+    Every lookup below is batched once for the whole session (not per line) - a session can have
+    300+ lines, and this mirrors get_voucher_line_documents()/get_procedure_checks()/
+    get_voucher_line_physical_bills()/get_line_observations()'s own sibling-resolution scope
+    (client_data_id, not the per-session voucher_line_id), just computed for every line in the
+    session in one pass instead of resolved one line at a time.
     """
     session = execute_query(
-        "SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'",
+        "SELECT id, client_id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'",
         (session_id,)
     )
     if not session:
         raise HTTPException(404, "Session not found or cancelled.")
+    client_id = session[0]['client_id']
 
     rows = execute_query(
         """
-        SELECT vd.transaction_ref, vd.cleared_status, cd.extract_amount, cd.extract_date, cd.row_data
+        SELECT vd.id AS detail_id, vd.transaction_ref, vd.cleared_status,
+               cd.id AS client_data_id, cd.extract_amount, cd.extract_date, cd.row_data
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
         WHERE vd.session_id = ? AND vd.range_status = 'active'
@@ -2134,34 +2214,245 @@ def get_audit_workbook(session_id: int):
         (session_id,)
     )
 
-    groups: Dict[str, dict] = {}
+    if not rows:
+        return {"total_vouchers": 0, "total_lines": 0, "vouchers": []}
+
+    # Parse row_data / resolve account_code+description once per line, up front - everything
+    # below keys off account_code (category resolution) or client_data_id (the sibling-scope
+    # every per-line lookup below is batched against).
+    parsed_lines = []
+    account_codes = set()
+    client_data_ids = set()
+    transaction_refs = set()
     for r in rows:
-        ref = r['transaction_ref']
+        row_data = r['row_data']
+        try:
+            row_data = json.loads(row_data) if isinstance(row_data, str) else (row_data or {})
+        except Exception:
+            row_data = {}
+        account_code = get_column_value(row_data, ACCOUNT_CODE_ALIASES)
+        description = get_column_value(row_data, DESCRIPTION_ALIASES)
+        parsed_lines.append({
+            "detail_id": r['detail_id'],
+            "transaction_ref": r['transaction_ref'],
+            "cleared_status": r['cleared_status'],
+            "client_data_id": r['client_data_id'],
+            "extract_amount": r['extract_amount'] or 0,
+            "extract_date": r['extract_date'],
+            "account_code": account_code,
+            "description": description,
+        })
+        if account_code:
+            account_codes.add(account_code)
+        client_data_ids.add(r['client_data_id'])
+        if r['transaction_ref']:
+            transaction_refs.add(r['transaction_ref'])
+
+    category_id_by_account_code = _audit_workbook_resolve_categories(client_id, account_codes)
+
+    # guidance_docs_by_category: fetched once per DISTINCT category_id actually in use this
+    # session, not once per line.
+    distinct_category_ids = {cid for cid in category_id_by_account_code.values() if cid}
+    guidance_docs_by_category: Dict[int, list] = {
+        cid: get_category_guidance_documents(cid) for cid in distinct_category_ids
+    }
+
+    cd_placeholders = ",".join("?" for _ in client_data_ids)
+
+    # Linked evidence: {client_data_id: {document_id, ...}}
+    linked_doc_ids_by_cd: Dict[int, set] = {}
+    linked_rows = execute_query(
+        f"""
+        SELECT vd2.client_data_id, vld.document_id
+        FROM voucher_line_documents vld
+        JOIN verification_details vd2 ON vd2.id = vld.voucher_line_id
+        WHERE vd2.client_data_id IN ({cd_placeholders}) AND vld.status = 'active'
+        """,
+        tuple(client_data_ids)
+    )
+    for r in linked_rows:
+        linked_doc_ids_by_cd.setdefault(r['client_data_id'], set()).add(r['document_id'])
+
+    # Procedure-check ticks: {client_data_id: {document_id: {role_name: bool}}}, deduped by
+    # latest checked_at per (client_data_id, document_id, role_name) - same rule
+    # compute_and_persist_cleared_status()'s role_ticks_by_doc already uses per line.
+    role_ticks_by_cd: Dict[int, Dict[int, Dict[str, bool]]] = {}
+    tick_rows = execute_query(
+        f"""
+        SELECT vd2.client_data_id, vpc.document_id, vpc.role_name, vpc.is_checked, vpc.checked_at
+        FROM voucher_line_procedure_checks vpc
+        JOIN verification_details vd2 ON vd2.id = vpc.voucher_line_id
+        WHERE vd2.client_data_id IN ({cd_placeholders})
+        """,
+        tuple(client_data_ids)
+    )
+    latest_tick: Dict[tuple, dict] = {}
+    for r in tick_rows:
+        key = (r['client_data_id'], r['document_id'], r['role_name'])
+        existing = latest_tick.get(key)
+        if existing is None or (r['checked_at'] or '') > (existing['checked_at'] or ''):
+            latest_tick[key] = r
+    for (cd_id, doc_id, role_name), r in latest_tick.items():
+        role_ticks_by_cd.setdefault(cd_id, {}).setdefault(doc_id, {})[role_name] = bool(r['is_checked'])
+
+    # Physical bills: {client_data_id: {document_id: bill_row}}, deduped by latest updated_at
+    # per (client_data_id, document_id) - same rule get_voucher_line_physical_bills() uses.
+    bills_by_cd: Dict[int, Dict[int, dict]] = {}
+    bill_rows = execute_query(
+        f"""
+        SELECT vd2.client_data_id, vpb.document_id, vpb.bill_no, vpb.bill_date,
+               vpb.vendor_name, vpb.amount, vpb.updated_at
+        FROM voucher_line_physical_bills vpb
+        JOIN verification_details vd2 ON vd2.id = vpb.voucher_line_id
+        WHERE vd2.client_data_id IN ({cd_placeholders})
+        """,
+        tuple(client_data_ids)
+    )
+    latest_bill: Dict[tuple, dict] = {}
+    for r in bill_rows:
+        key = (r['client_data_id'], r['document_id'])
+        existing = latest_bill.get(key)
+        if existing is None or (r['updated_at'] or '') > (existing['updated_at'] or ''):
+            latest_bill[key] = r
+    for (cd_id, doc_id), r in latest_bill.items():
+        bills_by_cd.setdefault(cd_id, {})[doc_id] = r
+
+    # transaction_level_approval gate: {transaction_ref: bool}, vacuously True for every ref
+    # when zero voucher-level checks are configured - mirrors check #2's voucher_checks_ok.
+    voucher_checks_ok_by_ref: Dict[str, bool] = {}
+    if transaction_refs:
+        active_checks = execute_query("SELECT id FROM audit_rule_voucher_checks WHERE is_active = 1")
+        active_check_ids = {c['id'] for c in active_checks}
+        if not active_check_ids:
+            voucher_checks_ok_by_ref = {ref: True for ref in transaction_refs}
+        else:
+            ref_placeholders = ",".join("?" for _ in transaction_refs)
+            ticked_rows = execute_query(
+                f"""
+                SELECT transaction_ref, check_id FROM voucher_check_status
+                WHERE client_id = ? AND state = 'done' AND transaction_ref IN ({ref_placeholders})
+                """,
+                tuple([client_id] + list(transaction_refs))
+            )
+            ticked_by_ref: Dict[str, set] = {}
+            for r in ticked_rows:
+                ticked_by_ref.setdefault(r['transaction_ref'], set()).add(r['check_id'])
+            voucher_checks_ok_by_ref = {
+                ref: active_check_ids.issubset(ticked_by_ref.get(ref, set()))
+                for ref in transaction_refs
+            }
+
+    # Observations: {client_data_id: [{document_id, document_name, text}]}, deduped by latest
+    # updated_at per (client_data_id, document_id), non-blank text only - same rule
+    # updateObservationsCellForLine()'s nonEmpty filter already applies.
+    observations_by_cd: Dict[int, list] = {}
+    obs_rows = execute_query(
+        f"""
+        SELECT vd2.client_data_id, vlo.document_id, vlo.observation_text, vlo.updated_at,
+               ard.name AS document_name
+        FROM voucher_line_observations vlo
+        JOIN verification_details vd2 ON vd2.id = vlo.voucher_line_id
+        LEFT JOIN audit_rule_documents ard ON ard.id = vlo.document_id
+        WHERE vd2.client_data_id IN ({cd_placeholders})
+        """,
+        tuple(client_data_ids)
+    )
+    latest_obs: Dict[tuple, dict] = {}
+    for r in obs_rows:
+        key = (r['client_data_id'], r['document_id'])
+        existing = latest_obs.get(key)
+        if existing is None or (r['updated_at'] or '') > (existing['updated_at'] or ''):
+            latest_obs[key] = r
+    for (cd_id, doc_id), r in sorted(latest_obs.items(), key=lambda kv: kv[0][1]):
+        text = (r['observation_text'] or '').strip()
+        if not text:
+            continue
+        observations_by_cd.setdefault(cd_id, []).append({
+            "document_id": doc_id,
+            "document_name": r['document_name'],
+            "text": text,
+        })
+
+    def _compute_line_procedures(client_data_id: int, category_id: Optional[int],
+                                  transaction_ref: Optional[str], line_amount) -> dict:
+        if not category_id:
+            return {"done": 0, "total": 0}
+        docs = guidance_docs_by_category.get(category_id) or []
+        if not docs:
+            return {"done": 0, "total": 0}
+        linked = linked_doc_ids_by_cd.get(client_data_id, set())
+        ticks = role_ticks_by_cd.get(client_data_id, {})
+        bills = bills_by_cd.get(client_data_id, {})
+        voucher_amount = _cross_check_numeric(line_amount)
+
+        done = 0
+        for doc in docs:
+            if doc['document_type'] == 'physical_bill':
+                bill = bills.get(doc['id'])
+                if bill and (bill['bill_no'] or '').strip() and (bill['bill_date'] or '').strip() \
+                        and (bill['vendor_name'] or '').strip():
+                    bill_amount = _cross_check_numeric(bill['amount'])
+                    base = (bill_amount is not None and voucher_amount is not None
+                            and _cross_check_values_equal(bill_amount, voucher_amount))
+                else:
+                    base = False
+            elif doc['template_id']:
+                base = doc['id'] in linked
+            else:
+                roles = doc['auth_roles'] or []
+                doc_ticks = ticks.get(doc['id'], {})
+                base = bool(roles) and all(doc_ticks.get(role) for role in roles)
+            if base and doc['transaction_level_approval']:
+                base = voucher_checks_ok_by_ref.get(transaction_ref, True)
+            if base:
+                done += 1
+        return {"done": done, "total": len(docs)}
+
+    groups: Dict[str, dict] = {}
+    sr_counter = 0
+    total_lines = 0
+    for pl in parsed_lines:
+        ref = pl['transaction_ref']
         if not ref:
             continue
         if ref not in groups:
-            row_data = r['row_data']
-            try:
-                row_data = json.loads(row_data) if isinstance(row_data, str) else (row_data or {})
-            except Exception:
-                row_data = {}
+            sr_counter += 1
             groups[ref] = {
+                "sr": sr_counter,
                 "voucher_no": ref,
-                "date": r['extract_date'],
-                "description": get_column_value(row_data, DESCRIPTION_ALIASES),
+                "date": pl['extract_date'],
+                "line_count": 0,
                 "amount": 0.0,
-                "_cleared_statuses": []
+                "_cleared_statuses": [],
+                "lines": [],
             }
-        groups[ref]["amount"] += r['extract_amount'] or 0
-        groups[ref]["_cleared_statuses"].append(r['cleared_status'])
+        g = groups[ref]
+        category_id = category_id_by_account_code.get(pl['account_code']) if pl['account_code'] else None
+        line_status = pl['cleared_status'] or "Pending"
+        entries = observations_by_cd.get(pl['client_data_id'], [])
+        g["lines"].append({
+            "detail_id": pl['detail_id'],
+            "client_data_id": pl['client_data_id'],
+            "account_code": pl['account_code'],
+            "description": pl['description'],
+            "amount": pl['extract_amount'],
+            "status": line_status,
+            "procedures": _compute_line_procedures(
+                pl['client_data_id'], category_id, ref, pl['extract_amount']
+            ),
+            "observations": {"count": len(entries), "entries": entries},
+        })
+        g["line_count"] += 1
+        g["amount"] += pl['extract_amount']
+        g["_cleared_statuses"].append(pl['cleared_status'])
+        total_lines += 1
 
     vouchers = []
-    for g in groups.values():
-        status = _rollup_voucher_status(g.pop("_cleared_statuses"))
-        g["status"] = status
+    for g in sorted(groups.values(), key=lambda v: v['sr']):
+        g["status"] = _rollup_voucher_status(g.pop("_cleared_statuses"))
         vouchers.append(g)
 
-    return {"total": len(vouchers), "vouchers": vouchers}
+    return {"total_vouchers": len(vouchers), "total_lines": total_lines, "vouchers": vouchers}
 
 
 @router.post("/api/verification/session/{session_id}/reconcile_range")
