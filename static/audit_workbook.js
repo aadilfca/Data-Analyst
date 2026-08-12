@@ -67,7 +67,7 @@ function renderAuditWorkbookRows(vouchers, emptyMessage) {
 
     vouchers.forEach(v => {
         const tr = document.createElement('tr');
-        // Inert hook for Phase 4's row-click — not wired to anything this phase.
+        tr.className = 'aw-row-clickable';
         tr.setAttribute('data-voucher-no', v.voucher_no || '');
 
         const statusClass = (v.status || '').toLowerCase();
@@ -131,12 +131,34 @@ async function fetchAuditWorkbook(sessionId) {
     }
 }
 
+// ---------- NAVIGATION (Phase 4) ----------
+// Reuses verification.js's existing hard-refresh restore path (?state=session&id=&voucher=,
+// see restoreSessionView()/activateSessionView()) rather than building a parallel mechanism —
+// that path already resolves an arbitrary voucher_no to its detail_id client-side from the
+// session's full transaction list, with no backend support needed for an arbitrary jump.
+function navigateToVoucherInVerification(voucherNo) {
+    if (!currentSessionId || !voucherNo) return;
+    const params = new URLSearchParams({ state: 'session', id: currentSessionId, voucher: voucherNo });
+    window.location.href = `/static/verification.html?${params}`;
+}
+
 // ---------- EVENT LISTENERS ----------
 awFilterChips.forEach(chip => {
     chip.addEventListener('click', () => {
         currentFilterStatus = chip.dataset.status;
         applyFilterAndRender();
     });
+});
+
+// Delegated on the tbody (wired once) since renderAuditWorkbookRows() rebuilds every <tr> from
+// scratch on each render — placeholder/loading/error/empty rows never carry data-voucher-no, so
+// they're naturally excluded from this selector, no extra guard needed.
+awTableBody.addEventListener('click', function (e) {
+    const tr = e.target.closest('tr[data-voucher-no]');
+    if (!tr) return;
+    const voucherNo = tr.getAttribute('data-voucher-no');
+    if (!voucherNo) return;
+    navigateToVoucherInVerification(voucherNo);
 });
 
 // ---------- INIT ----------

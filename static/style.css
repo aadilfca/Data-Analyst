@@ -6059,6 +6059,9 @@ body {
 .aw-table tbody tr:hover {
     background: #f8fafc;
 }
+.aw-table tbody tr.aw-row-clickable {
+    cursor: pointer;
+}
 
 /* Same green/red/amber pill palette as .voucher-line-cleared-badge/.status-badge.pending
    elsewhere in this file (#dcfce7/#166534, #fee2e2/#991b1b, #fef3c7/#92400e) — not new colors. */
