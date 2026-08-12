@@ -3008,20 +3008,23 @@ async function loadTransactionList(showPopover = false, forceRefresh = false) {
     }
 }
 
-// Builds the status icon span shared by every transaction row in the popover.
-function buildPopoverStatusIcon(validationStatus) {
-    const status = validationStatus || 'Pending';
-    let statusIcon = '⏳';
-    if (status === 'Passed') statusIcon = '✅';
-    else if (status !== 'Pending') statusIcon = '❌';
-    return `<span class="status-icon ${status.toLowerCase()}">${statusIcon}</span>`;
+// Builds the Status cell shared by every transaction row in the popover — reuses the exact same
+// helpers the main voucher table's Status column already uses (getClearedStatusBadgeHtml() for
+// Cleared/Query, getVoucherLineStatusIcon() for the Pending dot) so this popover never drifts out
+// of sync with what the main table actually shows, per the 2026-08-09/2026-08-10 cutover from the
+// legacy validation_status field to cleared_status.
+function buildPopoverStatusHtml(clearedStatus) {
+    const badge = getClearedStatusBadgeHtml(clearedStatus);
+    if (badge) return badge;
+    return `${getVoucherLineStatusIcon('Pending')} Pending`;
 }
 
 // Returns the subset of sessionTransactions whose Voucher ID, Date, Account Name, Amount, or
-// validation Status contains the search term (case-insensitive substring match). Reuses the same
-// field-extraction logic renderTransactionPopover() uses per line (getVoucherLineAmount(), the
-// same rowData account-name fallback chain, the same default-to-'Pending' status) so results are
-// guaranteed consistent with what's actually displayed in the table.
+// Cleared/Query/Pending status contains the search term (case-insensitive substring match).
+// Reuses the same field-extraction logic renderTransactionPopover() uses per line
+// (getVoucherLineAmount(), the same rowData account-name fallback chain, the same
+// default-to-'Pending' status) so results are guaranteed consistent with what's actually
+// displayed in the table.
 function filterTransactionsForPopover(term) {
     const needle = term.trim().toLowerCase();
     if (!needle) return sessionTransactions;
@@ -3029,7 +3032,7 @@ function filterTransactionsForPopover(term) {
         const rowData = t.row_data || {};
         const accountName = rowData['Account Name'] || rowData['Account'] || rowData['Ledger'] || '';
         const amount = getVoucherLineAmount(rowData);
-        const status = t.validation_status || 'Pending';
+        const status = t.cleared_status || 'Pending';
         const haystack = [
             t.voucher_id || '',
             t.extract_date || '',
@@ -3123,7 +3126,7 @@ function renderTransactionPopover() {
                 <td>${dateCell}</td>
                 <td>${accountName}</td>
                 <td style="text-align:right;">${amount !== '' ? amount : '—'}</td>
-                <td style="text-align:center;">${buildPopoverStatusIcon(t.validation_status)}</td>
+                <td style="text-align:center;">${buildPopoverStatusHtml(t.cleared_status)}</td>
             </tr>`;
         });
 
