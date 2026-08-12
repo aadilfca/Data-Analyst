@@ -2069,6 +2069,7 @@ function computeVoucherTotal(lines) {
 function getVoucherLineStatusIcon(validationStatus) {
     const status = (validationStatus || 'Pending');
     const statusClass = status.toLowerCase();
+    if (statusClass === 'pending') return '';
     return `<span class="voucher-line-status-dot ${statusClass}" title="${status}"></span>`;
 }
 
@@ -2080,7 +2081,7 @@ function getVoucherLineStatusIcon(validationStatus) {
 function getVoucherLineStatusPillHtml(validationStatus, clearedStatus) {
     const status = (validationStatus || 'Pending').toLowerCase();
     if (status === 'pending' && (clearedStatus === 'Cleared' || clearedStatus === 'Query')) return '';
-    return `${getVoucherLineStatusIcon(validationStatus)} ${status}`;
+    return `${getVoucherLineStatusIcon(validationStatus)} ${status}`.trim();
 }
 
 // Validation Rules Phase 5: Cleared/Query badge, a sibling pill next to the existing
@@ -3016,7 +3017,7 @@ async function loadTransactionList(showPopover = false, forceRefresh = false) {
 function buildPopoverStatusHtml(clearedStatus) {
     const badge = getClearedStatusBadgeHtml(clearedStatus);
     if (badge) return badge;
-    return `${getVoucherLineStatusIcon('Pending')} Pending`;
+    return `${getVoucherLineStatusIcon('Pending')} Pending`.trim();
 }
 
 // Returns the subset of sessionTransactions whose Voucher ID, Date, Account Name, Amount, or
