@@ -7108,11 +7108,9 @@ document.getElementById('procedureModalValidateBtn')?.addEventListener('click', 
 if (procedureModalClose) {
     procedureModalClose.addEventListener('click', closeProcedureModal);
 }
-if (procedureModal) {
-    procedureModal.addEventListener('click', function(e) {
-        if (e.target === this) closeProcedureModal();
-    });
-}
+// Confirmed fix: no outside-click-to-close — the overlay click listener that called
+// closeProcedureModal() when e.target === procedureModal was removed. The × button above
+// remains the only way to close this modal.
 document.getElementById('procedureModalBackBtn')?.addEventListener('click', function() {
     navigateProcedureModalLine(-1);
 });

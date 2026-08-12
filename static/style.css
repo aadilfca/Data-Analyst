@@ -2915,11 +2915,19 @@ body {
     resize: both;
     box-shadow: 0 20px 60px rgba(0,0,0,0.3);
 }
+/* Sticky header (confirmed fix): .modal-header is a direct child of .modal-content, which is
+   this modal's single overflow:auto scroll region — pinning it here needs no wrapper
+   restructuring. background/z-index keep scrolled-under content from showing through/on top. */
 #procedureModal .modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 12px;
+    position: sticky;
+    top: 0;
+    background: white;
+    z-index: 5;
+    padding-top: 4px;
 }
 /* Left-side document rail (Supporting Documents redesign, Phase 1) - replaces the earlier
    horizontal .procedure-tab-bar. .procedure-modal-body lays the rail and the panel side by side;
