@@ -5993,3 +5993,100 @@ body {
     display: block;
     margin-bottom: 2px;
 }
+
+/* =============================================
+   AUDIT WORKBOOK MODULE (new, confirmed 5-phase requirement)
+   Phase 2 of 5: static page shell (static/audit_workbook.html) — no live data yet.
+   Own classes, visually matched (not shared) to .ar-tb-table/.voucher-line-cleared-badge/
+   .voucher-line-total-row's existing look, per this codebase's established "visually matched,
+   physically duplicated" convention for a new page's own list.
+   ============================================= */
+
+.aw-filter-chips {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.aw-filter-chip {
+    padding: 6px 18px;
+    border: 1px solid #d0d5dd;
+    border-radius: 20px;
+    background: white;
+    color: #475569;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.aw-filter-chip:hover {
+    border-color: #94a3b8;
+    background: #f8fafc;
+}
+.aw-filter-chip.active {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: white;
+}
+
+.aw-table-wrapper {
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    overflow: hidden;
+}
+
+.aw-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.aw-table th,
+.aw-table td {
+    text-align: left;
+    padding: 10px 16px;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 13px;
+}
+.aw-table th {
+    background: #f8fafc;
+    color: #64748b;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.03em;
+}
+.aw-table tbody tr:hover {
+    background: #f8fafc;
+}
+
+/* Same green/red/amber pill palette as .voucher-line-cleared-badge/.status-badge.pending
+   elsewhere in this file (#dcfce7/#166534, #fee2e2/#991b1b, #fef3c7/#92400e) — not new colors. */
+.aw-status-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 11px;
+}
+.aw-status-badge.cleared {
+    background: #dcfce7;
+    color: #166534;
+}
+.aw-status-badge.query {
+    background: #fee2e2;
+    color: #991b1b;
+}
+.aw-status-badge.pending {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+/* Running total footer row — same #dbeafe dim-blue background already established by
+   .voucher-line-total-row and reused across several other tables in this app. */
+.aw-total-row td {
+    background: #dbeafe;
+    font-weight: 700;
+    color: #1a1a2e;
+    border-bottom: none;
+}

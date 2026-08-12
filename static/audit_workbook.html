@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audit Workbook</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<!-- Audit Workbook (new, confirmed 5-phase requirement) — Phase 2 of 5: static page shell only,
+     no live data, no JS wiring. Intended design (Phase 3's job): this page is reached with a
+     ?session=<id> query param (same pattern as template-viewer.html's ?template=N), and fetches
+     Phase 1's GET /api/verification/session/{session_id}/audit_workbook to render one row per
+     voucher. The filter chips (All/Cleared/Query/Pending) and the running-total footer below are
+     placeholder markup for now — Phase 3 wires them to real data/click handlers. -->
+<body data-nav-module="Audit Workbook" data-nav-parent="verification.html">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <!-- Populated by renderNavLeft() in client_context.js: back arrow + home link + brand text. -->
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user">
+                <span>👤 Welcome, Analyst</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <header class="module-header">
+            <!-- Real page link (not JS history.back()) so this always returns to the
+                 Verification module's card strip specifically — same convention as
+                 template-viewer.html's own back-link. -->
+            <a href="/static/verification.html" class="back-link">← Back to Verification</a>
+            <h1>📗 Audit Workbook</h1>
+            <p id="awSubtitle">Read-only, voucher-level list of verification results for a session.</p>
+        </header>
+
+        <!-- Status filter chips — All is active by default. Non-functional this phase; Phase 3
+             wires click handlers keyed off each chip's data-status attribute. -->
+        <div class="aw-filter-chips">
+            <button type="button" class="aw-filter-chip active" id="awFilterAll" data-status="all">All</button>
+            <button type="button" class="aw-filter-chip" id="awFilterCleared" data-status="Cleared">Cleared</button>
+            <button type="button" class="aw-filter-chip" id="awFilterQuery" data-status="Query">Query</button>
+            <button type="button" class="aw-filter-chip" id="awFilterPending" data-status="Pending">Pending</button>
+        </div>
+
+        <!-- Table: Voucher No. / Date / Description / Amount / Status. Placeholder rows only —
+             Phase 3 replaces <tbody id="awTableBody"> with rows built from the Phase 1 endpoint. -->
+        <div class="aw-table-wrapper">
+            <table class="aw-table">
+                <thead>
+                    <tr>
+                        <th>Voucher No.</th>
+                        <th>Date</th>
+                        <th>Description</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="awTableBody">
+                    <tr>
+                        <td>CPV-0726-101</td>
+                        <td>2026-07-01</td>
+                        <td>Paid Food Allowance for overtime Mold Filling Hall (03-Workers)</td>
+                        <td>600.00</td>
+                        <td><span class="aw-status-badge cleared">Cleared</span></td>
+                    </tr>
+                    <tr>
+                        <td>CPV-0726-102</td>
+                        <td>2026-07-01</td>
+                        <td>Paid Food Allowance for overtime Leaser Hall, Main Unit No. 01</td>
+                        <td>1,000.00</td>
+                        <td><span class="aw-status-badge cleared">Cleared</span></td>
+                    </tr>
+                    <tr>
+                        <td>CPV-0726-103</td>
+                        <td>2026-07-01</td>
+                        <td>Paid Food Allowance for overtime Shakeel Hall Main Unit No. 01</td>
+                        <td>5,200.00</td>
+                        <td><span class="aw-status-badge query">Query</span></td>
+                    </tr>
+                    <tr>
+                        <td>CPV-0726-104</td>
+                        <td>2026-07-02</td>
+                        <td>Purchase of stationery items for Admin Office</td>
+                        <td>2,350.00</td>
+                        <td><span class="aw-status-badge pending">Pending</span></td>
+                    </tr>
+                    <tr>
+                        <td>CPV-0726-105</td>
+                        <td>2026-07-02</td>
+                        <td>Vehicle fuel reimbursement — Sales visit</td>
+                        <td>800.00</td>
+                        <td><span class="aw-status-badge pending">Pending</span></td>
+                    </tr>
+                </tbody>
+                <tfoot>
+                    <tr class="aw-total-row">
+                        <td colspan="3">Total</td>
+                        <td id="awTotalAmount">9,950.00</td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+
+    <script src="/static/client_context.js?v=2"></script>
+</body>
+
+</html>
