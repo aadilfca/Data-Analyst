@@ -95,6 +95,11 @@ def get_column_value(row_data: dict, aliases: list) -> Optional[str]:
 # GET /api/verification/category-for-account) without a network round-trip.
 ACCOUNT_CODE_ALIASES = ['Account Detail', 'Account Details', 'Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head', 'Ledger Detail']
 
+# Audit Workbook Phase 1 (backend rollup endpoint): same alias list as verification.js's
+# VOUCHER_LINE_DESCRIPTION_ALIASES, ported here so a voucher row's description can be resolved
+# server-side the same way the frontend already does for the voucher table.
+DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars']
+
 # Automated cross-document validation engine, Phase 8 of 10: reserved sentinel document_id
 # range for auto-written shortfall observations - same non-FK-enforced-sentinel convention as
 # ACCOUNT_HEAD_OBSERVATION_DOC_ID (-1, defined further below in this file) but a distinct range,
@@ -1965,6 +1970,23 @@ def get_session_progress(session_id: int):
     }
 
 
+def _rollup_voucher_status(cleared_statuses: list) -> str:
+    """
+    Shared voucher-level Cleared/Query/Pending rollup rule, factored out of get_voucher_stats()
+    (Audit Workbook Phase 1) so it and get_audit_workbook() can never silently drift apart.
+
+    Rollup rule: all lines cleared_status == 'Cleared' -> Cleared; else any line
+    cleared_status == 'Query' -> Query (Query takes priority over Pending); else -> Pending
+    (covers NULL/unclassified).
+    """
+    if all(s == 'Cleared' for s in cleared_statuses):
+        return 'Cleared'
+    elif any(s == 'Query' for s in cleared_statuses):
+        return 'Query'
+    else:
+        return 'Pending'
+
+
 @router.get("/api/verification/session/{session_id}/voucher_stats")
 def get_voucher_stats(session_id: int):
     """
@@ -1976,9 +1998,7 @@ def get_voucher_stats(session_id: int):
     the _doc_group_id grouping _fetch_session_details_grouped()/get_next_transaction() use for
     line navigation - so this endpoint's `total` agrees with the existing header number exactly.
 
-    Rollup rule per voucher: all lines cleared_status == 'Cleared' -> Cleared; else any line
-    cleared_status == 'Query' -> Query (Query takes priority over Pending); else -> Pending
-    (covers NULL/unclassified). cleared + query + pending always equals total.
+    cleared + query + pending always equals total. See _rollup_voucher_status() for the rule.
     """
     session = execute_query(
         "SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'",
@@ -2001,15 +2021,85 @@ def get_voucher_stats(session_id: int):
 
     cleared = query = pending = 0
     for statuses in lines_by_voucher.values():
-        if all(s == 'Cleared' for s in statuses):
+        status = _rollup_voucher_status(statuses)
+        if status == 'Cleared':
             cleared += 1
-        elif any(s == 'Query' for s in statuses):
+        elif status == 'Query':
             query += 1
         else:
             pending += 1
 
     total = len(lines_by_voucher)
     return {"total": total, "cleared": cleared, "query": query, "pending": pending}
+
+
+@router.get("/api/verification/session/{session_id}/audit_workbook")
+def get_audit_workbook(session_id: int):
+    """
+    Audit Workbook Phase 1 of 5 (backend): read-only per-voucher rollup rows for a session -
+    voucher no., date, description, amount, status - for the new Audit Workbook list view
+    (distinct from the existing Cashbook selection screen). Same session scope/grouping as
+    get_voucher_stats() (transaction_ref, not the _doc_group_id line-navigation grouping), so
+    this endpoint's total/status breakdown always agrees with that one exactly.
+
+    One row per voucher, not per line:
+    - date: the voucher's first line's extract_date (chronologically first by client_data.id).
+    - description: resolved via DESCRIPTION_ALIASES against the first line's row_data, same
+      alias convention ACCOUNT_CODE_ALIASES already uses for account codes.
+    - amount: sum of extract_amount across every line of the voucher (client_data.extract_amount
+      is already the resolved Debit/Credit-side value - see the 2026-08-09 extract_amount
+      backfill fix - so no re-derivation from row_data is needed here).
+    - status: _rollup_voucher_status() over the voucher's lines' cleared_status.
+
+    No sort applied beyond first-appearance (chronological, cd.id ASC) order - a later phase
+    (filter chips / sortable columns) can layer real sorting on top of this.
+    """
+    session = execute_query(
+        "SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'",
+        (session_id,)
+    )
+    if not session:
+        raise HTTPException(404, "Session not found or cancelled.")
+
+    rows = execute_query(
+        """
+        SELECT vd.transaction_ref, vd.cleared_status, cd.extract_amount, cd.extract_date, cd.row_data
+        FROM verification_details vd
+        JOIN client_data cd ON vd.client_data_id = cd.id
+        WHERE vd.session_id = ? AND vd.range_status = 'active'
+        ORDER BY cd.id ASC
+        """,
+        (session_id,)
+    )
+
+    groups: Dict[str, dict] = {}
+    for r in rows:
+        ref = r['transaction_ref']
+        if not ref:
+            continue
+        if ref not in groups:
+            row_data = r['row_data']
+            try:
+                row_data = json.loads(row_data) if isinstance(row_data, str) else (row_data or {})
+            except Exception:
+                row_data = {}
+            groups[ref] = {
+                "voucher_no": ref,
+                "date": r['extract_date'],
+                "description": get_column_value(row_data, DESCRIPTION_ALIASES),
+                "amount": 0.0,
+                "_cleared_statuses": []
+            }
+        groups[ref]["amount"] += r['extract_amount'] or 0
+        groups[ref]["_cleared_statuses"].append(r['cleared_status'])
+
+    vouchers = []
+    for g in groups.values():
+        status = _rollup_voucher_status(g.pop("_cleared_statuses"))
+        g["status"] = status
+        vouchers.append(g)
+
+    return {"total": len(vouchers), "vouchers": vouchers}
 
 
 @router.post("/api/verification/session/{session_id}/reconcile_range")
