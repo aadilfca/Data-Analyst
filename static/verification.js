@@ -2023,7 +2023,7 @@ async function autoFillCategoryForLine(uid, accountCode) {
 // Name, Amount, Procedures, Observations, Status. User-resizable (see the drag handles in
 // renderVoucherLines()'s header row) — persists at module scope across renders/navigation, same
 // convention as voucherLineState, so dragging a column survives Prev/Next voucher navigation.
-let voucherColumnWidths = [40, 100, 170, 395, 90, 130, 300, 90];
+let voucherColumnWidths = [40, 100, 170, 395, 90, 130, 263, 90];
 
 // Pushes voucherColumnWidths into the CSS custom property .voucher-line-summary-grid reads its
 // grid-template-columns from. Set on #voucherLinesContainer itself (not its innerHTML content),

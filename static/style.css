@@ -2001,7 +2001,6 @@ body {
 .voucher-lines-container {
     display: flex;
     flex-direction: column;
-    border-top: 1px solid #94a3b8;
     border-left: 1px solid #94a3b8;
     margin-bottom: 20px;
     /* Columns are now user-resizable (drag handles in the header row) and can grow past the
@@ -2024,7 +2023,7 @@ body {
    variable re-lines-up the header/line/total rows in one shot since they all read from it. */
 .voucher-line-summary-grid {
     display: grid;
-    grid-template-columns: var(--voucher-col-widths, 40px 100px 170px 395px 90px 130px 90px 300px 90px);
+    grid-template-columns: var(--voucher-col-widths, 40px 100px 170px 395px 90px 130px 90px 263px 90px);
     align-items: stretch;
     /* Block-level (and flex-stretched, for the header/total rows) boxes default to filling their
        container's full width — now that .voucher-panel is 100% wide and columns are fixed pixel
@@ -2045,7 +2044,12 @@ body {
     min-width: 0;
 }
 
-/* Column-title row, naming the cashbook's own columns — dim blue header bar. */
+/* Column-title row, naming the cashbook's own columns — dim blue header bar. Carries the table's
+   top border itself (rather than the outer .voucher-lines-container) since this row already has
+   .voucher-line-summary-grid's own width: fit-content — so the border always ends exactly at the
+   right edge of the last column, tracking live column drag-resizes, instead of stretching to
+   whatever width the container happens to be (previously wrong whenever the grid's actual
+   rendered width didn't match the container's, e.g. 100% of .voucher-panel). */
 .voucher-line-header-row {
     font-size: 11px;
     font-weight: 700;
@@ -2053,6 +2057,7 @@ body {
     letter-spacing: 0.4px;
     background: #dbeafe;
     color: #000000;
+    border-top: 1px solid #94a3b8;
 }
 .voucher-line-header-row > * {
     padding-top: 8px;
