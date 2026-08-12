@@ -855,17 +855,25 @@
                      voucher, not one line. Fully JS-rendered by renderVoucherChecksBar() in
                      verification.js, same "no static per-item markup" convention as the rail/panels
                      below. -->
-                <div id="procedureVoucherChecksBar" class="procedure-voucher-checks-bar"></div>
-                <!-- "Why is this line Cleared/Query?" inline panel (Validate button, above) — same
-                     GET /api/verification/line_status_reason/{id} payload and gate-row rendering as
-                     the Status-pill popover in the main voucher table (buildLineStatusReasonBody() in
-                     verification.js, reused here so there is exactly one gate-list rendering path).
-                     Collapsed by default; toggled open/closed by #procedureModalValidateBtn via
-                     toggleValidatePanel(). Content is 100% JS-rendered. -->
-                <div id="procedureValidatePanel" class="procedure-validate-panel" style="display:none;"></div>
-                <div class="procedure-modal-body">
-                    <div id="procedureModalTabs" class="procedure-doc-rail"></div>
-                    <div id="procedureModalPanels" class="procedure-tab-panels"></div>
+                <!-- Confirmed fix: structural header freeze. Everything that can grow tall (voucher
+                     checks bar, Validate panel, rail+panels) is wrapped in its own scrolling region
+                     (.procedure-modal-scroll-body, style.css) so .modal-header/.procedure-modal-footer
+                     never scroll with it and body content can never render above the header — see the
+                     style.css comment on .modal-content for the full flex-column layout this enables.
+                     Supersedes an earlier position:sticky attempt on .modal-header alone. -->
+                <div class="procedure-modal-scroll-body">
+                    <div id="procedureVoucherChecksBar" class="procedure-voucher-checks-bar"></div>
+                    <!-- "Why is this line Cleared/Query?" inline panel (Validate button, above) — same
+                         GET /api/verification/line_status_reason/{id} payload and gate-row rendering as
+                         the Status-pill popover in the main voucher table (buildLineStatusReasonBody() in
+                         verification.js, reused here so there is exactly one gate-list rendering path).
+                         Collapsed by default; toggled open/closed by #procedureModalValidateBtn via
+                         toggleValidatePanel(). Content is 100% JS-rendered. -->
+                    <div id="procedureValidatePanel" class="procedure-validate-panel" style="display:none;"></div>
+                    <div class="procedure-modal-body">
+                        <div id="procedureModalTabs" class="procedure-doc-rail"></div>
+                        <div id="procedureModalPanels" class="procedure-tab-panels"></div>
+                    </div>
                 </div>
                 <!-- Footer (Supporting Documents modal redesign follow-up): saved-state indicator +
                      Back/Next to move between this voucher's OTHER lines without closing the modal -

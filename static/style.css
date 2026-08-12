@@ -2901,33 +2901,48 @@ body {
     justify-content: center;
     align-items: center;
 }
+/* Structural header freeze (confirmed fix, supersedes an earlier position:sticky attempt on
+   .modal-header alone — that approach shared one overflow:auto scroll region between the header
+   and body, which could let body content bleed/render above the sticky header). .modal-content is
+   now a 3-region flex column: .modal-header (flex:0 0 auto) / .procedure-modal-scroll-body
+   (flex:1 1 auto, the sole scroll region) / .procedure-modal-footer (flex:0 0 auto) — the header
+   and footer are structurally outside the scrolling area entirely, not just visually pinned atop
+   it. .modal-content itself no longer scrolls (overflow:hidden); resize:both still works with
+   overflow:hidden, so the user's manual resize grip is unaffected. */
 #procedureModal .modal-content {
     background: white;
     border-radius: 16px;
     padding: 24px;
     /* Widened to 150% of the original 700px default (confirmed fix); user can grow it
-       further via the standard browser resize grip (resize:both, needs overflow:auto,
-       already set below) - no custom JS drag handle. */
+       further via the standard browser resize grip (resize:both, needs overflow != visible,
+       satisfied below by overflow:hidden) - no custom JS drag handle. */
     max-width: 1050px;
     width: 95%;
     max-height: 85vh;
-    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     resize: both;
     box-shadow: 0 20px 60px rgba(0,0,0,0.3);
 }
-/* Sticky header (confirmed fix): .modal-header is a direct child of .modal-content, which is
-   this modal's single overflow:auto scroll region — pinning it here needs no wrapper
-   restructuring. background/z-index keep scrolled-under content from showing through/on top. */
 #procedureModal .modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex: 0 0 auto;
+    padding-bottom: 12px;
     margin-bottom: 12px;
-    position: sticky;
-    top: 0;
-    background: white;
-    z-index: 5;
-    padding-top: 4px;
+    border-bottom: 1px solid #e2e8f0;
+}
+/* The sole scroll region inside #procedureModal — wraps the voucher-checks bar, Validate panel,
+   and rail+panels row (see verification.html). min-height:0 overrides the flex-item default of
+   min-height:auto (which sizes a flex child to its content and would prevent it from ever
+   shrinking to fit the available space) — without it this wrapper would just keep growing instead
+   of scrolling internally. */
+.procedure-modal-scroll-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    min-height: 0;
 }
 /* Left-side document rail (Supporting Documents redesign, Phase 1) - replaces the earlier
    horizontal .procedure-tab-bar. .procedure-modal-body lays the rail and the panel side by side;
@@ -4226,6 +4241,9 @@ body {
     margin-top: 16px;
     padding-top: 14px;
     border-top: 1px solid #e2e8f0;
+    /* Structural header freeze (confirmed fix): pinned like .modal-header, outside the
+       .procedure-modal-scroll-body scroll region, so Back/Verify stay reachable while scrolling. */
+    flex: 0 0 auto;
 }
 .procedure-modal-saved-note {
     font-size: 12px;
