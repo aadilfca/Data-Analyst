@@ -8,12 +8,13 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
-<!-- Audit Workbook (new, confirmed 5-phase requirement) — Phase 2 of 5: static page shell only,
-     no live data, no JS wiring. Intended design (Phase 3's job): this page is reached with a
-     ?session=<id> query param (same pattern as template-viewer.html's ?template=N), and fetches
-     Phase 1's GET /api/verification/session/{session_id}/audit_workbook to render one row per
-     voucher. The filter chips (All/Cleared/Query/Pending) and the running-total footer below are
-     placeholder markup for now — Phase 3 wires them to real data/click handlers. -->
+<!-- Audit Workbook — line-grain restructure (new, confirmed 3-phase follow-on requirement),
+     Phase 2 of 3 (this rewrite of static/audit_workbook.js consumes the new grouped/line-grain
+     response: a voucher header band row + unnumbered line rows + a subtotal row for any
+     line_count > 1 voucher). Styling polish is Phase 3 — this markup deliberately reuses only
+     already-existing global classes (.voucher-line-procedures-badge/.voucher-line-obs-flag/etc.
+     from the Verification module, .aw-status-badge/.aw-row-clickable already defined below in
+     style.css), no new CSS this phase. -->
 <body data-nav-module="Audit Workbook" data-nav-parent="verification.html">
     <!-- Top Navigation Bar -->
     <nav class="navbar">
@@ -56,60 +57,33 @@
             <button type="button" class="aw-filter-chip" id="awFilterPending" data-status="Pending">Pending</button>
         </div>
 
-        <!-- Table: Voucher No. / Date / Description / Amount / Status. Placeholder rows only —
-             Phase 3 replaces <tbody id="awTableBody"> with rows built from the Phase 1 endpoint. -->
+        <!-- Table: Account / Reference / Amount / Procedures / Observations / Status, line-grain,
+             grouped under a voucher header band row (Sr + voucher no. + date + description) with
+             an optional subtotal row per voucher (line_count > 1 only). awTableBody's rows are
+             entirely JS-rendered from the Phase 1 endpoint — the row below is just the initial
+             loading state so nothing stale flashes before the script runs. -->
         <div class="aw-table-wrapper">
             <table class="aw-table">
                 <thead>
                     <tr>
-                        <th>Voucher No.</th>
-                        <th>Date</th>
-                        <th>Description</th>
+                        <th>Account</th>
+                        <th>Reference</th>
                         <th>Amount</th>
+                        <th>Procedures</th>
+                        <th>Observations</th>
                         <th>Status</th>
                     </tr>
                 </thead>
                 <tbody id="awTableBody">
                     <tr>
-                        <td>CPV-0726-101</td>
-                        <td>2026-07-01</td>
-                        <td>Paid Food Allowance for overtime Mold Filling Hall (03-Workers)</td>
-                        <td>600.00</td>
-                        <td><span class="aw-status-badge cleared">Cleared</span></td>
-                    </tr>
-                    <tr>
-                        <td>CPV-0726-102</td>
-                        <td>2026-07-01</td>
-                        <td>Paid Food Allowance for overtime Leaser Hall, Main Unit No. 01</td>
-                        <td>1,000.00</td>
-                        <td><span class="aw-status-badge cleared">Cleared</span></td>
-                    </tr>
-                    <tr>
-                        <td>CPV-0726-103</td>
-                        <td>2026-07-01</td>
-                        <td>Paid Food Allowance for overtime Shakeel Hall Main Unit No. 01</td>
-                        <td>5,200.00</td>
-                        <td><span class="aw-status-badge query">Query</span></td>
-                    </tr>
-                    <tr>
-                        <td>CPV-0726-104</td>
-                        <td>2026-07-02</td>
-                        <td>Purchase of stationery items for Admin Office</td>
-                        <td>2,350.00</td>
-                        <td><span class="aw-status-badge pending">Pending</span></td>
-                    </tr>
-                    <tr>
-                        <td>CPV-0726-105</td>
-                        <td>2026-07-02</td>
-                        <td>Vehicle fuel reimbursement — Sales visit</td>
-                        <td>800.00</td>
-                        <td><span class="aw-status-badge pending">Pending</span></td>
+                        <td colspan="6" style="text-align:center; color:#94a3b8;">Loading vouchers…</td>
                     </tr>
                 </tbody>
                 <tfoot>
                     <tr class="aw-total-row">
-                        <td colspan="3">Total</td>
-                        <td id="awTotalAmount">9,950.00</td>
+                        <td colspan="2">Total</td>
+                        <td id="awTotalAmount">0.00</td>
+                        <td colspan="2"></td>
                         <td></td>
                     </tr>
                 </tfoot>
