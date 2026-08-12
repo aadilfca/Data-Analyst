@@ -1403,10 +1403,20 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
                 <span class="cashbook-stat"><span class="cashbook-stat-label">Query</span><span class="cashbook-stat-value query" id="voucherStatQuery">${statsQuery}</span></span>
                 <span class="cashbook-stat"><span class="cashbook-stat-label">Pending</span><span class="cashbook-stat-value pending" id="voucherStatPending">${statsPending}</span></span>
             </div>
-            <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">${bookIcon}</span> ${bookLabel}</button>
+            <div class="cashbook-bar-actions">
+                <button class="btn-cashbook" id="cashbookReturnBtn"><span class="btn-icon">${bookIcon}</span> Change ${bookLabel}</button>
+                <button class="btn-cashbook" id="auditWorkbookBtn"><span class="btn-icon">📗</span> Audit Workbook</button>
+            </div>
         `;
         document.getElementById('cashbookReturnBtn')?.addEventListener('click', function() {
             if (typeof returnToCashbookFromSession === 'function') returnToCashbookFromSession();
+        });
+        // Audit Workbook peer nav button (Phase 5, FINAL): same-tab navigation to the read-only
+        // per-voucher rollup view for this exact session — a plain, neutral action button here,
+        // not "active"-styled, since neither this button nor "Change Cashbook" represents the
+        // screen currently open (that's the voucher/session view itself, not either destination).
+        document.getElementById('auditWorkbookBtn')?.addEventListener('click', function() {
+            if (typeof navigateToAuditWorkbook === 'function') navigateToAuditWorkbook();
         });
     }
 
@@ -1436,6 +1446,16 @@ function clearVoucherHeader() {
     if (cashbookBar) cashbookBar.innerHTML = '';
     // Reset so a later session's first render doesn't briefly show this session's stale counts.
     voucherStatsCache = null;
+}
+
+// Audit Workbook (Phase 5, FINAL): navigates to the read-only per-voucher rollup page for the
+// currently open session, same-tab (this is "switch screens", not a side lookup — matches the
+// existing "Change Cashbook" button's own same-tab behavior). Session-scoped only, no voucher
+// context to carry — Phase 4's own row-click already handles the reverse (Audit Workbook →
+// a specific voucher in Verification) via ?state=session&id=&voucher=.
+function navigateToAuditWorkbook() {
+    if (!currentSessionId) return;
+    window.location.href = `/static/audit_workbook.html?session=${currentSessionId}`;
 }
 
 // ---------- VOUCHER LINE ALIAS HELPERS (Phase 3) ----------

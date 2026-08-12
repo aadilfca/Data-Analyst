@@ -26,6 +26,8 @@ const awFilterChips = [
     document.getElementById('awFilterQuery'),
     document.getElementById('awFilterPending')
 ];
+// Peer nav bar (Phase 5, FINAL) — see the matching comment in audit_workbook.html.
+const awVerificationBtn = document.getElementById('awVerificationBtn');
 
 // ---------- HELPERS ----------
 
@@ -170,10 +172,20 @@ window.onload = function () {
 
     if (isValidSessionId) {
         currentSessionId = sessionId;
+        // Reuses verification.js's own hard-refresh restore path (?state=session&id=) — lands
+        // on the session's earliest-Pending voucher (no ?voucher= given, since this button has
+        // no specific-voucher context to carry, unlike Phase 4's per-row jump).
+        if (awVerificationBtn) {
+            awVerificationBtn.disabled = false;
+            awVerificationBtn.addEventListener('click', () => {
+                window.location.href = `/static/verification.html?state=session&id=${currentSessionId}`;
+            });
+        }
         fetchAuditWorkbook(sessionId);
     } else {
         currentSessionId = null;
         allVouchers = [];
+        if (awVerificationBtn) awVerificationBtn.disabled = true;
         awSubtitleEl.textContent = 'No session specified — open this page via an Audit Workbook link from Verification.';
         setChipsDisabled(true);
         renderAuditWorkbookRows([], 'No session specified.');

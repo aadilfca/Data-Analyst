@@ -1547,6 +1547,15 @@ body {
 }
 .vh-icon:hover { transform: scale(1.15); }
 
+/* Wraps the peer button pair (Change Cashbook/Bankbook + Audit Workbook) on the right side of
+   #cashbookBar — .cashbook-bar itself is justify-content:space-between with exactly 2 children
+   (.cashbook-stats + this wrapper), so adding a 2nd button here doesn't disturb that layout. */
+.cashbook-bar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
 .btn-cashbook {
     padding: 6px 16px;
     background: #f1f5f9;
@@ -1560,6 +1569,25 @@ body {
 }
 .btn-cashbook:hover {
     background: #e2e8f0;
+}
+.btn-cashbook:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.btn-cashbook:disabled:hover {
+    background: #f1f5f9;
+}
+/* "You are here" indicator (Audit Workbook's own peer nav bar, Phase 5) — same blue-fill
+   convention as .aw-filter-chip.active, but not a re-selectable control: no hover change and a
+   default (not pointer) cursor, since clicking "the page you're already on" has no action. */
+.btn-cashbook.active {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: white;
+    cursor: default;
+}
+.btn-cashbook.active:hover {
+    background: #3b82f6;
 }
 
 /* ----- Transaction List Popover ----- */
@@ -6001,6 +6029,16 @@ body {
    .voucher-line-total-row's existing look, per this codebase's established "visually matched,
    physically duplicated" convention for a new page's own list.
    ============================================= */
+
+/* Peer nav buttons (Phase 5, FINAL) — reuses .btn-cashbook/.btn-cashbook.active from
+   verification.js's own #cashbookBar so the two screens' nav bars read as one consistent
+   pattern, not two different button languages. Replaces the earlier plain "Back to Verification"
+   text link. */
+.aw-nav-buttons {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+}
 
 .aw-filter-chips {
     display: flex;

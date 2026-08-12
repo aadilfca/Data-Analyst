@@ -32,10 +32,17 @@
     <!-- Main Content -->
     <div class="main-container">
         <header class="module-header">
-            <!-- Real page link (not JS history.back()) so this always returns to the
-                 Verification module's card strip specifically — same convention as
-                 template-viewer.html's own back-link. -->
-            <a href="/static/verification.html" class="back-link">← Back to Verification</a>
+            <!-- Peer nav bar (Phase 5, FINAL) — mirrors verification.js's own #cashbookBar
+                 button pair. "Verification" returns to this exact session (?state=session&id=,
+                 same restore path Phase 4's row-click already reuses), not just the generic
+                 verification.html landing page a plain link would have gone to. "Audit Workbook"
+                 is a static "you are here" indicator (not a real link) since we're already on
+                 this page. Both start disabled — audit_workbook.js enables/wires the
+                 Verification button once a valid ?session= is confirmed on load. -->
+            <div class="aw-nav-buttons">
+                <button type="button" class="btn-cashbook" id="awVerificationBtn" disabled><span class="btn-icon">✅</span> Verification</button>
+                <span class="btn-cashbook active"><span class="btn-icon">📗</span> Audit Workbook</span>
+            </div>
             <h1>📗 Audit Workbook</h1>
             <p id="awSubtitle">Read-only, voucher-level list of verification results for a session.</p>
         </header>
