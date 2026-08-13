@@ -6130,12 +6130,18 @@ body {
 }
 /* Confirmed fix: the ordinary row-to-row separator within a voucher group should read lighter
    than the vertical column separator, not the same colour — otherwise every cell looks equally
-   boxed in. Scoped to tbody only (higher specificity than the base .aw-table td rule above), so
-   the header row's own border-bottom and every cell's border-right stay #e2e8f0, unchanged. The
-   voucher group-start top border, subtotal row's own top/bottom border, and .aw-table-wrapper's
-   outer edge are all separate rules, untouched by this. */
-.aw-table tbody td {
-    border-bottom: 1px solid #f1f5f9;
+   boxed in. #f8fafc (bumped from an earlier #f1f5f9, confirmed too subtle against #e2e8f0 to
+   read clearly) gives a genuinely visible gap while staying lighter than the column border.
+   :not(.aw-subtotal-row) on the row (not the cell — a :not() can't reach an ancestor's class
+   through a descendant combinator) both keeps this scoped to tbody only, so the header row's
+   own border-bottom and every cell's border-right stay #e2e8f0 unchanged, AND excludes subtotal
+   rows entirely so this rule no longer competes with .aw-subtotal-row td's own border-bottom
+   below — confirmed fix: that rule's specificity (0,1,1) was previously losing to this one's
+   (0,1,2) with .aw-subtotal-row cells still matching it, silently overriding its intended 2px
+   #334155 down to this rule's colour. The voucher group-start top border and .aw-table-wrapper's
+   outer edge are separate rules, untouched by this. */
+.aw-table tbody tr:not(.aw-subtotal-row) td {
+    border-bottom: 1px solid #f8fafc;
 }
 .aw-table th:last-child,
 .aw-table td:last-child {
@@ -6188,14 +6194,20 @@ body {
 }
 
 /* Voucher-first row — a darker/thicker top border only where a new voucher group begins, giving
-   a clear visual break without a full banner row. Derived in pure CSS from the Sr cell already
-   being empty on every line but a voucher's first (see buildLineRowHtml() in audit_workbook.js)
-   — no extra class/hook needed for this one. #334155 (confirmed fix, v7 prototype) is this file's
-   own already-established darker-than-hairline 2px border colour (see .nav-client select),
-   deliberately darker than the earlier #94a3b8 medium-grey — applied consistently below to the
-   subtotal row's own top+bottom border and .aw-table-wrapper's outer edge, so all three read as
-   one structural line rather than three different shades. */
-.aw-line-row:has(td:first-child:not(:empty)) td {
+   a clear visual break without a full banner row. Confirmed fix: this used to be inferred via
+   :has(td:first-child:not(:empty)) (relying on the Sr cell being blank on every line but the
+   group's first), which the Phase 2 rowspan restructure silently broke — continuation rows now
+   omit the leading <td>s entirely rather than rendering them blank, so their real first-child
+   (the Reference cell, escapeHtml(line.description || '—') in buildLineRowHtml()) is never
+   empty, and the border fired on every line of a multi-line voucher. Now driven by
+   an explicit .group-start class stamped in buildLineRowHtml() (audit_workbook.js) only when
+   isFirstLine is true — same "stamp a dedicated CSS hook from JS" pattern as aw-group-even/
+   aw-group-odd, not inferred from cell structure. #334155 is this file's own already-established
+   darker-than-hairline 2px border colour (see .nav-client select), deliberately darker than the
+   earlier #94a3b8 medium-grey — applied consistently below to the subtotal row's own top+bottom
+   border and .aw-table-wrapper's outer edge, so all three read as one structural line rather than
+   three different shades. */
+.aw-line-row.group-start td {
     border-top: 2px solid #334155;
 }
 

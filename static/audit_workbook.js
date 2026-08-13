@@ -164,16 +164,23 @@ function getAwObservationsCellHtml(line) {
 // own comment for why that row needs its own leading cells instead of being covered by this
 // span. groupParityClass ('aw-group-even'/'aw-group-odd') is a pure CSS hook — style.css's
 // zebra striping needs it since variable-sized voucher groups can't be alternated in plain CSS
-// with no marker; the voucher-first top border needs no such hook (style.css derives it from
-// the Sr cell's own empty/non-empty state via :has()).
+// with no marker. The group-start class (confirmed fix) is a second such hook, stamped only
+// when isFirstLine is true: the row's own first-line-vs-continuation position used to be
+// inferred in CSS via :has(td:first-child:not(:empty)) (blank-Sr-cell-on-continuation-rows was
+// true under the old pre-rowspan markup), but omitting the leading <td>s entirely on
+// continuation rows (rather than rendering them blank) left every continuation row's true
+// first-child as the Reference cell — which is never empty (falls back to '—') — so that
+// selector was firing on every line of a multi-line voucher, not just the true first one. An
+// explicit class removes the guesswork the same way aw-group-even/aw-group-odd already do.
 function buildLineRowHtml(v, line, isFirstLine, groupParityClass) {
     const leadingCellsHtml = isFirstLine ? `
         <td rowspan="${v.line_count}">${escapeHtml(String(v.sr))}</td>
         <td rowspan="${v.line_count}">${escapeHtml(v.voucher_no)}</td>
         <td rowspan="${v.line_count}">${getAwAccountCellHtml(line)}</td>
     ` : '';
+    const groupStartClass = isFirstLine ? ' group-start' : '';
     return `
-        <tr class="aw-line-row aw-row-clickable ${groupParityClass}" data-voucher-no="${escapeHtml(v.voucher_no)}" data-detail-id="${line.detail_id}">
+        <tr class="aw-line-row aw-row-clickable ${groupParityClass}${groupStartClass}" data-voucher-no="${escapeHtml(v.voucher_no)}" data-detail-id="${line.detail_id}">
             ${leadingCellsHtml}
             <td>${escapeHtml(line.description || '—')}</td>
             <td>${formatAwAmount(line.amount)}</td>
