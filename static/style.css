@@ -6167,24 +6167,6 @@ body {
     background: #eff6ff;
 }
 
-/* Left accent bar on the rowspanned Sr / Voucher No. / Account cells (nth-child 1-3) — alternates
-   colour by group parity. These three <td>s are only physically present on a voucher group's
-   first line row (Phase 2's rowspan omits them, not blanks them, on subsequent lines), so
-   targeting them by nth-child naturally hits only that row, and the rowspan makes the border
-   visually span the whole group's height. Reuses the exact accent-pair already established for
-   this purpose elsewhere in this file (.obs-comments-row .obs-wrapper / .comments-wrapper) — no
-   new colours introduced. */
-.aw-table tbody tr.aw-line-row.aw-group-odd td:nth-child(1),
-.aw-table tbody tr.aw-line-row.aw-group-odd td:nth-child(2),
-.aw-table tbody tr.aw-line-row.aw-group-odd td:nth-child(3) {
-    border-left: 4px solid #3b82f6;
-}
-.aw-table tbody tr.aw-line-row.aw-group-even td:nth-child(1),
-.aw-table tbody tr.aw-line-row.aw-group-even td:nth-child(2),
-.aw-table tbody tr.aw-line-row.aw-group-even td:nth-child(3) {
-    border-left: 4px solid #8b5cf6;
-}
-
 /* Row hover — a shade visibly distinct from both the plain-white and zebra-tinted rows above.
    Reuses #f1f5f9, already used throughout this file for the same purpose (e.g.
    .nav-menu-item:hover). :not(.aw-subtotal-row) — a subtotal row carries no data-voucher-no/
