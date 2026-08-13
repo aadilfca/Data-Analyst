@@ -1375,7 +1375,7 @@ async function loadNextTransaction(detailId = null) {
         // header bar (nav+save, above) and each line's own row (below) are the only rendering now.
         renderVoucherHeader(data.voucher_id, data.voucher_date, voucherLines);
         seedVoucherLineState(voucherLines);
-        renderVoucherLines(voucherLines);
+        renderVoucherLines(voucherLines, data.voucher_date);
         await updateProgressDisplay(); // update the new progress element
         // Removed "Loaded transaction" message
     } catch (e) {
@@ -2110,11 +2110,11 @@ async function autoFillCategoryForLine(uid, accountCode) {
     applyCategoryToTypeCell(uid, categoryName);
 }
 
-// Order matches .voucher-line-summary-grid's columns: Sr No., Account Code, Account Type, Account
-// Name, Amount, Procedures, Observations, Status. User-resizable (see the drag handles in
+// Order matches .voucher-line-summary-grid's columns: Sr No., Date, Account Code, Account Type,
+// Account Name, Amount, Procedures, Observations, Status. User-resizable (see the drag handles in
 // renderVoucherLines()'s header row) — persists at module scope across renders/navigation, same
 // convention as voucherLineState, so dragging a column survives Prev/Next voucher navigation.
-let voucherColumnWidths = [40, 100, 170, 395, 90, 130, 263, 90];
+let voucherColumnWidths = [40, 90, 100, 170, 395, 90, 130, 263, 90];
 
 // Pushes voucherColumnWidths into the CSS custom property .voucher-line-summary-grid reads its
 // grid-template-columns from. Set on #voucherLinesContainer itself (not its innerHTML content),
@@ -2490,7 +2490,7 @@ function toggleVoucherLineLock(uid) {
     lockedLineUid = uid;
 }
 
-function renderVoucherLines(lines) {
+function renderVoucherLines(lines, voucherDate) {
     const container = document.getElementById('voucherLinesContainer');
     if (!container) return;
     applyVoucherColumnWidths();
@@ -2509,13 +2509,14 @@ function renderVoucherLines(lines) {
     let html = `
         <div class="voucher-line-header-row voucher-line-summary-grid">
             <span>Sr No.<span class="voucher-col-resize-handle" data-col="0"></span></span>
-            <span>Account Code<span class="voucher-col-resize-handle" data-col="1"></span></span>
-            <span>Account Type<span class="voucher-col-resize-handle" data-col="2"></span></span>
-            <span>Account Name<span class="voucher-col-resize-handle" data-col="3"></span></span>
-            <span class="voucher-line-amount-col">Amount<span class="voucher-col-resize-handle" data-col="4"></span></span>
-            <span>Procedures<button type="button" class="voucher-col-toggle-icon" title="Expand">⤢</button><span class="voucher-col-resize-handle" data-col="5"></span></span>
-            <span>Observations<button type="button" class="voucher-col-toggle-icon" title="Expand">⤢</button><span class="voucher-col-resize-handle" data-col="6"></span></span>
-            <span>Status<span class="voucher-col-resize-handle" data-col="7"></span></span>
+            <span>Date<span class="voucher-col-resize-handle" data-col="1"></span></span>
+            <span>Account Code<span class="voucher-col-resize-handle" data-col="2"></span></span>
+            <span>Account Type<span class="voucher-col-resize-handle" data-col="3"></span></span>
+            <span>Account Name<span class="voucher-col-resize-handle" data-col="4"></span></span>
+            <span class="voucher-line-amount-col">Amount<span class="voucher-col-resize-handle" data-col="5"></span></span>
+            <span>Procedures<button type="button" class="voucher-col-toggle-icon" title="Expand">⤢</button><span class="voucher-col-resize-handle" data-col="6"></span></span>
+            <span>Observations<button type="button" class="voucher-col-toggle-icon" title="Expand">⤢</button><span class="voucher-col-resize-handle" data-col="7"></span></span>
+            <span>Status<span class="voucher-col-resize-handle" data-col="8"></span></span>
         </div>
     `;
 
@@ -2530,6 +2531,11 @@ function renderVoucherLines(lines) {
         const uid = line.detail_id;
         const srNo = idx + 1;
         const row = line.row_data || {};
+        // Date column: prefer this specific line's own extract_date (present on lines sourced from
+        // sessionTransactions — Prev/popover navigation) and fall back to the voucher-level date
+        // passed in (present on lines sourced from get_next_transaction/voucher_nav, which don't
+        // carry a per-line extract_date) — same fallback renderVoucherHeader() already uses.
+        const lineDate = line.extract_date || voucherDate || '—';
         const accountCode = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_CODE_ALIASES);
         lineAccountCodes.push({ uid, accountCode });
         const accountName = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_NAME_ALIASES);
@@ -2551,6 +2557,7 @@ function renderVoucherLines(lines) {
             <div class="voucher-line-row" data-detail-id="${uid}">
                 <div class="voucher-line-summary voucher-line-summary-grid" data-detail-id="${uid}">
                     <span class="voucher-line-srno">${srNo}</span>
+                    <span class="voucher-line-date">${lineDate}</span>
                     <span class="voucher-line-code">${accountCode}</span>
                     <span class="voucher-line-type-cell">
                         <span class="voucher-line-type-value-row">
@@ -2587,6 +2594,7 @@ function renderVoucherLines(lines) {
     const total = computeVoucherTotal(lines);
     html += `
         <div class="voucher-line-total-row voucher-line-summary-grid">
+            <span></span>
             <span></span>
             <span></span>
             <span></span>
@@ -3330,7 +3338,7 @@ function navigateToTransaction(detailId) {
     const voucherLines = sessionTransactions.filter(t => t.voucher_id === transaction.voucher_id);
     renderVoucherHeader(transaction.voucher_id, transaction.extract_date, voucherLines);
     seedVoucherLineState(voucherLines);
-    renderVoucherLines(voucherLines);
+    renderVoucherLines(voucherLines, transaction.extract_date);
 
     // Cleanup pass: the standalone renderTransaction(transaction) card is gone — the voucher
     // header bar and per-line rows (above) are the only rendering now.
@@ -3446,7 +3454,7 @@ function applyVoucherNavRenderData(data) {
     }
     renderVoucherHeader(data.voucher_id, data.voucher_date, voucherLines);
     seedVoucherLineState(voucherLines);
-    renderVoucherLines(voucherLines);
+    renderVoucherLines(voucherLines, data.voucher_date);
     return true;
 }
 
