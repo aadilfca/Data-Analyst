@@ -2153,6 +2153,47 @@ def _audit_workbook_resolve_categories(client_id: int, account_codes: set) -> Di
     return resolved
 
 
+def _audit_workbook_resolve_account_names(client_id: int, account_codes: set) -> Dict[str, Optional[str]]:
+    """
+    Same "latest parsed Trial Balance" lookup pattern as _audit_workbook_resolve_categories()
+    (and get_category_for_account()) - batched once per distinct account code in a session's
+    line set, not once per line. No account_category_assignments-style fallback: that table
+    carries no name column, only category_id, so a code absent from the latest TB simply
+    resolves to None.
+
+    Returns {account_code: account_name or None}, every requested code present in the result.
+    """
+    resolved: Dict[str, Optional[str]] = {code: None for code in account_codes}
+    if not account_codes:
+        return resolved
+
+    codes = list(account_codes)
+    placeholders = ",".join("?" for _ in codes)
+
+    upload_rows = execute_query(
+        """
+        SELECT id FROM trial_balance_uploads
+        WHERE client_id = ? AND status = 'parsed'
+        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
+        LIMIT 1
+        """,
+        (client_id,)
+    )
+    if upload_rows:
+        tb_rows = execute_query(
+            f"""
+            SELECT account_code, account_name
+            FROM trial_balance_accounts
+            WHERE upload_id = ? AND account_code IN ({placeholders})
+            """,
+            tuple([upload_rows[0]['id']] + codes)
+        )
+        for r in tb_rows:
+            resolved[r['account_code']] = r['account_name']
+
+    return resolved
+
+
 @router.get("/api/verification/session/{session_id}/audit_workbook")
 def get_audit_workbook(session_id: int):
     """
@@ -2167,6 +2208,9 @@ def get_audit_workbook(session_id: int):
     Per line:
     - account_code / description: resolved via ACCOUNT_CODE_ALIASES / DESCRIPTION_ALIASES
       against that line's own row_data (same aliases used elsewhere in this file).
+    - account_name: resolved from the client's latest parsed Trial Balance by account_code -
+      same "latest parsed upload" lookup pattern as get_category_for_account()/
+      _audit_workbook_resolve_categories(). None when the code isn't in the latest TB.
     - amount: client_data.extract_amount (already the resolved Debit/Credit-side value - see
       the 2026-08-09 extract_amount backfill fix).
     - status: this line's own cleared_status verbatim, None mapped to "Pending" - the same
@@ -2249,6 +2293,7 @@ def get_audit_workbook(session_id: int):
             transaction_refs.add(r['transaction_ref'])
 
     category_id_by_account_code = _audit_workbook_resolve_categories(client_id, account_codes)
+    account_name_by_code = _audit_workbook_resolve_account_names(client_id, account_codes)
 
     # guidance_docs_by_category: fetched once per DISTINCT category_id actually in use this
     # session, not once per line.
@@ -2434,6 +2479,7 @@ def get_audit_workbook(session_id: int):
             "detail_id": pl['detail_id'],
             "client_data_id": pl['client_data_id'],
             "account_code": pl['account_code'],
+            "account_name": account_name_by_code.get(pl['account_code']) if pl['account_code'] else None,
             "description": pl['description'],
             "amount": pl['extract_amount'],
             "status": line_status,
