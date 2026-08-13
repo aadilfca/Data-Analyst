@@ -6128,6 +6128,15 @@ body {
        instead of wrapping. */
     overflow-wrap: break-word;
 }
+/* Confirmed fix: the ordinary row-to-row separator within a voucher group should read lighter
+   than the vertical column separator, not the same colour — otherwise every cell looks equally
+   boxed in. Scoped to tbody only (higher specificity than the base .aw-table td rule above), so
+   the header row's own border-bottom and every cell's border-right stay #e2e8f0, unchanged. The
+   voucher group-start top border, subtotal row's own top/bottom border, and .aw-table-wrapper's
+   outer edge are all separate rules, untouched by this. */
+.aw-table tbody td {
+    border-bottom: 1px solid #f1f5f9;
+}
 .aw-table th:last-child,
 .aw-table td:last-child {
     border-right: none;
