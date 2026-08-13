@@ -6152,11 +6152,31 @@ body {
 /* Zebra striping — per voucher GROUP, not per line, via the aw-group-even/aw-group-odd classes
    audit_workbook.js stamps on every row of a group. Scoped to .aw-line-row specifically so
    .aw-subtotal-row's own distinct #dbeafe background below is never overridden even though it
-   carries the same parity class for simplicity in the JS. Reuses #f8fafc, the same subtle tint
-   already used elsewhere in this file (including this table's own header background above) — no
-   new colour. Odd groups are left as the table's plain white default, so only even needs a rule. */
+   carries the same parity class for simplicity in the JS. #eff6ff is a slightly more saturated
+   pale-blue tint already used elsewhere in this file (.btn-voucher-nav:hover) for a "one step
+   stronger than hairline-gray" purpose — no new colour, chosen for stronger group-to-group
+   contrast than the original #f8fafc. Odd groups are left as the table's plain white default, so
+   only even needs a rule. */
 .aw-table tbody tr.aw-line-row.aw-group-even {
-    background: #f8fafc;
+    background: #eff6ff;
+}
+
+/* Left accent bar on the rowspanned Sr / Voucher No. / Account cells (nth-child 1-3) — alternates
+   colour by group parity. These three <td>s are only physically present on a voucher group's
+   first line row (Phase 2's rowspan omits them, not blanks them, on subsequent lines), so
+   targeting them by nth-child naturally hits only that row, and the rowspan makes the border
+   visually span the whole group's height. Reuses the exact accent-pair already established for
+   this purpose elsewhere in this file (.obs-comments-row .obs-wrapper / .comments-wrapper) — no
+   new colours introduced. */
+.aw-table tbody tr.aw-line-row.aw-group-odd td:nth-child(1),
+.aw-table tbody tr.aw-line-row.aw-group-odd td:nth-child(2),
+.aw-table tbody tr.aw-line-row.aw-group-odd td:nth-child(3) {
+    border-left: 4px solid #3b82f6;
+}
+.aw-table tbody tr.aw-line-row.aw-group-even td:nth-child(1),
+.aw-table tbody tr.aw-line-row.aw-group-even td:nth-child(2),
+.aw-table tbody tr.aw-line-row.aw-group-even td:nth-child(3) {
+    border-left: 4px solid #8b5cf6;
 }
 
 /* Row hover — a shade visibly distinct from both the plain-white and zebra-tinted rows above.
@@ -6170,14 +6190,15 @@ body {
     cursor: pointer;
 }
 
-/* Voucher-first row — a slightly stronger (but still 1px hairline-family) top border only where
-   a new voucher group begins, giving a visual break without a full banner row. Derived in pure
-   CSS from the Sr cell already being empty on every line but a voucher's first (see
-   buildLineRowHtml() in audit_workbook.js) — no extra class/hook needed for this one. #cbd5e1 is
-   an already-used, slightly-more-visible-than-hairline grey elsewhere in this file (e.g.
-   .module-card.admin-card's hover border) for the same "a bit stronger than default" purpose. */
+/* Voucher-first row — a darker/thicker top border only where a new voucher group begins, giving
+   a clear visual break without a full banner row. Derived in pure CSS from the Sr cell already
+   being empty on every line but a voucher's first (see buildLineRowHtml() in audit_workbook.js)
+   — no extra class/hook needed for this one. #94a3b8 is this file's own documented "stronger
+   structural border" token (already used for .aw-subtotal-row's own top border below and the
+   Verification "All Borders" grid, static/style.css ~2035-2268), at 2px here to visibly mark a
+   new voucher starting — .aw-subtotal-row's own separate 1px border rule is untouched. */
 .aw-line-row:has(td:first-child:not(:empty)) td {
-    border-top: 1px solid #cbd5e1;
+    border-top: 2px solid #94a3b8;
 }
 
 /* Subtotal row — lighter than a full total-row treatment: a thin (1px) top border and medium
