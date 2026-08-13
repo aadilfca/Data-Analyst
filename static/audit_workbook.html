@@ -8,12 +8,16 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
-<!-- Audit Workbook — restyle (new, confirmed 2-phase follow-on requirement), Phase 1 of 2
-     (row restructure). The voucher header band row is gone entirely — grouping now comes from
-     Sr (shown once, on a voucher's first line only) and Voucher No. (repeated on every line of
-     that voucher) as real leading columns, plus a subtotal row for any line_count > 1 voucher.
-     Styling polish (hairline borders, zebra striping, lighter subtotal row) is Phase 2 — this
-     markup deliberately reuses only already-existing global classes
+<!-- Audit Workbook — two overlapping change sets: the earlier 2-phase "restyle" (Sr/Voucher No.
+     columns replacing the old banner row, then lighter styling in style.css) and the current
+     3-phase "restructure" (Phase 1: backend account_name lookup; Phase 2: this markup's Sr/
+     Voucher No./Account columns are now rendered via real HTML rowspan — one <td> per voucher
+     group, not a blank/repeated-text cell per line — with Account merged into a code+name
+     stacked cell; Phase 3: grouping visual treatment in CSS). Column count/structure here is
+     unchanged (still 8 columns, awTableBody's rows are entirely JS-rendered — the row below is
+     just the initial loading state). Styling polish (hairline borders, zebra striping, lighter
+     subtotal row, any dedicated Account cell styling) is Phase 3 — this markup deliberately
+     reuses only already-existing global classes
      (.voucher-line-procedures-badge/.voucher-line-obs-flag/etc. from the Verification module,
      .aw-status-badge/.aw-row-clickable already defined below in style.css), no new CSS this
      phase. -->

@@ -1,19 +1,27 @@
-// Audit Workbook page — restyle (new, confirmed 2-phase follow-on requirement).
-// Phase 1: row restructure (Sr/Voucher No. columns, remove the voucher header banner row).
-// Phase 2, FINAL: lighter styling (style.css) — this file's own addition for that phase is
-// small and confirmed via AskUserQuestion: renderAuditWorkbookRows() stamps each voucher
-// group's line/subtotal rows with a shared aw-group-even/aw-group-odd class, a pure CSS hook
-// for zebra striping (variable-sized groups can't be alternated in plain CSS with no marker).
+// Audit Workbook page — two overlapping change sets share this file's history:
+// (1) the earlier 2-phase "restyle" (Sr/Voucher No. columns replacing the old banner row,
+//     then lighter styling in style.css — see the aw-group-even/aw-group-odd note below).
+// (2) the current 3-phase "restructure" (Phase 1: backend account_name lookup, done;
+//     Phase 2, THIS PHASE: real HTML rowspan on Sr/Voucher No./Account instead of the old
+//     blank-cell/repeated-text fake grouping, plus Account merged into a code+name stacked
+//     cell; Phase 3: grouping visual treatment in CSS).
+//
+// renderAuditWorkbookRows() stamps each voucher group's line/subtotal rows with a shared
+// aw-group-even/aw-group-odd class, a pure CSS hook for zebra striping (variable-sized groups
+// can't be alternated in plain CSS with no marker) — Phase 3's job, unused by CSS today.
 //
 // GET /api/verification/session/{session_id}/audit_workbook returns one voucher group per
 // voucher — {sr, voucher_no, date, line_count, amount, status, lines: [...]}, each line
-// {detail_id, client_data_id, account_code, description, amount, status,
-//  procedures: {done, total}, observations: {count, entries}}. This phase renders that shape as:
-// Sr shown once (a voucher's first line only) and Voucher No. repeated on every line, both as
-// real leading columns — no more full-width banner row — plus a subtotal row for any voucher
-// with more than one line. Further styling polish (hairline borders, zebra striping, lighter
-// subtotal row) is a separate, later phase — this file deliberately reuses only already-existing
-// global CSS classes (no style.css changes this phase):
+// {detail_id, client_data_id, account_code, account_name, description, amount, status,
+//  procedures: {done, total}, observations: {count, entries}}. Sr/Voucher No./Account are each
+// rendered ONCE per voucher group via a real <td rowspan="line_count">, on the group's first
+// line row only — not a blank placeholder cell repeated down the group, and not extended to
+// cover the subtotal row (see buildSubtotalRowHtml()'s own comment for why). Account's cell
+// merges account_code + account_name (Phase 1's new field) stacked, falling back to the code
+// alone when account_name is null. Further styling polish (hairline borders, zebra striping,
+// lighter subtotal row, any dedicated Account cell styling) is Phase 3 — this file deliberately
+// reuses only already-existing global CSS classes plus two new unstyled hook classes
+// (aw-account-code/aw-account-name, plain block-level <div>s, no style.css changes this phase):
 //   - .voucher-line-procedures-badge/.voucher-line-proc-ring(-fill) and
 //     .voucher-line-obs-flag/.voucher-line-obs-none/.voucher-line-obs-expanded-list(-item/-doc/-text)
 //     from static/verification.js's own Procedures/Observations column classes (defined globally
@@ -21,10 +29,10 @@
 //     pattern" per the confirmed brief.
 //   - .aw-status-badge/.aw-row-clickable, already defined for this page.
 //
-// Locked column mapping (confirmed this phase): Account = account_code, Reference = description —
-// the only two per-line text fields the backend returns. Observations expand/collapse is a
-// PER-ROW toggle (confirmed this phase) — clicking one line's own flag/expanded-list only affects
-// that line, not a shared page-wide state like Verification's own columnsExpanded.
+// Locked column mapping: Account = account_code + account_name (merged, this phase),
+// Reference = description. Observations expand/collapse is a PER-ROW toggle — clicking one
+// line's own flag/expanded-list only affects that line, not a shared page-wide state like
+// Verification's own columnsExpanded.
 //
 // API_BASE is a global already provided by client_context.js — deliberately not redeclared here
 // (redeclaring a global in a second plain <script> has caused real bugs elsewhere in this app,
@@ -89,6 +97,17 @@ function buildProcedureRingSvg(pct, cls) {
     </svg>`;
 }
 
+// Account cell content: code + name stacked (Phase 2's merged "Option B" format), using
+// Phase 1's account_name field. null falls back to showing just the code, same '—' convention
+// the rest of this file already uses for a missing value.
+function getAwAccountCellHtml(line) {
+    const code = escapeHtml(line.account_code || '—');
+    if (!line.account_name) {
+        return code;
+    }
+    return `<div class="aw-account-code">${code}</div><div class="aw-account-name">${escapeHtml(line.account_name)}</div>`;
+}
+
 function getAwStatusBadgeHtml(status) {
     const statusClass = (status || '').toLowerCase();
     return `<span class="aw-status-badge ${statusClass}">${escapeHtml(status || '—')}</span>`;
@@ -136,18 +155,26 @@ function getAwObservationsCellHtml(line) {
 
 // ---------- RENDER ----------
 
-// Sr is shown only on a voucher's first line (isFirstLine); Voucher No. repeats on every line —
-// both are how a voucher's lines read as a group now that the banner row is gone.
-// groupParityClass ('aw-group-even'/'aw-group-odd') is a pure CSS hook — style.css's zebra
-// striping needs it since variable-sized voucher groups can't be alternated in plain CSS with
-// no marker; the voucher-first top border needs no such hook (style.css derives it from the Sr
-// cell's own empty/non-empty state via :has()).
+// Sr, Voucher No., and Account are each rendered ONCE per voucher group, via a real
+// <td rowspan="line_count">, emitted only on the group's first line row (isFirstLine) — not a
+// blank placeholder repeated down the group. Account is sourced from THIS first line
+// (v.lines[0], the same `line` passed in when isFirstLine is true) since it's not a
+// group-level field on the backend response. The rowspan deliberately covers only the
+// line_count line rows, not the subtotal row that may follow — see buildSubtotalRowHtml()'s
+// own comment for why that row needs its own leading cells instead of being covered by this
+// span. groupParityClass ('aw-group-even'/'aw-group-odd') is a pure CSS hook — style.css's
+// zebra striping needs it since variable-sized voucher groups can't be alternated in plain CSS
+// with no marker; the voucher-first top border needs no such hook (style.css derives it from
+// the Sr cell's own empty/non-empty state via :has()).
 function buildLineRowHtml(v, line, isFirstLine, groupParityClass) {
+    const leadingCellsHtml = isFirstLine ? `
+        <td rowspan="${v.line_count}">${escapeHtml(String(v.sr))}</td>
+        <td rowspan="${v.line_count}">${escapeHtml(v.voucher_no)}</td>
+        <td rowspan="${v.line_count}">${getAwAccountCellHtml(line)}</td>
+    ` : '';
     return `
         <tr class="aw-line-row aw-row-clickable ${groupParityClass}" data-voucher-no="${escapeHtml(v.voucher_no)}" data-detail-id="${line.detail_id}">
-            <td>${isFirstLine ? escapeHtml(String(v.sr)) : ''}</td>
-            <td>${escapeHtml(v.voucher_no)}</td>
-            <td>${escapeHtml(line.account_code || '—')}</td>
+            ${leadingCellsHtml}
             <td>${escapeHtml(line.description || '—')}</td>
             <td>${formatAwAmount(line.amount)}</td>
             <td>${getAwProceduresCellHtml(line.procedures)}</td>
@@ -158,10 +185,13 @@ function buildLineRowHtml(v, line, isFirstLine, groupParityClass) {
 }
 
 // Only rendered when line_count > 1 — a single-line voucher's own line row already carries the
-// voucher's whole amount/status, so a subtotal would just duplicate it. Carries the same
-// groupParityClass as its group's line rows for consistency, though style.css's zebra rule is
-// scoped to .aw-line-row only, so it has no visual effect here — the subtotal keeps its own
-// distinct #dbeafe tint regardless of parity.
+// voucher's whole amount/status, so a subtotal would just duplicate it. This row is NOT covered
+// by the line rows' rowspan above (that span ends exactly at line_count rows, right before this
+// one) - so it must independently supply its own cells for the same 4 leading logical columns
+// (Sr+Voucher No.+Account+Reference) via colspan="4", exactly as before this phase's rowspan
+// change. Carries the same groupParityClass as its group's line rows for consistency, though
+// style.css's zebra rule is scoped to .aw-line-row only, so it has no visual effect here — the
+// subtotal keeps its own distinct #dbeafe tint regardless of parity.
 function buildSubtotalRowHtml(v, groupParityClass) {
     return `
         <tr class="aw-subtotal-row ${groupParityClass}">
