@@ -188,14 +188,16 @@ function buildLineRowHtml(v, line, isFirstLine, groupParityClass) {
 // voucher's whole amount/status, so a subtotal would just duplicate it. This row is NOT covered
 // by the line rows' rowspan above (that span ends exactly at line_count rows, right before this
 // one) - so it must independently supply its own cells for the same 4 leading logical columns
-// (Sr+Voucher No.+Account+Reference) via colspan="4", exactly as before this phase's rowspan
-// change. Carries the same groupParityClass as its group's line rows for consistency, though
-// style.css's zebra rule is scoped to .aw-line-row only, so it has no visual effect here — the
-// subtotal keeps its own distinct #dbeafe tint regardless of parity.
+// (Sr+Voucher No.+Account+Reference) via colspan="4" — a bare, unlabelled cell (per the confirmed
+// v7-prototype fix removing the old "Subtotal" text) that still reads as coloured band since
+// .aw-subtotal-row td's background rule applies to every <td> in the row including this one, not
+// just blank/bare space. Carries the same groupParityClass as its group's line rows for
+// consistency, though style.css's zebra rule is scoped to .aw-line-row only, so it has no visual
+// effect here — the subtotal keeps its own distinct #dbeafe tint regardless of parity.
 function buildSubtotalRowHtml(v, groupParityClass) {
     return `
         <tr class="aw-subtotal-row ${groupParityClass}">
-            <td colspan="4">Subtotal</td>
+            <td colspan="4"></td>
             <td>${formatAwAmount(v.amount)}</td>
             <td colspan="2"></td>
             <td>${getAwStatusBadgeHtml(v.status)}</td>

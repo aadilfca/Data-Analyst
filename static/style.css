@@ -6081,9 +6081,15 @@ body {
     color: white;
 }
 
+/* Outer edge (confirmed fix, v7 prototype) — #334155 is this file's own already-established
+   darker-than-hairline 2px border colour (see .nav-client select), reused here so the table's
+   outer boundary reads as the same "genuinely dark" structural line as the group-start and
+   subtotal row borders below, not the lighter #94a3b8 grey used elsewhere in this block.
+   border-radius + overflow:hidden are already present, so this renders as a clean rounded edge. */
 .aw-table-wrapper {
     background: white;
     border-radius: 16px;
+    border: 2px solid #334155;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
     overflow: hidden;
 }
@@ -6193,25 +6199,26 @@ body {
 /* Voucher-first row — a darker/thicker top border only where a new voucher group begins, giving
    a clear visual break without a full banner row. Derived in pure CSS from the Sr cell already
    being empty on every line but a voucher's first (see buildLineRowHtml() in audit_workbook.js)
-   — no extra class/hook needed for this one. #94a3b8 is this file's own documented "stronger
-   structural border" token (already used for .aw-subtotal-row's own top border below and the
-   Verification "All Borders" grid, static/style.css ~2035-2268), at 2px here to visibly mark a
-   new voucher starting — .aw-subtotal-row's own separate 1px border rule is untouched. */
+   — no extra class/hook needed for this one. #334155 (confirmed fix, v7 prototype) is this file's
+   own already-established darker-than-hairline 2px border colour (see .nav-client select),
+   deliberately darker than the earlier #94a3b8 medium-grey — applied consistently below to the
+   subtotal row's own top+bottom border and .aw-table-wrapper's outer edge, so all three read as
+   one structural line rather than three different shades. */
 .aw-line-row:has(td:first-child:not(:empty)) td {
-    border-top: 2px solid #94a3b8;
+    border-top: 2px solid #334155;
 }
 
-/* Subtotal row — lighter than a full total-row treatment: a thin (1px) top border and medium
-   (not bold) weight, while the #dbeafe tint (already this app's established total/rollup-row
-   colour, same as .aw-total-row/.voucher-line-total-row below) keeps it reading as a total.
-   #94a3b8 is this file's existing "stronger structural border" token (see the Verification
-   voucher-lines "All Borders" grid, static/style.css ~2035-2268) — most visible of this table's
-   three border tiers, but still only 1px. Only rendered by audit_workbook.js when line_count > 1. */
+/* Subtotal row — #dbeafe tint (already this app's established total/rollup-row colour, same as
+   .aw-total-row/.voucher-line-total-row below) keeps it reading as a total; top AND bottom border
+   (confirmed fix, v7 prototype) now match the same darker #334155/2px treatment as the
+   group-start border above and .aw-table-wrapper's outer edge, for one consistent structural
+   line across all three. Only rendered by audit_workbook.js when line_count > 1. */
 .aw-subtotal-row td {
     background: #dbeafe;
     color: #1a1a2e;
     font-weight: 600;
-    border-top: 1px solid #94a3b8;
+    border-top: 2px solid #334155;
+    border-bottom: 2px solid #334155;
 }
 
 /* Same green/red/amber pill palette as .voucher-line-cleared-badge/.status-badge.pending
