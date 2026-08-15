@@ -6110,22 +6110,25 @@ body {
 
 /* table-layout:fixed + explicit per-column widths on the header row's cells is what keeps
    line/subtotal rows aligned under the <thead> labels regardless of any row's own content.
-   Column proportions (Sr/Voucher No./Account/Reference/Amount/Procedures/Observations/Status)
-   sized so Reference (free text) and Observations (can hold an expanded entries list) get the
-   most room; Sr/Amount/Procedures/Status are compact number/pill/ring content. */
+   Column proportions (Sr/Voucher No./Date/Account/Reference/Amount/Procedures/Observations/
+   Status — Date inserted after Voucher No. by a later confirmed fix, nudging every later column
+   index up by one from the original 8-column layout) sized so Reference (free text) and
+   Observations (can hold an expanded entries list) get the most room; Sr/Date/Amount/Procedures/
+   Status are compact number/date/pill/ring content. */
 .aw-table {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
 }
 .aw-table th:nth-child(1) { width: 6%; }
-.aw-table th:nth-child(2) { width: 12%; }
-.aw-table th:nth-child(3) { width: 10%; }
-.aw-table th:nth-child(4) { width: 22%; }
-.aw-table th:nth-child(5) { width: 10%; }
-.aw-table th:nth-child(6) { width: 12%; }
-.aw-table th:nth-child(7) { width: 18%; }
-.aw-table th:nth-child(8) { width: 10%; }
+.aw-table th:nth-child(2) { width: 11%; }
+.aw-table th:nth-child(3) { width: 9%; }
+.aw-table th:nth-child(4) { width: 9%; }
+.aw-table th:nth-child(5) { width: 20%; }
+.aw-table th:nth-child(6) { width: 9%; }
+.aw-table th:nth-child(7) { width: 11%; }
+.aw-table th:nth-child(8) { width: 16%; }
+.aw-table th:nth-child(9) { width: 9%; }
 
 .aw-table th,
 .aw-table td {
@@ -6169,18 +6172,19 @@ body {
     font-size: 11px;
     letter-spacing: 0.03em;
 }
-/* Sr is a short number, centered like the pill/ring columns; Amount is a number (right-aligned,
-   matching this app's other amount columns, e.g. .voucher-line-amount); Procedures/Status hold a
-   centered pill/ring, not flowing text. Voucher No./Account/Reference/Observations stay
-   left-aligned via the base .aw-table td rule above. */
-.aw-table td:nth-child(1) {
+/* Sr and Date are short/compact, centered like the pill/ring columns; Amount is a number
+   (right-aligned, matching this app's other amount columns, e.g. .voucher-line-amount);
+   Procedures/Status hold a centered pill/ring, not flowing text. Voucher No./Account/Reference/
+   Observations stay left-aligned via the base .aw-table td rule above. */
+.aw-table td:nth-child(1),
+.aw-table td:nth-child(3) {
     text-align: center;
 }
-.aw-table td:nth-child(5) {
+.aw-table td:nth-child(6) {
     text-align: right;
 }
-.aw-table td:nth-child(6),
-.aw-table td:nth-child(8) {
+.aw-table td:nth-child(7),
+.aw-table td:nth-child(9) {
     text-align: center;
 }
 

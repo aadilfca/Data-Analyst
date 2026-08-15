@@ -8,19 +8,22 @@
     <link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 
-<!-- Audit Workbook — two overlapping change sets: the earlier 2-phase "restyle" (Sr/Voucher No.
-     columns replacing the old banner row, then lighter styling in style.css) and the current
-     3-phase "restructure" (Phase 1: backend account_name lookup; Phase 2: this markup's Sr/
-     Voucher No./Account columns are now rendered via real HTML rowspan — one <td> per voucher
-     group, not a blank/repeated-text cell per line — with Account merged into a code+name
-     stacked cell; Phase 3: grouping visual treatment in CSS). Column count/structure here is
-     unchanged (still 8 columns, awTableBody's rows are entirely JS-rendered — the row below is
-     just the initial loading state). Styling polish (hairline borders, zebra striping, lighter
-     subtotal row, any dedicated Account cell styling) is Phase 3 — this markup deliberately
-     reuses only already-existing global classes
-     (.voucher-line-procedures-badge/.voucher-line-obs-flag/etc. from the Verification module,
-     .aw-status-badge/.aw-row-clickable already defined below in style.css), no new CSS this
-     phase. -->
+<!-- Audit Workbook — several overlapping change sets: the earlier 2-phase "restyle" (Sr/Voucher
+     No. columns replacing the old banner row, then lighter styling in style.css); the 3-phase
+     "restructure" (backend account_name lookup; Sr/Voucher No./Account rendered via real HTML
+     rowspan — one <td> per voucher group, not a blank/repeated-text cell per line — with Account
+     merged into a code+name stacked cell; grouping visual treatment in CSS); and this later,
+     single-phase "add a Date column" fix — a new Date <th>/<td> inserted between Voucher No. and
+     Account (9 columns total: Sr, Voucher No., Date, Account, Reference, Amount, Procedures,
+     Observations, Status), same rowspan-once-per-voucher-group treatment as Sr/Voucher No./
+     Account, formatted via utils.js's formatDate() (loaded below, same page-load convention as
+     static/script.js's own use of it — no initUtils() call, so it falls back to formatDate()'s
+     own DD/MM/YYYY default rather than the user's configured date_format setting). awTableBody's
+     rows are entirely JS-rendered — the row below is just the initial loading state so nothing
+     stale flashes before the script runs. This markup deliberately reuses only already-existing
+     global classes (.voucher-line-procedures-badge/.voucher-line-obs-flag/etc. from the
+     Verification module, .aw-status-badge/.aw-row-clickable already defined below in
+     style.css). -->
 <body data-nav-module="Audit Workbook" data-nav-parent="verification.html">
     <!-- Top Navigation Bar -->
     <nav class="navbar">
@@ -75,6 +78,7 @@
                     <tr>
                         <th>Sr</th>
                         <th>Voucher No.</th>
+                        <th>Date</th>
                         <th>Account</th>
                         <th>Reference</th>
                         <th>Amount</th>
@@ -85,12 +89,12 @@
                 </thead>
                 <tbody id="awTableBody">
                     <tr>
-                        <td colspan="8" style="text-align:center; color:#94a3b8;">Loading vouchers…</td>
+                        <td colspan="9" style="text-align:center; color:#94a3b8;">Loading vouchers…</td>
                     </tr>
                 </tbody>
                 <tfoot>
                     <tr class="aw-total-row">
-                        <td colspan="4">Total</td>
+                        <td colspan="5">Total</td>
                         <td id="awTotalAmount">0.00</td>
                         <td colspan="2"></td>
                         <td></td>
@@ -101,6 +105,7 @@
     </div>
 
     <script src="/static/client_context.js?v=2"></script>
+    <script src="/static/utils.js?v=2"></script>
     <script src="/static/audit_workbook.js?v=1"></script>
 </body>
 

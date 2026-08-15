@@ -29,10 +29,16 @@
 //     pattern" per the confirmed brief.
 //   - .aw-status-badge/.aw-row-clickable, already defined for this page.
 //
-// Locked column mapping: Account = account_code + account_name (merged, this phase),
-// Reference = description. Observations expand/collapse is a PER-ROW toggle — clicking one
-// line's own flag/expanded-list only affects that line, not a shared page-wide state like
-// Verification's own columnsExpanded.
+// Locked column mapping: Account = account_code + account_name (merged), Reference =
+// description. Observations expand/collapse is a PER-ROW toggle — clicking one line's own
+// flag/expanded-list only affects that line, not a shared page-wide state like Verification's
+// own columnsExpanded.
+//
+// Date column (confirmed single-phase fix, frontend-only — no backend change, the Phase 1
+// endpoint already returns `date` per voucher group): inserted after Voucher No., same
+// rowspan-once-per-voucher-group treatment as Sr/Voucher No./Account (v.date is a group-level
+// field, not per-line, so it's read from `v` directly rather than the line object). Formatted
+// via utils.js's formatDate() (now loaded in audit_workbook.html) rather than a raw ISO string.
 //
 // API_BASE is a global already provided by client_context.js — deliberately not redeclared here
 // (redeclaring a global in a second plain <script> has caused real bugs elsewhere in this app,
@@ -176,6 +182,7 @@ function buildLineRowHtml(v, line, isFirstLine, groupParityClass) {
     const leadingCellsHtml = isFirstLine ? `
         <td rowspan="${v.line_count}">${escapeHtml(String(v.sr))}</td>
         <td rowspan="${v.line_count}">${escapeHtml(v.voucher_no)}</td>
+        <td rowspan="${v.line_count}">${formatDate(v.date)}</td>
         <td rowspan="${v.line_count}">${getAwAccountCellHtml(line)}</td>
     ` : '';
     const groupStartClass = isFirstLine ? ' group-start' : '';
@@ -194,17 +201,17 @@ function buildLineRowHtml(v, line, isFirstLine, groupParityClass) {
 // Only rendered when line_count > 1 — a single-line voucher's own line row already carries the
 // voucher's whole amount/status, so a subtotal would just duplicate it. This row is NOT covered
 // by the line rows' rowspan above (that span ends exactly at line_count rows, right before this
-// one) - so it must independently supply its own cells for the same 4 leading logical columns
-// (Sr+Voucher No.+Account+Reference) via colspan="4" — a bare, unlabelled cell (per the confirmed
-// v7-prototype fix removing the old "Subtotal" text) that still reads as coloured band since
-// .aw-subtotal-row td's background rule applies to every <td> in the row including this one, not
-// just blank/bare space. Carries the same groupParityClass as its group's line rows for
+// one) - so it must independently supply its own cells for the same 5 leading logical columns
+// (Sr+Voucher No.+Date+Account+Reference) via colspan="5" — a bare, unlabelled cell (per the
+// confirmed v7-prototype fix removing the old "Subtotal" text) that still reads as coloured band
+// since .aw-subtotal-row td's background rule applies to every <td> in the row including this
+// one, not just blank/bare space. Carries the same groupParityClass as its group's line rows for
 // consistency, though style.css's zebra rule is scoped to .aw-line-row only, so it has no visual
 // effect here — the subtotal keeps its own distinct #dbeafe tint regardless of parity.
 function buildSubtotalRowHtml(v, groupParityClass) {
     return `
         <tr class="aw-subtotal-row ${groupParityClass}">
-            <td colspan="4"></td>
+            <td colspan="5"></td>
             <td>${formatAwAmount(v.amount)}</td>
             <td colspan="2"></td>
             <td>${getAwStatusBadgeHtml(v.status)}</td>
@@ -215,7 +222,7 @@ function buildSubtotalRowHtml(v, groupParityClass) {
 function renderAuditWorkbookRows(vouchers, emptyMessage) {
     if (!vouchers || vouchers.length === 0) {
         awTableBody.innerHTML = `
-            <tr><td colspan="8" style="text-align:center; color:#94a3b8;">${escapeHtml(emptyMessage)}</td></tr>
+            <tr><td colspan="9" style="text-align:center; color:#94a3b8;">${escapeHtml(emptyMessage)}</td></tr>
         `;
         return;
     }
