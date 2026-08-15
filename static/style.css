@@ -6305,6 +6305,52 @@ body {
     color: #92400e;
 }
 
+/* Fetch-in-flight spinner (confirmed requirement, "Voucher No. -> Audit Workbook" Phase 2) —
+   shown only for the duration of the GET .../audit_workbook call itself, replaced the instant
+   data + positioning are ready by fetchAuditWorkbook()'s synchronous render+scroll sequence, not
+   a fixed minimum display time. First spinner in this app — no existing pattern to reuse, kept
+   deliberately minimal (a plain CSS border-spin) rather than an SVG/icon-font dependency. Colors
+   reused from this file's own palette: #64748b muted text, #e2e8f0 border track, #3b82f6 blue
+   accent (already used elsewhere, e.g. .btn-voucher-nav:hover). */
+.aw-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: #64748b;
+}
+.aw-spinner {
+    width: 18px;
+    height: 18px;
+    border: 3px solid #e2e8f0;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: aw-spin 0.8s linear infinite;
+}
+@keyframes aw-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Voucher jump-to-target highlight (same phase) — the exact fade-flash pattern already
+   established for Assign Categories' .ar-tb-restore-highlight/@keyframes ar-tb-restore-flash
+   (#bfdbfe -> transparent, 2s ease-out, JS-added/removed via audit_workbook.js's
+   positionOnTargetVoucher()), duplicated here under Audit Workbook's own name per this file's
+   established "visually matched, physically duplicated" convention rather than sharing the
+   .ar-tb-* class across modules. Targets the <td> (not the <tr>) deliberately: a line row's own
+   background is set at the tr level (.aw-line-row.aw-group-even) while the subtotal row's is set
+   at the td level (.aw-subtotal-row td) — animating the td's own background-color correctly
+   overrides either case while the animation is active, then fades back to reveal the real
+   background once the class is removed. Because Sr/Voucher No./Date/Account are real rowspan
+   cells that exist only in a voucher group's first line row, this one row's flash visually covers
+   the entire vertical extent of those leading columns for a multi-line voucher for free — no need
+   to stamp every line row of the group. */
+@keyframes aw-voucher-jump-flash {
+    0% { background-color: #bfdbfe; }
+    100% { background-color: transparent; }
+}
+.aw-table tbody tr.aw-voucher-jump-highlight td {
+    animation: aw-voucher-jump-flash 2s ease-out;
+}
+
 /* Running total footer row — same #dbeafe dim-blue background already established by
    .voucher-line-total-row and reused across several other tables in this app. Left unchanged by
    this phase's lighter-subtotal-row treatment — this is the page-level grand total (tfoot), a

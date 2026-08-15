@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audit Workbook</title>
-    <link rel="stylesheet" href="/static/style.css?v=3">
+    <link rel="stylesheet" href="/static/style.css?v=4">
 </head>
 
 <!-- Audit Workbook — several overlapping change sets: the earlier 2-phase "restyle" (Sr/Voucher
@@ -106,7 +106,12 @@
                 </thead>
                 <tbody id="awTableBody">
                     <tr>
-                        <td colspan="9" style="text-align:center; color:#94a3b8;">Loading vouchers…</td>
+                        <td colspan="9" style="text-align:center;">
+                            <div class="aw-loading">
+                                <span class="aw-spinner" aria-hidden="true"></span>
+                                <span>Loading vouchers…</span>
+                            </div>
+                        </td>
                     </tr>
                 </tbody>
                 <tfoot>
@@ -123,7 +128,7 @@
 
     <script src="/static/client_context.js?v=2"></script>
     <script src="/static/utils.js?v=2"></script>
-    <script src="/static/audit_workbook.js?v=1"></script>
+    <script src="/static/audit_workbook.js?v=2"></script>
 </body>
 
 </html>

@@ -43,6 +43,20 @@
 // API_BASE is a global already provided by client_context.js — deliberately not redeclared here
 // (redeclaring a global in a second plain <script> has caused real bugs elsewhere in this app,
 // see error_dashboard.js's old STORAGE_KEY crash).
+//
+// Land-on-voucher (Phase 2 of "Voucher No. -> Audit Workbook", confirmed requirement; Phase 1 is
+// the separate Verification-side clickable link that navigates here with ?session=&voucher=):
+// window.onload now also reads an optional ?voucher=<voucher_no> param and, once the fetch
+// resolves, positions on that voucher's row in the SAME synchronous call stack as the render
+// (applyFilterAndRender() then positionOnTargetVoucher(), no await/setTimeout/rAF between them)
+// so the browser never paints an intermediate top-of-list frame before landing on the target —
+// an instant jump (scrollIntoView behavior:'auto', not 'smooth') plus a brief highlight flash
+// reusing the exact fade pattern already established for Assign Categories'
+// .ar-tb-restore-highlight (static/style.css), duplicated here under Audit Workbook's own class
+// name per this file's established "visually matched, physically duplicated" convention. A
+// voucher_no with no match in this session fails soft (page just loads at the top, no error).
+// renderLoadingSpinnerRow() replaces the plain-text loading state ONLY for the in-flight fetch
+// itself — the error/empty states are untouched, still plain text via renderAuditWorkbookRows().
 
 // ---------- STATE ----------
 let currentSessionId = null;
@@ -261,10 +275,25 @@ function applyFilterAndRender() {
 }
 
 // ---------- FETCH ----------
-async function fetchAuditWorkbook(sessionId) {
+
+// Loading-in-flight state only — a spinner, not the plain-text row the error/empty states still
+// use. Kept as its own function (rather than a renderAuditWorkbookRows() branch) since it needs
+// raw markup, not the escaped-text emptyMessage that function's other callers rely on.
+function renderLoadingSpinnerRow() {
+    awTableBody.innerHTML = `
+        <tr><td colspan="9" style="text-align:center;">
+            <div class="aw-loading">
+                <span class="aw-spinner" aria-hidden="true"></span>
+                <span>Loading vouchers…</span>
+            </div>
+        </td></tr>
+    `;
+}
+
+async function fetchAuditWorkbook(sessionId, targetVoucherNo) {
     awSubtitleEl.textContent = 'Loading vouchers…';
     setChipsDisabled(true);
-    renderAuditWorkbookRows([], 'Loading vouchers…');
+    renderLoadingSpinnerRow();
 
     try {
         const res = await fetch(`${API_BASE}/api/verification/session/${sessionId}/audit_workbook`);
@@ -279,6 +308,9 @@ async function fetchAuditWorkbook(sessionId) {
         setChipsDisabled(false);
         currentFilterStatus = 'all';
         applyFilterAndRender();
+        // Same tick as the render above — no paint occurs between the two, so the browser never
+        // shows a top-of-list frame before landing on the target voucher (confirmed requirement).
+        positionOnTargetVoucher(targetVoucherNo);
     } catch (error) {
         console.error('Audit Workbook fetch error:', error);
         awSubtitleEl.textContent = '❌ Error: ' + error.message;
@@ -287,6 +319,34 @@ async function fetchAuditWorkbook(sessionId) {
         renderAuditWorkbookRows([], 'Error loading vouchers. Please try again.');
         awTotalAmountEl.textContent = formatAwAmount(0);
     }
+}
+
+// ---------- VOUCHER JUMP TARGET (Phase 2 of "Voucher No. → Audit Workbook") ----------
+
+// Finds the target voucher's first line row (the one holding the Sr/Voucher No./Date/Account
+// rowspan cells) by exact attribute comparison rather than a CSS attribute-selector string, to
+// avoid needing to escape special characters that might appear in a real voucher number.
+// Subtotal rows carry no data-voucher-no and line rows are in DOM order (first line before any
+// continuation lines), so the first match is always the group's first row.
+function findVoucherRow(voucherNo) {
+    if (!voucherNo) return null;
+    const rows = awTableBody.querySelectorAll('tr[data-voucher-no]');
+    for (const row of rows) {
+        if (row.getAttribute('data-voucher-no') === voucherNo) return row;
+    }
+    return null;
+}
+
+// Instant jump + highlight flash. behavior:'auto' (not 'smooth') per the confirmed requirement —
+// an instant jump, not an animated scroll. A voucher_no with no match in this session (stale
+// link, wrong session) fails soft: the page just stays at the top, no error shown.
+function positionOnTargetVoucher(voucherNo) {
+    if (!voucherNo) return;
+    const row = findVoucherRow(voucherNo);
+    if (!row) return;
+    row.scrollIntoView({ behavior: 'auto', block: 'center' });
+    row.classList.add('aw-voucher-jump-highlight');
+    setTimeout(() => row.classList.remove('aw-voucher-jump-highlight'), 2000);
 }
 
 // ---------- NAVIGATION (Phase 4 of the original 5-phase build) ----------
@@ -343,6 +403,9 @@ window.onload = function () {
     const sessionParam = params.get('session');
     const sessionId = Number(sessionParam);
     const isValidSessionId = sessionParam && Number.isInteger(sessionId) && sessionId > 0;
+    // Optional companion param (Phase 2) from the Verification-side link — the specific voucher
+    // to land on once the fetch resolves. See positionOnTargetVoucher() above.
+    const targetVoucherNo = params.get('voucher');
 
     if (isValidSessionId) {
         currentSessionId = sessionId;
@@ -355,7 +418,7 @@ window.onload = function () {
                 window.location.href = `/static/verification.html?state=session&id=${currentSessionId}`;
             });
         }
-        fetchAuditWorkbook(sessionId);
+        fetchAuditWorkbook(sessionId, targetVoucherNo);
     } else {
         currentSessionId = null;
         allVouchers = [];
