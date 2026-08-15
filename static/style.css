@@ -6037,24 +6037,25 @@ body {
 }
 
 /* =============================================
-   AUDIT WORKBOOK MODULE (restyle requirement, Phase 2 of 2, FINAL)
-   Phase 1 restructured rows into Sr / Voucher No. / Account / Reference / Amount /
-   Procedures / Observations / Status (8 columns), removing the old voucher-header banner row
-   entirely — grouping now reads from Sr (shown once per voucher) + Voucher No. (repeated per
-   line) plus this phase's zebra striping / voucher-first border. This phase lightens the
-   table: hairline 1px borders throughout, a lighter (not bold/heavy) subtotal row, and a
-   slightly-stronger top border only where a new voucher group begins.
+   AUDIT WORKBOOK MODULE
+   Several overlapping change sets share this block's history: the original restyle
+   (restructured rows into Sr / Voucher No. / Account / Reference / Amount / Procedures /
+   Observations / Status, removing the old voucher-header banner row entirely — grouping now
+   reads from Sr (shown once per voucher) + Voucher No. (repeated per line) plus zebra striping /
+   voucher-first border), a lighter hairline-border pass, a Date column insertion, and this
+   latest confirmed fix: the old h1 title + subtitle <p> + standalone filter-chips row collapsed
+   into one compact .aw-header-bar row (.aw-header-session left, .aw-filter-chips right) — the
+   page-level title was dropped since the top navbar already names this page.
    Own classes, visually matched (not shared) to .ar-tb-table/.voucher-line-cleared-badge/
    .voucher-line-total-row's existing look, per this codebase's established "visually matched,
    physically duplicated" convention for a new page's own list.
 
    Zebra striping per voucher group (not per line) needs a group-parity marker plain CSS can't
-   derive on its own for variable-sized groups — confirmed with the user to extend this
-   phase's file list by one: audit_workbook.js's renderAuditWorkbookRows() now stamps every
-   line/subtotal row belonging to the same voucher group with a shared aw-group-even/
-   aw-group-odd class (purely a CSS hook — no DOM structure, data flow, or logic change). The
-   voucher-first top border needed no such hook — it's derived in pure CSS from the Sr cell
-   already being empty on every line but a voucher's first, via :has().
+   derive on its own for variable-sized groups — audit_workbook.js's renderAuditWorkbookRows()
+   stamps every line/subtotal row belonging to the same voucher group with a shared
+   aw-group-even/aw-group-odd class (purely a CSS hook — no DOM structure, data flow, or logic
+   change). The voucher-first top border is driven by an explicit .group-start class stamped
+   the same way (see .aw-line-row.group-start td below for the full history of that one).
    ============================================= */
 
 /* Peer nav buttons (Phase 5, FINAL) — reuses .btn-cashbook/.btn-cashbook.active from
@@ -6067,10 +6068,39 @@ body {
     margin-bottom: 16px;
 }
 
+/* Compact header row (confirmed fix): session info left, filter chips right — replaces the old
+   h1 title + subtitle <p> + standalone filter-chips block. Wraps to two stacked rows on a narrow
+   viewport, same convention as .cashbook-bar's own flex-wrap. */
+.aw-header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+}
+
+.aw-header-session {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #475569;
+}
+
+/* Outline icon (confirmed over keeping the 📗 emoji here) — a plain clipboard-check glyph,
+   sized/colored to sit inline with the session text at the same visual weight. */
+.aw-header-session-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    color: #64748b;
+}
+
 .aw-filter-chips {
     display: flex;
     gap: 10px;
-    margin-bottom: 20px;
     flex-wrap: wrap;
 }
 

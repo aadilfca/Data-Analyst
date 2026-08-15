@@ -12,18 +12,19 @@
      No. columns replacing the old banner row, then lighter styling in style.css); the 3-phase
      "restructure" (backend account_name lookup; Sr/Voucher No./Account rendered via real HTML
      rowspan — one <td> per voucher group, not a blank/repeated-text cell per line — with Account
-     merged into a code+name stacked cell; grouping visual treatment in CSS); and this later,
-     single-phase "add a Date column" fix — a new Date <th>/<td> inserted between Voucher No. and
-     Account (9 columns total: Sr, Voucher No., Date, Account, Reference, Amount, Procedures,
-     Observations, Status), same rowspan-once-per-voucher-group treatment as Sr/Voucher No./
-     Account, formatted via utils.js's formatDate() (loaded below, same page-load convention as
-     static/script.js's own use of it — no initUtils() call, so it falls back to formatDate()'s
-     own DD/MM/YYYY default rather than the user's configured date_format setting). awTableBody's
-     rows are entirely JS-rendered — the row below is just the initial loading state so nothing
-     stale flashes before the script runs. This markup deliberately reuses only already-existing
-     global classes (.voucher-line-procedures-badge/.voucher-line-obs-flag/etc. from the
-     Verification module, .aw-status-badge/.aw-row-clickable already defined below in
-     style.css). -->
+     merged into a code+name stacked cell; grouping visual treatment in CSS); a later, single-phase
+     "add a Date column" fix — a new Date <th>/<td> inserted between Voucher No. and Account (9
+     columns total: Sr, Voucher No., Date, Account, Reference, Amount, Procedures, Observations,
+     Status), same rowspan-once-per-voucher-group treatment as Sr/Voucher No./Account, formatted
+     via utils.js's formatDate() (loaded below, same page-load convention as static/script.js's own
+     use of it — no initUtils() call, so it falls back to formatDate()'s own DD/MM/YYYY default
+     rather than the user's configured date_format setting); and this latest, single-phase "compact
+     header" fix — the old h1 title + separate subtitle <p> + standalone filter-chips row are
+     replaced by one .aw-header-bar row (session info left, filter chips right, see below). Table
+     structure/awTableBody rendering is completely unaffected by this latest change. This markup
+     deliberately reuses only already-existing global classes
+     (.voucher-line-procedures-badge/.voucher-line-obs-flag/etc. from the Verification module,
+     .aw-status-badge/.aw-row-clickable already defined below in style.css). -->
 <body data-nav-module="Audit Workbook" data-nav-parent="verification.html">
     <!-- Top Navigation Bar -->
     <nav class="navbar">
@@ -53,17 +54,33 @@
                 <button type="button" class="btn-cashbook" id="awVerificationBtn" disabled><span class="btn-icon">✅</span> Verification</button>
                 <span class="btn-cashbook active"><span class="btn-icon">📗</span> Audit Workbook</span>
             </div>
-            <h1>📗 Audit Workbook</h1>
-            <p id="awSubtitle">Read-only, voucher-level list of verification results for a session.</p>
         </header>
 
-        <!-- Status filter chips — All is active by default. Non-functional this phase; Phase 3
-             wires click handlers keyed off each chip's data-status attribute. -->
-        <div class="aw-filter-chips">
-            <button type="button" class="aw-filter-chip active" id="awFilterAll" data-status="all">All</button>
-            <button type="button" class="aw-filter-chip" id="awFilterCleared" data-status="Cleared">Cleared</button>
-            <button type="button" class="aw-filter-chip" id="awFilterQuery" data-status="Query">Query</button>
-            <button type="button" class="aw-filter-chip" id="awFilterPending" data-status="Pending">Pending</button>
+        <!-- Compact header row (confirmed fix): session info left, status filter chips right.
+             The page-level "📗 Audit Workbook" h1 + separate subtitle line this replaces were
+             dropped entirely — the top navbar (data-nav-module="Audit Workbook") already names
+             this page. #awSubtitle keeps its id/behavior unchanged (audit_workbook.js still just
+             sets its textContent to "Session #N · X voucher(s), Y line(s)" — no JS structural
+             change needed); the outline icon beside it is a static, page-load-only visual
+             (confirmed over keeping the 📗 emoji here — the emoji is kept everywhere else on the
+             page, e.g. the peer nav button above). Filter chips are unchanged in id/data-status/
+             click-handling — only their container moved to sit in this same row; All is active by
+             default, non-functional markup only (audit_workbook.js wires the click handlers). -->
+        <div class="aw-header-bar">
+            <div class="aw-header-session">
+                <svg class="aw-header-session-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M9 3h6a1 1 0 0 1 1 1v1h1.5A1.5 1.5 0 0 1 19 6.5v13A1.5 1.5 0 0 1 17.5 21h-11A1.5 1.5 0 0 1 5 19.5v-13A1.5 1.5 0 0 1 6.5 5H8V4a1 1 0 0 1 1-1Z"/>
+                    <path d="M9 3v3h6V3"/>
+                    <path d="m9 13 2 2 4-4"/>
+                </svg>
+                <span id="awSubtitle">Read-only, voucher-level list of verification results for a session.</span>
+            </div>
+            <div class="aw-filter-chips">
+                <button type="button" class="aw-filter-chip active" id="awFilterAll" data-status="all">All</button>
+                <button type="button" class="aw-filter-chip" id="awFilterCleared" data-status="Cleared">Cleared</button>
+                <button type="button" class="aw-filter-chip" id="awFilterQuery" data-status="Query">Query</button>
+                <button type="button" class="aw-filter-chip" id="awFilterPending" data-status="Pending">Pending</button>
+            </div>
         </div>
 
         <!-- Table: Sr / Voucher No. / Account / Reference / Amount / Procedures / Observations /
