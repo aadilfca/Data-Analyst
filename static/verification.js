@@ -1430,7 +1430,7 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
             <div class="voucher-title-block">
                 <div class="voucher-title-content">
                     <div class="voucher-title">
-                        Voucher ${voucherId || '—'}
+                        <span class="voucher-title-link" id="voucherTitleAuditWorkbookLink" title="Open this voucher in Audit Workbook">Voucher ${voucherId || '—'}</span>
                         <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
                             <span class="vh-icon-symbol">🔍</span>
                         </span>
@@ -1495,6 +1495,12 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
     });
     document.getElementById('nextArrow')?.addEventListener('click', function() {
         if (typeof goToNextTransaction === 'function') goToNextTransaction();
+    });
+    // Voucher No. text (distinct from the 🔍 mirror icon right beside it, which is untouched) —
+    // reuses navigateToAuditWorkbook() verbatim, the same session-based lookup the peer nav
+    // button in #cashbookBar already uses, per the confirmed brief (no new endpoint).
+    document.getElementById('voucherTitleAuditWorkbookLink')?.addEventListener('click', function() {
+        if (typeof navigateToAuditWorkbook === 'function') navigateToAuditWorkbook();
     });
     document.getElementById('transactionListIcon')?.addEventListener('click', function() {
         const popover = document.getElementById('transactionListPopover');

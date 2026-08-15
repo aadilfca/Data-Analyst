@@ -1502,6 +1502,17 @@ body {
     font-size: 16px;
     color: #1a1a2e;
 }
+/* Voucher No. text is a jump-to-Audit-Workbook link (session-scoped, see
+   voucherTitleAuditWorkbookLink in verification.js) — the adjacent 🔍 mirror icon (.vh-icon) is
+   untouched. Accent-colour text + pointer cursor on hover, no underline (matches .vh-icon's own
+   hover treatment, which just scales rather than underlining). */
+.voucher-title-link {
+    cursor: pointer;
+    transition: color 0.2s;
+}
+.voucher-title-link:hover {
+    color: #3b82f6;
+}
 .voucher-subtitle {
     font-size: 13px;
     color: #64748b;
