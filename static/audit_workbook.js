@@ -44,19 +44,25 @@
 // (redeclaring a global in a second plain <script> has caused real bugs elsewhere in this app,
 // see error_dashboard.js's old STORAGE_KEY crash).
 //
-// Land-on-voucher (Phase 2 of "Voucher No. -> Audit Workbook", confirmed requirement; Phase 1 is
-// the separate Verification-side clickable link that navigates here with ?session=&voucher=):
-// window.onload now also reads an optional ?voucher=<voucher_no> param and, once the fetch
-// resolves, positions on that voucher's row in the SAME synchronous call stack as the render
-// (applyFilterAndRender() then positionOnTargetVoucher(), no await/setTimeout/rAF between them)
-// so the browser never paints an intermediate top-of-list frame before landing on the target —
-// an instant jump (scrollIntoView behavior:'auto', not 'smooth') plus a brief highlight flash
-// reusing the exact fade pattern already established for Assign Categories'
-// .ar-tb-restore-highlight (static/style.css), duplicated here under Audit Workbook's own class
-// name per this file's established "visually matched, physically duplicated" convention. A
-// voucher_no with no match in this session fails soft (page just loads at the top, no error).
-// renderLoadingSpinnerRow() replaces the plain-text loading state ONLY for the in-flight fetch
-// itself — the error/empty states are untouched, still plain text via renderAuditWorkbookRows().
+// Land-on-voucher (Voucher No. -> Audit Workbook, confirmed requirement — Voucher No. on
+// verification.js's voucher header is a clickable link that navigates here with
+// ?session=&voucher=<voucher_no>, see navigateToAuditWorkbook() there): window.onload reads the
+// optional ?voucher= param and, once the fetch resolves, positions on that voucher's row.
+//
+// Spinner-overlay gating (confirmed acceptance criterion): the spinner must stay visible until
+// BOTH the data has loaded AND the target row has already been scrolled into view — not just
+// "no visible flash," a stricter requirement than relying on the browser never painting between
+// two synchronous statements. #awSpinnerOverlay (style.css/audit_workbook.html) is a full-cover
+// overlay INSIDE .aw-table-wrapper, not a spinner row swapped into #awTableBody — so
+// applyFilterAndRender()'s row-insertion and positionOnTargetVoucher()'s instant scroll both
+// happen completely hidden underneath it, and hideSpinnerOverlay() is the very last call in
+// fetchAuditWorkbook()'s success path. The scroll itself is an instant jump (scrollIntoView
+// behavior:'auto', not 'smooth') plus a brief highlight flash reusing the exact fade pattern
+// already established for Assign Categories' .ar-tb-restore-highlight (static/style.css),
+// duplicated here under Audit Workbook's own class name per this file's established "visually
+// matched, physically duplicated" convention. A voucher_no with no match in this session fails
+// soft (page just loads at the top, no error) — the overlay still hides correctly since
+// positionOnTargetVoucher() no-ops but hideSpinnerOverlay() still runs right after it.
 
 // ---------- STATE ----------
 let currentSessionId = null;
@@ -80,6 +86,10 @@ const awFilterChips = [
 // Peer nav bar (Phase 5, FINAL of the original 5-phase build) — see the matching comment in
 // audit_workbook.html.
 const awVerificationBtn = document.getElementById('awVerificationBtn');
+// Fetch-in-flight spinner overlay (Voucher No. -> Audit Workbook deep-link fix) — see the
+// matching comment on #awSpinnerOverlay in audit_workbook.html/style.css for why this is a
+// full-cover overlay rather than a spinner row inside #awTableBody.
+const awSpinnerOverlay = document.getElementById('awSpinnerOverlay');
 
 // ---------- HELPERS ----------
 
@@ -276,24 +286,23 @@ function applyFilterAndRender() {
 
 // ---------- FETCH ----------
 
-// Loading-in-flight state only — a spinner, not the plain-text row the error/empty states still
-// use. Kept as its own function (rather than a renderAuditWorkbookRows() branch) since it needs
-// raw markup, not the escaped-text emptyMessage that function's other callers rely on.
-function renderLoadingSpinnerRow() {
-    awTableBody.innerHTML = `
-        <tr><td colspan="9" style="text-align:center;">
-            <div class="aw-loading">
-                <span class="aw-spinner" aria-hidden="true"></span>
-                <span>Loading vouchers…</span>
-            </div>
-        </td></tr>
-    `;
+// Spinner overlay show/hide. The overlay is visible by default in the HTML (covers page paint
+// before the fetch even starts) — showSpinnerOverlay() here is a defensive re-show in case a
+// future caller re-fetches after an earlier hide; hideSpinnerOverlay() is the one call that
+// matters, and it must only ever be reached AFTER rows are inserted and positioning is complete
+// (see fetchAuditWorkbook() below) — that ordering, not this function itself, is what satisfies
+// the acceptance criterion.
+function showSpinnerOverlay() {
+    if (awSpinnerOverlay) awSpinnerOverlay.classList.remove('hidden');
+}
+function hideSpinnerOverlay() {
+    if (awSpinnerOverlay) awSpinnerOverlay.classList.add('hidden');
 }
 
 async function fetchAuditWorkbook(sessionId, targetVoucherNo) {
     awSubtitleEl.textContent = 'Loading vouchers…';
     setChipsDisabled(true);
-    renderLoadingSpinnerRow();
+    showSpinnerOverlay();
 
     try {
         const res = await fetch(`${API_BASE}/api/verification/session/${sessionId}/audit_workbook`);
@@ -307,10 +316,14 @@ async function fetchAuditWorkbook(sessionId, targetVoucherNo) {
         awSubtitleEl.textContent = `Session #${sessionId} · ${data.total_vouchers || 0} voucher(s), ${data.total_lines || 0} line(s)`;
         setChipsDisabled(false);
         currentFilterStatus = 'all';
+        // Rows are inserted, and the target row (if any) is instantly scrolled into view + flash-
+        // highlighted, all while the spinner overlay still fully covers the table — the user's
+        // first frame without the overlay is only reached at hideSpinnerOverlay() below, once both
+        // are already done (confirmed acceptance criterion). No await/setTimeout between any of
+        // these three calls.
         applyFilterAndRender();
-        // Same tick as the render above — no paint occurs between the two, so the browser never
-        // shows a top-of-list frame before landing on the target voucher (confirmed requirement).
         positionOnTargetVoucher(targetVoucherNo);
+        hideSpinnerOverlay();
     } catch (error) {
         console.error('Audit Workbook fetch error:', error);
         awSubtitleEl.textContent = '❌ Error: ' + error.message;
@@ -318,6 +331,7 @@ async function fetchAuditWorkbook(sessionId, targetVoucherNo) {
         setChipsDisabled(true);
         renderAuditWorkbookRows([], 'Error loading vouchers. Please try again.');
         awTotalAmountEl.textContent = formatAwAmount(0);
+        hideSpinnerOverlay();
     }
 }
 
@@ -427,5 +441,8 @@ window.onload = function () {
         setChipsDisabled(true);
         renderAuditWorkbookRows([], 'No session specified.');
         awTotalAmountEl.textContent = formatAwAmount(0);
+        // No fetch happens on this branch — the overlay (visible by default) must be hidden here,
+        // otherwise it would stay stuck covering the table forever.
+        hideSpinnerOverlay();
     }
 };

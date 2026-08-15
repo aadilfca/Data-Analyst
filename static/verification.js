@@ -1498,9 +1498,11 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
     });
     // Voucher No. text (distinct from the 🔍 mirror icon right beside it, which is untouched) —
     // reuses navigateToAuditWorkbook() verbatim, the same session-based lookup the peer nav
-    // button in #cashbookBar already uses, per the confirmed brief (no new endpoint).
+    // button in #cashbookBar already uses, per the confirmed brief (no new endpoint). Unlike that
+    // peer button, this link carries the specific voucherId so Audit Workbook lands already
+    // positioned on this exact voucher's row (see navigateToAuditWorkbook()'s voucherNo param).
     document.getElementById('voucherTitleAuditWorkbookLink')?.addEventListener('click', function() {
-        if (typeof navigateToAuditWorkbook === 'function') navigateToAuditWorkbook();
+        if (typeof navigateToAuditWorkbook === 'function') navigateToAuditWorkbook(voucherId);
     });
     document.getElementById('transactionListIcon')?.addEventListener('click', function() {
         const popover = document.getElementById('transactionListPopover');
@@ -1525,12 +1527,16 @@ function clearVoucherHeader() {
 
 // Audit Workbook (Phase 5, FINAL): navigates to the read-only per-voucher rollup page for the
 // currently open session, same-tab (this is "switch screens", not a side lookup — matches the
-// existing "Change Cashbook" button's own same-tab behavior). Session-scoped only, no voucher
-// context to carry — Phase 4's own row-click already handles the reverse (Audit Workbook →
-// a specific voucher in Verification) via ?state=session&id=&voucher=.
-function navigateToAuditWorkbook() {
+// existing "Change Cashbook" button's own same-tab behavior). Session-scoped only by default (the
+// peer nav button in #cashbookBar calls this with no arg). An optional voucherNo (Voucher No. →
+// Audit Workbook deep link, confirmed requirement) is carried as a companion ?voucher= param so
+// Audit Workbook can land already positioned on that specific voucher's row — see
+// positionOnTargetVoucher() in audit_workbook.js for the landing side of this.
+function navigateToAuditWorkbook(voucherNo) {
     if (!currentSessionId) return;
-    window.location.href = `/static/audit_workbook.html?session=${currentSessionId}`;
+    const params = new URLSearchParams({ session: currentSessionId });
+    if (voucherNo) params.set('voucher', voucherNo);
+    window.location.href = `/static/audit_workbook.html?${params}`;
 }
 
 // ---------- VOUCHER LINE ALIAS HELPERS (Phase 3) ----------

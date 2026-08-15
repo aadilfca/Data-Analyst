@@ -6147,6 +6147,32 @@ body {
     border: 2px solid #334155;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
     overflow: hidden;
+    /* Anchors .aw-spinner-overlay below, which needs to cover exactly this wrapper's area. */
+    position: relative;
+}
+
+/* Fetch-in-flight spinner overlay (Voucher No. -> Audit Workbook deep-link, confirmed requirement)
+   — a full-cover overlay INSIDE .aw-table-wrapper, not a spinner row swapped into #awTableBody.
+   The strict acceptance criterion is that the spinner stays visible until BOTH the data has
+   loaded AND the target voucher's row has already been scrolled into view — an in-tbody spinner
+   row would be visually replaced by real rows the instant applyFilterAndRender() runs, before
+   positionOnTargetVoucher()'s scroll happens one line later. An overlay sitting on top of the
+   table means the row-insertion + instant scroll can both happen underneath it, completely
+   hidden, and hideSpinnerOverlay() only fires as the very last step (audit_workbook.js's
+   fetchAuditWorkbook()) — so the very first frame the user ever sees without the spinner is
+   already scrolled to the right place. Visible by default in the HTML (no inline hidden style)
+   so it also covers the moment between page paint and the fetch actually starting. */
+.aw-spinner-overlay {
+    position: absolute;
+    inset: 0;
+    background: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+}
+.aw-spinner-overlay.hidden {
+    display: none;
 }
 
 /* table-layout:fixed + explicit per-column widths on the header row's cells is what keeps

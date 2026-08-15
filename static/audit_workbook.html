@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Audit Workbook</title>
-    <link rel="stylesheet" href="/static/style.css?v=4">
+    <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 
 <!-- Audit Workbook — several overlapping change sets: the earlier 2-phase "restyle" (Sr/Voucher
@@ -90,6 +90,19 @@
              the row below is just the initial loading state so nothing stale flashes before the
              script runs. -->
         <div class="aw-table-wrapper">
+            <!-- Fetch-in-flight spinner overlay (Voucher No. -> Audit Workbook deep-link fix): a
+                 full-cover overlay, not a spinner row inside #awTableBody, so row-insertion + the
+                 instant scroll-to-target both happen underneath it, completely hidden — the user's
+                 first visible frame without this overlay is already scrolled to the right voucher.
+                 Visible by default (no "hidden" class) so it also covers page paint before the
+                 fetch even starts; audit_workbook.js only adds the "hidden" class once BOTH the
+                 data has loaded AND the target row has already been scrolled into view. -->
+            <div class="aw-spinner-overlay" id="awSpinnerOverlay">
+                <div class="aw-loading">
+                    <span class="aw-spinner" aria-hidden="true"></span>
+                    <span>Loading vouchers…</span>
+                </div>
+            </div>
             <table class="aw-table">
                 <thead>
                     <tr>
@@ -105,14 +118,6 @@
                     </tr>
                 </thead>
                 <tbody id="awTableBody">
-                    <tr>
-                        <td colspan="9" style="text-align:center;">
-                            <div class="aw-loading">
-                                <span class="aw-spinner" aria-hidden="true"></span>
-                                <span>Loading vouchers…</span>
-                            </div>
-                        </td>
-                    </tr>
                 </tbody>
                 <tfoot>
                     <tr class="aw-total-row">
@@ -128,7 +133,7 @@
 
     <script src="/static/client_context.js?v=2"></script>
     <script src="/static/utils.js?v=2"></script>
-    <script src="/static/audit_workbook.js?v=2"></script>
+    <script src="/static/audit_workbook.js?v=3"></script>
 </body>
 
 </html>
