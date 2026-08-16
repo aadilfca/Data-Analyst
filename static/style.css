@@ -6072,11 +6072,28 @@ body {
 /* Peer nav buttons (Phase 5, FINAL) — reuses .btn-cashbook/.btn-cashbook.active from
    verification.js's own #cashbookBar so the two screens' nav bars read as one consistent
    pattern, not two different button languages. Replaces the earlier plain "Back to Verification"
-   text link. */
+   text link. margin-bottom (20px) is this page's single source of gap between the title row
+   and the stats-and-filters row below — matched to .aw-header-bar's own 20px so the whole
+   header reads at one consistent 20px vertical rhythm (the .module-header:has(.aw-nav-buttons)
+   override directly below neutralizes the shared .module-header's global 35px bottom margin on
+   this page so it can't collapse with this one into a larger inconsistent gap). */
 .aw-nav-buttons {
     display: flex;
     gap: 10px;
-    margin-bottom: 16px;
+    margin-bottom: 20px;
+}
+
+/* Audit Workbook-specific neutering of the shared .module-header bottom margin (spacing polish,
+   confirmed single-phase fix): .module-header is a global class used by all module pages, so its
+   35px margin-bottom can't be changed at the base rule — on this page (detected via the
+   Audit-Workbook-only .aw-nav-buttons it now exclusively wraps, Phase 5 of 5) it's zeroed so
+   the title row → stats row gap is exactly .aw-nav-buttons' own 20px, matching the stats row →
+   table gap (.aw-header-bar's 20px). Both rows of the compact two-row header (📗 Audit Workbook
+   title row + combined stats-and-filters row) now share one consistent, compact rhythm with no
+   overlaps or excessive whitespace. :has() is already an established convention in this file
+   (see .procedure-card:has(.proc-checkbox:checked)). */
+.module-header:has(.aw-nav-buttons) {
+    margin-bottom: 0;
 }
 
 /* Compact header row (confirmed fix): session info left, filter chips right — replaces the old
