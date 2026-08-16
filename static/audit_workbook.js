@@ -346,7 +346,7 @@ async function fetchAuditWorkbook(sessionId, targetVoucherNo) {
             });
         });
         awProcedureModalState = {};
-        awSubtitleEl.textContent = `Session #${sessionId} · ${data.total_vouchers || 0} voucher(s), ${data.total_lines || 0} line(s)`;
+        awSubtitleEl.textContent = `${data.total_vouchers || 0} voucher(s), ${data.total_lines || 0} line(s)`;
         setChipsDisabled(false);
         currentFilterStatus = 'all';
         // Rows are inserted, and the target row (if any) is instantly scrolled into view + flash-
