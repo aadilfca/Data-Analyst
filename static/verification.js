@@ -35,10 +35,6 @@ let currentSessionPeriodEnd = null;
 // then reset to '' by renderVoucherHeader() right after it's consumed, so every other navigation
 // path naturally renders it blank with no per-call-site clearing needed.
 let voucherNavCaptionText = '';
-// The voucher line uid currently shown in #procedureModal, or null when it's closed — lets
-// closeProcedureModal() flush any unsaved observation text without needing a uid parameter,
-// since its callers (the ✕ button and the outside-click listener) don't have one either.
-let currentProcedureModalUid = null;
 let currentClientDataId = null;
 let currentVoucherId = null;
 let currentTransactionType = '';
@@ -67,6 +63,50 @@ let procedureModalState = {};
 // voucherLineState in seedVoucherLineState() — lets openProcedureModal() look up a line's own
 // amount for the mismatch badge without a second fetch.
 let currentVoucherLines = [];
+
+// ---------- PROCEDURE MODAL ADAPTER (Phase 1b) ----------
+// static/procedure_modal.js (the shared Supporting-Document modal, extracted from this file) no
+// longer reads this file's globals directly — it receives them through this adapter object,
+// passed to openProcedureModal() at each real open-time call site below. Built fresh per call
+// (cheap — a handful of function refs + getters) rather than once at load, purely to keep the
+// mechanism obviously matching "adapter passed at open-time"; a stale adapter object would behave
+// identically either way, since every piece of live state below is exposed as a `get` accessor
+// (always resolves the CURRENT value of these variables at read-time, not a snapshot taken when
+// this function ran) and every function reference is a stable, never-reassigned declaration.
+// escapeHtml is included here (not duplicated locally in procedure_modal.js) specifically to
+// avoid a same-named top-level `function` declaration in both classic <script> files silently
+// shadowing one another depending on load order. API_BASE is NOT included — it's a page-level
+// global from client_context.js, not a verification.js dependency, and every host page already
+// loads that script independently.
+function buildProcedureModalAdapter() {
+    return {
+        getClientId,
+        getVoucherPosition,
+        showStatus,
+        saveLineItems,
+        saveAllVoucherLines,
+        escapeHtml,
+        getVoucherLineAlias,
+        getVoucherLineAmount,
+        renderGateRowHtml,
+        fetchAuditGuidanceData,
+        fetchPhysicalBillsForLine,
+        updateProceduresCellForLine,
+        updateObservationsCellForLine,
+        parseVoucherAmount,
+        computeLineRiskData,
+        updateProgressDisplay,
+        applyVoucherNavRenderData,
+        get VOUCHER_LINE_ACCOUNT_NAME_ALIASES() { return VOUCHER_LINE_ACCOUNT_NAME_ALIASES; },
+        get VOUCHER_LINE_DESCRIPTION_ALIASES() { return VOUCHER_LINE_DESCRIPTION_ALIASES; },
+        get currentVoucherId() { return currentVoucherId; },
+        get currentSessionId() { return currentSessionId; },
+        get currentVoucherLines() { return currentVoucherLines; },
+        get voucherLineState() { return voucherLineState; },
+        get procedureModalState() { return procedureModalState; }
+    };
+}
+
 let selectedCashbook = null;
 let cashbookCurrentPage = 1;
 let cashbookPageSize = 50;
@@ -1762,7 +1802,7 @@ async function updateProceduresCellForLine(uid, type) {
         cell.innerHTML = `<div class="voucher-line-proc-expanded-list" data-uid="${uid}">${itemsHtml}</div>`;
         cell.querySelector('.voucher-line-proc-expanded-list')?.addEventListener('click', function(e) {
             e.stopPropagation();
-            openProcedureModal(this.dataset.uid);
+            openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter());
         });
         return;
     }
@@ -1779,7 +1819,7 @@ async function updateProceduresCellForLine(uid, type) {
     `;
     cell.querySelector('.voucher-line-procedures-badge')?.addEventListener('click', function(e) {
         e.stopPropagation();
-        openProcedureModal(this.dataset.uid);
+        openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter());
     });
 }
 
@@ -1844,7 +1884,7 @@ async function updateObservationsCellForLine(uid, type) {
         cell.innerHTML = `<div class="voucher-line-obs-expanded-list" data-uid="${uid}">${itemsHtml}</div>`;
         cell.querySelector('.voucher-line-obs-expanded-list')?.addEventListener('click', function(e) {
             e.stopPropagation();
-            openProcedureModal(this.dataset.uid);
+            openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter());
         });
         return;
     }
@@ -1857,7 +1897,7 @@ async function updateObservationsCellForLine(uid, type) {
     cell.innerHTML = `<span class="voucher-line-obs-flag" data-uid="${uid}" title="${count} observation${count === 1 ? '' : 's'} recorded">⚑ ${count}</span>`;
     cell.querySelector('.voucher-line-obs-flag')?.addEventListener('click', function(e) {
         e.stopPropagation();
-        openProcedureModal(this.dataset.uid);
+        openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter());
     });
 }
 

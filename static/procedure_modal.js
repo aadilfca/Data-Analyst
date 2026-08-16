@@ -1,28 +1,52 @@
 // ==============================================
 // PROCEDURE MODAL — shared Supporting-Document/procedure modal component
-// Extracted verbatim from static/verification.js (relocation only, no behavior change) so it can
-// be reused by other pages (e.g. Audit Workbook's Procedures pill, a later separate phase) without
-// duplicating this markup/logic. Self-installing: this classic (non-module) <script> injects its
-// own markup (#procedureModal, #procedureBrowseModal, #voucherVerifyToast) into <body> and wires
-// its own DOM refs/listeners the moment it loads — a consuming page needs nothing beyond
+// Originally extracted verbatim from static/verification.js (pure relocation, no behavior change)
+// so it could be reused by other pages (e.g. Audit Workbook's Procedures pill) without duplicating
+// this markup/logic. Self-installing: this classic (non-module) <script> injects its own markup
+// (#procedureModal, #procedureBrowseModal, #voucherVerifyToast) into <body> and wires its own DOM
+// refs/listeners the moment it loads — a consuming page needs nothing beyond
 // <script src="/static/procedure_modal.js">.
 //
-// This file's functions reference several globals still owned by the host page's own script
-// (verification.js on Verification): API_BASE, getClientId(), getVoucherPosition(), showStatus(),
-// saveLineItems(), saveAllVoucherLines(), escapeHtml(), getVoucherLineAlias(), getVoucherLineAmount(),
-// parseVoucherAmount(), computeLineRiskData(), RISK_RATING_ORDER, buildLineStatusReasonBody(),
-// renderGateRowHtml(), fetchAuditGuidanceData()/auditGuidanceCache, fetchAssignedDocumentRecords(),
-// fetchProcedureChecksForLine(), fetchPhysicalBillsForLine(), currentVoucherLines, voucherLineState,
-// currentVoucherId, currentSessionId, currentDetailId, updateProceduresCellForLine(),
-// updateObservationsCellForLine(), VOUCHER_LINE_ACCOUNT_NAME_ALIASES. This works because classic
-// <script> tags on one page share a single Global Environment Record — resolved at call time, not
-// parse time — so no renaming/namespacing/parameter-passing was needed for this move; see the
-// matching note in verification.js's own comments left at each excision point.
+// Phase 1b (adapter refactor): that first extraction still read its host page's globals directly
+// (both files were classic <script> tags sharing one Global Environment Record) — workable for
+// Verification, which always loads both files together, but not portable to a page like Audit
+// Workbook that has no verification.js-shaped session/voucher-navigation state at all. This file
+// now receives every one of those external dependencies through an explicit adapter object,
+// stored in the module-level `hostAdapter` below, rather than reading bare globals.
 //
-// In the other direction, verification.js's saveLineItems() calls this file's
-// flushProcedureObservations()/flushAccountHeadNoMatchNote(), and its grid cell click handlers call
-// this file's openProcedureModal() — both resolved the same way, no code changes needed at those
-// call sites either.
+// openProcedureModal(uid, initialDocId, adapter) is the sole place `hostAdapter` is set — its
+// first statement is `if (adapter) hostAdapter = adapter;`. A host page (verification.js today;
+// Audit Workbook's own equivalent in a later phase) builds a fresh adapter and passes it on every
+// REAL open call. procedure_modal.js's own internal self-reopen call (line-to-line stepping
+// inside verifyAndAdvanceVoucher()) omits the 3rd argument entirely — the guard above then simply
+// leaves `hostAdapter` as whatever was last set, which is always already correct since the modal
+// can only reach that internal call while it's already open. The adapter's live-state properties
+// (hostAdapter.currentVoucherId/hostAdapter.currentSessionId/hostAdapter.currentVoucherLines/hostAdapter.voucherLineState/hostAdapter.procedureModalState) are
+// `get` accessors, not plain values, so they always resolve the host page's CURRENT live value at
+// read-time — safe regardless of how long ago the adapter object itself was constructed, since
+// verification.js reassigns several of these elsewhere (voucher navigation, seedVoucherLineState())
+// independent of this modal. See buildProcedureModalAdapter() in verification.js for the adapter's
+// exact shape/construction and the reasoning behind each property (function ref vs. getter).
+//
+// `escapeHtml` is one of the adapted properties, not a locally-duplicated copy, specifically
+// because a same-named top-level `function` declaration in two classic <script> files sharing one
+// global scope doesn't throw (unlike `let`/`const`) — the later-loaded file's declaration would
+// silently win and shadow this file's own, defeating a "local copy." `API_BASE` is NOT adapted —
+// it's a page-level global from client_context.js that every host page already loads on its own,
+// not a verification.js-specific dependency.
+//
+// `currentProcedureModalUid` and `voucherChecksCache`/`voucherChecksLoadingPromises` are this
+// file's OWN module-local state (declared below), not part of the adapter — nothing outside this
+// file ever reads or writes them, so there was nothing to decouple.
+//
+// In the other direction, verification.js's hostAdapter.saveLineItems() calls this file's
+// flushProcedureObservations()/flushAccountHeadNoMatchNote() directly (unchanged, still resolved
+// via shared classic-script scope, since those two functions' NAMES still need to be callable from
+// verification.js) — both guard on `if (!hostAdapter) return;` as their first statement, since a
+// line can be saved (and these get called) before the modal has ever been opened this page-load,
+// when hostAdapter is still null. That guard is provably a no-op-for-a-no-op: whenever hostAdapter
+// is null, the modal was never opened for any line, so hostAdapter.procedureModalState/accountHeadCache would
+// have been empty anyway — the exact same no-op path these functions already take today.
 // ==============================================
 
 const PROCEDURE_MODAL_MARKUP = `
@@ -159,10 +183,10 @@ const procedureModal = document.getElementById('procedureModal');
 const procedureModalTitle = document.getElementById('procedureModalTitle');
 const procedureModalClose = document.getElementById('procedureModalClose');
 // Small auto-dismissing toast for momentary positive feedback on a single action (e.g. the
-// plain "Verify" button) - unlike showStatus() above, this doesn't write into the persistent
+// plain "Verify" button) - unlike hostAdapter.showStatus() above, this doesn't write into the persistent
 // page-level status bar, since the VERIFIED count and each line's Cleared/Query badge already
 // cover the standing status. Kept on its own timer variable so it never clobbers/gets clobbered
-// by showStatus()'s window.statusTimeout.
+// by hostAdapter.showStatus()'s window.statusTimeout.
 let voucherVerifyToastTimeout = null;
 function showVerifyToast(msg) {
     if (!voucherVerifyToast) return;
@@ -176,6 +200,18 @@ function showVerifyToast(msg) {
 // Validation Rules Phase 5: synthetic id for the procedure modal's non-document "Voucher Line"
 // tab (Prepared/Checked/Approved By) — never a real audit_rule_documents.id, so it can't collide.
 const VOUCHER_LINE_TAB_ID = '__voucher_line__';
+
+// Phase 1b: the host page's adapter object (see the top-of-file comment above and
+// buildProcedureModalAdapter() in verification.js). Set only by openProcedureModal()'s own
+// `if (adapter) hostAdapter = adapter;` guard — every other function in this file reads
+// dependencies off this object instead of a bare global.
+let hostAdapter = null;
+
+// The voucher line uid currently shown in #procedureModal, or null when it's closed — lets
+// closeProcedureModal() flush any unsaved observation text without needing a uid parameter, since
+// its callers (the ✕ button and the outside-click listener) don't have one either. Moved here from
+// verification.js (Phase 1b) — nothing outside this file ever read or wrote it.
+let currentProcedureModalUid = null;
 
 // Account Head Recommendation follow-up: reserved sentinel document_id for the "no suitable TB
 // account" note, reused via the existing save_line_observation/voucher_line_observations flow.
@@ -304,10 +340,10 @@ function hideValidatePanel() {
 }
 
 // Splits gates into visible (pass/fail/query) vs N/A, hiding N/A by default behind a
-// "Show N/A (n)" toggle link. Reuses renderGateRowHtml() — same row markup as the popover.
+// "Show N/A (n)" toggle link. Reuses hostAdapter.renderGateRowHtml() — same row markup as the popover.
 function buildValidatePanelBody(data) {
     if (data.reason) {
-        return `<p class="lsr-reason">${escapeHtml(data.reason)}</p>`;
+        return `<p class="lsr-reason">${hostAdapter.escapeHtml(data.reason)}</p>`;
     }
     const gates = data.gates || [];
     if (!gates.length) {
@@ -317,12 +353,12 @@ function buildValidatePanelBody(data) {
     const naGates = gates.filter(g => g.status === 'not_applicable');
 
     let html = visible.length
-        ? visible.map(renderGateRowHtml).join('')
+        ? visible.map(hostAdapter.renderGateRowHtml).join('')
         : '<p class="lsr-reason">No applicable checks for this line.</p>';
 
     if (naGates.length) {
         if (validatePanelShowNA) {
-            html += naGates.map(renderGateRowHtml).join('');
+            html += naGates.map(hostAdapter.renderGateRowHtml).join('');
             html += `<a href="#" id="procedureValidateNAToggle" class="procedure-validate-na-toggle">Hide N/A (${naGates.length})</a>`;
         } else {
             html += `<a href="#" id="procedureValidateNAToggle" class="procedure-validate-na-toggle">Show N/A (${naGates.length})</a>`;
@@ -339,7 +375,7 @@ function renderValidatePanel() {
     const pillClass = data.cleared_status === 'Cleared' ? 'cleared' : (data.cleared_status === 'Query' ? 'query' : 'unknown');
     panel.innerHTML = `
         <div class="procedure-validate-panel-header">
-            <span class="procedure-validate-status-pill ${pillClass}">${escapeHtml(status)}</span>
+            <span class="procedure-validate-status-pill ${pillClass}">${hostAdapter.escapeHtml(status)}</span>
         </div>
         <div class="procedure-validate-panel-body">${buildValidatePanelBody(data)}</div>
     `;
@@ -387,7 +423,7 @@ async function toggleValidatePanel() {
 // SUPPORTING DOCUMENTS TABBED MODAL
 // Voucher Supporting-Document Linking, Phase 3 of 6 (shell): one tab per document belonging to
 // the voucher line's Category, generated dynamically from that Category's documents[] list (the
-// same list already fetched for the Guide popover/Supporting cell via fetchAuditGuidanceData()).
+// same list already fetched for the Guide popover/Supporting cell via hostAdapter.fetchAuditGuidanceData()).
 // Phase 4 of 6 (this phase): wires each tab to real search (Phase 2's extended
 // GET /api/data/preview), a paginated browse fallback (#procedureBrowseModal, below), and a
 // selected-lines table sourced from Phase 1's assign_document/voucher_line_documents endpoints.
@@ -407,7 +443,7 @@ function getProcedureSearchDateEnd() {
 // scoped to one document's own template, over the wide fixed date window above. search='' (browse
 // mode) returns every row for that template, paginated; a non-empty search narrows it.
 async function fetchProcedureRows(templateId, search, page, limit) {
-    const clientId = getClientId();
+    const clientId = hostAdapter.getClientId();
     if (!clientId) throw new Error('No client selected.');
     const params = new URLSearchParams({
         client_id: clientId,
@@ -443,11 +479,11 @@ function formatAssignedVoucherLabel(voucherId, lineSrno) {
 // can no longer be compared directly (a row assigned under an OLDER session's copy of this same
 // line would wrongly show as "assigned to a different voucher" even though it's the exact same
 // line). Compares by the stable client_data_id of the voucher's own line instead — looked up for
-// "uid" via currentVoucherLines (already loaded for the current voucher), against the new
+// "uid" via hostAdapter.currentVoucherLines (already loaded for the current voucher), against the new
 // assigned_to_line_client_data_id field routers/data.py's attach_assignment_flags() now returns.
 function isSameUnderlyingLine(uid, row) {
     if (!row.is_assigned) return false;
-    const currentLine = currentVoucherLines.find(l => l.detail_id === uid);
+    const currentLine = hostAdapter.currentVoucherLines.find(l => l.detail_id === uid);
     if (!currentLine || currentLine.client_data_id == null || row.assigned_to_line_client_data_id == null) return false;
     return String(currentLine.client_data_id) === String(row.assigned_to_line_client_data_id);
 }
@@ -484,15 +520,15 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
     if (isSelf) {
         lockNote = '<span class="procedure-result-locked">Already linked here</span>';
     } else if (isSameLineOtherDoc) {
-        lockNote = `<span class="procedure-result-locked">Linked to this voucher under "${escapeHtml(row.assigned_to_document_name || 'another document')}"</span>`;
+        lockNote = `<span class="procedure-result-locked">Linked to this voucher under "${hostAdapter.escapeHtml(row.assigned_to_document_name || 'another document')}"</span>`;
     } else if (isLocked) {
-        lockNote = `<span class="procedure-result-locked">Assigned to voucher ${escapeHtml(formatAssignedVoucherLabel(row.assigned_to_voucher_id, row.assigned_to_line_srno))}</span>`;
+        lockNote = `<span class="procedure-result-locked">Assigned to voucher ${hostAdapter.escapeHtml(formatAssignedVoucherLabel(row.assigned_to_voucher_id, row.assigned_to_line_srno))}</span>`;
     }
     return `
         <div class="procedure-result-item${isLocked ? ' locked' : ''}" data-id="${row.id}"${isLocked ? '' : ' role="button" tabindex="0"'}>
             <div class="procedure-result-main">
-                <span class="procedure-result-label">${escapeHtml(String(label))}</span>
-                <span class="procedure-result-meta">${escapeHtml(date)} · ${escapeHtml(String(amount))}</span>
+                <span class="procedure-result-label">${hostAdapter.escapeHtml(String(label))}</span>
+                <span class="procedure-result-meta">${hostAdapter.escapeHtml(date)} · ${hostAdapter.escapeHtml(String(amount))}</span>
             </div>
             ${lockNote}
         </div>
@@ -516,20 +552,21 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 // GET /api/verification/procedure_checks/{uid} in openProcedureModal() — a role with no entry
 // is unchecked.
 function getProcedureTabState(uid, docId) {
-    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
-    if (!procedureModalState[uid].tabs[docId]) {
-        procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBill: null, physicalBillSaved: false, physicalBillErrors: {}, physicalBillSaving: false, physicalBillSourceDocumentRowId: null, physicalBillSourceTemplate: null };
+    if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
+    if (!hostAdapter.procedureModalState[uid].tabs[docId]) {
+        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBill: null, physicalBillSaved: false, physicalBillErrors: {}, physicalBillSaving: false, physicalBillSourceDocumentRowId: null, physicalBillSourceTemplate: null };
     }
-    return procedureModalState[uid].tabs[docId];
+    return hostAdapter.procedureModalState[uid].tabs[docId];
 }
 
 // Opens the modal for one voucher line, showing a tab per document in that line's currently
 // assigned Category. initialDocId (optional) pre-selects that document's tab; otherwise the
 // first document's tab opens. No-ops if the line has no Category assigned yet (nothing to build
 // tabs from) or its Category has no documents.
-async function openProcedureModal(uid, initialDocId = null) {
+async function openProcedureModal(uid, initialDocId = null, adapter = null) {
+    if (adapter) hostAdapter = adapter;
     if (!procedureModal) return;
-    const lineState = voucherLineState[uid];
+    const lineState = hostAdapter.voucherLineState[uid];
     const type = lineState && lineState.transactionType;
     if (!type) return;
 
@@ -538,7 +575,7 @@ async function openProcedureModal(uid, initialDocId = null) {
     // fresh on every open" convention as assignedRecords/procedureChecks just below.
     let guidance = null;
     try {
-        guidance = await fetchAuditGuidanceData(type, true);
+        guidance = await hostAdapter.fetchAuditGuidanceData(type, true);
     } catch (e) {
         console.error('Failed to load Supporting Documents modal data:', e);
         return;
@@ -552,7 +589,7 @@ async function openProcedureModal(uid, initialDocId = null) {
     // isProcedureDocumentComplete()/renderProcedureModalPanel() can special-case it; every other
     // place that iterates `documents` (e.g. the template-warming filter just below) naturally
     // skips it since it has no template_id. Built as a NEW array (not documents.unshift(), which
-    // would mutate guidance.documents in place — that's the same object fetchAuditGuidanceData()
+    // would mutate guidance.documents in place — that's the same object hostAdapter.fetchAuditGuidanceData()
     // just wrote into auditGuidanceCache, so mutating it would permanently pollute the shared
     // cache other callers (Supporting column, Guide popover) read from).
     const documents = [{ id: VOUCHER_LINE_TAB_ID, name: 'Voucher Line', __voucherTab: true }, ...guidanceDocuments];
@@ -619,8 +656,8 @@ async function openProcedureModal(uid, initialDocId = null) {
     // Physical Bill evidence type, Phase 7 of 8: every saved Physical Bill entry for this line,
     // across all documents - same fail-soft-to-empty, re-fetched-fresh-on-every-open convention
     // as assignedRecords/procedureChecks/observationEntries above. Shared helper (see
-    // fetchPhysicalBillsForLine() above) since updateProceduresCellForLine() also needs this now.
-    const physicalBillEntries = await fetchPhysicalBillsForLine(uid);
+    // hostAdapter.fetchPhysicalBillsForLine() above) since hostAdapter.updateProceduresCellForLine() also needs this now.
+    const physicalBillEntries = await hostAdapter.fetchPhysicalBillsForLine(uid);
 
     // Automated cross-document validation engine, Phase 9 of 10: this line's Cross-check
     // evaluation results (Phase 6/7's already-computed structure - zero new evaluation logic,
@@ -651,31 +688,31 @@ async function openProcedureModal(uid, initialDocId = null) {
 
     // Warm the Trial Balance leaf-account list for the Account Head search-select — fetched fresh
     // on every open, same fail-soft-to-empty convention as assignedRecords/procedureChecks above.
-    await fetchLatestTbAccounts(getClientId());
+    await fetchLatestTbAccounts(hostAdapter.getClientId());
 
     // Generic Voucher-Level Checks cutover: the persistent voucher-level checks bar's data — read
     // once per voucher (client_id+transaction_ref), reused across every line of that same voucher
     // rather than re-fetched per line, matching the backend's own "applied to every line of that
-    // voucher" design (Phase 4). currentVoucherId is this open voucher's transaction_ref, kept in
+    // voucher" design (Phase 4). hostAdapter.currentVoucherId is this open voucher's transaction_ref, kept in
     // sync by every navigation function in this module.
-    await ensureVoucherChecksLoaded(getClientId(), currentVoucherId);
+    await ensureVoucherChecksLoaded(hostAdapter.getClientId(), hostAdapter.currentVoucherId);
 
     // The voucher line's own amount (for the mismatch badge) — looked up from the already-loaded
     // voucher, no extra fetch needed. String()-normalized: uid arrives as a string whenever this
-    // is called from a table click (dataset.uid is always a string), but currentVoucherLines[].
+    // is called from a table click (dataset.uid is always a string), but hostAdapter.currentVoucherLines[].
     // detail_id is a number straight from the JSON response — a bare === here always missed on
     // that path (confirmed bug: caused the header below to show "Line 0 of 6 — —" and this amount
-    // to silently default to 0). Object-key lookups elsewhere (voucherLineState[uid]) don't have
+    // to silently default to 0). Object-key lookups elsewhere (hostAdapter.voucherLineState[uid]) don't have
     // this problem since plain-object keys auto-coerce to strings; only Array.find/findIndex do not.
-    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
-    const voucherLine = lineIdx !== -1 ? currentVoucherLines[lineIdx] : null;
-    const voucherLineAmount = voucherLine ? parseVoucherAmount(getVoucherLineAmount(voucherLine.row_data || {})) : 0;
+    const lineIdx = hostAdapter.currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const voucherLine = lineIdx !== -1 ? hostAdapter.currentVoucherLines[lineIdx] : null;
+    const voucherLineAmount = voucherLine ? hostAdapter.parseVoucherAmount(hostAdapter.getVoucherLineAmount(voucherLine.row_data || {})) : 0;
 
-    if (!procedureModalState[uid]) procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
-    procedureModalState[uid].documents = documents;
-    procedureModalState[uid].assignedDocIds = assignedDocIds;
-    procedureModalState[uid].voucherLineAmount = voucherLineAmount;
-    procedureModalState[uid].crossCheckResults = crossCheckResults;
+    if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
+    hostAdapter.procedureModalState[uid].documents = documents;
+    hostAdapter.procedureModalState[uid].assignedDocIds = assignedDocIds;
+    hostAdapter.procedureModalState[uid].voucherLineAmount = voucherLineAmount;
+    hostAdapter.procedureModalState[uid].crossCheckResults = crossCheckResults;
 
     // Re-sync each tab's selections and checklist from the fresh server data (never just seeded
     // once) so reopening the modal always reflects reality, even if a change happened elsewhere.
@@ -733,7 +770,7 @@ async function openProcedureModal(uid, initialDocId = null) {
         const firstIncomplete = documents.find(doc => !isProcedureDocumentComplete(uid, doc));
         activeDocId = firstIncomplete ? firstIncomplete.id : documents[0].id;
     }
-    procedureModalState[uid].activeDocId = activeDocId;
+    hostAdapter.procedureModalState[uid].activeDocId = activeDocId;
 
     currentProcedureModalUid = uid;
 
@@ -743,13 +780,13 @@ async function openProcedureModal(uid, initialDocId = null) {
 
     // Header: line position/account name, type, amount, risk (Supporting Documents modal
     // redesign follow-up) — srNo/totalLines mirror the same order renderVoucherLines() numbers
-    // the table with; risk reuses computeLineRiskData() against the guidance already fetched
+    // the table with; risk reuses hostAdapter.computeLineRiskData() against the guidance already fetched
     // above, no extra request. lineIdx/voucherLine were already resolved above (String()-normalized).
     const srNo = lineIdx + 1;
-    const totalLines = currentVoucherLines.length;
-    const accountName = voucherLine ? getVoucherLineAlias(voucherLine.row_data || {}, VOUCHER_LINE_ACCOUNT_NAME_ALIASES) : '—';
-    const amountDisplay = voucherLine ? getVoucherLineAmount(voucherLine.row_data || {}) : '';
-    const riskData = computeLineRiskData(guidance);
+    const totalLines = hostAdapter.currentVoucherLines.length;
+    const accountName = voucherLine ? hostAdapter.getVoucherLineAlias(voucherLine.row_data || {}, hostAdapter.VOUCHER_LINE_ACCOUNT_NAME_ALIASES) : '—';
+    const amountDisplay = voucherLine ? hostAdapter.getVoucherLineAmount(voucherLine.row_data || {}) : '';
+    const riskData = hostAdapter.computeLineRiskData(guidance);
     if (procedureModalTitle) procedureModalTitle.textContent = `Line ${srNo} of ${totalLines} — ${accountName}`;
     const metaEl = document.getElementById('procedureModalMeta');
     if (metaEl) {
@@ -785,7 +822,7 @@ async function openProcedureModal(uid, initialDocId = null) {
 function updateProcedureModalSavedNote(uid) {
     const noteEl = document.getElementById('procedureModalSavedNote');
     if (!noteEl) return;
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const tabs = (lineState && lineState.tabs) || {};
     const dirty = Object.values(tabs).some(t => t.observationDirty);
     noteEl.textContent = dirty ? 'Unsaved changes' : 'All changes saved';
@@ -808,28 +845,28 @@ async function navigateProcedureModalLine(delta) {
     if (!uid) return;
     // String()-normalized — see the matching comment in openProcedureModal() for why a bare ===
     // between currentProcedureModalUid (may be a string) and detail_id (a number) can miss.
-    const idx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const idx = hostAdapter.currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
     if (idx === -1) return;
     const newIdx = idx + delta;
-    if (newIdx < 0 || newIdx >= currentVoucherLines.length) return;
-    const newUid = currentVoucherLines[newIdx].detail_id;
-    const newLineState = voucherLineState[newUid];
+    if (newIdx < 0 || newIdx >= hostAdapter.currentVoucherLines.length) return;
+    const newUid = hostAdapter.currentVoucherLines[newIdx].detail_id;
+    const newLineState = hostAdapter.voucherLineState[newUid];
     if (!newLineState || !newLineState.transactionType) {
-        showStatus('This line has no assigned category — supporting documents unavailable.', 'error');
+        hostAdapter.showStatus('This line has no assigned category — supporting documents unavailable.', 'error');
         return;
     }
-    // Validation Rules Phase 5: saveLineItems() (not just flushProcedureObservations()) so
+    // Validation Rules Phase 5: hostAdapter.saveLineItems() (not just flushProcedureObservations()) so
     // cleared_status recomputes and the badge refreshes every time the modal moves between
     // lines — the badge lives in the main table, hidden behind the modal while it's open, so
     // this is the natural point for it to catch up.
-    await saveLineItems(uid);
+    await hostAdapter.saveLineItems(uid);
     await openProcedureModal(newUid);
 }
 
 // Finds the next *unverified* line of the currently loaded voucher, searching forward only from
 // fromIdx + 1. "Unverified" is cleared_status !== 'Cleared' — the Validation Rules verdict already
 // rendered as the Cleared/Query badge on each table row, recomputed server-side on every
-// saveLineItems() call and mirrored straight back into currentVoucherLines, so the value tested
+// hostAdapter.saveLineItems() call and mirrored straight back into hostAdapter.currentVoucherLines, so the value tested
 // here is always fresh by the time Verify & Next consults it.
 //
 // Forward-only (never wraps back to an earlier line) by deliberate design: a line can legitimately
@@ -841,10 +878,10 @@ async function navigateProcedureModalLine(delta) {
 // (this module's existing documented rule), so targeting one would silently freeze the modal on the
 // previous line's content. Returns -1 when no qualifying line remains.
 function findNextUnverifiedLineIndex(fromIdx) {
-    for (let i = fromIdx + 1; i < currentVoucherLines.length; i++) {
-        const line = currentVoucherLines[i];
+    for (let i = fromIdx + 1; i < hostAdapter.currentVoucherLines.length; i++) {
+        const line = hostAdapter.currentVoucherLines[i];
         if (line.cleared_status === 'Cleared') continue;
-        const lineState = voucherLineState[line.detail_id];
+        const lineState = hostAdapter.voucherLineState[line.detail_id];
         if (!lineState || !lineState.transactionType) continue;
         return i;
     }
@@ -853,8 +890,8 @@ function findNextUnverifiedLineIndex(fromIdx) {
 
 // Pure teardown — hides the modal(s) and clears the "currently open" marker, with no save of any
 // kind. Factored out of closeProcedureModal() so the Verify & Next/Close button (which already
-// explicitly saves via saveLineItems() before calling verify_voucher_checks) can tear down the
-// modal without triggering a redundant second save. procedureModalState[uid] is deliberately left
+// explicitly saves via hostAdapter.saveLineItems() before calling verify_voucher_checks) can tear down the
+// modal without triggering a redundant second save. hostAdapter.procedureModalState[uid] is deliberately left
 // in place (not cleared here) — reopening the same line's modal within the same voucher should
 // show tab state exactly as it was left; it's only reset on voucher navigation, in
 // seedVoucherLineState().
@@ -875,20 +912,20 @@ function hideProcedureModalOnly() {
     closeProcedureBrowseModal();
     const uid = currentProcedureModalUid;
     currentProcedureModalUid = null;
-    const type = uid && voucherLineState[uid] && voucherLineState[uid].transactionType;
+    const type = uid && hostAdapter.voucherLineState[uid] && hostAdapter.voucherLineState[uid].transactionType;
     if (type) {
-        updateProceduresCellForLine(uid, type);
-        updateObservationsCellForLine(uid, type);
+        hostAdapter.updateProceduresCellForLine(uid, type);
+        hostAdapter.updateObservationsCellForLine(uid, type);
     }
 }
 
 async function closeProcedureModal() {
     // Flush any unsaved observation text/voucher-approval edits before hiding — closing via ✕ or
     // outside-click persists the same way Prev/Next/Complete/Exit does, per the confirmed
-    // requirement (there is no longer a Save button to rely on instead). saveLineItems() also
+    // requirement (there is no longer a Save button to rely on instead). hostAdapter.saveLineItems() also
     // recomputes cleared_status (Validation Rules Phase 5) so the main table's badge is caught up
     // by the time the modal is gone.
-    if (currentProcedureModalUid) await saveLineItems(currentProcedureModalUid);
+    if (currentProcedureModalUid) await hostAdapter.saveLineItems(currentProcedureModalUid);
     hideProcedureModalOnly();
 }
 
@@ -905,9 +942,9 @@ function updateVerifyFooterButton(uid) {
     const btn = document.getElementById('procedureModalVerifyBtn');
     const verifyOnlyBtn = document.getElementById('procedureModalVerifyOnlyBtn');
     if (!btn && !verifyOnlyBtn) return;
-    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const lineIdx = hostAdapter.currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
     const hasNextLine = lineIdx !== -1 && findNextUnverifiedLineIndex(lineIdx) !== -1;
-    const pos = getVoucherPosition();
+    const pos = hostAdapter.getVoucherPosition();
     const isLastVoucher = !(pos.total > 0 && pos.index < pos.total);
     if (btn) {
         if (hasNextLine) {
@@ -919,7 +956,7 @@ function updateVerifyFooterButton(uid) {
     // Both buttons hit the same backend precondition (verify_voucher_checks 400s if any active
     // check is untouched), so they share this one gate — the plain "Verify" button's label never
     // changes, unlike Verify & Next's three-state wording, since it never describes "what's next".
-    const checks = voucherChecksCache[currentVoucherId] || [];
+    const checks = voucherChecksCache[hostAdapter.currentVoucherId] || [];
     const allTouched = isVoucherChecksAllTouched(checks);
     const title = allTouched ? '' : 'Mark every check before verifying';
     if (btn) {
@@ -947,21 +984,21 @@ async function performVerifyVoucherChecks(uid) {
     if (btn) btn.disabled = true;
     if (verifyOnlyBtn) verifyOnlyBtn.disabled = true;
     try {
-        await saveLineItems(uid);
+        await hostAdapter.saveLineItems(uid);
         const res = await fetch(`${API_BASE}/api/verification/verify_voucher_checks`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: currentSessionId, current_detail_id: uid })
+            body: JSON.stringify({ session_id: hostAdapter.currentSessionId, current_detail_id: uid })
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            showStatus(err.detail || 'Could not verify voucher-level checks — please try again.', 'error');
+            hostAdapter.showStatus(err.detail || 'Could not verify voucher-level checks — please try again.', 'error');
             return null;
         }
         return await res.json();
     } catch (e) {
         console.error('Error verifying voucher checks:', e);
-        showStatus('Could not verify voucher-level checks — please try again.', 'error');
+        hostAdapter.showStatus('Could not verify voucher-level checks — please try again.', 'error');
         return null;
     } finally {
         // Restores each button to its real gate-driven state (isVoucherChecksAllTouched()) rather
@@ -985,18 +1022,18 @@ async function verifyAndAdvanceVoucher() {
     const data = await performVerifyVoucherChecks(uid);
     if (!data) return;
 
-    // Line-first stepping: saveLineItems() inside the helper above already refreshed this line's
-    // cleared_status in currentVoucherLines, so the search below sees this press's own result, not
+    // Line-first stepping: hostAdapter.saveLineItems() inside the helper above already refreshed this line's
+    // cleared_status in hostAdapter.currentVoucherLines, so the search below sees this press's own result, not
     // a stale one. String()-normalized lookup for the same reason openProcedureModal() does it —
     // uid can be a string from a table click while detail_id is a number from JSON.
-    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const lineIdx = hostAdapter.currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
     const nextLineIdx = lineIdx === -1 ? -1 : findNextUnverifiedLineIndex(lineIdx);
     if (nextLineIdx !== -1) {
         // Stay in the voucher: keep the modal open and re-run the full fetch/render pipeline
         // for the target line, same as navigateProcedureModalLine() does (which re-saves; we
         // already saved above, so openProcedureModal() is called directly instead).
-        await openProcedureModal(currentVoucherLines[nextLineIdx].detail_id);
-        await updateProgressDisplay();
+        await openProcedureModal(hostAdapter.currentVoucherLines[nextLineIdx].detail_id);
+        await hostAdapter.updateProgressDisplay();
         return;
     }
 
@@ -1004,18 +1041,18 @@ async function verifyAndAdvanceVoucher() {
     // Already saved above — hide only, don't re-save via closeProcedureModal().
     hideProcedureModalOnly();
     if (data.boundary) {
-        showStatus('Voucher verified. No more vouchers in this session.', 'success');
+        hostAdapter.showStatus('Voucher verified. No more vouchers in this session.', 'success');
     } else {
-        applyVoucherNavRenderData(data);
+        hostAdapter.applyVoucherNavRenderData(data);
     }
-    await updateProgressDisplay();
+    await hostAdapter.updateProgressDisplay();
 }
 
 // Click handler for the plain footer "Verify" button (confirmed requirement): performs the exact
 // same save+verify action as Verify & Next above, via the same shared helper, but never advances —
 // it always just closes the modal back onto the grid at the current voucher, regardless of how
 // many lines the voucher has or whether more remain unverified. The current line's Cleared/Query
-// badge is already live in the grid by the time this returns (saveLineItems(), inside the helper,
+// badge is already live in the grid by the time this returns (hostAdapter.saveLineItems(), inside the helper,
 // already refreshes it), so there is nothing further to re-render here.
 async function verifyAndStay() {
     const uid = currentProcedureModalUid;
@@ -1027,7 +1064,7 @@ async function verifyAndStay() {
     // Already saved above — hide only, don't re-save via closeProcedureModal().
     hideProcedureModalOnly();
     showVerifyToast('Voucher checks verified.');
-    await updateProgressDisplay();
+    await hostAdapter.updateProgressDisplay();
 }
 
 // Shared "are all currently-active voucher-level checks marked done" check — used by any real
@@ -1050,7 +1087,7 @@ function isVoucherChecksAllTouched(checks) {
 
 // Fetches and caches one voucher's checks list (client_id+transaction_ref scoped, shared across
 // every line of that voucher) — factored out of openProcedureModal() so
-// updateProceduresCellForLine()'s standalone badge computation (below) can also warm the same
+// hostAdapter.updateProceduresCellForLine()'s standalone badge computation (below) can also warm the same
 // cache for a transaction_level_approval-flagged Document, without duplicating this fetch.
 async function ensureVoucherChecksLoaded(clientId, transactionRef) {
     if (!transactionRef) return null;
@@ -1058,7 +1095,7 @@ async function ensureVoucherChecksLoaded(clientId, transactionRef) {
         return voucherChecksCache[transactionRef];
     }
     // Confirmed fix (2026-07-30): this function is called from two independent sites for the
-    // same voucher — openProcedureModal() and updateProceduresCellForLine() (the latter fires
+    // same voucher — openProcedureModal() and hostAdapter.updateProceduresCellForLine() (the latter fires
     // automatically whenever a line's Category has a transaction_level_approval-flagged
     // Document, e.g. "Purchase Demand"). Without de-duplication, two near-simultaneous callers
     // could each fire their own GET; if a tick was saved (mutating the cache in place) while an
@@ -1113,7 +1150,7 @@ const ICON_SELECT_ALL_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fil
 function renderVoucherChecksBar(uid) {
     const container = document.getElementById('procedureVoucherChecksBar');
     if (!container) return;
-    const transactionRef = currentVoucherId;
+    const transactionRef = hostAdapter.currentVoucherId;
     const checks = voucherChecksCache[transactionRef] || [];
 
     if (!checks.length) {
@@ -1124,7 +1161,7 @@ function renderVoucherChecksBar(uid) {
 
     const notDone = checks.filter(c => c.state === 'not_done');
     const warningHtml = notDone.length
-        ? `<div class="procedure-voucher-checks-warning">⚠️ ${notDone.map(c => `<strong>${escapeHtml(c.name)}</strong>`).join(', ')} marked not done — observation will auto-note on close.</div>`
+        ? `<div class="procedure-voucher-checks-warning">⚠️ ${notDone.map(c => `<strong>${hostAdapter.escapeHtml(c.name)}</strong>`).join(', ')} marked not done — observation will auto-note on close.</div>`
         : '';
 
     // Select-all/clear-all toggle: only ever acts on checks NOT currently marked ✗ (not_done) — a
@@ -1140,7 +1177,7 @@ function renderVoucherChecksBar(uid) {
 
     container.innerHTML = selectAllBtnHtml + checks.map(check => `
         <div class="procedure-voucher-check-row" data-check-id="${check.id}">
-            <span class="procedure-voucher-check-label">${escapeHtml(check.name)}</span>
+            <span class="procedure-voucher-check-label">${hostAdapter.escapeHtml(check.name)}</span>
             <div class="procedure-voucher-check-toggle">
                 <button type="button" class="procedure-voucher-check-btn tick${check.state === 'done' ? ' selected' : ''}"
                     data-check-id="${check.id}" data-state="done" title="Mark done">✓</button>
@@ -1170,7 +1207,7 @@ function renderVoucherChecksBar(uid) {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        client_id: getClientId(),
+                        client_id: hostAdapter.getClientId(),
                         transaction_ref: transactionRef,
                         check_id: checkId,
                         state: newState
@@ -1186,11 +1223,11 @@ function renderVoucherChecksBar(uid) {
                 // refresh, extended to this bar's own dependents.
                 renderVoucherChecksBar(uid);
                 renderProcedureModalTabs(uid);
-                await saveAllVoucherLines();
+                await hostAdapter.saveAllVoucherLines();
             } catch (e) {
                 console.error('Failed to save voucher check:', e);
                 check.state = previousState;
-                showStatus('Failed to save voucher-level check — please try again.', 'error');
+                hostAdapter.showStatus('Failed to save voucher-level check — please try again.', 'error');
                 renderVoucherChecksBar(uid);
             }
         });
@@ -1203,7 +1240,7 @@ function renderVoucherChecksBar(uid) {
 // for the "never touch ✗" rule. Mirrors the per-check button's own optimistic-save/revert-on-
 // failure shape, batched via Promise.all rather than one save per check.
 async function toggleAllVoucherChecks(uid) {
-    const transactionRef = currentVoucherId;
+    const transactionRef = hostAdapter.currentVoucherId;
     const checks = voucherChecksCache[transactionRef] || [];
     const targets = checks.filter(c => c.state !== 'not_done');
     if (!targets.length) return;
@@ -1221,7 +1258,7 @@ async function toggleAllVoucherChecks(uid) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                client_id: getClientId(),
+                client_id: hostAdapter.getClientId(),
                 transaction_ref: transactionRef,
                 check_id: c.id,
                 state: newState
@@ -1235,11 +1272,11 @@ async function toggleAllVoucherChecks(uid) {
         }
         renderVoucherChecksBar(uid);
         renderProcedureModalTabs(uid);
-        await saveAllVoucherLines();
+        await hostAdapter.saveAllVoucherLines();
     } catch (e) {
         console.error('Failed to save all voucher checks:', e);
         toChange.forEach(c => { c.state = previousStates[c.id]; });
-        showStatus('Failed to update all checks — please try again.', 'error');
+        hostAdapter.showStatus('Failed to update all checks — please try again.', 'error');
         renderVoucherChecksBar(uid);
     }
 }
@@ -1269,7 +1306,7 @@ function isProcedureDocumentComplete(uid, doc) {
     // no-template role-tick branch below, the same trap Phase 6 closed server-side. Reflects
     // SAVED state only (not an unsaved draft edit) - same "dot reflects committed truth"
     // convention every other document type already follows. Also requires the saved bill's Amount
-    // to match this line's own amount (procedureModalState[uid].voucherLineAmount, already
+    // to match this line's own amount (hostAdapter.procedureModalState[uid].voucherLineAmount, already
     // computed by openProcedureModal() before this function can be called), within the same
     // epsilon the backend gate uses (CROSS_CHECK_FLOAT_EPSILON = 0.005, routers/verification.py's
     // _physical_bill_satisfied()) — closes the gap the original Phase 7 comment deferred to
@@ -1280,14 +1317,14 @@ function isProcedureDocumentComplete(uid, doc) {
         const fieldsComplete = tabState.physicalBillSaved && !!(b && b.bill_no && b.bill_date && b.vendor_name
             && b.amount !== '' && b.amount != null && !isNaN(parseFloat(b.amount)));
         if (fieldsComplete) {
-            const lineState = procedureModalState[uid];
+            const lineState = hostAdapter.procedureModalState[uid];
             const voucherLineAmount = (lineState && lineState.voucherLineAmount) || 0;
             baseComplete = Math.abs(parseFloat(b.amount) - voucherLineAmount) <= 0.005;
         } else {
             baseComplete = false;
         }
     } else if (doc.template_id) {
-        const lineState = procedureModalState[uid];
+        const lineState = hostAdapter.procedureModalState[uid];
         baseComplete = !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(doc.id));
     } else {
         const tabState = getProcedureTabState(uid, doc.id);
@@ -1296,7 +1333,7 @@ function isProcedureDocumentComplete(uid, doc) {
     }
     if (!baseComplete) return false;
     if (doc.transaction_level_approval) {
-        return isVoucherChecksComplete(voucherChecksCache[currentVoucherId]);
+        return isVoucherChecksComplete(voucherChecksCache[hostAdapter.currentVoucherId]);
     }
     return true;
 }
@@ -1306,7 +1343,7 @@ function isProcedureDocumentComplete(uid, doc) {
 function renderProcedureModalTabs(uid) {
     const container = document.getElementById('procedureModalTabs');
     if (!container) return;
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     if (!lineState) { container.innerHTML = ''; return; }
     const documents = lineState.documents || [];
 
@@ -1323,7 +1360,7 @@ function renderProcedureModalTabs(uid) {
                 <button type="button" class="procedure-tab-btn${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
                     <span class="procedure-tab-dot complete" title="Account Head Recommendation"></span>
                     <span class="procedure-tab-text">
-                        <span class="procedure-tab-label">${escapeHtml(doc.name)}</span>
+                        <span class="procedure-tab-label">${hostAdapter.escapeHtml(doc.name)}</span>
                     </span>
                 </button>
             `;
@@ -1360,7 +1397,7 @@ function renderProcedureModalTabs(uid) {
             <button type="button" class="procedure-tab-btn${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
                 <span class="procedure-tab-dot${isComplete ? ' complete' : ''}" title="${dotTitle}"></span>
                 <span class="procedure-tab-text">
-                    <span class="procedure-tab-label">${escapeHtml(doc.name)}</span>
+                    <span class="procedure-tab-label">${hostAdapter.escapeHtml(doc.name)}</span>
                     <span class="procedure-tab-sub">${subText}</span>
                     ${mismatchTagHtml}
                 </span>
@@ -1384,7 +1421,7 @@ function renderProcedureModalTabs(uid) {
 // untouched, so unsaved work in a tab (once Phases 4-6 add real content to it) survives
 // switching away and back within the same modal session.
 function activateProcedureTab(uid, docId) {
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     if (!lineState) return;
     lineState.activeDocId = docId;
     renderProcedureModalTabs(uid);
@@ -1420,7 +1457,7 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
 
     // The observation textarea is local-only on every keystroke (no network call) —
     // flushProcedureObservations() still persists any dirty tab automatically on
-    // Prev/Next/Complete/Exit (via saveLineItems()) and on modal close (via closeProcedureModal());
+    // Prev/Next/Complete/Exit (via hostAdapter.saveLineItems()) and on modal close (via closeProcedureModal());
     // the Copy button below is an additional, explicit, immediate trigger for one tab at a time.
     const observationInput = document.getElementById('procedureObservationInput');
     const copyBtn = document.getElementById('procedureObservationCopyBtn');
@@ -1542,9 +1579,9 @@ function renderVoucherApprovalPanel(uid) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
 
-    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
-    const voucherLine = lineIdx !== -1 ? currentVoucherLines[lineIdx] : null;
-    const currentAccountName = voucherLine ? getVoucherLineAlias(voucherLine.row_data || {}, VOUCHER_LINE_ACCOUNT_NAME_ALIASES) : '—';
+    const lineIdx = hostAdapter.currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const voucherLine = lineIdx !== -1 ? hostAdapter.currentVoucherLines[lineIdx] : null;
+    const currentAccountName = voucherLine ? hostAdapter.getVoucherLineAlias(voucherLine.row_data || {}, hostAdapter.VOUCHER_LINE_ACCOUNT_NAME_ALIASES) : '—';
 
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${VOUCHER_LINE_TAB_ID}">
@@ -1553,7 +1590,7 @@ function renderVoucherApprovalPanel(uid) {
                 <div class="procedure-segment-body">
                     <div class="procedure-account-head-current">
                         <label>Current Account Name</label>
-                        <span>${escapeHtml(currentAccountName)}</span>
+                        <span>${hostAdapter.escapeHtml(currentAccountName)}</span>
                     </div>
                     <div id="procedureAccountHeadBody"></div>
                 </div>
@@ -1582,7 +1619,7 @@ function renderAccountHeadCard(uid) {
             <div class="procedure-voucher-approval-field">
                 <label for="procedureAccountHeadNoMatchInput">Finding — no suitable account in Trial Balance</label>
                 <textarea id="procedureAccountHeadNoMatchInput" class="procedure-observation-textarea" rows="3"
-                    placeholder="Describe the recommended new account head...">${escapeHtml(state.noMatchText || '')}</textarea>
+                    placeholder="Describe the recommended new account head...">${hostAdapter.escapeHtml(state.noMatchText || '')}</textarea>
             </div>
             <button type="button" id="procedureAccountHeadToggleBtn" class="procedure-account-head-toggle-link">🔍 Search Trial Balance instead</button>
         `;
@@ -1599,7 +1636,7 @@ function renderAccountHeadCard(uid) {
                 <label for="procedureAccountHeadSearchInput">Recommended Account Head</label>
                 <input type="text" id="procedureAccountHeadSearchInput" class="procedure-search-input"
                     placeholder="Search Trial Balance accounts..." autocomplete="off"
-                    value="${escapeHtml(state.selectedAccountName || state.searchTerm || '')}">
+                    value="${hostAdapter.escapeHtml(state.selectedAccountName || state.searchTerm || '')}">
             </div>
             <div id="procedureAccountHeadSearchDropdown" class="procedure-search-dropdown"></div>
             <button type="button" id="procedureAccountHeadSuggestBtn" class="procedure-account-head-suggest-btn" ${state.loading ? 'disabled' : ''}>${state.loading ? 'Searching…' : '🔍 Suggest Account Head'}</button>
@@ -1655,10 +1692,10 @@ function renderAccountHeadSearchDropdown(uid) {
     }
 
     dropdownEl.innerHTML = matches.map(a => `
-        <div class="procedure-result-item" data-account-id="${a.id}" data-account-name="${escapeHtml(a.account_name)}">
+        <div class="procedure-result-item" data-account-id="${a.id}" data-account-name="${hostAdapter.escapeHtml(a.account_name)}">
             <div class="procedure-result-main">
-                <span>${escapeHtml(a.account_name)}</span>
-                <span class="procedure-result-meta">${escapeHtml(a.account_code || '')}</span>
+                <span>${hostAdapter.escapeHtml(a.account_name)}</span>
+                <span class="procedure-result-meta">${hostAdapter.escapeHtml(a.account_code || '')}</span>
             </div>
         </div>
     `).join('');
@@ -1699,19 +1736,19 @@ function renderAccountHeadResults(uid) {
     }
 
     if (!state.matched) {
-        resultsEl.innerHTML = `<p class="procedure-account-head-no-match">${escapeHtml(state.message || 'No match — new head likely needed')}</p>`;
+        resultsEl.innerHTML = `<p class="procedure-account-head-no-match">${hostAdapter.escapeHtml(state.message || 'No match — new head likely needed')}</p>`;
         return;
     }
 
     resultsEl.innerHTML = state.suggestions.map((s, idx) => `
         <div class="procedure-account-head-suggestion">
             <div class="procedure-account-head-suggestion-row">
-                <span class="procedure-account-head-suggestion-name">${escapeHtml(s.account_name)}</span>
-                <span class="procedure-account-head-suggestion-score">Score: ${escapeHtml(String(s.score))}</span>
+                <span class="procedure-account-head-suggestion-name">${hostAdapter.escapeHtml(s.account_name)}</span>
+                <span class="procedure-account-head-suggestion-score">Score: ${hostAdapter.escapeHtml(String(s.score))}</span>
                 <button type="button" class="procedure-account-head-use-btn" data-suggestion-idx="${idx}" title="Select this account in the dropdown above">📋 Use</button>
             </div>
             <ul class="procedure-account-head-reasons">
-                ${(s.reasons || []).map(r => `<li>${escapeHtml(r)}</li>`).join('')}
+                ${(s.reasons || []).map(r => `<li>${hostAdapter.escapeHtml(r)}</li>`).join('')}
             </ul>
         </div>
     `).join('');
@@ -1730,7 +1767,7 @@ function renderAccountHeadResults(uid) {
             if (match) {
                 selectAccountHeadTbAccount(uid, match.id, match.account_name);
             } else {
-                showStatus(`"${suggestion.account_name}" is no longer in the current Trial Balance — pick a leaf account manually if it still applies.`, 'error');
+                hostAdapter.showStatus(`"${suggestion.account_name}" is no longer in the current Trial Balance — pick a leaf account manually if it still applies.`, 'error');
             }
         });
     });
@@ -1742,14 +1779,14 @@ function renderAccountHeadResults(uid) {
 // account name when the alias lookup finds nothing ('—' sentinel from getVoucherLineAlias).
 async function fetchAccountHeadSuggestions(uid) {
     const state = getAccountHeadState(uid);
-    const lineIdx = currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
-    const voucherLine = lineIdx !== -1 ? currentVoucherLines[lineIdx] : null;
+    const lineIdx = hostAdapter.currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
+    const voucherLine = lineIdx !== -1 ? hostAdapter.currentVoucherLines[lineIdx] : null;
     const rowData = voucherLine ? (voucherLine.row_data || {}) : {};
-    const accountName = getVoucherLineAlias(rowData, VOUCHER_LINE_ACCOUNT_NAME_ALIASES);
-    const rawDescription = getVoucherLineAlias(rowData, VOUCHER_LINE_DESCRIPTION_ALIASES);
+    const accountName = hostAdapter.getVoucherLineAlias(rowData, hostAdapter.VOUCHER_LINE_ACCOUNT_NAME_ALIASES);
+    const rawDescription = hostAdapter.getVoucherLineAlias(rowData, hostAdapter.VOUCHER_LINE_DESCRIPTION_ALIASES);
     const description = (rawDescription && rawDescription !== '—') ? rawDescription : accountName;
-    const category = (voucherLineState[uid] && voucherLineState[uid].transactionType) || '';
-    const clientId = getClientId();
+    const category = (hostAdapter.voucherLineState[uid] && hostAdapter.voucherLineState[uid].transactionType) || '';
+    const clientId = hostAdapter.getClientId();
 
     state.loading = true;
     renderAccountHeadResultsButtonState(uid);
@@ -1796,7 +1833,7 @@ function renderAccountHeadResultsButtonState(uid) {
 // One compact line per rule. A shortfall gets its own distinct (amber) state — not folded into
 // fail — since Phase 7/8 already treat it differently (doesn't gate Cleared, only observed).
 function summarizeCrossCheckRule(rule) {
-    const field = escapeHtml(rule.compare_field);
+    const field = hostAdapter.escapeHtml(rule.compare_field);
     if (rule.status === 'fail') {
         return { icon: '✗', text: `${field} mismatch`, cssClass: 'cc-badge-fail' };
     }
@@ -1822,10 +1859,10 @@ function buildCrossCheckRuleDetail(rule) {
     rule.chain.forEach(c => {
         const isAnchor = rule.anchor_document_id === c.document_id;
         const valueText = c.linked
-            ? (c.value !== null ? escapeHtml(String(c.value)) : '<span class="cc-chain-novalue">no value</span>')
+            ? (c.value !== null ? hostAdapter.escapeHtml(String(c.value)) : '<span class="cc-chain-novalue">no value</span>')
             : '<span class="cc-chain-notlinked">not linked</span>';
         html += `<li class="cc-chain-item">
-            <span class="cc-chain-doc">${escapeHtml(c.document_name)}${isAnchor ? ' <span class="cc-anchor-tag">(anchor)</span>' : ''}</span>
+            <span class="cc-chain-doc">${hostAdapter.escapeHtml(c.document_name)}${isAnchor ? ' <span class="cc-anchor-tag">(anchor)</span>' : ''}</span>
             <span class="cc-chain-value">${valueText}</span>
         </li>`;
     });
@@ -1834,12 +1871,12 @@ function buildCrossCheckRuleDetail(rule) {
         const matchIcon = vlc.match === true ? '✓' : (vlc.match === false ? '✗' : '—');
         html += `<li class="cc-chain-item cc-chain-voucher-row">
             <span class="cc-chain-doc">Voucher Line Amount</span>
-            <span class="cc-chain-value">${matchIcon} ${vlc.voucher_amount !== null ? escapeHtml(String(vlc.voucher_amount)) : '—'}</span>
+            <span class="cc-chain-value">${matchIcon} ${vlc.voucher_amount !== null ? hostAdapter.escapeHtml(String(vlc.voucher_amount)) : '—'}</span>
         </li>`;
     }
     html += '</ul>';
     if (rule.message) {
-        html += `<div class="cc-rule-message cc-rule-message-${rule.status}">${escapeHtml(rule.message)}</div>`;
+        html += `<div class="cc-rule-message cc-rule-message-${rule.status}">${hostAdapter.escapeHtml(rule.message)}</div>`;
     }
     return html;
 }
@@ -1866,7 +1903,7 @@ function buildCrossCheckRollup(rules) {
 function renderProcedureModalPanel(uid, docId) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     if (!doc) { container.innerHTML = ''; return; }
 
@@ -1909,7 +1946,7 @@ function renderProcedureModalPanel(uid, docId) {
                 ${docCrossChecks.length ? buildCrossCheckRollup(docCrossChecks) : ''}
                 <div class="procedure-search-row">
                     <input type="text" id="procedureSearchInput" class="procedure-search-input"
-                        placeholder="Search by reference, vendor, amount..." value="${escapeHtml(tabState.searchTerm)}">
+                        placeholder="Search by reference, vendor, amount..." value="${hostAdapter.escapeHtml(tabState.searchTerm)}">
                     <button type="button" id="procedureBrowseBtn" class="procedure-browse-btn" title="Browse all rows for this document">👁️</button>
                 </div>
                 <div id="procedureSearchDropdown" class="procedure-search-dropdown"></div>
@@ -1995,7 +2032,7 @@ function renderProcedureModalPanel(uid, docId) {
 // update once, batches the saves, and re-renders once on success or failure, same shape as
 // toggleAllVoucherChecks() above.
 async function toggleAllProcedureChecks(uid, docId) {
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     const roles = (doc && doc.auth_roles) || [];
     if (!roles.length) return;
@@ -2050,7 +2087,7 @@ async function toggleAllProcedureChecks(uid, docId) {
                 delete tabState.checklist[role];
             }
         });
-        showStatus('Failed to update all procedures — please try again.', 'error');
+        hostAdapter.showStatus('Failed to update all procedures — please try again.', 'error');
         renderProcedureModalPanel(uid, docId);
         renderProcedureModalTabs(uid);
     }
@@ -2098,7 +2135,7 @@ function validatePhysicalBillFields(bill) {
 function updateAmountMatchTick(uid, rawValue) {
     const tick = document.getElementById('procedureBillAmountTick');
     if (!tick) return;
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const voucherAmount = (lineState && lineState.voucherLineAmount) || 0;
     const parsed = parseFloat(rawValue);
     const matches = !isNaN(parsed) && Math.abs(parsed - voucherAmount) <= 0.005;
@@ -2162,7 +2199,7 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
     const tabState = getProcedureTabState(uid, doc.id);
     const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
     const errors = tabState.physicalBillErrors || {};
-    const fieldError = (field) => errors[field] ? `<div class="procedure-bill-field-error">${escapeHtml(errors[field])}</div>` : '';
+    const fieldError = (field) => errors[field] ? `<div class="procedure-bill-field-error">${hostAdapter.escapeHtml(errors[field])}</div>` : '';
 
     // Copy from lines (Phase 3 amendment): every GRN/Vendor Bill row already linked as evidence
     // elsewhere on this voucher line — button disabled with none, auto-fills directly with
@@ -2185,17 +2222,17 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                             <div class="procedure-bill-grid">
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillNoInput">Bill No</label>
-                                    <input type="text" id="procedureBillNoInput" class="procedure-bill-input" value="${escapeHtml(bill.bill_no)}">
+                                    <input type="text" id="procedureBillNoInput" class="procedure-bill-input" value="${hostAdapter.escapeHtml(bill.bill_no)}">
                                     ${fieldError('bill_no')}
                                 </div>
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillDateInput">Date</label>
-                                    <input type="date" id="procedureBillDateInput" class="procedure-bill-input" value="${escapeHtml(bill.bill_date)}">
+                                    <input type="date" id="procedureBillDateInput" class="procedure-bill-input" value="${hostAdapter.escapeHtml(bill.bill_date)}">
                                     ${fieldError('bill_date')}
                                 </div>
                                 <div class="procedure-bill-field procedure-bill-field-full">
                                     <label for="procedureBillVendorInput">Vendor Name</label>
-                                    <input type="text" id="procedureBillVendorInput" class="procedure-bill-input" value="${escapeHtml(bill.vendor_name)}">
+                                    <input type="text" id="procedureBillVendorInput" class="procedure-bill-input" value="${hostAdapter.escapeHtml(bill.vendor_name)}">
                                     ${fieldError('vendor_name')}
                                 </div>
                             </div>
@@ -2207,21 +2244,21 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillQuantityInput">Quantity</label>
                                     <div class="procedure-bill-calc-field" data-calc-field="quantity">
-                                        <input type="text" inputmode="decimal" id="procedureBillQuantityInput" class="procedure-bill-input procedure-bill-calc-input" value="${escapeHtml(bill.quantity)}" placeholder="0" title="Type a value, or tap the calculator icon">
+                                        <input type="text" inputmode="decimal" id="procedureBillQuantityInput" class="procedure-bill-input procedure-bill-calc-input" value="${hostAdapter.escapeHtml(bill.quantity)}" placeholder="0" title="Type a value, or tap the calculator icon">
                                         <span class="procedure-bill-calc-icon">${PB_ICON_CALC}</span>
                                     </div>
                                 </div>
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillRateInput">Rate</label>
                                     <div class="procedure-bill-calc-field" data-calc-field="rate">
-                                        <input type="text" inputmode="decimal" id="procedureBillRateInput" class="procedure-bill-input procedure-bill-calc-input" value="${escapeHtml(bill.rate)}" placeholder="0" title="Type a value, or tap the calculator icon">
+                                        <input type="text" inputmode="decimal" id="procedureBillRateInput" class="procedure-bill-input procedure-bill-calc-input" value="${hostAdapter.escapeHtml(bill.rate)}" placeholder="0" title="Type a value, or tap the calculator icon">
                                         <span class="procedure-bill-calc-icon">${PB_ICON_CALC}</span>
                                     </div>
                                 </div>
                                 <div class="procedure-bill-field">
                                     <label for="procedureBillAmountInput">Amount</label>
                                     <div class="procedure-bill-amount-row">
-                                        <input type="number" step="any" id="procedureBillAmountInput" class="procedure-bill-input procedure-bill-input-computed" value="${escapeHtml(bill.amount)}" readonly title="Auto-calculated as Quantity × Rate">
+                                        <input type="number" step="any" id="procedureBillAmountInput" class="procedure-bill-input procedure-bill-input-computed" value="${hostAdapter.escapeHtml(bill.amount)}" readonly title="Auto-calculated as Quantity × Rate">
                                         <span id="procedureBillAmountTick" class="procedure-amount-match-tick" style="display:none;" title="Matches voucher line amount">${PB_ICON_CHECK}</span>
                                     </div>
                                     ${fieldError('amount')}
@@ -2233,7 +2270,7 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                             </div>
                         </div>
 
-                        ${errors._general ? `<div class="procedure-bill-general-error">${escapeHtml(errors._general)}</div>` : ''}
+                        ${errors._general ? `<div class="procedure-bill-general-error">${hostAdapter.escapeHtml(errors._general)}</div>` : ''}
                         <button type="button" id="procedureBillSaveBtn" class="procedure-bill-save-primary" ${tabState.physicalBillSaving ? 'disabled' : ''}>
                             ${tabState.physicalBillSaving ? 'Saving…' : `${PB_ICON_SAVE} ${tabState.physicalBillSaved ? 'Update Bill' : 'Save Bill'}`}
                         </button>
@@ -2436,11 +2473,11 @@ function renderPhysicalBillCalculator() {
     const popover = getPhysicalBillCalcPopover();
     const rows = PB_CALC_KEYPAD.map(row => `
         <div class="pb-calc-row">
-            ${row.map(key => `<button type="button" class="pb-calc-btn ${pbCalcButtonClass(key)}" data-key="${escapeHtml(key)}">${escapeHtml(key)}</button>`).join('')}
+            ${row.map(key => `<button type="button" class="pb-calc-btn ${pbCalcButtonClass(key)}" data-key="${hostAdapter.escapeHtml(key)}">${hostAdapter.escapeHtml(key)}</button>`).join('')}
         </div>
     `).join('');
     popover.innerHTML = `
-        <div class="pb-calc-display">${escapeHtml(pbCalcState.display)}</div>
+        <div class="pb-calc-display">${hostAdapter.escapeHtml(pbCalcState.display)}</div>
         <div class="pb-calc-pad">${rows}</div>
     `;
     popover.querySelectorAll('.pb-calc-btn').forEach(btn => {
@@ -2655,7 +2692,7 @@ function resolvePhysicalBillSourceType(templateId) {
 // so the picker's label always matches what a click on that row would actually populate.
 // extract_date is display-only here — the backend never resolves a date automatically.
 function getEligiblePhysicalBillSourceRows(uid) {
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     if (!lineState) return [];
     const rows = [];
     (lineState.documents || []).forEach(otherDoc => {
@@ -2713,10 +2750,10 @@ async function applyPhysicalBillSource(uid, docId, sourceClientDataId, sourceTyp
         tabState.physicalBillErrors = {};
 
         renderProcedureModalPanel(uid, docId);
-        showStatus('Physical Bill form pre-filled from source row — review and Save.', 'success');
+        hostAdapter.showStatus('Physical Bill form pre-filled from source row — review and Save.', 'success');
     } catch (e) {
         console.error('Failed to populate Physical Bill from source:', e);
-        showStatus(e.message || 'Unable to load source row for Physical Bill.', 'error');
+        hostAdapter.showStatus(e.message || 'Unable to load source row for Physical Bill.', 'error');
         if (btn) {
             btn.disabled = false;
             btn.textContent = originalText;
@@ -2731,8 +2768,8 @@ function buildPhysicalBillCopyPickerHtml(rows) {
     return rows.map((r, idx) => `
         <div class="procedure-result-item procedure-bill-copy-picker-item" data-idx="${idx}">
             <div class="procedure-result-main">
-                <span class="procedure-result-label">${escapeHtml(r.vendor || '(no vendor)')}${r.bill_no ? ' — ' + escapeHtml(r.bill_no) : ''}</span>
-                <span class="procedure-result-meta">${escapeHtml(r.document_name)}${r.extract_date ? ' · ' + escapeHtml(r.extract_date) : ''}</span>
+                <span class="procedure-result-label">${hostAdapter.escapeHtml(r.vendor || '(no vendor)')}${r.bill_no ? ' — ' + hostAdapter.escapeHtml(r.bill_no) : ''}</span>
+                <span class="procedure-result-meta">${hostAdapter.escapeHtml(r.document_name)}${r.extract_date ? ' · ' + hostAdapter.escapeHtml(r.extract_date) : ''}</span>
             </div>
         </div>
     `).join('');
@@ -2773,7 +2810,7 @@ function debounceProcedureSearch(uid, docId, term) {
 async function performProcedureSearch(uid, docId, term) {
     const tabState = getProcedureTabState(uid, docId);
     tabState.searchTerm = term;
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     const dropdown = document.getElementById('procedureSearchDropdown');
     if (!doc || !doc.template_id) return;
@@ -2829,7 +2866,7 @@ function renderProcedureSearchDropdown(uid, docId) {
 // Returns true on success, false on failure, so callers (the dropdown and the browse modal) can
 // each decide what to do next (clear the dropdown vs. keep the browse modal open and refresh it).
 async function selectProcedureDocument(uid, docId, row) {
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     if (!lineState) return false;
     const tabState = getProcedureTabState(uid, docId);
     try {
@@ -2842,7 +2879,7 @@ async function selectProcedureDocument(uid, docId, row) {
             // A real race, not hypothetical — the row's own UNIQUE(client_data_id) constraint is
             // the actual enforcement, so a concurrent assignment elsewhere can land first.
             const err = await res.json().catch(() => ({}));
-            showStatus(err.detail || 'That row is no longer available — it was just assigned elsewhere.', 'error');
+            hostAdapter.showStatus(err.detail || 'That row is no longer available — it was just assigned elsewhere.', 'error');
             if (tabState.searchTerm) performProcedureSearch(uid, docId, tabState.searchTerm);
             return false;
         }
@@ -2862,11 +2899,11 @@ async function selectProcedureDocument(uid, docId, row) {
         tabState.searchResults = [];
         renderProcedureModalTabs(uid);
         renderProcedureModalPanel(uid, docId);
-        showStatus('✅ Evidence linked.', 'success');
+        hostAdapter.showStatus('✅ Evidence linked.', 'success');
         return true;
     } catch (e) {
         console.error('Failed to assign supporting document:', e);
-        showStatus('Failed to link evidence — please try again.', 'error');
+        hostAdapter.showStatus('Failed to link evidence — please try again.', 'error');
         return false;
     }
 }
@@ -2880,7 +2917,7 @@ async function unassignSupportingDocument(uid, docId, assignmentId) {
     if (!confirm('Unlink this evidence from the voucher line? The Data Bank row will become available to assign elsewhere.')) {
         return;
     }
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     if (!lineState) return;
     const tabState = getProcedureTabState(uid, docId);
 
@@ -2892,7 +2929,7 @@ async function unassignSupportingDocument(uid, docId, assignmentId) {
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            showStatus(err.detail || 'Failed to unlink evidence — please try again.', 'error');
+            hostAdapter.showStatus(err.detail || 'Failed to unlink evidence — please try again.', 'error');
             return;
         }
 
@@ -2903,10 +2940,10 @@ async function unassignSupportingDocument(uid, docId, assignmentId) {
         }
         renderProcedureModalTabs(uid);
         renderProcedureModalPanel(uid, docId);
-        showStatus('✅ Evidence unlinked.', 'success');
+        hostAdapter.showStatus('✅ Evidence unlinked.', 'success');
     } catch (e) {
         console.error('Failed to unassign supporting document:', e);
-        showStatus('Failed to unlink evidence — please try again.', 'error');
+        hostAdapter.showStatus('Failed to unlink evidence — please try again.', 'error');
     }
 }
 
@@ -2920,7 +2957,7 @@ async function unassignSupportingDocument(uid, docId, assignmentId) {
 // Shared by buildSelectedLinesTable() and buildObservationSuggestion() (Phase 6) so both read
 // the exact same total/mismatch computation — never recomputed independently.
 function getSelectedLinesSummary(uid, docId) {
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const tabState = getProcedureTabState(uid, docId);
     const selections = tabState.selections || [];
     const total = selections.reduce((sum, sel) => sum + (parseFloat(sel.extract_amount) || 0), 0);
@@ -2957,7 +2994,7 @@ function buildSelectedLinesTable(uid, docId) {
     // sensibly rather than going blank. Sr No is a plain row index, not sourced from row_data;
     // values are still looked up case-insensitively via getRowFieldCaseInsensitive(), which
     // renders blank when a row happens to be missing that field.
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     let columns = (doc && templateColumnsCache[doc.template_id]) || [];
     if (!columns.length) {
@@ -2969,7 +3006,7 @@ function buildSelectedLinesTable(uid, docId) {
     // this app's existing convention for icon-only action columns (e.g. Data Bank's Actions column).
     let html = '<div class="procedure-selected-table-wrapper"><table class="procedure-selected-table"><thead><tr>';
     html += '<th>Sr No</th>';
-    columns.forEach(col => { html += `<th>${escapeHtml(col.column_name)}</th>`; });
+    columns.forEach(col => { html += `<th>${hostAdapter.escapeHtml(col.column_name)}</th>`; });
     html += '<th></th>';
     html += '</tr></thead><tbody>';
     selections.forEach((sel, idx) => {
@@ -2985,9 +3022,9 @@ function buildSelectedLinesTable(uid, docId) {
                 const icon = sel.rate_source === 'derived'
                     ? '<span class="rate-source-icon" title="Rate derived as Amount ÷ Quantity">🧮</span>'
                     : '<span class="rate-source-icon" title="Rate imported directly from the source file">📥</span>';
-                html += `<td>${escapeHtml(value)}${icon}</td>`;
+                html += `<td>${hostAdapter.escapeHtml(value)}${icon}</td>`;
             } else {
-                html += `<td>${escapeHtml(value)}</td>`;
+                html += `<td>${hostAdapter.escapeHtml(value)}</td>`;
             }
         });
         html += '<td>';
@@ -3030,12 +3067,12 @@ function buildSelectedLinesTable(uid, docId) {
 // ---------- AUDIT PROCEDURES CHECKLIST (Phase 5 of 6) ----------
 // Renders one checkbox per auth role already configured on the Document (doc.auth_roles, sourced
 // from audit_rule_document_auth_roles via the same audit_guidance fetch/cache already used by
-// showAuditGuidancePopover()/updateProceduresCellForLine() — no new fetch for the role list
+// showAuditGuidancePopover()/hostAdapter.updateProceduresCellForLine() — no new fetch for the role list
 // itself). Tick state comes from tabState.checklist (seeded in openProcedureModal() from
 // GET /api/verification/procedure_checks/{uid}) — a role with no entry renders unchecked. No
 // validation behind ticking a role — rules are explicitly deferred to a future phase.
 function buildProcedureChecklist(uid, docId) {
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     const tabState = getProcedureTabState(uid, docId);
     const roles = (doc && doc.auth_roles) || [];
@@ -3048,8 +3085,8 @@ function buildProcedureChecklist(uid, docId) {
         const checked = !!state.is_checked;
         return `
             <label class="procedure-checklist-item">
-                <input type="checkbox" class="procedure-checklist-checkbox" data-role="${escapeHtml(role)}" ${checked ? 'checked' : ''}>
-                <span>${escapeHtml(role)}</span>
+                <input type="checkbox" class="procedure-checklist-checkbox" data-role="${hostAdapter.escapeHtml(role)}" ${checked ? 'checked' : ''}>
+                <span>${hostAdapter.escapeHtml(role)}</span>
                 <span class="procedure-checklist-source">sourced from Audit Rules</span>
             </label>
         `;
@@ -3100,7 +3137,7 @@ async function toggleProcedureCheck(uid, docId, roleName, isChecked) {
         } else {
             delete tabState.checklist[roleName];
         }
-        showStatus('Failed to save procedure tick — please try again.', 'error');
+        hostAdapter.showStatus('Failed to save procedure tick — please try again.', 'error');
         renderProcedureModalPanel(uid, docId);
         renderProcedureModalTabs(uid);
     }
@@ -3127,7 +3164,7 @@ async function toggleSignatureException(uid, docId, assignmentId, isChecked) {
     } catch (e) {
         console.error('Failed to save signature exception:', e);
         if (sel) sel.signature_exception = previousValue;
-        showStatus('Failed to save signature exception — please try again.', 'error');
+        hostAdapter.showStatus('Failed to save signature exception — please try again.', 'error');
         renderProcedureModalPanel(uid, docId);
     }
 }
@@ -3141,7 +3178,7 @@ async function toggleSignatureException(uid, docId, assignmentId, isChecked) {
 // A no-template document has no linked-evidence table/mismatch badge to reference (Two-segment
 // panel phase) — its suggestion is limited to unticked procedures only, or blank if none.
 function buildObservationSuggestion(uid, docId) {
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     const tabState = getProcedureTabState(uid, docId);
     const hasTemplate = !!(doc && doc.template_id);
@@ -3204,7 +3241,7 @@ function buildObservationSection(uid, docId) {
     const canSuggest = !!systemSuggestion;
     return `
         <textarea id="procedureObservationInput" class="procedure-observation-textarea"
-            placeholder="Add an observation for this document...">${escapeHtml(tabState.observation || '')}</textarea>
+            placeholder="Add an observation for this document...">${hostAdapter.escapeHtml(tabState.observation || '')}</textarea>
         <div class="procedure-observation-copy-row">
             <button type="button" id="procedureObservationSuggestBtn"
                 class="procedure-observation-suggest-btn"
@@ -3228,7 +3265,7 @@ function buildObservationSection(uid, docId) {
 // Persists one tab's observation text as a tagged entry (POST save_line_observation). Called only
 // by flushProcedureObservations() below, never directly from a UI event — there is no Save button
 // anymore. Always marks it unsynced server-side — it will be rolled into the voucher line's own
-// Observation field the next time that line is saved (saveLineItems(), via
+// Observation field the next time that line is saved (hostAdapter.saveLineItems(), via
 // sync_line_observations_to_voucher() in routers/verification.py), and also immediately here since
 // save_line_observation() itself calls that same sync function.
 async function saveLineObservation(uid, docId) {
@@ -3259,28 +3296,35 @@ async function saveLineObservation(uid, docId) {
 
         // The backend rolls this up into the voucher line's own Observation field immediately
         // (sync_line_observations_to_voucher(), called from save_line_observation() itself) —
-        // reflect that here too, in the cached line data (currentVoucherLines, so a later full
+        // reflect that here too, in the cached line data (hostAdapter.currentVoucherLines, so a later full
         // re-render of this voucher stays correct) and the live Observations cell's flag+count
         // (a fresh recount, not a plain-text write — this cell shows count/tooltip only, per the
         // v7 redesign).
-        const cachedLine = currentVoucherLines.find(l => l.detail_id === parseInt(uid));
+        const cachedLine = hostAdapter.currentVoucherLines.find(l => l.detail_id === parseInt(uid));
         if (cachedLine) cachedLine.observations = data.voucher_observations;
-        const lineType = voucherLineState[uid] && voucherLineState[uid].transactionType;
-        if (lineType) updateObservationsCellForLine(uid, lineType);
+        const lineType = hostAdapter.voucherLineState[uid] && hostAdapter.voucherLineState[uid].transactionType;
+        if (lineType) hostAdapter.updateObservationsCellForLine(uid, lineType);
     } catch (e) {
         console.error('Failed to save line observation:', e);
-        showStatus('Failed to save observation — please try again.', 'error');
+        hostAdapter.showStatus('Failed to save observation — please try again.', 'error');
     }
 }
 
 // Account Head Recommendation follow-up: persists a dirty no-match finding — called from the same
-// save chokepoint as flushProcedureObservations() (saveLineItems()). No-op
+// save chokepoint as flushProcedureObservations() (hostAdapter.saveLineItems()). No-op
 // unless the card is currently in no-match mode with unsaved text. Reuses the existing
 // save_line_observation endpoint under the reserved ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel — the
 // backend wraps the raw text into the "[Account Head Recommendation]: New account head
 // recommended: ... — no match in Trial Balance" finding at rollup time
 // (sync_line_observations_to_voucher()), so only the raw note is sent here.
 async function flushAccountHeadNoMatchNote(uid) {
+    // hostAdapter can be null here — this is called from verification.js's saveLineItems() on
+    // EVERY line save, including a save that happens before the modal has ever been opened this
+    // page-load. Provably a no-op-for-a-no-op: if hostAdapter was never set, the modal was never
+    // opened for any line, so accountHeadCache[uid] would still be its untouched default (mode
+    // 'match', noMatchDirty false) — this guard reaches the exact same early-return the next line
+    // would have taken anyway, just without needing hostAdapter to check it.
+    if (!hostAdapter) return;
     const state = getAccountHeadState(uid);
     if (state.mode !== 'nomatch' || !state.noMatchDirty) return;
 
@@ -3303,22 +3347,26 @@ async function flushAccountHeadNoMatchNote(uid) {
 
         // Same "keep the main table's Observations cell caught up immediately" pattern
         // saveLineObservation() already uses for real Document tabs.
-        const cachedLine = currentVoucherLines.find(l => l.detail_id === parseInt(uid));
+        const cachedLine = hostAdapter.currentVoucherLines.find(l => l.detail_id === parseInt(uid));
         if (cachedLine) cachedLine.observations = data.voucher_observations;
-        const lineType = voucherLineState[uid] && voucherLineState[uid].transactionType;
-        if (lineType) updateObservationsCellForLine(uid, lineType);
+        const lineType = hostAdapter.voucherLineState[uid] && hostAdapter.voucherLineState[uid].transactionType;
+        if (lineType) hostAdapter.updateObservationsCellForLine(uid, lineType);
     } catch (e) {
         console.error('Failed to save account head no-match note:', e);
-        showStatus('Failed to save account head finding — please try again.', 'error');
+        hostAdapter.showStatus('Failed to save account head finding — please try again.', 'error');
     }
 }
 
 // Persists every dirty (unsaved) observation tab for one voucher line — called from the
-// Prev/Next/Complete/Exit save chokepoint (saveLineItems()) and from closeProcedureModal(), so an
+// Prev/Next/Complete/Exit save chokepoint (hostAdapter.saveLineItems()) and from closeProcedureModal(), so an
 // observation typed without an explicit Save action is never lost. No-op if the modal was never
 // opened for this uid or nothing changed since the last save.
 async function flushProcedureObservations(uid) {
-    const lineState = procedureModalState[uid];
+    // See the matching comment in flushAccountHeadNoMatchNote() above — same reasoning applies
+    // here: hostAdapter null means the modal was never opened for any line this page-load, so
+    // procedureModalState[uid] would be undefined anyway and the next line would already no-op.
+    if (!hostAdapter) return;
+    const lineState = hostAdapter.procedureModalState[uid];
     if (!lineState || !lineState.tabs) return;
     for (const docId of Object.keys(lineState.tabs)) {
         const tabState = lineState.tabs[docId];
@@ -3354,7 +3402,7 @@ let procedureBrowseState = { uid: null, docId: null, page: 1, totalRows: 0, rows
 
 async function openProcedureBrowseModal(uid, docId) {
     if (!procedureBrowseModal) return;
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     if (!doc || !doc.template_id) return;
 
@@ -3373,7 +3421,7 @@ function closeProcedureBrowseModal() {
 
 async function fetchProcedureBrowsePage() {
     const { uid, docId, page } = procedureBrowseState;
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     if (!doc) return;
     if (procedureBrowseTableContainer) {
@@ -3431,7 +3479,7 @@ function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
     // derived field like Rate (see reorder_row_data_by_template()'s docstring, routers/
     // import_export.py). Falls back to the union-of-keys behavior if the cache has
     // nothing for this template.
-    const lineState = procedureModalState[uid];
+    const lineState = hostAdapter.procedureModalState[uid];
     const activeDoc = lineState && (lineState.documents || []).find(d => d.id === activeDocId);
     const templateColumns = (activeDoc && templateColumnsCache[activeDoc.template_id]) || [];
     const columns = templateColumns.length
@@ -3439,7 +3487,7 @@ function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
         : Object.keys(rows[0].row_data || {});
 
     let html = '<table class="procedure-browse-table"><thead><tr>';
-    columns.forEach(col => { html += `<th>${escapeHtml(col)}</th>`; });
+    columns.forEach(col => { html += `<th>${hostAdapter.escapeHtml(col)}</th>`; });
     html += '<th>Status</th><th>Voucher No.</th>';
     html += '</tr></thead><tbody>';
 
@@ -3449,18 +3497,18 @@ function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
         const interactiveAttrs = isAssigned ? '' : ' role="button" tabindex="0"';
         html += `<tr data-id="${row.id}"${rowClass}${interactiveAttrs}>`;
         columns.forEach(col => {
-            html += `<td>${escapeHtml(formatProcedureCellValue(row.row_data ? row.row_data[col] : ''))}</td>`;
+            html += `<td>${hostAdapter.escapeHtml(formatProcedureCellValue(row.row_data ? row.row_data[col] : ''))}</td>`;
         });
         const statusBadgeClass = isAssigned ? 'assigned' : 'unassigned';
         const statusLabel = isAssigned ? 'Assigned' : 'Unassigned';
         html += `<td><span class="procedure-browse-status-badge ${statusBadgeClass}">${statusLabel}</span></td>`;
         let voucherCell = '';
         if (isAssigned) {
-            voucherCell = escapeHtml(formatAssignedVoucherLabel(row.assigned_to_voucher_id, row.assigned_to_line_srno));
+            voucherCell = hostAdapter.escapeHtml(formatAssignedVoucherLabel(row.assigned_to_voucher_id, row.assigned_to_line_srno));
             const isOtherDocSameLine = isSameUnderlyingLine(uid, row)
                 && activeDocId != null && String(row.assigned_to_document_id) !== String(activeDocId);
             if (isOtherDocSameLine) {
-                voucherCell += ` <span class="procedure-browse-other-doc-note">(under "${escapeHtml(row.assigned_to_document_name || 'another document')}")</span>`;
+                voucherCell += ` <span class="procedure-browse-other-doc-note">(under "${hostAdapter.escapeHtml(row.assigned_to_document_name || 'another document')}")</span>`;
             }
         }
         html += `<td>${voucherCell}</td>`;
