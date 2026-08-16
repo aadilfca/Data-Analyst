@@ -834,115 +834,11 @@
         <!-- ============================================= -->
         <div id="auditGuidancePopover" class="audit-guidance-popover" style="display:none;"></div>
         <!-- ============================================= -->
-        <!-- SUPPORTING DOCUMENTS MODAL (left-side document rail)  -->
-        <!-- Voucher Supporting-Document Linking Phases 3-6 built this as a top tab bar; the       -->
-        <!-- Supporting Documents redesign's Phase 1 restructured it into a left rail instead -     -->
-        <!-- one entry per document belonging to the voucher line's Category, listed vertically.   -->
-        <!-- Rail (#procedureModalTabs) and panel (#procedureModalPanels) are still populated       -->
-        <!-- entirely by JS in verification.js (renderProcedureModalTabs()/renderProcedureModalPanel()) -->
-        <!-- - shell/CSS lives in the #procedureModal rules in style.css, per this file's documented -->
-        <!-- per-modal-scoped .modal-content/.modal-header convention (see #supportingModal/         -->
-        <!-- #dfdModal above). Each document's panel renders a search box/results dropdown/selected- -->
-        <!-- lines table (templated documents), an Audit Procedures checklist, and an Observation    -->
-        <!-- section - no per-document static markup here, all JS-rendered.                          -->
+        <!-- SUPPORTING DOCUMENTS PROCEDURE MODAL + BROWSE MODAL -->
+        <!-- Extracted into static/procedure_modal.js (relocation only) so it can be reused by other -->
+        <!-- pages without duplicating this markup — that file injects its own #procedureModal/       -->
+        <!-- #procedureBrowseModal markup into <body> at load time. See its own header comment.        -->
         <!-- ============================================= -->
-        <div id="procedureModal">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <div class="procedure-modal-heading">
-                        <h3 id="procedureModalTitle">📎 Supporting Documents</h3>
-                        <div id="procedureModalMeta" class="procedure-modal-meta"></div>
-                    </div>
-                    <button type="button" class="btn-ghost procedure-validate-btn" id="procedureModalValidateBtn">🔍 Validate</button>
-                    <button class="close-btn" id="procedureModalClose"
-                        style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
-                </div>
-                <!-- Persistent voucher-level checks bar (Generic Voucher-Level Checks cutover): shown
-                     once per voucher, above the document rail — not duplicated per tab/line, since
-                     these checks (audit_rule_voucher_checks/voucher_check_status) apply to the whole
-                     voucher, not one line. Fully JS-rendered by renderVoucherChecksBar() in
-                     verification.js, same "no static per-item markup" convention as the rail/panels
-                     below. -->
-                <!-- Confirmed fix: structural header freeze. Everything that can grow tall (voucher
-                     checks bar, Validate panel, rail+panels) is wrapped in its own scrolling region
-                     (.procedure-modal-scroll-body, style.css) so .modal-header/.procedure-modal-footer
-                     never scroll with it and body content can never render above the header — see the
-                     style.css comment on .modal-content for the full flex-column layout this enables.
-                     Supersedes an earlier position:sticky attempt on .modal-header alone. -->
-                <div class="procedure-modal-scroll-body">
-                    <div id="procedureVoucherChecksBar" class="procedure-voucher-checks-bar"></div>
-                    <!-- "Why is this line Cleared/Query?" inline panel (Validate button, above) — same
-                         GET /api/verification/line_status_reason/{id} payload and gate-row rendering as
-                         the Status-pill popover in the main voucher table (buildLineStatusReasonBody() in
-                         verification.js, reused here so there is exactly one gate-list rendering path).
-                         Collapsed by default; toggled open/closed by #procedureModalValidateBtn via
-                         toggleValidatePanel(). Content is 100% JS-rendered. -->
-                    <div id="procedureValidatePanel" class="procedure-validate-panel" style="display:none;"></div>
-                    <div class="procedure-modal-body">
-                        <div id="procedureModalTabs" class="procedure-doc-rail"></div>
-                        <div id="procedureModalPanels" class="procedure-tab-panels"></div>
-                    </div>
-                </div>
-                <!-- Footer (Supporting Documents modal redesign follow-up): saved-state indicator +
-                     Back/Next to move between this voucher's OTHER lines without closing the modal -
-                     distinct from the rail's tab switching, which moves between one line's Documents.
-                     See navigateProcedureModalLine()/updateProcedureModalSavedNote() in verification.js. -->
-                <div class="procedure-modal-footer">
-                    <span id="procedureModalSavedNote" class="procedure-modal-saved-note"></span>
-                    <div class="procedure-modal-footnav">
-                        <button type="button" id="procedureModalBackBtn" class="btn-ghost">← Back</button>
-                        <!-- Plain "Verify" (confirmed requirement): same save+verify action as Verify & Next
-                             below, but never auto-advances — always closes back onto the grid at the current
-                             voucher. Shares the same disabled/title gate as Verify & Next
-                             (updateVerifyFooterButton() in verification.js), since both hit the same backend
-                             precondition. -->
-                        <button type="button" id="procedureModalVerifyOnlyBtn" class="btn-ghost">✅ Verify</button>
-                        <!-- Voucher-level Checks simplified to name-only (Phase 3 of 4): replaces the old
-                             per-line "Next →" nav. Label/disabled state are fully JS-driven
-                             (updateVerifyFooterButton() in verification.js) — see that function for why. -->
-                        <button type="button" id="procedureModalVerifyBtn" class="btn-verify">✅ Verify & Next</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ============================================= -->
-        <!-- SUPPORTING DOCUMENTS BROWSE MODAL             -->
-        <!-- Voucher Supporting-Document Linking, Phase 4 of 6: nested on top of #procedureModal, -->
-        <!-- opened by a tab's 👁️ preview icon when the analyst doesn't have a search term -      -->
-        <!-- a paginated, read-only browse of GET /api/data/preview for that tab's document,      -->
-        <!-- same select/grey-out row treatment as the search dropdown                            -->
-        <!-- (buildProcedureResultRowHtml() in verification.js). Content is 100% JS-rendered;      -->
-        <!-- Prev/Next reuse the app's shared .btn-pagination class (style.css).                   -->
-        <!-- ============================================= -->
-        <div id="procedureBrowseModal">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h3 id="procedureBrowseModalTitle">👁️ Browse</h3>
-                    <button class="close-btn" id="procedureBrowseModalClose"
-                        style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
-                </div>
-                <!-- Status filter + count badge (Phase 3 of 3, FINAL) — client-side only, filters
-                     the already-loaded current page of #procedureBrowseTableContainer's rows by
-                     the Status column Phase 1 added. No search box here (this modal has none of
-                     its own; that's the separate tab-panel dropdown, Phase 2, untouched). -->
-                <div class="procedure-browse-toolbar">
-                    <label for="procedureBrowseStatusFilter">Status</label>
-                    <select id="procedureBrowseStatusFilter" class="procedure-browse-status-select">
-                        <option value="all" selected>All</option>
-                        <option value="assigned">Assigned</option>
-                        <option value="unassigned">Unassigned</option>
-                    </select>
-                    <span id="procedureBrowseStatusCount" class="procedure-browse-status-count"></span>
-                </div>
-                <div id="procedureBrowseTableContainer" class="procedure-browse-table-container"></div>
-                <div class="procedure-browse-pagination">
-                    <button type="button" id="procedureBrowsePrevBtn" class="btn-pagination" disabled>Previous</button>
-                    <span id="procedureBrowsePageInfo" class="procedure-browse-page-info">Page 1 of 1</span>
-                    <button type="button" id="procedureBrowseNextBtn" class="btn-pagination" disabled>Next</button>
-                </div>
-            </div>
-        </div>
 
         <!-- ============================================= -->
         <!-- NAVIGATION CONFIRM MODAL (moved outside procedureModal) -->
@@ -963,12 +859,11 @@
             </div>
         </div>
 
-        <!-- Momentary success toast (bottom-right, auto-dismisses) - see showVerifyToast() in
-             verification.js. Visibility is driven entirely by the .show class toggle, no inline
-             display style. -->
-        <div id="voucherVerifyToast" class="voucher-verify-toast"></div>
+        <!-- #voucherVerifyToast (Momentary success toast, bottom-right, auto-dismisses) is now also
+             injected by static/procedure_modal.js — see that file's showVerifyToast(). -->
 
         <script src="/static/client_context.js?v=2"></script>
+        <script src="/static/procedure_modal.js?v=1"></script>
         <script src="/static/verification.js?v=3"></script>
     </div>
 </body>
