@@ -83,6 +83,12 @@
             </div>
         </div>
 
+        <!-- Procedures-pill wiring phase: status feedback for actions taken inside the shared
+             procedure modal (opened from a line's Procedures pill) - same #verificationStatus/
+             .upload-status convention verification.html already uses, this page just had nothing
+             yet. audit_workbook.js's own showStatus-equivalent writes into this. -->
+        <div id="awStatus" class="upload-status" style="display:none; margin-bottom:12px;"></div>
+
         <!-- Table: Sr / Voucher No. / Account / Reference / Amount / Procedures / Observations /
              Status, line-grain. Sr appears only on a voucher's first line; Voucher No. repeats on
              every line of that voucher. An optional subtotal row follows any voucher with more
@@ -133,7 +139,15 @@
 
     <script src="/static/client_context.js?v=2"></script>
     <script src="/static/utils.js?v=2"></script>
-    <script src="/static/audit_workbook.js?v=3"></script>
+    <!-- Procedures-pill wiring phase: shared Supporting-Document/procedure modal component. Loads
+         before audit_workbook.js (which references its openProcedureModal()/flushProcedureObservations()/
+         flushAccountHeadNoMatchNote()/ensureVoucherChecksLoaded() by name, classic-script shared-
+         global-scope convention) and self-installs its own #procedureModal/#procedureBrowseModal/
+         #voucherVerifyToast markup on load - no HTML of its own needed here. See
+         static/procedure_modal.js's own header comment for the adapter contract audit_workbook.js's
+         buildAuditWorkbookAdapter() satisfies. -->
+    <script src="/static/procedure_modal.js?v=1"></script>
+    <script src="/static/audit_workbook.js?v=4"></script>
 </body>
 
 </html>

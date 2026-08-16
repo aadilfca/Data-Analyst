@@ -2194,6 +2194,32 @@ def _audit_workbook_resolve_account_names(client_id: int, account_codes: set) ->
     return resolved
 
 
+def _audit_workbook_resolve_category_names(category_ids: set) -> Dict[int, Optional[str]]:
+    """
+    Batched category_id -> name lookup for get_audit_workbook() (Procedures-pill wiring phase) -
+    same batching style as _audit_workbook_resolve_account_names(). The endpoint already resolves
+    category_id internally (_audit_workbook_resolve_categories()) to compute the procedures field,
+    but never surfaced the name - a real requirement for a caller (Audit Workbook's own procedure
+    modal adapter) that needs to call GET /api/verification/audit_guidance?transaction_type=<name>,
+    which is keyed by name, not id.
+
+    Returns {category_id: name or None} for every id passed in - a soft-deleted category still
+    resolves to its name here (display-context convention, matches get_category_for_account()).
+    """
+    resolved: Dict[int, Optional[str]] = {cid: None for cid in category_ids}
+    if not category_ids:
+        return resolved
+    ids = list(category_ids)
+    placeholders = ",".join("?" for _ in ids)
+    rows = execute_query(
+        f"SELECT id, name FROM audit_rule_categories WHERE id IN ({placeholders})",
+        tuple(ids)
+    )
+    for r in rows:
+        resolved[r['id']] = r['name']
+    return resolved
+
+
 @router.get("/api/verification/session/{session_id}/audit_workbook")
 def get_audit_workbook(session_id: int):
     """
@@ -2211,6 +2237,11 @@ def get_audit_workbook(session_id: int):
     - account_name: resolved from the client's latest parsed Trial Balance by account_code -
       same "latest parsed upload" lookup pattern as get_category_for_account()/
       _audit_workbook_resolve_categories(). None when the code isn't in the latest TB.
+    - category_name (Procedures-pill wiring phase): the line's resolved Category NAME (the
+      category_id already resolved internally to compute `procedures` below, just also
+      surfaced by name here) - None when the account code doesn't resolve to a Category. Needed
+      by Audit Workbook's own procedure-modal adapter, which must supply a Category name (not
+      id) to open the shared modal and to call GET /api/verification/audit_guidance.
     - amount: client_data.extract_amount (already the resolved Debit/Credit-side value - see
       the 2026-08-09 extract_amount backfill fix).
     - status: this line's own cleared_status verbatim, None mapped to "Pending" - the same
@@ -2237,6 +2268,12 @@ def get_audit_workbook(session_id: int):
     get_voucher_line_physical_bills()/get_line_observations()'s own sibling-resolution scope
     (client_data_id, not the per-session voucher_line_id), just computed for every line in the
     session in one pass instead of resolved one line at a time.
+
+    Top-level response also carries client_id (Procedures-pill wiring phase) - already loaded
+    below for the session lookup, just also returned. Needed by Audit Workbook's own procedure-
+    modal adapter for client-scoped calls inside the modal (Trial Balance leaf-account lookup,
+    Data Bank search/browse) - the session's real client, not whatever the global navbar client
+    picker happens to have selected at the time, which can silently disagree.
     """
     session = execute_query(
         "SELECT id, client_id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'",
@@ -2259,7 +2296,7 @@ def get_audit_workbook(session_id: int):
     )
 
     if not rows:
-        return {"total_vouchers": 0, "total_lines": 0, "vouchers": []}
+        return {"total_vouchers": 0, "total_lines": 0, "client_id": client_id, "vouchers": []}
 
     # Parse row_data / resolve account_code+description once per line, up front - everything
     # below keys off account_code (category resolution) or client_data_id (the sibling-scope
@@ -2301,6 +2338,7 @@ def get_audit_workbook(session_id: int):
     guidance_docs_by_category: Dict[int, list] = {
         cid: get_category_guidance_documents(cid) for cid in distinct_category_ids
     }
+    category_name_by_id = _audit_workbook_resolve_category_names(distinct_category_ids)
 
     cd_placeholders = ",".join("?" for _ in client_data_ids)
 
@@ -2480,6 +2518,7 @@ def get_audit_workbook(session_id: int):
             "client_data_id": pl['client_data_id'],
             "account_code": pl['account_code'],
             "account_name": account_name_by_code.get(pl['account_code']) if pl['account_code'] else None,
+            "category_name": category_name_by_id.get(category_id) if category_id else None,
             "description": pl['description'],
             "amount": pl['extract_amount'],
             "status": line_status,
@@ -2498,7 +2537,7 @@ def get_audit_workbook(session_id: int):
         g["status"] = _rollup_voucher_status(g.pop("_cleared_statuses"))
         vouchers.append(g)
 
-    return {"total_vouchers": len(vouchers), "total_lines": total_lines, "vouchers": vouchers}
+    return {"total_vouchers": len(vouchers), "total_lines": total_lines, "client_id": client_id, "vouchers": vouchers}
 
 
 @router.post("/api/verification/session/{session_id}/reconcile_range")

@@ -73,6 +73,22 @@ let currentFilterStatus = 'all';
 // data); reset only on a fresh session fetch, mirroring allVouchers' own lifetime.
 let expandedObservationDetailIds = new Set();
 
+// ---------- PROCEDURES-PILL WIRING STATE ----------
+// This session's client_id (GET .../audit_workbook now returns it) — the modal's own
+// client-scoped calls (Trial Balance leaf-account lookup, Data Bank search/browse) must use the
+// session's real client, not whatever the global navbar client picker happens to have selected.
+let sessionClientId = null;
+// {[detail_id]: {transactionType: category_name}} — the direct analog of verification.js's own
+// voucherLineState, populated once per fetchAuditWorkbook() from the endpoint's new per-line
+// category_name field. openProcedureModal() (procedure_modal.js) hard-gates on
+// hostAdapter.voucherLineState[uid].transactionType being truthy before it will open at all.
+let awVoucherLineState = {};
+// {[detail_id]: {...}} — the modal's own per-line tab scratch state (analog of verification.js's
+// procedureModalState), written into directly by procedure_modal.js via
+// hostAdapter.procedureModalState[uid] = {...}. Persistent across modal opens within this page's
+// lifetime, reset only alongside a fresh session fetch (matches awVoucherLineState's own lifetime).
+let awProcedureModalState = {};
+
 // ---------- DOM REFS ----------
 const awSubtitleEl = document.getElementById('awSubtitle');
 const awTableBody = document.getElementById('awTableBody');
@@ -90,6 +106,9 @@ const awVerificationBtn = document.getElementById('awVerificationBtn');
 // matching comment on #awSpinnerOverlay in audit_workbook.html/style.css for why this is a
 // full-cover overlay rather than a spinner row inside #awTableBody.
 const awSpinnerOverlay = document.getElementById('awSpinnerOverlay');
+// Status feedback for the shared procedure modal's adapter (Procedures-pill wiring phase) — same
+// .upload-status convention as #verificationStatus in verification.html.
+const awStatusEl = document.getElementById('awStatus');
 
 // ---------- HELPERS ----------
 
@@ -143,11 +162,14 @@ function getAwStatusBadgeHtml(status) {
     return `<span class="aw-status-badge ${statusClass}">${escapeHtml(status || '—')}</span>`;
 }
 
-// Procedures cell: static fraction + ring, matching Verification's own collapsed-badge look —
-// never clickable here, since this page has no #procedureModal equivalent to open. {total: 0}
-// (no resolved Category) renders a plain muted dash, same convention getAwObservationsCellHtml()
-// uses for a zero-entry line.
-function getAwProceduresCellHtml(procedures) {
+// Procedures cell: static fraction + ring, matching Verification's own collapsed-badge look.
+// Procedures-pill wiring phase: clickable — carries data-detail-id so the delegated click
+// listener below can open the shared procedure modal via this page's own adapter. {total: 0}
+// (no resolved Category) renders a plain muted dash with no badge at all, same convention
+// getAwObservationsCellHtml() uses for a zero-entry line — naturally non-clickable, no extra
+// guard needed.
+function getAwProceduresCellHtml(line) {
+    const procedures = line.procedures;
     const done = procedures ? procedures.done : 0;
     const total = procedures ? procedures.total : 0;
     if (!total) {
@@ -156,7 +178,7 @@ function getAwProceduresCellHtml(procedures) {
     const pct = Math.round((done / total) * 100);
     const cls = done === 0 ? 'pending' : (done === total ? 'done' : 'partial');
     return `
-        <span class="voucher-line-procedures-badge ${cls}" title="${done} of ${total} documents complete">
+        <span class="voucher-line-procedures-badge ${cls}" data-detail-id="${line.detail_id}" title="${done} of ${total} documents complete — click to open">
             ${buildProcedureRingSvg(pct, cls)}${done}/${total}
         </span>
     `;
@@ -215,7 +237,7 @@ function buildLineRowHtml(v, line, isFirstLine, groupParityClass) {
             ${leadingCellsHtml}
             <td>${escapeHtml(line.description || '—')}</td>
             <td>${formatAwAmount(line.amount)}</td>
-            <td>${getAwProceduresCellHtml(line.procedures)}</td>
+            <td>${getAwProceduresCellHtml(line)}</td>
             <td>${getAwObservationsCellHtml(line)}</td>
             <td>${getAwStatusBadgeHtml(line.status)}</td>
         </tr>
@@ -313,6 +335,17 @@ async function fetchAuditWorkbook(sessionId, targetVoucherNo) {
         const data = await res.json();
         allVouchers = data.vouchers || [];
         expandedObservationDetailIds = new Set();
+        // Procedures-pill wiring phase: session client + per-line resolved-Category state, built
+        // fresh from this fetch — awVoucherLineState/awProcedureModalState mirror this response's
+        // own lifetime (a fresh session fetch replaces both, same as allVouchers).
+        sessionClientId = data.client_id || null;
+        awVoucherLineState = {};
+        allVouchers.forEach(v => {
+            (v.lines || []).forEach(line => {
+                awVoucherLineState[line.detail_id] = { transactionType: line.category_name || '' };
+            });
+        });
+        awProcedureModalState = {};
         awSubtitleEl.textContent = `Session #${sessionId} · ${data.total_vouchers || 0} voucher(s), ${data.total_lines || 0} line(s)`;
         setChipsDisabled(false);
         currentFilterStatus = 'all';
@@ -376,6 +409,383 @@ function navigateToVoucherInVerification(voucherNo) {
     window.location.href = `/static/verification.html?${params}`;
 }
 
+// ---------- PROCEDURE MODAL ADAPTER (Procedures-pill wiring phase) ----------
+// Wires a line's Procedures pill to the shared static/procedure_modal.js component (the same
+// modal Verification uses) via this page's OWN buildProcedureModalAdapter()-equivalent, per
+// procedure_modal.js's Phase 1b adapter contract — see that file's own header comment for the
+// full property list/reasoning. This does NOT reuse verification.js's adapter or its
+// saveLineItems() (that function also does Verification-page-specific UI work — cashbook
+// preview, sessionTransactions patching — that doesn't apply here); everything below is this
+// page's own lean, direct-to-backend equivalent. Saving here has no effect on Verification's own
+// grid/state; the reverse is also true (Verification never reads any of this page's state).
+
+// Status feedback, same shape as verification.js's own showStatus() — see #awStatus in
+// audit_workbook.html.
+function awShowStatus(msg, type = 'info') {
+    if (!awStatusEl) return;
+    awStatusEl.textContent = msg;
+    awStatusEl.className = 'upload-status ' + type;
+    awStatusEl.style.display = 'block';
+    clearTimeout(window.awStatusTimeout);
+    window.awStatusTimeout = setTimeout(() => {
+        if (awStatusEl) awStatusEl.style.display = 'none';
+    }, 5000);
+}
+
+// Finds a line + its owning voucher group anywhere in allVouchers, by detail_id (String-compared,
+// same convention procedure_modal.js itself uses, since a uid arriving from a DOM dataset is
+// always a string while detail_id is a number straight from JSON).
+function awFindLineByDetailId(uid) {
+    for (const v of allVouchers) {
+        const line = (v.lines || []).find(l => String(l.detail_id) === String(uid));
+        if (line) return { voucher: v, line };
+    }
+    return null;
+}
+
+// Mirrors the backend's own _rollup_voucher_status() rule exactly (routers/verification.py,
+// documented in this project's CLAUDE.md Architecture notes): all lines Cleared -> Cleared; else
+// any line Query -> Query; else Pending (covers null/unclassified) — used to keep a voucher
+// group's own rollup status in sync client-side after a single line's status changes, without a
+// full session refetch.
+function awRollupVoucherStatus(statuses) {
+    if (!statuses.length) return 'Pending';
+    if (statuses.every(s => s === 'Cleared')) return 'Cleared';
+    if (statuses.some(s => s === 'Query')) return 'Query';
+    return 'Pending';
+}
+
+// Small local duplicates of the pure (no-Verification-state) helpers procedure_modal.js's adapter
+// contract requires — same "visually matched, physically duplicated" convention this file already
+// follows for buildProcedureRingSvg() above, since verification.js itself isn't loaded on this page.
+
+function getAwLineAlias(row, aliases) {
+    if (!row) return '—';
+    for (const alias of aliases) {
+        if (row[alias] !== undefined && row[alias] !== null && row[alias] !== '') return row[alias];
+    }
+    return '—';
+}
+
+const AW_ACCOUNT_NAME_ALIASES = ['Account Name'];
+const AW_DESCRIPTION_ALIASES = ['Description'];
+
+// Reads the synthesized row_data's single Amount key (see buildAuditWorkbookAdapter()'s
+// currentVoucherLines below) — this page's lines are already resolved to one plain amount
+// (client_data.extract_amount), so there's no real Debit/Credit alias set to match, unlike
+// verification.js's own getVoucherLineAmount().
+function getAwVoucherLineAmount(row) {
+    if (!row) return '';
+    return (row['Debit Amount'] !== undefined && row['Debit Amount'] !== null && row['Debit Amount'] !== '')
+        ? row['Debit Amount'] : '';
+}
+
+function parseAwVoucherAmount(value) {
+    if (value === '' || value === undefined || value === null) return 0;
+    const n = parseFloat(String(value).replace(/,/g, ''));
+    return isNaN(n) ? 0 : n;
+}
+
+const AW_RISK_RATING_ORDER = { Low: 1, Medium: 2, High: 3 };
+// Verbatim logic copy of verification.js's computeLineRiskData() — used by the modal's header
+// meta line (Line N of M — account — Type · Amount · Risk: ...).
+function awComputeLineRiskData(auditGuidanceData) {
+    const documents = (auditGuidanceData && auditGuidanceData.documents) || [];
+    let risk = null;
+    documents.forEach(doc => {
+        if (doc.risk_rating && (!risk || AW_RISK_RATING_ORDER[doc.risk_rating] > AW_RISK_RATING_ORDER[risk])) {
+            risk = doc.risk_rating;
+        }
+    });
+    const tooltip = documents
+        .filter(doc => (doc.auth_roles || []).length)
+        .map(doc => `${doc.name}: ${doc.auth_roles.join(', ')}`)
+        .join('\n');
+    return { risk, tooltip };
+}
+
+const AW_LSR_GATE_ICON = { pass: '✔', fail: '✘', not_applicable: '–' };
+// Verbatim logic copy of verification.js's renderGateRowHtml() — the Validate panel inside the
+// modal (procedure_modal.js's toggleValidatePanel()) calls hostAdapter.renderGateRowHtml per gate.
+function awRenderGateRowHtml(g) {
+    return `
+        <div class="lsr-gate ${g.status}">
+            <div class="lsr-gate-label"><span class="lsr-gate-icon">${AW_LSR_GATE_ICON[g.status] || '–'}</span>${escapeHtml(g.label)}</div>
+            ${g.detail ? `<div class="lsr-gate-detail">${escapeHtml(g.detail)}</div>` : ''}
+        </div>
+    `;
+}
+
+// Category guidance cache, same shape/contract as verification.js's auditGuidanceCache —
+// forceRefresh (used by openProcedureModal() on every real open) bypasses it.
+let awAuditGuidanceCache = {};
+async function awFetchAuditGuidanceData(type, forceRefresh = false) {
+    if (!forceRefresh && Object.prototype.hasOwnProperty.call(awAuditGuidanceCache, type)) {
+        return awAuditGuidanceCache[type];
+    }
+    const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
+    if (res.status === 404) {
+        awAuditGuidanceCache[type] = null;
+        return null;
+    }
+    if (!res.ok) throw new Error('Failed to fetch audit guidance');
+    const data = await res.json();
+    awAuditGuidanceCache[type] = data;
+    return data;
+}
+
+// Fail-soft-to-[] fetch helpers, same convention as their verification.js counterparts
+// (fetchAssignedDocumentRecords/fetchProcedureChecksForLine/fetchLineObservationEntries) — used
+// both by the adapter itself and by awRefreshLineProcedures()/awRefreshLineObservations() below.
+async function awFetchAssignedDocumentRecords(uid) {
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.documents || [];
+    } catch (e) {
+        console.error('Failed to load assignment status:', e);
+        return [];
+    }
+}
+
+async function awFetchProcedureChecksForLine(uid) {
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/procedure_checks/${uid}`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.checks || [];
+    } catch (e) {
+        console.error('Failed to load procedure checks:', e);
+        return [];
+    }
+}
+
+async function awFetchPhysicalBillsForLine(uid) {
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/physical_bills/${uid}`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.bills || [];
+    } catch (e) {
+        console.error('Failed to load physical bills:', e);
+        return [];
+    }
+}
+
+async function awFetchLineObservationEntries(uid) {
+    try {
+        const res = await fetch(`${API_BASE}/api/verification/line_observations/${uid}`);
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.entries || [];
+    } catch (e) {
+        console.error('Failed to load observations:', e);
+        return [];
+    }
+}
+
+// The direct-backend-call replacement for verification.js's saveLineItems() — flushes any dirty
+// observation/no-match-note text (flushProcedureObservations()/flushAccountHeadNoMatchNote() are
+// plain globals already declared in procedure_modal.js, reachable by name since it loads before
+// this file — same classic-script shared-scope convention procedure_modal.js's own header comment
+// documents), then POSTs the same save_line_items endpoint verification.js ultimately uses. On
+// success, patches this line's status + its voucher group's rollup status in allVouchers and
+// re-renders — the Status-column half of "row/pill refreshes after save".
+async function awSaveLineItems(uid) {
+    if (!uid) return;
+    await flushProcedureObservations(uid);
+    await flushAccountHeadNoMatchNote(uid);
+    try {
+        const payload = {
+            detail_id: uid,
+            line_items: [],
+            transaction_type: (awVoucherLineState[uid] && awVoucherLineState[uid].transactionType) || null,
+            procedure_data: {}
+        };
+        const res = await fetch(`${API_BASE}/api/verification/save_line_items`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save');
+        }
+        const data = await res.json();
+        if ('cleared_status' in data) {
+            const found = awFindLineByDetailId(uid);
+            if (found) {
+                found.line.status = data.cleared_status || 'Pending';
+                found.voucher.status = awRollupVoucherStatus((found.voucher.lines || []).map(l => l.status));
+                applyFilterAndRender();
+            }
+        }
+    } catch (e) {
+        console.error('Error saving line (Audit Workbook):', e);
+        awShowStatus('Could not save changes for this line — please try again.', 'error');
+    }
+}
+
+// The "row/pill refreshes after save" mechanism — called by procedure_modal.js's
+// hideProcedureModalOnly() unconditionally on every close path (✕, Verify & Next/Close, plain
+// Verify). Duplicates the same isDocDone()-style completion rule verification.js's own
+// updateProceduresCellForLine() applies (physical_bill exact-amount match / template-linked
+// evidence presence / no-template role ticks, gated on voucher-level checks when
+// transaction_level_approval is set) — the exact rule the backend's own _compute_line_procedures()
+// documents itself as matching, so this refresh can never disagree with a later full page reload.
+// Patches allVouchers in place and re-renders from that already-patched in-memory data (no network
+// re-fetch of the whole session) — a full local re-render rather than a surgical single-row DOM
+// patch, since Sr/Voucher No./Date/Account are real rowspan cells that make a targeted patch
+// fragile; the actual DATA change stays scoped to the one line, satisfying "no effect on
+// Verification's grid" (nothing here ever touches Verification's own state/DOM).
+async function awRefreshLineProcedures(uid, type) {
+    const found = awFindLineByDetailId(uid);
+    if (!found) return;
+    const { voucher, line } = found;
+    const category = type || (awVoucherLineState[uid] && awVoucherLineState[uid].transactionType);
+    if (!category) {
+        line.procedures = { done: 0, total: 0 };
+        applyFilterAndRender();
+        return;
+    }
+    let guidance = null;
+    try {
+        guidance = await awFetchAuditGuidanceData(category);
+    } catch (e) {
+        console.error('Failed to refresh Procedures cell:', e);
+        return;
+    }
+    const docs = (guidance && guidance.documents) || [];
+    if (!docs.length) {
+        line.procedures = { done: 0, total: 0 };
+        applyFilterAndRender();
+        return;
+    }
+    const needsVoucherChecks = docs.some(doc => doc.transaction_level_approval);
+    const needsPhysicalBills = docs.some(doc => doc.document_type === 'physical_bill');
+    const [assignedRecords, procedureChecks, checks, physicalBills] = await Promise.all([
+        awFetchAssignedDocumentRecords(uid),
+        awFetchProcedureChecksForLine(uid),
+        // ensureVoucherChecksLoaded() is a plain global already declared in procedure_modal.js
+        // (pure fetch+cache, no hostAdapter dependency of its own) — reused directly by name.
+        needsVoucherChecks ? ensureVoucherChecksLoaded(sessionClientId, voucher.voucher_no) : Promise.resolve(null),
+        needsPhysicalBills ? awFetchPhysicalBillsForLine(uid) : Promise.resolve([])
+    ]);
+    const assignedDocIds = new Set(assignedRecords.map(r => r.document_id));
+    const voucherLineAmount = parseAwVoucherAmount(line.amount);
+    const isDocDone = doc => {
+        let base;
+        if (doc.document_type === 'physical_bill') {
+            const bill = physicalBills.find(b => b.document_id === doc.id);
+            const fieldsComplete = !!(bill && (bill.bill_no || '').trim() && (bill.bill_date || '').trim()
+                && (bill.vendor_name || '').trim() && bill.amount !== '' && bill.amount != null && !isNaN(parseFloat(bill.amount)));
+            base = fieldsComplete && Math.abs(parseFloat(bill.amount) - voucherLineAmount) <= 0.005;
+        } else if (doc.template_id) {
+            base = assignedDocIds.has(doc.id);
+        } else {
+            const roles = doc.auth_roles || [];
+            base = roles.length > 0 && roles.every(role => procedureChecks.some(c => c.document_id === doc.id && c.role_name === role && c.is_checked));
+        }
+        if (!base) return false;
+        // isVoucherChecksComplete() is a plain global already declared in procedure_modal.js.
+        if (doc.transaction_level_approval) return isVoucherChecksComplete(checks);
+        return true;
+    };
+    const done = docs.filter(isDocDone).length;
+    line.procedures = { done, total: docs.length };
+    applyFilterAndRender();
+}
+
+// Companion to awRefreshLineProcedures() above, same call/patch/re-render shape — mirrors
+// verification.js's own updateObservationsCellForLine() nonEmpty filter and document-name
+// resolution (names aren't on the observation entry itself, resolved from the same cached
+// guidance fetch).
+async function awRefreshLineObservations(uid, type) {
+    const found = awFindLineByDetailId(uid);
+    if (!found) return;
+    const { line } = found;
+    const entries = await awFetchLineObservationEntries(uid);
+    const nonEmpty = entries.filter(e => (e.observation_text || '').trim());
+    line.observations = {
+        count: nonEmpty.length,
+        entries: nonEmpty.map(e => ({ document_id: e.document_id, document_name: null, text: e.observation_text }))
+    };
+    const category = type || (awVoucherLineState[uid] && awVoucherLineState[uid].transactionType);
+    if (category && nonEmpty.length) {
+        try {
+            const guidance = await awFetchAuditGuidanceData(category);
+            const nameById = {};
+            ((guidance && guidance.documents) || []).forEach(doc => { nameById[doc.id] = doc.name; });
+            line.observations.entries.forEach(e => { e.document_name = nameById[e.document_id] || null; });
+        } catch (e) {
+            console.error('Failed to resolve document names for Observations refresh:', e);
+        }
+    }
+    applyFilterAndRender();
+}
+
+// Builds a fresh adapter closing over the specific voucher group the clicked line belongs to —
+// mirrors verification.js's buildProcedureModalAdapter()'s own "fresh per real open" convention.
+// See procedure_modal.js's header comment for the full contract each property below satisfies.
+function buildAuditWorkbookAdapter(voucherGroup) {
+    return {
+        getClientId: () => sessionClientId,
+        // Cosmetic only (drives the footer button's "Verify & Next" vs "Verify & Close" label) —
+        // position within the whole session's voucher list, not line position within a voucher.
+        getVoucherPosition: () => {
+            const idx = allVouchers.indexOf(voucherGroup);
+            return { index: idx === -1 ? 0 : idx + 1, total: allVouchers.length };
+        },
+        showStatus: awShowStatus,
+        saveLineItems: awSaveLineItems,
+        saveAllVoucherLines: async () => {
+            for (const line of (voucherGroup.lines || [])) {
+                await awSaveLineItems(line.detail_id);
+            }
+        },
+        escapeHtml,
+        getVoucherLineAlias: getAwLineAlias,
+        getVoucherLineAmount: getAwVoucherLineAmount,
+        renderGateRowHtml: awRenderGateRowHtml,
+        fetchAuditGuidanceData: awFetchAuditGuidanceData,
+        fetchPhysicalBillsForLine: awFetchPhysicalBillsForLine,
+        updateProceduresCellForLine: awRefreshLineProcedures,
+        updateObservationsCellForLine: awRefreshLineObservations,
+        parseVoucherAmount: parseAwVoucherAmount,
+        computeLineRiskData: awComputeLineRiskData,
+        // Audit Workbook has no session-progress display to refresh.
+        updateProgressDisplay: async () => {},
+        // Audit Workbook already shows every voucher in one table — there is no separate
+        // "current voucher" page view to re-render into on the rare "advance past this voucher"
+        // branch (verifyAndAdvanceVoucher() in procedure_modal.js). The line that was just
+        // verified is already refreshed via updateProceduresCellForLine/updateObservationsCellForLine
+        // above regardless of this branch, so a no-op here loses nothing.
+        applyVoucherNavRenderData: () => {},
+        get VOUCHER_LINE_ACCOUNT_NAME_ALIASES() { return AW_ACCOUNT_NAME_ALIASES; },
+        get VOUCHER_LINE_DESCRIPTION_ALIASES() { return AW_DESCRIPTION_ALIASES; },
+        get currentVoucherId() { return voucherGroup.voucher_no; },
+        get currentSessionId() { return currentSessionId; },
+        // Synthesizes a row_data shape satisfying getVoucherLineAlias()/getVoucherLineAmount()'s
+        // alias lookups from this page's already-resolved line fields — there is no real Excel
+        // row_data here (unlike verification.js's currentVoucherLines, which comes straight from
+        // client_data).
+        get currentVoucherLines() {
+            return (voucherGroup.lines || []).map(line => ({
+                detail_id: line.detail_id,
+                client_data_id: line.client_data_id,
+                row_data: {
+                    'Account Name': line.account_name || line.account_code || '',
+                    'Description': line.description || '',
+                    'Debit Amount': line.amount
+                }
+            }));
+        },
+        get voucherLineState() { return awVoucherLineState; },
+        get procedureModalState() { return awProcedureModalState; }
+    };
+}
+
 // ---------- EVENT LISTENERS ----------
 awFilterChips.forEach(chip => {
     chip.addEventListener('click', () => {
@@ -391,6 +801,20 @@ awFilterChips.forEach(chip => {
 // subtotal row carries neither data-detail-id nor data-voucher-no, so it's naturally excluded
 // from both, and placeholder/loading/error/empty rows carry no data attributes either.
 awTableBody.addEventListener('click', function (e) {
+    // Procedures-pill wiring phase: checked first so a click on the badge opens the shared
+    // procedure modal instead of falling through to the Observations toggle or row-navigate
+    // branches below.
+    const procTarget = e.target.closest('.voucher-line-procedures-badge');
+    if (procTarget) {
+        e.stopPropagation();
+        const detailId = procTarget.getAttribute('data-detail-id');
+        const found = awFindLineByDetailId(detailId);
+        if (found) {
+            openProcedureModal(String(found.line.detail_id), null, buildAuditWorkbookAdapter(found.voucher));
+        }
+        return;
+    }
+
     const obsTarget = e.target.closest('.voucher-line-obs-flag, .voucher-line-obs-expanded-list');
     if (obsTarget) {
         e.stopPropagation();
@@ -436,6 +860,9 @@ window.onload = function () {
     } else {
         currentSessionId = null;
         allVouchers = [];
+        sessionClientId = null;
+        awVoucherLineState = {};
+        awProcedureModalState = {};
         if (awVerificationBtn) awVerificationBtn.disabled = true;
         awSubtitleEl.textContent = 'No session specified — open this page via an Audit Workbook link from Verification.';
         setChipsDisabled(true);
