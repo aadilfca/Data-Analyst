@@ -175,36 +175,36 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - 2026-07-14: Verification Phase 2.
 - 2026-07-14: Verification Phase 3 (flat theme-matched styling) done.
 - 2026-07-14: Phase 4 (expanded row: type dropdown + 2 popup buttons) done.
-- 2026-07-14: Code review of Cline's Phases 1-4 header/voucher redesign found real gaps (DFD content dropped with no popup/trigger left anywhere in the UI; Observations & Comments deleted rather than relocated despite a comment claiming relocation).
-- 2026-07-14: Removed the per-line Particulars/Value table (`buildParticularsValueTable()` deleted, was the only caller in `buildLineDetailHtml()`).
-- 2026-07-14: Voucher header + line-row redesign to match an approved Claude-prototype mockup (plan at the time: `melodic-dazzling-feather.md`).
+- 2026-07-14: Code review of Cline's Phases 1-4 header/voucher redesign found real gaps (DFD dropped, Observations/Comments deleted not relocated).
+- 2026-07-14: Removed the per-line Particulars/Value table (`buildParticularsValueTable()`).
+- 2026-07-14: Voucher header + line-row redesign to match an approved Claude-prototype mockup.
 - 2026-07-14: Amount column simplified per user correction.
 - 2026-07-15: Removed the "⚠️ Select a transaction type first." toast.
-- 2026-07-15: Removed the manual "Save Progress" button (`#saveBtn` in `renderVoucherHeader()`, static/verification.js) after confirming it was redundant.
-- 2026-07-15: Voucher panel capped to 50% width (left half of screen), right half left clear for future development, per a Claude-prototype mockup shown for visual reference only (internal alignment of the subtitle/columns/expanded-bar was explicitly kept as-is, not restyled to match the mockup). `#voucherHeaderBar` and `#voucherLinesContainer` wrapped in a new `.voucher-panel` div (static/verification.html); `.voucher-panel { width: 50%; }` added (static/style.css), with a `max-width:768px` override back to 100% so mobile isn't squeezed. `#transactionCard`/status bar/popups outside the wrapper, unaffected. Verified end-to-end with Playwright: panel renders at half width, right side empty, expanded-row layout (Audit Guidance/Supporting/Type) unaffected, no console errors..
-- 2026-07-15: Six-part voucher table polish pass (static/verification.js, static/verification.html, static/style.css): 1. `.voucher-panel` width 50%→60%. 2. Cashbook button + 🔍 view-all icon moved out of the separate `.voucher-toolbar-row` (now deleted) into the primary nav row (`renderVoucherHeader()`), grouped in a new `.voucher-nav-right` wrapper alongside the Next-voucher button so the row reads Prev | centered title | [Next · 🔍 · Cashbook] flush right. 3. Full "All Borders" grid styling (Excel Alt+H+B+A) applied to the voucher table: the column-title row, each line's summary row, and the total row now form one continuous bordered grid.
+- 2026-07-15: Removed the manual "Save Progress" button (`#saveBtn`, static/verification.js) after confirming it was redundant.
+- 2026-07-15: Voucher panel capped to 50% width via new `.voucher-panel` wrapper, per a Claude-prototype mockup.
+- 2026-07-15: Six-part voucher table polish pass — panel 50%→60%, nav row regrouped, full "All Borders" grid styling.
 - 2026-07-15: Toolbar/voucher-row split + table fixes (static/verification.html, static/verification.js, static/style.css).
-- 2026-07-15: Audited every `showStatus()` call site (19 total, all writing into the `#verificationStatus` header bar) and removed the two pure navigation-noise ones per user request.
+- 2026-07-15: Audited all 19 `showStatus()` call sites, removed 2 pure navigation-noise ones per user request.
 - 2026-07-15: Reverted the toolbar/voucher-row split from the previous phase, per direct feedback.
 - 2026-07-15: Two quick follow-up corrections to the above, same session.
 - 2026-07-15: Beautified `.cashbook-bar` and added session stats to its left side.
-- 2026-07-15: Dropped the internal grid border between the Status column and the chevron column (`.voucher-line-summary-grid > *:nth-child(4)`, static/style.css).
+- 2026-07-15: Dropped the internal grid border between the Status and chevron columns (static/style.css).
 - 2026-07-15: Follow-up fix, same session.
-- 2026-07-15: Transaction Type promoted from the expanded panel into its own "Type" column in the summary row, between Account Name and Amount (`renderVoucherLines()`, static/verification.js).
+- 2026-07-15: Transaction Type promoted from the expanded panel into its own "Type" column in the summary row (static/verification.js).
 - 2026-07-15: Two quick follow-ups to the Type column, same session.
 - 2026-07-15: Removed the "Session exited. Returning to cashbook." toast from `exitSession()` (static/verification.js).
-- 2026-07-15: Added a small 📋 Audit Guidance icon to the extreme right of the Account Name line in each voucher line's summary row (`.voucher-line-name-row`, `renderVoucherLines()` in static/verification.js).
-- 2026-07-15: Moved the Audit Guidance trigger from the Account Name line's icon to two small pill "chips" stacked below the Type dropdown, matching an approved prototype image.
-- 2026-07-15: Removed the voucher line table's expand/collapse entirely (chevron column, click-to-expand on the summary row, the `.voucher-line-detail` panel).
-- 2026-07-15: Supporting column now lists the five procedure names (Purchase Demand, Purchase Order, Gate Pass, Store Receiving, Vendor Bill) directly as bold plain-text links (`.voucher-line-proc-link`, `renderVoucherLines()` in static/verification.js) instead of one "📎 Procedures" chip that opened an intermediate card-picker popup.
-- 2026-07-15: Added an "Observations" column between Supporting and Status (`renderVoucherLines()`, static/verification.js).
+- 2026-07-15: Added a small 📋 Audit Guidance icon to the right of the Account Name line in each voucher line's summary row (static/verification.js).
+- 2026-07-15: Moved the Audit Guidance trigger to two small pill "chips" below the Type dropdown, matching an approved prototype image.
+- 2026-07-15: Removed the voucher line table's expand/collapse entirely (chevron column, click-to-expand row, detail panel).
+- 2026-07-15: Supporting column now lists the 5 procedure names as bold plain-text links instead of one chip opening a card-picker popup.
+- 2026-07-15: Added an "Observations" column between Supporting and Status (static/verification.js).
 - 2026-07-15: Voucher table columns made user-resizable and widened per direct request.
 - 2026-07-15: Fixed a visual regression from the above.
 - 2026-07-15: Default column widths adjusted per direct request.
 - 2026-07-15: Added an Excel-style "Width: N px" tooltip that follows the cursor while dragging a column resize handle.
 - 2026-07-15: Voucher table column-header polish.
-- 2026-07-15: Mirror-icon transaction-list popover (`#transactionListPopover`, opened by the 🔍 icon next to the voucher title) restructured Phase A of 2.
-- 2026-07-15: Re-reviewed the mirror-icon popover restructuring above against a separately-numbered "Phase 2" brief (grouping/Date column/subtotals/header text.
+- 2026-07-15: Mirror-icon transaction-list popover (`#transactionListPopover`) restructured Phase A of 2.
+- 2026-07-15: Re-reviewed the mirror-icon popover restructuring against a separately-numbered "Phase 2" brief (grouping/Date/subtotals/header).
 - 2026-07-15: Mirror-icon transaction-list popover Phase 3 (final phase) done.
 - 2026-07-15: Voucher Prev/Next navigation Phase A of 5 (backend) done.
 - 2026-07-15: Voucher Prev/Next navigation Phase B of 5 (frontend, main card multi-line rendering) done.
@@ -217,7 +217,7 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - 2026-07-16: Template module quick-add-column Phase 4 of 4 (final.
 - 2026-07-16: Per-client voucher pattern storage Phase 1 of 7 (database.py only) done.
 - 2026-07-16: Per-client voucher pattern storage Phase 3 of 7 (Clients page cogwheel entry point, static/clients.js) done.
-- 2026-07-16: Per-client voucher pattern storage Phase 4 of 7 (new Client Settings page, static/client_settings.html + static/client_settings.js, new files) done.
+- 2026-07-16: Per-client voucher pattern storage Phase 4 of 7 (new Client Settings page, static/client_settings.html/.js) done.
 - 2026-07-16: Per-client voucher pattern storage Phase 5 of 7 (Client Settings page.
 - 2026-07-16: Per-client voucher pattern storage Phase 6 of 7 (verification logic.
 - 2026-07-16: Per-client voucher pattern storage Phase 2 of 7 (backend CRUD API, database.py + routers/clients.py) done.
@@ -225,15 +225,15 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - 2026-07-16: Flexible date-import format Phase 1 of 5 (backend parsing core, routers/import_export.py only) done.
 - 2026-07-16: Flexible date-import format Phase 2 of 5 (distinguish native Excel dates from text-string dates, routers/import_export.py only) done.
 - 2026-07-16: Flexible date-import format Phase 3 of 5 (frontend two-step date-format dropdown UI, static/upload.html + static/upload.js only) done.
-- 2026-07-16: Flexible date-import format Phase 4 of 5 (wire frontend selection into validate/import calls, static/upload.js + routers/import_export.py) done.
+- 2026-07-16: Flexible date-import format Phase 4 of 5 (wire frontend selection into validate/import, static/upload.js + import_export.py) done.
 - 2026-07-16: Flexible date-import format Phase 5 of 5 (final.
 - 2026-07-16: Row-exclusion Phase 1 of 4 (backend, routers/import_export.py only) done.
 - 2026-07-17: Row-exclusion Phase 2 of 4 (frontend row-selection grid, static/upload.html + static/upload.js only) done.
-- 2026-07-17: Row-exclusion Phase 3 of 4 (auto-flag heuristic + live counter + Select All/Deselect All, static/upload.html + static/upload.js only) done.
+- 2026-07-17: Row-exclusion Phase 3 of 4 (auto-flag heuristic + live counter + Select All/Deselect All, static/upload.html/.js) done.
 - 2026-07-17: Row-exclusion Phase 4 of 4 (final.
 - 2026-07-17: Upload header reorg Phase 1 of 4 (step indicator strip, static/upload.html only) done.
-- 2026-07-17: Upload header reorg Phase 2 of 4 (regroup Template/Sheet/Download Template + progressive disclosure, static/upload.html + static/upload.js only, `static/style.css` untouched) done. Key finding before implementing: Download Template and `#sheetField` (Sheet selector) were already DOM-adjacent inside `.top-bar` (Template → Date Delimiter → Date Order → Date Format Preview → Download → Sheet → badge → Go to Data Bank), so regrouping them needed no reordering and left Date Delimiter/Order/badge/Preview/Go to Data Bank completely untouched, in place. Both are now wrapped in one new `<div class="field-group" id="sheetDownloadGroup">`, hidden by default and revealed together only once a Template is chosen.
-- 2026-07-17: Upload header reorg Phase 3 of 4 (collapse Date Delimiter/Order into a popover, static/upload.html + static/upload.js only, `static/style.css` untouched) done. Key finding before implementing: `dateDelimiterDropdown`/`dateOrderDropdown` are read once via `getElement()` at module load and referenced only by id everywhere (their `change` listeners, `populateDateOrderDropdown()`, the validate/import payload's `date_delimiter`/`date_order` fields).
+- 2026-07-17: Upload header reorg Phase 2 of 4 (regroup Template/Sheet/Download Template + progressive disclosure, static/upload.html/.js) done.
+- 2026-07-17: Upload header reorg Phase 3 of 4 (collapse Date Delimiter/Order into a popover, static/upload.html/.js) done.
 - 2026-07-17: Upload header reorg Phase 4 of 4 (final.
 - 2026-07-17: Mini Preview removed entirely (static/upload.html + static/upload.js only).
 - 2026-07-17: Global navbar standardisation Phase 1 of 6 (core JS/CSS foundation, static/client_context.js + static/style.css only) done.
@@ -245,15 +245,15 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - 2026-07-17: Upload page "Upload File" button Phase 1 of 2 (static/upload.html + static/upload.js) done.
 - 2026-07-17: Upload page "Upload File" button Phase 2 of 2 (final.
 - 2026-07-17: "Go to Data Bank" button moved onto the step-indicator row (static/upload.html only).
-- 2026-07-17: Upload page three-fix batch (static/upload.html + static/upload.js) done. **Fix 1**: removed the redundant 📤 emoji from the Upload File button label (now plain "Upload File" text, `.upload-file-btn-main` span). **Fix 2**: the Column Mapping panel's *container* (`.left-panel`, wrapping `#mappingPanel`/`#modeActions`) had no hidden default state of its own, so its border/background/box-shadow rendered as an empty rectangle even before any file was loaded -- gave it `id="leftPanel"` with `style="display:none"` by default, and added a parallel `leftPanel.style.display` toggle at each of the 4 existing spots that already toggle `mappingPanel.style.display` (template-cleared branch, `resetUpload()`, `autoMapColumns()` success, `renderMapping()`'s empty-mappings guard) -- mirrors `mappingPanel` exactly rather than coupling to `modeActions`, which doesn't toggle identically at all 4 sites. No `style.css` change needed -- `.right-panel`'s existing `flex: 1 1 62%` naturally fills the space while `.left-panel` is `display:none`. **Fix 3** (the larger piece): mid-upload progress (Template, Sheet, Date format, Row-exclusion selections) previously vanished entirely when navigating to Data Bank and back via "📤 Upload More", since nothing persisted this page's in-memory state across navigation -- now auto-restores silently (no confirmation dialog) via a new sessionStorage-backed save/restore/clear trio (`saveUploadSessionState()`/`restoreUploadSessionState()`/`clearUploadSessionState()`, key `uploadPageState`). **Confirmed constraint before implementing**: a browser `<input type="file">` can never be repopulated by JS, and there is no backend endpoint that serves an already-uploaded file's raw bytes back (`GET /api/upload/file/{file_id}` returns metadata only) -- so the actual file is never restored; `fileId` is deliberately not persisted either, since re-selecting a file always gets a fresh one from `uploadFileToServer()`. What *is* restored: Template (via a new `selectTemplate(id)` -- the template dropdown's `change`-handler body extracted into its own `async` function so `restoreUploadSessionState()` can `await` it directly instead of racing a dispatched synthetic event, which would have let `selectTemplate()`'s own later status-bar text silently overwrite the "resuming session" message before the user ever saw it), Date Delimiter/Order (restored immediately, file-independent), and Sheet name / excluded-row numbers (stashed in two module-level "pending" variables -- `pendingRestoreSheetName`/`pendingExcludedRowNumbersToRestore` -- consumed once each, by `handleFile()`'s `FileReader.onload` preferring the pending sheet name over the usual `sheetNames[0]` default, and by `renderRowExclusionGrid()` re-applying the pending excluded-row numbers, bounds-checked against the newly re-read file's actual row count, right after its own fresh-Set reset). `saveUploadSessionState()` calls were added to every existing state-mutation point (template dropdown's selected/cleared branches, `handleFile()`, sheet selector `change`, `autoMapColumns()` success, both date-format dropdowns' `change` handlers, the row-exclusion per-checkbox listener, `rowExclusionSelectAll()`/`rowExclusionDeselectAll()`, and `resetRowExclusionSelections()`) -- purely additive, no existing logic changed. `clearUploadSessionState()` is called once, inside `resetUpload()` (the shared cleanup path already invoked by both the Reset button and `showImportSummary()`'s Close/overlay-click handlers after a successful import), satisfying both of the brief's specified clear triggers with one hook. Verified via `node --check static/upload.js` (passes) and by starting the app locally, confirming via `curl` that both served files contain every new marker (`leftPanel`, `uploadPageState`, `saveUploadSessionState`, `restoreUploadSessionState`, `clearUploadSessionState`, `selectTemplate`, `pendingRestoreSheetName`, `pendingExcludedRowNumbersToRestore`, `resetRowExclusionSelections`) and that the button text no longer contains the emoji, then stopping the server. No Playwright/browser tool was available this session, so the actual interactive flow (partial mapping -> Go to Data Bank -> Upload More -> silent restore -> re-select file -> mapping/row-exclusion resume) was not click-through confirmed -- worth a manual pass..
+- 2026-07-17: Upload page three-fix batch: removed button emoji; fixed Column Mapping panel empty-state; added sessionStorage auto-restore.
 - 2026-07-17: Upload page session-restore follow-up.
-- 2026-07-17: "Go to Data Bank" now opens in a new browser tab (static/upload.js only, `window.location.href` → `window.open(..., '_blank')` in the button's click handler, `window.onload`).
+- 2026-07-17: "Go to Data Bank" now opens in a new browser tab (static/upload.js only).
 - 2026-07-17: Upload page top-bar rearrangement into two borderless rows (static/upload.html + static/upload.js) done.
-- 2026-07-17: Three quick Upload page follow-ups to the top-bar rearrangement (static/upload.html + static/upload.js). **1) Restored the light-grey boxed container**: `.top-bar` got its `background`/`border`/`border-radius` back (removed in the "borderless" phase) per direct request and a confirmed AskUserQuestion.
+- 2026-07-17: Three quick follow-ups to the top-bar rearrangement — restored `.top-bar`'s boxed container styling per direct request.
 - 2026-07-18: Verification back-arrow bug fix (static/client_context.js + static/verification.js) done.
 - 2026-07-18: Verification back-arrow follow-up (static/verification.html + static/verification.js) done.
-- 2026-07-18: Cashbook discovery bug fix, expanded to a 5-way voucher-prefix category scheme (database.py, routers/clients.py, routers/verification.py, static/client_settings.html, static/client_settings.js) done. Started as a narrow brief: `GET /api/verification/cashbooks` (`extract_cashbook_name()`) was surfacing expense/vendor accounts as cashbook candidates because it accepted a Cash/Bank-category row with *either* debit or credit > 0. Investigation found the root cause was structural: the earlier per-client-prefix migration had collapsed the old type-specific `CPV`/`CV`→Payment vs `CRV`/`CR`→Receipt prefix lists into a flat 3-way `Cash`/`Bank`/`Journal` scheme with no Payment/Receipt distinction at all.
-- 2026-07-18: Bank Verification project, Phases 1-4 re-confirmed already live (database.py 5-category schema, routers/clients.py API, static/client_settings.* UI, routers/verification.py discovery fix).
+- 2026-07-18: Cashbook discovery bug fix, expanded to a 5-way voucher-prefix category scheme (database.py, clients.py/verification.py, client_settings.*).
+- 2026-07-18: Bank Verification project, Phases 1-4 re-confirmed already live (database.py, clients.py, client_settings.*, verification.py).
 - 2026-07-18: Bank Verification project, Phase 7 (dashboard entry points, static/index.html + static/script.js) done.
 - 2026-07-18: Bank Verification project, Phase 8 (final.
 - 2026-07-18: Bank Verification project, final regression pass done.
@@ -261,7 +261,7 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - 2026-07-18: Verification hub Phase 2 of 3.
 - 2026-07-19: Cashbook Preview selector Phase 1 of 3 (static/verification.html + static/verification.js) done.
 - 2026-07-19: Cashbook Preview selector Phase 2 of 3 (static/verification.js only.
-- 2026-07-18: Verification hub Phase 3 of 3, FINAL (static/index.html + static/script.js; static/style.css confirmed needing no change since Phase 1's `.module-card.coming-soon` already is the dedicated inert-state class the brief asked for) done.
+- 2026-07-18: Verification hub Phase 3 of 3, FINAL (static/index.html + static/script.js, no style.css change needed) done.
 - 2026-07-19: Global quick-navigation menu Phase 1 of 3 (static/client_context.js + static/style.css) done.
 - 2026-07-19: Global quick-navigation menu Phase 2 of 3 (static/client_context.js + static/style.css) done.
 - 2026-07-19: Global quick-navigation menu Phase 3 of 3, FINAL (static/verification.js + static/client_context.js) done.
