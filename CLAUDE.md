@@ -553,7 +553,7 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - 2026-08-12: Fixed voucher search popover Status column reading `validation_status` instead of `cleared_status`. Full detail: CHANGELOG_ARCHIVE.md.
 
 **Audit Workbook module (new feature, 2026-08-12) - 13-entry build log compressed; full detail: CHANGELOG_ARCHIVE.md, "Audit Workbook Module".**
-- 2026-08-12: Audit Workbook - 5-phase build (backend endpoint -> page shell -> wire/filter chips -> row-click jump-to-voucher -> peer nav buttons) plus a same-day Cashbook-screen nav button, a 3-phase Cashbook screen enhancement (nav button/Status column/signed Amount column), a 3-phase restructure to line-grain rows with subtotals, and a 2-phase restyle (Sr/Voucher No. columns, zebra striping) - all done.
+- 2026-08-12: Audit Workbook built (5 phases) + Cashbook fixes + restructure + restyle. Full detail: CHANGELOG_ARCHIVE.md.
 - 2026-08-13: Audit Workbook restructure Phase 1 of 3 — added Account Name field to line data (`routers/verification.py`). Full detail: CHANGELOG_ARCHIVE.md, "Audit Workbook Module".
 - 2026-08-13: **Audit Workbook restructure, Phase 2 of 3 (line-grain frontend rendering, `static/audit_workbook.js` + `static/audit_workbook.html` only, no backend changes)** done.
 - 2026-08-13: Audit Workbook restructure Phase 3 of 3, FINAL — grouping accent bar + zebra tint (`static/style.css`). Full detail: CHANGELOG_ARCHIVE.md, "Audit Workbook Module".
@@ -578,5 +578,5 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 Do this automatically at the end of the session without being asked.
 
 - 2026-08-16: Wired Audit Workbook's Procedures pill to the shared procedure modal via its own adapter (`routers/verification.py` + `static/audit_workbook.js`/`.html`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-16: **Audit Workbook subtitle: remove session number + confirm duplicate ✅ Verification heading text already gone (confirmed fix, `static/audit_workbook.js` + `static/audit_workbook.html` only)** done. `#awSubtitle`'s success-path text dropped its `Session #N · ` prefix, now just `X voucher(s), Y line(s)`; investigation confirmed the alleged duplicate ✅ Verification heading text doesn't exist (compact-header fix already removed the old h1; the peer-nav `#awVerificationBtn` is the only ✅ instance and is untouched); only a stale HTML comment was refreshed. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-16: **Audit Workbook header vertical-spacing/alignment polish (confirmed single-phase fix, `static/style.css` + all 15 pages' `style.css?v=5`→`?v=6` cache-bust bump)** done. Two-row header (📗 Audit Workbook title row + stats-and-filters row) given one consistent 20px rhythm: `.aw-nav-buttons` margin-bottom 16→20px; the shared `.module-header`'s 35px bottom margin (which had been collapsing with it into an inconsistent ~35px gap) zeroed on this page only via a new `.module-header:has(.aw-nav-buttons)` override; stats row → table gap kept at `.aw-header-bar`'s own 20px. Full detail: CHANGELOG_ARCHIVE.md.
+- 2026-08-16: Audit Workbook subtitle dropped its session-number prefix (`static/audit_workbook.js`/`.html`). Full detail: CHANGELOG_ARCHIVE.md.
+- 2026-08-16: Fixed Audit Workbook header vertical-spacing to a consistent 20px rhythm (`static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
