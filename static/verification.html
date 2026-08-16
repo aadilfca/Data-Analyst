@@ -456,18 +456,12 @@
         <!-- DASHBOARD CONTENT (visible by default)        -->
         <!-- ============================================= -->
         <div id="dashboardContent">
-            <!-- Module Header -->
-            <header class="module-header">
-                <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
-                <h1>✅ Verification Module</h1>
-                <p>Select a verification type to begin</p>
-            </header>
-
             <!-- Hard-refresh view-persistence fallback: shown by showDashboardWithMessage() in
                  verification.js when a URL-restored cashbook/session view can't actually be
                  resumed (e.g. the session was completed/deleted elsewhere) - reuses the same
                  .upload-status/.error styling as #verificationStatus below, no new CSS. -->
-            <div id="dashboardFallbackMessage" class="upload-status error" style="display:none; margin-bottom:16px;"></div>
+            <div id="dashboardFallbackMessage" class="upload-status error" style="display:none; margin-bottom:16px;">
+            </div>
 
             <!-- Verification Hub: two labelled groups replacing the old 4-card Module Grid.
                  Only Cash/Bank voucher tiles are live (they navigate with ?type=, re-entering
@@ -661,7 +655,8 @@
                      currentType ('cash' or 'bank') - these ids exist only so JS can target them;
                      the markup below is just the Cash-mode default shown before JS runs. -->
                 <h2 id="sessionPopupTitle">📋 Start Cash Verification</h2>
-                <p id="sessionPopupSubtitle" style="color:#64748b; margin-bottom:16px;">Select a cashbook to begin verification.</p>
+                <p id="sessionPopupSubtitle" style="color:#64748b; margin-bottom:16px;">Select a cashbook to begin
+                    verification.</p>
                 <div class="field">
                     <label id="popupCashbookLabel">📒 Cashbook</label>
                     <select id="popupCashbookSelect" disabled>
@@ -700,8 +695,8 @@
                 <div>
                     <!-- Prefix text overwritten by openSessionPopup()/openCashbook() flow in
                          verification.js based on currentType - see the note on #sessionPopupTitle. -->
-                    <h1 style="font-size:24px; margin:0; color:#1a1a2e;"><span id="cashbookHeaderLabel">📒 Cashbook:</span> <span
-                            id="cashbookNameDisplay"></span>
+                    <h1 style="font-size:24px; margin:0; color:#1a1a2e;"><span id="cashbookHeaderLabel">📒
+                            Cashbook:</span> <span id="cashbookNameDisplay"></span>
                     </h1>
                 </div>
                 <div style="display:flex; align-items:center; gap:12px;">

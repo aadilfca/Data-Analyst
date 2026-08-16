@@ -583,3 +583,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-16: Wired Audit Workbook's Procedures pill to the shared procedure modal via its own adapter (`routers/verification.py` + `static/audit_workbook.js`/`.html`). Full detail: CHANGELOG_ARCHIVE.md.
 - 2026-08-16: Audit Workbook subtitle dropped its session-number prefix (`static/audit_workbook.js`/`.html`). Full detail: CHANGELOG_ARCHIVE.md.
 - 2026-08-16: Fixed Audit Workbook header vertical-spacing to a consistent 20px rhythm (`static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
+- 2026-08-16: Removed the redundant Verification module header block (back link + h1 + subtitle, `static/verification.html` only). Full detail: CHANGELOG_ARCHIVE.md.
