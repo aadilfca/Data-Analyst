@@ -2055,8 +2055,9 @@ body {
     flex-direction: column;
     border-left: 1px solid #94a3b8;
     margin-bottom: 20px;
-    /* Columns are now user-resizable (drag handles in the header row) and can grow past the
-       screen's width — scroll horizontally instead of overflowing the page. */
+    /* Columns are percentage-based and fit the visible width by default (no scroll). Still
+       user-resizable (drag handles in the header row, percentage-of-container math) — a drag can
+       push the total past 100%, so overflow-x stays as a fallback for that case only. */
     overflow-x: auto;
 }
 
@@ -2073,17 +2074,18 @@ body {
    Column widths come from the --voucher-col-widths custom property (set on #voucherLinesContainer
    by applyVoucherColumnWidths() in verification.js) instead of a literal list, so the header row's
    drag handles (.voucher-col-resize-handle) can resize any column live — updating the one CSS
-   variable re-lines-up the header/line/total rows in one shot since they all read from it. */
+   variable re-lines-up the header/line/total rows in one shot since they all read from it.
+   Widths are percentages of the container (summing to 100% by default: Sr No. 4 / Date 9 /
+   Account Code 9 / Account Type 14 / Account Name 28 / Amount 8 / Procedures 9 / Observations 9 /
+   Status 10), so the table fits the visible width with no horizontal scroll unless a drag pushes
+   the total over 100%. */
 .voucher-line-summary-grid {
     display: grid;
-    grid-template-columns: var(--voucher-col-widths, 40px 90px 100px 170px 395px 90px 130px 263px 90px);
+    grid-template-columns: var(--voucher-col-widths, 4% 9% 9% 14% 28% 8% 9% 9% 10%);
     align-items: stretch;
-    /* Block-level (and flex-stretched, for the header/total rows) boxes default to filling their
-       container's full width — now that .voucher-panel is 100% wide and columns are fixed pixel
-       widths instead of a fill-the-rest 1fr, that left the header/total rows' blue background (and
-       every row's own box) stretching past the last real column into empty space. Shrinking the
-       box to its own column tracks stops that "background/border running off to the right" look. */
-    width: fit-content;
+    /* Percentage tracks resolve against the container's own width, so the grid must actually fill
+       it (width: 100%) rather than size to content. */
+    width: 100%;
 }
 .voucher-line-summary-grid > * {
     border-right: 1px solid #94a3b8;
@@ -2095,6 +2097,9 @@ body {
        push cells past their column and overlap neighbors. Forcing 0 makes cells respect the
        track width so content wraps/clips within its own column instead. */
     min-width: 0;
+    /* Short/fixed-format columns stay single-line by default; Account Type/Account Name (the two
+       columns wide enough to hold free text) override this below to wrap instead. */
+    white-space: nowrap;
 }
 
 /* Column-title row, naming the cashbook's own columns — dim blue header bar. Carries the table's
@@ -2209,6 +2214,8 @@ body {
     flex-direction: column;
     align-items: flex-start;
     min-width: 0;
+    white-space: normal;
+    word-break: break-word;
 }
 
 .voucher-line-name {
@@ -2223,6 +2230,8 @@ body {
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
+    white-space: normal;
+    word-break: break-word;
 }
 
 /* Verification ↔ Assign Categories link (Phase 4): the value row puts the auto-filled Category
@@ -2267,6 +2276,7 @@ body {
     font-size: 14px;
     justify-content: flex-end;
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
 }
 
 /* Total line — a distinct footer row under the last line, summing Amount for the voucher and

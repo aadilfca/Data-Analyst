@@ -2033,10 +2033,13 @@ async function autoFillCategoryForLine(uid, accountCode) {
 }
 
 // Order matches .voucher-line-summary-grid's columns: Sr No., Date, Account Code, Account Type,
-// Account Name, Amount, Procedures, Observations, Status. User-resizable (see the drag handles in
-// renderVoucherLines()'s header row) — persists at module scope across renders/navigation, same
-// convention as voucherLineState, so dragging a column survives Prev/Next voucher navigation.
-let voucherColumnWidths = [40, 90, 100, 170, 395, 90, 130, 263, 90];
+// Account Name, Amount, Procedures, Observations, Status. Values are percentages of the container
+// width, summing to 100 by default so the table fits the visible screen with no horizontal scroll.
+// User-resizable (see the drag handles in renderVoucherLines()'s header row, percentage-of-
+// container math) — persists at module scope across renders/navigation, same convention as
+// voucherLineState, so dragging a column survives Prev/Next voucher navigation. A drag can push
+// the total over 100%, in which case the container's overflow-x: auto is the intended fallback.
+let voucherColumnWidths = [4, 9, 9, 14, 28, 8, 9, 9, 10];
 
 // Pushes voucherColumnWidths into the CSS custom property .voucher-line-summary-grid reads its
 // grid-template-columns from. Set on #voucherLinesContainer itself (not its innerHTML content),
@@ -2044,7 +2047,7 @@ let voucherColumnWidths = [40, 90, 100, 170, 395, 90, 130, 263, 90];
 // anyway at the top of renderVoucherLines() to stay in sync on first render.
 function applyVoucherColumnWidths() {
     const container = document.getElementById('voucherLinesContainer');
-    if (container) container.style.setProperty('--voucher-col-widths', voucherColumnWidths.map(w => w + 'px').join(' '));
+    if (container) container.style.setProperty('--voucher-col-widths', voucherColumnWidths.map(w => w + '%').join(' '));
 }
 
 // Returns a single Amount value for a line's row_data — this cashbook only ever populates one
@@ -2535,10 +2538,11 @@ function renderVoucherLines(lines, voucherDate) {
     // batch pass runs before any of those async fetches resolve.
 
     // Column drag-to-resize handles (header row only). Excel/Sheets-style: dragging a column's
-    // border only resizes that column — the table's total width changes with it (no neighbor
-    // compensation), scrolling horizontally via #voucherLinesContainer's overflow-x if it grows
-    // past the screen. Widths live in voucherColumnWidths (module scope), so they persist across
-    // re-renders/voucher navigation.
+    // border only resizes that column — no neighbor compensation. Widths are percentages of the
+    // container, so the drag delta (raw mouse pixels) is converted to a percentage of the
+    // container's own rendered width; the total can end up over 100%, in which case
+    // #voucherLinesContainer's overflow-x is the fallback. Widths live in voucherColumnWidths
+    // (module scope), so they persist across re-renders/voucher navigation.
     container.querySelectorAll('.voucher-col-resize-handle').forEach(handle => {
         handle.addEventListener('mousedown', function(e) {
             e.preventDefault();
@@ -2546,23 +2550,25 @@ function renderVoucherLines(lines, voucherDate) {
             const colIndex = parseInt(this.dataset.col);
             const startX = e.clientX;
             const startWidth = voucherColumnWidths[colIndex];
+            const containerWidth = container.getBoundingClientRect().width;
             this.classList.add('resizing');
 
-            // Small floating "Width: N px" readout that follows the cursor while dragging, same
+            // Small floating "Width: N%" readout that follows the cursor while dragging, same
             // idea as Excel's own column-resize tooltip — created fresh per drag, removed on
             // mouseup so it never lingers in the DOM.
             const tooltip = document.createElement('div');
             tooltip.className = 'voucher-col-resize-tooltip';
-            tooltip.textContent = `Width: ${startWidth} px`;
+            tooltip.textContent = `Width: ${startWidth}%`;
             tooltip.style.left = `${e.clientX + 12}px`;
             tooltip.style.top = `${e.clientY - 28}px`;
             document.body.appendChild(tooltip);
 
             const onMouseMove = (e2) => {
-                const newWidth = Math.max(40, startWidth + (e2.clientX - startX));
+                const deltaPercent = ((e2.clientX - startX) / containerWidth) * 100;
+                const newWidth = Math.round(Math.max(3, startWidth + deltaPercent) * 10) / 10;
                 voucherColumnWidths[colIndex] = newWidth;
                 applyVoucherColumnWidths();
-                tooltip.textContent = `Width: ${newWidth} px`;
+                tooltip.textContent = `Width: ${newWidth}%`;
                 tooltip.style.left = `${e2.clientX + 12}px`;
                 tooltip.style.top = `${e2.clientY - 28}px`;
             };
