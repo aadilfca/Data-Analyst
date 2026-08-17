@@ -2124,6 +2124,12 @@ body {
     position: relative;
     justify-content: center;
     text-align: center;
+    /* Overrides the shared cell rule's nowrap: percentage-width columns are narrower than the old
+       fixed pixel widths, and a label + its expand-toggle button (Procedures/Observations) can
+       exceed a narrow track's width. Grid cells don't clip overflowing content by default, so a
+       nowrap label bled visibly into the next column's header instead of wrapping. Wrapping keeps
+       it self-contained; body-row cells (badges/data) are unaffected, still nowrap. */
+    white-space: normal;
 }
 .voucher-line-header-row .voucher-line-amount-col {
     justify-content: flex-end;

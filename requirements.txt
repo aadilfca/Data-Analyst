@@ -1,8 +1,34 @@
-fastapi
-uvicorn[standard]
-pandas
-pydantic
-openpyxl
-python-multipart
-xlrd
-rapidfuzz
+# ============================================================
+# How to use this file on a NEW computer:
+#   1. Install Python, then create a virtual environment: python -m venv venv
+#   2. Activate it, then run: pip install -r requirements.txt
+#   3. That installs every library this project needs, with the exact same
+#      versions as the machine this file was generated on — so you get an
+#      identical setup, not "whatever the latest version happens to be".
+# venv/ itself is never uploaded to GitHub (it's in .gitignore) — this file
+# is what recreates it on a new machine.
+# ============================================================
+
+# --- Core app (FastAPI backend, required to run the app at all) ---
+fastapi==0.139.0
+uvicorn[standard]==0.50.0
+pandas==3.0.3
+pydantic==2.13.4
+openpyxl==3.1.5
+python-multipart==0.0.32
+xlrd==2.0.2
+rapidfuzz==3.14.5
+
+# --- Testing & AI-assisted development tools (not needed to run the app,
+#     but needed for Claude Code to write/verify automated tests and check
+#     UI changes in a real browser) ---
+pytest==9.1.1
+httpx==0.28.1
+playwright==1.61.0
+
+# --- Optional: system tray launcher (tray_control.py only — lets you
+#     start/stop/restart the server from a Windows tray icon instead of a
+#     terminal window; skip this section if you don't use that script) ---
+requests==2.34.2
+Pillow==12.3.0
+pystray==0.19.5

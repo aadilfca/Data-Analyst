@@ -29,8 +29,11 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 
 ## Commands
 - Run app: [your actual run command]
-- Run tests: [if you have any]
+- Run tests: `./venv/Scripts/python.exe -m pytest tests/ -v`
 
+## Dev tooling
+- **Automated backend tests**: `pytest` + FastAPI's `TestClient` (httpx-backed) are installed in `venv` (see `requirements-dev.txt` — deliberately kept out of `requirements.txt`, which stays production-accurate). `tests/` has 4 tests: `test_verification_indexes.py` and `test_upload_validation_counts.py` (pure function/schema checks) plus the newer `test_app_smoke.py` (real HTTP request/response through `main.app` via `TestClient`, proving the app actually boots and routers respond). All three test files use the same isolation pattern — monkeypatch `database.DB_NAME` to a `tempfile.TemporaryDirectory()` path and call `init_db()` before touching anything — **never** the real `test.db`; follow this pattern for any new test rather than hitting the live database. Run before reporting a backend fix "done" when it's plausible to catch it this way — this project's Status log has multiple instances of the same bug (e.g. Cleared/Query status logic) getting fixed, silently re-broken, and fixed again.
+- **Browser automation for UI verification**: `playwright` (Python, also in `requirements-dev.txt`) is installed in `venv` — `./venv/Scripts/python.exe -c "from playwright.sync_api import sync_playwright; ..."` launches a real headless Chromium against the live dev server (`localhost:5000`), no npm/Node install needed. Use it to actually reproduce/screenshot a UI bug (real DOM, real CSS, `page.evaluate()` for computed styles/`getBoundingClientRect()`, `performance.getEntriesByType('resource')` for cache/timing) instead of guessing from a description alone.
 
 ## Conventions
 - No inline event handlers (onclick, onload, onchange, etc.) in HTML
