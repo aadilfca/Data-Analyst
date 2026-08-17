@@ -2324,6 +2324,17 @@ function toggleVoucherLineLock(uid) {
 // or immediately if both are already done) and is cached, so it only actually delays the first
 // renderVoucherLines() call — every later call (Prev/Next, cashbook nav, hard-refresh restore)
 // awaits an already-resolved promise, effectively zero delay.
+// `document.readyState === 'complete'` (or the 'load' event) only means the stylesheet has
+// finished downloading — it's a microtask-speed check, not a guarantee the browser has actually
+// run a layout/paint pass with that CSS applied yet. A double requestAnimationFrame forces the
+// browser through one real paint cycle before resolving, closing that residual gap (this is what
+// fixed the flash for one voucher type but not the other last phase — a race, not a Cash/Bank
+// code-path difference; there is only one renderVoucherLines(), shared by both).
+function waitForPaint() {
+    return new Promise(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
+}
 let pageAssetsReadyPromise = null;
 function pageAssetsReady() {
     if (!pageAssetsReadyPromise) {
@@ -2331,7 +2342,7 @@ function pageAssetsReady() {
             ? Promise.resolve()
             : new Promise(resolve => window.addEventListener('load', resolve, { once: true }));
         const fontsReady = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
-        pageAssetsReadyPromise = Promise.all([loadReady, fontsReady]);
+        pageAssetsReadyPromise = Promise.all([loadReady, fontsReady]).then(waitForPaint);
     }
     return pageAssetsReadyPromise;
 }
