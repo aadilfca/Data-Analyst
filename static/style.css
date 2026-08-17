@@ -6256,19 +6256,31 @@ body {
     font-size: 11px;
     letter-spacing: 0.03em;
 }
-/* Sr and Date are short/compact, centered like the pill/ring columns; Amount is a number
-   (right-aligned, matching this app's other amount columns, e.g. .voucher-line-amount);
-   Procedures/Status hold a centered pill/ring, not flowing text. Voucher No./Account/Reference/
-   Observations stay left-aligned via the base .aw-table td rule above. */
+/* Sr and Date are short/compact, centered like the pill/ring columns; Procedures holds a centered
+   ring, not flowing text. Voucher No./Account/Observations stay left-aligned via the base
+   .aw-table td rule above. */
 .aw-table td:nth-child(1),
 .aw-table td:nth-child(3) {
     text-align: center;
 }
-.aw-table td:nth-child(6) {
-    text-align: right;
+.aw-table td:nth-child(7) {
+    text-align: center;
 }
-.aw-table td:nth-child(7),
-.aw-table td:nth-child(9) {
+
+/* Reference/Amount/Status alignment (confirmed fix): explicit JS-stamped classes
+   (aw-col-reference/aw-col-amount/aw-col-status, stamped in buildLineRowHtml()/
+   buildSubtotalRowHtml() in audit_workbook.js) rather than nth-child position — this file's own
+   established convention (see .aw-line-row.group-start's note below) for the same reason: a
+   column insertion (the Date column, added later) already silently shifted every later nth-child
+   index by one. Amount also gets tabular-nums so digit widths stay consistent down the column. */
+.aw-table td.aw-col-reference {
+    text-align: left;
+}
+.aw-table td.aw-col-amount {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.aw-table td.aw-col-status {
     text-align: center;
 }
 

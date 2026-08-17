@@ -2163,18 +2163,23 @@ function hideLineStatusReasonPopover() {
 
 // One gate row. Shared by the Status-pill popover (buildLineStatusReasonBody, all gates) and the
 // Validate panel (buildValidatePanelBody, N/A gates hidden by default) so both surfaces render a
-// gate identically.
+// gate identically. showDetail defaults to true so every existing caller (the Validate panel via
+// the procedure-modal adapter, which passes only g) keeps showing the explanatory text — only the
+// status-pill popover passes false, per the confirmed requirement.
 const LSR_GATE_ICON = { pass: '✔', fail: '✘', not_applicable: '–' };
-function renderGateRowHtml(g) {
+function renderGateRowHtml(g, showDetail = true) {
     return `
         <div class="lsr-gate ${g.status}">
             <div class="lsr-gate-label"><span class="lsr-gate-icon">${LSR_GATE_ICON[g.status] || '–'}</span>${escapeHtml(g.label)}</div>
-            ${g.detail ? `<div class="lsr-gate-detail">${escapeHtml(g.detail)}</div>` : ''}
+            ${g.detail && showDetail ? `<div class="lsr-gate-detail">${escapeHtml(g.detail)}</div>` : ''}
         </div>
     `;
 }
 
 // One row per gate. Failing gates are already ordered first by the endpoint — this only renders.
+// Confirmed requirement: the status popover shows ONLY the gate name + ✅/❌ badge — the greyed
+// explanatory detail lines are hidden entirely (showDetail=false). The `detail` field stays in the
+// backend response (locked assumption: hiding is frontend-only), it's just not rendered here.
 function buildLineStatusReasonBody(data) {
     if (data.reason) {
         return `<p class="lsr-reason">${escapeHtml(data.reason)}</p>`;
@@ -2183,7 +2188,7 @@ function buildLineStatusReasonBody(data) {
     if (!gates.length) {
         return '<p class="lsr-reason">No gate breakdown available for this line.</p>';
     }
-    return gates.map(renderGateRowHtml).join('');
+    return gates.map(g => renderGateRowHtml(g, false)).join('');
 }
 
 async function showLineStatusReasonPopover(cell, uid) {

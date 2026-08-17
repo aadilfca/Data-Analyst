@@ -235,11 +235,11 @@ function buildLineRowHtml(v, line, isFirstLine, groupParityClass) {
     return `
         <tr class="aw-line-row aw-row-clickable ${groupParityClass}${groupStartClass}" data-voucher-no="${escapeHtml(v.voucher_no)}" data-detail-id="${line.detail_id}">
             ${leadingCellsHtml}
-            <td>${escapeHtml(line.description || '—')}</td>
-            <td>${formatAwAmount(line.amount)}</td>
+            <td class="aw-col-reference">${escapeHtml(line.description || '—')}</td>
+            <td class="aw-col-amount">${formatAwAmount(line.amount)}</td>
             <td>${getAwProceduresCellHtml(line)}</td>
             <td>${getAwObservationsCellHtml(line)}</td>
-            <td>${getAwStatusBadgeHtml(line.status)}</td>
+            <td class="aw-col-status">${getAwStatusBadgeHtml(line.status)}</td>
         </tr>
     `;
 }
@@ -258,9 +258,9 @@ function buildSubtotalRowHtml(v, groupParityClass) {
     return `
         <tr class="aw-subtotal-row ${groupParityClass}">
             <td colspan="5"></td>
-            <td>${formatAwAmount(v.amount)}</td>
+            <td class="aw-col-amount">${formatAwAmount(v.amount)}</td>
             <td colspan="2"></td>
-            <td>${getAwStatusBadgeHtml(v.status)}</td>
+            <td class="aw-col-status">${getAwStatusBadgeHtml(v.status)}</td>
         </tr>
     `;
 }
