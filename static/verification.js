@@ -2317,9 +2317,29 @@ function toggleVoucherLineLock(uid) {
     lockedLineUid = uid;
 }
 
-function renderVoucherLines(lines, voucherDate) {
+// First-landing render-timing fix: on a fresh navigation into this page, style.css can still be
+// downloading/applying (and, if the browser ever gains a webfont, still swapping) at the exact
+// moment the very first voucher-line table renders — the grid briefly shows overlapping headers/
+// collapsed-default columns until the browser catches up. Resolves once (window 'load' + fonts.ready,
+// or immediately if both are already done) and is cached, so it only actually delays the first
+// renderVoucherLines() call — every later call (Prev/Next, cashbook nav, hard-refresh restore)
+// awaits an already-resolved promise, effectively zero delay.
+let pageAssetsReadyPromise = null;
+function pageAssetsReady() {
+    if (!pageAssetsReadyPromise) {
+        const loadReady = document.readyState === 'complete'
+            ? Promise.resolve()
+            : new Promise(resolve => window.addEventListener('load', resolve, { once: true }));
+        const fontsReady = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
+        pageAssetsReadyPromise = Promise.all([loadReady, fontsReady]);
+    }
+    return pageAssetsReadyPromise;
+}
+
+async function renderVoucherLines(lines, voucherDate) {
     const container = document.getElementById('voucherLinesContainer');
     if (!container) return;
+    await pageAssetsReady();
     applyVoucherColumnWidths();
     // Phase C: lock state is a transient focus aid, not saved data — reset on every new render
     // (voucher load/navigation) rather than trying to carry it across different lines/vouchers.
