@@ -554,7 +554,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!hostAdapter.procedureModalState[uid].tabs[docId]) {
-        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBill: null, physicalBillSaved: false, physicalBillErrors: {}, physicalBillSaving: false, physicalBillSourceDocumentRowId: null, physicalBillSourceTemplate: null };
+        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBill: null, physicalBillSaved: false, physicalBillErrors: {}, physicalBillSourceDocumentRowId: null, physicalBillSourceTemplate: null };
     }
     return hostAdapter.procedureModalState[uid].tabs[docId];
 }
@@ -860,6 +860,7 @@ async function navigateProcedureModalLine(delta) {
     // lines — the badge lives in the main table, hidden behind the modal while it's open, so
     // this is the natural point for it to catch up.
     await hostAdapter.saveLineItems(uid);
+    await flushPhysicalBillEntries(uid);
     await openProcedureModal(newUid);
 }
 
@@ -925,7 +926,10 @@ async function closeProcedureModal() {
     // requirement (there is no longer a Save button to rely on instead). hostAdapter.saveLineItems() also
     // recomputes cleared_status (Validation Rules Phase 5) so the main table's badge is caught up
     // by the time the modal is gone.
-    if (currentProcedureModalUid) await hostAdapter.saveLineItems(currentProcedureModalUid);
+    if (currentProcedureModalUid) {
+        await hostAdapter.saveLineItems(currentProcedureModalUid);
+        await flushPhysicalBillEntries(currentProcedureModalUid);
+    }
     hideProcedureModalOnly();
 }
 
@@ -985,6 +989,7 @@ async function performVerifyVoucherChecks(uid) {
     if (verifyOnlyBtn) verifyOnlyBtn.disabled = true;
     try {
         await hostAdapter.saveLineItems(uid);
+        await flushPhysicalBillEntries(uid);
         const res = await fetch(`${API_BASE}/api/verification/verify_voucher_checks`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2100,7 +2105,6 @@ const PB_ICON_RECEIPT = '<svg class="pb-icon" viewBox="0 0 24 24" width="14" hei
 const PB_ICON_DETAILS = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>';
 const PB_ICON_CALC = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="14" x2="8.01" y2="14"/><line x1="12" y1="14" x2="12.01" y2="14"/><line x1="16" y1="14" x2="16" y2="18"/><line x1="8" y1="18" x2="8.01" y2="18"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>';
 const PB_ICON_COPY = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
-const PB_ICON_SAVE = '<svg class="pb-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>';
 const PB_ICON_CHECK = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 
 // Client-side mirror of Phase 5's backend validation (save_physical_bill, routers/verification.py):
@@ -2271,10 +2275,6 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                         </div>
 
                         ${errors._general ? `<div class="procedure-bill-general-error">${hostAdapter.escapeHtml(errors._general)}</div>` : ''}
-                        <button type="button" id="procedureBillSaveBtn" class="procedure-bill-save-primary" ${tabState.physicalBillSaving ? 'disabled' : ''}>
-                            ${tabState.physicalBillSaving ? 'Saving…' : `${PB_ICON_SAVE} ${tabState.physicalBillSaved ? 'Update Bill' : 'Save Bill'}`}
-                        </button>
-                        <div class="procedure-bill-save-status">${(!tabState.physicalBillSaving && tabState.physicalBillSaved) ? `${PB_ICON_CHECK} Saved` : ''}</div>
                     </div>
                 </div>
             </div>
@@ -2368,13 +2368,6 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
             } else {
                 togglePhysicalBillCopyPicker(uid, doc.id, eligible);
             }
-        });
-    }
-
-    const saveBtn = document.getElementById('procedureBillSaveBtn');
-    if (saveBtn) {
-        saveBtn.addEventListener('click', function() {
-            savePhysicalBillEntry(uid, doc.id);
         });
     }
 
@@ -2612,23 +2605,19 @@ document.addEventListener('click', function(e) {
     closePhysicalBillCalculator();
 });
 
-// Saves one Physical Bill entry (POST save_physical_bill, upsert). Validates client-side first —
-// on a validation failure, sets physicalBillErrors and re-renders with inline messages, no network
-// call and no blocking alert(). On success, marks physicalBillSaved so the tab dot/subtext (rail)
-// and the panel's Save/Update button+status both reflect committed truth immediately.
+// Auto-saves one Physical Bill entry (POST save_physical_bill, upsert) — called only from
+// flushPhysicalBillEntries() below, from the modal's four exit chokepoints (✕/Back/Verify/Verify &
+// Next), never from a UI click (there is no Save button any more, confirmed requirement). Fires the
+// network call regardless of which fields are filled or blank — the backend's own required-field
+// validation (bill_no/vendor_name/amount/bill_date) still applies server-side exactly as before;
+// this just no longer blocks the call client-side. A failure (e.g. every field left blank) is
+// logged only, never a blocking alert()/toast, since the user is already leaving this line and a
+// blank Physical Bill tab is an expected, non-error state at this phase (Phase 2's mandatory-field
+// visual cue is the follow-up UI signal for this, not this one). No re-render here — the modal is
+// either being torn down or about to re-fetch fresh via openProcedureModal() right after.
 async function savePhysicalBillEntry(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
-    const errors = validatePhysicalBillFields(bill);
-    if (Object.keys(errors).length) {
-        tabState.physicalBillErrors = errors;
-        renderProcedureModalPanel(uid, docId);
-        return;
-    }
-
-    tabState.physicalBillErrors = {};
-    tabState.physicalBillSaving = true;
-    renderProcedureModalPanel(uid, docId);
 
     // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): quantity/rate/source_* are
     // all optional on the backend — a manually-entered bill with no source row sends null/null/
@@ -2644,10 +2633,10 @@ async function savePhysicalBillEntry(uid, docId) {
             body: JSON.stringify({
                 voucher_line_id: parseInt(uid),
                 document_id: docId,
-                bill_no: bill.bill_no.trim(),
+                bill_no: (bill.bill_no || '').trim(),
                 bill_date: bill.bill_date,
                 amount: parseFloat(bill.amount),
-                vendor_name: bill.vendor_name.trim(),
+                vendor_name: (bill.vendor_name || '').trim(),
                 quantity: quantityVal,
                 rate: rateVal,
                 source_document_row_id: tabState.physicalBillSourceDocumentRowId || null,
@@ -2659,15 +2648,25 @@ async function savePhysicalBillEntry(uid, docId) {
             throw new Error(err.detail || 'Failed to save physical bill.');
         }
         tabState.physicalBillSaved = true;
-        tabState.physicalBillSaving = false;
         tabState.physicalBillErrors = {};
-        renderProcedureModalTabs(uid);
-        renderProcedureModalPanel(uid, docId);
     } catch (e) {
-        console.error('Failed to save physical bill:', e);
-        tabState.physicalBillSaving = false;
-        tabState.physicalBillErrors = { _general: e.message || 'Save failed — please try again.' };
-        renderProcedureModalPanel(uid, docId);
+        console.error('Failed to auto-save physical bill:', e);
+    }
+}
+
+// Persists every Physical Bill Document tab of this line — called from the same exit chokepoints as
+// flushProcedureObservations() (closeProcedureModal(), navigateProcedureModalLine(), and
+// performVerifyVoucherChecks(), shared by both Verify and Verify & Next). Every physical_bill
+// Document tab always has tabState.physicalBill seeded by openProcedureModal() (whether or not that
+// tab was ever actually opened/viewed this session), so this saves ALL of them, not just the active
+// tab — mirrors flushProcedureObservations()'s across-every-tab convention.
+async function flushPhysicalBillEntries(uid) {
+    if (!hostAdapter) return;
+    const lineState = hostAdapter.procedureModalState[uid];
+    if (!lineState || !lineState.documents) return;
+    for (const doc of lineState.documents) {
+        if (doc.document_type !== 'physical_bill') continue;
+        await savePhysicalBillEntry(uid, doc.id);
     }
 }
 
