@@ -4089,9 +4089,15 @@ def save_physical_bill(
     fields - a caller resaving an already-populated bill must resend quantity/rate/source_*
     to keep them, or send them blank to intentionally clear provenance.
 
-    Basic field validation only this phase, no cross-field business logic: bill_no/vendor_name
-    non-blank, amount numeric, bill_date a valid date. No check here that amount matches the
-    voucher line's own amount - that's Phase 6's gate, not this endpoint's job.
+    Basic field validation only this phase, no cross-field business logic: amount numeric,
+    bill_date (if given) a valid date. Bill No/Vendor Name/Bill Date are all optional here,
+    same as Quantity/Rate - a blank field is stored as NULL, never rejected. (Confirmed fix:
+    these three used to be hard-required, which meant the Physical Bill panel's auto-save-on-
+    exit silently failed - and left the old value in place - the moment an auditor cleared any
+    one of them on an already-saved bill.) _physical_bill_satisfied() (this file's Cleared/Query
+    gate) already treats a blank/NULL value on any of these as "not satisfied", so relaxing this
+    write-side check doesn't loosen what counts as a complete bill. No check here that amount
+    matches the voucher line's own amount - that's Phase 6's gate, not this endpoint's job.
     """
     line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
     if not line:
@@ -4101,13 +4107,8 @@ def save_physical_bill(
     if not doc:
         raise HTTPException(404, "Document not found or inactive.")
 
-    bill_no = (bill_no or "").strip()
-    if not bill_no:
-        raise HTTPException(400, "Bill No is required.")
-
-    vendor_name = (vendor_name or "").strip()
-    if not vendor_name:
-        raise HTTPException(400, "Vendor name is required.")
+    bill_no = (bill_no or "").strip() or None
+    vendor_name = (vendor_name or "").strip() or None
 
     def _parse_optional_float(value, field_label):
         if value in (None, ''):
@@ -4133,10 +4134,12 @@ def save_physical_bill(
     if source_template is not None and source_template not in PHYSICAL_BILL_SOURCE_TYPES:
         raise HTTPException(400, f"Invalid source_template '{source_template}'. Must be one of: {', '.join(PHYSICAL_BILL_SOURCE_TYPES)} or omitted.")
 
-    try:
-        datetime.fromisoformat(bill_date)
-    except (TypeError, ValueError):
-        raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+    bill_date = (bill_date or "").strip() or None
+    if bill_date is not None:
+        try:
+            datetime.fromisoformat(bill_date)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
 
     execute_write(
         """
