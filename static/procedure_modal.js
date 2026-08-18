@@ -2126,6 +2126,27 @@ function validatePhysicalBillFields(bill) {
     return errors;
 }
 
+// Mandatory-for-Cleared visual cue (confirmed requirement, purely visual — never blocks saving or
+// Verify/Verify & Next). Bill No/Date/Vendor Name are the fields check #1 of
+// compute_and_persist_cleared_status() actually requires; a blank one gets a red border + tooltip.
+// Evaluated only at panel render and at the 4 save chokepoints (see savePhysicalBillEntry() below),
+// never live as-you-type. No-ops safely if the fields aren't currently in the DOM.
+const PB_MANDATORY_FIELD_MAP = {
+    bill_no: 'procedureBillNoInput',
+    bill_date: 'procedureBillDateInput',
+    vendor_name: 'procedureBillVendorInput'
+};
+
+function updatePhysicalBillMandatoryIndicators(bill) {
+    Object.keys(PB_MANDATORY_FIELD_MAP).forEach(field => {
+        const el = document.getElementById(PB_MANDATORY_FIELD_MAP[field]);
+        if (!el) return;
+        const isBlank = !bill || !bill[field] || !String(bill[field]).trim();
+        el.classList.toggle('procedure-bill-input-mandatory-missing', isBlank);
+        el.title = isBlank ? 'Required for status to clear' : '';
+    });
+}
+
 // Dedicated panel for a physical_bill Document — a 4-field entry form (Bill No/Date/Amount/Vendor
 // name) instead of the has-template search/evidence table or the no-template role checklist,
 // since neither concept applies to this doc type (Phase 6 backend note: a physical_bill Document
@@ -2341,6 +2362,7 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
         });
     }
     updatePhysicalBillAmount(uid, doc.id);
+    updatePhysicalBillMandatoryIndicators(bill);
 
     // Quantity/Rate calculator trigger — opens only via the small calculator icon next to the field
     // (confirmed fix), never by clicking the field itself, since the field is a normal typable input.
@@ -2618,6 +2640,9 @@ document.addEventListener('click', function(e) {
 async function savePhysicalBillEntry(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
+    // Save-trigger check (Phase 2 of 2, mandatory-field visual cue) — this single call site is
+    // reached by all 4 exit chokepoints (✕/Back/Verify/Verify & Next) via flushPhysicalBillEntries().
+    updatePhysicalBillMandatoryIndicators(bill);
 
     // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): quantity/rate/source_* are
     // all optional on the backend — a manually-entered bill with no source row sends null/null/

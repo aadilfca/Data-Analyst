@@ -590,3 +590,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-17: Audit Workbook Reference/Amount/Status columns aligned via JS-stamped classes + tabular-nums on Amount (`static/audit_workbook.js` + `static/style.css`, cache-bust bump).
 - 2026-08-18: Physical Bill panel Save button replaced with auto-save on all 4 modal exits (static/procedure_modal.js only, Phase 1 of 2) done.
 - 2026-08-18: Physical Bill Bill No/Date/Vendor Name now save as blank - relaxed backend required-field check (routers/verification.py only), matching Quantity/Rate.
+- 2026-08-18: Physical Bill mandatory-field (Bill No/Date/Vendor) red-border + tooltip cue (static/procedure_modal.js + static/style.css only).

@@ -3486,6 +3486,16 @@ body {
     font-size: 11px;
     color: #dc2626;
 }
+/* Mandatory-for-Cleared visual cue (Bill No/Date/Vendor Name) — purely visual, doesn't block
+   saving or Verify. Applied by updatePhysicalBillMandatoryIndicators() in procedure_modal.js on
+   panel render and at each of the 4 save chokepoints, not live as-you-type. */
+.procedure-bill-input-mandatory-missing {
+    border-color: #dc2626;
+}
+.procedure-bill-input-mandatory-missing:focus {
+    border-color: #dc2626;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
 .procedure-bill-general-error {
     font-size: 12px;
     color: #dc2626;
