@@ -1774,10 +1774,17 @@ async function updateProceduresCellForLine(uid, type) {
         // backend gate — a physical_bill Document must never fall into the generic no-template
         // auth_roles check below, which is not its real completion signal.
         if (doc.document_type === 'physical_bill') {
-            const bill = physicalBills.find(b => b.document_id === doc.id);
-            const fieldsComplete = !!(bill && (bill.bill_no || '').trim() && (bill.bill_date || '').trim()
-                && (bill.vendor_name || '').trim() && bill.amount !== '' && bill.amount != null && !isNaN(parseFloat(bill.amount)));
-            base = fieldsComplete && Math.abs(parseFloat(bill.amount) - voucherLineAmount) <= 0.005;
+            // Multi-Bill/Multi-Line Physical Bill (Phases 1-3): a Document can now have several
+            // bills, each with several items — .filter() (not .find()) and sum every matching
+            // bill's server-computed bill_total (null whenever that bill has zero items or any
+            // item's amount doesn't resolve numeric — same rule _evaluate_physical_bill_completion()
+            // uses server-side, reproduced here in one field check rather than re-deriving item
+            // sums client-side).
+            const docBills = physicalBills.filter(b => b.document_id === doc.id);
+            const headersComplete = docBills.length > 0 && docBills.every(bill =>
+                (bill.bill_no || '').trim() && (bill.bill_date || '').trim() && (bill.vendor_name || '').trim() && bill.bill_total != null
+            );
+            base = headersComplete && Math.abs(docBills.reduce((sum, bill) => sum + bill.bill_total, 0) - voucherLineAmount) <= 0.005;
         } else if (doc.template_id) {
             base = assignedDocIds.has(doc.id);
         } else {
