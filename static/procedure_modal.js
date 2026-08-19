@@ -2420,6 +2420,44 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                 renderPhysicalBillDocumentPanel(uid, doc);
             });
         }
+
+        // Multi-Bill/Multi-Line Physical Bill, Phase 4 of 6: Enter-key left-to-right navigation
+        // (Bill No -> Vendor Name -> Date -> each line's Item -> Rate -> Qty, card after card).
+        // .procedure-bill-input is applied to exactly these fields (never the derived Amount
+        // span), in exactly this order by HTML source order — so the flat DOM-order list below
+        // *is* the navigation order, with no manual bill/item index arithmetic and no special
+        // case needed to flow from one bill card into the next. Tab is left untouched (native
+        // default) — this only intercepts Enter.
+        form.querySelectorAll('.procedure-bill-input').forEach(el => {
+            el.addEventListener('keydown', function(e) {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                const inputs = Array.from(form.querySelectorAll('.procedure-bill-input'));
+                const idx = inputs.indexOf(this);
+                if (idx === -1) return;
+                // Last field of the last line of the last bill — those two facts (last in DOM
+                // order + a quantity field) are only simultaneously true for the last item row's
+                // Qty cell of the last bill card, since Qty is always an item row's last column
+                // and item rows always come last in a card. Appends to *this* input's own bill
+                // (its own data-bill-idx), not an assumed "last bill index".
+                if (idx === inputs.length - 1 && this.dataset.field === 'quantity') {
+                    const billIdx = parseInt(this.dataset.billIdx);
+                    const bill = tabState.physicalBills[billIdx];
+                    if (!bill) return;
+                    const newItemIdx = bill.items.length;
+                    bill.items.push(makeEmptyPhysicalBillItem());
+                    renderPhysicalBillDocumentPanel(uid, doc);
+                    const newInput = document.querySelector(
+                        `#procedureBillForm input[data-field="item_name"][data-bill-idx="${billIdx}"][data-item-idx="${newItemIdx}"]`
+                    );
+                    if (newInput) newInput.focus();
+                    return;
+                }
+                if (idx < inputs.length - 1) {
+                    inputs[idx + 1].focus();
+                }
+            });
+        });
     }
 
     refreshPhysicalBillMandatoryIndicators(uid, doc.id);
