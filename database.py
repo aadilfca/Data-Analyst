@@ -2124,30 +2124,44 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_procedure_checks_line ON voucher_line_procedure_checks (voucher_line_id)")
         print("✅ Created voucher_line_procedure_checks table (Phase 5 of 6: audit procedures checklist)")
 
-        # ---------- PHYSICAL BILL EVIDENCE (new, confirmed 8-phase requirement, Phase 1 of 8) ----------
-        # One manually-keyed physical bill per voucher line per Physical Bill Document - the
-        # evidence a 'billable' Category (audit_rule_categories.evidence_type) requires, in place
-        # of a linked Data Bank row. Captured during verification in a later phase; Phase 6 will
-        # hard-block Cleared status when `amount` doesn't match the voucher line's own amount.
-        # Schema only here - nothing reads or writes this table yet.
-        #
-        # document_id is carried alongside voucher_line_id (rather than one bare row per line):
-        # a Billable Category can attach more than one Physical Bill Document, and Phase 6's
-        # check #1 iterates per required Document, so it needs to know which Document a given
-        # bill satisfies. UNIQUE(voucher_line_id, document_id) still means one bill per line
-        # per Document.
+        # ---------- PHYSICAL BILL EVIDENCE (Multi-Bill / Multi-Line, current shape) ----------
+        # The evidence a 'billable' Category (audit_rule_categories.evidence_type) requires, in
+        # place of a linked Data Bank row, when the relevant Document is a Physical Bill. A
+        # voucher line can carry more than one vendor bill against a given Document, so the
+        # structure is voucher line -> bill(s) -> item line(s): voucher_line_physical_bills is
+        # the bill header (Bill No/Vendor Name/Date), voucher_line_physical_bill_items holds
+        # each bill's Item/Rate/Qty/Amount rows. document_id is carried on the header since a
+        # Billable Category can attach more than one Physical Bill Document, and the Cleared/
+        # Query gate's check #1 iterates per required Document. No UNIQUE constraint on the
+        # header - a line can have several bills against the same Document.
         #
         # voucher_line_id keys to the session-scoped verification_details.id, matching every
-        # other voucher_line_* table. Reads in later phases MUST therefore go through
-        # _resolve_sibling_voucher_line_ids() (routers/verification.py) the way
-        # voucher_line_documents/_observations/_procedure_checks already do - reopening a
-        # cashbook creates fresh verification_details rows, and skipping that resolution is the
-        # exact orphaning bug this module has already fixed three times.
+        # other voucher_line_* table. Reads MUST go through _resolve_sibling_voucher_line_ids()
+        # (routers/verification.py) the way voucher_line_documents/_observations/
+        # _procedure_checks already do - reopening a cashbook creates fresh verification_details
+        # rows, and skipping that resolution is the exact orphaning bug this module has already
+        # fixed three times. FOREIGN KEY clauses throughout are documentation/intent only: this
+        # app never sets PRAGMA foreign_keys = ON, so routers validate each referenced id
+        # explicitly.
         #
-        # Brand-new table with no prior data, so a plain CREATE TABLE IF NOT EXISTS is
-        # sufficient - no ALTER TABLE upgrade block needed. FOREIGN KEY clauses are
-        # documentation/intent only: this app never sets PRAGMA foreign_keys = ON, so the
-        # routers validate each referenced id explicitly.
+        # This replaced an earlier flat shape (one row = one bill, with quantity/rate/amount for
+        # a single implicit item, and UNIQUE(voucher_line_id, document_id) limiting a line to one
+        # bill per Document) as part of the Multi-Bill/Multi-Line Physical Bill requirement,
+        # Phase 1 of 6. SQLite can't drop a column/constraint in place, so upgrading a database
+        # that still has that old flat shape (detected via the quantity column living directly on
+        # this table) requires a full table rebuild - same idiom already used elsewhere in this
+        # file for client_voucher_prefixes/audit_rule_cross_checks/audit_rule_category_documents/
+        # signature_specimens/voucher_line_documents: rename -> recreate both tables -> copy
+        # header rows across (ids preserved) -> fold each old row's quantity/rate/amount/
+        # source_* into one item row keyed to that same id as bill_id -> drop the renamed table.
+        existing_vpb_cols = [row[1] for row in conn.execute("PRAGMA table_info(voucher_line_physical_bills)").fetchall()]
+        needs_vpb_rebuild = 'quantity' in existing_vpb_cols
+
+        if needs_vpb_rebuild:
+            print("⚠️ voucher_line_physical_bills is still the old flat (one bill = one item) shape - rebuilding for multi-bill/multi-line support.")
+            conn.execute("DROP TABLE IF EXISTS voucher_line_physical_bills_old")
+            conn.execute("ALTER TABLE voucher_line_physical_bills RENAME TO voucher_line_physical_bills_old")
+
         conn.execute('''
             CREATE TABLE IF NOT EXISTS voucher_line_physical_bills (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2155,44 +2169,61 @@ def init_db():
                 document_id INTEGER NOT NULL,
                 bill_no TEXT,
                 bill_date TEXT,
-                amount REAL,
                 vendor_name TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (voucher_line_id) REFERENCES verification_details(id) ON DELETE CASCADE,
-                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id),
-                UNIQUE(voucher_line_id, document_id)
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id)
             )
         ''')
-        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_physical_bills_line ON voucher_line_physical_bills (voucher_line_id)")
-        print("✅ Created voucher_line_physical_bills table (Physical Bill evidence, Phase 1 of 8)")
 
-        # Populate Physical Bill from GRN/ERP Vendor Bill (new, confirmed multi-phase
-        # requirement, Phase 1: schema). Adds quantity/rate (matching Amount, since a real
-        # bill's Amount is often Qty x Rate) plus traceability of which source row/template a
-        # given entry was populated from - source_document_row_id (the client_data.id of the
-        # GRN/ERP Vendor Bill row) and source_template (which template it came from). Both
-        # traceability columns are nullable and stay blank for a manually-entered bill (no
-        # source document available). No FOREIGN KEY on source_document_row_id, matching this
-        # table's own existing convention for document_id/voucher_line_id - this app never sets
-        # PRAGMA foreign_keys = ON, so referenced ids are validated in the router, not schema.
-        try:
-            cur = conn.execute("PRAGMA table_info(voucher_line_physical_bills)")
-            columns = [row[1] for row in cur.fetchall()]
-            if 'quantity' not in columns:
-                conn.execute("ALTER TABLE voucher_line_physical_bills ADD COLUMN quantity REAL")
-                print("✅ Added quantity column to voucher_line_physical_bills")
-            if 'rate' not in columns:
-                conn.execute("ALTER TABLE voucher_line_physical_bills ADD COLUMN rate REAL")
-                print("✅ Added rate column to voucher_line_physical_bills")
-            if 'source_document_row_id' not in columns:
-                conn.execute("ALTER TABLE voucher_line_physical_bills ADD COLUMN source_document_row_id INTEGER")
-                print("✅ Added source_document_row_id column to voucher_line_physical_bills")
-            if 'source_template' not in columns:
-                conn.execute("ALTER TABLE voucher_line_physical_bills ADD COLUMN source_template TEXT")
-                print("✅ Added source_template column to voucher_line_physical_bills")
-        except Exception as e:
-            print("⚠️ Could not add Qty/Rate/source columns to voucher_line_physical_bills:", e)
+        # Item lines under a bill (Item/Rate/Qty/Amount). source_document_row_id/source_template
+        # (which GRN/ERP Vendor Bill row, and which template, a given entry was populated from)
+        # move here from the old header-level columns, since "copy from lines" now seeds one
+        # item per source Store Receiving row - each item can trace back to a different source
+        # row within the same bill. amount is stored (Qty x Rate, rounded to rate_precision at
+        # save time), not recomputed on every read, matching this table's own existing
+        # convention of persisting amount rather than deriving it live.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_line_physical_bill_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bill_id INTEGER NOT NULL,
+                item_name TEXT,
+                quantity REAL,
+                rate REAL,
+                amount REAL,
+                source_document_row_id INTEGER,
+                source_template TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (bill_id) REFERENCES voucher_line_physical_bills(id) ON DELETE CASCADE
+            )
+        ''')
+
+        if needs_vpb_rebuild:
+            conn.execute('''
+                INSERT INTO voucher_line_physical_bills
+                    (id, voucher_line_id, document_id, bill_no, bill_date, vendor_name, sort_order, created_at, updated_at)
+                SELECT id, voucher_line_id, document_id, bill_no, bill_date, vendor_name, 0, created_at, updated_at
+                FROM voucher_line_physical_bills_old
+            ''')
+            conn.execute('''
+                INSERT INTO voucher_line_physical_bill_items
+                    (bill_id, item_name, quantity, rate, amount, source_document_row_id, source_template, sort_order, created_at, updated_at)
+                SELECT id, NULL, quantity, rate, amount, source_document_row_id, source_template, 0, created_at, updated_at
+                FROM voucher_line_physical_bills_old
+                WHERE quantity IS NOT NULL OR rate IS NOT NULL OR amount IS NOT NULL
+                   OR source_document_row_id IS NOT NULL OR source_template IS NOT NULL
+            ''')
+            conn.execute("DROP TABLE voucher_line_physical_bills_old")
+            print("✅ Rebuilt voucher_line_physical_bills as a bill header + migrated existing bills into voucher_line_physical_bill_items")
+        else:
+            print("✅ Created voucher_line_physical_bills/voucher_line_physical_bill_items tables (Multi-Bill/Multi-Line Physical Bill, Phase 1 of 6)")
+
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_physical_bills_line ON voucher_line_physical_bills (voucher_line_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_physical_bill_items_bill ON voucher_line_physical_bill_items (bill_id)")
 
         # ---------- VOUCHER-LEVEL APPROVAL (Validation Rules, Phase 1 addendum) ----------
         # Prepared By / Checked By / Approved By as one independent, mandatory record per
