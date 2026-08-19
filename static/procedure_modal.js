@@ -2102,6 +2102,7 @@ const PB_ICON_DETAILS = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" hei
 const PB_ICON_CHECK = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const PB_ICON_PLUS = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 const PB_ICON_REMOVE = '<svg class="pb-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+const PB_ICON_COPY = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
 
 // Float-safety epsilon matching CROSS_CHECK_FLOAT_EPSILON (routers/verification.py) — used both
 // for the grand-total-vs-voucher-amount reconciliation pill and the completion-dot gate below, so
@@ -2304,6 +2305,62 @@ function renderPhysicalBillCard(bill, billIdx) {
     `;
 }
 
+// ---------- COPY FROM LINES (Phase 5 of 6 — rebuilt against the nested bills[].items[] shape) ----------
+// Resolves a Document's own template to a Physical Bill "source type" ('grn'/'vendor_bill') purely
+// from templateNameCache, same case-insensitive match resolve_physical_bill_fields_from_source()
+// (routers/verification.py) uses via its own PHYSICAL_BILL_SOURCE_TEMPLATE_NAMES — reused here only
+// to find eligible source rows, no server call made.
+function resolvePhysicalBillSourceType(templateId) {
+    const templateName = (templateNameCache[templateId] || '').trim().toLowerCase();
+    if (templateName === 'store receiving') return 'grn';
+    if (templateName === 'vendor bill') return 'vendor_bill';
+    return null;
+}
+
+// Every GRN/Vendor Bill row currently linked as evidence anywhere on this line, across every other
+// Document — no new fetch needed: openProcedureModal() already seeds every document's tabState.
+// selections (with full row_data) from its batch assignedRecords fetch, and already warms
+// templateNameCache for every document's template_id before any tab renders. Quantity/Rate are read
+// case-insensitively via the same getRowFieldCaseInsensitive() the Linked Evidence totals row
+// already uses. Item Name has no source column on either template (confirmed by inspecting both
+// templates' actual configured columns) — left for the copied item's default blank value.
+function getEligiblePhysicalBillCopySourceRows(uid) {
+    const lineState = hostAdapter.procedureModalState[uid];
+    if (!lineState) return [];
+    const rows = [];
+    (lineState.documents || []).forEach(otherDoc => {
+        const sourceType = resolvePhysicalBillSourceType(otherDoc.template_id);
+        if (!sourceType) return;
+        const tabState = getProcedureTabState(uid, otherDoc.id);
+        (tabState.selections || []).forEach(sel => {
+            rows.push({
+                quantity: getRowFieldCaseInsensitive(sel.row_data, 'Quantity'),
+                rate: getRowFieldCaseInsensitive(sel.row_data, 'Rate')
+            });
+        });
+    });
+    return rows;
+}
+
+// One-time seed action (not a live sync): creates a single new bill, populated with one item per
+// currently-eligible source row (Quantity/Rate carried across, Amount derived; Item Name/Bill No/
+// Vendor Name/Date all left blank for manual entry — no reliable source for any of them). Only ever
+// called from the empty-state's Copy from lines button, which itself only renders while this
+// Document has zero bills (confirmed requirement) — so no separate "already has bills" guard is
+// needed here beyond the eligible-rows check.
+function copyPhysicalBillFromLines(uid, doc) {
+    const tabState = getProcedureTabState(uid, doc.id);
+    const eligibleRows = getEligiblePhysicalBillCopySourceRows(uid);
+    if (!eligibleRows.length) return;
+    const items = eligibleRows.map(row => {
+        const item = { item_name: '', quantity: row.quantity, rate: row.rate, amount: null };
+        recomputePhysicalBillItemAmount(item);
+        return item;
+    });
+    tabState.physicalBills.push({ bill_no: '', bill_date: '', vendor_name: '', items });
+    renderPhysicalBillDocumentPanel(uid, doc);
+}
+
 // Dedicated panel for a physical_bill Document — one card per bill, each with its own editable
 // item-lines table, plus an "Add Bill" button and a Grand Total/reconciliation footer. Replaces
 // the earlier one-bill-per-Document 4-field form (Phase 7 of 8) now that a Document can carry
@@ -2321,9 +2378,16 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
     const grandTotal = computePhysicalBillGrandTotal(bills);
     const recon = buildPhysicalBillReconciliationStatus(grandTotal, voucherLineAmount);
 
+    // Copy from lines (Phase 5 of 6): only offered while this Document has zero bills yet — a
+    // one-time seed action, not a repeatable append (confirmed requirement) — and only when there
+    // is at least one eligible GRN/Vendor Bill row to seed from.
+    const eligibleForCopy = bills.length === 0 ? getEligiblePhysicalBillCopySourceRows(uid) : [];
     const cardsHtml = bills.length
         ? bills.map((bill, billIdx) => renderPhysicalBillCard(bill, billIdx)).join('')
-        : '<div class="procedure-bill-empty-state">No bills entered yet.</div>';
+        : `<div class="procedure-bill-empty-state">
+            No bills entered yet.
+            ${eligibleForCopy.length ? `<button type="button" id="procedureBillCopyBtn" class="procedure-bill-copy-btn">${PB_ICON_COPY} Copy from lines (${eligibleForCopy.length})</button>` : ''}
+           </div>`;
 
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${doc.id}">
@@ -2418,6 +2482,13 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
             addBillBtn.addEventListener('click', function() {
                 tabState.physicalBills.push(makeEmptyPhysicalBill());
                 renderPhysicalBillDocumentPanel(uid, doc);
+            });
+        }
+
+        const copyBtn = document.getElementById('procedureBillCopyBtn');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', function() {
+                copyPhysicalBillFromLines(uid, doc);
             });
         }
 
