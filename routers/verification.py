@@ -443,34 +443,33 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         ticks = role_ticks_by_doc.get(document_id, {})
         return all(ticks.get(role) for role in roles)
 
-    # Physical Bill evidence type, Phase 6 of 8: fetch every physical bill recorded for this line
-    # (sibling-session-resolved, same as every other voucher_line_* read in this file) once, only
-    # when at least one required document actually needs one - zero extra query otherwise.
+    # Physical Bill evidence type, Phase 6 of 8 (generalized in Multi-Bill/Multi-Line Physical
+    # Bill, Phase 2 of 6): fetch every physical bill recorded for this line (sibling-session-
+    # resolved, same as every other voucher_line_* read in this file) once, only when at least
+    # one required document actually needs one - zero extra query otherwise. A document can now
+    # have several bills, so bills_by_doc groups into a LIST per document_id rather than
+    # assuming one row.
     physical_bill_required_ids = {did for did, dt in required_doc_types.items() if dt == 'physical_bill'}
-    bills_by_doc: Dict[int, dict] = {}
+    bills_by_doc: Dict[int, list] = {}
     if physical_bill_required_ids:
-        bills_by_doc = {b['document_id']: b for b in get_voucher_line_physical_bills(voucher_line_id)['bills']}
+        for b in get_voucher_line_physical_bills(voucher_line_id)['bills']:
+            bills_by_doc.setdefault(b['document_id'], []).append(b)
 
     def _physical_bill_satisfied(document_id: int) -> bool:
         """
-        Hard-lock check, no partial credit: Bill No/Date/Vendor all non-blank AND Amount exactly
-        equal (float-safety epsilon only, no business rounding tolerance) to the voucher line's
-        own extract_amount - matches compare_to_voucher_line's own "exact equality" convention in
-        the cross-document validation engine below.
+        Delegates to the shared _evaluate_physical_bill_completion() (defined further down this
+        file, near _cross_check_values_equal) - the hard-lock, no-partial-credit rule: every
+        bill's Bill No/Date/Vendor non-blank and at least one item, every item's amount
+        resolvable, and the GRAND TOTAL across every item in every bill for this document
+        exactly equal (float-safety epsilon only, no business rounding tolerance) to the
+        voucher line's own extract_amount.
         """
-        bill = bills_by_doc.get(document_id)
-        if not bill:
-            return False
-        if not (bill['bill_no'] or '').strip():
-            return False
-        if not (bill['bill_date'] or '').strip():
-            return False
-        if not (bill['vendor_name'] or '').strip():
-            return False
-        bill_amount = _cross_check_numeric(bill['amount'])
-        if bill_amount is None or voucher_amount is None:
-            return False
-        return _cross_check_values_equal(bill_amount, voucher_amount)
+        doc_bills = [
+            {"bill_no": b['bill_no'], "bill_date": b['bill_date'], "vendor_name": b['vendor_name'],
+             "items": [item['amount'] for item in b['items']]}
+            for b in bills_by_doc.get(document_id, [])
+        ]
+        return _evaluate_physical_bill_completion(doc_bills, voucher_amount)
 
     satisfied_doc_ids = set()
     for did in required_doc_ids:
@@ -492,15 +491,20 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
             if not d['is_active'] or did in satisfied_doc_ids:
                 continue
             if required_doc_types.get(did) == 'physical_bill':
-                bill = bills_by_doc.get(did)
-                if not bill:
+                doc_bills = bills_by_doc.get(did) or []
+                if not doc_bills:
                     outstanding_parts.append(f"{d['name']} (no physical bill entered)")
-                elif not ((bill['bill_no'] or '').strip() and (bill['bill_date'] or '').strip()
-                          and (bill['vendor_name'] or '').strip()):
-                    outstanding_parts.append(f"{d['name']} (physical bill missing Bill No/Date/Vendor)")
+                elif any(
+                    not (b['bill_no'] or '').strip() or not (b['bill_date'] or '').strip()
+                    or not (b['vendor_name'] or '').strip() or not b['items']
+                    or any(_cross_check_numeric(item['amount']) is None for item in b['items'])
+                    for b in doc_bills
+                ):
+                    outstanding_parts.append(f"{d['name']} (physical bill missing Bill No/Date/Vendor or has an incomplete item row)")
                 else:
+                    grand_total = sum(_cross_check_numeric(item['amount']) for b in doc_bills for item in b['items'])
                     outstanding_parts.append(
-                        f"{d['name']} (physical bill amount {bill['amount']} does not match "
+                        f"{d['name']} (physical bill grand total {grand_total} does not match "
                         f"voucher amount {row['extract_amount']})"
                     )
             elif required_template_ids.get(did):
@@ -2378,27 +2382,53 @@ def get_audit_workbook(session_id: int):
     for (cd_id, doc_id, role_name), r in latest_tick.items():
         role_ticks_by_cd.setdefault(cd_id, {}).setdefault(doc_id, {})[role_name] = bool(r['is_checked'])
 
-    # Physical bills: {client_data_id: {document_id: bill_row}}, deduped by latest updated_at
-    # per (client_data_id, document_id) - same rule get_voucher_line_physical_bills() uses.
-    bills_by_cd: Dict[int, Dict[int, dict]] = {}
-    bill_rows = execute_query(
+    # Physical bills (Multi-Bill/Multi-Line Physical Bill, Phase 2 of 6): {client_data_id:
+    # {document_id: [bill, ...]}}, each bill a lightweight {"bill_no", "bill_date",
+    # "vendor_name", "items": [<raw amount>, ...]} dict ready for _evaluate_physical_bill_
+    # completion(). A document can now have several bills, so this dedups at the whole-bill-SET
+    # level, not per-row: the winning voucher_line_id per (client_data_id, document_id) is
+    # whichever sibling session's bills for that document have the max(updated_at) among the
+    # header rows - same "latest-touched bill SET wins" rule get_voucher_line_physical_bills()
+    # uses - then only that session's bills/items are kept, never a mix of two sessions' bills
+    # under one document.
+    bills_by_cd: Dict[int, Dict[int, list]] = {}
+    header_rows = execute_query(
         f"""
-        SELECT vd2.client_data_id, vpb.document_id, vpb.bill_no, vpb.bill_date,
-               vpb.vendor_name, vpb.amount, vpb.updated_at
+        SELECT vd2.client_data_id, vpb.id, vpb.voucher_line_id, vpb.document_id,
+               vpb.bill_no, vpb.bill_date, vpb.vendor_name, vpb.updated_at
         FROM voucher_line_physical_bills vpb
         JOIN verification_details vd2 ON vd2.id = vpb.voucher_line_id
         WHERE vd2.client_data_id IN ({cd_placeholders})
         """,
         tuple(client_data_ids)
     )
-    latest_bill: Dict[tuple, dict] = {}
-    for r in bill_rows:
+    winning_session_by_key: Dict[tuple, tuple] = {}
+    for r in header_rows:
         key = (r['client_data_id'], r['document_id'])
-        existing = latest_bill.get(key)
-        if existing is None or (r['updated_at'] or '') > (existing['updated_at'] or ''):
-            latest_bill[key] = r
-    for (cd_id, doc_id), r in latest_bill.items():
-        bills_by_cd.setdefault(cd_id, {})[doc_id] = r
+        candidate = (r['updated_at'] or '', r['voucher_line_id'])
+        existing = winning_session_by_key.get(key)
+        if existing is None or candidate > existing:
+            winning_session_by_key[key] = candidate
+
+    winning_bill_ids = []
+    bill_shell_by_id: Dict[int, dict] = {}
+    for r in header_rows:
+        key = (r['client_data_id'], r['document_id'])
+        if r['voucher_line_id'] != winning_session_by_key[key][1]:
+            continue
+        shell = {"bill_no": r['bill_no'], "bill_date": r['bill_date'], "vendor_name": r['vendor_name'], "items": []}
+        bill_shell_by_id[r['id']] = shell
+        winning_bill_ids.append(r['id'])
+        bills_by_cd.setdefault(r['client_data_id'], {}).setdefault(r['document_id'], []).append(shell)
+
+    if winning_bill_ids:
+        bid_placeholders = ",".join("?" for _ in winning_bill_ids)
+        item_rows = execute_query(
+            f"SELECT bill_id, amount FROM voucher_line_physical_bill_items WHERE bill_id IN ({bid_placeholders})",
+            tuple(winning_bill_ids)
+        )
+        for r in item_rows:
+            bill_shell_by_id[r['bill_id']]['items'].append(r['amount'])
 
     # transaction_level_approval gate: {transaction_ref: bool}, vacuously True for every ref
     # when zero voucher-level checks are configured - mirrors check #2's voucher_checks_ok.
@@ -2471,14 +2501,7 @@ def get_audit_workbook(session_id: int):
         done = 0
         for doc in docs:
             if doc['document_type'] == 'physical_bill':
-                bill = bills.get(doc['id'])
-                if bill and (bill['bill_no'] or '').strip() and (bill['bill_date'] or '').strip() \
-                        and (bill['vendor_name'] or '').strip():
-                    bill_amount = _cross_check_numeric(bill['amount'])
-                    base = (bill_amount is not None and voucher_amount is not None
-                            and _cross_check_values_equal(bill_amount, voucher_amount))
-                else:
-                    base = False
+                base = _evaluate_physical_bill_completion(bills.get(doc['id'], []), voucher_amount)
             elif doc['template_id']:
                 base = doc['id'] in linked
             else:
@@ -4057,47 +4080,141 @@ def preview_physical_bill_from_source(client_data_id: int, source_type: str):
     return resolve_physical_bill_fields_from_source(client_data_id, source_type)
 
 
+def _fetch_physical_bill_items(bill_ids: List[int]) -> Dict[int, list]:
+    """
+    Batch-fetch every item row for the given bill ids in one query, grouped by bill_id and
+    ordered sort_order/id. Returns {} without querying for an empty bill_ids list - both
+    callers below already handle the "no bills" case upstream, but this stays defensive since
+    an empty IN (...) is invalid SQL.
+    """
+    if not bill_ids:
+        return {}
+    placeholders = ",".join("?" for _ in bill_ids)
+    rows = execute_query(
+        f"""
+        SELECT id, bill_id, item_name, quantity, rate, amount,
+               source_document_row_id, source_template, sort_order, created_at, updated_at
+        FROM voucher_line_physical_bill_items
+        WHERE bill_id IN ({placeholders})
+        ORDER BY bill_id, sort_order, id
+        """,
+        tuple(bill_ids)
+    )
+    items_by_bill: Dict[int, list] = {}
+    for r in rows:
+        items_by_bill.setdefault(r['bill_id'], []).append({
+            "id": r['id'],
+            "item_name": r['item_name'],
+            "quantity": r['quantity'],
+            "rate": r['rate'],
+            "amount": r['amount'],
+            "source_document_row_id": r['source_document_row_id'],
+            "source_template": r['source_template'],
+            "sort_order": r['sort_order'],
+            "created_at": r['created_at'],
+            "updated_at": r['updated_at'],
+        })
+    return items_by_bill
+
+
+def _shape_physical_bill(header_row: dict, items: list) -> dict:
+    """
+    Builds one nested bill dict from a header row (bill_no/bill_date/vendor_name/... joined to
+    audit_rule_documents) plus its already-fetched items list - the single place both
+    save_physical_bill()'s response and get_voucher_line_physical_bills() build a bill dict, so
+    their shapes stay byte-identical. bill_total is the sum of this bill's item amounts, or
+    None if the bill has no items yet or any item's amount isn't resolvable (an incomplete
+    bill has no meaningful subtotal) - mirrors _evaluate_physical_bill_completion()'s own
+    "any unresolvable item amount blocks the total" rule, just surfaced for display here rather
+    than as a pass/fail gate.
+    """
+    bill_total = None
+    if items:
+        numeric_amounts = [_cross_check_numeric(item['amount']) for item in items]
+        if all(a is not None for a in numeric_amounts):
+            bill_total = sum(numeric_amounts)
+    document_is_active = header_row['document_is_active']
+    return {
+        "id": header_row['id'],
+        "voucher_line_id": header_row['voucher_line_id'],
+        "document_id": header_row['document_id'],
+        "bill_no": header_row['bill_no'],
+        "bill_date": header_row['bill_date'],
+        "vendor_name": header_row['vendor_name'],
+        "sort_order": header_row['sort_order'],
+        "created_at": header_row['created_at'],
+        "updated_at": header_row['updated_at'],
+        "document_name": header_row['document_name'],
+        "is_active": document_is_active if document_is_active is None else bool(document_is_active),
+        "items": items,
+        "bill_total": bill_total,
+    }
+
+
+def _fetch_physical_bills_for_document(voucher_line_id: int, document_id: int) -> dict:
+    """
+    Direct (non-sibling-resolved) read of every bill currently stored for exactly this
+    (voucher_line_id, document_id) pair - used as save_physical_bill()'s response so a caller
+    sees exactly what it just wrote, regardless of whether a sibling session might also have
+    bills for the same document. get_voucher_line_physical_bills() below is the sibling-
+    resolved batch read used everywhere else (Supporting Documents modal, Cleared/Query gate).
+    """
+    header_rows = execute_query(
+        """
+        SELECT vpb.id, vpb.voucher_line_id, vpb.document_id, vpb.bill_no, vpb.bill_date,
+               vpb.vendor_name, vpb.sort_order, vpb.created_at, vpb.updated_at,
+               ard.name AS document_name, ard.is_active AS document_is_active
+        FROM voucher_line_physical_bills vpb
+        LEFT JOIN audit_rule_documents ard ON ard.id = vpb.document_id
+        WHERE vpb.voucher_line_id = ? AND vpb.document_id = ?
+        ORDER BY vpb.sort_order, vpb.id
+        """,
+        (voucher_line_id, document_id)
+    )
+    items_by_bill = _fetch_physical_bill_items([r['id'] for r in header_rows])
+    bills = [_shape_physical_bill(r, items_by_bill.get(r['id'], [])) for r in header_rows]
+    return {"voucher_line_id": voucher_line_id, "document_id": document_id, "bills": bills}
+
+
 @router.post("/api/verification/save_physical_bill")
 def save_physical_bill(
     voucher_line_id: int = Body(..., embed=True, description="verification_details.id (the voucher line 'uid')"),
     document_id: int = Body(..., embed=True, description="audit_rule_documents.id (a physical_bill Document this bill belongs to)"),
-    bill_no: str = Body(..., embed=True),
-    bill_date: str = Body(..., embed=True, description="ISO format, YYYY-MM-DD"),
-    amount: Any = Body(None, embed=True, description="Required unless quantity+rate are both given, in which case it's computed and this is ignored"),
-    vendor_name: str = Body(..., embed=True),
-    quantity: Any = Body(None, embed=True, description="Populate-from-source only; blank for a manually-entered bill"),
-    rate: Any = Body(None, embed=True, description="Populate-from-source only; blank for a manually-entered bill"),
-    source_document_row_id: Optional[int] = Body(None, embed=True, description="client_data.id of the GRN/ERP Vendor Bill row this entry was populated from, if any"),
-    source_template: Optional[str] = Body(None, embed=True, description="'grn' or 'vendor_bill' - which source type populated this entry, if any"),
+    bills: List[Dict[str, Any]] = Body(..., embed=True, description="Full replacement bill set for this document - see docstring"),
     updated_by: str = Body("Analyst", embed=True)
 ):
     """
-    Save (upsert) one Document's Physical Bill data for a voucher line. One bill per
-    voucher line per Document (UNIQUE(voucher_line_id, document_id)) - a repeat save for
-    the same pair updates the existing row in place, never appends a duplicate.
+    Multi-Bill/Multi-Line Physical Bill, Phase 2 of 6: full-replace upsert of a Document's
+    ENTIRE bill set for a voucher line - a repeat save always replaces every existing bill and
+    item for (voucher_line_id, document_id) with exactly what's sent, never merges. Each
+    `bills[]` entry: {bill_no, bill_date, vendor_name, items: [{item_name, quantity, rate,
+    source_document_row_id, source_template}, ...]}. Supersedes the old one-bill-per-Document
+    flat shape - Phase 1's schema already dropped the UNIQUE(voucher_line_id, document_id)
+    constraint that used to limit a Document to exactly one bill.
 
     Writes always target the literal voucher_line_id passed in, never fanned out across
     sibling sessions - _resolve_sibling_voucher_line_ids()'s own documented contract (writes
     are unaffected by it, only reads are), same as every other voucher_line_* table.
 
-    quantity/rate/source_document_row_id/source_template (Populate Physical Bill from
-    GRN/ERP Vendor Bill, Phase 2 of 4) are all optional and default to None - a manual-entry
-    caller that omits them gets byte-identical behaviour to before this phase. When quantity
-    and rate are BOTH provided, amount is computed here (Qty x Rate, rounded to
-    get_rate_precision()) and whatever amount was sent is ignored; otherwise amount is
-    required and validated exactly as before. This is a full-replace upsert like the other
-    fields - a caller resaving an already-populated bill must resend quantity/rate/source_*
-    to keep them, or send them blank to intentionally clear provenance.
+    Per item: quantity/rate are optional (_parse_optional_float, same convention as before);
+    amount is ALWAYS derived as Qty x Rate (rounded to get_rate_precision()) when both are
+    given, else None - an item no longer accepts a standalone manual Amount the way the old
+    single-bill row did, per the confirmed "Amount (derived)" field design. source_template, if
+    given, is validated against PHYSICAL_BILL_SOURCE_TYPES.
 
-    Basic field validation only this phase, no cross-field business logic: amount numeric,
-    bill_date (if given) a valid date. Bill No/Vendor Name/Bill Date are all optional here,
-    same as Quantity/Rate - a blank field is stored as NULL, never rejected. (Confirmed fix:
-    these three used to be hard-required, which meant the Physical Bill panel's auto-save-on-
-    exit silently failed - and left the old value in place - the moment an auditor cleared any
-    one of them on an already-saved bill.) _physical_bill_satisfied() (this file's Cleared/Query
-    gate) already treats a blank/NULL value on any of these as "not satisfied", so relaxing this
-    write-side check doesn't loosen what counts as a complete bill. No check here that amount
-    matches the voucher line's own amount - that's Phase 6's gate, not this endpoint's job.
+    Per bill: bill_no/vendor_name are optional free text (blank stored as NULL, never
+    rejected - same relaxed-validation fix carried over from before: the auto-save-on-exit
+    flow must never fail just because a field is still blank mid-entry); bill_date, if given,
+    must be a valid ISO date (YYYY-MM-DD).
+
+    A bill that is entirely blank (no bill_no/date/vendor AND every item itself entirely
+    blank) is silently dropped rather than persisted - keeps an unused trailing "Add Bill"/
+    "Add line" UI placeholder from becoming a permanent phantom row on every auto-save tick.
+    An item that is entirely blank within an otherwise real bill is dropped the same way (a
+    trailing auto-added blank item row someone never filled in).
+
+    No check here that the grand total matches the voucher line's own amount - that's the
+    Cleared/Query gate's job (_evaluate_physical_bill_completion()), not this endpoint's.
     """
     line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
     if not line:
@@ -4107,8 +4224,8 @@ def save_physical_bill(
     if not doc:
         raise HTTPException(404, "Document not found or inactive.")
 
-    bill_no = (bill_no or "").strip() or None
-    vendor_name = (vendor_name or "").strip() or None
+    if not isinstance(bills, list):
+        raise HTTPException(400, "bills must be a list.")
 
     def _parse_optional_float(value, field_label):
         if value in (None, ''):
@@ -4118,61 +4235,107 @@ def save_physical_bill(
         except (TypeError, ValueError):
             raise HTTPException(400, f"{field_label} must be numeric.")
 
-    quantity = _parse_optional_float(quantity, "Quantity")
-    rate = _parse_optional_float(rate, "Rate")
+    def _is_blank_item(raw_item: dict) -> bool:
+        return not (raw_item.get('item_name') or '').strip() \
+            and raw_item.get('quantity') in (None, '') \
+            and raw_item.get('rate') in (None, '') \
+            and raw_item.get('source_document_row_id') in (None, '') \
+            and not (raw_item.get('source_template') or '')
 
-    if quantity is not None and rate is not None:
-        amount = round(quantity * rate, get_rate_precision())
-    else:
-        if amount in (None, ''):
-            raise HTTPException(400, "Amount is required when Quantity/Rate are not both provided.")
-        try:
-            amount = float(amount)
-        except (TypeError, ValueError):
-            raise HTTPException(400, "Amount must be numeric.")
+    cleaned_bills = []
+    for bill in bills:
+        if not isinstance(bill, dict):
+            raise HTTPException(400, "Each bill must be a dict.")
+        raw_items = bill.get('items') or []
+        if not isinstance(raw_items, list):
+            raise HTTPException(400, "Each bill's items must be a list.")
 
-    if source_template is not None and source_template not in PHYSICAL_BILL_SOURCE_TYPES:
-        raise HTTPException(400, f"Invalid source_template '{source_template}'. Must be one of: {', '.join(PHYSICAL_BILL_SOURCE_TYPES)} or omitted.")
+        parsed_items = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                raise HTTPException(400, "Each item must be a dict.")
+            if _is_blank_item(raw_item):
+                continue
+            quantity = _parse_optional_float(raw_item.get('quantity'), "Quantity")
+            rate = _parse_optional_float(raw_item.get('rate'), "Rate")
+            amount = round(quantity * rate, get_rate_precision()) if (quantity is not None and rate is not None) else None
+            source_template = raw_item.get('source_template') or None
+            if source_template is not None and source_template not in PHYSICAL_BILL_SOURCE_TYPES:
+                raise HTTPException(400, f"Invalid source_template '{source_template}'. Must be one of: {', '.join(PHYSICAL_BILL_SOURCE_TYPES)} or omitted.")
+            parsed_items.append({
+                "item_name": (raw_item.get('item_name') or '').strip() or None,
+                "quantity": quantity,
+                "rate": rate,
+                "amount": amount,
+                "source_document_row_id": raw_item.get('source_document_row_id') or None,
+                "source_template": source_template,
+            })
 
-    bill_date = (bill_date or "").strip() or None
-    if bill_date is not None:
-        try:
-            datetime.fromisoformat(bill_date)
-        except (TypeError, ValueError):
-            raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
+        bill_no = (bill.get('bill_no') or '').strip() or None
+        vendor_name = (bill.get('vendor_name') or '').strip() or None
+        bill_date = (bill.get('bill_date') or '').strip() or None
+        if bill_date is not None:
+            try:
+                datetime.fromisoformat(bill_date)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
 
-    execute_write(
-        """
-        INSERT INTO voucher_line_physical_bills
-            (voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name,
-             quantity, rate, source_document_row_id, source_template, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(voucher_line_id, document_id)
-        DO UPDATE SET bill_no = excluded.bill_no, bill_date = excluded.bill_date,
-                      amount = excluded.amount, vendor_name = excluded.vendor_name,
-                      quantity = excluded.quantity, rate = excluded.rate,
-                      source_document_row_id = excluded.source_document_row_id,
-                      source_template = excluded.source_template,
-                      updated_at = CURRENT_TIMESTAMP
-        """,
-        (voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name,
-         quantity, rate, source_document_row_id, source_template)
-    )
+        if not bill_no and not bill_date and not vendor_name and not parsed_items:
+            continue
+
+        cleaned_bills.append({
+            "bill_no": bill_no,
+            "bill_date": bill_date,
+            "vendor_name": vendor_name,
+            "items": parsed_items,
+        })
+
+    conn = get_raw_conn()
+    try:
+        existing_bill_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM voucher_line_physical_bills WHERE voucher_line_id = ? AND document_id = ?",
+            (voucher_line_id, document_id)
+        ).fetchall()]
+        if existing_bill_ids:
+            item_placeholders = ",".join("?" for _ in existing_bill_ids)
+            conn.execute(
+                f"DELETE FROM voucher_line_physical_bill_items WHERE bill_id IN ({item_placeholders})",
+                existing_bill_ids
+            )
+        conn.execute(
+            "DELETE FROM voucher_line_physical_bills WHERE voucher_line_id = ? AND document_id = ?",
+            (voucher_line_id, document_id)
+        )
+
+        for bill_sort, bill in enumerate(cleaned_bills):
+            cursor = conn.execute(
+                """
+                INSERT INTO voucher_line_physical_bills
+                    (voucher_line_id, document_id, bill_no, bill_date, vendor_name, sort_order, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (voucher_line_id, document_id, bill['bill_no'], bill['bill_date'], bill['vendor_name'], bill_sort)
+            )
+            bill_id = cursor.lastrowid
+            for item_sort, item in enumerate(bill['items']):
+                conn.execute(
+                    """
+                    INSERT INTO voucher_line_physical_bill_items
+                        (bill_id, item_name, quantity, rate, amount, source_document_row_id,
+                         source_template, sort_order, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (bill_id, item['item_name'], item['quantity'], item['rate'], item['amount'],
+                     item['source_document_row_id'], item['source_template'], item_sort)
+                )
+        conn.commit()
+    finally:
+        conn.close()
 
     log_audit(updated_by, "Save Physical Bill", "Verification",
-               f"Saved physical bill for document {document_id} on voucher line {voucher_line_id}.")
+               f"Saved {len(cleaned_bills)} physical bill(s) for document {document_id} on voucher line {voucher_line_id}.")
 
-    saved = execute_query(
-        """
-        SELECT id, voucher_line_id, document_id, bill_no, bill_date, amount, vendor_name,
-               quantity, rate, source_document_row_id, source_template, created_at, updated_at
-        FROM voucher_line_physical_bills
-        WHERE voucher_line_id = ? AND document_id = ?
-        """,
-        (voucher_line_id, document_id)
-    )[0]
-
-    return dict(saved)
+    return _fetch_physical_bills_for_document(voucher_line_id, document_id)
 
 
 @router.get("/api/verification/physical_bills/{voucher_line_id}")
@@ -4180,14 +4343,20 @@ def get_voucher_line_physical_bills(voucher_line_id: int):
     """
     Batch fetch every Physical Bill entry recorded for a voucher line, across all documents -
     one call per Supporting Documents modal open, mirroring get_line_observations()/
-    get_voucher_line_documents().
+    get_voucher_line_documents(). Nested bill->items shape (Multi-Bill/Multi-Line Physical
+    Bill, Phase 2 of 6) - a document can now have several bills, each with several items.
 
     Looks up across every verification_details.id that shares this line's own client_data_id
-    (_resolve_sibling_voucher_line_ids()), not just voucher_line_id itself, so a bill saved in
-    an earlier verification session still shows up when the same voucher line is reopened in a
-    new one. Two sibling sessions could each have their own row for the same document_id (the
-    UNIQUE constraint only prevents duplicates within one session) - the most recently updated
-    one wins, same dedup convention as get_line_observations().
+    (_resolve_sibling_voucher_line_ids()), not just voucher_line_id itself, so bills saved in
+    an earlier verification session still show up when the same voucher line is reopened in a
+    new one. Two sibling sessions could each have their own bill SET for the same document_id
+    (the old UNIQUE constraint that prevented more than one bill within a single session is
+    gone as of Phase 1, and never applied across sessions anyway) - dedup is now "latest-
+    touched bill SET wins per document_id", generalized from the old "latest-updated row
+    wins": the winning voucher_line_id for a document_id is whichever sibling session's bills
+    for that document have the max(updated_at), and every bill returned for that document
+    comes from that one winning session - never a mix of bills from two different sibling
+    sessions under the same document.
 
     LEFT JOIN (not INNER) so a bill against a since-deactivated Document still surfaces with
     is_active: false rather than disappearing - matches this module's established
@@ -4198,46 +4367,33 @@ def get_voucher_line_physical_bills(voucher_line_id: int):
         raise HTTPException(404, "Voucher line not found.")
 
     placeholders = ",".join("?" for _ in sibling_ids)
-    rows = execute_query(
+    header_rows = execute_query(
         f"""
         SELECT vpb.id, vpb.voucher_line_id, vpb.document_id, vpb.bill_no, vpb.bill_date,
-               vpb.amount, vpb.vendor_name, vpb.quantity, vpb.rate,
-               vpb.source_document_row_id, vpb.source_template,
-               vpb.created_at, vpb.updated_at,
+               vpb.vendor_name, vpb.sort_order, vpb.created_at, vpb.updated_at,
                ard.name AS document_name, ard.is_active AS document_is_active
         FROM voucher_line_physical_bills vpb
         LEFT JOIN audit_rule_documents ard ON ard.id = vpb.document_id
         WHERE vpb.voucher_line_id IN ({placeholders})
+        ORDER BY vpb.sort_order, vpb.id
         """,
         tuple(sibling_ids)
     )
 
-    latest_by_doc: Dict[int, dict] = {}
-    for r in rows:
-        existing = latest_by_doc.get(r['document_id'])
-        if existing is None or (r['updated_at'] or '') > (existing['updated_at'] or ''):
-            latest_by_doc[r['document_id']] = r
+    winning_session_by_doc: Dict[int, tuple] = {}
+    for r in header_rows:
+        candidate = (r['updated_at'] or '', r['voucher_line_id'])
+        existing = winning_session_by_doc.get(r['document_id'])
+        if existing is None or candidate > existing:
+            winning_session_by_doc[r['document_id']] = candidate
 
-    bills = [
-        {
-            "id": r['id'],
-            "voucher_line_id": r['voucher_line_id'],
-            "document_id": r['document_id'],
-            "bill_no": r['bill_no'],
-            "bill_date": r['bill_date'],
-            "amount": r['amount'],
-            "vendor_name": r['vendor_name'],
-            "quantity": r['quantity'],
-            "rate": r['rate'],
-            "source_document_row_id": r['source_document_row_id'],
-            "source_template": r['source_template'],
-            "created_at": r['created_at'],
-            "updated_at": r['updated_at'],
-            "document_name": r['document_name'],
-            "is_active": r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])
-        }
-        for r in latest_by_doc.values()
+    winning_rows = [
+        r for r in header_rows
+        if r['voucher_line_id'] == winning_session_by_doc[r['document_id']][1]
     ]
+
+    items_by_bill = _fetch_physical_bill_items([r['id'] for r in winning_rows])
+    bills = [_shape_physical_bill(r, items_by_bill.get(r['id'], [])) for r in winning_rows]
     return {"voucher_line_id": voucher_line_id, "bills": bills, "count": len(bills)}
 
 
@@ -4467,6 +4623,42 @@ def _cross_check_numeric(value: Any) -> Optional[float]:
 def _cross_check_values_equal(a: float, b: float) -> bool:
     """Equality within CROSS_CHECK_FLOAT_EPSILON - see that constant for why."""
     return abs(a - b) <= CROSS_CHECK_FLOAT_EPSILON
+
+
+def _evaluate_physical_bill_completion(bills: List[dict], voucher_amount: Optional[float]) -> bool:
+    """
+    Shared hard-lock check for one physical_bill Document's requirement (Multi-Bill/Multi-Line
+    Physical Bill, Phase 2 of 6) - used both by compute_and_persist_cleared_status()'s per-line
+    gate and get_audit_workbook()'s pre-batched Procedures-pill computation, so the two can never
+    disagree. No partial credit: every bill in `bills` must have non-blank bill_no/bill_date/
+    vendor_name and at least one item; every item must resolve to a numeric amount
+    (_cross_check_numeric); the SUM of every item's amount across every bill must exactly equal
+    `voucher_amount` (_cross_check_values_equal - float-safety epsilon only, no rounding
+    tolerance). One incomplete bill or item fails the whole document.
+
+    `bills` is a list of {"bill_no", "bill_date", "vendor_name", "items": [<raw amount>, ...]}
+    dicts - callers adapt their own row shape (a real nested bill dict, or a lighter dict built
+    from a batch join) into this shape before calling; this function only ever reads those 4 keys.
+    """
+    if not bills or voucher_amount is None:
+        return False
+    grand_total = 0.0
+    for bill in bills:
+        if not (bill.get('bill_no') or '').strip():
+            return False
+        if not (bill.get('bill_date') or '').strip():
+            return False
+        if not (bill.get('vendor_name') or '').strip():
+            return False
+        items = bill.get('items') or []
+        if not items:
+            return False
+        for raw_amount in items:
+            item_amount = _cross_check_numeric(raw_amount)
+            if item_amount is None:
+                return False
+            grand_total += item_amount
+    return _cross_check_values_equal(grand_total, voucher_amount)
 
 
 def _get_category_cross_check_configs(category_id: int) -> List[dict]:
