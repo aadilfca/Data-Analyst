@@ -554,7 +554,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!hostAdapter.procedureModalState[uid].tabs[docId]) {
-        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBill: null, physicalBillSaved: false, physicalBillErrors: {}, physicalBillSourceDocumentRowId: null, physicalBillSourceTemplate: null };
+        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false };
     }
     return hostAdapter.procedureModalState[uid].tabs[docId];
 }
@@ -736,27 +736,25 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null) {
             tabState.lastSyncedText = savedEntry.last_synced_text || null;
         }
 
-        // Physical Bill evidence type, Phase 7 of 8: server truth always wins on reopen, same
-        // convention as observation/lastSyncedText above — never trust a stale local draft.
+        // Multi-Bill/Multi-Line Physical Bill, Phase 3 of 6: server truth always wins on reopen,
+        // same convention as observation/lastSyncedText above — never trust a stale local draft.
+        // A document can now have several bills, each with several items (Phase 2's nested shape);
+        // ids/timestamps/bill_total are display-only server fields, not needed client-side since
+        // save is always full-replace, so only the editable fields are carried into tabState.
         if (doc.document_type === 'physical_bill') {
-            const savedBill = physicalBillEntries.find(b => b.document_id === doc.id);
-            tabState.physicalBill = savedBill
-                ? {
-                    bill_no: savedBill.bill_no || '',
-                    bill_date: savedBill.bill_date || '',
-                    amount: savedBill.amount != null ? String(savedBill.amount) : '',
-                    vendor_name: savedBill.vendor_name || '',
-                    quantity: savedBill.quantity != null ? String(savedBill.quantity) : '',
-                    rate: savedBill.rate != null ? String(savedBill.rate) : ''
-                }
-                : { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
-            tabState.physicalBillSaved = !!savedBill;
-            tabState.physicalBillErrors = {};
-            // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): re-seed the source
-            // pointer too, so reopening the modal on an already-populated-from-source bill shows
-            // the same readonly/computed Amount state, not just the four original fields.
-            tabState.physicalBillSourceDocumentRowId = savedBill ? (savedBill.source_document_row_id || null) : null;
-            tabState.physicalBillSourceTemplate = savedBill ? (savedBill.source_template || null) : null;
+            const savedBills = physicalBillEntries.filter(b => b.document_id === doc.id);
+            tabState.physicalBills = savedBills.map(b => ({
+                bill_no: b.bill_no || '',
+                bill_date: b.bill_date || '',
+                vendor_name: b.vendor_name || '',
+                items: (b.items || []).map(item => ({
+                    item_name: item.item_name || '',
+                    quantity: item.quantity != null ? String(item.quantity) : '',
+                    rate: item.rate != null ? String(item.rate) : '',
+                    amount: item.quantity != null && item.rate != null ? item.quantity * item.rate : null
+                }))
+            }));
+            tabState.physicalBillSaved = savedBills.length > 0;
         }
     });
 
@@ -1305,26 +1303,24 @@ function isProcedureDocumentComplete(uid, doc) {
         return true;
     }
     let baseComplete;
-    // Physical Bill evidence type, Phase 7 of 8: checked BEFORE doc.template_id (always null for
-    // this doc type) - mirrors compute_and_persist_cleared_status()'s own document_type-first
-    // branch order (Phase 6), so a physical_bill Document never silently falls into the
-    // no-template role-tick branch below, the same trap Phase 6 closed server-side. Reflects
-    // SAVED state only (not an unsaved draft edit) - same "dot reflects committed truth"
-    // convention every other document type already follows. Also requires the saved bill's Amount
-    // to match this line's own amount (hostAdapter.procedureModalState[uid].voucherLineAmount, already
-    // computed by openProcedureModal() before this function can be called), within the same
-    // epsilon the backend gate uses (CROSS_CHECK_FLOAT_EPSILON = 0.005, routers/verification.py's
-    // _physical_bill_satisfied()) — closes the gap the original Phase 7 comment deferred to
-    // "Phase 8", which turned out not to touch this indicator.
+    // Physical Bill evidence type: checked BEFORE doc.template_id (always null for this doc
+    // type) - mirrors compute_and_persist_cleared_status()'s own document_type-first branch
+    // order, so a physical_bill Document never silently falls into the no-template role-tick
+    // branch below. Reflects SAVED state only (not an unsaved draft edit) - same "dot reflects
+    // committed truth" convention every other document type already follows: gated by
+    // tabState.physicalBillSaved (must have been saved at least once this session, or loaded
+    // with existing bills), with completeness itself computed over the current (possibly
+    // since-edited) draft. Multi-Bill/Multi-Line Physical Bill, Phase 3 of 6: mirrors
+    // _evaluate_physical_bill_completion() - every bill needs non-blank bill_no/bill_date/
+    // vendor_name and at least one item, every item's qty*rate must resolve numeric, and the
+    // grand total across every bill/item must equal this line's own amount within the same
+    // epsilon the backend gate uses (CROSS_CHECK_FLOAT_EPSILON = 0.005).
     if (doc.document_type === 'physical_bill') {
         const tabState = getProcedureTabState(uid, doc.id);
-        const b = tabState.physicalBill;
-        const fieldsComplete = tabState.physicalBillSaved && !!(b && b.bill_no && b.bill_date && b.vendor_name
-            && b.amount !== '' && b.amount != null && !isNaN(parseFloat(b.amount)));
-        if (fieldsComplete) {
+        if (tabState.physicalBillSaved) {
             const lineState = hostAdapter.procedureModalState[uid];
             const voucherLineAmount = (lineState && lineState.voucherLineAmount) || 0;
-            baseComplete = Math.abs(parseFloat(b.amount) - voucherLineAmount) <= 0.005;
+            baseComplete = computePhysicalBillCompletion(tabState.physicalBills, voucherLineAmount);
         } else {
             baseComplete = false;
         }
@@ -2098,86 +2094,24 @@ async function toggleAllProcedureChecks(uid, docId) {
     }
 }
 
-// ---------- PHYSICAL BILL ENTRY (evidence type, Phase 7 of 8) ----------
+// ---------- PHYSICAL BILL ENTRY (evidence type; Multi-Bill/Multi-Line, Phase 3 of 6) ----------
 // Small line-style SVG icons (stroke=currentColor, no fill) used throughout this form in place of
 // emoji — purely decorative, sized/aligned via the shared .pb-icon wrapper class in style.css.
 const PB_ICON_RECEIPT = '<svg class="pb-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/></svg>';
 const PB_ICON_DETAILS = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>';
-const PB_ICON_CALC = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="14" x2="8.01" y2="14"/><line x1="12" y1="14" x2="12.01" y2="14"/><line x1="16" y1="14" x2="16" y2="18"/><line x1="8" y1="18" x2="8.01" y2="18"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>';
-const PB_ICON_COPY = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
 const PB_ICON_CHECK = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const PB_ICON_PLUS = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+const PB_ICON_REMOVE = '<svg class="pb-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 
-// Client-side mirror of Phase 5's backend validation (save_physical_bill, routers/verification.py):
-// Bill No/Vendor name non-blank, Amount numeric, Date non-blank and a valid date. Fails soft — the
-// caller renders these as inline messages under each field, never a blocking alert(). Returns a
-// {field: message} object; empty means valid.
-function validatePhysicalBillFields(bill) {
-    const errors = {};
-    if (!bill.bill_no || !bill.bill_no.trim()) errors.bill_no = 'Bill No is required.';
-    if (!bill.vendor_name || !bill.vendor_name.trim()) errors.vendor_name = 'Vendor name is required.';
-    if (bill.amount === '' || bill.amount == null || isNaN(parseFloat(bill.amount))) {
-        errors.amount = 'Amount must be numeric.';
-    }
-    if (!bill.bill_date) {
-        errors.bill_date = 'Date is required.';
-    } else if (isNaN(Date.parse(bill.bill_date))) {
-        errors.bill_date = 'Invalid date.';
-    }
-    return errors;
-}
-
-// Mandatory-for-Cleared visual cue (confirmed requirement, purely visual — never blocks saving or
-// Verify/Verify & Next). Bill No/Date/Vendor Name are the fields check #1 of
-// compute_and_persist_cleared_status() actually requires; a blank one gets a red border + tooltip.
-// Evaluated only at panel render and at the 4 save chokepoints (see savePhysicalBillEntry() below),
-// never live as-you-type. No-ops safely if the fields aren't currently in the DOM.
-const PB_MANDATORY_FIELD_MAP = {
-    bill_no: 'procedureBillNoInput',
-    bill_date: 'procedureBillDateInput',
-    vendor_name: 'procedureBillVendorInput'
-};
-
-function updatePhysicalBillMandatoryIndicators(bill) {
-    Object.keys(PB_MANDATORY_FIELD_MAP).forEach(field => {
-        const el = document.getElementById(PB_MANDATORY_FIELD_MAP[field]);
-        if (!el) return;
-        const isBlank = !bill || !bill[field] || !String(bill[field]).trim();
-        el.classList.toggle('procedure-bill-input-mandatory-missing', isBlank);
-        el.title = isBlank ? 'Required for status to clear' : '';
-    });
-}
-
-// Dedicated panel for a physical_bill Document — a 4-field entry form (Bill No/Date/Amount/Vendor
-// name) instead of the has-template search/evidence table or the no-template role checklist,
-// since neither concept applies to this doc type (Phase 6 backend note: a physical_bill Document
-// always has template_id: null, and its auth_roles — if any — are no longer read by the Cleared/
-// Query gate for this doc type, so no Audit Procedures segment is rendered here either). The
-// Observation segment is unchanged, same as every other document type.
-// Live, purely visual signal — shows a small green tick beside the Physical Bill Amount field the
-// instant its value exactly matches the voucher line's own amount (same 0.005 epsilon
-// _physical_bill_satisfied() uses server-side). Never touches physicalBillSaved/the Save button/
-// any backend call — the tick is just a hint while typing, independent of what's actually saved.
-function updateAmountMatchTick(uid, rawValue) {
-    const tick = document.getElementById('procedureBillAmountTick');
-    if (!tick) return;
-    const lineState = hostAdapter.procedureModalState[uid];
-    const voucherAmount = (lineState && lineState.voucherLineAmount) || 0;
-    const parsed = parseFloat(rawValue);
-    const matches = !isNaN(parsed) && Math.abs(parsed - voucherAmount) <= 0.005;
-    tick.style.display = matches ? '' : 'none';
-}
-
-// Formats a raw amount value for the prominent "Total Amount" readout at the bottom of the
-// Quantity/Rate/Amount sub-section — display only, never fed back into what gets saved.
-function formatBillTotalDisplay(value) {
-    const num = parseFloat(value);
-    if (isNaN(num)) return '—';
-    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+// Float-safety epsilon matching CROSS_CHECK_FLOAT_EPSILON (routers/verification.py) — used both
+// for the grand-total-vs-voucher-amount reconciliation pill and the completion-dot gate below, so
+// neither can ever disagree with the backend's own _cross_check_values_equal()/
+// _evaluate_physical_bill_completion() epsilon.
+const PB_FLOAT_EPSILON = 0.005;
 
 // Strips a Quantity/Rate input's typed value down to digits and at most one decimal point (confirmed
-// fix) — used on every 'input' event so pasted/typed letters and symbols never survive, and a second
-// '.' collapses away rather than producing an unparseable string like "1.2.3".
+// fix, carried over) — used on every 'input' event so pasted/typed letters and symbols never survive,
+// and a second '.' collapses away rather than producing an unparseable string like "1.2.3".
 function pbSanitizeNumericInput(str) {
     let cleaned = str.replace(/[^0-9.]/g, '');
     const firstDot = cleaned.indexOf('.');
@@ -2187,115 +2121,223 @@ function pbSanitizeNumericInput(str) {
     return cleaned;
 }
 
-// Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4); restyle (confirmed fix): Amount
-// is now always a read-only, greyed field — never manually typed — live-computed as Qty × Rate
-// whenever both are currently valid non-blank numbers. When they aren't (a brand-new entry with
-// nothing typed yet, or a legacy bill saved before Quantity/Rate existed), the field simply keeps
-// showing whatever value is already there (blank, or the originally-saved Amount) rather than
-// becoming editable — there is no manual-entry path for Amount any more. This is a live UI preview
-// only — the authoritative rounding (rate_precision) happens server-side in save_physical_bill(),
-// same convention as the rest of this app's client-side "computed" fields. Also drives the
-// prominent Total Amount readout beneath the field grid, which always mirrors this same value.
-function updatePhysicalBillAmount(uid, docId) {
-    const qtyEl = document.getElementById('procedureBillQuantityInput');
-    const rateEl = document.getElementById('procedureBillRateInput');
-    const amountEl = document.getElementById('procedureBillAmountInput');
-    const totalEl = document.getElementById('procedureBillTotalValue');
-    if (!amountEl) return;
-    const qtyStr = qtyEl ? qtyEl.value : '';
-    const rateStr = rateEl ? rateEl.value : '';
-    const qty = parseFloat(qtyStr);
-    const rate = parseFloat(rateStr);
-    const bothValid = qtyStr !== '' && rateStr !== '' && !isNaN(qty) && !isNaN(rate);
-    if (bothValid) {
-        const computedStr = (qty * rate).toFixed(2);
-        amountEl.value = computedStr;
-        const tabState = getProcedureTabState(uid, docId);
-        if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
-        tabState.physicalBill.amount = computedStr;
-    }
-    if (totalEl) totalEl.textContent = formatBillTotalDisplay(amountEl.value);
-    updateAmountMatchTick(uid, amountEl.value);
+// Formats a raw number for display (subtotal/grand total rows, item Amount cells) — display only,
+// never fed back into what gets saved. Returns '—' for anything not a finite number.
+function formatBillTotalDisplay(value) {
+    const num = parseFloat(value);
+    if (isNaN(num)) return '—';
+    return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// One empty bill card — items start empty; the user adds lines via the per-card "Add line" button.
+function makeEmptyPhysicalBill() {
+    return { bill_no: '', bill_date: '', vendor_name: '', items: [] };
+}
+
+function makeEmptyPhysicalBillItem() {
+    return { item_name: '', quantity: '', rate: '', amount: null };
+}
+
+// Recomputes one item's derived Amount (qty*rate, or null if either isn't currently a valid
+// number) and caches it on the item object — the single source both the item's own Amount cell
+// and the bill/grand-total sums read from.
+function recomputePhysicalBillItemAmount(item) {
+    const qty = parseFloat(item.quantity);
+    const rate = parseFloat(item.rate);
+    const bothValid = item.quantity !== '' && item.rate !== '' && !isNaN(qty) && !isNaN(rate);
+    item.amount = bothValid ? qty * rate : null;
+    return item.amount;
+}
+
+// A bill's subtotal for display — sums every item's cached Amount, treating a not-yet-resolvable
+// item (blank/invalid Qty or Rate) as 0 so the running total stays a useful live preview rather
+// than going blank the moment one row is mid-edit. This is display-only; the actual Cleared/Query
+// gate (_evaluate_physical_bill_completion(), mirrored by computePhysicalBillCompletion() below)
+// requires every item to resolve numeric, with no such leniency.
+function computePhysicalBillSubtotal(bill) {
+    return (bill.items || []).reduce((sum, item) => sum + (item.amount != null ? item.amount : 0), 0);
+}
+
+function computePhysicalBillGrandTotal(bills) {
+    return (bills || []).reduce((sum, bill) => sum + computePhysicalBillSubtotal(bill), 0);
+}
+
+// Client-side mirror of _evaluate_physical_bill_completion() (routers/verification.py) — every
+// bill needs non-blank bill_no/bill_date/vendor_name and at least one item; every item's Qty*Rate
+// must resolve to a number; the grand total across every bill/item must equal the voucher line's
+// own amount within PB_FLOAT_EPSILON. No partial credit — one incomplete bill or item, or a
+// mismatched total, fails the whole document. Used only for the rail's completion dot; the real
+// gate is always evaluated server-side.
+function computePhysicalBillCompletion(bills, voucherLineAmount) {
+    if (!bills || !bills.length || voucherLineAmount == null) return false;
+    let grandTotal = 0;
+    for (const bill of bills) {
+        if (!bill.bill_no || !bill.bill_no.trim()) return false;
+        if (!bill.bill_date || !bill.bill_date.trim()) return false;
+        if (!bill.vendor_name || !bill.vendor_name.trim()) return false;
+        if (!bill.items || !bill.items.length) return false;
+        for (const item of bill.items) {
+            const amount = recomputePhysicalBillItemAmount(item);
+            if (amount == null || isNaN(amount)) return false;
+            grandTotal += amount;
+        }
+    }
+    return Math.abs(grandTotal - voucherLineAmount) <= PB_FLOAT_EPSILON;
+}
+
+// Reconciliation pill shown beside the Grand Total — "Reconciled" once the grand total matches
+// the voucher line's own amount within PB_FLOAT_EPSILON (same epsilon the backend gate uses, no
+// wider tolerance), otherwise "Over by X" / "Short by X".
+function buildPhysicalBillReconciliationStatus(grandTotal, voucherLineAmount) {
+    const diff = grandTotal - voucherLineAmount;
+    if (Math.abs(diff) <= PB_FLOAT_EPSILON) {
+        return { cls: 'reconciled', label: `${PB_ICON_CHECK} Reconciled` };
+    }
+    if (diff > 0) {
+        return { cls: 'over', label: `Over by ${formatBillTotalDisplay(diff)}` };
+    }
+    return { cls: 'short', label: `Short by ${formatBillTotalDisplay(-diff)}` };
+}
+
+// Mandatory-for-Cleared visual cue (confirmed requirement, purely visual — never blocks saving or
+// Verify/Verify & Next). Bill No/Date/Vendor Name are the fields the Cleared/Query gate actually
+// requires; a blank one gets a red border + tooltip. Evaluated only at panel render and after a
+// save completes (savePhysicalBillEntry()) — never live as-you-type — same convention as before,
+// now walking every currently-rendered bill card via data-bill-idx/data-field rather than the old
+// design's fixed element ids (which assumed exactly one bill per document). No-ops safely if this
+// document's panel isn't the one currently rendered.
+function refreshPhysicalBillMandatoryIndicators(uid, docId) {
+    const container = document.getElementById('procedureModalPanels');
+    if (!container) return;
+    const panel = container.querySelector(`.procedure-tab-panel[data-doc-id="${docId}"]`);
+    if (!panel) return;
+    const tabState = getProcedureTabState(uid, docId);
+    (tabState.physicalBills || []).forEach((bill, billIdx) => {
+        ['bill_no', 'bill_date', 'vendor_name'].forEach(field => {
+            const el = panel.querySelector(`[data-bill-idx="${billIdx}"][data-field="${field}"]`);
+            if (!el) return;
+            const isBlank = !bill[field] || !String(bill[field]).trim();
+            el.classList.toggle('procedure-bill-input-mandatory-missing', isBlank);
+            el.title = isBlank ? 'Required for status to clear' : '';
+        });
+    });
+}
+
+// Recomputes and repaints one item row's Amount cell, its bill's Subtotal, and the Grand
+// Total/reconciliation pill — the targeted (no full re-render) update path used on every Rate/Qty
+// keystroke so typing never loses focus. Structural changes (Add/Remove Bill/line) go through a
+// full renderPhysicalBillDocumentPanel() re-render instead (see the click handlers below).
+function updatePhysicalBillTotals(uid, docId, billIdx) {
+    const container = document.getElementById('procedureModalPanels');
+    if (!container) return;
+    const panel = container.querySelector(`.procedure-tab-panel[data-doc-id="${docId}"]`);
+    if (!panel) return;
+    const tabState = getProcedureTabState(uid, docId);
+    const bill = tabState.physicalBills[billIdx];
+    if (!bill) return;
+
+    if (billIdx != null) {
+        bill.items.forEach((item, itemIdx) => {
+            const amountCell = panel.querySelector(`.procedure-bill-item-amount[data-bill-idx="${billIdx}"][data-item-idx="${itemIdx}"]`);
+            if (amountCell) amountCell.textContent = formatBillTotalDisplay(item.amount);
+        });
+        const subtotalEl = panel.querySelector(`.procedure-bill-subtotal-value[data-bill-idx="${billIdx}"]`);
+        if (subtotalEl) subtotalEl.textContent = formatBillTotalDisplay(computePhysicalBillSubtotal(bill));
+    }
+
+    const lineState = hostAdapter.procedureModalState[uid];
+    const voucherLineAmount = (lineState && lineState.voucherLineAmount) || 0;
+    const grandTotal = computePhysicalBillGrandTotal(tabState.physicalBills);
+    const grandTotalEl = panel.querySelector('#procedureBillGrandTotalValue');
+    if (grandTotalEl) grandTotalEl.textContent = formatBillTotalDisplay(grandTotal);
+    const recon = buildPhysicalBillReconciliationStatus(grandTotal, voucherLineAmount);
+    const reconEl = panel.querySelector('#procedureBillReconStatus');
+    if (reconEl) {
+        reconEl.className = `procedure-bill-recon-pill procedure-bill-recon-${recon.cls}`;
+        reconEl.innerHTML = recon.label;
+    }
+}
+
+// One bill card: header fields (Bill No/Vendor/Date + remove-bill), an items table (Item/Rate/
+// Qty/Amount-derived/remove-line), an "Add line" button, and a dimmed subtotal row.
+function renderPhysicalBillCard(bill, billIdx) {
+    const subtotal = computePhysicalBillSubtotal(bill);
+    const itemRows = (bill.items || []).map((item, itemIdx) => `
+        <tr>
+            <td><input type="text" class="procedure-bill-input" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" data-field="item_name" value="${hostAdapter.escapeHtml(item.item_name)}" placeholder="Item"></td>
+            <td><input type="text" inputmode="decimal" class="procedure-bill-input" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" data-field="rate" value="${hostAdapter.escapeHtml(item.rate)}" placeholder="0"></td>
+            <td><input type="text" inputmode="decimal" class="procedure-bill-input" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" data-field="quantity" value="${hostAdapter.escapeHtml(item.quantity)}" placeholder="0"></td>
+            <td class="procedure-bill-item-amount" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}">${formatBillTotalDisplay(item.amount)}</td>
+            <td><button type="button" class="procedure-bill-remove-line-btn" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" title="Remove line">${PB_ICON_REMOVE}</button></td>
+        </tr>
+    `).join('');
+
+    return `
+        <div class="procedure-bill-card" data-bill-idx="${billIdx}">
+            <div class="procedure-bill-card-header">
+                <div class="procedure-bill-field">
+                    <label>Bill No</label>
+                    <input type="text" class="procedure-bill-input" data-bill-idx="${billIdx}" data-field="bill_no" value="${hostAdapter.escapeHtml(bill.bill_no)}">
+                </div>
+                <div class="procedure-bill-field">
+                    <label>Vendor Name</label>
+                    <input type="text" class="procedure-bill-input" data-bill-idx="${billIdx}" data-field="vendor_name" value="${hostAdapter.escapeHtml(bill.vendor_name)}">
+                </div>
+                <div class="procedure-bill-field">
+                    <label>Date</label>
+                    <input type="date" class="procedure-bill-input" data-bill-idx="${billIdx}" data-field="bill_date" value="${hostAdapter.escapeHtml(bill.bill_date)}">
+                </div>
+                <button type="button" class="procedure-bill-remove-bill-btn" data-bill-idx="${billIdx}" title="Remove bill">${PB_ICON_REMOVE} Remove Bill</button>
+            </div>
+            <table class="procedure-bill-items-table">
+                <thead>
+                    <tr><th>Item</th><th>Rate</th><th>Qty</th><th>Amount</th><th></th></tr>
+                </thead>
+                <tbody>${itemRows}</tbody>
+            </table>
+            <button type="button" class="procedure-bill-add-line-btn" data-bill-idx="${billIdx}">${PB_ICON_PLUS} Add line</button>
+            <div class="procedure-bill-subtotal-row">
+                <span class="procedure-bill-subtotal-label">Subtotal</span>
+                <span class="procedure-bill-subtotal-value" data-bill-idx="${billIdx}">${formatBillTotalDisplay(subtotal)}</span>
+            </div>
+        </div>
+    `;
+}
+
+// Dedicated panel for a physical_bill Document — one card per bill, each with its own editable
+// item-lines table, plus an "Add Bill" button and a Grand Total/reconciliation footer. Replaces
+// the earlier one-bill-per-Document 4-field form (Phase 7 of 8) now that a Document can carry
+// several bills, each with several line items (Phase 1-2 of this requirement). No Audit
+// Procedures segment here (same as before — neither concept applies to this doc type). The
+// Observation segment is unchanged, same as every other document type.
 function renderPhysicalBillDocumentPanel(uid, doc) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
     const tabState = getProcedureTabState(uid, doc.id);
-    const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
-    const errors = tabState.physicalBillErrors || {};
-    const fieldError = (field) => errors[field] ? `<div class="procedure-bill-field-error">${hostAdapter.escapeHtml(errors[field])}</div>` : '';
+    const bills = tabState.physicalBills || [];
 
-    // Copy from lines (Phase 3 amendment): every GRN/Vendor Bill row already linked as evidence
-    // elsewhere on this voucher line — button disabled with none, auto-fills directly with
-    // exactly one (handled in the click listener below), opens a small picker for 2+.
-    const eligibleSourceRows = getEligiblePhysicalBillSourceRows(uid);
-    const initialTotalDisplay = formatBillTotalDisplay(bill.amount);
+    const lineState = hostAdapter.procedureModalState[uid];
+    const voucherLineAmount = (lineState && lineState.voucherLineAmount) || 0;
+    const grandTotal = computePhysicalBillGrandTotal(bills);
+    const recon = buildPhysicalBillReconciliationStatus(grandTotal, voucherLineAmount);
+
+    const cardsHtml = bills.length
+        ? bills.map((bill, billIdx) => renderPhysicalBillCard(bill, billIdx)).join('')
+        : '<div class="procedure-bill-empty-state">No bills entered yet.</div>';
 
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${doc.id}">
             <div class="procedure-segment procedure-segment-data">
                 <h4 class="procedure-segment-header">${PB_ICON_RECEIPT} Physical Bill</h4>
                 <div class="procedure-segment-body">
-                    <div class="procedure-bill-form">
-                        <div class="procedure-bill-section">
-                            <div class="procedure-bill-section-header">
-                                <div class="procedure-bill-section-title">${PB_ICON_DETAILS} Bill Details</div>
-                                <button type="button" id="procedureBillCopyBtn" class="procedure-bill-copy-btn" ${!eligibleSourceRows.length ? 'disabled' : ''} title="${!eligibleSourceRows.length ? 'No GRN or Vendor Bill evidence linked to this voucher line yet' : 'Copy Vendor/Qty/Rate from a linked GRN or Vendor Bill row'}">${PB_ICON_COPY} Copy from lines</button>
-                            </div>
-                            <div id="procedureBillCopyPicker" class="procedure-search-dropdown" style="display:none;"></div>
-                            <div class="procedure-bill-grid">
-                                <div class="procedure-bill-field">
-                                    <label for="procedureBillNoInput">Bill No</label>
-                                    <input type="text" id="procedureBillNoInput" class="procedure-bill-input" value="${hostAdapter.escapeHtml(bill.bill_no)}">
-                                    ${fieldError('bill_no')}
-                                </div>
-                                <div class="procedure-bill-field">
-                                    <label for="procedureBillDateInput">Date</label>
-                                    <input type="date" id="procedureBillDateInput" class="procedure-bill-input" value="${hostAdapter.escapeHtml(bill.bill_date)}">
-                                    ${fieldError('bill_date')}
-                                </div>
-                                <div class="procedure-bill-field procedure-bill-field-full">
-                                    <label for="procedureBillVendorInput">Vendor Name</label>
-                                    <input type="text" id="procedureBillVendorInput" class="procedure-bill-input" value="${hostAdapter.escapeHtml(bill.vendor_name)}">
-                                    ${fieldError('vendor_name')}
-                                </div>
-                            </div>
+                    <div class="procedure-bill-form" id="procedureBillForm">
+                        ${cardsHtml}
+                        <button type="button" id="procedureBillAddBillBtn" class="procedure-bill-add-bill-btn">${PB_ICON_PLUS} Add Bill</button>
+                        <div class="procedure-bill-grand-total-row">
+                            <span class="procedure-bill-grand-total-label">${PB_ICON_DETAILS} Grand Total</span>
+                            <span id="procedureBillGrandTotalValue" class="procedure-bill-grand-total-value">${formatBillTotalDisplay(grandTotal)}</span>
+                            <span id="procedureBillReconStatus" class="procedure-bill-recon-pill procedure-bill-recon-${recon.cls}">${recon.label}</span>
                         </div>
-
-                        <div class="procedure-bill-section procedure-bill-section-amounts">
-                            <div class="procedure-bill-section-title">${PB_ICON_CALC} Quantity &amp; Amount</div>
-                            <div class="procedure-bill-grid procedure-bill-grid-3">
-                                <div class="procedure-bill-field">
-                                    <label for="procedureBillQuantityInput">Quantity</label>
-                                    <div class="procedure-bill-calc-field" data-calc-field="quantity">
-                                        <input type="text" inputmode="decimal" id="procedureBillQuantityInput" class="procedure-bill-input procedure-bill-calc-input" value="${hostAdapter.escapeHtml(bill.quantity)}" placeholder="0" title="Type a value, or tap the calculator icon">
-                                        <span class="procedure-bill-calc-icon">${PB_ICON_CALC}</span>
-                                    </div>
-                                </div>
-                                <div class="procedure-bill-field">
-                                    <label for="procedureBillRateInput">Rate</label>
-                                    <div class="procedure-bill-calc-field" data-calc-field="rate">
-                                        <input type="text" inputmode="decimal" id="procedureBillRateInput" class="procedure-bill-input procedure-bill-calc-input" value="${hostAdapter.escapeHtml(bill.rate)}" placeholder="0" title="Type a value, or tap the calculator icon">
-                                        <span class="procedure-bill-calc-icon">${PB_ICON_CALC}</span>
-                                    </div>
-                                </div>
-                                <div class="procedure-bill-field">
-                                    <label for="procedureBillAmountInput">Amount</label>
-                                    <div class="procedure-bill-amount-row">
-                                        <input type="number" step="any" id="procedureBillAmountInput" class="procedure-bill-input procedure-bill-input-computed" value="${hostAdapter.escapeHtml(bill.amount)}" readonly title="Auto-calculated as Quantity × Rate">
-                                        <span id="procedureBillAmountTick" class="procedure-amount-match-tick" style="display:none;" title="Matches voucher line amount">${PB_ICON_CHECK}</span>
-                                    </div>
-                                    ${fieldError('amount')}
-                                </div>
-                            </div>
-                            <div class="procedure-bill-total-row">
-                                <span class="procedure-bill-total-label">Total Amount</span>
-                                <span class="procedure-bill-total-value" id="procedureBillTotalValue">${initialTotalDisplay}</span>
-                            </div>
-                        </div>
-
-                        ${errors._general ? `<div class="procedure-bill-general-error">${hostAdapter.escapeHtml(errors._general)}</div>` : ''}
                     </div>
                 </div>
             </div>
@@ -2306,350 +2348,94 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
         </div>
     `;
 
-    // Amount is always read-only/computed. Quantity/Rate are normal editable inputs with two entry
-    // routes (confirmed fix): typing directly (this loop) or the calculator popover (below) — both
-    // write into tabState.physicalBill the same way and both recalculate Amount.
-    const fieldInputs = {
-        bill_no: document.getElementById('procedureBillNoInput'),
-        bill_date: document.getElementById('procedureBillDateInput'),
-        vendor_name: document.getElementById('procedureBillVendorInput')
-    };
-    Object.keys(fieldInputs).forEach(field => {
-        const el = fieldInputs[field];
-        if (el) {
+    const form = document.getElementById('procedureBillForm');
+    if (form) {
+        // Text/date fields (bill header + item name) — write straight into tabState on every
+        // keystroke, no DOM update needed since the input already shows what was typed.
+        form.querySelectorAll('input[data-field="bill_no"], input[data-field="vendor_name"], input[data-field="bill_date"], input[data-field="item_name"]').forEach(el => {
             el.addEventListener('input', function() {
-                if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
-                tabState.physicalBill[field] = this.value;
+                const billIdx = parseInt(this.dataset.billIdx);
+                const bill = tabState.physicalBills[billIdx];
+                if (!bill) return;
+                if (this.dataset.itemIdx != null && this.dataset.itemIdx !== '') {
+                    const item = bill.items[parseInt(this.dataset.itemIdx)];
+                    if (item) item[this.dataset.field] = this.value;
+                } else {
+                    bill[this.dataset.field] = this.value;
+                }
+            });
+        });
+
+        // Rate/Qty inputs — sanitized on every input, written into tabState, then a targeted
+        // (non-full-re-render) update of this row's Amount + its bill's Subtotal + the Grand
+        // Total/reconciliation pill, so typing never loses focus.
+        form.querySelectorAll('input[data-field="rate"], input[data-field="quantity"]').forEach(el => {
+            el.addEventListener('input', function() {
+                const cleaned = pbSanitizeNumericInput(this.value);
+                if (cleaned !== this.value) this.value = cleaned;
+                const billIdx = parseInt(this.dataset.billIdx);
+                const itemIdx = parseInt(this.dataset.itemIdx);
+                const bill = tabState.physicalBills[billIdx];
+                const item = bill && bill.items[itemIdx];
+                if (!item) return;
+                item[this.dataset.field] = cleaned;
+                recomputePhysicalBillItemAmount(item);
+                updatePhysicalBillTotals(uid, doc.id, billIdx);
+            });
+        });
+
+        form.querySelectorAll('.procedure-bill-remove-line-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const billIdx = parseInt(this.dataset.billIdx);
+                const itemIdx = parseInt(this.dataset.itemIdx);
+                const bill = tabState.physicalBills[billIdx];
+                if (!bill) return;
+                bill.items.splice(itemIdx, 1);
+                renderPhysicalBillDocumentPanel(uid, doc);
+            });
+        });
+
+        form.querySelectorAll('.procedure-bill-add-line-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const billIdx = parseInt(this.dataset.billIdx);
+                const bill = tabState.physicalBills[billIdx];
+                if (!bill) return;
+                bill.items.push(makeEmptyPhysicalBillItem());
+                renderPhysicalBillDocumentPanel(uid, doc);
+            });
+        });
+
+        form.querySelectorAll('.procedure-bill-remove-bill-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const billIdx = parseInt(this.dataset.billIdx);
+                tabState.physicalBills.splice(billIdx, 1);
+                renderPhysicalBillDocumentPanel(uid, doc);
+            });
+        });
+
+        const addBillBtn = document.getElementById('procedureBillAddBillBtn');
+        if (addBillBtn) {
+            addBillBtn.addEventListener('click', function() {
+                tabState.physicalBills.push(makeEmptyPhysicalBill());
+                renderPhysicalBillDocumentPanel(uid, doc);
             });
         }
-    });
-    const calcFieldInputs = {
-        quantity: document.getElementById('procedureBillQuantityInput'),
-        rate: document.getElementById('procedureBillRateInput')
-    };
-    Object.keys(calcFieldInputs).forEach(field => {
-        const el = calcFieldInputs[field];
-        if (!el) return;
-        // Manual typing is restricted to digits and a single decimal point — strip anything else
-        // (letters, symbols, a second '.') on every input, including paste, not just keystrokes.
-        el.addEventListener('input', function() {
-            const cleaned = pbSanitizeNumericInput(this.value);
-            if (cleaned !== this.value) this.value = cleaned;
-            if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
-            tabState.physicalBill[field] = cleaned;
-            updatePhysicalBillAmount(uid, doc.id);
-        });
-    });
-    // Enter-key flow: Quantity's Enter confirms the value and moves focus to Rate (the next field
-    // in this group); Rate's Enter confirms the value, recalculates Amount, and blurs entirely (no
-    // destination field) since Rate is the last field. Amount is already kept in sync live by the
-    // 'input' listener above — the explicit updatePhysicalBillAmount() call here just guarantees a
-    // correct recalculation even for an Enter press with no preceding value change.
-    if (calcFieldInputs.quantity) {
-        calcFieldInputs.quantity.addEventListener('keydown', function(e) {
-            if (e.key !== 'Enter') return;
-            e.preventDefault();
-            updatePhysicalBillAmount(uid, doc.id);
-            if (calcFieldInputs.rate) calcFieldInputs.rate.focus();
-        });
-    }
-    if (calcFieldInputs.rate) {
-        calcFieldInputs.rate.addEventListener('keydown', function(e) {
-            if (e.key !== 'Enter') return;
-            e.preventDefault();
-            updatePhysicalBillAmount(uid, doc.id);
-            this.blur();
-        });
-    }
-    updatePhysicalBillAmount(uid, doc.id);
-    updatePhysicalBillMandatoryIndicators(bill);
-
-    // Quantity/Rate calculator trigger — opens only via the small calculator icon next to the field
-    // (confirmed fix), never by clicking the field itself, since the field is a normal typable input.
-    // "Done" writes the result back into the field/tabState and recalculates Amount (see
-    // openPhysicalBillCalculator()/pbCalcApplyDone() below). triggerEl is the actual <input> (not the
-    // wrapper div) so Done's `triggerEl.value = ...` visibly updates the field.
-    container.querySelectorAll('.procedure-bill-calc-icon').forEach(icon => {
-        icon.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const wrapper = this.closest('.procedure-bill-calc-field');
-            if (!wrapper) return;
-            const field = wrapper.dataset.calcField;
-            const input = wrapper.querySelector('input');
-            openPhysicalBillCalculator(uid, doc.id, field, input);
-        });
-    });
-
-    const copyBtn = document.getElementById('procedureBillCopyBtn');
-    if (copyBtn) {
-        copyBtn.addEventListener('click', function() {
-            const eligible = getEligiblePhysicalBillSourceRows(uid);
-            if (!eligible.length) return;
-            if (eligible.length === 1) {
-                applyPhysicalBillSource(uid, doc.id, eligible[0].client_data_id, eligible[0].source_type, this);
-            } else {
-                togglePhysicalBillCopyPicker(uid, doc.id, eligible);
-            }
-        });
     }
 
+    refreshPhysicalBillMandatoryIndicators(uid, doc.id);
     wireProcedureChecklistAndObservation(container, uid, doc.id, tabState);
 }
 
-// ---------- QUANTITY/RATE CALCULATOR POPOVER (confirmed fix) ----------
-// Quantity and Rate are read-only, tap-to-open fields — this is the shared 4-function calculator
-// popover that opens on click. Single global instance (only one field's calculator can be open at
-// a time, mirroring togglePhysicalBillCopyPicker()'s one-at-a-time convention); pbCalcState holds
-// which uid/docId/field it's editing plus the standard accumulator/pendingOp/waitingForOperand
-// state every basic calculator app uses (operator applies to the running accumulator immediately,
-// not full order-of-operations — matches a physical desk calculator, not a scientific one).
-let pbCalcState = null;
-
-const PB_CALC_KEYPAD = [
-    ['C', '⌫', '%', '÷'],
-    ['7', '8', '9', '×'],
-    ['4', '5', '6', '-'],
-    ['1', '2', '3', '+'],
-    ['0', '.', '=', 'Done']
-];
-
-function pbCalcButtonClass(key) {
-    if (key === 'Done') return 'pb-calc-btn-done';
-    if (key === '=') return 'pb-calc-btn-equals';
-    if (key === 'C' || key === '⌫') return 'pb-calc-btn-fn';
-    if (key === '+' || key === '-' || key === '×' || key === '÷' || key === '%') return 'pb-calc-btn-op';
-    return 'pb-calc-btn-digit';
-}
-
-// Rounds to 12 significant digits to shed floating-point artifacts (e.g. 0.1+0.2) while still
-// allowing genuinely precise results, then renders as a plain string.
-function pbCalcFormat(num) {
-    if (num == null || isNaN(num) || !isFinite(num)) return 'Error';
-    return String(parseFloat(num.toPrecision(12)));
-}
-
-function pbCalcCompute(a, b, op) {
-    switch (op) {
-        case '+': return a + b;
-        case '-': return a - b;
-        case '×': return a * b;
-        case '÷': return b === 0 ? NaN : a / b;
-        default: return b;
-    }
-}
-
-function getPhysicalBillCalcPopover() {
-    let popover = document.getElementById('pbCalcPopover');
-    if (!popover) {
-        popover = document.createElement('div');
-        popover.id = 'pbCalcPopover';
-        popover.className = 'pb-calc-popover';
-        popover.style.display = 'none';
-        document.body.appendChild(popover);
-    }
-    return popover;
-}
-
-function closePhysicalBillCalculator() {
-    const popover = document.getElementById('pbCalcPopover');
-    if (popover) {
-        popover.style.display = 'none';
-        popover.innerHTML = '';
-    }
-    pbCalcState = null;
-}
-
-// Positions the popover near the tapped field, clamped to the viewport — same pattern as
-// showVoucherChangePopover()/showAuditGuidancePopover() elsewhere in this file.
-function positionPhysicalBillCalculator(anchorEl) {
-    const popover = getPhysicalBillCalcPopover();
-    const rect = anchorEl.getBoundingClientRect();
-    const popoverWidth = 220;
-    let left = rect.left;
-    if (left + popoverWidth > window.innerWidth) {
-        left = Math.max(8, window.innerWidth - popoverWidth - 8);
-    }
-    popover.style.left = left + 'px';
-
-    const popoverHeight = 300;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    if (spaceBelow >= popoverHeight + 6) {
-        popover.style.top = (rect.bottom + 6) + 'px';
-        popover.style.bottom = 'auto';
-    } else {
-        popover.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
-        popover.style.top = 'auto';
-    }
-    popover.style.display = 'block';
-}
-
-function renderPhysicalBillCalculator() {
-    if (!pbCalcState) return;
-    const popover = getPhysicalBillCalcPopover();
-    const rows = PB_CALC_KEYPAD.map(row => `
-        <div class="pb-calc-row">
-            ${row.map(key => `<button type="button" class="pb-calc-btn ${pbCalcButtonClass(key)}" data-key="${hostAdapter.escapeHtml(key)}">${hostAdapter.escapeHtml(key)}</button>`).join('')}
-        </div>
-    `).join('');
-    popover.innerHTML = `
-        <div class="pb-calc-display">${hostAdapter.escapeHtml(pbCalcState.display)}</div>
-        <div class="pb-calc-pad">${rows}</div>
-    `;
-    popover.querySelectorAll('.pb-calc-btn').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            handlePbCalcKey(this.dataset.key);
-        });
-    });
-}
-
-// Opens (or, if the same field's popover is already open, closes) the calculator for `field`
-// ('quantity'/'rate') on doc `docId`'s Physical Bill tab — pre-seeds the display from the field's
-// current value so re-opening to make a small correction doesn't start from zero.
-function openPhysicalBillCalculator(uid, docId, field, triggerEl) {
-    if (pbCalcState && pbCalcState.triggerEl === triggerEl) {
-        closePhysicalBillCalculator();
-        return;
-    }
-    const tabState = getProcedureTabState(uid, docId);
-    const bill = tabState.physicalBill || {};
-    const currentVal = bill[field];
-    const startDisplay = (currentVal !== '' && currentVal != null && !isNaN(parseFloat(currentVal)))
-        ? pbCalcFormat(parseFloat(currentVal))
-        : '0';
-    pbCalcState = {
-        uid, docId, field, triggerEl,
-        display: startDisplay,
-        accumulator: null,
-        pendingOp: null,
-        // Waiting-for-operand means the next digit typed replaces (rather than appends to) the
-        // display — true here so tapping a digit after reopening starts a fresh number instead of
-        // appending onto the pre-filled value.
-        waitingForOperand: true
-    };
-    renderPhysicalBillCalculator();
-    positionPhysicalBillCalculator(triggerEl);
-}
-
-function handlePbCalcKey(key) {
-    if (!pbCalcState) return;
-    if (key === 'Done') {
-        pbCalcApplyDone();
-        return;
-    }
-    if (key === 'C') {
-        pbCalcState.display = '0';
-        pbCalcState.accumulator = null;
-        pbCalcState.pendingOp = null;
-        pbCalcState.waitingForOperand = false;
-        renderPhysicalBillCalculator();
-        return;
-    }
-    if (key === '⌫') {
-        if (!pbCalcState.waitingForOperand) {
-            pbCalcState.display = pbCalcState.display.length > 1 ? pbCalcState.display.slice(0, -1) : '0';
-        }
-        renderPhysicalBillCalculator();
-        return;
-    }
-    if (key === '.') {
-        if (pbCalcState.waitingForOperand) {
-            pbCalcState.display = '0.';
-            pbCalcState.waitingForOperand = false;
-        } else if (pbCalcState.display.indexOf('.') === -1) {
-            pbCalcState.display += '.';
-        }
-        renderPhysicalBillCalculator();
-        return;
-    }
-    if (key === '%') {
-        const val = parseFloat(pbCalcState.display) || 0;
-        pbCalcState.display = pbCalcFormat(val / 100);
-        pbCalcState.waitingForOperand = true;
-        renderPhysicalBillCalculator();
-        return;
-    }
-    if (key === '+' || key === '-' || key === '×' || key === '÷' || key === '=') {
-        // Pressing an operator right after another operator (no new digit typed yet) just swaps
-        // which operator is pending, rather than computing against an unchanged operand twice.
-        if (pbCalcState.pendingOp && pbCalcState.waitingForOperand) {
-            pbCalcState.pendingOp = key === '=' ? null : key;
-            renderPhysicalBillCalculator();
-            return;
-        }
-        const inputValue = parseFloat(pbCalcState.display) || 0;
-        if (pbCalcState.accumulator === null) {
-            pbCalcState.accumulator = inputValue;
-        } else if (pbCalcState.pendingOp) {
-            pbCalcState.accumulator = pbCalcCompute(pbCalcState.accumulator, inputValue, pbCalcState.pendingOp);
-        }
-        pbCalcState.display = pbCalcFormat(pbCalcState.accumulator);
-        pbCalcState.pendingOp = key === '=' ? null : key;
-        pbCalcState.waitingForOperand = true;
-        renderPhysicalBillCalculator();
-        return;
-    }
-    // A digit 0-9.
-    if (pbCalcState.waitingForOperand) {
-        pbCalcState.display = key;
-        pbCalcState.waitingForOperand = false;
-    } else {
-        pbCalcState.display = pbCalcState.display === '0' ? key : pbCalcState.display + key;
-    }
-    renderPhysicalBillCalculator();
-}
-
-// "Done" — commits the calculator's current display into the target field (both the visible input
-// and tabState.physicalBill), closes the popover, then recalculates Amount exactly as if the value
-// had been typed directly (updatePhysicalBillAmount() is unchanged, still Qty × Rate).
-function pbCalcApplyDone() {
-    if (!pbCalcState) return;
-    const { uid, docId, field, triggerEl } = pbCalcState;
-    const finalValue = parseFloat(pbCalcState.display);
-    const valueStr = isNaN(finalValue) ? '' : pbCalcFormat(finalValue);
-    const tabState = getProcedureTabState(uid, docId);
-    if (!tabState.physicalBill) tabState.physicalBill = { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
-    tabState.physicalBill[field] = valueStr;
-    if (triggerEl) triggerEl.value = valueStr;
-    closePhysicalBillCalculator();
-    updatePhysicalBillAmount(uid, docId);
-}
-
-// Close on any click outside the popover and outside the field that opened it (that field's own
-// click handler already handles the "click again to close" toggle case — see
-// openPhysicalBillCalculator() above).
-document.addEventListener('click', function(e) {
-    if (!pbCalcState) return;
-    const popover = document.getElementById('pbCalcPopover');
-    if (!popover || popover.style.display !== 'block') return;
-    if (popover.contains(e.target)) return;
-    if (pbCalcState.triggerEl && pbCalcState.triggerEl.contains(e.target)) return;
-    closePhysicalBillCalculator();
-});
-
-// Auto-saves one Physical Bill entry (POST save_physical_bill, upsert) — called only from
-// flushPhysicalBillEntries() below, from the modal's four exit chokepoints (✕/Back/Verify/Verify &
-// Next), never from a UI click (there is no Save button any more, confirmed requirement). Fires the
-// network call regardless of which fields are filled or blank — the backend's own required-field
-// validation (bill_no/vendor_name/amount/bill_date) still applies server-side exactly as before;
-// this just no longer blocks the call client-side. A failure (e.g. every field left blank) is
-// logged only, never a blocking alert()/toast, since the user is already leaving this line and a
-// blank Physical Bill tab is an expected, non-error state at this phase (Phase 2's mandatory-field
-// visual cue is the follow-up UI signal for this, not this one). No re-render here — the modal is
-// either being torn down or about to re-fetch fresh via openProcedureModal() right after.
+// Auto-saves every bill for one physical_bill Document (POST save_physical_bill, full-replace
+// upsert) — called only from flushPhysicalBillEntries() below, from the modal's four exit
+// chokepoints (✕/Back/Verify/Verify & Next), never from a UI click (there is no Save button — a
+// blank/incomplete Physical Bill tab is an expected, non-error state at this point in a line's
+// review). A completely empty bills array is still sent (the backend drops any all-blank bill
+// server-side, so an empty array or an array of all-blank bills behave the same). A failure is
+// logged only, never a blocking alert()/toast, since the user is already leaving this line.
 async function savePhysicalBillEntry(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
-    const bill = tabState.physicalBill || { bill_no: '', bill_date: '', amount: '', vendor_name: '', quantity: '', rate: '' };
-    // Save-trigger check (Phase 2 of 2, mandatory-field visual cue) — this single call site is
-    // reached by all 4 exit chokepoints (✕/Back/Verify/Verify & Next) via flushPhysicalBillEntries().
-    updatePhysicalBillMandatoryIndicators(bill);
-
-    // Populate Physical Bill from GRN/ERP Vendor Bill (Phase 3 of 4): quantity/rate/source_* are
-    // all optional on the backend — a manually-entered bill with no source row sends null/null/
-    // null/null here and gets byte-identical behavior to before this phase (save_physical_bill()
-    // then requires and uses the typed Amount as-is).
-    const quantityVal = (bill.quantity !== '' && bill.quantity != null) ? parseFloat(bill.quantity) : null;
-    const rateVal = (bill.rate !== '' && bill.rate != null) ? parseFloat(bill.rate) : null;
+    const bills = tabState.physicalBills || [];
 
     try {
         const res = await fetch(`${API_BASE}/api/verification/save_physical_bill`, {
@@ -2658,14 +2444,18 @@ async function savePhysicalBillEntry(uid, docId) {
             body: JSON.stringify({
                 voucher_line_id: parseInt(uid),
                 document_id: docId,
-                bill_no: (bill.bill_no || '').trim(),
-                bill_date: bill.bill_date,
-                amount: parseFloat(bill.amount),
-                vendor_name: (bill.vendor_name || '').trim(),
-                quantity: quantityVal,
-                rate: rateVal,
-                source_document_row_id: tabState.physicalBillSourceDocumentRowId || null,
-                source_template: tabState.physicalBillSourceTemplate || null
+                bills: bills.map(bill => ({
+                    bill_no: (bill.bill_no || '').trim(),
+                    bill_date: bill.bill_date,
+                    vendor_name: (bill.vendor_name || '').trim(),
+                    items: (bill.items || []).map(item => ({
+                        item_name: (item.item_name || '').trim(),
+                        quantity: item.quantity === '' ? null : item.quantity,
+                        rate: item.rate === '' ? null : item.rate,
+                        source_document_row_id: null,
+                        source_template: null
+                    }))
+                }))
             })
         });
         if (!res.ok) {
@@ -2673,16 +2463,16 @@ async function savePhysicalBillEntry(uid, docId) {
             throw new Error(err.detail || 'Failed to save physical bill.');
         }
         tabState.physicalBillSaved = true;
-        tabState.physicalBillErrors = {};
     } catch (e) {
         console.error('Failed to auto-save physical bill:', e);
     }
+    refreshPhysicalBillMandatoryIndicators(uid, docId);
 }
 
 // Persists every Physical Bill Document tab of this line — called from the same exit chokepoints as
 // flushProcedureObservations() (closeProcedureModal(), navigateProcedureModalLine(), and
 // performVerifyVoucherChecks(), shared by both Verify and Verify & Next). Every physical_bill
-// Document tab always has tabState.physicalBill seeded by openProcedureModal() (whether or not that
+// Document tab always has tabState.physicalBills seeded by openProcedureModal() (whether or not that
 // tab was ever actually opened/viewed this session), so this saves ALL of them, not just the active
 // tab — mirrors flushProcedureObservations()'s across-every-tab convention.
 async function flushPhysicalBillEntries(uid) {
@@ -2695,132 +2485,6 @@ async function flushPhysicalBillEntries(uid) {
     }
 }
 
-// ---------- COPY FROM LINES (Phase 3 amendment, iDempiere-style) ----------
-// Replaces the earlier per-source-row trigger design: a single "Copy from lines" button lives on
-// the Physical Bill panel itself instead of on each GRN/Vendor Bill evidence row. Resolves the
-// source template (GRN vs ERP Vendor Bill) purely from templateNameCache — same case-insensitive
-// match resolve_physical_bill_fields_from_source() (routers/verification.py) uses via its own
-// PHYSICAL_BILL_SOURCE_TEMPLATE_NAMES.
-function resolvePhysicalBillSourceType(templateId) {
-    const templateName = (templateNameCache[templateId] || '').trim().toLowerCase();
-    if (templateName === 'store receiving') return 'grn';
-    if (templateName === 'vendor bill') return 'vendor_bill';
-    return null;
-}
-
-// Every GRN/Vendor Bill row currently linked as evidence anywhere in this line's Category — no
-// new fetch needed: openProcedureModal() already seeds every document's tabState.selections (not
-// just the active tab's) from the batch assignedRecords fetch, and already warms
-// templateNameCache for every document's template_id before any tab renders. Bill No is read via
-// the same per-source-type field the backend itself resolves (PHYSICAL_BILL_SOURCE_BILL_NO_FIELD)
-// so the picker's label always matches what a click on that row would actually populate.
-// extract_date is display-only here — the backend never resolves a date automatically.
-function getEligiblePhysicalBillSourceRows(uid) {
-    const lineState = hostAdapter.procedureModalState[uid];
-    if (!lineState) return [];
-    const rows = [];
-    (lineState.documents || []).forEach(otherDoc => {
-        const sourceType = resolvePhysicalBillSourceType(otherDoc.template_id);
-        if (!sourceType) return;
-        const tabState = getProcedureTabState(uid, otherDoc.id);
-        (tabState.selections || []).forEach(sel => {
-            rows.push({
-                client_data_id: sel.client_data_id,
-                source_type: sourceType,
-                document_name: otherDoc.name,
-                vendor: getRowFieldCaseInsensitive(sel.row_data, 'Vendor'),
-                bill_no: getRowFieldCaseInsensitive(sel.row_data, sourceType === 'grn' ? 'Bill no' : 'vendor Bill no'),
-                extract_date: sel.extract_date
-            });
-        });
-    });
-    return rows;
-}
-
-// Fetches the read-only preview (Phase 2's physical_bill_source_preview endpoint) and pre-fills
-// docId's own tab state with it — Bill No/Vendor Name/Quantity/Rate from the source row, Date
-// always left blank for manual entry (never resolved server-side either), Amount left for
-// updatePhysicalBillAmount() to compute live once the panel renders. Nothing is saved here — the
-// intern reviews/edits then clicks the existing Save Bill button, same savePhysicalBillEntry()
-// path as a fully manual entry. docId is always the Physical Bill Document whose own panel this
-// was clicked from, so unlike the earlier per-row-trigger design there's no target-document
-// lookup and no tab switch — the panel being re-rendered is already the one showing.
-async function applyPhysicalBillSource(uid, docId, sourceClientDataId, sourceType, btn) {
-    if (!sourceClientDataId) return;
-    const originalText = btn ? btn.textContent : null;
-    if (btn) {
-        btn.disabled = true;
-        btn.textContent = '…';
-    }
-
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/physical_bill_source_preview/${sourceClientDataId}?source_type=${encodeURIComponent(sourceType)}`);
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            throw new Error(data.detail || 'Unable to load source row for Physical Bill.');
-        }
-
-        const tabState = getProcedureTabState(uid, docId);
-        tabState.physicalBill = {
-            bill_no: data.bill_no || '',
-            bill_date: '', // always manual — never resolved by the preview or the backend
-            amount: '', // updatePhysicalBillAmount() computes this once the panel renders
-            vendor_name: data.vendor_name || '',
-            quantity: data.quantity != null ? String(data.quantity) : '',
-            rate: data.rate != null ? String(data.rate) : ''
-        };
-        tabState.physicalBillSourceDocumentRowId = sourceClientDataId;
-        tabState.physicalBillSourceTemplate = sourceType;
-        tabState.physicalBillErrors = {};
-
-        renderProcedureModalPanel(uid, docId);
-        hostAdapter.showStatus('Physical Bill form pre-filled from source row — review and Save.', 'success');
-    } catch (e) {
-        console.error('Failed to populate Physical Bill from source:', e);
-        hostAdapter.showStatus(e.message || 'Unable to load source row for Physical Bill.', 'error');
-        if (btn) {
-            btn.disabled = false;
-            btn.textContent = originalText;
-        }
-    }
-}
-
-// Small picker row list — reuses .procedure-result-item/.procedure-result-main/
-// .procedure-result-label/.procedure-result-meta as-is (already-existing search-dropdown row
-// styling), no new CSS needed for the rows themselves.
-function buildPhysicalBillCopyPickerHtml(rows) {
-    return rows.map((r, idx) => `
-        <div class="procedure-result-item procedure-bill-copy-picker-item" data-idx="${idx}">
-            <div class="procedure-result-main">
-                <span class="procedure-result-label">${hostAdapter.escapeHtml(r.vendor || '(no vendor)')}${r.bill_no ? ' — ' + hostAdapter.escapeHtml(r.bill_no) : ''}</span>
-                <span class="procedure-result-meta">${hostAdapter.escapeHtml(r.document_name)}${r.extract_date ? ' · ' + hostAdapter.escapeHtml(r.extract_date) : ''}</span>
-            </div>
-        </div>
-    `).join('');
-}
-
-// Toggles the inline picker open/closed — plain show/hide within the panel's own flow, not a
-// floating popover, since it renders directly beneath the Copy from lines button.
-function togglePhysicalBillCopyPicker(uid, docId, eligibleRows) {
-    const picker = document.getElementById('procedureBillCopyPicker');
-    if (!picker) return;
-    const isOpen = picker.style.display !== 'none' && picker.innerHTML !== '';
-    if (isOpen) {
-        picker.style.display = 'none';
-        picker.innerHTML = '';
-        return;
-    }
-    picker.innerHTML = buildPhysicalBillCopyPickerHtml(eligibleRows);
-    picker.style.display = 'block';
-    picker.querySelectorAll('.procedure-bill-copy-picker-item').forEach(item => {
-        item.addEventListener('click', function() {
-            const row = eligibleRows[parseInt(this.dataset.idx)];
-            picker.style.display = 'none';
-            picker.innerHTML = '';
-            if (row) applyPhysicalBillSource(uid, docId, row.client_data_id, row.source_type, document.getElementById('procedureBillCopyBtn'));
-        });
-    });
-}
 
 // ---------- SEARCH (debounced, stale-response-guarded) ----------
 let procedureSearchDebounceTimer = null;

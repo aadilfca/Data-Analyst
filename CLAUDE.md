@@ -577,6 +577,7 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - 2026-08-16: procedure_modal.js Phase 1b — replaced bare shared-global reliance with an explicit adapter object, unblocking non-Verification host pages (`static/procedure_modal.js` + `static/verification.js`). Full detail: CHANGELOG_ARCHIVE.md.
 - 2026-08-19: Multi-Bill/Multi-Line Physical Bill schema, Phase 1 of 6 (voucher_line_physical_bills split header+items, database.py only). Full detail: CHANGELOG_ARCHIVE.md.
 - 2026-08-19: Multi-Bill/Multi-Line Physical Bill, Phase 2 of 6 (save/read endpoints + Cleared/Query gate now handle nested bills, routers/verification.py only). Full detail: CHANGELOG_ARCHIVE.md.
+- 2026-08-19: Multi-Bill/Multi-Line Physical Bill, Phase 3 of 6 (multi-bill card UI + live totals, static/procedure_modal.js only). Full detail: CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
