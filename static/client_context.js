@@ -61,6 +61,7 @@ const NAV_MANIFEST = [
         items: [
             { label: 'Upload Client Data', url: '/static/upload.html', state: 'ready', module: 'Upload Data' },
             { label: 'Client Data Bank', url: '/static/databank.html', state: 'ready', module: 'Data Bank' },
+            { label: 'Trial Balance', url: '/static/trial_balance.html', state: 'ready', module: 'Trial Balance' },
         ],
     },
     {

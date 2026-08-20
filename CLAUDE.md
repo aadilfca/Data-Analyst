@@ -602,3 +602,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-20: Global header nav rebuild, Phase B of 6 (wire Up+Back into Verification/Audit Workbook/Audit Rules) done. Full detail: CHANGELOG_ARCHIVE.md.
 - 2026-08-20: Global header nav rebuild, Phase C of 6 (Home icon audit — no bugs found; removed redundant duplicate click handler, `static/client_context.js` only) done.
 - 2026-08-20: Global header nav rebuild, Phase D of 6 (merged FEATURE_SEARCH_INDEX into NAV_MANIFEST as keyword-bearing children, wired to menu+search, static/search_index.js deleted) done.
+- 2026-08-20: Global header nav rebuild, Phase E of 6 (Trial Balance added to NAV_MANIFEST as a top-level entry, static/client_context.js only) done.
