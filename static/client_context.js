@@ -939,16 +939,6 @@ document.addEventListener('keydown', function (e) {
     input.select();
 });
 
-// ---------- GLOBAL CLICK HANDLER: HOME ICON ----------
-// Delegated at document level so any current or future element carrying the
-// .nav-home-icon class navigates to the dashboard, even if a page doesn't wire its own href.
-document.addEventListener('click', function (e) {
-    const homeIcon = e.target.closest('.nav-home-icon');
-    if (homeIcon) {
-        window.location.href = '/static/index.html';
-    }
-});
-
 // ---------- GLOBAL CLICK HANDLER: BACK ARROW (chronological history stack) ----------
 document.addEventListener('click', function (e) {
     const backArrow = e.target.closest('.nav-back-arrow');

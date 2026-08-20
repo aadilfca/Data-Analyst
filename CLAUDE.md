@@ -600,3 +600,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-18: Physical Bill mandatory-field (Bill No/Date/Vendor) red-border + tooltip cue (static/procedure_modal.js + static/style.css only).
 - 2026-08-20: Global header nav rebuild, Phase A of 6 (Up + Back core logic, static/client_context.js + static/style.css) done. Full detail: CHANGELOG_ARCHIVE.md.
 - 2026-08-20: Global header nav rebuild, Phase B of 6 (wire Up+Back into Verification/Audit Workbook/Audit Rules) done. Full detail: CHANGELOG_ARCHIVE.md.
+- 2026-08-20: Global header nav rebuild, Phase C of 6 (Home icon audit — no bugs found; removed redundant duplicate click handler, `static/client_context.js` only) done.
