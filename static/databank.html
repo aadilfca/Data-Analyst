@@ -933,6 +933,13 @@
                     🟡 Show only Sunday rows
                 </label>
                 <span class="sunday-count-badge" id="sundayCountBadge">Sunday rows: 0</span>
+                <!-- Subtotal toggle (Subtotal toggle: Data Bank preview UI, FINAL phase):
+                     initialised per-open from the template's has_subtotals_by_default flag
+                     (openPreview()), freely overridable for the session, no persistence. -->
+                <label>
+                    <input type="checkbox" id="subtotalToggleCheckbox">
+                    🧮 Show document subtotals
+                </label>
             </div>
 
             <!-- Search/Filter Toolbar -->

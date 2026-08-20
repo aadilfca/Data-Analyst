@@ -611,3 +611,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-20: Import progress Phase 2 of 3, FINAL (frontend progress bar polling import-status, replaces spinner, `static/upload.html` + `static/upload.js`) done.
 - 2026-08-20: Subtotal default flag Phase 4 of 6 (schema + backend, `database.py` + `routers/templates.py`) done.
 - 2026-08-20: Subtotal default flag Phase 5 of 6 (Template setup checkbox, `static/templates.html` + `static/templates.js`) done.
+- 2026-08-20: Subtotal default flag Phase 6 of 6, FINAL (Data Bank preview toggle, static/databank.html + static/databank.js) done.

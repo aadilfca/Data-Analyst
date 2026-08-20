@@ -25,6 +25,15 @@ let previewSundayCount = 0;
 let previewDocumentKeyColumn = null;
 let previewDateColumn = null;
 let previewAmountColumns = [];
+// Subtotal toggle (Subtotal toggle: Data Bank preview UI, FINAL phase):
+// previewShowSubtotals is initialised from the opened template's
+// has_subtotals_by_default flag (see fetchTemplateSubtotalDefault() below,
+// called from openPreview()) and freely overridable per session via the
+// #subtotalToggleCheckbox listener - no persistence across preview opens.
+// previewCachedRows holds the last-fetched page's rows so toggling re-
+// renders instantly without a network round-trip.
+let previewShowSubtotals = true;
+let previewCachedRows = [];
 let previewTemplateId = null;
 let previewTemplateName = '';
 let isPreviewOpen = false;
@@ -90,6 +99,7 @@ const previewTableHead = document.getElementById('previewTableHead');
 const previewTableBody = document.getElementById('previewTableBody');
 const pageSizeSelect = document.getElementById('pageSizeSelect');
 const sundayOnlyCheckbox = document.getElementById('sundayOnlyCheckbox');
+const subtotalToggleCheckbox = document.getElementById('subtotalToggleCheckbox');
 const dataQualityFilter = document.getElementById('dataQualityFilter');
 const sundayCountBadge = document.getElementById('sundayCountBadge');
 
@@ -884,7 +894,7 @@ async function deleteTemplateData(templateId, templateName, rowCount) {
 // ==============================================
 
 // ---------- OPEN PREVIEW ----------
-function openPreview(templateId, templateName) {
+async function openPreview(templateId, templateName) {
     // The shared range (already validated by whichever caller reached this
     // point — confirmSharedRangePopover()) is read fresh here as a defensive
     // fallback, not a copy — see getDateRangeFromFilter().
@@ -917,8 +927,41 @@ function openPreview(templateId, templateName) {
     dataQualityFilter.value = '';
     sundayCountBadge.textContent = 'Sunday rows: 0';
 
+    // Subtotal toggle: re-initialise from this template's own default flag
+    // every time the preview is (re)opened - no cross-open persistence.
+    previewShowSubtotals = await fetchTemplateSubtotalDefault(templateId);
+    subtotalToggleCheckbox.checked = previewShowSubtotals;
+
     // Fetch data
     fetchPreviewData();
+}
+
+// Subtotal toggle: per-template has_subtotals_by_default lookup, cached
+// like fetchTemplateColumns() below (same underlying GET /api/templates/{id}
+// endpoint, kept as a separate small cache rather than folding into
+// templateColumnsCache since that cache's shape is a plain column-name array
+// consumed elsewhere).
+let templateSubtotalDefaultCache = {};
+
+async function fetchTemplateSubtotalDefault(templateId) {
+    if (Object.prototype.hasOwnProperty.call(templateSubtotalDefaultCache, templateId)) {
+        return templateSubtotalDefaultCache[templateId];
+    }
+    try {
+        const res = await fetch(`${API_BASE}/api/templates/${templateId}`);
+        if (!res.ok) {
+            templateSubtotalDefaultCache[templateId] = false;
+            return false;
+        }
+        const data = await res.json();
+        const flag = !!data.has_subtotals_by_default;
+        templateSubtotalDefaultCache[templateId] = flag;
+        return flag;
+    } catch (e) {
+        console.error('Failed to load template subtotal default:', e);
+        templateSubtotalDefaultCache[templateId] = false;
+        return false;
+    }
 }
 
 // ---------- FETCH PREVIEW DATA ----------
@@ -1041,6 +1084,9 @@ async function fetchTemplateColumns(templateId) {
 // ---------- RENDER PREVIEW ROWS ----------
 async function renderPreviewRows(rows) {
     hideRowHistoryPopover();
+    // Subtotal toggle: cache the current page's rows so toggling later
+    // re-renders instantly from memory, with no refetch.
+    previewCachedRows = rows || [];
     if (!rows || rows.length === 0) {
         previewTableBody.innerHTML = '<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">No rows to display.</td></tr>';
         previewTableHead.innerHTML = '';
@@ -1204,7 +1250,7 @@ async function renderPreviewRows(rows) {
         // each document's block reads as visually closed off. Skipped
         // entirely when the template has no Amount (Numeric) column, since
         // there's nothing meaningful to subtotal.
-        if (isLastInGroup && previewAmountColumns.length > 0) {
+        if (isLastInGroup && previewAmountColumns.length > 0 && previewShowSubtotals) {
             const subtotalTr = document.createElement('tr');
             subtotalTr.className = 'preview-subtotal-row';
 
@@ -1465,6 +1511,15 @@ sundayOnlyCheckbox.addEventListener('change', function() {
     if (isPreviewOpen) {
         currentPage = 1;
         fetchPreviewData();
+    }
+});
+
+// Subtotal toggle: a display setting, not a data filter - re-renders the
+// already-fetched current page from previewCachedRows, no refetch.
+subtotalToggleCheckbox.addEventListener('change', function() {
+    previewShowSubtotals = this.checked;
+    if (isPreviewOpen) {
+        renderPreviewRows(previewCachedRows);
     }
 });
 
