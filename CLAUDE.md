@@ -39,6 +39,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 - No inline event handlers (onclick, onload, onchange, etc.) in HTML
 - No <script> inside HTML containers
 - Meaningful comments on new/changed code
+- Any new module or in-module feature must register itself in `NAV_MANIFEST` (`static/client_context.js`) — including a `children` entry with `keywords` if it should be searchable. This is the single source of truth for both the ⊞ quick-nav dropdown and the search field; a feature left out of it is undiscoverable through either.
 - No "temporary code" shortcuts — proper separation of concerns; if something genuinely needs a stopgap, flag it explicitly rather than leaving it disguised as a normal implementation
 - In static/style.css, `.modal-content` and `.modal-header` are NOT shared base classes — each existing modal (#supportingModal, #procedureModal) defines its own `#<modalId> .modal-content` / `#<modalId> .modal-header` rules. When adding a new modal, add its own id-scoped rules rather than relying on `.modal-content`/`.modal-header` alone to style it.
 - Keep changes scoped — don't touch unrelated code
@@ -603,3 +604,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-20: Global header nav rebuild, Phase C of 6 (Home icon audit — no bugs found; removed redundant duplicate click handler, `static/client_context.js` only) done.
 - 2026-08-20: Global header nav rebuild, Phase D of 6 (merged FEATURE_SEARCH_INDEX into NAV_MANIFEST as keyword-bearing children, wired to menu+search, static/search_index.js deleted) done.
 - 2026-08-20: Global header nav rebuild, Phase E of 6 (Trial Balance added to NAV_MANIFEST as a top-level entry, static/client_context.js only) done.
+- 2026-08-20: Global header nav rebuild, Phase F of 6, FINAL (tooltips, hover/active states, NAV_MANIFEST convention, known-gap log) done.

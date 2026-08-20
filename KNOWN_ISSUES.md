@@ -15,7 +15,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 
 | Date | Module | Finding | Severity |
 |------|--------|---------|----------|
-| | | | |
+| 2026-08-20 | Global Header Nav | Verification's Cashbook/Client Data Links and Trial Balance's Available Trial Balances view have no addressable URL, so they can't be added to NAV_MANIFEST as real destinations | Feature |
 
 ---
 

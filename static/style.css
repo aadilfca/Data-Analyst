@@ -153,27 +153,36 @@ body {
     padding: 4px;
     transition: background 0.2s ease, transform 0.2s ease;
 }
-.nav-home-icon:hover {
+.nav-home-icon:hover,
+.nav-back-arrow:hover,
+.nav-up-arrow:hover {
     background: rgba(255, 255, 255, 0.12);
     transform: scale(1.15);
+}
+.nav-home-icon:active,
+.nav-back-arrow:active:not(:disabled),
+.nav-up-arrow:active {
+    transform: scale(0.9);
 }
 
 /* .nav-back-arrow/.nav-up-arrow are <button> elements (not anchors) — their destination is
    resolved dynamically at click time (history-stack pop / getUpTarget()/upOverride), not a fixed
    href — so default button chrome is reset here to keep them looking like the old plain-text
-   arrow links. */
+   arrow links. Hover/active feedback (background + scale) is shared with .nav-home-icon above so
+   all header icon-buttons read as one consistent set. */
 .nav-back-arrow,
 .nav-up-arrow {
     background: none;
     border: none;
-    padding: 0;
+    border-radius: 50%;
+    padding: 4px;
     font-family: inherit;
     color: #94a3b8;
     font-size: 22px;
     line-height: 1;
     margin-right: 6px;
     cursor: pointer;
-    transition: color 0.2s ease;
+    transition: background 0.2s ease, transform 0.2s ease, color 0.2s ease;
 }
 .nav-back-arrow:hover,
 .nav-up-arrow:hover {
@@ -185,6 +194,8 @@ body {
 }
 .nav-back-arrow:disabled:hover {
     color: #475569;
+    background: none;
+    transform: none;
 }
 
 /* ---------- GLOBAL QUICK-NAVIGATION MENU (⊞ icon + dropdown, Phase 1) ----------
@@ -215,6 +226,9 @@ body {
 .nav-menu-toggle:hover {
     background: rgba(255, 255, 255, 0.12);
     transform: scale(1.15);
+}
+.nav-menu-toggle:active {
+    transform: scale(0.9);
 }
 .nav-menu-toggle:focus-visible {
     outline: 2px solid #4fc3f7;

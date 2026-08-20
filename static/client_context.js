@@ -522,10 +522,10 @@ function renderNavLeft() {
     // <button> rather than an anchor with a static href. Disabled when there's nowhere to go back
     // to (stack has 0 or 1 entries, i.e. this is the first page visited this session).
     const backDisabled = readNavHistory().length <= 1;
-    const backArrow = `<button type="button" class="nav-back-arrow" title="Back"${backDisabled ? ' disabled' : ''}>←</button>`;
+    const backArrow = `<button type="button" class="nav-back-arrow" title="Back — go to the page you just came from"${backDisabled ? ' disabled' : ''}>←</button>`;
     // Up: hierarchical parent (getUpTarget()/upOverride) — also always intercepted, since its
     // destination can depend on a page-registered override rather than a fixed href.
-    const upArrow = `<button type="button" class="nav-up-arrow" title="Up">↑</button>`;
+    const upArrow = `<button type="button" class="nav-up-arrow" title="Up — go to the parent screen">↑</button>`;
     // Quick-navigation icon + panel, rendered immediately after the brand text on every page.
     const navMenu = `
         <button type="button" id="navMenuToggle" class="nav-menu-toggle" aria-haspopup="true" aria-expanded="false" title="Quick navigation">⊞</button>
@@ -540,7 +540,7 @@ function renderNavLeft() {
             <input type="text" id="navSearchInput" class="nav-search-input"
                    role="combobox" aria-expanded="false" aria-autocomplete="list"
                    aria-controls="navSearchResults" aria-haspopup="listbox"
-                   placeholder="Search... ( / )" autocomplete="off">
+                   placeholder="Search... ( / )" title="Search all pages and features" autocomplete="off">
             <div id="navSearchResults" class="nav-menu-panel" role="listbox" hidden></div>
         </div>
     `;
