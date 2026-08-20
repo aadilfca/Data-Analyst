@@ -152,17 +152,19 @@ class TemplateCreate(BaseModel):
     selected_columns: List[int]
     created_by: str = "Admin"
     rate_source: str | None = None
+    has_subtotals_by_default: bool = False
 
 class TemplateUpdate(BaseModel):
     template_name: str
     selected_columns: List[int]
     rate_source: str | None = None
+    has_subtotals_by_default: bool = False
 
 @router.get("/api/templates")
 def get_templates():
     """Return all active templates with their columns (ordered by sort_order)."""
     templates = execute_query(
-        "SELECT id, template_name, created_by, created_date, is_active, rate_source FROM templates WHERE is_active = 1 ORDER BY template_name"
+        "SELECT id, template_name, created_by, created_date, is_active, rate_source, has_subtotals_by_default FROM templates WHERE is_active = 1 ORDER BY template_name"
     )
     for t in templates:
         mappings = execute_query(
@@ -207,8 +209,8 @@ def create_template(template: TemplateCreate):
 
     resolved_rate_source = resolve_rate_source(template.template_name, template.rate_source)
     template_id = execute_write(
-        "INSERT INTO templates (template_name, created_by, rate_source) VALUES (?, ?, ?)",
-        (template.template_name, template.created_by, resolved_rate_source)
+        "INSERT INTO templates (template_name, created_by, rate_source, has_subtotals_by_default) VALUES (?, ?, ?, ?)",
+        (template.template_name, template.created_by, resolved_rate_source, template.has_subtotals_by_default)
     )
 
     for idx, col_id in enumerate(template.selected_columns):
@@ -231,8 +233,8 @@ def update_template(template_id: int, template: TemplateUpdate):
 
     resolved_rate_source = resolve_rate_source(template.template_name, template.rate_source)
     execute_write(
-        "UPDATE templates SET template_name = ?, rate_source = ? WHERE id = ?",
-        (template.template_name, resolved_rate_source, template_id)
+        "UPDATE templates SET template_name = ?, rate_source = ?, has_subtotals_by_default = ? WHERE id = ?",
+        (template.template_name, resolved_rate_source, template.has_subtotals_by_default, template_id)
     )
     execute_write("DELETE FROM template_column_mappings WHERE template_id = ?", (template_id,))
     for idx, col_id in enumerate(template.selected_columns):

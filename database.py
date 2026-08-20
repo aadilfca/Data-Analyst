@@ -254,7 +254,8 @@ def init_db():
                 created_by TEXT DEFAULT 'Admin',
                 created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 is_active INTEGER DEFAULT 1,
-                is_system INTEGER DEFAULT 0
+                is_system INTEGER DEFAULT 0,
+                has_subtotals_by_default INTEGER DEFAULT 0
             )
         ''')
         try:
@@ -273,6 +274,14 @@ def init_db():
                 print("✅ Added rate_source column to templates")
         except Exception as e:
             print("⚠️ Could not add rate_source column:", e)
+        try:
+            cur = conn.execute("PRAGMA table_info(templates)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'has_subtotals_by_default' not in columns:
+                conn.execute("ALTER TABLE templates ADD COLUMN has_subtotals_by_default INTEGER DEFAULT 0")
+                print("✅ Added has_subtotals_by_default column to templates")
+        except Exception as e:
+            print("⚠️ Could not add has_subtotals_by_default column:", e)
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS template_column_mappings (
@@ -756,8 +765,8 @@ def init_db():
         if not tpl:
             # Create the template
             conn.execute(
-                "INSERT INTO templates (template_name, created_by, is_system) VALUES (?, ?, ?)",
-                ("Transaction Report", "System", 1)
+                "INSERT INTO templates (template_name, created_by, is_system, has_subtotals_by_default) VALUES (?, ?, ?, ?)",
+                ("Transaction Report", "System", 1, 1)
             )
             tpl_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             # Define required columns and their IDs (create if missing)
@@ -795,9 +804,9 @@ def init_db():
                 )
             print("✅ Created system template: Transaction Report")
         else:
-            # Ensure is_system flag is set
+            # Ensure is_system flag and default-subtotals flag are set
             conn.execute(
-                "UPDATE templates SET is_system = 1 WHERE id = ?",
+                "UPDATE templates SET is_system = 1, has_subtotals_by_default = 1 WHERE id = ?",
                 (tpl[0],)
             )
             print("✅ Transaction Report template already exists (system flag ensured)")
