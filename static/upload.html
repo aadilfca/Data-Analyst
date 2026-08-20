@@ -835,6 +835,40 @@
             margin-right: 6px;
         }
 
+        /* ---------- IMPORT PROGRESS BAR (Import Progress requirement, frontend phase) ----------
+           Lives inside #statusBar, under the "Importing data" message -- flex-basis:100% forces it
+           onto its own row below #statusMessage/#statusExtra since .status-bar is flex-wrap:wrap.
+           Amber fill matches .status-bar.loading's own palette (background #fef3c7 / color #92400e). */
+        .import-progress-bar {
+            flex-basis: 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .import-progress-track {
+            flex: 1 1 auto;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .import-progress-fill {
+            height: 100%;
+            width: 0%;
+            background: #f59e0b;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        .import-progress-label {
+            flex-shrink: 0;
+            font-size: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
         @keyframes spin {
             to {
                 transform: rotate(360deg);
@@ -1525,6 +1559,16 @@
                 <span class="icon">ℹ️</span>
                 <span id="statusMessage"></span>
                 <span class="spacer" id="statusExtra"></span>
+                <!-- Import progress bar (Phase 3 of the Import Progress requirement): shown only
+                     while performImport()'s POST is in flight, filled by polling
+                     GET /api/upload/import-status/{file_id} (see pollImportProgress() in upload.js).
+                     Replaces the old importBtn spinner as the visual feedback for this step. -->
+                <div id="importProgressBar" class="import-progress-bar" style="display:none;">
+                    <div class="import-progress-track">
+                        <div class="import-progress-fill" id="importProgressFill"></div>
+                    </div>
+                    <div class="import-progress-label" id="importProgressLabel">0 of 0 transactions uploaded</div>
+                </div>
             </div>
 
             <!-- FOOTER -->
@@ -1584,7 +1628,7 @@
     </div>
 
     <script src="/static/client_context.js?v=2"></script>
-    <script src="/static/upload.js?v=3"></script>
+    <script src="/static/upload.js?v=4"></script>
 </body>
 
 </html>

@@ -354,6 +354,48 @@ function resetValidationState() {
 }
 
 // ---------- HELPERS ----------
+// ---------- IMPORT PROGRESS BAR (Import Progress requirement, frontend phase) ----------
+// Polls GET /api/upload/import-status/{file_id} (routers/import_export.py) while
+// performImport()'s POST is in flight -- see the interval start/clear in performImport() below.
+let importProgressPollInterval = null;
+
+function showImportProgressBar() {
+    const bar = document.getElementById('importProgressBar');
+    const fill = document.getElementById('importProgressFill');
+    const label = document.getElementById('importProgressLabel');
+    if (!bar) return;
+    if (fill) fill.style.width = '0%';
+    if (label) label.textContent = '0 of 0 transactions uploaded';
+    bar.style.display = 'flex';
+}
+
+function hideImportProgressBar() {
+    const bar = document.getElementById('importProgressBar');
+    if (bar) bar.style.display = 'none';
+}
+
+function updateImportProgressBar(current, total) {
+    const fill = document.getElementById('importProgressFill');
+    const label = document.getElementById('importProgressLabel');
+    const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+    if (fill) fill.style.width = pct + '%';
+    if (label) label.textContent = `${current} of ${total} transactions uploaded`;
+}
+
+function pollImportProgress(fileId) {
+    importProgressPollInterval = setInterval(async () => {
+        try {
+            const res = await fetch(API_BASE + '/api/upload/import-status/' + fileId);
+            if (!res.ok) return;
+            const status = await res.json();
+            updateImportProgressBar(status.current || 0, status.total || 0);
+        } catch (e) {
+            // Silently skip a failed poll tick -- the next tick (or the final import
+            // response itself) will resolve the UI either way.
+        }
+    }, 1000);
+}
+
 function showStatus(msg, type = 'info', extra = '') {
     if (!statusBar || !statusMessage) {
         return;
@@ -1805,9 +1847,11 @@ if (importBtn) {
 async function performImport(payload) {
     try {
         importBtn.disabled = true;
-        importBtn.innerHTML = '<span class="spinner"></span> Processing...';
+        importBtn.innerHTML = 'Processing...';
         showStatus('⏳ Importing data...', 'loading');
         setBadge('⏳ Importing...', 'loading');
+        showImportProgressBar();
+        pollImportProgress(payload.file_id);
 
         // --- FIX: Add skip_validation if validation already passed ---
         if (validationStatus === 'valid') {
@@ -1876,6 +1920,8 @@ async function performImport(payload) {
         showStatus('❌ Import error: ' + error.message, 'error');
         setBadge('❌ Import failed', 'error');
     } finally {
+        clearInterval(importProgressPollInterval);
+        hideImportProgressBar();
         importBtn.disabled = false;
         importBtn.innerHTML = '🚀 Upload';
     }
