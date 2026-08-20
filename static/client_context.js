@@ -13,7 +13,7 @@ const STORAGE_CODE = 'selectedClientCode';
 // edits either side must mirror changes into the other manually. Plain data (no rendering
 // logic) so Phase 2's search field can flatten/filter this same array directly.
 // `module` (when present) is matched against window._appNav.module to highlight the
-// current page as "you are here" (see getBackTarget()/data-nav-module below).
+// current page as "you are here" (see getUpTarget()/data-nav-module below).
 // `children` mirror a module's own internal card/hub grid one level deep (no further nesting
 // supported by renderNavMenuPanel()/renderNavSearchResults()) — so far Verification (its hub's
 // Voucher/Process verification tiles) and Setup (its own 5-card grid, minus Manage Clients since
@@ -258,10 +258,18 @@ function renderClientControl() {
 }
 
 // ---------- GLOBAL NAVBAR UPDATE FUNCTIONS ----------
-// backOverride: null (default, static getBackTarget() resolution) or a function invoked instead
-// of navigating — for single-page/multi-view modules (e.g. Verification) whose "back" destination
+// backOverride: LEGACY, pending removal in Phase B. No longer consulted by the Back-arrow click
+// handler (Back is now the chronological history stack below) — kept defined only so existing
+// callers (e.g. verification.js's setBackOverride(exitSession)) don't throw. Its intended meaning
+// ("go to a sensible parent view") is superseded by upOverride, which Phase B will migrate callers
+// onto.
+// upOverride: null (default, static getUpTarget() resolution) or a function invoked instead of
+// navigating — for single-page/multi-view modules (e.g. Verification) whose "up" destination
 // depends on in-page view state rather than a fixed URL.
-window._appNav = window._appNav || { module: 'Dashboard', stats: '', backOverride: null };
+// inPageRestoreHandler: null, or a function(viewKey) a multi-view page registers so the Back
+// history stack can restore one of its in-page views instead of navigating (see
+// setInPageRestoreHandler()/pushInPageNavEntry() below).
+window._appNav = window._appNav || { module: 'Dashboard', stats: '', backOverride: null, upOverride: null, inPageRestoreHandler: null };
 
 /**
  * Set the module name displayed in the navbar (e.g., "Verification", "Upload")
@@ -295,27 +303,47 @@ window.updateNavClientName = function(name) {
 };
 
 /**
- * Override the back arrow's behavior for pages with in-page view state (e.g. Verification's
- * Cashbook-selection vs active-session views), where the destination isn't a fixed URL.
- * Pass a function to intercept back-arrow clicks (called instead of navigating); pass null
- * (or omit) to restore the page's static data-nav-parent/NAV_PARENT_MAP/index.html default.
+ * LEGACY, pending removal in Phase B — no longer consulted by the Back-arrow click handler.
+ * Kept only so existing callers (verification.js) don't throw. Use setUpOverride() instead.
  * @param {Function|null} fn
  */
 window.setBackOverride = function(fn) {
     window._appNav.backOverride = (typeof fn === 'function') ? fn : null;
 };
-// ---------- BACK-ARROW PARENT-TARGET MECHANISM ----------
+
+/**
+ * Override the Up arrow's behavior for pages with in-page view state (e.g. Verification's
+ * Cashbook-selection vs active-session views), where "up" isn't a fixed URL.
+ * Pass a function to intercept Up-arrow clicks (called instead of navigating); pass null
+ * (or omit) to restore the page's static data-nav-parent/NAV_PARENT_MAP/index.html default.
+ * @param {Function|null} fn
+ */
+window.setUpOverride = function(fn) {
+    window._appNav.upOverride = (typeof fn === 'function') ? fn : null;
+};
+
+/**
+ * Register a handler the Back history stack calls to restore one of this page's in-page views
+ * (e.g. Verification's cashbook/session views) instead of navigating, when the stack's target
+ * entry shares this page's URL but carries a viewKey. Pass null to unregister.
+ * @param {Function|null} fn - called as fn(viewKey)
+ */
+window.setInPageRestoreHandler = function(fn) {
+    window._appNav.inPageRestoreHandler = (typeof fn === 'function') ? fn : null;
+};
+
+// ---------- UP-ARROW PARENT-TARGET MECHANISM ----------
 // Page-filename -> parent-filename config map. Left empty in this foundation phase;
-// Phases 2-5 populate real entries as each page is wired (e.g. 'client_settings.html': 'clients.html').
+// later phases populate real entries as each page is wired (e.g. 'client_settings.html': 'clients.html').
 const NAV_PARENT_MAP = {
     // 'somepage.html': 'parentpage.html',
 };
 
 /**
- * Resolve the back arrow's destination for the current page.
+ * Resolve the Up arrow's destination for the current page.
  * Priority: <body data-nav-parent="..."> override, then NAV_PARENT_MAP, then index.html.
  */
-function getBackTarget() {
+function getUpTarget() {
     const override = document.body.getAttribute('data-nav-parent');
     if (override) return '/static/' + override;
 
@@ -326,6 +354,125 @@ function getBackTarget() {
     return '/static/index.html';
 }
 
+// ---------- BACK: CHRONOLOGICAL HISTORY STACK ----------
+// sessionStorage-backed (not a plain JS variable — a real page navigation, e.g. Verification to
+// Audit Workbook, reloads this whole module) array of {url, viewKey, label}, capped at 20 entries,
+// oldest trimmed first. url is pathname+search; viewKey is null for a plain page load or an opaque
+// string a page's own setInPageRestoreHandler() knows how to interpret for an in-page view.
+// Follows this project's established try/catch + warn-only + clear-on-parse-error sessionStorage
+// convention (see e.g. VERIFICATION_DATE_RANGE_STORAGE_KEY in verification.js).
+const NAV_HISTORY_STORAGE_KEY = 'navHistoryStack';
+const NAV_PENDING_RESTORE_KEY = 'navPendingRestore';
+const NAV_HISTORY_MAX = 20;
+
+function readNavHistory() {
+    try {
+        const raw = sessionStorage.getItem(NAV_HISTORY_STORAGE_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+        console.warn('⚠️ Failed to read nav history, resetting:', error.message);
+        sessionStorage.removeItem(NAV_HISTORY_STORAGE_KEY);
+        return [];
+    }
+}
+
+function writeNavHistory(stack) {
+    try {
+        const trimmed = stack.slice(-NAV_HISTORY_MAX);
+        sessionStorage.setItem(NAV_HISTORY_STORAGE_KEY, JSON.stringify(trimmed));
+    } catch (error) {
+        console.warn('⚠️ Failed to write nav history:', error.message);
+    }
+}
+
+function currentPageUrl() {
+    return window.location.pathname + window.location.search;
+}
+
+/**
+ * Push the current page's entry onto the Back history stack, skipping a duplicate push if it
+ * already matches the current top (e.g. a plain refresh). Called once per page load from
+ * initClientContext(), after any pending in-page restore has been consumed.
+ */
+function pushCurrentPageToHistory() {
+    const stack = readNavHistory();
+    const entry = { url: currentPageUrl(), viewKey: null, label: window._appNav.module };
+    const top = stack[stack.length - 1];
+    if (top && top.url === entry.url && top.viewKey === entry.viewKey) return;
+    stack.push(entry);
+    writeNavHistory(stack);
+}
+
+/**
+ * Page-facing hook (used by multi-view pages, wired in a later phase): push a new history entry
+ * for an in-page view change (no navigation happens — the URL stays the same, only viewKey/label
+ * differ), so Back can later restore it via setInPageRestoreHandler().
+ * @param {string} viewKey
+ * @param {string} label
+ */
+window.pushInPageNavEntry = function(viewKey, label) {
+    const stack = readNavHistory();
+    const entry = { url: currentPageUrl(), viewKey: viewKey || null, label: label || window._appNav.module };
+    const top = stack[stack.length - 1];
+    if (top && top.url === entry.url && top.viewKey === entry.viewKey) return;
+    stack.push(entry);
+    writeNavHistory(stack);
+};
+
+/**
+ * On page load, consume a pending in-page restore left behind by a cross-page Back click (see
+ * handleBackArrowClick() below). Runs before pushCurrentPageToHistory() so the just-restored entry
+ * (already the stack's top from the Back click that navigated here) isn't duplicated.
+ */
+function consumePendingNavRestore() {
+    let pending;
+    try {
+        const raw = sessionStorage.getItem(NAV_PENDING_RESTORE_KEY);
+        if (!raw) return;
+        pending = JSON.parse(raw);
+    } catch (error) {
+        console.warn('⚠️ Failed to read pending nav restore, discarding:', error.message);
+        sessionStorage.removeItem(NAV_PENDING_RESTORE_KEY);
+        return;
+    }
+    sessionStorage.removeItem(NAV_PENDING_RESTORE_KEY);
+    if (pending && pending.viewKey && typeof window._appNav.inPageRestoreHandler === 'function') {
+        window._appNav.inPageRestoreHandler(pending.viewKey);
+    }
+}
+
+/**
+ * Back-arrow click: pop the current entry, then either restore an in-page view on this same page
+ * (via inPageRestoreHandler) or navigate to a different page (stashing its viewKey, if any, for
+ * that page to consume on load via consumePendingNavRestore()).
+ */
+function handleBackArrowClick() {
+    const stack = readNavHistory();
+    if (stack.length <= 1) return; // nothing to go back to; button is disabled in this state anyway
+
+    stack.pop(); // discard "current" entry
+    const newTop = stack[stack.length - 1];
+    writeNavHistory(stack);
+
+    if (newTop.url === currentPageUrl()) {
+        if (typeof window._appNav.inPageRestoreHandler === 'function') {
+            window._appNav.inPageRestoreHandler(newTop.viewKey);
+        }
+        return;
+    }
+
+    if (newTop.viewKey) {
+        try {
+            sessionStorage.setItem(NAV_PENDING_RESTORE_KEY, JSON.stringify({ viewKey: newTop.viewKey }));
+        } catch (error) {
+            console.warn('⚠️ Failed to stash pending nav restore:', error.message);
+        }
+    }
+    window.location.href = newTop.url;
+}
+
 // ---------- RENDER LEFT SECTION (brand + home icon + back arrow) ----------
 function renderNavLeft() {
     const container = document.getElementById('navLeft');
@@ -333,6 +480,14 @@ function renderNavLeft() {
 
     const isDash = isDashboardPage();
     const homeIcon = `<a href="/static/index.html" class="nav-home-icon" title="Go to Dashboard">🏢</a>`;
+    // Back: chronological history stack (see handleBackArrowClick()) — always intercepted, so a
+    // <button> rather than an anchor with a static href. Disabled when there's nowhere to go back
+    // to (stack has 0 or 1 entries, i.e. this is the first page visited this session).
+    const backDisabled = readNavHistory().length <= 1;
+    const backArrow = `<button type="button" class="nav-back-arrow" title="Back"${backDisabled ? ' disabled' : ''}>←</button>`;
+    // Up: hierarchical parent (getUpTarget()/upOverride) — also always intercepted, since its
+    // destination can depend on a page-registered override rather than a fixed href.
+    const upArrow = `<button type="button" class="nav-up-arrow" title="Up">↑</button>`;
     // Quick-navigation icon + panel, rendered immediately after the brand text on every page.
     const navMenu = `
         <button type="button" id="navMenuToggle" class="nav-menu-toggle" aria-haspopup="true" aria-expanded="false" title="Quick navigation">⊞</button>
@@ -361,9 +516,10 @@ function renderNavLeft() {
             ${navSearch}
         `;
     } else {
-        // Non-dashboard: back arrow, then home icon, then brand
+        // Non-dashboard: back arrow, up arrow, then home icon, then brand
         container.innerHTML = `
-            <a href="${getBackTarget()}" class="nav-back-arrow">←</a>
+            ${backArrow}
+            ${upArrow}
             ${homeIcon}
             <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
             ${navMenu}
@@ -793,14 +949,24 @@ document.addEventListener('click', function (e) {
     }
 });
 
-// ---------- GLOBAL CLICK HANDLER: BACK ARROW OVERRIDE ----------
-// When a page has registered a dynamic override via setBackOverride() (e.g. Verification's
-// in-page view switching), intercept the click and run that instead of following the static href.
+// ---------- GLOBAL CLICK HANDLER: BACK ARROW (chronological history stack) ----------
 document.addEventListener('click', function (e) {
     const backArrow = e.target.closest('.nav-back-arrow');
-    if (backArrow && typeof window._appNav.backOverride === 'function') {
-        e.preventDefault();
-        window._appNav.backOverride();
+    if (backArrow && !backArrow.disabled) {
+        handleBackArrowClick();
+    }
+});
+
+// ---------- GLOBAL CLICK HANDLER: UP ARROW (hierarchical parent) ----------
+// When a page has registered a dynamic override via setUpOverride() (e.g. Verification's in-page
+// view switching), run that instead of navigating to the static getUpTarget() URL.
+document.addEventListener('click', function (e) {
+    const upArrow = e.target.closest('.nav-up-arrow');
+    if (!upArrow) return;
+    if (typeof window._appNav.upOverride === 'function') {
+        window._appNav.upOverride();
+    } else {
+        window.location.href = getUpTarget();
     }
 });
 // ---------- RENDER CLIENT BADGE (read-only) ----------
@@ -843,7 +1009,7 @@ function goToDashboard() {
 
 // ---------- INIT ----------
 function initClientContext() {
-    // Data-attribute source for the Area label (mirrors getBackTarget()'s data-nav-parent read) -
+    // Data-attribute source for the Area label (mirrors getUpTarget()'s data-nav-parent read) -
     // lets a self-contained page declare its module name via <body data-nav-module="..."> instead
     // of needing its own setNavModule() call. Read before the first render so it's correct on
     // first paint; setNavModule() can still override it later (e.g. verification.js at runtime).
@@ -851,6 +1017,11 @@ function initClientContext() {
     if (moduleAttr) {
         window._appNav.module = moduleAttr;
     }
+    // Consume any pending in-page restore left by a cross-page Back click before pushing this
+    // page's own history entry, so the restored entry isn't duplicated (see
+    // consumePendingNavRestore()/pushCurrentPageToHistory() above).
+    consumePendingNavRestore();
+    pushCurrentPageToHistory();
     renderClientControl();
     renderNavLeft();
 }

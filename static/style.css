@@ -158,16 +158,33 @@ body {
     transform: scale(1.15);
 }
 
-.nav-back-arrow {
+/* .nav-back-arrow/.nav-up-arrow are <button> elements (not anchors) — their destination is
+   resolved dynamically at click time (history-stack pop / getUpTarget()/upOverride), not a fixed
+   href — so default button chrome is reset here to keep them looking like the old plain-text
+   arrow links. */
+.nav-back-arrow,
+.nav-up-arrow {
+    background: none;
+    border: none;
+    padding: 0;
+    font-family: inherit;
     color: #94a3b8;
-    text-decoration: none;
     font-size: 22px;
     line-height: 1;
     margin-right: 6px;
+    cursor: pointer;
     transition: color 0.2s ease;
 }
-.nav-back-arrow:hover {
+.nav-back-arrow:hover,
+.nav-up-arrow:hover {
     color: #f1f5f9;
+}
+.nav-back-arrow:disabled {
+    color: #475569;
+    cursor: not-allowed;
+}
+.nav-back-arrow:disabled:hover {
+    color: #475569;
 }
 
 /* ---------- GLOBAL QUICK-NAVIGATION MENU (⊞ icon + dropdown, Phase 1) ----------
@@ -3542,6 +3559,231 @@ body {
     font-size: 18px;
     font-weight: 700;
     color: #1a1a2e;
+}
+
+/* ----- Multi-Bill/Multi-Line Physical Bill (Phase 6 of 6, styling) -----
+   One .procedure-bill-card per bill inside #procedureBillForm, each with its own header fields,
+   items table, and dimmed subtotal row, plus a shared Grand Total/reconciliation footer below all
+   cards. Markup: renderPhysicalBillCard()/renderPhysicalBillDocumentPanel() in procedure_modal.js.
+   Card look matches .procedure-segment-data's own border/header-bg convention so a bill card reads
+   as a nested mini-card inside the Physical Bill segment. All rules scoped under #procedureModal
+   per this app's per-modal CSS convention. */
+#procedureModal .procedure-bill-card {
+    border: 1px solid #e6e9ed;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #ffffff;
+}
+#procedureModal .procedure-bill-card + .procedure-bill-card {
+    margin-top: 14px;
+}
+#procedureModal .procedure-bill-card-header {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    padding: 12px 14px;
+    background: #eef0f2;
+}
+#procedureModal .procedure-bill-card-header .procedure-bill-field {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+#procedureModal .procedure-bill-remove-bill-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 6px 10px;
+    border: 1px solid #fecaca;
+    border-radius: 6px;
+    background: white;
+    color: #b91c1c;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+#procedureModal .procedure-bill-remove-bill-btn:hover {
+    background: #fee2e2;
+    border-color: #dc2626;
+}
+
+#procedureModal .procedure-bill-items-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+#procedureModal .procedure-bill-items-table th {
+    text-align: left;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    border-bottom: 1px solid #e6e9ed;
+}
+#procedureModal .procedure-bill-items-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: middle;
+}
+#procedureModal .procedure-bill-items-table tbody tr:last-child td {
+    border-bottom: none;
+}
+#procedureModal .procedure-bill-items-table .procedure-bill-input {
+    padding: 6px 8px;
+    font-size: 13px;
+}
+/* Amount is derived (Rate × Quantity), never typed — greyed to read as computed/read-only,
+   matching the .procedure-bill-input-computed convention used elsewhere in this form. */
+#procedureModal .procedure-bill-item-amount {
+    color: #475569;
+    font-weight: 600;
+    white-space: nowrap;
+}
+#procedureModal .procedure-bill-remove-line-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+}
+#procedureModal .procedure-bill-remove-line-btn:hover {
+    color: #dc2626;
+    background: #fee2e2;
+}
+
+#procedureModal .procedure-bill-add-line-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 10px 14px 0;
+    padding: 5px 10px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 6px;
+    background: transparent;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+#procedureModal .procedure-bill-add-line-btn:hover {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+    color: #1a1a2e;
+}
+
+/* Dimmed per-bill subtotal — a quieter footer line inside each card, distinct from the bolder
+   Grand Total row below all cards. */
+#procedureModal .procedure-bill-subtotal-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin: 10px 0 0;
+    padding: 10px 14px;
+    background: #fafbfc;
+    border-top: 1px dashed #e2e8f0;
+    color: #94a3b8;
+}
+#procedureModal .procedure-bill-subtotal-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+#procedureModal .procedure-bill-subtotal-value {
+    font-size: 13px;
+    font-weight: 700;
+}
+
+#procedureModal .procedure-bill-add-bill-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    padding: 7px 14px;
+    border: 1px solid #d0d5dd;
+    border-radius: 6px;
+    background: white;
+    color: #374151;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+#procedureModal .procedure-bill-add-bill-btn:hover {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+}
+
+/* Grand Total footer — a clear visual step up from each card's own dimmed subtotal, since this is
+   the amount the reconciliation pill (Reconciled/Over by/Short by) is judged against. */
+#procedureModal .procedure-bill-grand-total-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+}
+#procedureModal .procedure-bill-grand-total-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+#procedureModal .procedure-bill-grand-total-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-right: auto;
+}
+/* Reconciliation pill states — same green/red/amber palette as .status-badge.pending/.aw-status-badge
+   elsewhere in this file (#dcfce7/#166534, #fee2e2/#991b1b, #fef3c7/#92400e), not new colors. */
+#procedureModal .procedure-bill-recon-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+#procedureModal .procedure-bill-recon-reconciled {
+    background: #dcfce7;
+    color: #166534;
+}
+#procedureModal .procedure-bill-recon-short {
+    background: #fee2e2;
+    color: #991b1b;
+}
+#procedureModal .procedure-bill-recon-over {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+/* Empty state — shown only while a Document has zero bills; the Copy from lines button reuses
+   .procedure-bill-copy-btn's own styling below unchanged. */
+#procedureModal .procedure-bill-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 28px 16px;
+    border: 1px dashed #d0d5dd;
+    border-radius: 10px;
+    background: #fafbfc;
+    color: #94a3b8;
+    font-size: 13px;
+    text-align: center;
 }
 
 /* ----- Copy from lines (Phase 3 amendment, iDempiere-style) -----
