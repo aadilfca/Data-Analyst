@@ -856,6 +856,15 @@ window.onload = function () {
                 window.location.href = `/static/verification.html?state=session&id=${currentSessionId}`;
             });
         }
+        // Global navbar Up icon: this page's structural parent is the Verification session it was
+        // opened from — same target as the peer-nav button above. No in-page views to distinguish
+        // here (one table, one screen), so pushInPageNavEntry()/setInPageRestoreHandler() aren't
+        // wired on this page — there's nothing for them to do.
+        if (typeof window.setUpOverride === 'function') {
+            window.setUpOverride(() => {
+                window.location.href = `/static/verification.html?state=session&id=${currentSessionId}`;
+            });
+        }
         fetchAuditWorkbook(sessionId, targetVoucherNo);
     } else {
         currentSessionId = null;

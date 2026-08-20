@@ -870,6 +870,11 @@ function switchEntityType(type) {
     // whatever item, if any, was last selected within it — editingCrossCheckId etc. are
     // untouched by a plain rail switch, so this naturally restores the right selection too).
     updateAuditRulesUrl();
+    // Global navbar Back icon: records this rail switch as a chronological history entry — covers
+    // both a real switch and window.onload's own URL-restore call, the latter a no-op via
+    // pushInPageNavEntry()'s own dedup since the page's own load-time push already recorded this
+    // exact URL.
+    if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, type);
 
     if (type === 'cross-checks') {
         // Refresh the Documents cache every time this view is opened, so the "add
@@ -2349,6 +2354,11 @@ async function openAssignCategoriesView() {
     arAssignCategoriesSection.style.display = 'block';
     assignCategoriesViewOpen = true;
     updateAuditRulesUrl();
+    // Global navbar Up icon: Assign Categories' structural parent is the entity rail it was
+    // opened from — reuses the same function the in-page "⬅ Back" button already calls.
+    if (typeof window.setUpOverride === 'function') window.setUpOverride(closeAssignCategoriesView);
+    // Global navbar Back icon: records entering this view as a chronological history entry.
+    if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, 'Assign Categories');
     if (assignCategoriesAccounts.length > 0) {
         // Already loaded once this page session — a full reload here would wipe+rebuild the
         // whole table and lose scroll position just to pick up a category added/renamed
@@ -2373,6 +2383,9 @@ function closeAssignCategoriesView() {
     url.searchParams.delete('account_code');
     history.replaceState(null, '', url);
     updateAuditRulesUrl();
+    // Now back on the entity rail — Up falls back to the static default (getUpTarget()). Not
+    // pushed to the Back history stack: this is an Up-equivalent retreat, not new forward progress.
+    if (typeof window.setUpOverride === 'function') window.setUpOverride(null);
 }
 
 // ---------- LOAD ----------
@@ -2848,19 +2861,14 @@ arAssignCategoriesTableBody.addEventListener('click', function(e) {
 // mirrors verification.js's own hard-refresh restore pattern in window.onload.
 const AR_VALID_ENTITY_TYPES = ['documents', 'cross-checks', 'categories', 'voucher-checks'];
 
-window.onload = async function() {
-    // Verification deep link (Phase 5, FINAL): a ?client_id=&account_code= URL means Verification's
-    // recycle-arrow icon opened this page — skip the normal Documents-rail default entirely and go
-    // straight to the highlighted Assign Categories row. A plain/in-app page load (no params) is
-    // completely unaffected, matching the confirmed brief. Takes priority over the URL-restore
-    // logic below.
-    const isDeepLink = await checkAssignCategoriesDeepLink();
-    if (isDeepLink) return;
-
-    // The Documents form's Template dropdown is needed regardless of which entity/view ends
-    // up restored below.
-    loadTemplatesForDocuments();
-
+// Global navbar Back icon: factored out of window.onload's own hard-refresh restore logic (below)
+// so the same dispatch also serves as the Back history stack's in-page restore handler — reached
+// only in the narrow edge case where the popped stack entry's URL exactly matches the current URL
+// (Back's own "different page, do a real navigation" path already handles every other case via a
+// full reload straight into this same ?view=/?entity=/?id= restore logic, since
+// pushInPageNavEntry() always pushes AFTER updateAuditRulesUrl() has updated the URL to match the
+// view being entered). Mirrors verification.js's restoreVerificationViewFromUrl().
+async function restoreAuditRulesViewFromUrl() {
     const restoreParams = new URLSearchParams(window.location.search);
     const viewParam = restoreParams.get('view');
 
@@ -2888,6 +2896,28 @@ window.onload = async function() {
             else if (restoredEntity === 'voucher-checks') await selectVoucherCheck(id);
         }
     }
+}
+
+window.onload = async function() {
+    // Verification deep link (Phase 5, FINAL): a ?client_id=&account_code= URL means Verification's
+    // recycle-arrow icon opened this page — skip the normal Documents-rail default entirely and go
+    // straight to the highlighted Assign Categories row. A plain/in-app page load (no params) is
+    // completely unaffected, matching the confirmed brief. Takes priority over the URL-restore
+    // logic below.
+    const isDeepLink = await checkAssignCategoriesDeepLink();
+    if (isDeepLink) return;
+
+    // The Documents form's Template dropdown is needed regardless of which entity/view ends
+    // up restored below.
+    loadTemplatesForDocuments();
+
+    // Global navbar Back icon: lets the history stack restore this page's own in-page views (see
+    // restoreAuditRulesViewFromUrl() above) for the rare same-URL edge case.
+    if (typeof window.setInPageRestoreHandler === 'function') {
+        window.setInPageRestoreHandler(restoreAuditRulesViewFromUrl);
+    }
+
+    await restoreAuditRulesViewFromUrl();
 };
 
 // =====================================================================================

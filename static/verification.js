@@ -523,8 +523,8 @@ function mountCashbookDateRangePicker() {
 // Reflects the current view + its identifying id in the URL (state=<view>&id=<id>&type=<currentType>)
 // so a hard refresh can restore the right view (see window.onload below) instead of always dropping
 // back to the dashboard. Uses history.replaceState, not pushState — this page already manages its
-// own "back" behavior via setBackOverride()/the global navbar arrow, not the browser's native back
-// button, so no new history entries should be introduced here. Distinct from the pre-existing
+// own Up/Back behavior via setUpOverride()/pushInPageNavEntry()/the global navbar icons, not the
+// browser's native back button, so no new history entries should be introduced here. Distinct from the pre-existing
 // entry-only ?type=/?view= params (which only mean "open the Start-Verification popup" and are read
 // once by window.onload) — this always deletes ?view=, since it's served its purpose once a real
 // view is reached.
@@ -784,11 +784,10 @@ async function activateCashbookView(cashbook) {
     // visit arrives with .verification-active still applied from activateSessionView().
     const verificationContainer = document.getElementById('verificationContainer');
     if (verificationContainer) verificationContainer.classList.remove('verification-active');
-    // Global navbar back-arrow: resumes the still-open session (no re-fetch) if one is active,
-    // otherwise returns to the Verification module's entry view (not index.html), unchanged.
-    if (typeof setBackOverride === 'function') {
-        setBackOverride(currentSessionId ? returnToSessionFromCashbook : exitCashbookView);
-    }
+    // Global navbar Up icon: the Cashbook view's structural parent is always the module's entry
+    // hub, regardless of whether a session is active in the background — resuming that session is
+    // now the Back icon's job (chronological), not Up's. See exitCashbookView()'s setUpOverride(null).
+    if (typeof setUpOverride === 'function') setUpOverride(exitCashbookView);
     // Bank Verification (Phase 8): relabel the page header to match currentType.
     const headerLabel = document.getElementById('cashbookHeaderLabel');
     if (headerLabel) headerLabel.textContent = currentType === 'bank' ? '🏦 Bankbook:' : '📒 Cashbook:';
@@ -840,6 +839,11 @@ async function activateCashbookView(cashbook) {
     }
     if (cashbookDateRangePicker) cashbookDateRangePicker.setRange(cashbookViewStart, cashbookViewEnd);
     setVerificationUrl('cashbook', cashbook);
+    // Global navbar Back icon: records this as a chronological history entry — covers both a
+    // fresh entry (openCashbook()) and a hard-refresh restore (restoreCashbookView()), the latter
+    // a no-op via pushInPageNavEntry()'s own dedup since the page's own load-time push already
+    // recorded this exact URL.
+    if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, 'Cashbook Preview');
     await fetchCashbookData();
 }
 
@@ -874,6 +878,8 @@ function exitCashbookView() {
     selectedCashbook = null;
     cashbookTableWrapper.innerHTML = '';
     setVerificationUrl('dashboard');
+    // Now at the module's entry hub — Up falls back to the static default (getUpTarget()).
+    if (typeof setUpOverride === 'function') setUpOverride(null);
 }
 
 // ---------- CASHBOOK PREVIEW SELECTOR: APPLY ----------
@@ -1265,13 +1271,17 @@ async function activateSessionView(sessionId, targetVoucherId = null) {
     dashboardContent.style.display = 'none';
     cashbookContent.style.display = 'none';
     sessionContent.style.display = 'block';
-    // Global navbar back-arrow should return to the Cashbook selection screen (not index.html)
-    // while a session is active — reuse the same flow as the "Cashbook" button.
-    if (typeof setBackOverride === 'function') setBackOverride(returnToCashbookFromSession);
+    // Global navbar Up icon should return to the Cashbook selection screen (its structural
+    // parent) — reuse the same flow as the "Cashbook" button.
+    if (typeof setUpOverride === 'function') setUpOverride(returnToCashbookFromSession);
     // Remove padding from main container when verification session is active
     const container = document.getElementById('verificationContainer');
     if (container) container.classList.add('verification-active');
     setVerificationUrl('session', sessionId);
+    // Global navbar Back icon: records this as a chronological history entry — covers both a
+    // fresh entry (startSessionFromCashbook()) and a hard-refresh restore (restoreSessionView()),
+    // the latter a no-op via pushInPageNavEntry()'s own dedup.
+    if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, 'Verification Session');
     // Load transaction list (without showing popover) to get indices and total
     await loadTransactionList(false);
     // Restore to the specific voucher the auditor was on (targetVoucherId), reusing
@@ -3600,11 +3610,11 @@ async function completeTransaction() {
 // and so leaving Place 2 again without touching Apply (returnToSessionFromCashbook()) can cheaply
 // resume exactly where the auditor left off - no re-fetch, no confirm dialog, since nothing is
 // actually lost.
-// This is what runs on both the "🏦/📒 Cashbook" button and the global navbar back-arrow (its
-// setBackOverride() target, set in activateSessionView()). Returning to the cashbook view still
+// This is what runs on both the "🏦/📒 Cashbook" button and the global navbar Up icon (its
+// setUpOverride() target, set in activateSessionView()). Returning to the cashbook view still
 // reuses restoreCashbookView() — the exact same fresh load/render path a hard refresh into
 // ?state=cashbook goes through (loadCashbooks() then activateCashbookView(), which itself handles
-// hiding dashboard/session, showing cashbookContent, the back-override, header labels, the
+// hiding dashboard/session, showing cashbookContent, the Up override, header labels, the
 // cashbook selector, date-range defaults, the URL, and fetching data) — instead of manually
 // toggling visibility and calling fetchCashbookData() directly. The manual version rendered a
 // blank cashbook whenever the session had been reached via a direct ?state=session URL restore
@@ -3640,7 +3650,7 @@ function returnToSessionFromCashbook() {
     dashboardContent.style.display = 'none';
     cashbookContent.style.display = 'none';
     sessionContent.style.display = 'block';
-    if (typeof setBackOverride === 'function') setBackOverride(returnToCashbookFromSession);
+    if (typeof setUpOverride === 'function') setUpOverride(returnToCashbookFromSession);
     const container = document.getElementById('verificationContainer');
     if (container) container.classList.add('verification-active');
     if (currentSessionId) setVerificationUrl('session', currentSessionId);
@@ -3912,6 +3922,35 @@ if (dfdModal) {
 // now lives in static/procedure_modal.js — see that file for the full implementation.
 // ==============================================
 
+// ---------- GLOBAL NAVBAR BACK: RESTORE A VIEW FROM THE CURRENT URL ----------
+// Factored out of window.onload's own hard-refresh restore branches (below) so the same dispatch
+// logic can also serve as the Back history stack's in-page restore handler (see
+// window.setInPageRestoreHandler() in window.onload) — reached only in the narrow edge case where
+// the popped stack entry's URL exactly matches the current URL (Back's own "different page, do a
+// real navigation" path already handles every other case via a full reload straight into this same
+// ?state=/?id= restore logic, since pushInPageNavEntry() always pushes AFTER setVerificationUrl()
+// has updated the URL to match the view being entered).
+function restoreVerificationViewFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const stateParam = params.get('state');
+    const idParam = params.get('id');
+    if (stateParam === 'session' && idParam) {
+        restoreSessionView(parseInt(idParam, 10));
+        return;
+    }
+    if (stateParam === 'cashbook' && idParam) {
+        restoreCashbookView(idParam);
+        return;
+    }
+    // No recognized state param — the dashboard hub itself.
+    if (dashboardContent) dashboardContent.style.display = 'block';
+    if (sessionContent) sessionContent.style.display = 'none';
+    if (cashbookContent) cashbookContent.style.display = 'none';
+    const container = document.getElementById('verificationContainer');
+    if (container) container.classList.remove('verification-active');
+    if (typeof setUpOverride === 'function') setUpOverride(null);
+}
+
 // ---------- INIT ----------
 window.onload = function() {
     if (dashboardContent) dashboardContent.style.display = 'block';
@@ -3919,6 +3958,11 @@ window.onload = function() {
     if (cashbookContent) cashbookContent.style.display = 'none';
     if (typeof setNavModule === 'function') {
         setNavModule('Verification');
+    }
+    // Global navbar Back icon: lets the history stack restore this page's own in-page views (see
+    // restoreVerificationViewFromUrl() above) for the rare same-URL edge case.
+    if (typeof window.setInPageRestoreHandler === 'function') {
+        window.setInPageRestoreHandler(restoreVerificationViewFromUrl);
     }
     loadVerificationStats();
     loadDataLinksCards();
@@ -3932,9 +3976,9 @@ window.onload = function() {
     // or search field's Cashbook/Bank book entries) reuses this exact same entry path - there is
     // no book name in the link, so the furthest this can jump straight to is the same pre-filled
     // popup ?type= already opens; the user picks a specific book and clicks "Open
-    // Cashbook/Bankbook" from there (openCashbook()), same as today. No setBackOverride() call is
+    // Cashbook/Bankbook" from there (openCashbook()), same as today. No setUpOverride() call is
     // needed here: openCashbook()/startSessionFromCashbook()/returnToCashbookFromSession() already register the
-    // correct back-arrow override once the user actually reaches a real view.
+    // correct Up-icon override once the user actually reaches a real view.
     const arrivalParams = new URLSearchParams(window.location.search);
 
     // Hard-refresh view persistence: ?state=session|cashbook&id=... (written by
@@ -3943,13 +3987,8 @@ window.onload = function() {
     // default below. Checked ahead of the existing ?type=/?view= entry-link handling, which stays
     // completely unchanged for ordinary (non-restored) page loads.
     const stateParam = arrivalParams.get('state');
-    const idParam = arrivalParams.get('id');
-    if (stateParam === 'session' && idParam) {
-        restoreSessionView(parseInt(idParam, 10));
-        return;
-    }
-    if (stateParam === 'cashbook' && idParam) {
-        restoreCashbookView(idParam);
+    if (stateParam === 'session' || stateParam === 'cashbook') {
+        restoreVerificationViewFromUrl();
         return;
     }
 
