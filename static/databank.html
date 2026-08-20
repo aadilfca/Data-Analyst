@@ -979,11 +979,15 @@
             <div class="pagination"
                 style="display:flex; justify-content:space-between; align-items:center; margin-top:16px; flex-wrap:wrap; gap:8px;">
                 <div style="display:flex; gap:12px; align-items:center;">
+                    <button id="firstPageBtn" disabled
+                        style="padding:4px 16px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;">&laquo;</button>
                     <button id="prevPageBtn" disabled
                         style="padding:4px 16px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;">Previous</button>
                     <span id="pageInfo">Page 1 of 1</span>
                     <button id="nextPageBtn" disabled
                         style="padding:4px 16px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;">Next</button>
+                    <button id="lastPageBtn" disabled
+                        style="padding:4px 16px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;">&raquo;</button>
                 </div>
                 <div id="previewCountInfo" style="font-size:13px; color:#64748b;">0 rows</div>
             </div>
@@ -1070,7 +1074,7 @@
     </div>
 
     <script src="/static/client_context.js?v=2"></script>
-    <script src="/static/databank.js?v=2"></script>
+    <script src="/static/databank.js?v=3"></script>
 </body>
 
 </html>

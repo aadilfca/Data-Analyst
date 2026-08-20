@@ -605,3 +605,5 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-20: Global header nav rebuild, Phase D of 6 (merged FEATURE_SEARCH_INDEX into NAV_MANIFEST as keyword-bearing children, wired to menu+search, static/search_index.js deleted) done.
 - 2026-08-20: Global header nav rebuild, Phase E of 6 (Trial Balance added to NAV_MANIFEST as a top-level entry, static/client_context.js only) done.
 - 2026-08-20: Global header nav rebuild, Phase F of 6, FINAL (tooltips, hover/active states, NAV_MANIFEST convention, known-gap log) done.
+- 2026-08-20: Data Bank preview <</>> first/last page pagination buttons (static/databank.html + static/databank.js, no backend changes) done.
+- 2026-08-20: Added <</>> first/last page buttons to both Upload page preview windows (Row Selection grid + Excel Preview modal), static/upload.html/.js.

@@ -113,8 +113,10 @@ const searchInput = document.getElementById('searchInput');
 const amountMin = document.getElementById('amountMin');
 const amountMax = document.getElementById('amountMax');
 const applyFiltersBtn = document.getElementById('applyFiltersBtn');
+const firstPageBtn = document.getElementById('firstPageBtn');
 const prevPageBtn = document.getElementById('prevPageBtn');
 const nextPageBtn = document.getElementById('nextPageBtn');
+const lastPageBtn = document.getElementById('lastPageBtn');
 const pageInfo = document.getElementById('pageInfo');
 const previewCountInfo = document.getElementById('previewCountInfo');
 const closePreviewBtn = document.getElementById('closePreviewBtn');
@@ -1230,8 +1232,10 @@ async function renderPreviewRows(rows) {
 function updatePagination() {
     const totalPages = Math.ceil(previewTotalRows / previewLimit) || 1;
     pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+    firstPageBtn.disabled = currentPage <= 1;
     prevPageBtn.disabled = currentPage <= 1;
     nextPageBtn.disabled = currentPage >= totalPages;
+    lastPageBtn.disabled = currentPage >= totalPages;
 }
 
 // ---------- APPLY PREVIEW FILTERS ----------
@@ -1410,6 +1414,12 @@ previewModal.addEventListener('click', (e) => {
 });
 
 // Pagination
+firstPageBtn.addEventListener('click', () => {
+    if (currentPage > 1) {
+        currentPage = 1;
+        fetchPreviewData();
+    }
+});
 prevPageBtn.addEventListener('click', () => {
     if (currentPage > 1) {
         currentPage--;
@@ -1420,6 +1430,13 @@ nextPageBtn.addEventListener('click', () => {
     const totalPages = Math.ceil(previewTotalRows / previewLimit) || 1;
     if (currentPage < totalPages) {
         currentPage++;
+        fetchPreviewData();
+    }
+});
+lastPageBtn.addEventListener('click', () => {
+    const totalPages = Math.ceil(previewTotalRows / previewLimit) || 1;
+    if (currentPage < totalPages) {
+        currentPage = totalPages;
         fetchPreviewData();
     }
 });

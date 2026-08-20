@@ -1887,8 +1887,10 @@ function renderPreviewPage() {
     const previewInfo = document.getElementById('previewInfo');
     const previewRowRange = document.getElementById('previewRowRange');
     const previewPageInfo = document.getElementById('previewPageInfo');
+    const previewFirstPage = document.getElementById('previewFirstPage');
     const previewPrevPage = document.getElementById('previewPrevPage');
     const previewNextPage = document.getElementById('previewNextPage');
+    const previewLastPage = document.getElementById('previewLastPage');
 
     const headers = previewHeaders || [];
     const totalRows = previewAllRows.length;
@@ -1997,11 +1999,17 @@ function renderPreviewPage() {
     }
 
     // Disable buttons at boundaries
+    if (previewFirstPage) {
+        previewFirstPage.disabled = (previewCurrentPage === 1);
+    }
     if (previewPrevPage) {
         previewPrevPage.disabled = (previewCurrentPage === 1);
     }
     if (previewNextPage) {
         previewNextPage.disabled = (previewCurrentPage === totalPages);
+    }
+    if (previewLastPage) {
+        previewLastPage.disabled = (previewCurrentPage === totalPages);
     }
 }
 
@@ -2222,8 +2230,10 @@ function renderRowExclusionPage() {
     const body = document.getElementById('rowExclusionBody');
     const rangeEl = document.getElementById('rowExclusionRange');
     const pageInfoEl = document.getElementById('rowExclusionPageInfo');
+    const firstBtn = document.getElementById('rowExclusionFirstPage');
     const prevBtn = document.getElementById('rowExclusionPrevPage');
     const nextBtn = document.getElementById('rowExclusionNextPage');
+    const lastBtn = document.getElementById('rowExclusionLastPage');
     if (!headRow || !body) return;
 
     const headers = rowExclusionHeaders || [];
@@ -2341,8 +2351,10 @@ function renderRowExclusionPage() {
     if (pageInfoEl) {
         pageInfoEl.textContent = `Page ${rowExclusionCurrentPage} of ${totalPages}`;
     }
+    if (firstBtn) firstBtn.disabled = (rowExclusionCurrentPage === 1);
     if (prevBtn) prevBtn.disabled = (rowExclusionCurrentPage === 1);
     if (nextBtn) nextBtn.disabled = (rowExclusionCurrentPage === totalPages);
+    if (lastBtn) lastBtn.disabled = (rowExclusionCurrentPage === totalPages);
 
     updateRowExclusionCounter();
 }
@@ -2497,6 +2509,17 @@ window.onload = async function() {
         });
     }
 
+    const previewFirstPageBtn = document.getElementById('previewFirstPage');
+    if (previewFirstPageBtn) {
+        previewFirstPageBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (previewCurrentPage > 1) {
+                previewCurrentPage = 1;
+                renderPreviewPage();
+            }
+        });
+    }
+
     const previewPrevPageBtn = document.getElementById('previewPrevPage');
     if (previewPrevPageBtn) {
         previewPrevPageBtn.addEventListener('click', function(e) {
@@ -2520,7 +2543,30 @@ window.onload = async function() {
         });
     }
 
+    const previewLastPageBtn = document.getElementById('previewLastPage');
+    if (previewLastPageBtn) {
+        previewLastPageBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            const totalPages = Math.ceil(previewTotalRows / previewPageSize) || 1;
+            if (previewCurrentPage < totalPages) {
+                previewCurrentPage = totalPages;
+                renderPreviewPage();
+            }
+        });
+    }
+
     // Row selection grid pagination controls (Phase 2 of row-exclusion)
+    const rowExclusionFirstPageBtn = document.getElementById('rowExclusionFirstPage');
+    if (rowExclusionFirstPageBtn) {
+        rowExclusionFirstPageBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            if (rowExclusionCurrentPage > 1) {
+                rowExclusionCurrentPage = 1;
+                renderRowExclusionPage();
+            }
+        });
+    }
+
     const rowExclusionPrevPageBtn = document.getElementById('rowExclusionPrevPage');
     if (rowExclusionPrevPageBtn) {
         rowExclusionPrevPageBtn.addEventListener('click', function(e) {
@@ -2539,6 +2585,18 @@ window.onload = async function() {
             const totalPages = Math.ceil(rowExclusionAllRows.length / ROW_EXCLUSION_PAGE_SIZE) || 1;
             if (rowExclusionCurrentPage < totalPages) {
                 rowExclusionCurrentPage++;
+                renderRowExclusionPage();
+            }
+        });
+    }
+
+    const rowExclusionLastPageBtn = document.getElementById('rowExclusionLastPage');
+    if (rowExclusionLastPageBtn) {
+        rowExclusionLastPageBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            const totalPages = Math.ceil(rowExclusionAllRows.length / ROW_EXCLUSION_PAGE_SIZE) || 1;
+            if (rowExclusionCurrentPage < totalPages) {
+                rowExclusionCurrentPage = totalPages;
                 renderRowExclusionPage();
             }
         });
