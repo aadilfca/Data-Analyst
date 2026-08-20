@@ -10,6 +10,13 @@ from datetime import datetime, time
 # ⭐ MUST HAVE THIS LINE
 router = APIRouter()
 
+# In-memory row-write progress for an in-flight import, keyed by file_id (known to
+# the frontend before it fires POST /api/upload/import, so it can poll
+# GET /api/upload/import-status/{file_id} while that request is still in flight).
+# Synchronous single-request import, no queue/background job -- state only lives
+# for the duration of one import call.
+IMPORT_PROGRESS: dict = {}
+
 # ---------- FLEXIBLE DATE PARSING (Phase 1 of the date-format requirement) ----------
 # Default date-import format. There is no UI to choose a different format yet
 # (that's a later phase), so these defaults reproduce today's DD/MM/YYYY-only
@@ -1458,6 +1465,14 @@ def validate_and_import(request: ImportRequest):
     updated_count = 0
     deleted_count = 0
 
+    # Row-write progress tracking (Import progress requirement, phase 1 of 3) --
+    # total reflects rows about to actually be written, not the earlier validation pass.
+    if change_detection is not None and change_detection.get("unchanged") is not None:
+        progress_total = len(change_detection["changed"]) + len(change_detection["new"]) + len(change_detection["missing"])
+    else:
+        progress_total = len(rows)
+    IMPORT_PROGRESS[request.file_id] = {"current": 0, "total": progress_total, "status": "processing"}
+
     if change_detection is not None and change_detection.get("unchanged") is not None:
         # --- Re-upload scenario: handle each category ---
         # 1. Unchanged: skip — retain existing validation status (no action needed)
@@ -1502,6 +1517,7 @@ def validate_and_import(request: ImportRequest):
                 )
 
             updated_count += 1
+            IMPORT_PROGRESS[request.file_id]["current"] += 1
 
         # 3. New: insert fresh rows
         for new_row_data in change_detection["new"]:
@@ -1519,6 +1535,7 @@ def validate_and_import(request: ImportRequest):
                  json.dumps(new_row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
             )
             inserted_count += 1
+            IMPORT_PROGRESS[request.file_id]["current"] += 1
             log_data_audit(row_id, "Analyst", "INSERT", None, new_row_data)
 
         # 4. Missing: flag existing rows as 'deleted' for auditor review (soft flag)
@@ -1534,6 +1551,7 @@ def validate_and_import(request: ImportRequest):
             )
             log_data_audit(cid, "Analyst", "DELETE", item["old_row_data"], None)
             deleted_count += 1
+            IMPORT_PROGRESS[request.file_id]["current"] += 1
 
     else:
         # --- First-time upload (no existing data with valid composite key): insert all rows as new ---
@@ -1573,10 +1591,13 @@ def validate_and_import(request: ImportRequest):
                  json.dumps(row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
             )
             inserted_count += 1
+            IMPORT_PROGRESS[request.file_id]["current"] += 1
             log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
 
     log_audit("Analyst", "Import", "Upload",
               f"Imported {inserted_count} new, {updated_count} updated, {deleted_count} flagged missing for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
+
+    IMPORT_PROGRESS[request.file_id]["status"] = "complete"
 
     return {
         "status": "success",
@@ -1595,6 +1616,12 @@ def validate_and_import(request: ImportRequest):
         "force_included_count": force_included_count,
         "change_detection": change_detection  # Phase 2: detailed breakdown of unchanged/changed/new/missing
     }
+
+@router.get("/api/upload/import-status/{file_id}")
+def get_import_status(file_id: int):
+    """Polled by the frontend while POST /api/upload/import is in flight for this file_id."""
+    return IMPORT_PROGRESS.get(file_id, {"current": 0, "total": 0, "status": "idle"})
+
 # ---------- DOWNLOAD TEMPLATE ----------
 @router.get("/api/upload/download-template/{template_id}")
 def download_template(template_id: int):
