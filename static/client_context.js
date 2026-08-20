@@ -11,13 +11,21 @@ const STORAGE_CODE = 'selectedClientCode';
 // Hand-maintained tree describing every navigable destination, grouped exactly like the
 // dashboard's three sections (static/index.html). Not a live scrape of the DOM — whoever
 // edits either side must mirror changes into the other manually. Plain data (no rendering
-// logic) so Phase 2's search field can flatten/filter this same array directly.
+// logic) so the search field can flatten/filter this same array directly.
 // `module` (when present) is matched against window._appNav.module to highlight the
 // current page as "you are here" (see getUpTarget()/data-nav-module below).
-// `children` mirror a module's own internal card/hub grid one level deep (no further nesting
-// supported by renderNavMenuPanel()/renderNavSearchResults()) — so far Verification (its hub's
-// Voucher/Process verification tiles) and Setup (its own 5-card grid, minus Manage Clients since
-// that's already a distinct top-level entry above) have real sub-pages worth listing this way.
+// `children` mirror a module's own internal card/hub grid or in-page feature list one level
+// deep (no further nesting supported by renderNavMenuPanel()/renderNavSearchResults()) — used
+// both for real sub-pages (Verification's Voucher/Process verification tiles, Setup's own
+// 5-card grid) and, since the Phase D nav-data merge, for a page's ground-level in-page
+// features that have a real visible entry point but no page of their own (Audit Rules' rail
+// entities + Assign Categories/Signature Specimens, deep-linked via `?feature=<slug>` — see
+// "Global Header Nav Rebuild" in CHANGELOG_ARCHIVE.md for the merge history; this replaces the
+// old standalone FEATURE_SEARCH_INDEX/static/search_index.js, deleted in that same phase). A
+// child MAY carry `keywords: string[]` (lowercase synonym phrases) — flattenNavManifest()
+// carries them through and renderNavSearchResults() matches them by substring alongside label,
+// exactly like FEATURE_SEARCH_INDEX's old matching did; a child with no keywords is matched by
+// label only, same as before this phase.
 // Verification's Cash vouchers/Bank vouchers children use the same ?type=cash/?type=bank URLs as
 // verification.html's own hub tiles (#cashVoucherTile/#bankVoucherTile in verification.js) — an
 // earlier session added `?view=cashbook`/`?view=bankbook` as separate "Cashbook"/"Bank book"
@@ -68,6 +76,35 @@ const NAV_MANIFEST = [
                 ]
             },
             { label: 'Manage Clients', url: '/static/clients.html', state: 'ready', module: 'Manage Clients' },
+            {
+                label: 'Audit Rules', url: '/static/audit_rules.html', state: 'ready', module: 'Audit Rules',
+                children: [
+                    {
+                        label: 'Documents', url: '/static/audit_rules.html?feature=documents', state: 'ready',
+                        keywords: ['supporting document', 'audit document', 'risk rating', 'authorisation roles'],
+                    },
+                    {
+                        label: 'Cross-checks', url: '/static/audit_rules.html?feature=cross-checks', state: 'ready',
+                        keywords: ['cross check', 'crosscheck', 'compare field', 'comparison', 'document chain'],
+                    },
+                    {
+                        label: 'Categories', url: '/static/audit_rules.html?feature=categories', state: 'ready',
+                        keywords: ['category', 'transaction type', 'validation rules', 'cleared requirements'],
+                    },
+                    {
+                        label: 'Voucher-level Checks', url: '/static/audit_rules.html?feature=voucher-checks', state: 'ready',
+                        keywords: ['voucher check', 'prepared by', 'checked by', 'approved by'],
+                    },
+                    {
+                        label: 'Assign Categories', url: '/static/audit_rules.html?feature=assign-categories', state: 'ready',
+                        keywords: ['assign category', 'account category', 'trial balance accounts', 'account head'],
+                    },
+                    {
+                        label: 'Signature Specimens', url: '/static/audit_rules.html?feature=signature-specimens', state: 'ready',
+                        keywords: ['signature specimen', 'specimen', 'signatory', 'authority'],
+                    },
+                ]
+            },
             { label: 'Settings', url: null, state: 'coming-soon' },
             { label: 'Users', url: null, state: 'coming-soon' },
             { label: 'Audit Log', url: null, state: 'coming-soon' },
@@ -87,7 +124,7 @@ function flattenNavManifest() {
         group.items.forEach(item => {
             flat.push({ label: item.label, url: item.url, state: item.state, groupTitle: group.title, isChild: false });
             (item.children || []).forEach(child => {
-                flat.push({ label: child.label, url: child.url, state: child.state, groupTitle: group.title, isChild: true });
+                flat.push({ label: child.label, url: child.url, state: child.state, groupTitle: group.title, isChild: true, keywords: child.keywords || [] });
             });
         });
     });
@@ -856,7 +893,10 @@ function renderNavSearchResults(query) {
     }
 
     const needle = trimmed.toLowerCase();
-    const matches = flattenNavManifest().filter(entry => entry.label.toLowerCase().includes(needle));
+    const matches = flattenNavManifest().filter(entry =>
+        entry.label.toLowerCase().includes(needle) ||
+        (entry.keywords || []).some(kw => kw.includes(needle))
+    );
 
     if (!matches.length) {
         panel.innerHTML = '<div class="nav-search-empty">No matches found.</div>';
