@@ -16,6 +16,7 @@ const modalTitle = document.getElementById('modalTitle');
 const templateName = document.getElementById('templateName');
 const rateSourceField = document.getElementById('rateSourceField');
 const rateSourceSelect = document.getElementById('rateSourceSelect');
+const hasSubtotalsCheckbox = document.getElementById('hasSubtotalsByDefaultCheckbox');
 const searchInput = document.getElementById('columnSearchInput');
 const clearSearchBtn = document.getElementById('clearSearchBtn');
 const addColumnTriggerBtn = document.getElementById('addColumnTriggerBtn');
@@ -602,6 +603,7 @@ async function openModal(title, templateData = null) {
         templateName.value = templateData.template_name;
         editId.value = templateData.id;
         rateSourceSelect.value = templateData.rate_source || 'imported';
+        hasSubtotalsCheckbox.checked = !!templateData.has_subtotals_by_default;
         // Use templateData.columns (pivot table) instead of selected_columns.
         // GET /api/templates(/{id}) doesn't select master_columns.notes, so
         // look it up from the just-loaded `columns` (GET /api/columns, which
@@ -618,6 +620,7 @@ async function openModal(title, templateData = null) {
         templateName.value = '';
         editId.value = '';
         rateSourceSelect.value = 'imported';
+        hasSubtotalsCheckbox.checked = false;
         renderSelectedColumns();
         updateSelectedCount();
     }
@@ -695,7 +698,7 @@ document.getElementById('templateForm').addEventListener('submit', async functio
     try {
         let url = API_BASE + '/api/templates';
         let method = 'POST';
-        const payload = { template_name: name, selected_columns: selectedIds, rate_source: rateSourceSelect.value };
+        const payload = { template_name: name, selected_columns: selectedIds, rate_source: rateSourceSelect.value, has_subtotals_by_default: hasSubtotalsCheckbox.checked };
 
         if (editingId) {
             url += '/' + editingId;
