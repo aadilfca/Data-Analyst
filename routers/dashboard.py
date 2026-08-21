@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from datetime import datetime
 from database import execute_query, estimate_client_data_size
 from routers.verification import _rollup_voucher_status
+from routers.data import compute_overdue_uploads
 
 router = APIRouter()
 
@@ -108,6 +109,16 @@ def get_dashboard_kpi_stats():
         "cleared_vouchers": cleared_vouchers,
         "unresolved_errors": unresolved_errors,
     }
+
+
+@router.get("/api/dashboard/overdue-uploads")
+def get_dashboard_overdue_uploads():
+    """
+    Main Dashboard: overdue-upload list across every client, sorted
+    most-overdue-first. See routers/data.py's compute_overdue_uploads() for
+    the business-day/holiday detection logic (Phase D1).
+    """
+    return {"overdue": compute_overdue_uploads()}
 
 
 @router.get("/api/health")

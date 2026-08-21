@@ -225,6 +225,13 @@ def get_client_db_size(client_id: int = Query(..., description="Client ID")):
 
 VALID_UPLOAD_FREQUENCIES = ("Daily", "Weekly", "Monthly")
 
+# Overdue Uploads (Phase D1): allowed gap, in business days (Sundays + firm-wide
+# holidays excluded), between a client+template's last upload and today before
+# it counts as overdue. Weekly/Monthly are business-day equivalents of a
+# calendar week (~6 business days) and month (~22 business days), not raw
+# calendar-day counts.
+ALLOWED_GAP_BUSINESS_DAYS = {"Daily": 1, "Weekly": 6, "Monthly": 22}
+
 class UploadFrequencyUpdate(BaseModel):
     client_id: int
     template_id: int
@@ -262,6 +269,145 @@ def set_upload_frequency(payload: UploadFrequencyUpdate):
     )
 
     return {"client_id": payload.client_id, "template_id": payload.template_id, "frequency": payload.frequency}
+
+
+# ==============================================
+# 📅 OVERDUE UPLOADS (Phase D1: business-day overdue detection)
+# ==============================================
+
+def _get_all_holidays_lookup():
+    """
+    Unfiltered read of the whole holidays table (unlike
+    _resolve_holidays_for_month() above, which is scoped to a single
+    year/month - a business-day count here can span many months/years).
+    Returns (exact_dates, repeating_month_days):
+      - exact_dates: set of 'YYYY-MM-DD' strings for non-repeating holidays
+      - repeating_month_days: set of (month, day) tuples for repeats_yearly=1
+        holidays, so they match any year
+    """
+    holiday_rows = execute_query("SELECT holiday_date, repeats_yearly FROM holidays")
+    exact_dates = set()
+    repeating_month_days = set()
+    for h in holiday_rows:
+        if h["repeats_yearly"]:
+            try:
+                d = datetime.fromisoformat(h["holiday_date"])
+            except ValueError:
+                continue
+            repeating_month_days.add((d.month, d.day))
+        else:
+            exact_dates.add(h["holiday_date"])
+    return exact_dates, repeating_month_days
+
+
+def _is_business_day(date_obj: datetime, exact_dates: set, repeating_month_days: set) -> bool:
+    """False for a Sunday or a firm-wide holiday (exact date or repeating month/day match)."""
+    if date_obj.strftime('%w') == '0':
+        return False
+    date_str = date_obj.strftime('%Y-%m-%d')
+    if date_str in exact_dates:
+        return False
+    if (date_obj.month, date_obj.day) in repeating_month_days:
+        return False
+    return True
+
+
+def _count_business_days_elapsed(last_upload_date: str, today_str: str, exact_dates: set, repeating_month_days: set) -> int:
+    """
+    Counts business days strictly after last_upload_date, through today_str
+    inclusive. 0 means today is still within the same business day the last
+    upload was made (or earlier), i.e. no gap has opened up yet.
+    """
+    start = datetime.fromisoformat(last_upload_date)
+    end = datetime.fromisoformat(today_str)
+    count = 0
+    current = start
+    while current < end:
+        current = current.fromordinal(current.toordinal() + 1)
+        if _is_business_day(current, exact_dates, repeating_month_days):
+            count += 1
+    return count
+
+
+def compute_overdue_uploads(client_id: Optional[int] = None) -> list:
+    """
+    Shared core for both the all-clients (routers/dashboard.py) and
+    single-client overdue-uploads endpoints. For every client+template pair
+    that has at least one client_data row, compares business days elapsed
+    since its last upload (MAX(extract_date), the data date - not the file
+    import timestamp) against the allowed gap for its saved upload_frequency
+    (absent = Daily, same convention as get_availability()'s
+    frequency_lookup). Returns only pairs that are actually overdue
+    (days_overdue > 0), sorted most-overdue-first.
+    """
+    where = ["cd.is_deleted = 0", "c.is_active = 1", "t.is_active = 1"]
+    params = []
+    if client_id is not None:
+        where.append("cd.client_id = ?")
+        params.append(client_id)
+    where_sql = " AND ".join(where)
+
+    pairs = execute_query(
+        f"""
+        SELECT cd.client_id, c.client_name, cd.template_id, t.template_name,
+               MAX(cd.extract_date) as last_upload_date
+        FROM client_data cd
+        JOIN clients c ON c.id = cd.client_id
+        JOIN templates t ON t.id = cd.template_id
+        WHERE {where_sql}
+        GROUP BY cd.client_id, cd.template_id
+        """,
+        params
+    )
+
+    if client_id is not None:
+        freq_rows = execute_query(
+            "SELECT client_id, template_id, frequency FROM client_template_upload_frequency WHERE client_id = ?",
+            (client_id,)
+        )
+    else:
+        freq_rows = execute_query(
+            "SELECT client_id, template_id, frequency FROM client_template_upload_frequency"
+        )
+    freq_lookup = {(r["client_id"], r["template_id"]): r["frequency"] for r in freq_rows}
+
+    exact_dates, repeating_month_days = _get_all_holidays_lookup()
+    today_str = datetime.now().strftime('%Y-%m-%d')
+
+    result = []
+    for r in pairs:
+        if not r["last_upload_date"]:
+            continue
+        frequency = freq_lookup.get((r["client_id"], r["template_id"]), "Daily")
+        allowed_gap = ALLOWED_GAP_BUSINESS_DAYS[frequency]
+        elapsed = _count_business_days_elapsed(r["last_upload_date"], today_str, exact_dates, repeating_month_days)
+        days_overdue = elapsed - allowed_gap
+        if days_overdue > 0:
+            result.append({
+                "client_id": r["client_id"],
+                "client_name": r["client_name"],
+                "template_id": r["template_id"],
+                "template_name": r["template_name"],
+                "last_upload_date": r["last_upload_date"],
+                "frequency": frequency,
+                "days_overdue": days_overdue,
+            })
+
+    result.sort(key=lambda x: x["days_overdue"], reverse=True)
+    return result
+
+
+@router.get("/api/data/overdue-uploads")
+def get_client_overdue_uploads(client_id: int = Query(..., description="Client ID")):
+    """
+    Client Data module: overdue-upload list for a single client, sorted
+    most-overdue-first. See compute_overdue_uploads() for the detection logic.
+    """
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    return {"client_id": client_id, "overdue": compute_overdue_uploads(client_id=client_id)}
 
 
 # ==============================================
