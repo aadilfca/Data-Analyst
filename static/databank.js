@@ -89,7 +89,7 @@ const missingDatesReportBody = document.getElementById('missingDatesReportBody')
 
 const statsTotalRecords = document.getElementById('totalRecords');
 const statsTotalTemplates = document.getElementById('totalTemplates');
-const statsMissingTemplates = document.getElementById('missingTemplates');
+const statsClientDbSize = document.getElementById('clientDbSize');
 const statsSundayRows = document.getElementById('totalSundayRows');
 
 // Preview modal elements
@@ -649,24 +649,34 @@ async function fetchAvailability() {
     showStatus('⏳ Fetching availability data...', 'loading');
     
     try {
-        const res = await fetch(`${API_BASE}/api/data/availability?${params.toString()}`);
+        const [res, dbSizeRes] = await Promise.all([
+            fetch(`${API_BASE}/api/data/availability?${params.toString()}`),
+            fetch(`${API_BASE}/api/data/db-size?client_id=${clientId}`)
+        ]);
         if (!res.ok) {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to fetch availability');
         }
         const data = await res.json();
         availabilityData = data;
-        
+
                 // Update stats - use total_row_count (unfiltered) for Total Records
         const totalRows = data.reduce((sum, item) => sum + (item.total_row_count || 0), 0);
         const totalTemplates = data.length;
-        const missing = data.filter(item => item.status === 'missing').length;
         const sundayRows = data.reduce((sum, item) => sum + (item.filtered_sunday_count || 0), 0);
-        
+
         statsTotalRecords.textContent = totalRows;
         statsTotalTemplates.textContent = totalTemplates;
-        statsMissingTemplates.textContent = missing;
         statsSundayRows.textContent = sundayRows;
+
+        // Database Size Visibility (Phase A2): client-level aggregate, separate
+        // fetch from availability since it's not scoped to the date range.
+        if (dbSizeRes.ok) {
+            const dbSizeData = await dbSizeRes.json();
+            statsClientDbSize.textContent = dbSizeData.formatted || '0 B';
+        } else {
+            statsClientDbSize.textContent = '0 B';
+        }
         
         // Redesign Phase 5: new "Your datasets" table reflects the exact
         // same fetch/data — no separate network call. (The old Availability
@@ -696,7 +706,7 @@ async function fetchAvailability() {
         resetDatasetTables('❌ Error loading data. Please try again.');
         statsTotalRecords.textContent = '0';
         statsTotalTemplates.textContent = '0';
-        statsMissingTemplates.textContent = '0';
+        statsClientDbSize.textContent = '0 B';
         statsSundayRows.textContent = '0';
     }
 }
@@ -827,6 +837,15 @@ function renderYourDatasetsTable(data, emptyMessage = 'No templates found for th
         tdDocCount.style.fontWeight = '600';
         tdDocCount.setAttribute('data-tooltip', 'Unique documents across all dates for this template');
         tr.appendChild(tdDocCount);
+
+        // Database (Database Size Visibility, Phase A2) — estimated storage
+        // footprint for this template (all data, unfiltered), sourced from
+        // the API's estimated_size_formatted field.
+        const tdSize = document.createElement('td');
+        tdSize.textContent = item.estimated_size_formatted || '0 B';
+        tdSize.style.textAlign = 'center';
+        tdSize.setAttribute('data-tooltip', 'Estimated storage size (row count × avg row size)');
+        tr.appendChild(tdSize);
 
         // Coverage — the 📅 icon, now its own column (was previously part of
         // the Actions cell; see buildCoverageCell()).

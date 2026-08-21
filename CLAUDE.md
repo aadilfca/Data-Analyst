@@ -613,3 +613,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-20: Subtotal default flag Phase 5 of 6 (Template setup checkbox, `static/templates.html` + `static/templates.js`) done.
 - 2026-08-20: Subtotal default flag Phase 6 of 6, FINAL (Data Bank preview toggle, static/databank.html + static/databank.js) done.
 - 2026-08-21: Database size visibility Phase A1 (backend size estimate, `database.py` + `routers/dashboard.py` + `routers/data.py`) done.
+- 2026-08-21: Database size visibility Phase A2 (frontend display, `static/index.html`/`script.js` + `static/databank.html`/`.js`) done.

@@ -8,7 +8,6 @@ async function loadDashboardStats() {
         const res = await fetch('/api/dashboard/stats');
         if (res.ok) {
             const stats = await res.json();
-            document.getElementById('totalUploads').textContent = stats.total_uploads || 0;
             document.getElementById('pendingVerifications').textContent = stats.pending_verifications || 0;
             document.getElementById('totalRecords').textContent = stats.total_records || 0;
                         const lastUpload = stats.last_upload ? formatDate(stats.last_upload) : 'Never';
@@ -20,18 +19,31 @@ async function loadDashboardStats() {
             }
         } else {
             // Fallback
-            document.getElementById('totalUploads').textContent = '0';
             document.getElementById('pendingVerifications').textContent = '0';
             document.getElementById('totalRecords').textContent = '0';
             const lastUploadEl = document.getElementById('lastUploadDate');
             if (lastUploadEl) lastUploadEl.textContent = 'Never';
         }
     } catch (error) {
-        document.getElementById('totalUploads').textContent = '⚠️';
         document.getElementById('pendingVerifications').textContent = '⚠️';
         document.getElementById('totalRecords').textContent = '⚠️';
         const lastUploadEl = document.getElementById('lastUploadDate');
         if (lastUploadEl) lastUploadEl.textContent = '⚠️';
+    }
+}
+
+// ---------- LOAD DATABASE SIZE (Database Size Visibility, Phase A2) ----------
+async function loadDbSize() {
+    try {
+        const res = await fetch('/api/dashboard/db-size');
+        if (res.ok) {
+            const data = await res.json();
+            document.getElementById('dbSize').textContent = data.formatted || '0 B';
+        } else {
+            document.getElementById('dbSize').textContent = '0 B';
+        }
+    } catch (error) {
+        document.getElementById('dbSize').textContent = '⚠️';
     }
 }
 
@@ -69,12 +81,14 @@ document.querySelectorAll('.module-card:not(.coming-soon)').forEach(card => {
 // ---------- LOAD ON PAGE OPEN ----------
 window.onload = function() {
     loadDashboardStats();
+    loadDbSize();
 };
 
 // ---------- KEYBOARD SHORTCUTS ----------
 document.addEventListener('keydown', function(e) {
     if (e.key === 'r' || e.key === 'R') {
         loadDashboardStats();
+        loadDbSize();
     }
 });
 
