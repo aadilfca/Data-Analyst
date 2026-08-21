@@ -617,3 +617,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-21: Dashboard KPI stats Phase B1 (backend, `routers/dashboard.py`, reuses `verification.py`'s `_rollup_voucher_status()`) done.
 - 2026-08-21: Dashboard KPI stats Phase B2 (frontend, `static/index.html` + `static/script.js`, 5-card Quick Overview strip) done.
 - 2026-08-21: Overdue Uploads Phase C1 (backend, upload_frequency schema + save/load, `database.py` + `routers/data.py`) done.
+- 2026-08-21: Overdue Uploads Phase C2 (frontend, Frequency dropdown column, `static/databank.html` + `static/databank.js`) done.

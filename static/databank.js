@@ -711,6 +711,59 @@ async function fetchAvailability() {
     }
 }
 
+// Overdue Uploads Phase C2: builds the Frequency cell — an inline
+// Daily/Weekly/Monthly dropdown, per client+template. Saves on change via
+// PUT /api/data/upload-frequency (Phase C1); on failure the select reverts
+// to its previous value rather than leaving a stale/wrong-looking selection.
+const UPLOAD_FREQUENCY_OPTIONS = ['Daily', 'Weekly', 'Monthly'];
+
+function buildFrequencyCell(item) {
+    const tdFrequency = document.createElement('td');
+    tdFrequency.style.textAlign = 'center';
+
+    const select = document.createElement('select');
+    UPLOAD_FREQUENCY_OPTIONS.forEach(freq => {
+        const option = document.createElement('option');
+        option.value = freq;
+        option.textContent = freq;
+        select.appendChild(option);
+    });
+    select.value = item.upload_frequency || 'Daily';
+
+    select.addEventListener('change', async () => {
+        const previousValue = select.dataset.lastValue || 'Daily';
+        const newValue = select.value;
+        const clientId = getSelectedClientId();
+
+        try {
+            const res = await fetch(`${API_BASE}/api/data/upload-frequency`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    client_id: clientId,
+                    template_id: item.template_id,
+                    frequency: newValue
+                })
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || 'Failed to update upload frequency');
+            }
+            item.upload_frequency = newValue;
+            select.dataset.lastValue = newValue;
+            showStatus('✅ Upload frequency updated.', 'success');
+        } catch (error) {
+            console.error('Update upload frequency error:', error);
+            select.value = previousValue;
+            showStatus('❌ Error: ' + error.message, 'error');
+        }
+    });
+
+    select.dataset.lastValue = select.value;
+    tdFrequency.appendChild(select);
+    return tdFrequency;
+}
+
 // Status column removal fix: builds the Coverage cell — just the 📅 icon,
 // now in its own column (previously shared the Actions cell with
 // Preview/Export/Delete). Always shown, even for a template with zero rows —
@@ -816,6 +869,11 @@ function renderYourDatasetsTable(data, emptyMessage = 'No templates found for th
         tdName.textContent = item.template_name;
         tdName.style.fontWeight = '500';
         tr.appendChild(tdName);
+
+        // Frequency (Overdue Uploads Phase C2) — inline-editable Daily/Weekly/
+        // Monthly dropdown, seeded from the C1-extended /api/data/availability
+        // response (defaults 'Daily' server-side when no override is saved).
+        tr.appendChild(buildFrequencyCell(item));
 
         // Full Date Range (unfiltered) — same fallback logic as the old table.
         const tdDate = document.createElement('td');
