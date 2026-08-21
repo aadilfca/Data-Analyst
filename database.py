@@ -64,6 +64,47 @@ def execute_write(query, params=None, retries=5, delay=0.5):
         raise last_exception
 
 
+def execute_batch(conn, query, params_list, chunk_size=500):
+    """
+    Run `query` once per params tuple via executemany(), in chunks of
+    chunk_size, committing after each chunk. A chunk that raises rolls back
+    only that chunk (already-committed chunks stay committed) before
+    re-raising. Caller owns the connection's lifecycle (open/close).
+    """
+    for i in range(0, len(params_list), chunk_size):
+        chunk = params_list[i:i + chunk_size]
+        try:
+            conn.executemany(query, chunk)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def execute_batch_insert_with_ids(conn, query, params_list, table, chunk_size=500):
+    """
+    INSERT-only variant of execute_batch() for an INTEGER PRIMARY KEY
+    AUTOINCREMENT table: returns the assigned rowids in the same order as
+    params_list. Relies on SQLite allocating rowids strictly sequentially
+    within one connection's transaction (no other writer can interleave
+    while this connection holds the write lock) - a chunk's ids are exactly
+    (start_id+1 .. start_id+len(chunk)), where start_id is MAX(id) read
+    just before the chunk's executemany.
+    """
+    ids = []
+    for i in range(0, len(params_list), chunk_size):
+        chunk = params_list[i:i + chunk_size]
+        try:
+            start_id = conn.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table}").fetchone()[0]
+            conn.executemany(query, chunk)
+            ids.extend(range(start_id + 1, start_id + 1 + len(chunk)))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return ids
+
+
 def get_raw_conn():
     conn = sqlite3.connect(DB_NAME, timeout=20)
     conn.row_factory = sqlite3.Row

@@ -2,7 +2,7 @@ from fastapi import APIRouter, File, UploadFile, HTTPException, Body
 from fastapi.responses import StreamingResponse
 import os, json, openpyxl, pandas as pd
 from io import BytesIO
-from database import execute_query, execute_write, log_audit, get_raw_conn, log_data_audit
+from database import execute_query, execute_write, log_audit, get_raw_conn, log_data_audit, execute_batch, execute_batch_insert_with_ids
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, time
@@ -1316,6 +1316,27 @@ def validate_only(request: ImportRequest):
         "rate_mode": rate_mode,
     }
 
+DATA_AUDIT_LOG_INSERT_SQL = (
+    "INSERT INTO data_audit_log (client_data_id, user, action, old_row_data, new_row_data) "
+    "VALUES (?, ?, ?, ?, ?)"
+)
+
+
+def _audit_row_params(client_data_id, action, old_data=None, new_data=None, user="Analyst"):
+    """
+    Builds one params tuple for DATA_AUDIT_LOG_INSERT_SQL, matching
+    log_data_audit()'s own JSON-encoding convention exactly (used for the
+    batched import write path instead of calling log_data_audit() per row).
+    """
+    return (
+        client_data_id,
+        user,
+        action,
+        json.dumps(old_data) if old_data else None,
+        json.dumps(new_data) if new_data else None,
+    )
+
+
 # ---------- VALIDATE & IMPORT ----------
 @router.post("/api/upload/import")
 def validate_and_import(request: ImportRequest):
@@ -1526,126 +1547,176 @@ def validate_and_import(request: ImportRequest):
         progress_total = len(rows)
     IMPORT_PROGRESS[request.file_id] = {"current": 0, "total": progress_total, "status": "processing"}
 
-    if change_detection is not None and change_detection.get("unchanged") is not None:
-        # --- Re-upload scenario: handle each category ---
-        # 1. Unchanged: skip — retain existing validation status (no action needed)
-        #    (These rows already exist in client_data and their validation_status is preserved)
+    # Reuse a single connection for the whole write phase instead of opening/closing
+    # a new sqlite3 connection (and re-setting PRAGMAs) on every row write -- this was
+    # 94.6% of total import time for a ~4,900-row import. Each write category below is
+    # batched via executemany() in chunks (database.py's execute_batch()/
+    # execute_batch_insert_with_ids()), committing per chunk rather than per row or in
+    # one giant transaction.
+    conn = get_raw_conn()
+    try:
+        if change_detection is not None and change_detection.get("unchanged") is not None:
+            # --- Re-upload scenario: handle each category ---
+            # 1. Unchanged: skip — retain existing validation status (no action needed)
+            #    (These rows already exist in client_data and their validation_status is preserved)
 
-        # 2. Changed: update row_data, reset validation_status to 'Pending', log old values
-        for item in change_detection["changed"]:
-            cid = item["client_data_id"]
-            new_version = (item.get("old_version") or 1) + 1
-            new_row_data = item["new_row_data"]
+            # 2. Changed: update row_data, reset validation_status to 'Pending', log old values
+            changed_client_data_params = []
+            changed_verification_params = []
+            changed_audit_params = []
+            for item in change_detection["changed"]:
+                cid = item["client_data_id"]
+                new_version = (item.get("old_version") or 1) + 1
+                new_row_data = item["new_row_data"]
 
-            # Compute document_group_id from the new row_data
-            doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
+                # Compute document_group_id from the new row_data
+                doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
 
-            # Update the existing row_data, increment version, update document_group_id, set change_detection_status='updated'
-            # data_quality_flag (Phase 4 of the blank-field-rejection requirement) is
-            # recomputed from the new row_data -- a force-included row with a still-blank
-            # critical field is flagged 'incomplete', otherwise cleared back to NULL.
-            data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
-            # extract_amount/extract_date (confirmed fix, 2026-08-09) are recomputed from the
-            # new row_data too -- this UPDATE previously left both columns untouched on a
-            # changed-row re-upload, so a row's amount/date would never refresh even after the
-            # extraction bug above was fixed.
-            amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
-            execute_write(
-                """
-                UPDATE client_data
-                SET row_data = ?, version = ?, document_group_id = ?, change_detection_status = 'updated', data_quality_flag = ?, rate_source = ?, extract_amount = ?, extract_date = ?
-                WHERE id = ?
-                """,
-                (json.dumps(new_row_data), new_version, doc_group_id, data_quality_flag, rate_source, amount, date_str, cid)
-            )
-
-            # Log the old values for audit trail
-            log_data_audit(cid, "Analyst", "UPDATE", item["old_row_data"], new_row_data)
-
-            # Reset validation_status to 'Pending' if a verification_detail row exists
-            if item.get("verification_detail_id"):
-                execute_write(
-                    "UPDATE verification_details SET validation_status = 'Pending' WHERE id = ?",
-                    (item["verification_detail_id"],)
+                # data_quality_flag (Phase 4 of the blank-field-rejection requirement) is
+                # recomputed from the new row_data -- a force-included row with a still-blank
+                # critical field is flagged 'incomplete', otherwise cleared back to NULL.
+                data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
+                # extract_amount/extract_date (confirmed fix, 2026-08-09) are recomputed from the
+                # new row_data too -- this UPDATE previously left both columns untouched on a
+                # changed-row re-upload, so a row's amount/date would never refresh even after the
+                # extraction bug above was fixed.
+                amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
+                changed_client_data_params.append(
+                    (json.dumps(new_row_data), new_version, doc_group_id, data_quality_flag, rate_source, amount, date_str, cid)
                 )
+                changed_audit_params.append(_audit_row_params(cid, "UPDATE", item["old_row_data"], new_row_data))
+                if item.get("verification_detail_id"):
+                    changed_verification_params.append((item["verification_detail_id"],))
 
-            updated_count += 1
-            IMPORT_PROGRESS[request.file_id]["current"] += 1
+                updated_count += 1
+                IMPORT_PROGRESS[request.file_id]["current"] += 1
 
-        # 3. New: insert fresh rows
-        for new_row_data in change_detection["new"]:
-            amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
-            doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
-            # data_quality_flag (Phase 4 of the blank-field-rejection requirement) --
-            # 'incomplete' for a force-included row still carrying a blank critical field.
-            data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
-            row_id = execute_write(
-                """
-                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added', ?, ?, ?)
-                """,
-                (request.client_id, request.template_id, request.file_id,
-                 json.dumps(new_row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
-            )
-            inserted_count += 1
-            IMPORT_PROGRESS[request.file_id]["current"] += 1
-            log_data_audit(row_id, "Analyst", "INSERT", None, new_row_data)
+            if changed_client_data_params:
+                execute_batch(
+                    conn,
+                    """
+                    UPDATE client_data
+                    SET row_data = ?, version = ?, document_group_id = ?, change_detection_status = 'updated', data_quality_flag = ?, rate_source = ?, extract_amount = ?, extract_date = ?
+                    WHERE id = ?
+                    """,
+                    changed_client_data_params
+                )
+            if changed_verification_params:
+                execute_batch(
+                    conn,
+                    "UPDATE verification_details SET validation_status = 'Pending' WHERE id = ?",
+                    changed_verification_params
+                )
+            if changed_audit_params:
+                execute_batch(conn, DATA_AUDIT_LOG_INSERT_SQL, changed_audit_params)
 
-        # 4. Missing: flag existing rows as 'deleted' for auditor review (soft flag)
-        for item in change_detection["missing"]:
-            cid = item["client_data_id"]
-            execute_write(
-                """
-                UPDATE client_data
-                SET change_detection_status = 'deleted'
-                WHERE id = ?
-                """,
-                (cid,)
-            )
-            log_data_audit(cid, "Analyst", "DELETE", item["old_row_data"], None)
-            deleted_count += 1
-            IMPORT_PROGRESS[request.file_id]["current"] += 1
+            # 3. New: insert fresh rows
+            new_client_data_params = []
+            new_row_data_list = []
+            for new_row_data in change_detection["new"]:
+                amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
+                doc_group_id = get_document_group_id(template_cols, new_row_data, request.template_id)
+                # data_quality_flag (Phase 4 of the blank-field-rejection requirement) --
+                # 'incomplete' for a force-included row still carrying a blank critical field.
+                data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
+                new_client_data_params.append(
+                    (request.client_id, request.template_id, request.file_id,
+                     json.dumps(new_row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
+                )
+                new_row_data_list.append(new_row_data)
+                inserted_count += 1
+                IMPORT_PROGRESS[request.file_id]["current"] += 1
 
-    else:
-        # --- First-time upload (no existing data with valid composite key): insert all rows as new ---
-        for row in rows:
-            # Build JSON row_data
-            row_data = {}
-            for t_col_name, excel_col in col_mapping.items():
-                if excel_col in row:
-                    row_data[t_col_name] = json_safe_cell_value(row[excel_col])
+            if new_client_data_params:
+                new_ids = execute_batch_insert_with_ids(
+                    conn,
+                    """
+                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added', ?, ?, ?)
+                    """,
+                    new_client_data_params,
+                    table="client_data"
+                )
+                new_audit_params = [
+                    _audit_row_params(row_id, "INSERT", None, new_row_data)
+                    for row_id, new_row_data in zip(new_ids, new_row_data_list)
+                ]
+                execute_batch(conn, DATA_AUDIT_LOG_INSERT_SQL, new_audit_params)
 
-            # Rate derivation (Phase 7 of the Rate-derivation requirement) -- see
-            # apply_rate_derivation()'s docstring for why this must happen right
-            # here, at first assembly.
-            apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
-            # Restores the template's real column order -- apply_rate_derivation() may have
-            # just appended 'Rate' at the end of the dict (see reorder_row_data_by_template()'s
-            # docstring).
-            row_data = reorder_row_data_by_template(row_data, template_cols)
+            # 4. Missing: flag existing rows as 'deleted' for auditor review (soft flag)
+            missing_client_data_params = []
+            missing_audit_params = []
+            for item in change_detection["missing"]:
+                cid = item["client_data_id"]
+                missing_client_data_params.append((cid,))
+                missing_audit_params.append(_audit_row_params(cid, "DELETE", item["old_row_data"], None))
+                deleted_count += 1
+                IMPORT_PROGRESS[request.file_id]["current"] += 1
 
-            # Compute document_group_id from the first column value
-            doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)
+            if missing_client_data_params:
+                execute_batch(
+                    conn,
+                    "UPDATE client_data SET change_detection_status = 'deleted' WHERE id = ?",
+                    missing_client_data_params
+                )
+            if missing_audit_params:
+                execute_batch(conn, DATA_AUDIT_LOG_INSERT_SQL, missing_audit_params)
 
-            # Extract amount and date for indexing
-            amount, date_str = extract_columns_from_row(row_data, template_cols, effective_delimiter, effective_order)
+        else:
+            # --- First-time upload (no existing data with valid composite key): insert all rows as new ---
+            first_upload_client_data_params = []
+            first_upload_row_data_list = []
+            for row in rows:
+                # Build JSON row_data
+                row_data = {}
+                for t_col_name, excel_col in col_mapping.items():
+                    if excel_col in row:
+                        row_data[t_col_name] = json_safe_cell_value(row[excel_col])
 
-            # data_quality_flag (Phase 4 of the blank-field-rejection requirement) --
-            # 'incomplete' for a force-included row still carrying a blank critical field.
-            data_quality_flag = compute_data_quality_flag(row_data, critical_cols)
+                # Rate derivation (Phase 7 of the Rate-derivation requirement) -- see
+                # apply_rate_derivation()'s docstring for why this must happen right
+                # here, at first assembly.
+                apply_rate_derivation(row_data, template_cols, rate_source, rate_precision)
+                # Restores the template's real column order -- apply_rate_derivation() may have
+                # just appended 'Rate' at the end of the dict (see reorder_row_data_by_template()'s
+                # docstring).
+                row_data = reorder_row_data_by_template(row_data, template_cols)
 
-            # Insert every row as new
-            row_id = execute_write(
-                """
-                INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
-                """,
-                (request.client_id, request.template_id, request.file_id,
-                 json.dumps(row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
-            )
-            inserted_count += 1
-            IMPORT_PROGRESS[request.file_id]["current"] += 1
-            log_data_audit(row_id, "Analyst", "INSERT", None, row_data)
+                # Compute document_group_id from the first column value
+                doc_group_id = get_document_group_id(template_cols, row_data, request.template_id)
+
+                # Extract amount and date for indexing
+                amount, date_str = extract_columns_from_row(row_data, template_cols, effective_delimiter, effective_order)
+
+                # data_quality_flag (Phase 4 of the blank-field-rejection requirement) --
+                # 'incomplete' for a force-included row still carrying a blank critical field.
+                data_quality_flag = compute_data_quality_flag(row_data, critical_cols)
+
+                first_upload_client_data_params.append(
+                    (request.client_id, request.template_id, request.file_id,
+                     json.dumps(row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
+                )
+                first_upload_row_data_list.append(row_data)
+                inserted_count += 1
+                IMPORT_PROGRESS[request.file_id]["current"] += 1
+
+            if first_upload_client_data_params:
+                first_upload_ids = execute_batch_insert_with_ids(
+                    conn,
+                    """
+                    INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                    """,
+                    first_upload_client_data_params,
+                    table="client_data"
+                )
+                first_upload_audit_params = [
+                    _audit_row_params(row_id, "INSERT", None, row_data)
+                    for row_id, row_data in zip(first_upload_ids, first_upload_row_data_list)
+                ]
+                execute_batch(conn, DATA_AUDIT_LOG_INSERT_SQL, first_upload_audit_params)
+    finally:
+        conn.close()
 
     log_audit("Analyst", "Import", "Upload",
               f"Imported {inserted_count} new, {updated_count} updated, {deleted_count} flagged missing for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
