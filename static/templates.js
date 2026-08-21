@@ -602,7 +602,7 @@ async function openModal(title, templateData = null) {
         editingId = templateData.id;
         templateName.value = templateData.template_name;
         editId.value = templateData.id;
-        rateSourceSelect.value = templateData.rate_source || 'imported';
+        rateSourceSelect.value = templateData.rate_source || 'auto';
         hasSubtotalsCheckbox.checked = !!templateData.has_subtotals_by_default;
         // Use templateData.columns (pivot table) instead of selected_columns.
         // GET /api/templates(/{id}) doesn't select master_columns.notes, so
@@ -619,7 +619,7 @@ async function openModal(title, templateData = null) {
         editingId = null;
         templateName.value = '';
         editId.value = '';
-        rateSourceSelect.value = 'imported';
+        rateSourceSelect.value = 'auto';
         hasSubtotalsCheckbox.checked = false;
         renderSelectedColumns();
         updateSelectedCount();
