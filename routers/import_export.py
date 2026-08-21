@@ -463,6 +463,23 @@ def find_named_column(template_cols: list, name: str) -> Optional[dict]:
     return None
 
 
+def resolve_upload_rate_source(template_cols: list, col_mapping: Optional[dict]) -> str:
+    """
+    Resolves a template's 'auto' rate_source into a concrete 'imported'/'derived'
+    for one specific upload (Phase B of the Rate Source 'auto' requirement).
+    Unlike apply_rate_derivation()'s per-row work, this is a per-upload decision --
+    every row in the same upload shares the same column mapping, so it's resolved
+    once and reused for the whole file, never re-derived per row.
+
+    'imported' if this upload's own column mapping (`col_mapping`: template column
+    name -> Excel column name, as actually chosen on THIS upload -- not the
+    template's static column list) maps a Rate column; 'derived' otherwise, i.e.
+    the uploaded file simply has no Rate column mapped, so it must be computed.
+    """
+    mapped_cols = [c for c in template_cols if col_mapping and col_mapping.get(c['column_name'])]
+    return 'imported' if find_named_column(mapped_cols, 'Rate') else 'derived'
+
+
 def apply_rate_derivation(row_data: dict, template_cols: list, rate_source: Optional[str], rate_precision: int) -> None:
     """
     Populates/rounds row_data['Rate'] in place for Purchase Order/Store Receiving/
@@ -472,6 +489,11 @@ def apply_rate_derivation(row_data: dict, template_cols: list, rate_source: Opti
     existing stored rows -- doing it after would make a re-upload look
     artificially "changed" forever, since a previously-imported row already has
     a Rate value baked into its stored row_data.
+
+    rate_source here is always already resolved to 'imported'/'derived' -- a
+    template's 'auto' value is resolved once per upload by
+    resolve_upload_rate_source() before this function is ever called (see call
+    sites), so this function never sees the literal 'auto'.
 
     'derived': Rate = Amount / Quantity, rounded to rate_precision. Quantity
     missing/blank/0 leaves Rate as None -- a normal "Rate unavailable" outcome,
@@ -1341,6 +1363,13 @@ def validate_and_import(request: ImportRequest):
     # Receiving/Vendor Bill (see resolve_rate_source() in routers/templates.py).
     rate_source = template[0].get('rate_source')
     rate_precision = get_rate_precision()
+    # Phase B of the Rate Source 'auto' requirement: 'auto' is only a template-level
+    # trigger, resolved once per upload (not per row -- every row in this upload
+    # shares the same col_mapping) into a concrete 'imported'/'derived' before
+    # anything downstream (compare_transactions, first-time-upload insert, or the
+    # rate_source column stored per row) ever sees it.
+    if rate_source == 'auto':
+        rate_source = resolve_upload_rate_source(template_cols, col_mapping)
 
     # --- Validation ---
     validation_errors = []
