@@ -8,27 +8,39 @@ async function loadDashboardStats() {
         const res = await fetch('/api/dashboard/stats');
         if (res.ok) {
             const stats = await res.json();
-            document.getElementById('pendingVerifications').textContent = stats.pending_verifications || 0;
-            document.getElementById('totalRecords').textContent = stats.total_records || 0;
-                        const lastUpload = stats.last_upload ? formatDate(stats.last_upload) : 'Never';
-            // Add a new element for last upload if not exists; we'll add it in index.html.
-            // We'll handle it by updating an optional element.
+            const lastUpload = stats.last_upload ? formatDate(stats.last_upload) : 'Never';
             const lastUploadEl = document.getElementById('lastUploadDate');
             if (lastUploadEl) {
                 lastUploadEl.textContent = lastUpload;
             }
         } else {
-            // Fallback
-            document.getElementById('pendingVerifications').textContent = '0';
-            document.getElementById('totalRecords').textContent = '0';
             const lastUploadEl = document.getElementById('lastUploadDate');
             if (lastUploadEl) lastUploadEl.textContent = 'Never';
         }
     } catch (error) {
-        document.getElementById('pendingVerifications').textContent = '⚠️';
-        document.getElementById('totalRecords').textContent = '⚠️';
         const lastUploadEl = document.getElementById('lastUploadDate');
         if (lastUploadEl) lastUploadEl.textContent = '⚠️';
+    }
+}
+
+// ---------- LOAD QUICK OVERVIEW KPI STATS (Phase B2) ----------
+async function loadKpiStats() {
+    try {
+        const res = await fetch('/api/dashboard/kpi-stats');
+        if (res.ok) {
+            const data = await res.json();
+            document.getElementById('openQueries').textContent = data.open_queries ?? 0;
+            document.getElementById('verificationProgress').textContent = `${data.verification_progress_pct ?? 0}%`;
+            document.getElementById('unresolvedErrors').textContent = data.unresolved_errors ?? 0;
+        } else {
+            document.getElementById('openQueries').textContent = '0';
+            document.getElementById('verificationProgress').textContent = '0%';
+            document.getElementById('unresolvedErrors').textContent = '0';
+        }
+    } catch (error) {
+        document.getElementById('openQueries').textContent = '⚠️';
+        document.getElementById('verificationProgress').textContent = '⚠️';
+        document.getElementById('unresolvedErrors').textContent = '⚠️';
     }
 }
 
@@ -82,6 +94,7 @@ document.querySelectorAll('.module-card:not(.coming-soon)').forEach(card => {
 window.onload = function() {
     loadDashboardStats();
     loadDbSize();
+    loadKpiStats();
 };
 
 // ---------- KEYBOARD SHORTCUTS ----------
@@ -89,6 +102,7 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'r' || e.key === 'R') {
         loadDashboardStats();
         loadDbSize();
+        loadKpiStats();
     }
 });
 
