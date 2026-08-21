@@ -31,17 +31,71 @@ async function loadKpiStats() {
             const data = await res.json();
             document.getElementById('openQueries').textContent = data.open_queries ?? 0;
             document.getElementById('verificationProgress').textContent = `${data.verification_progress_pct ?? 0}%`;
-            document.getElementById('unresolvedErrors').textContent = data.unresolved_errors ?? 0;
         } else {
             document.getElementById('openQueries').textContent = '0';
             document.getElementById('verificationProgress').textContent = '0%';
-            document.getElementById('unresolvedErrors').textContent = '0';
         }
     } catch (error) {
         document.getElementById('openQueries').textContent = '⚠️';
         document.getElementById('verificationProgress').textContent = '⚠️';
-        document.getElementById('unresolvedErrors').textContent = '⚠️';
     }
+}
+
+// ---------- LOAD OVERDUE UPLOADS (Overdue Uploads, Phase D2, FINAL) ----------
+// All-clients list from routers/data.py's compute_overdue_uploads(), already
+// sorted most-overdue-first by the backend — no client-side re-sort needed.
+// Row-click-to-jump-to-upload-page is deliberately deferred (not built this phase).
+let overdueUploadsData = [];
+
+function getOverdueSeverityBadge(daysOverdue) {
+    // Exact thresholds left to implementation per the brief — a fixed cutoff
+    // reusing the app's existing .status-badge.pending (amber) / .failed (red) pair.
+    const cls = daysOverdue >= 5 ? 'failed' : 'pending';
+    return `<span class="status-badge ${cls}">${daysOverdue}</span>`;
+}
+
+function renderOverdueUploadsTable() {
+    const tbody = document.getElementById('overdueUploadsTableBody');
+    const noData = document.getElementById('overdueUploadsNoData');
+    if (!tbody) return;
+    if (overdueUploadsData.length === 0) {
+        tbody.innerHTML = '';
+        if (noData) noData.style.display = 'block';
+        return;
+    }
+    if (noData) noData.style.display = 'none';
+    tbody.innerHTML = overdueUploadsData.map(item => `
+        <tr>
+            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${item.client_name}</td>
+            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${item.template_name}</td>
+            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${formatDate(item.last_upload_date)}</td>
+            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${item.frequency}</td>
+            <td style="padding:12px 16px; border-bottom:1px solid #f0f2f5;">${getOverdueSeverityBadge(item.days_overdue)}</td>
+        </tr>
+    `).join('');
+}
+
+async function loadOverdueUploads() {
+    try {
+        const res = await fetch('/api/dashboard/overdue-uploads');
+        if (res.ok) {
+            const data = await res.json();
+            overdueUploadsData = data.overdue || [];
+        } else {
+            overdueUploadsData = [];
+        }
+    } catch (error) {
+        overdueUploadsData = [];
+    }
+    const countEl = document.getElementById('overdueUploadsCount');
+    if (countEl) countEl.textContent = overdueUploadsData.length;
+    renderOverdueUploadsTable();
+}
+
+function toggleOverdueUploadsPanel() {
+    const panel = document.getElementById('overdueUploadsPanel');
+    if (!panel) return;
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
 }
 
 // ---------- LOAD DATABASE SIZE (Database Size Visibility, Phase A2) ----------
@@ -95,6 +149,9 @@ window.onload = function() {
     loadDashboardStats();
     loadDbSize();
     loadKpiStats();
+    loadOverdueUploads();
+    const overdueCard = document.getElementById('overdueUploadsCard');
+    if (overdueCard) overdueCard.addEventListener('click', toggleOverdueUploadsPanel);
 };
 
 // ---------- KEYBOARD SHORTCUTS ----------
@@ -103,6 +160,7 @@ document.addEventListener('keydown', function(e) {
         loadDashboardStats();
         loadDbSize();
         loadKpiStats();
+        loadOverdueUploads();
     }
 });
 

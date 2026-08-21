@@ -753,12 +753,10 @@
         }
 
         /* ===== METRIC TILES (Redesign Phase 6, FINAL) =====
-           Replaces the old .stats-bar row. Same 4 stat ids (#totalRecords/
-           #totalTemplates/#missingTemplates/#totalSundayRows) carried forward
-           unchanged, so every existing .textContent write in databank.js
-           still works with no JS changes to the stat-writing logic itself —
-           only the surrounding markup/CSS changed. Positioned at the bottom
-           of the page, per the prototype. */
+           Replaces the old .stats-bar row. Positioned at the bottom of the
+           page, per the prototype. The 4th tile (#totalSundayRows) was
+           renamed/repurposed to Overdue Uploads (#overdueUploadsCount) in
+           Phase D2 — see fetchOverdueUploads() in databank.js. */
         .metric-tiles-section {
             display: flex;
             flex-wrap: wrap;
@@ -894,9 +892,37 @@
                 <div class="metric-tile-label">📁 Templates Available</div>
                 <div class="metric-tile-value" id="totalTemplates">0</div>
             </div>
-            <div class="metric-tile">
-                <div class="metric-tile-label">📅 Sunday Rows</div>
-                <div class="metric-tile-value" id="totalSundayRows">0</div>
+            <!-- Overdue Uploads (Phase D2, FINAL): renamed/repurposed from the old
+                 "Sunday Rows" tile slot. Clickable, toggles the drill-down panel
+                 below. Scoped to the currently selected client via
+                 GET /api/data/overdue-uploads?client_id=. -->
+            <div class="metric-tile" id="overdueUploadsTile" style="cursor:pointer;">
+                <div class="metric-tile-label">⏰ Overdue Uploads</div>
+                <div class="metric-tile-value" id="overdueUploadsCount">0</div>
+            </div>
+        </div>
+
+        <!-- Overdue Uploads drill-down panel (Phase D2, FINAL) — hidden until the
+             tile above is clicked. Single-client list, most-overdue-first
+             (backend-sorted, no client-side re-sort). No Client column (per
+             brief — this view is already scoped to one client). Row-click-to-
+             jump-to-upload-page deferred per brief. -->
+        <div id="overdueUploadsPanel" style="display:none; margin-bottom:20px;">
+            <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+                <table class="availability-table">
+                    <thead>
+                        <tr>
+                            <th>Template</th>
+                            <th>Last Upload</th>
+                            <th>Frequency</th>
+                            <th>Days Overdue</th>
+                        </tr>
+                    </thead>
+                    <tbody id="overdueUploadsTableBody"></tbody>
+                </table>
+                <div id="overdueUploadsNoData" class="no-data" style="display:none;">
+                    ✅ No overdue uploads.
+                </div>
             </div>
         </div>
 

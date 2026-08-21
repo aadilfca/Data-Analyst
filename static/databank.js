@@ -90,7 +90,13 @@ const missingDatesReportBody = document.getElementById('missingDatesReportBody')
 const statsTotalRecords = document.getElementById('totalRecords');
 const statsTotalTemplates = document.getElementById('totalTemplates');
 const statsClientDbSize = document.getElementById('clientDbSize');
-const statsSundayRows = document.getElementById('totalSundayRows');
+// Overdue Uploads (Phase D2, FINAL): renamed from statsSundayRows/#totalSundayRows.
+const statsOverdueUploads = document.getElementById('overdueUploadsCount');
+const overdueUploadsTile = document.getElementById('overdueUploadsTile');
+const overdueUploadsPanel = document.getElementById('overdueUploadsPanel');
+const overdueUploadsTableBody = document.getElementById('overdueUploadsTableBody');
+const overdueUploadsNoData = document.getElementById('overdueUploadsNoData');
+let overdueUploadsData = [];
 
 // Preview modal elements
 const previewModal = document.getElementById('previewModal');
@@ -663,11 +669,9 @@ async function fetchAvailability() {
                 // Update stats - use total_row_count (unfiltered) for Total Records
         const totalRows = data.reduce((sum, item) => sum + (item.total_row_count || 0), 0);
         const totalTemplates = data.length;
-        const sundayRows = data.reduce((sum, item) => sum + (item.filtered_sunday_count || 0), 0);
 
         statsTotalRecords.textContent = totalRows;
         statsTotalTemplates.textContent = totalTemplates;
-        statsSundayRows.textContent = sundayRows;
 
         // Database Size Visibility (Phase A2): client-level aggregate, separate
         // fetch from availability since it's not scoped to the date range.
@@ -677,7 +681,12 @@ async function fetchAvailability() {
         } else {
             statsClientDbSize.textContent = '0 B';
         }
-        
+
+        // Overdue Uploads (Phase D2, FINAL): not date-range-scoped (it's a
+        // MAX(extract_date) freshness check), so fetched once per client
+        // selection rather than re-fetched on every date-range change.
+        fetchOverdueUploads(clientId);
+
         // Redesign Phase 5: new "Your datasets" table reflects the exact
         // same fetch/data — no separate network call. (The old Availability
         // Table's own renderAvailabilityTable() was removed in Phase 6.)
@@ -707,8 +716,65 @@ async function fetchAvailability() {
         statsTotalRecords.textContent = '0';
         statsTotalTemplates.textContent = '0';
         statsClientDbSize.textContent = '0 B';
-        statsSundayRows.textContent = '0';
     }
+}
+
+// ---------- OVERDUE UPLOADS (Phase D2, FINAL) ----------
+// Single-client list from GET /api/data/overdue-uploads, already sorted
+// most-overdue-first by the backend. No Client column (this view is already
+// scoped to one client). Row-click-to-jump-to-upload-page deferred per brief.
+function getOverdueSeverityBadge(daysOverdue) {
+    // Same fixed threshold/badge convention as the Main Dashboard's version
+    // (static/script.js) — exact thresholds left to implementation per the brief.
+    const cls = daysOverdue >= 5 ? 'failed' : 'pending';
+    return `<span class="status-badge ${cls}">${daysOverdue}</span>`;
+}
+
+function renderOverdueUploadsTable() {
+    if (!overdueUploadsTableBody) return;
+    if (overdueUploadsData.length === 0) {
+        overdueUploadsTableBody.innerHTML = '';
+        if (overdueUploadsNoData) overdueUploadsNoData.style.display = 'block';
+        return;
+    }
+    if (overdueUploadsNoData) overdueUploadsNoData.style.display = 'none';
+    overdueUploadsTableBody.innerHTML = overdueUploadsData.map(item => `
+        <tr>
+            <td>${item.template_name}</td>
+            <td>${formatDateForDisplay(item.last_upload_date)}</td>
+            <td>${item.frequency}</td>
+            <td>${getOverdueSeverityBadge(item.days_overdue)}</td>
+        </tr>
+    `).join('');
+}
+
+async function fetchOverdueUploads(clientId) {
+    if (!clientId) {
+        overdueUploadsData = [];
+        if (statsOverdueUploads) statsOverdueUploads.textContent = '0';
+        renderOverdueUploadsTable();
+        return;
+    }
+    try {
+        const res = await fetch(`${API_BASE}/api/data/overdue-uploads?client_id=${clientId}`);
+        if (res.ok) {
+            const data = await res.json();
+            overdueUploadsData = data.overdue || [];
+        } else {
+            overdueUploadsData = [];
+        }
+    } catch (error) {
+        overdueUploadsData = [];
+    }
+    if (statsOverdueUploads) statsOverdueUploads.textContent = overdueUploadsData.length;
+    renderOverdueUploadsTable();
+}
+
+if (overdueUploadsTile) {
+    overdueUploadsTile.addEventListener('click', () => {
+        if (!overdueUploadsPanel) return;
+        overdueUploadsPanel.style.display = overdueUploadsPanel.style.display === 'none' ? 'block' : 'none';
+    });
 }
 
 // Overdue Uploads Phase C2: builds the Frequency cell — an inline
