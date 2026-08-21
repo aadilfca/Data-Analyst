@@ -624,3 +624,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-21: Rate Source 'auto' state Phase A (schema migration + new default, database.py + routers/templates.py) done.
 - 2026-08-21: Rate Source 'auto' Phase B (per-upload detection logic, routers/import_export.py only) done.
 - 2026-08-21: Rate Source dropdown Phase C (Auto/Force Imported/Force Derived, 3-option UI, static/templates.html + static/templates.js) done.
+- 2026-08-21: Rate Source Phase D FINAL (pre-import visibility, routers/import_export.py + static/upload.html/.js) done.

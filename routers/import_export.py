@@ -1115,13 +1115,13 @@ def validate_only(request: ImportRequest):
     Returns row-by-row validation errors.
     """
     # Validate template and file
-    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    template = execute_query("SELECT id, template_name, rate_source FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
     file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
     if not file_info:
         raise HTTPException(404, "File not found")
-    
+
     # Validate client exists
     client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
     if not client:
@@ -1154,6 +1154,29 @@ def validate_only(request: ImportRequest):
         mapping = mapping_dict.get(t_col['id'])
         if mapping and mapping.excel_column_name:
             col_mapping[t_col['column_name']] = mapping.excel_column_name
+
+    # Pre-import Rate mode visibility (Phase D of the Rate-derivation requirement) --
+    # resolves the same 'auto' -> 'imported'/'derived' decision validate_and_import()
+    # makes at commit time, via the same resolve_upload_rate_source() helper, so the
+    # frontend can show it before the user ever clicks Upload. template_rate_source is
+    # already NULL for every non-eligible template (enforced by resolve_rate_source()
+    # in routers/templates.py), so rate_mode stays None there with no extra check needed.
+    template_rate_source = template[0].get('rate_source')
+    rate_mode = None
+    if template_rate_source:
+        effective_source = template_rate_source
+        if effective_source == 'auto':
+            effective_source = resolve_upload_rate_source(template_cols, col_mapping)
+        label = {
+            'auto': f"Auto → {effective_source.capitalize()}",
+            'imported': 'Forced Imported',
+            'derived': 'Forced Derived',
+        }[template_rate_source]
+        rate_mode = {
+            "template_setting": template_rate_source,
+            "effective_source": effective_source,
+            "label": label,
+        }
 
     # Read Excel data
     try:
@@ -1290,6 +1313,7 @@ def validate_only(request: ImportRequest):
         "valid_rows": len(rows) - len(bad_row_numbers),
         "new_rows_count": new_count,
         "existing_rows_count": existing_count,
+        "rate_mode": rate_mode,
     }
 
 # ---------- VALIDATE & IMPORT ----------

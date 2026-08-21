@@ -77,6 +77,11 @@ let currentSheet = null;
 let workbookData = null;
 let isProcessing = false;
 let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
+// Pre-import Rate mode visibility (Phase D of the Rate-derivation requirement) --
+// the validate response's rate_mode field ({template_setting, effective_source, label}),
+// or null for a non-eligible template. Only ever trustworthy alongside a 'valid'
+// validationStatus -- cleared in lockstep with it by resetValidationState().
+let lastRateModeInfo = null;
 
 // Pagination state variables
 let previewCurrentPage = 1;
@@ -351,6 +356,29 @@ function resetValidationState() {
         importBtn.disabled = false;
     }
     updatePreviewButtonState();
+    // Prior rate_mode result no longer reflects the current mapping -- clear it until
+    // the next successful Validate call.
+    lastRateModeInfo = null;
+    renderRateModeIndicator();
+}
+
+// ---------- RATE MODE INDICATOR (Phase D of the Rate-derivation requirement) ----------
+// Renders lastRateModeInfo (set from validate_only()'s rate_mode response field) as a
+// small badge in both the Row Selection grid header and the Excel Preview header --
+// informational only, no override control here (that stays in Template setup).
+function renderRateModeIndicator() {
+    const badges = [document.getElementById('rateModeBadgeGrid'), document.getElementById('rateModeBadgePreview')];
+    const icon = lastRateModeInfo ? (lastRateModeInfo.effective_source === 'derived' ? '🧮' : '📥') : '';
+    badges.forEach(el => {
+        if (!el) return;
+        if (lastRateModeInfo) {
+            el.textContent = `${icon} Rate: ${lastRateModeInfo.label}`;
+            el.style.display = 'inline-flex';
+        } else {
+            el.textContent = '';
+            el.style.display = 'none';
+        }
+    });
 }
 
 // ---------- HELPERS ----------
@@ -1814,6 +1842,10 @@ if (importBtn) {
                                     // Validation passed – clear any stale failed-row markers from a
             // prior attempt (Phase 4), then show simple success message
             setValidationFailedRows([]);
+            // Pre-import Rate mode visibility (Phase D) -- reflects this Validate call's
+            // resolved Auto/Forced Imported/Derived decision until the next mapping change.
+            lastRateModeInfo = result.rate_mode || null;
+            renderRateModeIndicator();
             const totalRows = result.total_rows || 0;
             const newRowsCount = result.new_rows_count || 0;
             const existingRowsCount = result.existing_rows_count || 0;

@@ -580,6 +580,25 @@
             color: #0369a1;
         }
 
+        /* ---------- RATE MODE BADGE (Phase D of the Rate-derivation requirement) ----------
+           Informational-only indicator of the resolved Auto->Imported/Derived or Forced
+           Imported/Derived decision (routers/import_export.py's validate_only() response
+           rate_mode field) -- shown in the Row Selection grid header and Excel Preview
+           header once Validate succeeds (renderRateModeIndicator() in upload.js). Absent
+           entirely for a template with no rate_source (rate_mode: null). Same small-pill
+           sizing language as .type-badge above. */
+        .rate-mode-badge {
+            display: none;
+            align-items: center;
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #eff6ff;
+            color: #1e40af;
+            white-space: nowrap;
+        }
+
         .mapping-count {
             margin-top: 10px;
             font-size: 13px;
@@ -1505,6 +1524,7 @@
                         <div class="row-exclusion-header">
                             <span class="row-exclusion-title">☑️ Row Selection</span>
                             <div class="row-exclusion-header-actions">
+                                <span class="rate-mode-badge" id="rateModeBadgeGrid" style="display:none;"></span>
                                 <span class="row-exclusion-counter" id="rowExclusionCounter">0 of 0 rows will be imported</span>
                             </div>
                         </div>
@@ -1589,6 +1609,7 @@
                 </div>
                 <div class="preview-header-controls">
                     <span class="preview-info" id="previewInfo">0 rows · 0 columns</span>
+                    <span class="rate-mode-badge" id="rateModeBadgePreview" style="display:none;"></span>
                     <div class="preview-pagesize-container">
                         <label for="previewPageSize">Rows per page:</label>
                         <select id="previewPageSize">
