@@ -130,19 +130,19 @@ def get_column_usage(column_id: int):
 
 # ---------- TEMPLATES (with PIVOT table) ----------
 
-RATE_SOURCE_VALUES = ('imported', 'derived')
+RATE_SOURCE_VALUES = ('auto', 'imported', 'derived')
 # Rate is only ever imported-vs-derived for these templates (matched case-insensitively) --
 # Purchase Demand / Gate Pass never carry a rate_source.
 RATE_SOURCE_ELIGIBLE_TEMPLATES = {'purchase order', 'store receiving', 'vendor bill'}
 
 def resolve_rate_source(template_name: str, rate_source: str | None) -> str | None:
     """Only Purchase Order / Store Receiving / Vendor Bill templates carry a rate_source.
-    Eligible templates default to 'imported' (never silently start deriving Rate).
+    Eligible templates default to 'auto'.
     Any other template's rate_source is always stored as NULL."""
     if template_name.strip().lower() not in RATE_SOURCE_ELIGIBLE_TEMPLATES:
         return None
     if rate_source is None:
-        return 'imported'
+        return 'auto'
     if rate_source not in RATE_SOURCE_VALUES:
         raise HTTPException(400, f"rate_source must be one of {RATE_SOURCE_VALUES}")
     return rate_source

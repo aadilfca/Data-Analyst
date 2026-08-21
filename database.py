@@ -329,6 +329,19 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add rate_source column:", e)
         try:
+            cur = conn.execute(
+                """
+                UPDATE templates
+                SET rate_source = 'auto'
+                WHERE rate_source IS NULL
+                  AND LOWER(TRIM(template_name)) IN ('purchase order', 'store receiving', 'vendor bill')
+                """
+            )
+            if cur.rowcount > 0:
+                print(f"✅ Migrated {cur.rowcount} template(s) with NULL rate_source to 'auto'")
+        except Exception as e:
+            print("⚠️ Could not migrate templates.rate_source to 'auto':", e)
+        try:
             cur = conn.execute("PRAGMA table_info(templates)")
             columns = [row[1] for row in cur.fetchall()]
             if 'has_subtotals_by_default' not in columns:
