@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from datetime import datetime
-from database import execute_query
+from database import execute_query, estimate_client_data_size
 
 router = APIRouter()
 
@@ -38,6 +38,17 @@ def get_dashboard_stats():
         "total_records": total_records,
         "last_upload": last_upload
     }
+
+@router.get("/api/dashboard/db-size")
+def get_dashboard_db_size():
+    """
+    Database size visibility (Main Dashboard): estimated storage footprint
+    aggregated across every client's template data (client_data table only -
+    not error_log/app_settings/etc). See database.py's estimate_client_data_size()
+    for the estimation formula/caveats.
+    """
+    return estimate_client_data_size()
+
 
 @router.get("/api/health")
 def health_check():

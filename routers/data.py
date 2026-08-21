@@ -3,7 +3,7 @@
 # ==============================================
 
 from fastapi import APIRouter, HTTPException, Query
-from database import execute_query, execute_write, log_audit, log_data_audit, get_data_audit_history, diff_row_data
+from database import execute_query, execute_write, log_audit, log_data_audit, get_data_audit_history, diff_row_data, estimate_client_data_size
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
@@ -202,6 +202,22 @@ def get_datasets(client_id: int = Query(..., description="Client ID")):
             })
     
     return result
+
+@router.get("/api/data/db-size")
+def get_client_db_size(client_id: int = Query(..., description="Client ID")):
+    """
+    Database size visibility (Client Data module): estimated storage footprint
+    aggregated across all of this client's templates. See database.py's
+    estimate_client_data_size() for the estimation formula/caveats.
+    """
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    result = estimate_client_data_size(client_id=client_id)
+    result["client_id"] = client_id
+    return result
+
 
 # ==============================================
 # 📊 PREVIEW ROWS (Aggregated across multiple uploads)
@@ -854,6 +870,11 @@ def get_availability(
         # Filtered status: if filtered_row_count > 0, the filter matches some data
         filtered_status = "complete" if filtered["filtered_row_count"] > 0 else "missing"
         
+        # Database size visibility: per-template estimated storage footprint
+        # (unfiltered, all-time - same scope as total_row_count), reusing
+        # estimate_client_data_size() rather than a separate endpoint.
+        size_estimate = estimate_client_data_size(client_id=client_id, template_id=tid)
+
         result.append({
             "template_id": tid,
             "template_name": filtered["template_name"] if filtered["template_name"] != "Unknown" else total.get("template_name", f"Template {tid}"),
@@ -864,7 +885,9 @@ def get_availability(
             "date_max": total["date_max"],           # FULL date range (unfiltered)
             "filtered_sunday_count": filtered["filtered_sunday_count"],
             "status": status,                        # based on total data
-            "filtered_status": filtered_status       # based on filtered data
+            "filtered_status": filtered_status,      # based on filtered data
+            "estimated_size_bytes": size_estimate["total_bytes"],
+            "estimated_size_formatted": size_estimate["formatted"]
         })
 
     return result

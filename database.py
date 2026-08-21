@@ -113,6 +113,60 @@ def get_data_audit_history(client_data_id):
     )
 
 
+# Database size visibility (dashboard/per-client/per-template): this is a fixed
+# per-row byte allowance covering client_data's other columns (id, client_id,
+# template_id, upload_id, extract_amount, extract_date, created_at, created_by,
+# is_deleted, version, data_quality_flag) plus SQLite's own per-row overhead.
+# It is an ESTIMATE only, not exact disk usage.
+ROW_OVERHEAD_BYTES = 100
+
+
+def estimate_client_data_size(client_id: int = None, template_id: int = None) -> dict:
+    """
+    Estimate the storage footprint of client_data rows: SUM(LENGTH(row_data))
+    (the dominant, JSON-encoded contributor) + COUNT(*) * ROW_OVERHEAD_BYTES,
+    filtered to is_deleted = 0 (same convention as get_dashboard_stats()'s
+    total_records count). Optionally scoped to one client and/or one template
+    - omitting both aggregates across every client's template data.
+    Computed live on every call, no caching - deferred until/if it becomes a
+    performance issue with data growth (per the confirmed requirement).
+    """
+    where_clauses = ["is_deleted = 0"]
+    params = []
+    if client_id is not None:
+        where_clauses.append("client_id = ?")
+        params.append(client_id)
+    if template_id is not None:
+        where_clauses.append("template_id = ?")
+        params.append(template_id)
+    where_sql = " AND ".join(where_clauses)
+
+    result = execute_query(
+        f"SELECT COALESCE(SUM(LENGTH(row_data)), 0) as data_bytes, COUNT(*) as row_count "
+        f"FROM client_data WHERE {where_sql}",
+        params
+    )
+    data_bytes = result[0]["data_bytes"] if result else 0
+    row_count = result[0]["row_count"] if result else 0
+    total_bytes = data_bytes + (row_count * ROW_OVERHEAD_BYTES)
+
+    return {
+        "total_bytes": total_bytes,
+        "row_count": row_count,
+        "formatted": format_bytes(total_bytes)
+    }
+
+
+def format_bytes(n: int) -> str:
+    """Human-readable byte formatting (B/KB/MB/GB), 1 decimal place above B."""
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
 def diff_row_data(old_data, new_data):
     """
     Generic field-level diff between two row_data dicts (any template's
