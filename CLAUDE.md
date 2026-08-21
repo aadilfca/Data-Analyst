@@ -626,3 +626,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-21: Rate Source dropdown Phase C (Auto/Force Imported/Force Derived, 3-option UI, static/templates.html + static/templates.js) done.
 - 2026-08-21: Rate Source Phase D FINAL (pre-import visibility, routers/import_export.py + static/upload.html/.js) done.
 - 2026-08-21: Import write perf fix: single reused connection + executemany batching for import row/audit writes (database.py + routers/import_export.py).
+- 2026-08-21: Native Excel dates no longer mis-parsed against the text delimiter/order picker (confirmed fix, `routers/import_export.py` only).

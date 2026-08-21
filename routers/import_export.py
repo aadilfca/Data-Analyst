@@ -84,8 +84,24 @@ def excel_serial_to_datetime(value) -> datetime:
     return datetime(1899, 12, 30) + timedelta(days=value)
 
 
+class _NativeDateValue(datetime):
+    """
+    Passthrough for a genuine native Excel date cell (see json_safe_cell_value()'s
+    preserve_native_dates flag). Stringifies to the same '%d/%m/%Y' text the
+    non-preserving path would have produced -- via __str__, used by both
+    compare_transactions()'s diff (str(new_val or '')) and json.dumps(...,
+    default=str) at the storage call sites -- so change-detection and the stored
+    row_data JSON stay byte-identical to before. But because it IS a real datetime
+    instance, extract_columns_from_row()'s classify_date_cell() still resolves it
+    via the 'native' branch instead of misparsing it against the text-column
+    delimiter/order picker (which is only correct for genuinely text-based dates).
+    """
+    def __str__(self):
+        return self.strftime('%d/%m/%Y')
+
+
 # ---------- JSON-SAFE CELL COERCION (Phase 2 of the upload-reliability requirement) ----------
-def json_safe_cell_value(value, date_fmt: str = '%d/%m/%Y'):
+def json_safe_cell_value(value, date_fmt: str = '%d/%m/%Y', preserve_native_dates: bool = False):
     """
     Coerces a raw cell value (as read by pandas/openpyxl) into something safe to
     store in a row_data dict and pass straight to json.dumps(). Single source of
@@ -102,10 +118,20 @@ def json_safe_cell_value(value, date_fmt: str = '%d/%m/%Y'):
     isinstance(value, datetime) (datetime.time does not subclass datetime.datetime),
     so it was falling through untouched into a raw row_data dict and then blowing
     up the first time json.dumps() saw it, with no error handling around it.
+
+    preserve_native_dates=True returns a _NativeDateValue instead of stringifying
+    a native datetime/Timestamp -- opt in only where the resulting row_data later
+    reaches extract_columns_from_row(), so a real Excel date is extracted via its
+    own value instead of being needlessly re-parsed against the text delimiter/
+    order picker (see _NativeDateValue's docstring). Default False preserves
+    today's behavior for every other caller.
     """
     if pd.isna(value):
         return None
     if isinstance(value, datetime):
+        if preserve_native_dates:
+            return _NativeDateValue(value.year, value.month, value.day,
+                                     value.hour, value.minute, value.second, value.microsecond)
         return value.strftime(date_fmt)
     if isinstance(value, time):
         return value.strftime('%H:%M:%S')
@@ -276,7 +302,7 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
         row_data = {}
         for t_col_name, excel_col in col_mapping.items():
             if excel_col in raw_row:
-                row_data[t_col_name] = json_safe_cell_value(raw_row[excel_col])
+                row_data[t_col_name] = json_safe_cell_value(raw_row[excel_col], preserve_native_dates=True)
 
         # Rate derivation (Phase 7 of the Rate-derivation requirement) -- must run
         # here, at first assembly, so the diff below and the eventual insert/update
@@ -1332,8 +1358,8 @@ def _audit_row_params(client_data_id, action, old_data=None, new_data=None, user
         client_data_id,
         user,
         action,
-        json.dumps(old_data) if old_data else None,
-        json.dumps(new_data) if new_data else None,
+        json.dumps(old_data, default=str) if old_data else None,
+        json.dumps(new_data, default=str) if new_data else None,
     )
 
 
@@ -1582,7 +1608,7 @@ def validate_and_import(request: ImportRequest):
                 # extraction bug above was fixed.
                 amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
                 changed_client_data_params.append(
-                    (json.dumps(new_row_data), new_version, doc_group_id, data_quality_flag, rate_source, amount, date_str, cid)
+                    (json.dumps(new_row_data, default=str), new_version, doc_group_id, data_quality_flag, rate_source, amount, date_str, cid)
                 )
                 changed_audit_params.append(_audit_row_params(cid, "UPDATE", item["old_row_data"], new_row_data))
                 if item.get("verification_detail_id"):
@@ -1621,7 +1647,7 @@ def validate_and_import(request: ImportRequest):
                 data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
                 new_client_data_params.append(
                     (request.client_id, request.template_id, request.file_id,
-                     json.dumps(new_row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
+                     json.dumps(new_row_data, default=str), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
                 )
                 new_row_data_list.append(new_row_data)
                 inserted_count += 1
@@ -1671,7 +1697,7 @@ def validate_and_import(request: ImportRequest):
                 row_data = {}
                 for t_col_name, excel_col in col_mapping.items():
                     if excel_col in row:
-                        row_data[t_col_name] = json_safe_cell_value(row[excel_col])
+                        row_data[t_col_name] = json_safe_cell_value(row[excel_col], preserve_native_dates=True)
 
                 # Rate derivation (Phase 7 of the Rate-derivation requirement) -- see
                 # apply_rate_derivation()'s docstring for why this must happen right
@@ -1694,7 +1720,7 @@ def validate_and_import(request: ImportRequest):
 
                 first_upload_client_data_params.append(
                     (request.client_id, request.template_id, request.file_id,
-                     json.dumps(row_data), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
+                     json.dumps(row_data, default=str), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
                 )
                 first_upload_row_data_list.append(row_data)
                 inserted_count += 1
