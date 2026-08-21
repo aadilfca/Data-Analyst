@@ -220,6 +220,51 @@ def get_client_db_size(client_id: int = Query(..., description="Client ID")):
 
 
 # ==============================================
+# 📅 UPLOAD FREQUENCY (Overdue Uploads Phase C1)
+# ==============================================
+
+VALID_UPLOAD_FREQUENCIES = ("Daily", "Weekly", "Monthly")
+
+class UploadFrequencyUpdate(BaseModel):
+    client_id: int
+    template_id: int
+    frequency: str
+
+@router.put("/api/data/upload-frequency")
+def set_upload_frequency(payload: UploadFrequencyUpdate):
+    """
+    Set (or change) the expected upload frequency for a client+template pair.
+    Feeds the later Overdue Uploads detection (Phase D1) - this endpoint only
+    stores the setting. Absence of a row means Daily (see get_availability()'s
+    frequency_lookup), so this endpoint is only called when a user picks a
+    non-default value or explicitly changes an existing one.
+    """
+    if payload.frequency not in VALID_UPLOAD_FREQUENCIES:
+        raise HTTPException(400, f"frequency must be one of {VALID_UPLOAD_FREQUENCIES}")
+
+    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (payload.client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
+
+    template = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (payload.template_id,))
+    if not template:
+        raise HTTPException(404, "Template not found or inactive")
+
+    execute_write(
+        """
+        INSERT INTO client_template_upload_frequency (client_id, template_id, frequency, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(client_id, template_id) DO UPDATE SET
+            frequency = excluded.frequency,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (payload.client_id, payload.template_id, payload.frequency)
+    )
+
+    return {"client_id": payload.client_id, "template_id": payload.template_id, "frequency": payload.frequency}
+
+
+# ==============================================
 # 📊 PREVIEW ROWS (Aggregated across multiple uploads)
 # ==============================================
 
@@ -850,6 +895,16 @@ def get_availability(
             document_count_lookup[tid] = row["total_row_count"]
 
     # ------------------------------------------------------------
+    # 2c. Upload Frequency (Overdue Uploads Phase C1) - one batched query for
+    # every template this client has a saved frequency for; absent = Daily.
+    # ------------------------------------------------------------
+    frequency_rows = execute_query(
+        "SELECT template_id, frequency FROM client_template_upload_frequency WHERE client_id = ?",
+        (client_id,)
+    )
+    frequency_lookup = {r["template_id"]: r["frequency"] for r in frequency_rows}
+
+    # ------------------------------------------------------------
     # 3. Merge results
     # ------------------------------------------------------------
     result = []
@@ -887,7 +942,8 @@ def get_availability(
             "status": status,                        # based on total data
             "filtered_status": filtered_status,      # based on filtered data
             "estimated_size_bytes": size_estimate["total_bytes"],
-            "estimated_size_formatted": size_estimate["formatted"]
+            "estimated_size_formatted": size_estimate["formatted"],
+            "upload_frequency": frequency_lookup.get(tid, "Daily")
         })
 
     return result

@@ -1233,6 +1233,28 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_saved_column_mappings_client_template ON saved_column_mappings (client_id, template_id)")
         print("✅ Created saved_column_mappings table")
 
+        # ---------- UPLOAD FREQUENCY (Overdue Uploads Phase C1 of 4: schema) ----------
+        # How often a given client is expected to upload data for a given template
+        # (Daily/Weekly/Monthly) - feeds the later Overdue Uploads detection (Phase D1).
+        # Keyed by client_id+template_id (mirrors saved_column_mappings above), since
+        # different clients can have different frequencies for the same template. No row
+        # is created until a user explicitly sets a non-default value - absence of a row
+        # means Daily, resolved in application code (routers/data.py), not seeded here.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS client_template_upload_frequency (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                frequency TEXT NOT NULL DEFAULT 'Daily' CHECK (frequency IN ('Daily', 'Weekly', 'Monthly')),
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE,
+                UNIQUE(client_id, template_id)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_upload_frequency_client_template ON client_template_upload_frequency (client_id, template_id)")
+        print("✅ Created client_template_upload_frequency table")
+
         # ---------- AUDIT RULES MODULE (Phase 1 of 9: schema foundation) ----------
         # Three reusable entities assembled by reference (not duplicated per-category):
         # Documents, Cross-checks, and Categories. A Category is the thing a voucher will
