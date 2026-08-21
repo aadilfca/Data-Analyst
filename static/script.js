@@ -31,13 +31,16 @@ async function loadKpiStats() {
             const data = await res.json();
             document.getElementById('openQueries').textContent = data.open_queries ?? 0;
             document.getElementById('verificationProgress').textContent = `${data.verification_progress_pct ?? 0}%`;
+            document.getElementById('unresolvedErrors').textContent = data.unresolved_errors ?? 0;
         } else {
             document.getElementById('openQueries').textContent = '0';
             document.getElementById('verificationProgress').textContent = '0%';
+            document.getElementById('unresolvedErrors').textContent = '0';
         }
     } catch (error) {
         document.getElementById('openQueries').textContent = '⚠️';
         document.getElementById('verificationProgress').textContent = '⚠️';
+        document.getElementById('unresolvedErrors').textContent = '⚠️';
     }
 }
 

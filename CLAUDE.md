@@ -620,3 +620,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-21: Overdue Uploads Phase C2 (frontend, Frequency dropdown column, `static/databank.html` + `static/databank.js`) done.
 - 2026-08-21: Overdue Uploads Phase D1 (backend business-day detection, `routers/data.py` + `routers/dashboard.py`) done.
 - 2026-08-21: Overdue Uploads Phase D2 FINAL (frontend cards + drill-down, static/index.html/script.js + static/databank.html/js) done.
+- 2026-08-21: Restored "Unresolved Errors" as 6th Quick Overview card (frontend-only, static/index.html + static/script.js) done.
