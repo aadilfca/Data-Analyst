@@ -156,14 +156,6 @@ function showStatus(msg, type = 'info') {
     }, 5000);
 }
 
-function getSelectedClientId() {
-    return localStorage.getItem(STORAGE_KEY) || null;
-}
-
-function getSelectedClientName() {
-    return localStorage.getItem(STORAGE_NAME) || 'Unknown Client';
-}
-
 function formatDateForDisplay(dateStr) {
     if (!dateStr) return '—';
     try {
@@ -1062,7 +1054,7 @@ async function openPreview(templateId, templateName) {
 
     // Show modal
     previewModal.style.display = 'flex';
-    previewTitle.textContent = `📋 ${templateName} – Preview (${getSelectedClientName()})`;
+    previewTitle.textContent = `📋 ${templateName} – Preview (${getSelectedClientName() || 'Unknown Client'})`;
     sundayOnlyCheckbox.checked = false;
     searchInput.value = '';
     amountMin.value = '';

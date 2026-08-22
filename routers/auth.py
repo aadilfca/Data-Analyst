@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime, timedelta
 
 import bcrypt
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from database import execute_query, execute_write, log_error
@@ -20,6 +20,10 @@ SESSION_DURATION_HOURS = 10  # within the confirmed 8-12h window
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class SelectClientRequest(BaseModel):
+    client_id: int
 
 
 @router.post("/api/auth/login")
@@ -108,3 +112,46 @@ def get_current_user(request: Request):
         raise HTTPException(401, "Session expired")
 
     return session
+
+
+def _get_client_summary(client_id):
+    rows = execute_query(
+        "SELECT id, client_name, client_code FROM clients WHERE id = ?", (client_id,)
+    )
+    return rows[0] if rows else None
+
+
+@router.put("/api/auth/select-client")
+def select_client(payload: SelectClientRequest, session=Depends(get_current_user)):
+    client = _get_client_summary(payload.client_id)
+    if not client:
+        raise HTTPException(404, "Client not found")
+
+    execute_write(
+        "UPDATE sessions SET selected_client_id = ? WHERE token = ?",
+        (client["id"], session["token"]),
+    )
+
+    return {
+        "success": True,
+        "client_id": client["id"],
+        "client_name": client["client_name"],
+        "client_code": client["client_code"],
+    }
+
+
+@router.get("/api/auth/current-client")
+def current_client(session=Depends(get_current_user)):
+    client_id = session["selected_client_id"]
+    if not client_id:
+        return {"client_id": None, "client_name": None, "client_code": None}
+
+    client = _get_client_summary(client_id)
+    if not client:
+        return {"client_id": None, "client_name": None, "client_code": None}
+
+    return {
+        "client_id": client["id"],
+        "client_name": client["client_name"],
+        "client_code": client["client_code"],
+    }

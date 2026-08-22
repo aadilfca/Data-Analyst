@@ -3,14 +3,10 @@
 // ==============================================
 // Standalone page (no client_context.js/navbar — no client is selected yet), so this file
 // defines its own minimal fetch call rather than relying on client_context.js's global API_BASE.
-// Selection is written to localStorage under the same keys client_context.js already
-// reads/writes (selectedClientId/selectedClientName/selectedClientCode) so the dashboard and
-// every other client_context.js-driven page picks it up with no changes on their end. This is a
-// temporary client-side handoff — true session-backed selection is a later phase.
-
-const STORAGE_KEY = 'selectedClientId';
-const STORAGE_NAME = 'selectedClientName';
-const STORAGE_CODE = 'selectedClientCode';
+// Selection is session-backed: a card click PUTs to /api/auth/select-client, which writes
+// sessions.selected_client_id server-side. client_context.js reads it back on every page load
+// via GET /api/auth/current-client. Returning to this page never auto-selects the last-used
+// client — the user must click a card again each time.
 
 let allClients = [];
 
@@ -61,11 +57,20 @@ function renderClients(clients) {
     });
 }
 
-function selectClient(client) {
-    localStorage.setItem(STORAGE_KEY, client.id);
-    localStorage.setItem(STORAGE_NAME, client.client_name);
-    localStorage.setItem(STORAGE_CODE, client.client_code);
-    window.location.href = '/static/index.html';
+async function selectClient(client) {
+    try {
+        const res = await fetch('/api/auth/select-client', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: client.id }),
+        });
+        if (!res.ok) throw new Error('Failed to select client');
+        window.location.href = '/static/index.html';
+    } catch (err) {
+        clientCardGrid.innerHTML = '';
+        clientSelectEmpty.textContent = 'Could not select client. Please try again.';
+        clientSelectEmpty.style.display = 'block';
+    }
 }
 
 function filterClients(searchTerm) {

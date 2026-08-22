@@ -3,9 +3,29 @@
 // ==============================================
 
 const API_BASE = 'http://localhost:5000';
-const STORAGE_KEY = 'selectedClientId';
-const STORAGE_NAME = 'selectedClientName';
-const STORAGE_CODE = 'selectedClientCode';
+
+// Session-backed selected-client cache (replaces the old localStorage handoff). Populated once
+// per page load by loadSessionClient() (called from initClientContext() before anything renders
+// that depends on it) via GET /api/auth/current-client. Every getter below reads this in-memory
+// object rather than localStorage, keeping the existing synchronous getter interface every
+// dependent page already relies on.
+let sessionClientCache = { id: null, name: null, code: null };
+
+async function loadSessionClient() {
+    try {
+        const res = await fetch(API_BASE + '/api/auth/current-client');
+        if (!res.ok) throw new Error('Failed to load session client');
+        const data = await res.json();
+        sessionClientCache = {
+            id: data.client_id || null,
+            name: data.client_name || null,
+            code: data.client_code || null,
+        };
+    } catch (error) {
+        console.warn('⚠️ Failed to load session client:', error.message);
+        sessionClientCache = { id: null, name: null, code: null };
+    }
+}
 
 // ---------- GLOBAL QUICK-NAVIGATION MANIFEST ----------
 // Hand-maintained tree describing every navigable destination, grouped exactly like the
@@ -164,14 +184,14 @@ async function loadClientDropdown() {
             select.appendChild(opt);
         });
 
-        // Restore selection from localStorage
-        const savedId = localStorage.getItem(STORAGE_KEY);
+        // Restore selection from the session-backed cache (loaded before this runs)
+        const savedId = sessionClientCache.id;
         if (savedId && clientList.some(c => c.id == savedId)) {
             select.value = savedId;
         } else if (currentVal && clientList.some(c => c.id == currentVal)) {
             select.value = currentVal;
         }
-        updateSelectedClient();
+        await updateSelectedClient();
     } catch (error) {
         console.error('⚠️ Error loading clients:', error.message);
         select.innerHTML = '<option value="">⚠️ Failed to load clients</option>';
@@ -179,22 +199,32 @@ async function loadClientDropdown() {
 }
 
 // ---------- UPDATE SELECTED CLIENT (from dropdown) ----------
-function updateSelectedClient() {
+async function updateSelectedClient() {
     const select = getClientSelect();
     if (!select) return;
     const id = select.value || null;
     selectedClientId = id;
     if (id) {
         const client = clientList.find(c => c.id == id);
-        localStorage.setItem(STORAGE_KEY, id);
-        if (client) {
-            localStorage.setItem(STORAGE_NAME, client.client_name);
-            localStorage.setItem(STORAGE_CODE, client.client_code);
+        try {
+            const res = await fetch(API_BASE + '/api/auth/select-client', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ client_id: Number(id) }),
+            });
+            if (!res.ok) throw new Error('Failed to select client');
+            sessionClientCache = {
+                id,
+                name: client ? client.client_name : null,
+                code: client ? client.client_code : null,
+            };
+        } catch (error) {
+            console.error('⚠️ Failed to select client:', error.message);
         }
     } else {
-        localStorage.removeItem(STORAGE_KEY);
-        localStorage.removeItem(STORAGE_NAME);
-        localStorage.removeItem(STORAGE_CODE);
+        // No "unselect" endpoint exists (not requested by this phase) — just reflect the
+        // cleared dropdown locally; the session's own selected_client_id is left as-is.
+        sessionClientCache = { id: null, name: null, code: null };
     }
     updateClientDependentUI();
     // If we are on a non-dashboard page, update the client name in the navbar
@@ -220,17 +250,17 @@ function updateClientDependentUI() {
     }
 }
 
-// ---------- GETTERS (using localStorage for non-dashboard pages) ----------
+// ---------- GETTERS (session-backed via sessionClientCache, see loadSessionClient() above) ----------
 function getSelectedClientId() {
-    return localStorage.getItem(STORAGE_KEY) || null;
+    return sessionClientCache.id;
 }
 
 function getSelectedClientName() {
-    return localStorage.getItem(STORAGE_NAME) || null;
+    return sessionClientCache.name;
 }
 
 function getSelectedClientCode() {
-    return localStorage.getItem(STORAGE_CODE) || null;
+    return sessionClientCache.code;
 }
 
 function isClientSelected() {
@@ -1039,7 +1069,7 @@ function goToDashboard() {
 }
 
 // ---------- INIT ----------
-function initClientContext() {
+async function initClientContext() {
     // Data-attribute source for the Area label (mirrors getUpTarget()'s data-nav-parent read) -
     // lets a self-contained page declare its module name via <body data-nav-module="..."> instead
     // of needing its own setNavModule() call. Read before the first render so it's correct on
@@ -1053,6 +1083,10 @@ function initClientContext() {
     // consumePendingNavRestore()/pushCurrentPageToHistory() above).
     consumePendingNavRestore();
     pushCurrentPageToHistory();
+    // Populate the session-backed client cache before anything renders that depends on it
+    // (the client badge/dropdown). Every page's own init runs from window.onload, well after
+    // DOMContentLoaded, so this has ample time to resolve first.
+    await loadSessionClient();
     renderClientControl();
     renderNavLeft();
 }
