@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, RedirectResponse
 from database import init_db, log_error, get_error_code_for_exception, execute_query
-from routers import dashboard, verification, import_export, templates, clients, data, error_log, settings, audit_rules, trial_balance, auth
+from routers import dashboard, verification, import_export, templates, clients, data, error_log, settings, audit_rules, trial_balance, auth, users
 from routers.auth import get_current_user
 from datetime import datetime
 import traceback
@@ -48,6 +48,7 @@ app.include_router(settings.router)
 app.include_router(audit_rules.router)
 app.include_router(trial_balance.router)
 app.include_router(auth.router)
+app.include_router(users.router)
 
 # ---------- GLOBAL EXCEPTION HANDLER ----------
 from fastapi import Request, status
