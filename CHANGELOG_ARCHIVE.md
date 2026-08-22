@@ -1490,3 +1490,73 @@ Reuse the already-logged-in page. Also confirmed again: this console is cp1252 a
 in `print()` — encode to ASCII with `errors="replace"` when echoing page text back.
 
 ---
+
+## Client Settings Card on the Dashboard
+
+**Date:** 2026-08-22 | **Files:** `static/index.html`, `static/script.js`, `static/client_context.js`,
+plus a `client_context.js?v=8` cache-bust bump on the other 15 pages that load it.
+Phase 2 of a 3-phase requirement (Phase 1: admin tab-strip stabilisation, already landed; Phase 3:
+`client_settings.html`'s own Up/Back navigation, not started).
+
+**Why:** the only route into `client_settings.html` (per-client voucher prefix config) was the ⚙️
+cogwheel on `clients.html`, which now sits behind the firm-level Admin area. Someone already working
+inside a client's workspace had no direct way there. This adds a second, contextual entry point on
+the dashboard. The `clients.html` cogwheel is untouched.
+
+**The constraint that shaped the design:** `client_settings.js`'s `loadClientSettings()` reads
+`?client_id=N` straight off the URL and hard-errors ("No client_id was provided in the page URL")
+without one. So the card could not be a static link — the id has to be resolved from the session at
+click time. `client_settings.html` itself was not modified.
+
+**What was built:**
+
+1. **`getClientSettingsUrl()`** (`client_context.js`, next to the other client getters, exported on
+   `window`) — the single source of truth for "where does Client Settings go?", shared by the
+   dashboard card and the nav manifest so the rule lives in exactly one place. Returns
+   `/static/client_settings.html?client_id=<id>` when a client is selected, `/static/client_select.html`
+   (the picker) when none is — the confirmed choice over dimming the card or alerting. Deliberately
+   synchronous: every caller resolves it on a real click/render, long after `loadSessionClient()` has
+   populated the cache, so there is no `clientContextReady` race here; the null branch means an early
+   read degrades to the picker rather than to a broken page.
+
+2. **The card** (`index.html`) — `#clientSettingsCard`, second in the Administration group between
+   Setup and Audit Log, reusing `.module-card.admin-card` as-is (quieter styling, no status badge).
+   **No `style.css` change was needed**, so no stylesheet `?v=` bump was involved.
+
+3. **Function-valued destinations.** `MODULE_CARD_DESTINATIONS` (`script.js`) now accepts either a
+   URL string or a function returning one; the existing listener loop resolves it at click time.
+   `NAV_MANIFEST` got the same treatment via a new shared `resolveNavItemUrl(item)` helper, called at
+   the two places an `href` is built from an item — `renderNavMenuPanel()`'s `renderItem()` and
+   `renderNavSearchResults()`'s ready-row branch. Both run on demand (dropdown open / keystroke), well
+   after the session cache is populated, so the resolved href is always current. Every existing string
+   `url` passes through untouched.
+
+4. **NAV_MANIFEST entry** — "Client Settings" under Administration, `module: 'Client Settings'`, with
+   `keywords: ['voucher prefix', 'prefixes', 'cash payment', 'bank receipt', 'client config']`. It is
+   client-scoped, not firm-level, so it sits in every logged-in user's Administration group alongside
+   Setup rather than behind the Admin gear.
+
+**Pre-existing bug found and fixed while verifying:** `flattenNavManifest()` carried `keywords`
+through for **children only** — the top-level push omitted the field entirely. Until now no top-level
+item had declared any, so nothing had ever surfaced it. Live proof: searching "prefix" returned zero
+matches even though the entry declared that keyword, while "Client Settings" (a label match) worked.
+Fixed by adding `keywords: item.keywords || []` to the top-level push, symmetric with the child push
+and inert for every item that declares none.
+
+**Verified live** (Playwright, headless Chromium against the running dev server on :5000, logged in
+as `admin`, client "ACME" selected):
+1. Card renders in the Administration group, no status badge, correct label/description.
+2. `getClientSettingsUrl()` evaluated in-page → `/static/client_settings.html?client_id=1`.
+3. ⊞ dropdown's "Client Settings" href → same resolved URL, not a bare `client_settings.html`.
+4. Nav search "prefix" → matched via keywords **after** the flatten fix (empty before it).
+5. Card click → landed on `client_settings.html?client_id=1`, heading read "Voucher prefix
+   configuration for ACME", prefixes loaded.
+6. `performance.getEntriesByType('resource')` on a fresh dashboard load confirmed
+   `client_context.js?v=8` and `script.js?v=3` were actually fetched, not stale cached copies.
+7. Backend suite: 4 passed. `node --check` clean on both changed JS files.
+
+**Testing note (again):** this console is cp1252 and throws `UnicodeEncodeError` on emoji in
+`print()` — `PYTHONIOENCODING=utf-8` on the Playwright invocation is the fix used here, an
+alternative to the `errors="replace"` encode noted in the previous entry.
+
+---

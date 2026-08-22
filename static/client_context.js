@@ -156,6 +156,15 @@ const NAV_MANIFEST = [
                     { label: 'App Settings', url: '/static/settings.html', state: 'ready' },
                 ]
             },
+            // Client-scoped, not firm-level: this is the selected client's own voucher-prefix
+            // config, so it sits in every user's Administration group alongside Setup rather than
+            // behind the Admin gear. `url` is a function, not a string, because the target needs a
+            // ?client_id= resolved from the session at render time — see resolveNavItemUrl() below.
+            {
+                label: 'Client Settings', url: () => getClientSettingsUrl(), state: 'ready',
+                module: 'Client Settings',
+                keywords: ['voucher prefix', 'prefixes', 'cash payment', 'bank receipt', 'client config'],
+            },
             {
                 label: 'Audit Rules', url: '/static/audit_rules.html', state: 'ready', module: 'Audit Rules',
                 children: [
@@ -191,16 +200,31 @@ const NAV_MANIFEST = [
 ];
 
 /**
+ * A manifest item's `url` may be either a plain string (the usual case) or a function returning one,
+ * for a destination that can only be resolved at render time — currently just Client Settings, whose
+ * target needs the session's ?client_id=. Called at both places an href is built from an item
+ * (renderNavMenuPanel() and renderNavSearchResults()), so a function-valued url is resolved in
+ * exactly one place per surface. Every existing string url passes through untouched.
+ */
+function resolveNavItemUrl(item) {
+    return typeof item.url === 'function' ? item.url() : item.url;
+}
+
+/**
  * Flatten NAV_MANIFEST into a single ordered array for search filtering. Pure data
  * transform (no DOM) — recomputed fresh on every keystroke since the manifest is tiny.
  * Each entry carries groupTitle/isChild so renderNavSearchResults() can re-group matches
  * in the manifest's own order without a second, drift-prone copy of the group structure.
+ * `keywords` is carried through for top-level items as well as children — until Client Settings
+ * only children ever declared any, so a top-level item's keywords were silently dropped here and
+ * the entry stayed findable by label alone. Harmless for every item that declares none (empty
+ * array, matches nothing extra).
  */
 function flattenNavManifest() {
     const flat = [];
     NAV_MANIFEST.forEach(group => {
         group.items.forEach(item => {
-            flat.push({ label: item.label, url: item.url, state: item.state, groupTitle: group.title, isChild: false });
+            flat.push({ label: item.label, url: item.url, state: item.state, groupTitle: group.title, isChild: false, keywords: item.keywords || [] });
             (item.children || []).forEach(child => {
                 flat.push({ label: child.label, url: child.url, state: child.state, groupTitle: group.title, isChild: true, keywords: child.keywords || [] });
             });
@@ -245,6 +269,27 @@ function getSelectedClientName() {
 function getSelectedClientCode() {
     return sessionClientCache.code;
 }
+
+/**
+ * Single source of truth for "where does Client Settings go?", shared by the dashboard's
+ * #clientSettingsCard (script.js) and this file's own NAV_MANIFEST entry.
+ *
+ * client_settings.js's loadClientSettings() reads ?client_id=N straight off the URL and hard-errors
+ * without one, so this page can never be reached by a static link from a client-scoped page — the id
+ * has to come from the session at click time. With no client selected we send the user to the picker
+ * rather than to a page that would only show "No client_id was provided".
+ *
+ * Deliberately synchronous: every caller resolves this on a real click/render, long after
+ * loadSessionClient() has populated the cache, so there's no clientContextReady race to await here —
+ * and if one somehow read it early, the null branch degrades to the picker rather than breaking.
+ */
+function getClientSettingsUrl() {
+    const clientId = getSelectedClientId();
+    return clientId
+        ? '/static/client_settings.html?client_id=' + clientId
+        : '/static/client_select.html';
+}
+window.getClientSettingsUrl = getClientSettingsUrl;
 
 function isClientSelected() {
     return !!getSelectedClientId();
@@ -804,7 +849,7 @@ function renderNavMenuPanel() {
 
         let html;
         if (item.state === 'ready') {
-            html = `<a href="${item.url}" role="menuitem" class="${classes}">${item.label}</a>`;
+            html = `<a href="${resolveNavItemUrl(item)}" role="menuitem" class="${classes}">${item.label}</a>`;
         } else {
             html = `<span role="menuitem" aria-disabled="true" class="${classes}">${item.label}</span>`;
         }
@@ -1071,7 +1116,7 @@ function renderNavSearchResults(query) {
                 if (entry.state === 'ready') {
                     const id = 'navSearchOpt-' + optionIndex;
                     optionIndex += 1;
-                    return `<a href="${entry.url}" role="option" id="${id}" class="${classes}">${entry.label}</a>`;
+                    return `<a href="${resolveNavItemUrl(entry)}" role="option" id="${id}" class="${classes}">${entry.label}</a>`;
                 }
                 return `<span role="option" aria-disabled="true" class="${classes}">${entry.label}</span>`;
             }).join('');

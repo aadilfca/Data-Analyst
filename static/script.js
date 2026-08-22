@@ -121,17 +121,21 @@ async function loadDbSize() {
 // Verification deliberately has no ?type= param — the verification hub itself is the
 // Cash-vs-Bank chooser. "Coming Soon" cards are inert by design: no entry in this map,
 // no listener at all.
+// A destination may be a plain URL string or a function returning one, for a card whose target can
+// only be resolved at click time — Client Settings needs the session's ?client_id= appended, so it
+// delegates to getClientSettingsUrl() (client_context.js), the same helper NAV_MANIFEST uses.
 const MODULE_CARD_DESTINATIONS = {
     verificationCard: '/static/verification.html',
     uploadCard: '/static/upload.html',
     dataBankCard: '/static/databank.html',
     trialBalanceCard: '/static/trial_balance.html',
     setupCard: '/static/setup.html',
-    auditRulesCard: '/static/audit_rules.html'
+    auditRulesCard: '/static/audit_rules.html',
+    clientSettingsCard: () => getClientSettingsUrl()
 };
 Object.entries(MODULE_CARD_DESTINATIONS).forEach(([cardId, destination]) => {
     document.getElementById(cardId).addEventListener('click', function() {
-        window.location.href = destination;
+        window.location.href = typeof destination === 'function' ? destination() : destination;
     });
 });
 
