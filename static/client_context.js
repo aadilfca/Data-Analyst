@@ -623,6 +623,37 @@ function renderNavUser() {
     `;
 }
 
+// ---------- RENDER FIRM-LEVEL NAVBAR (settings/users/clients) ----------
+// The Admin pages are firm-level, not client-scoped, so the shared header above is actively wrong
+// on them: it renders a "Client: None selected" pill, a 🏢 dashboard icon, the ⊞ quick-nav dropdown
+// and the search field — every one of which is a route back into a client's workspace these pages
+// have nothing to do with. This renders a deliberately minimal replacement instead: firm identity
+// and a way out, nothing else.
+// Kept here rather than hardcoded into the three HTML pages on purpose. Per-page navbar markup has
+// already drifted apart once in this app (the "Welcome, Admin" vs "Welcome, Analyst" split across
+// 15 pages that NAV_USER_LABEL was introduced to end) — one renderer can't drift.
+// Deliberately ABSENT, do not "restore" any of these: the client pill, the 🏢 home icon, the Back
+// and Up arrows, the ⊞ dropdown (initNavMenu) and the search field (initNavSearch).
+// The brand text links to client_select.html — firm-level, and the Admin area's own sanctioned
+// entry point (its gear icon) — so it is a way back that never enters client territory. Logout
+// reuses the existing .nav-logout-btn class, so the document-level delegated listener at the bottom
+// of this file already handles its click; no listener is bound here.
+function renderFirmLevelNav() {
+    const container = document.getElementById('firmNav');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="firm-nav-left">
+            <a href="/static/client_select.html" class="firm-nav-brand" title="Back to client selection">System Analyst</a>
+            <span class="firm-nav-area">AREA: Administration</span>
+        </div>
+        <div class="firm-nav-right">
+            <span class="nav-user-name">${NAV_USER_LABEL}</span>
+            <button type="button" class="nav-logout-btn" title="Log out" aria-label="Log out">🚪</button>
+        </div>
+    `;
+}
+
 // ---------- QUICK NAVIGATION MENU (⊞ icon + dropdown) ----------
 // Re-initialised on every renderNavLeft() call since the toggle/panel are rebuilt via
 // innerHTML each time (mirrors how renderClientControl() re-binds clientSelectElement
@@ -1139,7 +1170,13 @@ async function initClientContext() {
     // page's own history entry, so the restored entry isn't duplicated (see
     // consumePendingNavRestore()/pushCurrentPageToHistory() above).
     consumePendingNavRestore();
-    pushCurrentPageToHistory();
+    // Firm-level Admin pages stay out of the Back history stack entirely. They are reached only via
+    // client_select.html's gear icon, never as part of a client's workflow, so letting them onto the
+    // stack would make an Admin page the Back destination of a client-scoped page later in the
+    // session - exactly the cross-territory jump this whole change removes.
+    if (!isFirmLevelPage()) {
+        pushCurrentPageToHistory();
+    }
     // Populate the session-backed client cache before anything renders that depends on it
     // (the client badge/dropdown). This is a real network fetch, and window.onload waiting on
     // subresources says nothing about an in-flight fetch() — on a light page onload fires first.
@@ -1154,13 +1191,21 @@ async function initClientContext() {
         // navigating away, so any page script awaiting it should never wake back up here.
         return;
     }
-    renderClientControl();
-    renderNavLeft();
-    // Renders no session-dependent data, so its position relative to loadSessionClient() doesn't
-    // matter — kept with the other two so clientContextReady keeps meaning "the whole navbar is
-    // ready". Not called from setNavModule()/setNavStats(), which re-render only the client
-    // control; this content is static for the life of the page.
-    renderNavUser();
+    // Firm-level Admin pages get their own independent header instead of the client-scoped one -
+    // see renderFirmLevelNav() above for what it deliberately leaves out and why. Everything before
+    // this point (the pending-restore consume, loadSessionClient() and its 401 early-return) is
+    // shared by both branches, so the session guard behaves identically either way.
+    if (isFirmLevelPage()) {
+        renderFirmLevelNav();
+    } else {
+        renderClientControl();
+        renderNavLeft();
+        // Renders no session-dependent data, so its position relative to loadSessionClient() doesn't
+        // matter — kept with the other two so clientContextReady keeps meaning "the whole navbar is
+        // ready". Not called from setNavModule()/setNavStats(), which re-render only the client
+        // control; this content is static for the life of the page.
+        renderNavUser();
+    }
     // Resolved only once the client cache is populated AND the navbar is rendered, so a page
     // awaiting this gets both.
     resolveClientContextReady();

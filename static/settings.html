@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>App Settings</title>
-    <link rel="stylesheet" href="/static/style.css?v=9">
+    <link rel="stylesheet" href="/static/style.css?v=10">
     <style>
         .settings-group {
             background: white;
@@ -149,22 +149,21 @@
     </style>
 </head>
 
-<body data-nav-module="App Settings" data-nav-parent="setup.html">
-    <!-- Navbar -->
-    <nav class="navbar">
-        <div class="nav-container">
-            <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
-            <div id="navLeft"></div>
-            <div class="nav-client" id="clientControl">
-                <!-- Will be rendered by client_context.js -->
-            </div>
-            <div class="nav-user"></div>
+<body data-nav-module="App Settings">
+    <!-- Firm-level navbar. This page is not client-scoped, so it deliberately does NOT use the
+         shared client header (#navLeft/#clientControl/.nav-user) every client-scoped page carries -
+         no client pill, no 🏢 dashboard icon, no ⊞ quick-nav, no search, no back/up arrows. The
+         single #firmNav container below is filled by renderFirmLevelNav() in client_context.js.
+         data-nav-parent is deliberately absent: the Up arrow no longer renders here, and its old
+         value (setup.html) pointed into client territory. -->
+    <nav class="navbar firm-navbar">
+        <div class="nav-container" id="firmNav">
+            <!-- Will be rendered by client_context.js -->
         </div>
     </nav>
 
     <div class="main-container">
         <header class="module-header">
-            <a href="/static/setup.html" class="back-link">← Back to Setup</a>
             <h1>⚙️ Settings</h1>
             <p>Configure global settings and manage firm-level administration</p>
         </header>
@@ -207,7 +206,7 @@
         </div>
     </div>
 
-    <script src="/static/client_context.js?v=5"></script>
+    <script src="/static/client_context.js?v=6"></script>
     <script src="/static/settings.js"></script>
 </body>
 

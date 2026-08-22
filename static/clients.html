@@ -5,26 +5,25 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manage Clients</title>
-    <link rel="stylesheet" href="/static/style.css?v=9">
+    <link rel="stylesheet" href="/static/style.css?v=10">
 </head>
 
-<body data-nav-module="Manage Clients" data-nav-parent="index.html">
-    <!-- Top Navigation Bar -->
-    <nav class="navbar">
-        <div class="nav-container">
-            <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
-            <div id="navLeft"></div>
-            <div class="nav-client" id="clientControl">
-                <!-- Will be rendered by client_context.js -->
-            </div>
-            <div class="nav-user"></div>
+<body data-nav-module="Manage Clients">
+    <!-- Firm-level navbar. This page is not client-scoped, so it deliberately does NOT use the
+         shared client header (#navLeft/#clientControl/.nav-user) every client-scoped page carries -
+         no client pill, no 🏢 dashboard icon, no ⊞ quick-nav, no search, no back/up arrows. The
+         single #firmNav container below is filled by renderFirmLevelNav() in client_context.js.
+         data-nav-parent is deliberately absent: the Up arrow no longer renders here, and its old
+         value (index.html) pointed into client territory. -->
+    <nav class="navbar firm-navbar">
+        <div class="nav-container" id="firmNav">
+            <!-- Will be rendered by client_context.js -->
         </div>
     </nav>
 
     <!-- Main Content -->
     <div class="main-container">
         <header class="module-header">
-            <a href="/static/setup.html" class="back-link">← Back to Setup</a>
             <h1>🏢 Manage Clients</h1>
             <p>Add, edit, or delete client entities (companies/organisations)</p>
         </header>
@@ -144,8 +143,8 @@
         <div id="modalStatus" style="margin-top:10px; padding:8px; display:none; border-radius:4px;"></div>
     </div>
 
-    <script src="/static/client_context.js?v=5"></script>
-    <script src="/static/clients.js?v=2"></script>
+    <script src="/static/client_context.js?v=6"></script>
+    <script src="/static/clients.js?v=3"></script>
 </body>
 
 </html>

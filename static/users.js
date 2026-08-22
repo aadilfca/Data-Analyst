@@ -93,7 +93,10 @@ async function loadUsers() {
             showStatus('⛔ Admin access required. Redirecting...', 'error');
             usersBody.innerHTML = '';
             noUsersMsg.style.display = 'none';
-            setTimeout(() => { window.location.href = '/static/index.html'; }, 2000);
+            // Bounces to the client picker, not index.html. This is a firm-level page reached from
+            // client_select.html, so a non-admin who lands here has no client selected - dropping
+            // them on the client-scoped dashboard was a dead end into client territory.
+            setTimeout(() => { window.location.href = '/static/client_select.html'; }, 2000);
             return;
         }
         if (!res.ok) throw new Error('Failed to fetch users');

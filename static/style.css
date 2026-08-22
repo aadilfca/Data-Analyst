@@ -224,6 +224,62 @@ body {
     transform: none;
 }
 
+/* ---------- FIRM-LEVEL NAVBAR (settings.html / users.html / clients.html) ----------
+   The Admin pages' own header, rendered by renderFirmLevelNav() in client_context.js into their
+   single #firmNav container. Not a variant of the client-scoped navbar above — it shares only the
+   .navbar bar itself and .nav-logout-btn, and deliberately has no client pill, home icon, nav
+   arrows, quick-nav dropdown or search field, since every one of those leads into client territory.
+   Colours are taken from the existing navbar palette (#e0f2fe for the area label, matching
+   .nav-area) rather than introducing new one-off values, so the two headers read as one app. */
+.firm-navbar .nav-container {
+    justify-content: space-between;
+}
+
+.firm-nav-left,
+.firm-nav-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+/* Anchor, not a plain span: it is the Admin area's non-destructive way out (back to the client
+   picker), so link chrome is reset here to keep it looking like the brand text it replaces on the
+   client-scoped navbar. */
+.firm-nav-brand {
+    font-weight: 700;
+    font-size: 24px;
+    letter-spacing: 1px;
+    color: white;
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.firm-nav-brand:hover {
+    color: #e0f2fe;
+}
+
+.firm-nav-brand:focus-visible {
+    outline: 2px solid #4fc3f7;
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+.firm-nav-area {
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.3px;
+    color: #e0f2fe;
+    white-space: nowrap;
+}
+
+/* .nav-user-name carries no rules of its own — on the client-scoped navbar it inherits font-size/
+   colour from its .nav-user parent, which this header doesn't use. Restated here (same values) so
+   the greeting doesn't silently fall back to the bar's plain white. */
+.firm-nav-right .nav-user-name {
+    font-size: 14px;
+    color: #b0bec5;
+}
+
 /* ---------- GLOBAL QUICK-NAVIGATION MENU (⊞ icon + dropdown, Phase 1) ----------
    Reads from NAV_MANIFEST in client_context.js. Sits immediately right of the
    "System Analyst" brand text on every page. #navLeft needs position:relative so the

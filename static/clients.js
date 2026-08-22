@@ -457,18 +457,21 @@ document.addEventListener('keydown', function(e) {
 // client_select.js needs it for every logged-in user, not just admins - so it can't
 // double as the 403-probe. Reuses GET /api/users instead, the same de facto
 // "am I admin" endpoint settings.js's checkAdminAndShowTabs() already relies on.
+// Both failure paths bounce to the client picker, not index.html: this is a firm-level page
+// reached from client_select.html, so a non-admin who lands here has no client selected -
+// dropping them on the client-scoped dashboard was a dead end into client territory.
 async function checkAdminAccess() {
     try {
         const res = await fetch(API_BASE + '/api/users');
         if (res.status === 403) {
             showStatus('⛔ Admin access required. Redirecting...', 'error');
-            setTimeout(() => { window.location.href = '/static/index.html'; }, 2000);
+            setTimeout(() => { window.location.href = '/static/client_select.html'; }, 2000);
             return false;
         }
         return true;
     } catch (error) {
         showStatus('⛔ Admin access required. Redirecting...', 'error');
-        setTimeout(() => { window.location.href = '/static/index.html'; }, 2000);
+        setTimeout(() => { window.location.href = '/static/client_select.html'; }, 2000);
         return false;
     }
 }

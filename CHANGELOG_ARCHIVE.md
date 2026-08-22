@@ -1304,3 +1304,92 @@ stale content would otherwise look identical. Backend suite: 4 passed, unaffecte
 
 ---
 
+## Firm-Level Header for the Admin Pages (confirmed fix, 2026-08-22)
+
+**Problem.** `settings.html`, `users.html` and `clients.html` are firm-level pages (already exempted
+from client selection by Admin area Phase 6's `isFirmLevelPage()`), but they still inherited the
+shared *client-scoped* header rendered by `client_context.js`. That header showed a "Client: None
+selected" pill, a 🏢 dashboard icon, the ⊞ quick-nav dropdown and the search field — all routes back
+into a client workspace these pages have nothing to do with. On top of that, `settings.html` and
+`clients.html` carried a stray "← Back to Setup" link and `users.html` a "← Back to Dashboard" link,
+each a dead-end into client territory. Net effect: a confusing flow with a permanently empty client
+pill and links that led nowhere useful.
+
+**Decision on mechanism.** The header is defined once inside `client_context.js` and selected by the
+existing `isFirmLevelPage()`/`FIRM_LEVEL_PAGES` list, rather than hardcoded into the three HTML
+pages. Per-page navbar markup has already drifted apart once in this app — the "Welcome, Admin" vs
+"Welcome, Analyst" split across 15 pages that `NAV_USER_LABEL` was introduced to end — and one
+renderer cannot drift. Keeping `client_context.js` loaded on all three also means the 401 session
+guard, `API_BASE` and `logoutUser()` are reused as-is with no duplication, unlike `client_select.js`,
+which had to grow its own `guardSession()` because it is a genuinely pre-session page.
+
+### Phase 1 — Foundation (`static/client_context.js`, `static/style.css`)
+
+- New `renderFirmLevelNav()` renders into a single `#firmNav` container: brand text, an
+  "AREA: Administration" label, the `NAV_USER_LABEL` greeting, and Logout.
+- **Deliberately absent, do not restore:** the client pill (`.nav-client-display`), the 🏢 home icon,
+  the Back and Up arrows, the ⊞ dropdown (`initNavMenu`) and the search field (`initNavSearch`).
+- The brand text is an anchor to `client_select.html` — firm-level, and the Admin area's own
+  sanctioned entry point (its gear icon) — so it is a non-destructive way out that never enters
+  client territory. Confirmed with the user after the brief was found to leave `clients.html` and
+  `users.html` with Logout as their only exit.
+- Logout reuses the existing `.nav-logout-btn` class, so the document-level delegated listener at the
+  bottom of the file already handles the click; no new listener was bound.
+- `initClientContext()` branches on `isFirmLevelPage()` *after* `loadSessionClient()` and its 401
+  early-return, so session-expiry handling is identical on both paths.
+- `pushCurrentPageToHistory()` is now skipped for firm-level pages, so an Admin page can never become
+  the Back-arrow destination of a client-scoped page later in the session.
+- `style.css` gained `.firm-navbar`/`.firm-nav-brand`/`.firm-nav-area`, reusing the existing dark
+  navbar palette rather than new one-off colours. `.nav-user-name` had no rules of its own — on the
+  client-scoped navbar it inherits font-size/colour from its `.nav-user` parent, which this header
+  does not use — so those two values are restated under `.firm-nav-right .nav-user-name`.
+
+### Phase 2 — The three Admin pages
+
+- Each page's `<nav>` now holds a single `#firmNav` container carrying a `firm-navbar` class, in
+  place of the `#navLeft`/`#clientControl`/`.nav-user` trio.
+- The `back-link` anchors were deleted, and the now-dead `data-nav-parent` attributes removed (the
+  Up arrow no longer renders, and both values pointed into client territory).
+- **Prediction that proved wrong:** the plan stated the three page scripts would need no changes. A
+  grep for remaining navigation targets found that `users.js`'s and `clients.js`'s "Admin access
+  required" 403 handlers redirected a non-admin to `index.html` — the *client* dashboard, and a page
+  they have no selected client for. Both now redirect to `client_select.html`. Lesson: the "no links
+  into client-scoped pages" rule has to be checked against JS `location.href` assignments, not just
+  HTML `href` attributes.
+- **Deliberately left alone:** `clients.js`'s ⚙️ cogwheel still links to `client_settings.html`, a
+  client-scoped page. Confirmed with the user: `client_settings.html` keeps its client-scoped header,
+  because a separate later piece of work will reach it from inside the client dashboard instead. The
+  cogwheel is removed then, once its replacement exists — not as part of this fix.
+- Also left alone per the brief: `setup.html`'s "App Settings" card still links to `settings.html`.
+
+### Phase 3 — Cache-bust bumps
+
+`style.css?v=9` → `?v=10` on all **18** pages that load it; `client_context.js?v=5` → `?v=6` on all
+**16** pages that load it; plus `clients.js?v=2`→`v=3` and `users.js?v=1`→`v=2` (both changed in
+Phase 2). `settings.js` was not changed and carries no version string, so it was left as-is.
+
+**Count correction:** CLAUDE.md's prose said "17 pages"/"15 pages" for these two figures. A grep
+shows the real counts are 18 and 16 — `login.html`/`client_select.html` load `style.css` but not
+`client_context.js`. The prose has been corrected. Re-check these with a grep, never from prose.
+
+### Verification (Playwright against the already-running dev server on port 5000)
+
+- On all three pages: `.nav-client-display`, `.nav-home-icon`, `#navMenuToggle`, `#navSearchInput`,
+  `.nav-back-arrow`, `.nav-up-arrow`, `.back-link`, `#navLeft` and `#clientControl` all absent;
+  `#firmNav`, `.firm-nav-brand`, `.firm-nav-area`, `.nav-logout-btn` all present. Navbar computed
+  background `rgb(26, 26, 46)`, proving `style.css?v=10` actually reached the browser.
+- Regression: `setup.html` (client-scoped) still renders the full client header, with no `#firmNav`.
+- Back-stack: visiting `users.html` left `navHistoryStack` unchanged at the `setup.html` entry.
+- Logout from `settings.html` → `login.html`; brand link from `clients.html` → `client_select.html`;
+  `settings.html` with no session → `login.html` (session guard intact).
+- With a client actually selected, the firm header still shows no client text.
+- Backend suite: 4 passed.
+
+**Testing note for future sessions:** the first behavioural run reported two apparent failures
+(logout not navigating, client selection not taking) that were both artifacts of
+`wait_for_load_state("networkidle")` returning before a *JS-initiated* navigation began. Use
+`page.wait_for_url(...)` when the navigation comes from `window.location.href`, not networkidle.
+Also set `PYTHONIOENCODING=utf-8` when printing page text — this environment's cp1252 console throws
+on emoji, the same quirk that breaks `python main.py` from a bash tool here.
+
+---
