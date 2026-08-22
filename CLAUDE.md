@@ -161,434 +161,88 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 
 
 ## Status log
-<!--
-RULE: one line per phase. Date + phase name + outcome only.
-No verification steps, no test output, no exploratory detail.
-Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
--->
-- 2026-07-09: main.py NameError fixed.
-- 2026-07-09: clients module reviewed, no issues.
-- 2026-07-12: Phase 3 done.
-- 2026-07-12: Phase 4 done.
-- 2026-07-13: Upload redesign Phase 1.
-- 2026-07-13: Upload flush-layout fix + Phase 2 done.
-- 2026-07-13: Upload navbar-gap fix + Phase 3 done.
-- 2026-07-13: Verification card redesign Phase 1 (Layout Skeleton) done.
-- 2026-07-13: Verification card redesign Phase 2 (Segment 2 Tab Shell) done.
-- 2026-07-13: Verification card redesign Phase 4 (AUDIT Tab Frontend) done.
-- 2026-07-13: Verification card redesign Phase 5 (DFD Tab Shell) done.
-- 2026-07-13: Verification card redesign Phase 8 (Voucher ID change-alert icon + popover) done.
-- 2026-07-13: transaction-details-table header row added.
-- 2026-07-13: Verification card redesign Phase 6 (Segment 3 card redesign, final phase) done.
-- 2026-07-13: Verification card redesign Phase 7 (Amount Cell Validation Signal) done.
-- 2026-07-14: Verification voucher/line grouping Phase 1 of 4 (backend) done.
-- 2026-07-14: Verification voucher/line grouping Phase 2 of 4 (frontend voucher header + navigation) done.
-- 2026-07-14: Verification voucher/line grouping Phase 3 of 4 (collapsed/expand line rows) done.
-- 2026-07-14: Verification voucher/line grouping Phase 4 of 4 (final) done.
-- 2026-07-14: Verification cleanup.
-- 2026-07-14: Verification module header redesign Phase 1 (static/verification.js, static/style.css).
-- 2026-07-14: Verification Phase 2.
-- 2026-07-14: Verification Phase 3 (flat theme-matched styling) done.
-- 2026-07-14: Phase 4 (expanded row: type dropdown + 2 popup buttons) done.
-- 2026-07-14: Code review of Cline's Phases 1-4 header/voucher redesign found real gaps (DFD dropped, Observations/Comments deleted not relocated).
-- 2026-07-14: Removed the per-line Particulars/Value table (`buildParticularsValueTable()`).
-- 2026-07-14: Voucher header + line-row redesign to match an approved Claude-prototype mockup.
-- 2026-07-14: Amount column simplified per user correction.
-- 2026-07-15: Removed the "⚠️ Select a transaction type first." toast.
-- 2026-07-15: Removed the manual "Save Progress" button (`#saveBtn`, static/verification.js) after confirming it was redundant.
-- 2026-07-15: Voucher panel capped to 50% width via new `.voucher-panel` wrapper, per a Claude-prototype mockup.
-- 2026-07-15: Six-part voucher table polish pass — panel 50%→60%, nav row regrouped, full "All Borders" grid styling.
-- 2026-07-15: Toolbar/voucher-row split + table fixes (static/verification.html, static/verification.js, static/style.css).
-- 2026-07-15: Audited all 19 `showStatus()` call sites, removed 2 pure navigation-noise ones per user request.
-- 2026-07-15: Reverted the toolbar/voucher-row split from the previous phase, per direct feedback.
-- 2026-07-15: Two quick follow-up corrections to the above, same session.
-- 2026-07-15: Beautified `.cashbook-bar` and added session stats to its left side.
-- 2026-07-15: Dropped the internal grid border between the Status and chevron columns (static/style.css).
-- 2026-07-15: Follow-up fix, same session.
-- 2026-07-15: Transaction Type promoted from the expanded panel into its own "Type" column in the summary row (static/verification.js).
-- 2026-07-15: Two quick follow-ups to the Type column, same session.
-- 2026-07-15: Removed the "Session exited. Returning to cashbook." toast from `exitSession()` (static/verification.js).
-- 2026-07-15: Added a small 📋 Audit Guidance icon to the right of the Account Name line in each voucher line's summary row (static/verification.js).
-- 2026-07-15: Moved the Audit Guidance trigger to two small pill "chips" below the Type dropdown, matching an approved prototype image.
-- 2026-07-15: Removed the voucher line table's expand/collapse entirely (chevron column, click-to-expand row, detail panel).
-- 2026-07-15: Supporting column now lists the 5 procedure names as bold plain-text links instead of one chip opening a card-picker popup.
-- 2026-07-15: Added an "Observations" column between Supporting and Status (static/verification.js).
-- 2026-07-15: Voucher table columns made user-resizable and widened per direct request.
-- 2026-07-15: Fixed a visual regression from the above.
-- 2026-07-15: Default column widths adjusted per direct request.
-- 2026-07-15: Added an Excel-style "Width: N px" tooltip that follows the cursor while dragging a column resize handle.
-- 2026-07-15: Voucher table column-header polish.
-- 2026-07-15: Mirror-icon transaction-list popover (`#transactionListPopover`) restructured Phase A of 2.
-- 2026-07-15: Re-reviewed the mirror-icon popover restructuring against a separately-numbered "Phase 2" brief (grouping/Date/subtotals/header).
-- 2026-07-15: Mirror-icon transaction-list popover Phase 3 (final phase) done.
-- 2026-07-15: Voucher Prev/Next navigation Phase A of 5 (backend) done.
-- 2026-07-15: Voucher Prev/Next navigation Phase B of 5 (frontend, main card multi-line rendering) done.
-- 2026-07-15: Voucher line click-to-lock/dim focus Phase C of 5 done.
-- 2026-07-15: Voucher Prev/Next navigation Phase D of 5 done.
-- 2026-07-15: Voucher Prev/Next navigation Phase E of 5 (final) done.
-- 2026-07-16: Template module quick-add-column Phase 1 of 4 (backend) done.
-- 2026-07-16: Template module quick-add-column Phase 2 of 4 (frontend trigger + close-match hint) done.
-- 2026-07-16: Template module quick-add-column Phase 3 of 4 (wire quick-add modal into template creation flow) done.
-- 2026-07-16: Template module quick-add-column Phase 4 of 4 (final.
-- 2026-07-16: Per-client voucher pattern storage Phase 1 of 7 (database.py only) done.
-- 2026-07-16: Per-client voucher pattern storage Phase 3 of 7 (Clients page cogwheel entry point, static/clients.js) done.
-- 2026-07-16: Per-client voucher pattern storage Phase 4 of 7 (new Client Settings page, static/client_settings.html/.js) done.
-- 2026-07-16: Per-client voucher pattern storage Phase 5 of 7 (Client Settings page.
-- 2026-07-16: Per-client voucher pattern storage Phase 6 of 7 (verification logic.
-- 2026-07-16: Per-client voucher pattern storage Phase 2 of 7 (backend CRUD API, database.py + routers/clients.py) done.
-- 2026-07-16: Per-client voucher pattern storage Phase 7 of 7 (final.
-- 2026-07-16: Flexible date-import format Phase 1 of 5 (backend parsing core, routers/import_export.py only) done.
-- 2026-07-16: Flexible date-import format Phase 2 of 5 (distinguish native Excel dates from text-string dates, routers/import_export.py only) done.
-- 2026-07-16: Flexible date-import format Phase 3 of 5 (frontend two-step date-format dropdown UI, static/upload.html + static/upload.js only) done.
-- 2026-07-16: Flexible date-import format Phase 4 of 5 (wire frontend selection into validate/import, static/upload.js + import_export.py) done.
-- 2026-07-16: Flexible date-import format Phase 5 of 5 (final.
-- 2026-07-16: Row-exclusion Phase 1 of 4 (backend, routers/import_export.py only) done.
-- 2026-07-17: Row-exclusion Phase 2 of 4 (frontend row-selection grid, static/upload.html + static/upload.js only) done.
-- 2026-07-17: Row-exclusion Phase 3 of 4 (auto-flag heuristic + live counter + Select All/Deselect All, static/upload.html/.js) done.
-- 2026-07-17: Row-exclusion Phase 4 of 4 (final.
-- 2026-07-17: Upload header reorg Phase 1 of 4 (step indicator strip, static/upload.html only) done.
-- 2026-07-17: Upload header reorg Phase 2 of 4 (regroup Template/Sheet/Download Template + progressive disclosure, static/upload.html/.js) done.
-- 2026-07-17: Upload header reorg Phase 3 of 4 (collapse Date Delimiter/Order into a popover, static/upload.html/.js) done.
-- 2026-07-17: Upload header reorg Phase 4 of 4 (final.
-- 2026-07-17: Mini Preview removed entirely (static/upload.html + static/upload.js only).
-- 2026-07-17: Global navbar standardisation Phase 1 of 6 (core JS/CSS foundation, static/client_context.js + static/style.css only) done.
-- 2026-07-17: Global navbar standardisation Phase 2 of 6 (rollout batch A.
-- 2026-07-17: Global navbar standardisation Phase 3 of 6 (rollout batch B.
-- 2026-07-17: Global navbar standardisation Phase 4 of 6 (rollout batch C.
-- 2026-07-17: Global navbar standardisation Phase 5 of 6 (rollout batch D.
-- 2026-07-17: Global navbar standardisation Phase 6 of 6, FINAL (static/verification.js only) done.
-- 2026-07-17: Upload page "Upload File" button Phase 1 of 2 (static/upload.html + static/upload.js) done.
-- 2026-07-17: Upload page "Upload File" button Phase 2 of 2 (final.
-- 2026-07-17: "Go to Data Bank" button moved onto the step-indicator row (static/upload.html only).
-- 2026-07-17: Upload page three-fix batch: removed button emoji; fixed Column Mapping panel empty-state; added sessionStorage auto-restore.
-- 2026-07-17: Upload page session-restore follow-up.
-- 2026-07-17: "Go to Data Bank" now opens in a new browser tab (static/upload.js only).
-- 2026-07-17: Upload page top-bar rearrangement into two borderless rows (static/upload.html + static/upload.js) done.
-- 2026-07-17: Three quick follow-ups to the top-bar rearrangement — restored `.top-bar`'s boxed container styling per direct request.
-- 2026-07-18: Verification back-arrow bug fix (static/client_context.js + static/verification.js) done.
-- 2026-07-18: Verification back-arrow follow-up (static/verification.html + static/verification.js) done.
-- 2026-07-18: Cashbook discovery bug fix, expanded to a 5-way voucher-prefix category scheme (database.py, clients.py/verification.py, client_settings.*).
-- 2026-07-18: Bank Verification project, Phases 1-4 re-confirmed already live (database.py, clients.py, client_settings.*, verification.py).
-- 2026-07-18: Bank Verification project, Phase 7 (dashboard entry points, static/index.html + static/script.js) done.
-- 2026-07-18: Bank Verification project, Phase 8 (final.
-- 2026-07-18: Bank Verification project, final regression pass done.
-- 2026-07-18: Verification hub Phase 1 of 3 (static/verification.html + static/verification.js + static/style.css) done.
-- 2026-07-18: Verification hub Phase 2 of 3.
-- 2026-07-19: Cashbook Preview selector Phase 1 of 3 (static/verification.html + static/verification.js) done.
-- 2026-07-19: Cashbook Preview selector Phase 2 of 3 (static/verification.js only.
-- 2026-07-18: Verification hub Phase 3 of 3, FINAL (static/index.html + static/script.js, no style.css change needed) done.
-- 2026-07-19: Global quick-navigation menu Phase 1 of 3 (static/client_context.js + static/style.css) done.
-- 2026-07-19: Global quick-navigation menu Phase 2 of 3 (static/client_context.js + static/style.css) done.
-- 2026-07-19: Global quick-navigation menu Phase 3 of 3, FINAL (static/verification.js + static/client_context.js) done.
-- 2026-07-19: Global quick-navigation menu.
-- 2026-07-19: Global quick-navigation menu.
-- 2026-07-19: Global quick-navigation menu.
-- 2026-07-20: Audit Rules module Phase 1 of 2 (dashboard card, static/index.html only) done.
-- 2026-07-20: Audit Rules module Phase 2 of 2, FINAL (static/clients.js only) done.
-- 2026-07-19: Global navbar search.
-- 2026-07-20: Audit Rules module.
-- 2026-07-20: Audit Rules module Phase 2 of 9 (Documents CRUD API.
-- 2026-07-20: Audit Rules module Phase 3 of 9 (Cross-checks CRUD API.
-- 2026-07-20: Audit Rules module Phase 4 of 9, FINAL entity CRUD (Categories CRUD API.
-- 2026-07-20: Audit Rules module Phase 5 of 9 (frontend shell, new `static/audit_rules.html` + `static/audit_rules.js` + a new scoped section in `static/style.css`) done.
-- 2026-07-20: Audit Rules module Phase 6 of 9 (Cross-checks view, `static/audit_rules.html` + `static/audit_rules.js` + additive CSS in `static/style.css`) done.
-- 2026-07-20: Audit Rules module Phase 7 of 9, final entity view (Categories, `static/audit_rules.html` + `static/audit_rules.js`, `static/style.css` needed no changes.
-- 2026-07-20: Audit Rules module Phase 8 of 9.
-- 2026-07-20: Audit Rules module Phase 8 of 9, revised (dashboard entry point, `static/index.html` + `static/script.js`) done.
-- 2026-07-20: Audit Rules entry-point correction (`static/setup.html` + `static/setup.js` + `static/clients.js`) done.
-- 2026-07-20: Audit Rules 📐 icon reverted back to inert (`static/clients.js` only), same session.
-- 2026-07-20: Audit Rules module Phase 9 of 9, FINAL (`database.py`, `routers/audit_rules.py`, `routers/verification.py`, `static/audit_rules.html`/`.js`, `static/verification.js`) done.
-- 2026-07-20: Save Column Mapping feature (new, confirmed 3-phase requirement). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-21: Data Bank date-range filter Phase B1 of 2 (backend query support, `routers/data.py` only) done.
-- 2026-07-21: Data Bank date-range filter Phase B2 of 2, FINAL (popover UI, `static/databank.html` + `static/databank.js` only, no backend changes) done.
-- 2026-07-21: **Unified date range for Data Bank preview.
-- 2026-07-21: Unified date range for Data Bank preview, Phase 2 of 2, FINAL (`static/databank.html` + `static/databank.js` only) done.
-- 2026-07-21: **Client Data Bank unified redesign.
-- 2026-07-21: Client Data Bank unified redesign Phase 2 of 6 (Template picker: chips + search, `static/databank.html` + `static/databank.js` only, no backend changes) done.
-- 2026-07-21: Client Data Bank unified redesign Phase 3 of 6 (Calendar & legend restyle, `static/databank.html` + `static/databank.js` only, no backend changes) done.
-- 2026-07-21: Client Data Bank unified redesign Phase 4 of 6 (Missing-dates report as a callout, `static/databank.html` only, no JS/backend changes) done.
-- 2026-07-21: Client Data Bank unified redesign Phase 5 of 6 ("Your datasets" table, `static/databank.html` + `static/databank.js`, no backend changes) done.
-- 2026-07-21: Client Data Bank unified redesign Phase 6 of 6, FINAL (`static/databank.html` + `static/databank.js`, no backend changes) done.
-- 2026-07-21: Data Bank page header cleanup (`static/databank.html` only, no JS/backend changes).
-- 2026-07-21: Data Bank Coverage Calendar text cleanup (`static/databank.html` only, no JS/backend changes).
-- 2026-07-21: Data Bank export 422 fix (`static/databank.js` only, no HTML/backend changes).
-- 2026-07-21: **Coverage Calendar → per-template popover fix** (`static/databank.html` + `static/databank.js`, no backend changes) done.
-- 2026-07-21: **Data Bank 3-fix batch** (`static/databank.html` + `static/databank.js`, no backend changes) done.
-- 2026-07-22: **Data Bank Status column removal** (`static/databank.html` + `static/databank.js`, no backend changes) done.
-- 2026-07-22: **Data Bank "Total Rows" → "No of Documents" fix** (`routers/data.py` + `static/databank.html` + `static/databank.js`) done.
-- 2026-07-22: **Data Bank preview grouping follow-up** (`static/databank.js` only) done.
-- 2026-07-22: **Data Bank preview document grouping + subtotal rows** (`routers/data.py` + `static/databank.js` + `static/databank.html`) done.
-- 2026-07-22: **Trial Balance module.
-- 2026-07-22: **Trial Balance module Phase 2 of 5 (parsing & classification engine, new `routers/trial_balance.py`, `main.py` two-line mount, `requirements.txt`)** done.
-- 2026-07-22: **Trial Balance module Phase 3 of 5 (store + retrieve classified accounts, `routers/trial_balance.py` only)** done.
-- 2026-07-22: **Trial Balance module Phase 4 of 5 (Upload UI, new `static/trial_balance.html` + `static/trial_balance.js`)** done.
-- 2026-07-22: **Trial Balance module Phase 5 of 5, FINAL (review screen + dashboard link.
-- 2026-07-22: **Trial Balance.
-- 2026-07-22: **Trial Balance.
-- 2026-07-22: **Trial Balance mapping fields expanded 4→8 (confirmed fix.
-- 2026-07-22: **Trial Balance.
-- 2026-07-23: **Trial Balance.
-- 2026-07-23: **Trial Balance.
-- 2026-07-23: **Trial Balance.
-- 2026-07-23: **Trial Balance upload page cleanup.
-- 2026-07-23: **Trial Balance.
-- 2026-07-23: **Trial Balance.
-- 2026-07-23: **Trial Balance.
-- 2026-07-23: Trial Balance — Assign Categories, Section 2, Phase 4 of 5 (backend: latest-TB lookup + cascade assignment endpoint, `routers/trial_balance.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-23: Trial Balance — Assign Categories, Section 2, Phase 5 of 5, FINAL (frontend, `static/audit_rules.html` + `static/audit_rules.js` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-23: **Delete Trial Balance upload (confirmed fix, `routers/trial_balance.py` + `static/trial_balance.html` + `static/trial_balance.js`)** done.
-- 2026-07-23: **Assign Categories.
-- 2026-07-23: **Verification ↔ Assign Categories link (new, confirmed 5-phase requirement).
-- 2026-07-23: **Verification ↔ Assign Categories link, Phase 5 of 5, FINAL (Assign Categories deep-link target, `static/audit_rules.js` + `static/style.css` only.
-- 2026-07-23: **Verification ↔ Assign Categories link, Phase 4 of 5 (frontend.
-- 2026-07-23: **Verification ↔ Assign Categories link, Phase 3 of 5 (backend read lookup, `routers/verification.py` only)** done.
-- 2026-07-23: **Verification ↔ Assign Categories link, Phase 2 of 5 (backend write path + carry-forward on upload, `routers/trial_balance.py` only)** done.
-- 2026-07-23: **Verification page hard-refresh view persistence (confirmed fix, `static/verification.js` + `static/verification.html`)** done.
-- 2026-07-23: **Verification hard-refresh session restore.
-- 2026-07-23: **Assign Categories deep-link highlight doesn't reapply on a repeat visit.
-- 2026-07-23: **Verification hard-refresh restores wrong voucher.
-- 2026-07-23: **Verification back-arrow return-to-Cashbook renders blank.
-- 2026-07-24: **Verification Client Data Links.
-- 2026-07-24: **Verification Client Data Links, Phase 2 of 5 (template viewer page shell, new `static/template-viewer.html` + `static/template-viewer.js`)** done.
-- 2026-07-24: **Verification Client Data Links, Phase 3 of 5 (per-template config + data fetch, `static/template-viewer.html` + `static/template-viewer.js` only, no backend changes)** done.
-- 2026-07-24: **Verification Client Data Links, Phase 4 of 5 (search across all columns, `static/template-viewer.js` only, no HTML/backend changes)** done.
-- 2026-07-24: **Client Data Links card strip made dynamic (confirmed fix, `static/verification.html` + `static/verification.js`)** done.
-- 2026-07-24: **Template Viewer Vendor Bill greyed-out-fields fix (confirmed fix, `static/template-viewer.js` only)** done.
-- 2026-07-24: **Voucher Supporting-Document Linking.
-- 2026-07-24: **Voucher Supporting-Document Linking Phase 2 of 6 (search filter on Data Bank preview, `routers/data.py` + `routers/verification.py`)** done.
-- 2026-07-24: **Voucher Supporting-Document Linking Phase 3 of 6 (tabbed modal shell, `static/verification.html` + `static/verification.js` + `static/style.css`)** done.
-- 2026-07-24: **Voucher Supporting-Document Linking Phase 4 of 6 (search, select, selected-lines table, `static/verification.js` + `static/verification.html` + `static/style.css`)** done.
-- 2026-07-24: **Voucher Supporting-Document Linking Phase 5 of 6 (audit procedures checklist, `database.py` + `routers/verification.py` + `static/verification.js` + `static/verification.html` + `static/style.css`)** done.
-- 2026-07-24: **Voucher Supporting-Document Linking Phase 6 of 6, FINAL (observation flow: capture, sync, roll-up.
-- 2026-07-24: **Unassign supporting document lines (new, confirmed single-phase requirement.
-- 2026-07-25: **`#procedureModal` widened + made resizable (confirmed fix, `static/style.css` only)** done.
-- 2026-07-25: **Voucher Supporting-Document Linking follow-up (new, confirmed 3-phase requirement).
-- 2026-07-25: **Voucher Supporting-Document Linking follow-up, Phase 2 of 3 (Search dropdown shows assigned matches, greyed).
-- 2026-07-25: **Voucher Supporting-Document Linking follow-up, Phase 3 of 3, FINAL (Status filter + count badge, `static/verification.js` + `static/verification.html` + `static/style.css`)** done.
-- 2026-07-25: **Voucher list popover search filter (confirmed fix, `static/verification.html` + `static/verification.js` + `static/style.css`)** done.
-- 2026-07-25: **Browse-Status vs Linked-Evidence disagreement fix (confirmed fix, `routers/verification.py` + `routers/data.py` + `static/verification.js` + `static/style.css`)** done.
-- 2026-07-25: **Voucher Supporting-Document Linking follow-up (new, confirmed 4-phase requirement).
-- 2026-07-25: **Browse-Status vs Linked-Evidence disagreement fix.
-- 2026-07-25: **Voucher Supporting-Document Linking follow-up, Phase 2 of 4 (Browse label shows voucher no. + line Sr no., `routers/verification.py` + `routers/data.py` + `static/verification.js`)** done.
-- 2026-07-25: **Voucher Supporting-Document Linking follow-up, Phase 3 of 4 (diagnose and fix the real Browse/Linked Evidence sync bug, `routers/verification.py` + `routers/data.py` + `static/verification.js`)** done.
-- 2026-07-25: **Voucher Supporting-Document Linking follow-up, Phase 4 of 4, FINAL (confirmatory tick shortcut, `static/verification.js` + `static/style.css`, no backend/HTML changes)** done.
-- 2026-07-25: **Observation sync doesn't roll up across orphaned sessions (confirmed fix, `routers/verification.py` only)** done.
-- 2026-07-25: **Observation roll-up doesn't fire until an unrelated later action (confirmed fix, `routers/verification.py` only)** done.
-- 2026-07-25: **Wire up the OBSERVATIONS column + suppress duplicate roll-up blocks (confirmed fix, `database.py` + `routers/verification.py` + `static/verification.js`)** done.
-- 2026-07-25: **Observation roll-up should replace-per-procedure, not append-forever (confirmed fix, `routers/verification.py` only)** done.
-- 2026-07-21: Upload reliability & blank-field handling Phase 2 of 4 (stop the `/api/upload/validate` 500, `routers/import_export.py` only) done.
-- 2026-07-21: Error Log `/stats` route-order fix (`routers/error_log.py` only, not part of the 4-phase Upload requirement.
-- 2026-07-21: Upload reliability & blank-field handling Phase 3 of 4 (inline editing for blank cells in the Row Selection grid, `static/upload.html` + `static/upload.js` only) done.
-- 2026-07-21: Upload reliability & blank-field handling Phase 4 of 4, FINAL (wire edited blank-cell values into validate/import, `static/upload.js` + `routers/import_export.py`) done.
-- 2026-07-21: Row-level blank-field rejection requirement Phase 1 of 4 (`static/upload.html` + `static/upload.js`) done.
-- 2026-07-21: Row-level blank-field rejection requirement Phase 2 of 4 (`routers/import_export.py` only) done.
-- 2026-07-21: Row-level blank-field rejection requirement Phase 3 of 4 (`static/upload.html` + `static/upload.js` only, no backend changes) done.
-- 2026-07-21: Row-level blank-field rejection requirement Phase 4 of 4, FINAL (`static/upload.js`, `routers/import_export.py`, `database.py`) done.
-- 2026-07-21: Save Column Mapping Phase A2 of 3 (frontend save action + auto-apply on load, `static/upload.html` + `static/upload.js` only) done.
-- 2026-07-21: Save Column Mapping Phase A3 of 3, FINAL (clear a saved mapping, `routers/import_export.py` + `static/upload.html` + `static/upload.js`) done.
-- 2026-07-21: Row-level blank-field rejection requirement Phase 5 of 5, FINAL (Data Bank surfacing.
-- 2026-07-21: Client Data Availability & Coverage Redesign Phase 1 of 6 (Holiday list backend, `database.py` + `routers/settings.py`) done.
-- 2026-07-21: Client Data Availability & Coverage Redesign Phase 2 of 6 (Holiday calendar management UI, `static/settings.html` + `static/settings.js`) done.
-- 2026-07-21: Client Data Availability & Coverage Redesign Phase 3 of 6 (Availability calendar backend, `routers/data.py` only) done.
-- 2026-07-21: Client Data Availability & Coverage Redesign Phase 4 of 6 (Template multi-select + coverage calendar UI, `static/databank.html` + `static/databank.js`) done.
-- 2026-07-21: Client Data Availability & Coverage Redesign Phase 5 of 6 (Missing-dates report, `static/databank.html` + `static/databank.js`) done.
-- 2026-07-25: **Linked Evidence totals row (confirmed fix, `static/verification.js` + `static/style.css` only)** done.
-- 2026-07-21: Client Data Availability & Coverage Redesign Phase 6 of 6, FINAL (Preview popup shell restyle, `static/databank.html` only) done.
-- 2026-07-25: Supporting-column no-template Documents unlocked, 3 phases (`static/verification.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-27: Read-only investigation of the Verification module's actual current behavior (page-view swapping, Prev/Next navigation scope, `#procedureModal` tab-vs. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-27: Supporting Documents modal redesign (new, confirmed 6-phase requirement) — Phase 1 of 6 (left-side document rail replacing top tabs, `static/verification.html` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-27: Supporting Documents modal redesign, Phase 2 of 6 (three-segment visual styling, `static/verification.js` + `static/style.css` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-27: Supporting Documents modal redesign, Phase 3 of 6 (remove Save button; route observation persistence through the Next/Back save chokepoint, `static/verification.js`.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-27: Supporting Documents modal redesign, Phase 4 of 6 (Description column in the Linked Evidence table, `static/verification.js` only, no backend changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-27: Supporting Documents modal redesign, Phase 5 of 6 (confirm/fix live role fetch from Audit Rules, `static/verification.js` only, no backend changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-27: Supporting Documents modal redesign, Phase 6 of 6, FINAL (Audit Risk + required-procedures indicator on the main voucher table, `database.py` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-27: Linked Evidence table dynamic columns (confirmed fix, `static/verification.js` only, no backend/CSS changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-28: "🗑️ Deleted" badge firing on every voucher line (confirmed fix, 2-phase) — Phase 1 (diagnosis, no code changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-28: Verification UI fix set, Phase 3 (Type→Account Type rename, remove Learning column, relocate chips/risk dot, `static/verification.js` + `static/style.css` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-28: **Verification UI fix set, Phase 4 (Procedures/Observations column expand/collapse toggle, `static/verification.js` + `static/style.css` only, no backend changes)** done.
-- 2026-07-28: `#procedureModal` segment colour fill extended to whole card (confirmed fix, `static/style.css` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-28: Copy button for procedure-tab observations (confirmed fix, `static/verification.js` + `static/style.css` only, no backend changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-28: Observation flow: auto-sync on clear + Restore (↺) icon (confirmed fix, 2-part, `routers/verification.py` + `static/verification.js` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-28: System Observations button (confirmed fix, `static/verification.js` + `static/style.css` only, no backend changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Observation box auto-fill → opt-in "💡 Suggest" button (confirmed fix, `static/verification.js` + `static/style.css` only, no backend changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Transaction level approval (new, confirmed 4-phase requirement) — Phase 1 of 4 (schema, `database.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Transaction level approval, Phase 2 of 4 (backend CRUD endpoint, `routers/audit_rules.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Transaction level approval, Phase 3 of 4 (Audit Rules frontend checkbox, `static/audit_rules.html` + `static/audit_rules.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Transaction level approval, Phase 4 of 4, FINAL (`routers/audit_rules.py` + `static/verification.js`). Full detail: CHANGELOG_ARCHIVE.md.
 
-- 2026-07-28: Validation Rules module (new, confirmed 7-phase requirement) — Phase 1 of 7 (schema, `database.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-28: Validation Rules module, Phase 2 of 7 (Audit Rules backend, `routers/audit_rules.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-28: Validation Rules module, Phase 3 of 7 (Audit Rules frontend, `static/audit_rules.html` + `static/audit_rules.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-28: Validation Rules module, Phase 1 addendum (voucher-level approval schema, `database.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-28: Validation Rules module, Phase 4 of 7 (Verification backend status engine, `routers/verification.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Validation Rules module, Phase 5 of 7 (Verification frontend status + signature UI, `routers/verification.py` + `static/verification.js` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Validation Rules module, Phase 6 of 7 (Account Head recommendation backend, `routers/verification.py` + `requirements.txt`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Validation Rules module, Phase 7 of 7, FINAL (Account Head recommendation frontend, `static/verification.js` + `static/style.css` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Account Head Recommendation reposition + search-select + no-match note (confirmed fix, `routers/verification.py` + `static/verification.js` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Hide Sig. Exc. checkbox + Transaction Level Approval checkbox from UI (confirmed fix, `static/verification.js` + `static/audit_rules.html` + `static/audit_rules.js`.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Move Voucher Approval to persistent header + tick icons — paused mid-planning, no functional change landed.. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Generic Voucher-Level Checks (new, confirmed 6-phase requirement) — Phase 1 of 6 (schema, `database.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Generic Voucher-Level Checks, Phase 2 of 6 (Audit Rules backend CRUD, `routers/audit_rules.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Generic Voucher-Level Checks, Phase 3 of 6 (Audit Rules frontend, `static/audit_rules.html` + `static/audit_rules.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Generic Voucher-Level Checks, Phase 4 of 6 (Verification backend, `routers/verification.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Generic Voucher-Level Checks, Phase 5 of 6 (Verification frontend bar + gate cutover, `routers/verification.py` + `static/verification.js` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-29: Generic Voucher-Level Checks, Phase 6 of 6, FINAL (styling, `static/style.css` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-30: Voucher-level Checks simplified to name-only (new, confirmed 4-phase requirement) — Phase 1 of 4 (Audit Rules side, `routers/audit_rules.py` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-30: Voucher-level Checks simplified to name-only, Phase 2 of 4 (Verification backend: 3-state check model + Verify & Next/Close sync, `database.py` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-30: Voucher-level Checks simplified to name-only, Phase 3 of 4 (Verification frontend procedure window redesign, `static/verification.js` + `static/verification.html` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-30: Verification bundled Fix Mode (2 confirmed fixes) — Account Type mismatch + Status column overlap (`routers/verification.py` + `static/style.css` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-30: Voucher-level checks not persisting on reopen (confirmed fix, `static/verification.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-30: **Supporting Documents modal: hide empty segments (confirmed fix, `static/verification.js` + `static/style.css` only)** done.
-- 2026-07-31: Automated cross-document validation engine (new, confirmed 10-phase requirement) — Phase 1 of 10 (schema foundation, `database.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: Automated cross-document validation engine, Phase 2 of 10 (server-side named-field extraction, `routers/verification.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: Automated cross-document validation engine, Phase 3 of 10 (compare_field dropdown, `static/audit_rules.html` + `static/audit_rules.js` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: Automated cross-document validation engine, Phase 4 of 10 (is_required UI on Category's Documents list, `routers/audit_rules.py` + `static/audit_rules.html` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: Automated cross-document validation engine, Phase 5 of 10 (new rule types + voucher-line comparison in Cross-checks config UI, `routers/audit_rules.py` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: Automated cross-document validation engine, Phase 6 of 10 (chain-aware evaluation engine, `routers/verification.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: Automated cross-document validation engine, Phase 7 of 10 (wire the engine + Account Head check into Cleared/Query, `routers/verification.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: Automated cross-document validation engine, Phase 8 of 10 (auto-log shortfall observations, `routers/verification.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: Automated cross-document validation engine, Phase 9 of 10 (pass/fail UI in the Data Table segment, `routers/verification.py` + `static/verification.js` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: Automated cross-document validation engine, Phase 10 of 10, FINAL (live document-chain preview on Category detail screen, `static/audit_rules.html` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: "Field to Compare" dropdown stuck on "Add a document first" (confirmed fix, `static/audit_rules.js` + data correction via the existing API, no schema/router changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-07-31: "Amount" → "Rate" rename — proposed, then stopped and deferred by the user before any change was made.. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting (new, confirmed 9-phase Rate-derivation requirement) — Phase 1 of 9 (schema + API, `database.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting, Phase 2 of 9 (Settings UI, `static/settings.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting, Phase 3 of 9 (Master Columns "Notes / Interpretation" field, `database.py` + `routers/templates.py` + `static/columns.html`/`.js` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting, Phase 4 of 9 (display Notes/Interpretation as a tooltip in Template setup, `static/templates.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting, Phase 5 of 9 (Template `rate_source` field, `database.py` + `routers/templates.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting, Phase 5a (Template `rate_source` UI toggle, `static/templates.html` + `static/templates.js` only, no backend changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting, Phase 6 of 9 (import logic: derive Rate at import time, `routers/import_export.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting, Phase 7 of 9 (voucher line `rate_source` audit trail, `database.py` + `routers/import_export.py`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting, Phase 8 of 9 (Rate as a formal template column, `database.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting, Phase 9 of 9 (backfill script for historical Rate values, new `backfill_rate.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting, Phase 10 of 9, FINAL (UI provenance indicator, `routers/data.py` + `routers/verification.py` + `static/databank.js` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate Precision setting — historical backfill executed (`backfill_rate.py --run`, live data write, no code changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Rate column display/storage order fix (confirmed fix, `routers/import_export.py` + `static/databank.js` + `static/verification.js` + `static/template-viewer.js`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: "Rate" missing from Cross-checks "Field to Compare" dropdown (confirmed fix, data-only via existing API, no code changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: "No cashbooks found" — investigation + confirmed fix (`routers/verification.py` + `static/verification.js` + `static/verification.html`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Category detail redesign: validation rules grouped/highlighted (new, confirmed requirement) — Phase 1 of 3 (Validation Rules section shell, `static/audit_rules.js`.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Category detail redesign, Phase 2 of 3 (move Voucher-level Checks UI into Category detail, `static/audit_rules.js` + `static/style.css` only, no HTML/backend.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Category detail redesign, Phase 3 of 3, FINAL (rule-count badge on Categories list, `static/audit_rules.js` + `static/style.css` only, no backend changes). Full detail: CHANGELOG_ARCHIVE.md.
+**Full detail for every entry below lives in `CHANGELOG_ARCHIVE.md`**, under the matching heading —
+these lines are pointers, not the record. Compressed 2026-08-22 (408 entries → the grouped list
+below): multi-phase requirements are one line each rather than one line per phase, since a phase-by-
+phase trail is exactly what the archive is for. Keep it that way — one line per requirement, ~25
+words, and roll a finished multi-phase requirement up into its single line rather than appending
+each phase.
 
-- 2026-08-01: Signature Specimens soft-delete conversion (new, confirmed 4-phase requirement) — Phase 1 of 4 (schema + backend CRUD behaviour, `database.py` +.... Full detail: CHANGELOG_ARCHIVE.md.
+- 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
+- 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.
+- 2026-07-13: Verification card redesign, 9 phases — layout skeleton, tab shells, AUDIT/DFD tabs, amount-cell validation, voucher change-alert popover.
+- 2026-07-14: Verification voucher/line grouping, 4 phases, plus cleanup pass.
+- 2026-07-14: Verification header + voucher-table redesign, many iterations — panel width, borders, columns, chips, resizable headers.
+- 2026-07-15: Mirror-icon transaction-list popover restructured, 3 phases.
+- 2026-07-15: Voucher Prev/Next navigation, 5 phases, including click-to-lock line focus.
+- 2026-07-16: Template module quick-add-column, 4 phases.
+- 2026-07-16: Per-client voucher prefix storage, 7 phases — introduced the 5-way category scheme.
+- 2026-07-16: Flexible date-import format, 5 phases (`parse_date_flexible()`/`classify_date_cell()`).
+- 2026-07-17: Row-exclusion requirement, 4 phases (selection grid, auto-flag heuristic, counter, validation markers).
+- 2026-07-17: Upload header reorg, 4 phases; Mini Preview removed entirely.
+- 2026-07-17: Global navbar standardisation, 6 phases across all pages.
+- 2026-07-17: Upload page "Upload File" button (2 phases), top-bar rearrangement, sessionStorage auto-restore.
+- 2026-07-18: Verification back-arrow fix; cashbook discovery bug expanded into the 5-way voucher-prefix migration.
+- 2026-07-18: Bank Verification project, 8 phases plus a final regression pass.
+- 2026-07-18: Verification hub, 3 phases; Cashbook Preview selector, 3 phases.
+- 2026-07-19: Global quick-navigation menu, 3 phases, plus the navbar search field.
+- 2026-07-20: Audit Rules module, 9 phases (4 entity CRUD APIs, frontend shell, verification wiring).
+- 2026-07-20: Save Column Mapping, 3 phases (`saved_column_mappings`, save/apply/clear).
+- 2026-07-21: Data Bank date-range filter, 2 phases; unified date range for preview, 2 phases.
+- 2026-07-21: Client Data Bank unified redesign, 6 phases, plus follow-up cleanups and export/grouping fixes.
+- 2026-07-21: Upload reliability & blank-field handling, 4 phases; Error Log `/stats` route-order fix.
+- 2026-07-21: Row-level blank-field rejection, 5 phases — replaced the rolled-back inline blank-cell editing.
+- 2026-07-21: Client Data Availability & Coverage Redesign, 6 phases — holidays, coverage calendar, missing-dates report.
+- 2026-07-22: Trial Balance module, 5 phases, plus column-mapping Section 1 (3 phases) and a delete-upload fix.
+- 2026-07-23: Assign Categories, Section 2, 5 phases (latest-TB lookup, cascade assignment, frontend).
+- 2026-07-23: Verification ↔ Assign Categories link, 5 phases, plus hard-refresh view-persistence fixes.
+- 2026-07-24: Verification Client Data Links, 5 phases, plus dynamic card strip and template-viewer fixes.
+- 2026-07-24: Voucher Supporting-Document Linking, 6 phases, plus unassign and a 4-phase follow-up.
+- 2026-07-25: Observation roll-up, 4 successive fixes ending in the replace-per-procedure design.
+- 2026-07-25: Supporting-column no-template Documents unlocked, 3 phases; Linked Evidence totals row.
+- 2026-07-27: Read-only investigation of Verification's actual behaviour — findings recorded in Conventions, no code change.
+- 2026-07-27: Supporting Documents modal redesign, 6 phases (left rail, segments, risk indicator).
+- 2026-07-28: Verification UI fix set, 4 phases, plus deleted-badge fix and modal/observation polish.
+- 2026-07-28: Validation Rules module, 7 phases plus a Phase 1 addendum (voucher-level approval schema).
+- 2026-07-29: Transaction level approval, 4 phases — UI later deliberately hidden, backend still live.
+- 2026-07-29: Generic Voucher-Level Checks, 6 phases, then simplified to name-only across 4 more.
+- 2026-07-29: Account Head Recommendation repositioned; search-select and no-match note added.
+- 2026-07-31: Automated cross-document validation engine, 10 phases (chain-aware evaluation, shortfall observations).
+- 2026-08-01: Rate-derivation requirement, 10 phases, plus historical backfill and a column-order fix.
+- 2026-08-01: Category detail redesign, 3 phases (validation rules grouped, voucher checks moved in, rule-count badge).
+- 2026-08-01: Signature Specimens soft-delete conversion, 4 phases.
+- 2026-08-01: ID-based Cross-check-eligible Fields, 4 phases, including the rename dependency preview.
+- 2026-08-01: "No cashbooks found" investigated and fixed (`routers/verification.py` + `static/verification.*`).
+- 2026-08-02: Authority fields added to Signature Specimens, "Approved by" roles, and Voucher-level Checks; document-level authority gate wired.
+- 2026-08-02: Category "Approved" checkbox hard-removed; Documents picker merged; Cleared Requirements summary, 3 phases.
+- 2026-08-05: Dev/test fixture hard-deletes; inactive items excluded from selection contexts, 5 phases.
+- 2026-08-07: "Verify & Next" now steps through voucher lines before advancing the voucher.
+- 2026-08-08: Audit Rules Categories screen restructured; repo hygiene (`.gitignore`, `git gc`); Code Health Review protocol added.
+- 2026-08-08: Global header search finds in-module features, Phase 1 (`static/search_index.js`, later merged away).
+- 2026-08-08: Physical Bill evidence type, 8 phases (schema, CRUD, gate wiring, frontend entry).
+- 2026-08-09: `client_data.extract_amount` permanently NULL — fixed, plus `backfill_extract_amount.py`.
+- 2026-08-09: Cleared-status display fixes — pending pill, reload revert, Physical Bill amount-match tick.
+- 2026-08-09: Populate Physical Bill from GRN/ERP Vendor Bill, 4 phases; superseded and removed Create-Vendor-Bill-from-GRN.
+- 2026-08-10: Verification session/cashbook UX fixes — state persistence, date-range reconciliation (4 phases), header stats (3 phases).
+- 2026-08-12: Audit Workbook module built, 5 phases, plus line-grain restructure (3 phases) and restyle.
+- 2026-08-13: Audit Workbook border/grouping fixes; `style.css` cache-bust convention introduced across all 15 pages.
+- 2026-08-15: Audit Workbook header compaction, Date column added, `?voucher=` deep-link jump.
+- 2026-08-16: Procedure modal extracted to shared `static/procedure_modal.js` with an adapter; wired into Audit Workbook.
+- 2026-08-18: Physical Bill auto-save on modal exit, blank-field relaxation, mandatory-field red-border cue.
+- 2026-08-19: Multi-Bill/Multi-Line Physical Bill, 6 phases (nested header+items schema through styling).
+- 2026-08-20: Global header nav rebuild, 6 phases — Up/Back split, NAV_MANIFEST merge, `search_index.js` deleted.
+- 2026-08-20: First/last page buttons on Data Bank and Upload previews; import progress bar, 2 phases.
+- 2026-08-20: Subtotal default flag, 3 phases (schema, template checkbox, Data Bank toggle).
+- 2026-08-21: Database size visibility, 2 phases; dashboard KPI stats, 2 phases plus a 6th card.
+- 2026-08-21: Overdue Uploads, 4 phases — frequency schema, business-day detection, dashboard cards and drill-down.
+- 2026-08-21: Rate Source 'auto' state, 4 phases; import write perf fix; native-Excel-date parse fix.
+- 2026-08-22: User module (Login → Client Cards → Dashboard), 7 phases — `users`/`sessions`, `routers/auth.py`, session-backed client selection.
+- 2026-08-22: Client-context load-order race fixed via the `window.clientContextReady` signal.
+- 2026-08-22: Header client area redesign Phase 1 of 4 — dropdown replaced by a fixed read-only Client display.
+- 2026-08-22: Header client area redesign Phase 2 of 4 — JS-owned Welcome text, icon-only Logout, dead spans removed from 15 pages.
+- 2026-08-22: Status log compressed 408 → 73 entries; 44 entries orphaned below Self-maintenance moved back under this heading.
 
-- 2026-08-01: Signature Specimens soft-delete conversion, Phase 3 of 4 (filter active-only specimens in Verification's signature check, `routers/verification.py`) — confirmed.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Signature Specimens soft-delete conversion, Phase 2 of 4 (relax uniqueness constraint, `database.py` + `routers/audit_rules.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: Signature Specimens soft-delete conversion, Phase 4 of 4, FINAL (`static/audit_rules.html` + `static/audit_rules.js` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: ID-based Cross-check-eligible Fields (new, confirmed 4-phase requirement) — Phase 1 of 4 (backend/schema, `database.py` + `routers/audit_rules.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: ID-based Cross-check-eligible Fields, Phase 2 of 4 (Document detail eligible-fields dropdown, `static/audit_rules.html` + `static/audit_rules.js` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: ID-based Cross-check-eligible Fields, Phase 3 of 4 ("Field to Compare" empty-state messaging, `static/audit_rules.js` only) — brief's premise investigated and found.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-01: ID-based Cross-check-eligible Fields, Phase 4 of 4, FINAL (rename/edit dependency preview, `routers/templates.py` + `static/columns.html` + `static/columns.js`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-02: Voucher-level Checks restored as its own top-level rail tab (confirmed fix, `static/audit_rules.js` only, no HTML/backend changes). Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-02: Authority field on Signature Specimens (new, confirmed requirement) — `database.py` + `routers/audit_rules.py` + `static/audit_rules.js` + `static/style.css`. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-02: Required Authority field on "Approved by" role (new, confirmed requirement) — `database.py` + `routers/audit_rules.py` + `static/audit_rules.js` + `static/style.css`. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-02: Hard-remove Category "Approved" checkbox (confirmed requirement, single phase) — `database.py` + `routers/audit_rules.py` + `static/audit_rules.js` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-02: Merge Category's Documents picker + Document Requirements list into one row-based UI (confirmed requirement, single phase) — `static/audit_rules.html` +.... Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-02: Authority/Designation field on Voucher-level Checks (new, confirmed requirement) — `database.py` + `routers/audit_rules.py` + `static/audit_rules.html` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-02: Document-level Approved-by authority gate (new, confirmed requirement) — `routers/audit_rules.py` + `routers/verification.py`. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-02: Stale Category resolution in `compute_and_persist_cleared_status()` (confirmed fix, `routers/verification.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-02: Category detail Documents list: inactive-document indicator + empty-state placeholder (confirmed fix, `routers/audit_rules.py` + `static/audit_rules.js`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-02: Category "Cleared Requirements" summary (new, confirmed requirement) — Phase 1 of 3 (backend, `routers/audit_rules.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-02: Category "Cleared Requirements" summary, Phase 2 of 3 (frontend render, `static/audit_rules.js` only, no HTML/CSS changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-02: Category "Cleared Requirements" summary, Phase 3 of 3, FINAL (styling, `static/style.css` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-05: Hard-delete dev/test fixture Documents from Audit Rules (confirmed fix, data-only via a disposable one-off script, no app code changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-05: Hard-delete dev/test fixtures across Cross-checks, Categories, and Voucher-level Checks (confirmed fix, data-only via a disposable one-off script, no app code.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-05: Inactive items excluded from selection contexts, Phase 2 of 5 (Category-builder pickers, `static/audit_rules.js`) — confirmed no code change needed.. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-05: Inactive items excluded from selection contexts (new, confirmed 5-phase requirement) — Phase 1 of 5 (backend default-exclude, `routers/audit_rules.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-05: Inactive items excluded from selection contexts, Phase 3 of 5 (Verification procedure window: freeze/lock already-referenced inactive documents.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-05: Inactive items excluded from selection contexts, Phase 4 of 5 (Category-assignment dropdowns outside Audit Rules, `routers/verification.py` +.... Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-05: Inactive items excluded from selection contexts, Phase 5 of 5, FINAL (Cleared-status engine confirmation, `routers/verification.py` + `routers/audit_rules.py`). Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-07: "✅ Verify & Next" steps through voucher lines before advancing the voucher (confirmed fix, `static/verification.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-08: Audit Rules Categories screen visual restructure (confirmed fix, `static/audit_rules.html` + `static/audit_rules.js` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-08: Stop committing the dev database to git (confirmed fix, new `.gitignore` + git index only — no application code touched). Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-08: Repo compaction via `git gc` (no code, no history rewrite, no project file touched). Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-08: Code Health Review protocol added (documentation only — `CLAUDE.md` + new `KNOWN_ISSUES.md` + `File_Map.md`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-08: Global header search finds in-module features (new, confirmed 4-phase requirement) — Phase 1 of 4 (search index registry, new `static/search_index.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-08: Expose why a voucher line is Query (confirmed single-phase fix, `routers/verification.py` + `static/verification.js` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-08: Fix missing required-documents role-completion + Validate button in procedure window (`routers/verification.py` + `static/verification.html` +.... Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-08: Physical Bill evidence type (new, confirmed 8-phase requirement) — Phase 1 of 8 (schema, `database.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-08: Physical Bill evidence type, Phase 2 of 8 (Documents CRUD supports `physical_bill`, `routers/audit_rules.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-08: Physical Bill evidence type, Phase 3 of 8 (Categories require `evidence_type`, `routers/audit_rules.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-08: Physical Bill evidence type, Phase 4 of 8 (Audit Rules frontend pickers, `static/audit_rules.html` + `static/audit_rules.js` only, no backend/CSS changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Physical Bill evidence type, Phase 5 of 8 (Verification backend capture, `routers/verification.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Physical Bill evidence type, Phase 6 of 8 (wire into check #1's gate, `routers/verification.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Physical Bill evidence type, Phase 7 of 8 (Verification frontend entry, `routers/audit_rules.py` + `static/verification.js` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Physical Bill evidence type, Phase 8 of 8, FINAL (reason-popover/Validate-panel reporting) — confirmed no-op, no code change.. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: `client_data.extract_amount` permanently NULL on every real row (confirmed fix + backfill, `routers/import_export.py` + new `backfill_extract_amount.py`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Suppress "Pending" status text on Cleared lines (confirmed fix, `static/verification.js` only, no CSS/HTML changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Cleared line reverts to "pending" on page reload (confirmed fix, `routers/verification.py` only, no frontend changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Hide the whole Pending pill (dot + text), not just the text, on Cleared lines (follow-on correction, `static/verification.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Fix: rail dot + Procedures-column badge didn't reflect Physical Bill amount-match (confirmed fix, `static/verification.js` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Live green tick on Physical Bill Amount match (confirmed requirement, `static/verification.js` + `static/style.css` only, no backend changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Amount-tick field-width fix (confirmed fix, `static/style.css` only, no JS/markup changes). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Amount-tick position moved to the right (confirmed fix, `static/style.css` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Create Vendor Bill from GRN (new, confirmed multi-phase requirement), Phase 1 of 3 (backend, `database.py` + `routers/verification.py`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Populate Physical Bill from GRN/ERP Vendor Bill (new, confirmed 4-phase requirement) — Phase 1 of 4 (schema, `database.py` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Physical Bill Phase 2/4 — added backend preview + populate endpoints for GRN/ERP Vendor Bill sourcing.
-- 2026-08-09: Superseded same-day by the "Copy from lines" amendment below — original per-source-row trigger design fully reverted/replaced. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-09: Physical Bill Phase 3/4 (original design) — per-row populate trigger on evidence rows; superseded same-day by the Copy-from-lines amendment below.
-- 2026-08-09: Physical Bill Phase 3 amendment — replaced per-row trigger with single "Copy from lines" button on Physical Bill panel.
-- 2026-08-09: Physical Bill Phase 3 amendment cont'd — removed obsolete GRN-to-Vendor-Bill trigger icon/chain from frontend.
-- 2026-08-09: Physical Bill Phase 4/4 FINAL — removed orphaned backend (source_grn_row_id column, old endpoints). Requirement complete.
-- 2026-08-10: Audit Rules page hard-refresh state persistence (`static/audit_rules.js`) - URL-param restore for entity type/selection/Assign Categories view. Full detail: CHANGELOG_ARCHIVE.md, "Verification Session & Cashbook UX Fixes".
-- 2026-08-10: Assign Categories visually flags unassigned accounts (amber row + placeholder option + "X of Y unassigned" badge). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-10: Added a plain "Verify" button (verify without navigating) to the Supporting-Document popup footer. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-10: Fixed cashbook selection resetting when the Start Cash Verification date range changes. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-10: Replaced the "Voucher checks verified." status-bar message with a dismissing toast. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Header voucher-wise stats, Phase 1 of 3 - new `GET .../voucher_stats` backend endpoint. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Header voucher-wise stats, Phase 2 of 3 - Total/Cleared/Query/Pending header wiring. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Procedure badge partial-state colour, Phase 3 of 3, FINAL - amber to light-red for "some ticked". Completes the 3-phase requirement. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Fixed Cashbook Place 2 date range resetting on session exit. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Fixed Place 1 popup date range resetting on reopen (sessionStorage persistence). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Investigated Place 3 not syncing with Place 2's date-range change - confirmed intended, documentation-only fix. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Re-resolve active session against new date range, Phase 1 of 4 - `range_status`/`reconcile_range` backend. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Re-resolve session against new date range, Phase 2 of 4 - Place 2 kept alive, Apply wired to reconcile. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Session date-range reconciliation, Phase 2 regressions fixed (Apply no longer navigates/shows a banner). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Header format cleanup ("session range . Voucher X of Y") + orphaned-voucher auto-nav with caption. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Fixed Apply/Start Verification unresponsive after returning to cashbook from Place 3. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-12: Removed dot icon from "Pending" status pill, Phase 1 of 2. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-12: Restyled "Pending" status pill as a badge, Phase 2 of 2. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-10: Fixed "Next voucher" validation warning out of sync with Status column (`cleared_status` vs `validation_status`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-10: Fixed "Next voucher" validation warning reading a stale `sessionTransactions` cache. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-10: Assign Categories avoids full table reload on category-add; restores scroll/highlight on real reloads. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-11: Fixed cashbook selection resetting on return to Place 1 popup (sessionStorage persistence). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-12: Procedure modal: removed outside-click-close, added sticky header. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-12: Fixed voucher search popover Status column reading `validation_status` instead of `cleared_status`. Full detail: CHANGELOG_ARCHIVE.md.
-
-**Audit Workbook module (new feature, 2026-08-12) - 13-entry build log compressed; full detail: CHANGELOG_ARCHIVE.md, "Audit Workbook Module".**
-- 2026-08-12: Audit Workbook built (5 phases) + Cashbook fixes + restructure + restyle. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-13: Audit Workbook restructure Phase 1 of 3 — added Account Name field to line data (`routers/verification.py`). Full detail: CHANGELOG_ARCHIVE.md, "Audit Workbook Module".
-- 2026-08-13: **Audit Workbook restructure, Phase 2 of 3 (line-grain frontend rendering, `static/audit_workbook.js` + `static/audit_workbook.html` only, no backend changes)** done.
-- 2026-08-13: Audit Workbook restructure Phase 3 of 3, FINAL — grouping accent bar + zebra tint (`static/style.css`). Full detail: CHANGELOG_ARCHIVE.md, "Audit Workbook Module".
-- 2026-08-13: Audit Workbook 3-item fix vs. prototype v7 — removed subtotal label, rowspan grouping, unified group/subtotal borders (`static/audit_workbook.js` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-
-- 2026-08-13: Removed the Audit Workbook accent-bar (reversed per later prototype rounds, `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-13: Lightened Audit Workbook row-separator vs. column-separator contrast (`static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-13: Added `style.css` cache-busting version string to all 15 pages, fixing stale-CSS-in-browser reports. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-13: Fixed Audit Workbook row-separator contrast + subtotal-row border losing to a CSS specificity conflict (`static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-13: Fixed Audit Workbook group-start border firing on every line — stamped an explicit JS class instead of DOM-inferring (`static/audit_workbook.js`/`style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-15: Compacted Audit Workbook's 3-line header into one row (icon+session info left, filter chips right), removed the duplicate `<h1>` (`static/audit_workbook.html` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-15: Added a Date column to Audit Workbook, 8→9 columns, frontend-only (`static/audit_workbook.js`/`.html` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-15: Audit Workbook `?voucher=` deep link now jumps instantly to that row with a highlight flash + spinner (`static/audit_workbook.js`/`.html` + `static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-16: Extracted the Supporting-Document procedure modal out of `verification.js` into shared `static/procedure_modal.js`, pure relocation, zero behavior change. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-16: procedure_modal.js Phase 1b — replaced bare shared-global reliance with an explicit adapter object, unblocking non-Verification host pages (`static/procedure_modal.js` + `static/verification.js`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-19: Multi-Bill/Multi-Line Physical Bill schema, Phase 1 of 6 (voucher_line_physical_bills split header+items, database.py only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-19: Multi-Bill/Multi-Line Physical Bill, Phase 2 of 6 (save/read endpoints + Cleared/Query gate now handle nested bills, routers/verification.py only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-19: Multi-Bill/Multi-Line Physical Bill, Phase 3 of 6 (multi-bill card UI + live totals, static/procedure_modal.js only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-19: Fixed Procedures badge amount-match reading stale flat bill.amount field (confirmed fix, static/verification.js only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-19: Multi-Bill/Multi-Line Physical Bill, Phase 4 of 6 (Enter-key field navigation, static/procedure_modal.js only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-19: Multi-Bill/Multi-Line Physical Bill, Phase 5 of 6 (Copy from lines rebuilt for nested bills, static/procedure_modal.js only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-19: Multi-Bill/Multi-Line Physical Bill, Phase 6 of 6, FINAL (styling: bill cards, item table, recon pill, empty state, static/style.css only). Full detail: CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
@@ -596,50 +250,3 @@ Full write-ups belong in CHANGELOG_ARCHIVE.md, not here.
 - If new files were created, add them to the Architecture/file map (this file's own Architecture section) AND to `File_Map.md` (same folder as this file, git-tracked alongside it — a separate, more detailed one-line-per-file reference) if a file was added, removed, or repurposed. This is the only File_Map.md in the project — do not create or update a second copy elsewhere.
 - If a new convention or rule emerges from a mistake, add it under Conventions
 Do this automatically at the end of the session without being asked.
-
-- 2026-08-16: Wired Audit Workbook's Procedures pill to the shared procedure modal via its own adapter (`routers/verification.py` + `static/audit_workbook.js`/`.html`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-16: Audit Workbook subtitle dropped its session-number prefix (`static/audit_workbook.js`/`.html`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-16: Fixed Audit Workbook header vertical-spacing to a consistent 20px rhythm (`static/style.css`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-16: Removed the redundant Verification module header block (back link + h1 + subtitle, `static/verification.html` only). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-17: Audit Workbook Reference/Amount/Status columns aligned via JS-stamped classes + tabular-nums on Amount (`static/audit_workbook.js` + `static/style.css`, cache-bust bump).
-- 2026-08-18: Physical Bill panel Save button replaced with auto-save on all 4 modal exits (static/procedure_modal.js only, Phase 1 of 2) done.
-- 2026-08-18: Physical Bill Bill No/Date/Vendor Name now save as blank - relaxed backend required-field check (routers/verification.py only), matching Quantity/Rate.
-- 2026-08-18: Physical Bill mandatory-field (Bill No/Date/Vendor) red-border + tooltip cue (static/procedure_modal.js + static/style.css only).
-- 2026-08-20: Global header nav rebuild, Phase A of 6 (Up + Back core logic, static/client_context.js + static/style.css) done. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-20: Global header nav rebuild, Phase B of 6 (wire Up+Back into Verification/Audit Workbook/Audit Rules) done. Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-20: Global header nav rebuild, Phase C of 6 (Home icon audit — no bugs found; removed redundant duplicate click handler, `static/client_context.js` only) done.
-- 2026-08-20: Global header nav rebuild, Phase D of 6 (merged FEATURE_SEARCH_INDEX into NAV_MANIFEST as keyword-bearing children, wired to menu+search, static/search_index.js deleted) done.
-- 2026-08-20: Global header nav rebuild, Phase E of 6 (Trial Balance added to NAV_MANIFEST as a top-level entry, static/client_context.js only) done.
-- 2026-08-20: Global header nav rebuild, Phase F of 6, FINAL (tooltips, hover/active states, NAV_MANIFEST convention, known-gap log) done.
-- 2026-08-20: Data Bank preview <</>> first/last page pagination buttons (static/databank.html + static/databank.js, no backend changes) done.
-- 2026-08-20: Added <</>> first/last page buttons to both Upload page preview windows (Row Selection grid + Excel Preview modal), static/upload.html/.js.
-- 2026-08-20: Import progress Phase 1 of 3 (backend row-write counter + `GET .../import-status/{file_id}` polling endpoint, `routers/import_export.py`). Full detail: CHANGELOG_ARCHIVE.md.
-- 2026-08-20: Import progress Phase 2 of 3, FINAL (frontend progress bar polling import-status, replaces spinner, `static/upload.html` + `static/upload.js`) done.
-- 2026-08-20: Subtotal default flag Phase 4 of 6 (schema + backend, `database.py` + `routers/templates.py`) done.
-- 2026-08-20: Subtotal default flag Phase 5 of 6 (Template setup checkbox, `static/templates.html` + `static/templates.js`) done.
-- 2026-08-20: Subtotal default flag Phase 6 of 6, FINAL (Data Bank preview toggle, static/databank.html + static/databank.js) done.
-- 2026-08-21: Database size visibility Phase A1 (backend size estimate, `database.py` + `routers/dashboard.py` + `routers/data.py`) done.
-- 2026-08-21: Database size visibility Phase A2 (frontend display, `static/index.html`/`script.js` + `static/databank.html`/`.js`) done.
-- 2026-08-21: Dashboard KPI stats Phase B1 (backend, `routers/dashboard.py`, reuses `verification.py`'s `_rollup_voucher_status()`) done.
-- 2026-08-21: Dashboard KPI stats Phase B2 (frontend, `static/index.html` + `static/script.js`, 5-card Quick Overview strip) done.
-- 2026-08-21: Overdue Uploads Phase C1 (backend, upload_frequency schema + save/load, `database.py` + `routers/data.py`) done.
-- 2026-08-21: Overdue Uploads Phase C2 (frontend, Frequency dropdown column, `static/databank.html` + `static/databank.js`) done.
-- 2026-08-21: Overdue Uploads Phase D1 (backend business-day detection, `routers/data.py` + `routers/dashboard.py`) done.
-- 2026-08-21: Overdue Uploads Phase D2 FINAL (frontend cards + drill-down, static/index.html/script.js + static/databank.html/js) done.
-- 2026-08-21: Restored "Unresolved Errors" as 6th Quick Overview card (frontend-only, static/index.html + static/script.js) done.
-- 2026-08-21: Rate Source 'auto' state Phase A (schema migration + new default, database.py + routers/templates.py) done.
-- 2026-08-21: Rate Source 'auto' Phase B (per-upload detection logic, routers/import_export.py only) done.
-- 2026-08-21: Rate Source dropdown Phase C (Auto/Force Imported/Force Derived, 3-option UI, static/templates.html + static/templates.js) done.
-- 2026-08-21: Rate Source Phase D FINAL (pre-import visibility, routers/import_export.py + static/upload.html/.js) done.
-- 2026-08-21: Import write perf fix: single reused connection + executemany batching for import row/audit writes (database.py + routers/import_export.py).
-- 2026-08-21: Native Excel dates no longer mis-parsed against the text delimiter/order picker (confirmed fix, `routers/import_export.py` only).
-- 2026-08-22: Users & Sessions schema Phase 1 of 7 (users/sessions tables + seeded admin, database.py only).
-- 2026-08-22: Auth endpoints Phase 2 of 7 (login/logout on Users & Sessions schema, new routers/auth.py + main.py) done.
-- 2026-08-22: Session guard dependency Phase 3 of 7 (get_current_user in routers/auth.py, not yet attached to routes) done.
-- 2026-08-22: Login page UI Phase 4 of 7 (static/login.html + static/login.js) - form wired to auth endpoint, redirects to index.html placeholder.
-- 2026-08-22: Client Cards landing page Phase 5 of 7 (new static/client_select.html + .js, static/login.js redirect updated) done.
-- 2026-08-22: Session-backed client selection Phase 6 of 7 (routers/auth.py + static/client_select.js/client_context.js, databank.js shadow-fn fix) done.
-- 2026-08-22: Wire flow + guard pages Phase 7/7 FINAL (root route main.py, session-check+Logout client_context.js, guard client_select.js).
-- 2026-08-22: Fixed client-context load-order race - added window.clientContextReady signal, awaited in trial_balance/databank/verification.js; verification.js dead localStorage fallback removed; 15 HTML cache-bust.
-- 2026-08-22: Header client area redesign Phase 1 of 4 (dropdown replaced by fixed read-only Client display, static/client_context.js + static/style.css) done.
-- 2026-08-22: Header client area redesign Phase 2 of 4 (JS-owned Welcome text, icon-only Logout, dead spans deleted from 15 pages) done.

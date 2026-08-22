@@ -1164,3 +1164,36 @@ review of this phase needs a hard refresh (Ctrl+F5). Playwright starts cache-emp
 
 ---
 
+## Status Log Compression (CLAUDE.md maintenance, 2026-08-22)
+
+**Trigger.** The Status log's own budget rule caps it at ~80 lines, with a documented drift trigger:
+"if the Status log exceeds ~80 lines, stop before starting new work and flag it." It had reached
+**408 entries** — 5× over — because each phase of every multi-phase requirement had been appended as
+its own line, which is precisely the phase-by-phase trail `CHANGELOG_ARCHIVE.md` exists to hold.
+This is the second such compression (the first was August 2026); the Conventions note predicting
+recurrence was correct.
+
+**A second, structural problem found while doing it.** 44 entries (2026-08-16 onward) had been
+appended *below* the `## Self-maintenance` section rather than under `## Status log` — so the log
+was silently split in two, with the newest entries outside it. Anything counting or reading "the
+Status log" would have missed the most recent third of it. Those were moved back under the heading.
+
+**Method.** Grouped by requirement rather than by phase: a finished multi-phase requirement is now
+one line ("Audit Rules module, 9 phases", "Automated cross-document validation engine, 10 phases")
+instead of 9 or 10. Chronological order preserved; no requirement dropped. 408 → 73 entries.
+A short preamble was added at the top of the section stating that full detail lives in the archive,
+which let every individual line drop its repetitive "Full detail: CHANGELOG_ARCHIVE.md." suffix —
+that phrase alone accounted for roughly four words on a large share of the old entries. The preamble
+also states the go-forward rule explicitly: one line per *requirement*, roll a finished multi-phase
+requirement up rather than appending each phase.
+
+**Verification.** A pre-edit backup was taken to scratchpad. Afterwards: section headings unchanged
+in count and order (10, same list); `git diff -U0` hunks confirmed to start at line 164 or later, so
+Architecture / Conventions / Workflow rules / Dev tooling / Code Health Review are provably
+untouched; `git diff` shows no `## ` heading added or removed; zero dated entries remain below
+`## Self-maintenance`; the Self-maintenance block itself diffs identically; and every one of the 73
+entries was word-counted programmatically against the ~25-word rule — none over. Net file size
+645 → 252 lines.
+
+---
+
