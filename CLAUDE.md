@@ -166,11 +166,14 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Status log
 
 **Full detail for every entry below lives in `CHANGELOG_ARCHIVE.md`**, under the matching heading —
-these lines are pointers, not the record. Compressed 2026-08-22 (408 entries → the grouped list
-below): multi-phase requirements are one line each rather than one line per phase, since a phase-by-
-phase trail is exactly what the archive is for. Keep it that way — one line per requirement, ~25
-words, and roll a finished multi-phase requirement up into its single line rather than appending
-each phase.
+these lines are pointers, not the record. Compressed twice on 2026-08-22 — first 408 entries → 73,
+then a second pass rolling up that day's own per-phase tail (77 entries now). Multi-phase
+requirements are one line each rather than one line per phase, since a phase-by-phase trail is
+exactly what the archive is for. Keep it that way — one line per requirement, ~25 words, and roll a
+finished multi-phase requirement up into its single line rather than appending each phase.
+**The second pass was needed because each phase of a live requirement got its own line as it landed,
+which is what pushed the log past its 80-line trigger within a single day. Roll a multi-phase
+requirement up as soon as it completes, rather than leaving the per-phase lines for a later pass.**
 
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.
@@ -242,22 +245,12 @@ each phase.
 - 2026-08-21: Rate Source 'auto' state, 4 phases; import write perf fix; native-Excel-date parse fix.
 - 2026-08-22: User module (Login → Client Cards → Dashboard), 7 phases — `users`/`sessions`, `routers/auth.py`, session-backed client selection.
 - 2026-08-22: Client-context load-order race fixed via the `window.clientContextReady` signal.
-- 2026-08-22: Header client area redesign Phase 1 of 4 — dropdown replaced by a fixed read-only Client display.
-- 2026-08-22: Header client area redesign Phase 2 of 4 — JS-owned Welcome text, icon-only Logout, dead spans removed from 15 pages.
-- 2026-08-22: Status log compressed 408 → 73 entries; 44 entries orphaned below Self-maintenance moved back under this heading.
-- 2026-08-22: Header client area redesign Phase 3 of 4 (client display clickable, single confirm to client picker, cache-bust across 17 pages).
-- 2026-08-22: Fixed session-expiry bug: 401 on current-client wrongly fired select-client alert/redirect race; loadSessionClient() now signals caller to stop (client_context.js).
-- 2026-08-22: client_context.js cache-bust bumped to v=5 (all 15 pages) so the session-expiry fix actually reaches browsers, not just the server.
+- 2026-08-22: Header client area redesign, Phases 1-3 of 4 - read-only clickable client display, JS-owned Welcome text, icon-only Logout, cache-bust across 17 pages.
+- 2026-08-22: Status log compressed twice - 408 to 73 entries, then the per-phase Aug-22 tail rolled up into one line per requirement.
+- 2026-08-22: Session-expiry 401 race fixed - loadSessionClient() now signals the caller to stop; client_context.js bumped to v=5 so it reached browsers.
 - 2026-08-22: Assign Categories hard-refresh restore now awaits clientContextReady before opening view; avoids null-client 422 (audit_rules.js).
 - 2026-08-22: Audit Workbook Account column now renders per-line, not rowspan'd to group's first line; fixed multi-account display bug (static/audit_workbook.js, style.css).
-- 2026-08-22: Admin role foundation, Phase 1 of 7 - seeded admin gets role='admin', require_admin dependency added (database.py, routers/auth.py).
-- 2026-08-22: Admin role foundation, Phase 2 of 7 - Manage Users CRUD backend added, require_admin's first real use (routers/users.py, main.py).
-- 2026-08-22: Admin role foundation, Phase 3 of 7 - Manage Users frontend built (static/users.html, static/users.js), mirrors clients.html/.js.
-- 2026-08-22: Admin area, Phase 4 of 8 - Settings restructured into tabs (App Settings/Manage Clients/Manage Users), role-gated via GET /api/users probe (settings.html, settings.js).
-- 2026-08-22: Admin area, Phase 5 of 8 - Manage Clients protected with require_admin (except GET list), clients.js gets admin guard (routers/clients.py, clients.js).
-- 2026-08-22: Admin area, Phase 6 of 8 - settings.html/users.html/clients.html exempted from enforceClientSelection() via isFirmLevelPage() (client_context.js).
-- 2026-08-22: Admin area, Phase 7 of 8 - admin-only gear icon added to Client Select page, links to settings.html (client_select.html, client_select.js).
-- 2026-08-22: Admin area, Phase 8 of 8 FINAL - removed Manage Clients/Settings/Users from dashboard and NAV_MANIFEST (index.html, script.js, client_context.js).
+- 2026-08-22: Admin area, 8 phases - admin role + require_admin, Manage Users backend/frontend, Settings tabs, Manage Clients gated, firm-level exemptions, Client Select gear icon.
 - 2026-08-22: Admin pages given own firm-level header via renderFirmLevelNav(); back-links and client-scoped redirects removed (client_context.js, style.css, settings/users/clients).
 
 
