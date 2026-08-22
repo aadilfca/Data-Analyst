@@ -2873,8 +2873,16 @@ async function restoreAuditRulesViewFromUrl() {
     const viewParam = restoreParams.get('view');
 
     if (viewParam === 'assign-categories') {
-        await openAssignCategoriesView();
-        return;
+        // Confirmed fix: window.onload firing doesn't guarantee client_context.js's session
+        // fetch has resolved yet, so getSelectedClientId() can still be null here on a hard
+        // refresh, sending client_id=null to the accounts API (422). Wait for the session
+        // fetch, then only enter this view if a client actually ended up selected — otherwise
+        // fall through to the normal entity/id restore below (matches a non-deep-link load).
+        if (window.clientContextReady) await window.clientContextReady;
+        if (getSelectedClientId()) {
+            await openAssignCategoriesView();
+            return;
+        }
     }
 
     const entityParam = restoreParams.get('entity');
