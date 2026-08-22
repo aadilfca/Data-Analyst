@@ -97,6 +97,25 @@ clientSearchInput.addEventListener('input', function () {
     filterClients(this.value.trim().toLowerCase());
 });
 
+// Admin-only Settings entry point (Admin area, Phase 7 of 8) - same GET /api/users 403-probe
+// pattern reused across settings.js/clients.js. Standalone page, no client_context.js/API_BASE,
+// so this follows the plain-relative-path fetch convention already used elsewhere in this file.
+async function checkAdminAndShowGear() {
+    try {
+        const res = await fetch('/api/users');
+        if (res.ok) {
+            const btn = document.getElementById('adminSettingsBtn');
+            if (btn) btn.style.display = '';
+        }
+    } catch (err) {
+        // Fail closed - gear icon stays hidden, same as a 403.
+    }
+}
+
+document.getElementById('adminSettingsBtn')?.addEventListener('click', () => {
+    window.location.href = '/static/settings.html';
+});
+
 // This page has no navbar/client_context.js, so it needs its own session guard rather
 // than inheriting loadSessionClient()'s check — no valid session, no client cards.
 (async function guardSession() {
@@ -111,4 +130,5 @@ clientSearchInput.addEventListener('input', function () {
         return;
     }
     loadClients();
+    checkAdminAndShowGear();
 })();
