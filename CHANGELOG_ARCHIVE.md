@@ -1014,6 +1014,28 @@ A **control run** was added specifically to prove the test could actually fail r
 
 ---
 
+## User Module — Auth Backend (routers/auth.py, all 7 phases complete)
+
+`POST /api/auth/login` verifies username/`bcrypt` password against `users`, 401s on bad credentials or unknown user (same message either way), 403s if `is_active=0`, logs every failed attempt to `error_log` (`module='Auth'`) via the existing `log_error()`. On success: creates a `sessions` row (`secrets.token_hex(32)` token, ~10h expiry), updates `users.last_login`, sets an HttpOnly `session_token` cookie (`samesite=lax`, `max_age`-based — not `expires`, which requires a UTC-aware datetime `Response.set_cookie` doesn't get from a naive `datetime.now()`).
+
+`POST /api/auth/logout` deletes the session row matching the cookie's token and clears the cookie; idempotent if no session exists — this also naturally clears `selected_client_id` since the whole row is gone, no explicit clearing needed; called by `client_context.js`'s `logoutUser()` (navbar Logout button) with no request body, always 200.
+
+`get_current_user(request)` is the reusable guard — reads the cookie, joins `sessions`+`users` on token (now also selecting `u.role`, added for the Admin role foundation phase below), raises 401 if missing/invalid, 401 "Session expired" if `expiry` (naive local time, matching `login()`'s own writes) has passed; no active purge of expired rows. Used both as a route `Depends()` (`select-client`/`current-client`) and called directly (not via `Depends()`) by `main.py`'s root route and `client_context.js`'s `loadSessionClient()`/`client_select.js`'s `guardSession()` (via the `current-client` endpoint's 401) to gate every page.
+
+`PUT /api/auth/select-client` (body `{client_id}`) validates the client exists then writes `sessions.selected_client_id`; `GET /api/auth/current-client` reads it back — the session-backed client handoff. Registered in main.py alongside the other 10 routers.
+
+---
+
+## Admin Role Foundation (Phase 1 of 7, complete)
+
+Confirmed 7-phase requirement to build a firm-level Admin area (Settings tabs: App Settings | Manage Clients | Manage Users), reachable via an admin-only gear icon on the Client Select page. This phase (1 of 7) laid the role/permissions groundwork only — no route protected yet, no UI.
+
+Single two-tier role model (`admin` vs everything else), no third-party RBAC library, consistent with the rest of the auth module's plain `secrets`/`bcrypt` approach. `database.py`'s seed-admin block now inserts `role="admin"` (was `None`) for the placeholder `admin`/`admin123` user. `get_current_user`'s session+user join query (`routers/auth.py`) now also selects `u.role`, and a new `require_admin(session=Depends(get_current_user))` dependency raises 403 if `session["role"] != "admin"` — additive only, no existing route's behavior changed. Verified via the existing `pytest tests/ -v` suite (4 passed, includes a real-app boot smoke test).
+
+Remaining phases: Manage Users backend/frontend, Settings page tab restructure, protect+relocate Manage Clients under `require_admin`, admin gear icon on Client Select, remove admin links from the client-scoped navbar.
+
+---
+
 
 ## Global Header Client Area Redesign (4-phase requirement, in progress)
 

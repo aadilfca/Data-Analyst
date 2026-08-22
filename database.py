@@ -2596,7 +2596,7 @@ def init_db():
             admin_password_hash = bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode()
             conn.execute(
                 "INSERT INTO users (username, password_hash, is_active, role, last_login) VALUES (?, ?, ?, ?, ?)",
-                ("admin", admin_password_hash, 1, None, None)
+                ("admin", admin_password_hash, 1, "admin", None)
             )
             print("✅ Seeded admin user")
 

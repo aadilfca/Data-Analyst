@@ -100,7 +100,7 @@ def get_current_user(request: Request):
         raise HTTPException(401, "Not authenticated")
 
     rows = execute_query(
-        "SELECT s.*, u.username, u.is_active FROM sessions s "
+        "SELECT s.*, u.username, u.is_active, u.role FROM sessions s "
         "JOIN users u ON u.id = s.user_id WHERE s.token = ?",
         (token,),
     )
@@ -111,6 +111,17 @@ def get_current_user(request: Request):
     if datetime.fromisoformat(session["expiry"]) < datetime.now():
         raise HTTPException(401, "Session expired")
 
+    return session
+
+
+def require_admin(session=Depends(get_current_user)):
+    """FastAPI dependency: require the current session's user to have role='admin'.
+
+    Builds on get_current_user - raises 403 if the authenticated user isn't an
+    admin. Use as Depends(require_admin) on any admin-only route.
+    """
+    if session["role"] != "admin":
+        raise HTTPException(403, "Admin access required")
     return session
 
 
