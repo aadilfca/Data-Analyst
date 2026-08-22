@@ -11,6 +11,19 @@ const API_BASE = 'http://localhost:5000';
 // dependent page already relies on.
 let sessionClientCache = { id: null, name: null, code: null };
 
+// Ready signal for page scripts. initClientContext() is async (it awaits a real network fetch),
+// so window.onload is NOT a safe barrier for it — on a light page, onload fires long before the
+// fetch resolves, and any page reading getSelectedClientId() at that moment sees null and wrongly
+// concludes no client is selected. Every page's init must await this promise before reading the
+// client. Created here at parse time (not inside initClientContext()) so it always exists by the
+// time a page script's own onload handler runs, since client_context.js is loaded first everywhere.
+// Always resolves, never rejects — loadSessionClient() swallows its own errors and leaves the cache
+// null, so a rejection here would hang every page instead of letting it render its no-client state.
+let resolveClientContextReady;
+window.clientContextReady = new Promise(function (resolve) {
+    resolveClientContextReady = resolve;
+});
+
 async function loadSessionClient() {
     try {
         const res = await fetch(API_BASE + '/api/auth/current-client');
@@ -1114,11 +1127,16 @@ async function initClientContext() {
     consumePendingNavRestore();
     pushCurrentPageToHistory();
     // Populate the session-backed client cache before anything renders that depends on it
-    // (the client badge/dropdown). Every page's own init runs from window.onload, well after
-    // DOMContentLoaded, so this has ample time to resolve first.
+    // (the client badge/dropdown). This is a real network fetch, and window.onload waiting on
+    // subresources says nothing about an in-flight fetch() — on a light page onload fires first.
+    // Page scripts must therefore await window.clientContextReady (resolved below) rather than
+    // assuming their own window.onload runs after this.
     await loadSessionClient();
     renderClientControl();
     renderNavLeft();
+    // Resolved only once the client cache is populated AND the navbar is rendered, so a page
+    // awaiting this gets both.
+    resolveClientContextReady();
 }
 
 // ---------- EXPOSE GLOBALLY ----------

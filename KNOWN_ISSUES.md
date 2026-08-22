@@ -16,6 +16,8 @@ Every finding from a review session is recorded here — never fixed silently, n
 | Date | Module | Finding | Severity |
 |------|--------|---------|----------|
 | 2026-08-20 | Global Header Nav | Verification's Cashbook/Client Data Links and Trial Balance's Available Trial Balances view have no addressable URL, so they can't be added to NAV_MANIFEST as real destinations | Feature |
+| 2026-08-22 | Upload / Audit Rules / Template Viewer | Same client-context load-order race fixed this date in trial_balance.js/databank.js/verification.js: `window.onload` reads `getSelectedClientId()` before `client_context.js`'s async session fetch resolves. Fix is to `await window.clientContextReady` first — deliberately scoped out of that phase | Fix |
+| 2026-08-22 | Upload | `static/upload.js` still falls back to `localStorage.getItem('selectedClientId')` in two places (~line 475 and ~line 1748). Nothing writes that key since session-backed client selection landed, so the branch can only return null or a stale pre-migration value. Equivalent fallback already removed from verification.js | Fix |
 
 ---
 

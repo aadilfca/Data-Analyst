@@ -198,11 +198,14 @@ function hidePopupError() {
     if (popupError) popupError.style.display = 'none';
 }
 
+// Client selection is session-backed (client_context.js reads GET /api/auth/current-client into its
+// own cache). The old localStorage 'selectedClientId' fallback was removed: nothing writes that key
+// any more, so it could only ever return null or a stale pre-migration value.
 function getClientId() {
     if (typeof window.getSelectedClientId === 'function') {
         return window.getSelectedClientId();
     }
-    return localStorage.getItem('selectedClientId');
+    return null;
 }
 
 function formatDateInput(d) {
@@ -3952,7 +3955,12 @@ function restoreVerificationViewFromUrl() {
 }
 
 // ---------- INIT ----------
-window.onload = function() {
+window.onload = async function() {
+    // client_context.js populates the session-backed client cache from an async fetch. window.onload
+    // is not a safe barrier for that (see the ready-signal note in client_context.js) -- without this
+    // await, loadVerificationStats()/loadDataLinksCards() below run with a null client id.
+    if (window.clientContextReady) await window.clientContextReady;
+
     if (dashboardContent) dashboardContent.style.display = 'block';
     if (sessionContent) sessionContent.style.display = 'none';
     if (cashbookContent) cashbookContent.style.display = 'none';

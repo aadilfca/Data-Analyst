@@ -988,4 +988,30 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Client Context Load-Order Race (confirmed fix, single phase, complete)
+
+**Reported symptom**: Client Data (Data Bank) and Trial Balance showed "no client selected" despite a valid session with a client selected. The brief's initial diagnosis was a stale-source read — a direct `localStorage` read, or a locally-declared `getSelectedClientId()`/`getSelectedClientName()` shadowing `client_context.js`'s canonical versions, the exact bug already fixed once in `databank.js` on 2026-08-22.
+
+**That diagnosis was wrong, and was corrected before any code was touched.** Investigation found `static/databank.js` has no local shadow helpers left (the earlier fix is complete and deployed) and `static/trial_balance.js` reads the client only via `window.getSelectedClientId()`, with no `localStorage` access anywhere in the file.
+
+**Actual root cause — a load-order race.** `initClientContext()` (static/client_context.js) is `async` and `await`s `loadSessionClient()`, a real network fetch to `GET /api/auth/current-client`, kicked off at `DOMContentLoaded`. Each page then gates its UI from `window.onload` and calls `getSelectedClientId()` *synchronously*. `window.onload` waits on subresources, which says nothing about an in-flight `fetch()` — on a light page (scripts at the end of `<body>`, no images) `onload` fires first, `sessionClientCache.id` is still `null`, and the page renders its no-client state. The file's own comment at the `await loadSessionClient()` call ("Every page's own init runs from `window.onload`, well after `DOMContentLoaded`, so this has ample time to resolve first") stated exactly this wrong assumption and has been corrected in place.
+
+Per-page consequences: `trial_balance.js` showed its client-selection warning with Upload permanently disabled; `databank.js` reset its tables and **hard-redirected to `index.html` after 3 seconds**; `verification.js` ran `loadVerificationStats()`/`loadDataLinksCards()` with a null client id.
+
+**Fix.** `client_context.js` had no ready signal of any kind — no event, no flag, no promise (confirmed by reading the file end to end). Added `window.clientContextReady`, a promise created at *module parse time* (not inside `initClientContext()`, so it exists before any page script's `onload` can run — `client_context.js` is loaded first on every page) and resolved at the very end of `initClientContext()`, after `loadSessionClient()`, `renderClientControl()` and `renderNavLeft()` have all completed, so an awaiting page gets both a populated cache and a rendered navbar. It always resolves and never rejects: `loadSessionClient()` already swallows its own errors and leaves the cache null, so a rejection would hang every page rather than letting it render its no-client state; a 401 inside it redirects to login and returns early, and the promise still resolving there is correct since the page is being torn down anyway.
+
+The three reported pages then gate on it — `window.onload` stays the entry point, it just awaits first: `if (window.clientContextReady) await window.clientContextReady;` as the first statement (guarded, matching the defensive `typeof window.getSelectedClientId === 'function'` style already used across these files). `trial_balance.js` and `verification.js` became `async`; `databank.js` already was, and the await went ahead of its `initUtils()` call. `verification.js`'s `window.onload` has early `return`s (the `?state=` restore branch) — awaiting at the top is unaffected by those.
+
+Also removed `verification.js`'s `getClientId()` fallback to `localStorage.getItem('selectedClientId')`: nothing writes that key since session-backed selection landed, so it could only ever return `null` or a stale pre-migration value. `upload.js` has two identical dead fallbacks (~lines 475 and 1748) — deliberately left, logged in `KNOWN_ISSUES.md`.
+
+**Cache-bust**: `client_context.js?v=2` → `?v=3` on all 15 HTML pages together (per this project's style.css convention — never bump only some pages, which reintroduces the split "some pages live, others stale" state), plus the three edited page scripts on their own pages (`trial_balance.js` v4→v5, `databank.js` v3→v4, `verification.js` v6→v7).
+
+**Scope deliberately held**: `upload.js`, `audit_rules.js` and `template-viewer.js` all read the client id at `window.onload` and have the same race. Confirmed with the user as a separate follow-up phase, logged in `KNOWN_ISSUES.md`.
+
+**Verification.** Backend suite (`pytest tests/ -v`) 4 passed, unchanged as expected for a frontend-only change. Playwright against the user's already-running dev server (port 5000, confirmed via `netstat` first and deliberately not restarted — a `--reload` server was already live in the user's own terminal): logged in as the seeded admin, selected a client, then hard-loaded all three pages twice — once normally, once with `GET /api/auth/current-client` artificially delayed ~2s via `page.route()`, which is what makes the race deterministic rather than machine-dependent. All six checks passed with no page errors: Trial Balance's warning hidden and navbar client correct, Data Bank still on `databank.html` after waiting past its 3-second redirect window, Verification rendering all 6 Client Data Links cards.
+
+A **control run** was added specifically to prove the test could actually fail rather than being vacuously green: an init script recorded `window.getSelectedClientId()` at the exact moment the `load` event fired versus after `window.clientContextReady` resolved. Result on all three pages, under the same 2s delay — `None` at the load event, `1` after the signal. That is the race reproduced directly, and confirms the await is what closes it.
+
+---
+
 

@@ -989,6 +989,11 @@ if (closeAvailableTrialBalancesBtn) {
 }
 
 // ---------- INIT ----------
-window.onload = function () {
+window.onload = async function () {
+    // client_context.js populates the session-backed client cache from an async fetch. window.onload
+    // is not a safe barrier for that (see the ready-signal note in client_context.js) -- without this
+    // await, getSelectedClientId() returns null here and the page shows its "no client selected"
+    // warning with Upload permanently disabled, despite a valid session.
+    if (window.clientContextReady) await window.clientContextReady;
     updateClientDependentUI();
 };

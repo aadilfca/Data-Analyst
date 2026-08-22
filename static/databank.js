@@ -1776,6 +1776,12 @@ window.onClientChange = function(clientId) {
 
 // ---------- INIT ----------
 window.onload = async function() {
+    // client_context.js populates the session-backed client cache from an async fetch. window.onload
+    // is not a safe barrier for that (see the ready-signal note in client_context.js) -- without this
+    // await, getSelectedClientId() below returns null and this page redirects to the dashboard after
+    // 3 seconds, despite a valid session with a client selected.
+    if (window.clientContextReady) await window.clientContextReady;
+
     // Load utilities first
     if (typeof initUtils === 'function') {
         await initUtils();
