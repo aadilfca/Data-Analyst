@@ -1734,3 +1734,98 @@ logged to `KNOWN_ISSUES.md` instead, to be corrected when `NAV_USER_LABEL` is ne
 the real username app-wide. That app-wide change is itself a separate requirement, not this one.
 
 ---
+
+## Fix: clients.html Cogwheel Blocked Despite a URL client_id (2026-08-22)
+
+**Phase 1 of a 2-phase Fix Mode requirement.** Preceded by a read-only investigation (see the
+Status log entry) that reproduced both faults live before any code was touched.
+
+### The bug
+
+The Admin-area cogwheel on `clients.html` builds a fully-resolved
+`client_settings.html?client_id=1&from=clients` — the destination's client id is right there in the
+URL. But `enforceClientSelection()` (`static/client_context.js`) decided whether a page could load
+by checking **only** the session's `selected_client_id`, never the URL. In the normal Admin flow
+(client picker → gear → Settings → Manage Clients) no client is ever selected, so the cogwheel
+navigated correctly and was then immediately evicted with "⚠️ Please select a client from the
+Dashboard first" and bounced to `index.html`.
+
+`client_settings.js`'s `loadClientSettings()` reads `?client_id=` straight off the URL and hard-errors
+without one — the page is *designed* to be URL-driven. The guard was the piece out of step, which is
+why the fix is scoped to `client_context.js` and `clients.js` was left untouched.
+
+### Why the exemption is a named whitelist, not "any page with a client_id param"
+
+The obvious fix — let any page through if the URL carries a `client_id` — would have been wrong, not
+merely broad. Every other client-scoped page (`databank.html`, `verification.html`, `upload.html`, …)
+resolves its client from `getSelectedClientId()` (the session cache), **not** from the URL. Exempting
+those on the strength of a param they never read would let them load with a null client and render a
+broken page — trading a clear message for silent breakage.
+
+So the fix adds `URL_CLIENT_SCOPED_PAGES` (currently `['client_settings.html']`), deliberately
+mirroring the two lookup-table conventions already in this same file — `FIRM_LEVEL_PAGES` and
+`NAV_ENTRY_SOURCES` (which CLAUDE.md states is a lookup table *on purpose*, for the open-redirect
+reason). The rule for adding to it is stated in the code comment: a page belongs there only if its
+own loader actually reads `?client_id=` off the URL.
+
+Supporting helpers, both new:
+- `getUrlClientId()` — parses `?client_id=` using the **same** validation `loadClientSettings()`
+  applies (`!idParam || isNaN(parseInt(idParam, 10))`, else `parseInt(idParam, 10)`). Deliberately
+  the same shape so the guard and the loader can never disagree about what counts as a valid id: a
+  value the guard accepted but the loader rejected would wave a page through only for it to
+  hard-error on arrival.
+- `hasUrlSuppliedClient()` — requires **both** that the current file is whitelisted and that the id
+  is valid. A stray `?client_id=` anywhere else grants nothing.
+
+`enforceClientSelection()` gained a single early `if (hasUrlSuppliedClient()) return true;` inside its
+existing no-client branch; the alert/redirect path is otherwise unchanged.
+
+### Not a security regression
+
+Verified rather than assumed: every endpoint `client_settings.js` calls — `GET /api/clients/{id}`,
+`GET`/`PUT /api/clients/{id}/voucher-prefixes` (`routers/clients.py`) — sits behind
+`Depends(require_admin)`. This guard is UX, not authorization; a non-admin crafting the URL gets 403s
+and an error message, never data.
+
+### Explicitly not touched
+
+`NAV_ENTRY_SOURCES`/`getUpTarget()`/the `?from=` whitelist from the immediately-prior phase (a
+different parameter, no interaction — and regression-tested below); `clients.js` (its URL building was
+already correct); `getClientSettingsUrl()` (Phase 2's subject — touching it here would have blurred
+the two faults together).
+
+### Fault A is NOT fixed by this — confirmed before scoping, as the brief required
+
+The dashboard card / ⊞ nav landing on `client_select.html` fails at a different point: it fails
+*before navigation*. `getClientSettingsUrl()` resolves to `/static/client_select.html` at click time,
+so `client_settings.html` never loads and this guard never runs. The two faults share a symptom and a
+file, not a mechanism. Phase 2 stays necessary and does not shrink — though it may change shape, since
+`client_settings.html?client_id=N` is now genuinely reachable with no session client, making "pass the
+id in the URL" a Phase 2 option that did not exist before this fix.
+
+### Verification (live)
+
+`node --check` clean. Backend suite 4 passed (no backend change; run as a guard).
+
+1. **The fix** — fresh login, no client selected, `clients.html` → cogwheel: landed on
+   `client_settings.html?client_id=1&from=clients`, **zero alerts**, and the page rendered real data
+   ("Voucher prefix configuration for ACME", 6 prefix chips) rather than the "No client specified" error.
+2. **Guard still fires where it should** — `databank.html` with no client → alert + redirect to
+   `index.html`, as before. Crucially, `databank.html?client_id=1` *also* still alerts and redirects,
+   proving it is the whitelist and not the bare param that grants entry.
+3. **Invalid id still blocked** — `client_settings.html?client_id=abc` → alert + redirect.
+4. **`?from=` navigation intact** — with a client selected, dashboard card → `from=dashboard`,
+   "← Back to Dashboard", Up `/static/index.html`; cogwheel → `from=clients`, "← Back to Manage
+   Clients", Up `/static/clients.html`. Injection guard held: `from=https://evil.com` fell through to
+   `/static/index.html`.
+5. `client_context.js?v=10` confirmed actually fetched by the browser (bumped from `v=9` across all
+   16 pages that load it — verified by grep, not by trusting the count in prose; `client_select.html`
+   correctly does not load it and was rightly excluded).
+
+### Known cosmetic side effect (flagged, not fixed — logged to KNOWN_ISSUES.md)
+
+On `client_settings.html` reached with no session client, the navbar pill reads "Client: None
+selected" while the page heading reads "Voucher prefix configuration for ACME" — confirmed live.
+Cosmetic only; fixing it means touching `renderClientControl()`, outside this brief's scope.
+
+---

@@ -319,9 +319,45 @@ function isFirmLevelPage() {
     return FIRM_LEVEL_PAGES.includes(currentFile);
 }
 
+// Pages that read their own client from ?client_id= in the URL instead of from the session.
+// A named lookup list, NOT a general opt-out — same convention as FIRM_LEVEL_PAGES above and
+// NAV_ENTRY_SOURCES below. Only add a page here if its OWN loader actually reads ?client_id=
+// off the URL; every other client-scoped page (databank/verification/upload/...) resolves its
+// client from getSelectedClientId(), so exempting one of those on the strength of a URL param
+// would let it load with a null client and render a broken page — replacing a clear message
+// with silent breakage.
+const URL_CLIENT_SCOPED_PAGES = ['client_settings.html'];
+
+// Parses ?client_id= using the SAME validation client_settings.js's loadClientSettings() applies,
+// deliberately duplicated in shape so the guard and the loader can never disagree about what
+// counts as a valid id (a value this accepts but the loader rejects would let a page through the
+// guard only to hard-error on arrival). Returns the integer, or null when absent/non-numeric.
+function getUrlClientId() {
+    const params = new URLSearchParams(window.location.search);
+    const idParam = params.get('client_id');
+    if (!idParam || isNaN(parseInt(idParam, 10))) return null;
+    return parseInt(idParam, 10);
+}
+
+// True only when BOTH hold: this page is one that reads its client from the URL, and the URL
+// actually carries a valid id. Both conditions matter — a stray ?client_id= on any other page
+// grants nothing.
+function hasUrlSuppliedClient() {
+    const currentFile = window.location.pathname.split('/').pop() || '';
+    return URL_CLIENT_SCOPED_PAGES.includes(currentFile) && getUrlClientId() !== null;
+}
+
 // ---------- ENFORCE CLIENT SELECTION ----------
 function enforceClientSelection() {
     if (!isClientSelected()) {
+        // A page that carries its own valid ?client_id= already has everything it needs, so
+        // blocking it here was wrong: the clients.html cogwheel builds a fully-resolved
+        // client_settings.html?client_id=N&from=clients, and this guard evicted it anyway
+        // because the Admin flow (picker → gear → Settings → Manage Clients) never sets a
+        // session client. See hasUrlSuppliedClient() above for why that exemption is a named
+        // whitelist rather than "any page with a client_id param".
+        if (hasUrlSuppliedClient()) return true;
+
         // Only enforce on non-dashboard, non-firm-level pages
         if (!isDashboardPage() && !isFirmLevelPage()) {
             // Show a friendly alert and redirect to dashboard
