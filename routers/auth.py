@@ -81,3 +81,30 @@ def logout(request: Request, response: Response):
         execute_write("DELETE FROM sessions WHERE token = ?", (token,))
     response.delete_cookie(SESSION_COOKIE_NAME)
     return {"success": True}
+
+
+def get_current_user(request: Request):
+    """FastAPI dependency: require a valid, unexpired session cookie.
+
+    Returns the joined session+user row (user_id, username, is_active,
+    expiry, selected_client_id) so a route can read it via Depends() without
+    a second query. Raises 401 on missing/invalid/expired session - no
+    redirect logic here, that's the frontend's job in a later phase.
+    """
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        raise HTTPException(401, "Not authenticated")
+
+    rows = execute_query(
+        "SELECT s.*, u.username, u.is_active FROM sessions s "
+        "JOIN users u ON u.id = s.user_id WHERE s.token = ?",
+        (token,),
+    )
+    session = rows[0] if rows else None
+    if not session:
+        raise HTTPException(401, "Not authenticated")
+
+    if datetime.fromisoformat(session["expiry"]) < datetime.now():
+        raise HTTPException(401, "Session expired")
+
+    return session
