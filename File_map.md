@@ -46,6 +46,7 @@ This document lists all source files in the project, grouped by directory, with 
 
 | File | Purpose |
 |------|---------|
+| `login.html` | Login page (Auth module, Phase 4 of 7) — username/password form, no navbar/`client_context.js` (runs before any session exists). On success redirects to `index.html` (placeholder until the Phase 5 Client Cards page exists); on 401/403 shows one generic error message. |
 | `index.html` | Main dashboard — module cards grouped into Audit work / Client data / Administration sections, plus quick stats. |
 | `clients.html` | Manage Clients — sortable/searchable table, add/edit modal, deactivate/restore, and a ⚙️ cogwheel link to each client's Client Settings page. |
 | `client_settings.html` | Per-client voucher prefix configuration — chip-list editors for the 5 categories (Cash Payment/Cash Receipt/Bank Payment/Bank Receipt/Journal), plus a static read-only "how the app identifies voucher types" explainer. |
@@ -68,6 +69,7 @@ This document lists all source files in the project, grouped by directory, with 
 
 | File | Purpose |
 |------|---------|
+| `login.js` | Login page submit handler — POSTs `{username, password}` to `/api/auth/login`, redirects to `index.html` on success, shows a single generic error message on 401/403 (no branching by status/message text). No `client_context.js` dependency — defines its own fetch, no shared `API_BASE`. |
 | `client_context.js` | Global client-selection state shared by every page — navbar client dropdown/badge, `localStorage` persistence, client-selection enforcement, `setNavModule`/`setNavStats`, the global quick-navigation `⊞` dropdown + search field (`NAV_MANIFEST`-driven, `children` entries optionally carrying `keywords[]` for in-page features), and header navigation: Up (hierarchical, `getUpTarget()`/`setUpOverride()`) + Back (chronological, sessionStorage-backed history stack, `pushInPageNavEntry()`/`setInPageRestoreHandler()`) + Home icon. |
 | `utils.js` | Shared formatting helpers — `formatDate` and `formatAmount`, both driven by cached `/api/settings` data. |
 | `script.js` | Dashboard stats loading, keyboard shortcuts, `MODULE_CARD_DESTINATIONS`-driven card navigation, and click-feedback animation (excluding inert "coming soon" cards). |
