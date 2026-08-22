@@ -452,8 +452,31 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+// ---------- ADMIN ACCESS GUARD (Admin area, Phase 5 of 8) ----------
+// GET /api/clients (loadClients()'s own endpoint) stays deliberately unprotected -
+// client_select.js needs it for every logged-in user, not just admins - so it can't
+// double as the 403-probe. Reuses GET /api/users instead, the same de facto
+// "am I admin" endpoint settings.js's checkAdminAndShowTabs() already relies on.
+async function checkAdminAccess() {
+    try {
+        const res = await fetch(API_BASE + '/api/users');
+        if (res.status === 403) {
+            showStatus('⛔ Admin access required. Redirecting...', 'error');
+            setTimeout(() => { window.location.href = '/static/index.html'; }, 2000);
+            return false;
+        }
+        return true;
+    } catch (error) {
+        showStatus('⛔ Admin access required. Redirecting...', 'error');
+        setTimeout(() => { window.location.href = '/static/index.html'; }, 2000);
+        return false;
+    }
+}
+
 // ---------- INIT ----------
-window.onload = function() {
+window.onload = async function() {
+    const isAdmin = await checkAdminAccess();
+    if (!isAdmin) return;
     loadClients();
     setupSorting();
 };

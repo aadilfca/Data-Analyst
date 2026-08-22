@@ -2,11 +2,12 @@
 # 🏢 CLIENT MANAGEMENT ROUTER
 # ==============================================
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 from database import execute_query, execute_write, log_audit, get_client_voucher_prefixes, save_client_voucher_prefixes, DEFAULT_VOUCHER_PREFIXES
 from datetime import datetime
+from routers.auth import require_admin
 
 router = APIRouter()
 
@@ -89,14 +90,14 @@ def get_clients(include_inactive: bool = False):
     return [row_to_client(r) for r in rows]
 
 @router.get("/api/clients/{client_id}", response_model=ClientResponse)
-def get_client(client_id: int):
+def get_client(client_id: int, session=Depends(require_admin)):
     rows = execute_query("SELECT * FROM clients WHERE id = ?", (client_id,))
     if not rows:
         raise HTTPException(404, "Client not found")
     return row_to_client(rows[0])
 
 @router.post("/api/clients", response_model=dict)
-def create_client(client: ClientCreate):
+def create_client(client: ClientCreate, session=Depends(require_admin)):
     # Check for duplicate client_code
     existing = execute_query("SELECT id FROM clients WHERE client_code = ?", (client.client_code,))
     if existing:
@@ -119,7 +120,7 @@ def create_client(client: ClientCreate):
     return {"message": f"Client '{client.client_name}' created successfully", "client_id": client_id}
 
 @router.put("/api/clients/{client_id}", response_model=dict)
-def update_client(client_id: int, client: ClientUpdate):
+def update_client(client_id: int, client: ClientUpdate, session=Depends(require_admin)):
     existing = execute_query("SELECT id FROM clients WHERE id = ?", (client_id,))
     if not existing:
         raise HTTPException(404, "Client not found")
@@ -143,7 +144,7 @@ def update_client(client_id: int, client: ClientUpdate):
     return {"message": f"Client updated successfully"}
 
 @router.delete("/api/clients/{client_id}", response_model=dict)
-def delete_client(client_id: int):
+def delete_client(client_id: int, session=Depends(require_admin)):
     """
     Soft-delete a client (set is_active = 0).
     """
@@ -155,7 +156,7 @@ def delete_client(client_id: int):
     return {"message": f"Client deleted (soft-delete) successfully"}
 
 @router.post("/api/clients/{client_id}/restore", response_model=dict)
-def restore_client(client_id: int):
+def restore_client(client_id: int, session=Depends(require_admin)):
     """
     Restore a soft-deleted client.
     """
@@ -167,7 +168,7 @@ def restore_client(client_id: int):
     return {"message": f"Client restored successfully"}
 
 @router.get("/api/clients/{client_id}/voucher-prefixes", response_model=dict)
-def get_voucher_prefixes(client_id: int):
+def get_voucher_prefixes(client_id: int, session=Depends(require_admin)):
     """
     Get a client's voucher prefix configuration (Cash Payment/Cash Receipt/Bank Payment/
     Bank Receipt/Journal), including seeded defaults.
@@ -178,7 +179,7 @@ def get_voucher_prefixes(client_id: int):
     return get_client_voucher_prefixes(client_id)
 
 @router.put("/api/clients/{client_id}/voucher-prefixes", response_model=dict)
-def update_voucher_prefixes(client_id: int, payload: VoucherPrefixesUpdate):
+def update_voucher_prefixes(client_id: int, payload: VoucherPrefixesUpdate, session=Depends(require_admin)):
     """
     Replace a client's voucher prefix configuration. An empty list for any
     category is valid. Rejects a prefix that appears under more than one
