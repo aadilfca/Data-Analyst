@@ -127,7 +127,6 @@ const MODULE_CARD_DESTINATIONS = {
     dataBankCard: '/static/databank.html',
     trialBalanceCard: '/static/trial_balance.html',
     setupCard: '/static/setup.html',
-    manageClientsCard: '/static/clients.html',
     auditRulesCard: '/static/audit_rules.html'
 };
 Object.entries(MODULE_CARD_DESTINATIONS).forEach(([cardId, destination]) => {

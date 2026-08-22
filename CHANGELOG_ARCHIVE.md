@@ -1026,7 +1026,7 @@ A **control run** was added specifically to prove the test could actually fail r
 
 ---
 
-## Admin Role Foundation (8-phase requirement, in progress)
+## Admin Role Foundation (8-phase requirement, complete)
 
 Confirmed requirement to build a firm-level Admin area (Settings tabs: App Settings | Manage Clients | Manage Users), reachable via an admin-only gear icon on the Client Select page. Originally scoped as 7 phases; renumbered to 8 after Phase 3 verification found that `client_context.js`'s `enforceClientSelection()` blocks every non-dashboard page (including the new admin pages) unless a client is selected — a new phase (6) was inserted to fix that, pushing the old Phase 6/7 to 7/8.
 
@@ -1048,7 +1048,9 @@ Confirmed requirement to build a firm-level Admin area (Settings tabs: App Setti
 
 **Phase 7 (Admin gear icon on Client Select page, complete)**: `client_select.html` gets an `⚙️` gear icon in its header, hidden by default, positioned alongside the title in a flex row. `client_select.js` adds `checkAdminAndShowGear()` — the same `GET /api/users` 403-probe pattern reused for the 4th time now (`settings.js`/`clients.js`), revealing the icon on `200`. Since this page is standalone (no `client_context.js`/`API_BASE`), the probe uses a plain relative fetch, matching this file's existing `fetch('/api/clients')`/`fetch('/api/auth/select-client')` convention. Clicking the icon navigates to `settings.html`, the Admin area's tab hub. Called from the existing `guardSession()` IIFE right after `loadClients()`, so a user about to be bounced to login never triggers the extra probe. No further changes to `settings.html`/`users.html`/`clients.html` — already firm-level-accessible since Phase 6. Verified via Playwright against the live dev server: admin session sees the gear icon and it navigates correctly to `settings.html`; a scripted non-admin test user (created and deleted for the check) sees no icon and no visual gap — screenshots pixel-identical to the standard layout aside from the icon's absence.
 
-Remaining phase: remove admin links from the client-scoped navbar (8, FINAL).
+**Phase 8 (Remove admin links from client-scoped navbar, complete, FINAL)**: pure markup/data removal, no logic or backend changes — every route stays live, just unlinked from client-scoped surfaces now that the Phase 7 gear icon is the Admin area's sole entry point. `static/index.html`: removed the `#manageClientsCard` card and the inert "Settings"/"Users" `coming-soon` cards from the Administration `hub-group` (Setup/Audit Rules/Audit Log untouched). `static/script.js`: removed `manageClientsCard: '/static/clients.html'` from `MODULE_CARD_DESTINATIONS` (Settings/Users were never wired there, always inert). `static/client_context.js`: removed the top-level `Manage Clients` (ready) and `Settings`/`Users` (coming-soon) entries from `NAV_MANIFEST`'s Administration group — `flattenNavManifest()`/`renderNavMenuPanel()`/`renderNavSearchResults()` needed no code changes, since they all read the array generically. **Confirmed with the user and deliberately left untouched**: `Setup`'s own nested `App Settings` child link — pre-existing Setup-hub internal navigation, unrelated to this Admin-area initiative, and `setup.html` was never in this phase's file list. Verified via Playwright against the live dev server: dashboard's Administration section shows only Setup/Audit Log/Audit Rules with no visual gap; the ⊞ quick-nav dropdown and search field no longer surface Manage Clients/Settings/Users while still correctly finding Setup's own "App Settings" child; the Phase 7 gear icon still reaches `settings.html` end-to-end, proving the underlying pages/routes remain fully functional.
+
+**All 8 phases of the Admin Role Foundation requirement are now complete.**
 
 ---
 

@@ -141,6 +141,11 @@ const NAV_MANIFEST = [
     },
     {
         title: 'Administration',
+        // Manage Clients (ready) and the Settings/Users coming-soon placeholders were removed
+        // here (Admin area, Phase 8 of 8, FINAL) - that whole area is now reached exclusively via
+        // the admin-only gear icon on client_select.html, not from inside a client's own
+        // workspace. Setup's own "App Settings" child link below is untouched - pre-existing
+        // Setup-hub navigation, unrelated to this removal (confirmed with the user).
         items: [
             {
                 label: 'Setup', url: '/static/setup.html', state: 'ready', module: 'Setup',
@@ -151,7 +156,6 @@ const NAV_MANIFEST = [
                     { label: 'App Settings', url: '/static/settings.html', state: 'ready' },
                 ]
             },
-            { label: 'Manage Clients', url: '/static/clients.html', state: 'ready', module: 'Manage Clients' },
             {
                 label: 'Audit Rules', url: '/static/audit_rules.html', state: 'ready', module: 'Audit Rules',
                 children: [
@@ -181,8 +185,6 @@ const NAV_MANIFEST = [
                     },
                 ]
             },
-            { label: 'Settings', url: null, state: 'coming-soon' },
-            { label: 'Users', url: null, state: 'coming-soon' },
             { label: 'Audit Log', url: null, state: 'coming-soon' },
         ],
     },

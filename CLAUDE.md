@@ -256,6 +256,7 @@ each phase.
 - 2026-08-22: Admin area, Phase 5 of 8 - Manage Clients protected with require_admin (except GET list), clients.js gets admin guard (routers/clients.py, clients.js).
 - 2026-08-22: Admin area, Phase 6 of 8 - settings.html/users.html/clients.html exempted from enforceClientSelection() via isFirmLevelPage() (client_context.js).
 - 2026-08-22: Admin area, Phase 7 of 8 - admin-only gear icon added to Client Select page, links to settings.html (client_select.html, client_select.js).
+- 2026-08-22: Admin area, Phase 8 of 8 FINAL - removed Manage Clients/Settings/Users from dashboard and NAV_MANIFEST (index.html, script.js, client_context.js).
 
 
 ## Self-maintenance
