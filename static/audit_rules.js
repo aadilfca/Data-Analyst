@@ -2344,6 +2344,23 @@ function showAssignCategoriesStatus(message, type) {
     }, 5000);
 }
 
+// Momentary success toast (bottom-right, auto-dismisses) - same pattern as showVerifyToast() in
+// procedure_modal.js, reusing its .voucher-verify-toast CSS. This page doesn't load
+// procedure_modal.js (it self-installs a large unrelated modal component), so this is its own
+// small local copy rather than a shared function. Success-only feedback, per that convention -
+// errors still go through showAssignCategoriesStatus() above.
+const arAssignCategoriesToast = document.getElementById('arAssignCategoriesToast');
+let arAssignCategoriesToastTimeout = null;
+function showAssignCategoriesToast(msg) {
+    if (!arAssignCategoriesToast) return;
+    arAssignCategoriesToast.textContent = msg;
+    arAssignCategoriesToast.classList.add('show');
+    clearTimeout(arAssignCategoriesToastTimeout);
+    arAssignCategoriesToastTimeout = setTimeout(() => {
+        arAssignCategoriesToast.classList.remove('show');
+    }, 2000);
+}
+
 // ---------- OPEN / CLOSE (whole-shell swap) ----------
 // async/await added for the Verification -> Assign Categories deep link (Phase 5), which needs
 // to know once the accounts have actually loaded before it can locate/highlight a row. The
@@ -2682,13 +2699,12 @@ async function assignCategory(accountId, categoryId, forceApply) {
 
         const actionLabel = categoryId ? 'Category assigned' : 'Category cleared';
         if (result.is_leaf) {
-            showAssignCategoriesStatus('✅ ' + actionLabel + '.', 'success');
+            showAssignCategoriesToast('✅ ' + actionLabel + '.');
         } else {
-            showAssignCategoriesStatus(
+            showAssignCategoriesToast(
                 '✅ ' + actionLabel + (forceApply ? ' (force-applied)' : '') + '. ' +
                 result.descendants_updated_count + ' descendant(s) updated, ' +
-                result.descendants_skipped_count + ' left unchanged.',
-                'success'
+                result.descendants_skipped_count + ' left unchanged.'
             );
         }
     } catch (error) {
