@@ -97,4 +97,18 @@ clientSearchInput.addEventListener('input', function () {
     filterClients(this.value.trim().toLowerCase());
 });
 
-loadClients();
+// This page has no navbar/client_context.js, so it needs its own session guard rather
+// than inheriting loadSessionClient()'s check — no valid session, no client cards.
+(async function guardSession() {
+    try {
+        const res = await fetch('/api/auth/current-client');
+        if (!res.ok) {
+            window.location.href = '/static/login.html';
+            return;
+        }
+    } catch (err) {
+        window.location.href = '/static/login.html';
+        return;
+    }
+    loadClients();
+})();

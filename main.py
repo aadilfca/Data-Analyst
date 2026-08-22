@@ -2,9 +2,10 @@
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from database import init_db, log_error, get_error_code_for_exception, execute_query
 from routers import dashboard, verification, import_export, templates, clients, data, error_log, settings, audit_rules, trial_balance, auth
+from routers.auth import get_current_user
 from datetime import datetime
 import traceback
 import sys
@@ -20,6 +21,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# ---------- ROOT ROUTE: LOGIN → CLIENT CARDS ENTRY FLOW ----------
+@app.get("/")
+async def root(request: Request):
+    """
+    No valid session -> login.html. Valid session -> client_select.html (never straight
+    to the dashboard, so the user always re-picks a client - matches the app's existing
+    "never auto-resume" convention).
+    """
+    try:
+        get_current_user(request)
+        return RedirectResponse(url="/static/client_select.html")
+    except HTTPException:
+        return RedirectResponse(url="/static/login.html")
 
 # ✅ THEN include routers
 app.include_router(dashboard.router)

@@ -14,6 +14,12 @@ let sessionClientCache = { id: null, name: null, code: null };
 async function loadSessionClient() {
     try {
         const res = await fetch(API_BASE + '/api/auth/current-client');
+        if (res.status === 401) {
+            // No valid session - bounce to login rather than rendering a page the
+            // user isn't allowed to see.
+            window.location.href = '/static/login.html';
+            return;
+        }
         if (!res.ok) throw new Error('Failed to load session client');
         const data = await res.json();
         sessionClientCache = {
@@ -25,6 +31,19 @@ async function loadSessionClient() {
         console.warn('⚠️ Failed to load session client:', error.message);
         sessionClientCache = { id: null, name: null, code: null };
     }
+}
+
+/**
+ * Log out: clear the session server-side, then redirect to login regardless of
+ * response (logout is designed to always succeed / be idempotent).
+ */
+async function logoutUser() {
+    try {
+        await fetch(API_BASE + '/api/auth/logout', { method: 'POST' });
+    } catch (error) {
+        console.warn('⚠️ Logout request failed:', error.message);
+    }
+    window.location.href = '/static/login.html';
 }
 
 // ---------- GLOBAL QUICK-NAVIGATION MANIFEST ----------
@@ -548,6 +567,7 @@ function renderNavLeft() {
 
     const isDash = isDashboardPage();
     const homeIcon = `<a href="/static/index.html" class="nav-home-icon" title="Go to Dashboard">🏢</a>`;
+    const logoutButton = `<button type="button" class="nav-logout-btn" title="Log out">🚪 Logout</button>`;
     // Back: chronological history stack (see handleBackArrowClick()) — always intercepted, so a
     // <button> rather than an anchor with a static href. Disabled when there's nowhere to go back
     // to (stack has 0 or 1 entries, i.e. this is the first page visited this session).
@@ -582,6 +602,7 @@ function renderNavLeft() {
             <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
             ${navMenu}
             ${navSearch}
+            ${logoutButton}
         `;
     } else {
         // Non-dashboard: back arrow, up arrow, then home icon, then brand
@@ -592,6 +613,7 @@ function renderNavLeft() {
             <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
             ${navMenu}
             ${navSearch}
+            ${logoutButton}
         `;
     }
 
@@ -1028,6 +1050,14 @@ document.addEventListener('click', function (e) {
         window._appNav.upOverride();
     } else {
         window.location.href = getUpTarget();
+    }
+});
+
+// ---------- GLOBAL CLICK HANDLER: LOGOUT ----------
+document.addEventListener('click', function (e) {
+    const logoutBtn = e.target.closest('.nav-logout-btn');
+    if (logoutBtn) {
+        logoutUser();
     }
 });
 // ---------- RENDER CLIENT BADGE (read-only) ----------
