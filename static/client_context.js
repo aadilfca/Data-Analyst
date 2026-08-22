@@ -254,11 +254,22 @@ function isDashboardPage() {
     return path.endsWith('index.html') || path === '/' || path === '/static/' || path === '/static/index.html';
 }
 
+// Firm-level pages (Admin area, Phase 6 of 8) - not client-scoped, so they shouldn't need a
+// client selected to load. A named exemption list, not a general opt-out mechanism - only these
+// three pages are exempt. Their own admin-role guards (checkAdminAccess()/checkAdminAndShowTabs(),
+// Phases 3/5's GET /api/users 403-probes) are untouched and still apply on top of this.
+const FIRM_LEVEL_PAGES = ['settings.html', 'users.html', 'clients.html'];
+
+function isFirmLevelPage() {
+    const currentFile = window.location.pathname.split('/').pop() || '';
+    return FIRM_LEVEL_PAGES.includes(currentFile);
+}
+
 // ---------- ENFORCE CLIENT SELECTION ----------
 function enforceClientSelection() {
     if (!isClientSelected()) {
-        // Only enforce on non-dashboard pages
-        if (!isDashboardPage()) {
+        // Only enforce on non-dashboard, non-firm-level pages
+        if (!isDashboardPage() && !isFirmLevelPage()) {
             // Show a friendly alert and redirect to dashboard
             alert('⚠️ Please select a client from the Dashboard first.');
             window.location.href = '/static/index.html';
@@ -301,7 +312,8 @@ function renderClientControl() {
             <span class="nav-area" style="font-weight:600; font-size:14px; color:#e0f2fe; letter-spacing:0.3px; white-space:nowrap;">AREA: ${moduleName}</span>
             <span id="navStats" style="font-size:13px; color:#94a3b8; white-space:nowrap;">${statsText}</span>
         `;
-        // Enforce client selection on all non-dashboard pages
+        // Enforce client selection on all non-dashboard pages, except the firm-level
+        // pages exempted above (Admin area, Phase 6 of 8)
         enforceClientSelection();
     }
 }
