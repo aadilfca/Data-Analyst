@@ -117,6 +117,35 @@
             color: #94a3b8;
             padding: 8px 0;
         }
+
+        /* Admin area tabs (Phase 4 of 8: Settings restructure into tabs) */
+        .settings-tabs {
+            display: flex;
+            gap: 4px;
+            border-bottom: 2px solid #e2e8f0;
+            margin-bottom: 24px;
+        }
+
+        .settings-tab {
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
+            font-size: 14px;
+            font-weight: 600;
+            color: #64748b;
+            cursor: pointer;
+            margin-bottom: -2px;
+        }
+
+        .settings-tab:hover {
+            color: #1a1a2e;
+        }
+
+        .settings-tab.active {
+            color: #2563eb;
+            border-bottom-color: #2563eb;
+        }
     </style>
 </head>
 
@@ -136,34 +165,46 @@
     <div class="main-container">
         <header class="module-header">
             <a href="/static/setup.html" class="back-link">← Back to Setup</a>
-            <h1>⚙️ App Settings</h1>
-            <p>Configure global settings for the application</p>
+            <h1>⚙️ Settings</h1>
+            <p>Configure global settings and manage firm-level administration</p>
         </header>
 
-        <div id="settingsContainer">
-            <!-- Settings will be loaded by JavaScript -->
+        <!-- Admin area tabs (Phase 4 of 8: Settings restructure into tabs). Manage Clients/
+             Manage Users are hidden until checkAdminAndShowTabs() confirms the session is an
+             admin (reuses the same GET /api/users 403-probe pattern users.js established in
+             Phase 3) - no dedicated "am I admin" endpoint exists. -->
+        <div class="settings-tabs" id="settingsTabs">
+            <button type="button" class="settings-tab active" data-tab="app-settings">⚙️ App Settings</button>
+            <button type="button" class="settings-tab admin-tab" data-tab="manage-clients" style="display:none;">🏢 Manage Clients</button>
+            <button type="button" class="settings-tab admin-tab" data-tab="manage-users" style="display:none;">👥 Manage Users</button>
         </div>
 
-        <!-- Firm-wide Holidays (Phase 2 of the Client Data Availability & Coverage Redesign) -->
-        <div class="settings-group">
-            <h3>🗓️ Firm-wide Holidays</h3>
-            <p class="hint" style="margin-bottom:12px;">
-                Sundays are excluded automatically. Add public/religious holidays here (lunar holidays like Eid/Muharram shift every year — re-add them each year; fixed-date holidays like Pakistan Day can be marked "Repeats yearly").
-            </p>
-            <div class="setting-row">
-                <input type="date" id="holidayDateInput">
-                <input type="text" id="holidayLabelInput" placeholder="e.g. Eid-ul-Fitr">
-                <label style="min-width:auto; font-weight:normal;">
-                    <input type="checkbox" id="holidayRepeatsYearly"> Repeats yearly
-                </label>
-                <button class="save-btn" id="addHolidayBtn">+ Add Holiday</button>
+        <div id="tabPanelAppSettings">
+            <div id="settingsContainer">
+                <!-- Settings will be loaded by JavaScript -->
             </div>
-            <div id="holidayListContainer">
-                <!-- Holiday rows rendered by settings.js -->
-            </div>
-        </div>
 
-        <div id="statusMessage" class="upload-status" style="display:none;"></div>
+            <!-- Firm-wide Holidays (Phase 2 of the Client Data Availability & Coverage Redesign) -->
+            <div class="settings-group">
+                <h3>🗓️ Firm-wide Holidays</h3>
+                <p class="hint" style="margin-bottom:12px;">
+                    Sundays are excluded automatically. Add public/religious holidays here (lunar holidays like Eid/Muharram shift every year — re-add them each year; fixed-date holidays like Pakistan Day can be marked "Repeats yearly").
+                </p>
+                <div class="setting-row">
+                    <input type="date" id="holidayDateInput">
+                    <input type="text" id="holidayLabelInput" placeholder="e.g. Eid-ul-Fitr">
+                    <label style="min-width:auto; font-weight:normal;">
+                        <input type="checkbox" id="holidayRepeatsYearly"> Repeats yearly
+                    </label>
+                    <button class="save-btn" id="addHolidayBtn">+ Add Holiday</button>
+                </div>
+                <div id="holidayListContainer">
+                    <!-- Holiday rows rendered by settings.js -->
+                </div>
+            </div>
+
+            <div id="statusMessage" class="upload-status" style="display:none;"></div>
+        </div>
     </div>
 
     <script src="/static/client_context.js?v=5"></script>
