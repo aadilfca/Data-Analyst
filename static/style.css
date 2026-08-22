@@ -280,6 +280,52 @@ body {
     color: #b0bec5;
 }
 
+/* ---------- FIRM-LEVEL TAB STRIP (settings.html / users.html / clients.html) ----------
+   The Admin area's persistent tab navigation, rendered by renderFirmLevelTabs() in
+   client_context.js into each Admin page's #firmTabs container. These rules previously lived in
+   settings.html's own inline <style> block under the names .settings-tabs/.settings-tab, which is
+   why the strip rendered unstyled anywhere else — they are shared now, and renamed to match the
+   neighbouring .firm-nav-* family since they are no longer settings-specific. Values are carried
+   over unchanged (no new colours introduced); .firm-tab is a <button>, so font chrome is reset to
+   inherit the same way .nav-client-display above does. */
+.firm-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 2px solid #e2e8f0;
+    margin-bottom: 24px;
+}
+
+.firm-tab {
+    padding: 10px 20px;
+    background: none;
+    border: none;
+    border-bottom: 3px solid transparent;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    color: #64748b;
+    cursor: pointer;
+    margin-bottom: -2px;
+}
+
+.firm-tab:hover {
+    color: #1a1a2e;
+}
+
+/* The page you are currently on. Not a re-selectable control — clicking it is a deliberate no-op
+   (see the delegated listener in client_context.js), so it takes a default cursor, the same
+   convention .btn-cashbook.active already follows for its own "you are here" state. */
+.firm-tab.active {
+    color: #2563eb;
+    border-bottom-color: #2563eb;
+    cursor: default;
+}
+
+.firm-tab:focus-visible {
+    outline: 2px solid #4fc3f7;
+    outline-offset: -2px;
+}
+
 /* ---------- GLOBAL QUICK-NAVIGATION MENU (⊞ icon + dropdown, Phase 1) ----------
    Reads from NAV_MANIFEST in client_context.js. Sits immediately right of the
    "System Analyst" brand text on every page. #navLeft needs position:relative so the

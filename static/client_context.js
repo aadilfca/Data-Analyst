@@ -258,8 +258,9 @@ function isDashboardPage() {
 
 // Firm-level pages (Admin area, Phase 6 of 8) - not client-scoped, so they shouldn't need a
 // client selected to load. A named exemption list, not a general opt-out mechanism - only these
-// three pages are exempt. Their own admin-role guards (checkAdminAccess()/checkAdminAndShowTabs(),
-// Phases 3/5's GET /api/users 403-probes) are untouched and still apply on top of this.
+// three pages are exempt. The admin-role guards on top of this are untouched and still apply -
+// clients.js's checkAdminAccess(), users.js's own 403-aware loadUsers(), and the tab strip's
+// admin-only gating, all resolving through the shared isAdminUser() probe below.
 const FIRM_LEVEL_PAGES = ['settings.html', 'users.html', 'clients.html'];
 
 function isFirmLevelPage() {
@@ -653,6 +654,76 @@ function renderFirmLevelNav() {
         </div>
     `;
 }
+
+// ---------- FIRM-LEVEL TAB STRIP (settings.html / users.html / clients.html) ----------
+// The Admin area's persistent tab navigation, defined once here for the same reason
+// renderFirmLevelNav() above is: it used to be hardcoded inline in settings.html only, so clicking
+// "Manage Clients"/"Manage Users" landed the user on a page with no tab strip at all and no way
+// back to the other two. One renderer on all three pages can't drift the way per-page markup did.
+// A hand-maintained data array, deliberately not a scrape of any page's DOM - same convention as
+// NAV_MANIFEST above. `file` doubles as both the navigation target and the active-state key.
+const FIRM_LEVEL_TABS = [
+    { file: 'settings.html', label: '⚙️ App Settings', adminOnly: false },
+    { file: 'clients.html', label: '🏢 Manage Clients', adminOnly: true },
+    { file: 'users.html', label: '👥 Manage Users', adminOnly: true }
+];
+
+// Memoised admin probe. There is still no dedicated "am I admin" endpoint, so this reuses the same
+// de facto GET /api/users 403-probe that settings.js/clients.js/client_select.js already rely on -
+// memoising the promise means the three Admin pages issue one probe between them rather than each
+// firing its own. Fails closed (false) on any error, matching every existing call site's behaviour.
+let adminProbePromise = null;
+
+function isAdminUser() {
+    if (!adminProbePromise) {
+        adminProbePromise = fetch(`${API_BASE}/api/users`)
+            .then(res => res.ok)
+            .catch(() => false);
+    }
+    return adminProbePromise;
+}
+
+// Fills the #firmTabs container each Admin page declares (an empty div - the page supplies no tab
+// markup of its own). Active state is derived from the current filename, the same read
+// isFirmLevelPage() uses, so "you are here" always comes from the URL rather than a hardcoded
+// class in HTML - which is what made the old active state dead once you navigated away.
+// Admin-only tabs render hidden and are revealed once isAdminUser() resolves true, preserving
+// settings.html's existing behaviour where a non-admin sees App Settings alone.
+function renderFirmLevelTabs() {
+    const container = document.getElementById('firmTabs');
+    if (!container) return;
+
+    const currentFile = window.location.pathname.split('/').pop() || '';
+
+    container.innerHTML = FIRM_LEVEL_TABS.map(tab => {
+        const isActive = tab.file === currentFile;
+        return `
+            <button type="button"
+                    class="firm-tab${isActive ? ' active' : ''}"
+                    data-tab-file="${tab.file}"
+                    ${tab.adminOnly ? 'data-admin-only="true" style="display:none;"' : ''}
+                    ${isActive ? 'aria-current="page"' : ''}>${tab.label}</button>
+        `;
+    }).join('');
+
+    isAdminUser().then(isAdmin => {
+        if (!isAdmin) return;
+        container.querySelectorAll('[data-admin-only]').forEach(tab => {
+            tab.style.display = '';
+        });
+    });
+}
+
+// Bound once at module load rather than inside renderFirmLevelTabs(), so a future re-render can
+// never stack duplicate listeners - the same reasoning as the nav-menu document listeners below.
+// Looks the container up fresh each time since its contents are replaced on render.
+document.addEventListener('click', function (e) {
+    const tab = e.target.closest('.firm-tab');
+    if (!tab) return;
+    // Clicking the tab you're already on is a deliberate no-op - no reload, no flicker.
+    if (tab.classList.contains('active')) return;
+    window.location.href = '/static/' + tab.dataset.tabFile;
+});
 
 // ---------- QUICK NAVIGATION MENU (⊞ icon + dropdown) ----------
 // Re-initialised on every renderNavLeft() call since the toggle/panel are rebuilt via
@@ -1197,6 +1268,10 @@ async function initClientContext() {
     // shared by both branches, so the session guard behaves identically either way.
     if (isFirmLevelPage()) {
         renderFirmLevelNav();
+        // The Admin area's persistent tab strip. Rendered into each Admin page's own #firmTabs
+        // container (page content, under the module header) rather than into the navbar - see
+        // renderFirmLevelTabs() above.
+        renderFirmLevelTabs();
     } else {
         renderClientControl();
         renderNavLeft();
@@ -1220,6 +1295,9 @@ window.confirmSwitchClient = confirmSwitchClient;
 window.goToDashboard = goToDashboard;
 window.renderClientBadge = renderClientBadge;
 window.enforceClientSelection = enforceClientSelection;
+// Shared admin probe - exposed so an Admin page's own guard (clients.js's checkAdminAccess())
+// reuses this one memoised request instead of issuing a second identical one.
+window.isAdminUser = isAdminUser;
 window.onClientChange = null; // Hook for page-specific logic
 
 // ---------- AUTO-INIT ON DOM READY ----------

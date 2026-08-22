@@ -455,25 +455,21 @@ document.addEventListener('keydown', function(e) {
 // ---------- ADMIN ACCESS GUARD (Admin area, Phase 5 of 8) ----------
 // GET /api/clients (loadClients()'s own endpoint) stays deliberately unprotected -
 // client_select.js needs it for every logged-in user, not just admins - so it can't
-// double as the 403-probe. Reuses GET /api/users instead, the same de facto
-// "am I admin" endpoint settings.js's checkAdminAndShowTabs() already relies on.
+// double as the 403-probe. Delegates instead to client_context.js's shared window.isAdminUser(),
+// which wraps the same de facto GET /api/users probe this function used to issue itself - and
+// memoises it, so this page's guard and its tab strip share one request rather than firing two.
+// Fails closed identically (the shared probe resolves false on a 403 or a network error).
 // Both failure paths bounce to the client picker, not index.html: this is a firm-level page
 // reached from client_select.html, so a non-admin who lands here has no client selected -
 // dropping them on the client-scoped dashboard was a dead end into client territory.
 async function checkAdminAccess() {
-    try {
-        const res = await fetch(API_BASE + '/api/users');
-        if (res.status === 403) {
-            showStatus('⛔ Admin access required. Redirecting...', 'error');
-            setTimeout(() => { window.location.href = '/static/client_select.html'; }, 2000);
-            return false;
-        }
-        return true;
-    } catch (error) {
+    const isAdmin = await window.isAdminUser();
+    if (!isAdmin) {
         showStatus('⛔ Admin access required. Redirecting...', 'error');
         setTimeout(() => { window.location.href = '/static/client_select.html'; }, 2000);
         return false;
     }
+    return true;
 }
 
 // ---------- INIT ----------

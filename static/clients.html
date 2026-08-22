@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manage Clients</title>
-    <link rel="stylesheet" href="/static/style.css?v=10">
+    <link rel="stylesheet" href="/static/style.css?v=11">
 </head>
 
 <body data-nav-module="Manage Clients">
@@ -27,6 +27,11 @@
             <h1>🏢 Manage Clients</h1>
             <p>Add, edit, or delete client entities (companies/organisations)</p>
         </header>
+
+        <!-- Admin area tab strip. Deliberately empty: the tabs, their active state and their
+             admin-only gating are all rendered by renderFirmLevelTabs() in client_context.js, the
+             same way this page's navbar is rendered by renderFirmLevelNav(). -->
+        <div class="firm-tabs" id="firmTabs"></div>
 
         <!-- Toolbar -->
         <div style="display:flex; justify-content:space-between; margin-bottom:20px; flex-wrap:wrap; gap:10px;">
@@ -143,8 +148,8 @@
         <div id="modalStatus" style="margin-top:10px; padding:8px; display:none; border-radius:4px;"></div>
     </div>
 
-    <script src="/static/client_context.js?v=6"></script>
-    <script src="/static/clients.js?v=3"></script>
+    <script src="/static/client_context.js?v=7"></script>
+    <script src="/static/clients.js?v=4"></script>
 </body>
 
 </html>

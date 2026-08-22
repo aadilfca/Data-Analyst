@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>App Settings</title>
-    <link rel="stylesheet" href="/static/style.css?v=10">
+    <link rel="stylesheet" href="/static/style.css?v=11">
     <style>
         .settings-group {
             background: white;
@@ -118,34 +118,8 @@
             padding: 8px 0;
         }
 
-        /* Admin area tabs (Phase 4 of 8: Settings restructure into tabs) */
-        .settings-tabs {
-            display: flex;
-            gap: 4px;
-            border-bottom: 2px solid #e2e8f0;
-            margin-bottom: 24px;
-        }
-
-        .settings-tab {
-            padding: 10px 20px;
-            background: none;
-            border: none;
-            border-bottom: 3px solid transparent;
-            font-size: 14px;
-            font-weight: 600;
-            color: #64748b;
-            cursor: pointer;
-            margin-bottom: -2px;
-        }
-
-        .settings-tab:hover {
-            color: #1a1a2e;
-        }
-
-        .settings-tab.active {
-            color: #2563eb;
-            border-bottom-color: #2563eb;
-        }
+        /* The Admin tab strip's rules used to live here. They are now shared across all three
+           Admin pages as .firm-tabs/.firm-tab in style.css - see renderFirmLevelTabs(). */
     </style>
 </head>
 
@@ -168,15 +142,12 @@
             <p>Configure global settings and manage firm-level administration</p>
         </header>
 
-        <!-- Admin area tabs (Phase 4 of 8: Settings restructure into tabs). Manage Clients/
-             Manage Users are hidden until checkAdminAndShowTabs() confirms the session is an
-             admin (reuses the same GET /api/users 403-probe pattern users.js established in
-             Phase 3) - no dedicated "am I admin" endpoint exists. -->
-        <div class="settings-tabs" id="settingsTabs">
-            <button type="button" class="settings-tab active" data-tab="app-settings">⚙️ App Settings</button>
-            <button type="button" class="settings-tab admin-tab" data-tab="manage-clients" style="display:none;">🏢 Manage Clients</button>
-            <button type="button" class="settings-tab admin-tab" data-tab="manage-users" style="display:none;">👥 Manage Users</button>
-        </div>
+        <!-- Admin area tab strip. Deliberately empty: the tabs, their active state and their
+             admin-only gating are all rendered by renderFirmLevelTabs() in client_context.js, the
+             same way this page's navbar is rendered by renderFirmLevelNav(). Do not hardcode tab
+             markup back in here - it existing only on this page is precisely what made the strip
+             vanish on clients.html/users.html. -->
+        <div class="firm-tabs" id="firmTabs"></div>
 
         <div id="tabPanelAppSettings">
             <div id="settingsContainer">
@@ -206,8 +177,8 @@
         </div>
     </div>
 
-    <script src="/static/client_context.js?v=6"></script>
-    <script src="/static/settings.js"></script>
+    <script src="/static/client_context.js?v=7"></script>
+    <script src="/static/settings.js?v=2"></script>
 </body>
 
 </html>

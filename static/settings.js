@@ -249,49 +249,9 @@ window.onload = function() {
         const btn = event.target.closest('.delete-holiday-btn');
         if (btn) deleteHoliday(btn.dataset.id);
     });
-    checkAdminAndShowTabs();
-    setupSettingsTabs();
 };
 
-// ==============================================
-// 🗂️ SETTINGS TABS (Phase 4 of 8: Settings restructure into tabs)
-// App Settings is the only real in-page panel today; Manage Clients/Manage Users
-// navigate to their existing standalone pages instead of rendering in place -
-// Phase 5 relocates Manage Clients' actual content into a second in-page panel.
-// ==============================================
-
-// Reuses the same admin-only GET /api/users 403-probe pattern users.js established
-// in Phase 3 - there's no dedicated "am I admin" endpoint, and the brief calls for
-// reusing that pattern rather than adding a second one.
-async function checkAdminAndShowTabs() {
-    try {
-        const res = await fetch(`${API_BASE}/api/users`);
-        if (res.ok) {
-            document.querySelectorAll('.admin-tab').forEach(tab => tab.style.display = '');
-        }
-    } catch (error) {
-        // Fail closed - admin tabs stay hidden on any error, same as a 403.
-    }
-}
-
-function setupSettingsTabs() {
-    document.getElementById('settingsTabs')?.addEventListener('click', (event) => {
-        const tab = event.target.closest('.settings-tab');
-        if (!tab) return;
-
-        if (tab.dataset.tab === 'manage-clients') {
-            window.location.href = '/static/clients.html';
-            return;
-        }
-        if (tab.dataset.tab === 'manage-users') {
-            window.location.href = '/static/users.html';
-            return;
-        }
-
-        // App Settings - toggle active state (a no-op today since it's the only
-        // real panel, but keeps the interaction consistent once Phase 5 adds a
-        // second in-page panel for Manage Clients).
-        document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-    });
-}
+// The Admin tab strip's rendering, admin-only gating and click handling used to live here as
+// checkAdminAndShowTabs()/setupSettingsTabs(). Both are gone: the strip is now shared across all
+// three Admin pages, owned by renderFirmLevelTabs() in client_context.js, which this page reaches
+// via its empty #firmTabs container. Nothing tab-related belongs in this file any more.

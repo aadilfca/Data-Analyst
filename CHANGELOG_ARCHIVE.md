@@ -1393,3 +1393,100 @@ Also set `PYTHONIOENCODING=utf-8` when printing page text — this environment's
 on emoji, the same quirk that breaks `python main.py` from a bash tool here.
 
 ---
+
+## Shared Admin Tab Strip
+
+**Date:** 2026-08-22 · **Type:** Fix Mode, single phase · **Scope:** frontend only (no backend,
+router or schema changes)
+
+### The problem
+
+The three firm-level Admin pages (`settings.html`, `clients.html`, `users.html`) were supposed to
+read as one Administration area, but the tab strip appeared on Settings alone. Clicking
+"🏢 Manage Clients" or "👥 Manage Users" landed the user on a page with no tab strip, no way back to
+the other two, and no indication of where they were. The tabs behaved as a one-way menu.
+
+### Root cause (diagnosed before fixing)
+
+The brief allowed for two possibilities — (a) the markup only exists on `settings.html`, or (b) it
+exists everywhere but loses its active styling on navigation. **It was (a), conclusively:**
+
+- `settings.html:175-179` held the only `.settings-tabs` markup in the entire app.
+- `clients.html` and `users.html` had no tab markup at all (both read end to end to confirm).
+- The `.settings-tabs`/`.settings-tab` CSS lived in `settings.html`'s own inline `<style>` block
+  (lines 121-148), so copying the markup elsewhere would have rendered it unstyled anyway.
+- The `active` class was a hardcoded HTML attribute plus a click-time toggle in
+  `setupSettingsTabs()` that was effectively dead code — it only ran for the one tab that never
+  navigated away.
+
+### The fix
+
+Extracted into a single shared component owned by `static/client_context.js`, following the exact
+precedent `renderFirmLevelNav()` already set for the Admin navbar — that file already owned the
+firm-level header, already knew which pages were firm-level (`FIRM_LEVEL_PAGES`/`isFirmLevelPage()`),
+and already had a firm-level branch in `initClientContext()`.
+
+- **`FIRM_LEVEL_TABS`** — a hand-maintained data array (`{file, label, adminOnly}`), the same
+  data-not-DOM-scrape convention `NAV_MANIFEST` follows. `file` doubles as navigation target and
+  active-state key.
+- **`renderFirmLevelTabs()`** — fills each page's empty `#firmTabs` container. Active state is
+  derived from `window.location.pathname.split('/').pop()`, the same read `isFirmLevelPage()` uses,
+  so "you are here" always comes from the URL and can never go stale the way a hardcoded class did.
+- **`isAdminUser()`** — a **memoised** promise around the existing `GET /api/users` 403-probe (there
+  is still no dedicated "am I admin" endpoint). Memoising means the guard and the tab strip on a
+  given page share one request instead of firing two. Fails closed on any error.
+- **Delegated click listener**, bound once at module load (same pattern as the nav-menu document
+  listeners). Clicking the already-active tab is a deliberate no-op.
+- The three HTML pages each carry only `<div class="firm-tabs" id="firmTabs"></div>` after their
+  `</header>` — no tab markup of their own, by design.
+- `.settings-tabs`/`.settings-tab` moved out of `settings.html`'s inline block into `style.css` as
+  `.firm-tabs`/`.firm-tab`/`.firm-tab.active`, in the existing firm-level section. Renamed because
+  they are no longer settings-specific; all values carried over unchanged (no new colours). The old
+  class names were confirmed to appear nowhere else before renaming.
+- `settings.js` lost `checkAdminAndShowTabs()` and `setupSettingsTabs()` entirely.
+- `clients.js`'s `checkAdminAccess()` kept its name, redirect behaviour and call site, but now
+  delegates to `window.isAdminUser()` instead of issuing its own fetch.
+- **`users.js` deliberately untouched** — it was on the confirmed file list, but its guard is
+  `loadUsers()`'s real `GET /api/users?include_inactive=true` data call, not a separate probe, so
+  there was nothing to consolidate.
+
+**One deliberate behavioural narrowing:** `clients.js`'s old guard returned `true` for any non-403
+response, so a `401` (expired session) would have passed the admin check. The shared probe requires
+`res.ok`, so a 401 now fails closed. `loadSessionClient()` already redirects to `login.html` in that
+case, so this is strictly a tightening with no user-visible change.
+
+### Cache-busting
+
+Per the standing convention that a partial bump reintroduces the "some pages live, others stale" bug
+it exists to prevent: `style.css?v=10` → `?v=11` on all **18** pages, `client_context.js?v=6` →
+`?v=7` on the **16** that load it. Both counts verified by grep, not taken from prose — the count in
+`CLAUDE.md` has been wrong twice historically. Additionally `clients.js?v=3` → `?v=4`, and
+`settings.js` was given a `?v=2` (it had never carried a version string at all, against convention,
+which would have left its deletions stale in browsers).
+
+### Verification (Playwright, headless Chromium against the live dev server)
+
+A dev server was already listening on port 5000 (PID 12712) and was deliberately reused, not killed,
+per the standing rule about persistent `--reload` servers.
+
+As **admin**, on all three pages: 3 tabs rendered and visible; exactly one active tab and it matched
+the current page; active tab computed `border-bottom-color: rgb(37, 99, 235)` and `cursor: default`;
+inactive tabs computed `rgb(100, 116, 139)`. Navigation between tabs worked and the strip survived
+it with the right tab active. Clicking the active tab left the URL unchanged. No console errors.
+
+As **non-admin** — simulated by intercepting `GET /api/users` to return the same 403
+`require_admin()` raises, deliberately **not** by creating a throwaway user in the live database:
+only "⚙️ App Settings" visible on `settings.html` with its content still loading normally;
+`clients.html` still showed "⛔ Admin access required" and redirected to `client_select.html`,
+proving the shared probe did not weaken that guard.
+
+Regression: `index.html` and `databank.html` still render the client pill, carry no `#firmTabs`, and
+log no console errors — `client_context.js` is shared by every page, so this mattered. Backend suite:
+4 passed.
+
+**Testing note:** `browser.new_page()` creates a *fresh context* with no session cookie, so a
+regression check written that way silently bounces to `login.html` rather than testing anything.
+Reuse the already-logged-in page. Also confirmed again: this console is cp1252 and throws on emoji
+in `print()` — encode to ASCII with `errors="replace"` when echoing page text back.
+
+---
