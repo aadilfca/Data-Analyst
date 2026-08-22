@@ -266,10 +266,13 @@ function renderClientControl() {
 
     // A session can legitimately have no client yet (GET /api/auth/current-client returns nulls
     // when selected_client_id is unset), so this renders an explicit state rather than blank.
+    // Both states are clickable and both lead to client_select.html — see the delegated
+    // .nav-client-display listener at the bottom of this file for how the two differ (the
+    // no-client state skips the confirm, since there's nothing to lose).
     const clientName = getSelectedClientName();
     const clientDisplay = clientName
-        ? `<span class="nav-client-display">Client: <strong>${clientName}</strong></span>`
-        : `<span class="nav-client-display client-none">Client: None selected</span>`;
+        ? `<button type="button" class="nav-client-display" title="Switch client">Client: <strong>${clientName}</strong></button>`
+        : `<button type="button" class="nav-client-display client-none" title="Select a client">Client: None selected</button>`;
 
     if (isDashboardPage()) {
         container.innerHTML = clientDisplay;
@@ -1029,6 +1032,23 @@ document.addEventListener('click', function (e) {
         logoutUser();
     }
 });
+
+// ---------- GLOBAL CLICK HANDLER: CLIENT DISPLAY (switch client) ----------
+// Delegated by necessity, not style: renderClientControl() rebuilds this button via innerHTML on
+// every setNavModule()/setNavStats() call, so a listener bound directly to the element would be
+// thrown away on the first re-render (e.g. verification.js setting its module name at runtime).
+// The two states are told apart by the button's own client-none class rather than by re-reading
+// session state, so what's rendered is the single source of truth for what the click does.
+document.addEventListener('click', function (e) {
+    const display = e.target.closest('.nav-client-display');
+    if (!display) return;
+    if (display.classList.contains('client-none')) {
+        // Nothing selected yet — nothing to lose, so skip the confirm entirely.
+        goToClientSelect();
+    } else {
+        confirmSwitchClient();
+    }
+});
 // ---------- RENDER CLIENT BADGE (read-only) ----------
 function renderClientBadge() {
     const container = document.getElementById('clientControl');
@@ -1056,11 +1076,19 @@ function renderClientBadge() {
 }
 
 // ---------- SWITCH CLIENT FLOW ----------
+// One confirm, then straight to the client picker. Two things changed here from the original:
+// it used to navigate to index.html, which stopped being a picker once the dashboard dropdown was
+// removed; and it fired a second alert() warning that "all client-related data visible on current
+// pages will be cleared", which was never accurate under the session-backed design — every query
+// is client_id-scoped, so nothing mixes and nothing is discarded by switching. Cancel does nothing.
 function confirmSwitchClient() {
-    if (confirm('Do you want to switch client? This will return you to the Dashboard.')) {
-        alert('All client-related data visible on current pages will be cleared. Your data is safely stored in the database.');
-        window.location.href = '/static/index.html';
+    if (confirm('Switch client? Any unsaved work on this page may be lost.')) {
+        goToClientSelect();
     }
+}
+
+function goToClientSelect() {
+    window.location.href = '/static/client_select.html';
 }
 
 function goToDashboard() {

@@ -62,25 +62,46 @@ body {
     margin: 0 15px;
 }
 
-/* Fixed read-only "Client: [Name]" display, rendered on every protected page by
-   renderClientControl() in client_context.js. Deliberately identical in look to the pill this
-   replaced — these values were previously an inline style="..." on that markup's .nav-client-name
-   span, moved here rather than restyled, so the header reads the same as before. */
+/* "Client: [Name]" display, rendered on every protected page by renderClientControl() in
+   client_context.js — and, since Phase 3, the switch-client entry point. Deliberately identical in
+   look to the pill this replaced (those values were previously an inline style="..." on the old
+   .nav-client-name span, moved here rather than restyled). It is a <button>, so font/text-align
+   are reset to inherit rather than take the browser's button defaults — without that, converting
+   the tag would visibly change the pill even though every other declaration stayed the same. */
 .nav-client-display {
+    font-family: inherit;
     font-size: 13px;
     font-weight: 500;
+    text-align: left;
     color: #f1f5f9;
     background: #1e293b;
     padding: 2px 12px;
     border-radius: 16px;
     border: 1px solid #334155;
     white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+}
+/* Subtle lift on hover — same "lighten against the dark navbar" language as .nav-home-icon:hover
+   and friends, rather than a new colour. */
+.nav-client-display:hover {
+    background: #334155;
+    border-color: #475569;
+}
+.nav-client-display:focus-visible {
+    outline: 2px solid #4fc3f7;
+    outline-offset: 2px;
 }
 /* Session with no client selected yet — same amber tokens as .client-badge.client-none below,
-   not a new one-off colour. */
+   not a new one-off colour. Still clickable (it goes straight to the picker, no confirm), so it
+   gets its own hover keeping the amber rather than falling back to the default grey one. */
 .nav-client-display.client-none {
     color: #fbbf24;
     border-color: #f59e0b;
+}
+.nav-client-display.client-none:hover {
+    background: #334155;
+    border-color: #fbbf24;
 }
 
 /* Badge (non-Dashboard pages) */

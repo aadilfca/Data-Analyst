@@ -1197,3 +1197,70 @@ entries was word-counted programmatically against the ~25-word rule — none ove
 
 ---
 
+### Phase 3 of 4 — click-to-switch flow + cache-bust (`static/client_context.js`, `static/style.css`, all 17 pages)
+
+**The old switch flow was stale on two counts.** `confirmSwitchClient()` navigated to `index.html`,
+which stopped being a client picker the moment Phase 1 removed the dashboard dropdown — so the one
+surviving "switch client" path led somewhere with no way to switch. It also fired a *second*
+`alert()` after the confirm, warning that "all client-related data visible on current pages will be
+cleared". That was never accurate under the session-backed design: every query is `client_id`-scoped,
+so switching mixes nothing and discards nothing. Two stacked dialogs for one action, the second of
+them misinformation.
+
+**Now:** the `.nav-client-display` pill is a `<button type="button">` (Phase 1 deliberately rendered
+it as an inert `<span>` rather than land a clickable-looking control a phase before it did
+anything). One `confirm('Switch client? Any unsaved work on this page may be lost.')` → on OK,
+`client_select.html`. Cancel does nothing at all. The `alert()` is gone.
+
+**Both states are clickable**, per the user's call. The no-client (`client-none`) state goes
+*straight* to the picker with no confirm — there is nothing to lose, and it is precisely the state
+where the user most needs to get there. The two are told apart at click time by reading the
+button's own `client-none` class rather than re-querying session state, so what is rendered is the
+single source of truth for what the click does.
+
+**The listener is delegated by necessity, not style.** `renderClientControl()` rebuilds this
+element via `innerHTML` on every `setNavModule()`/`setNavStats()` call, so a directly-bound listener
+would be silently discarded on the first runtime re-render — which happens on `verification.html`
+during normal use. It follows the same `e.target.closest()` shape as the existing Back/Up/Logout
+handlers, bound once at module load. A dedicated test case covers exactly this (see below).
+
+**CSS.** `cursor: pointer`, a hover that lightens against the dark navbar (`#334155`, the same
+"subtle lift" language as `.nav-home-icon:hover` rather than a new colour), and a `:focus-visible`
+outline reusing the existing `2px solid #4fc3f7`. Also `font-family: inherit` + `text-align: left`
+— converting `<span>` to `<button>` otherwise picks up browser button defaults and visibly changes
+the pill even though nothing else was restyled. The `client-none` variant keeps its amber on hover
+rather than falling through to the grey one.
+
+**Cache-bust: 17 pages, not 15, and two assets, not one.** Two corrections surfaced here, both
+found by grepping rather than trusting the convention's prose:
+
+1. The convention text said "all 15 pages", but **17** pages load `style.css` — `login.html` and
+   `client_select.html` were added after that note was written. All 17 were in lockstep at `?v=8`;
+   bumping only 15 would have stranded those two and recreated the exact split "some pages live,
+   others stale" state the rule exists to prevent. All 17 → `?v=9` (confirmed with the user).
+2. **`client_context.js` was still at `?v=3` on the 15 navbar pages** — and that file was modified in
+   all three phases. Bumping the stylesheet alone would have shipped a half-applied change: the new
+   CSS lands, but the JS that renders the markup it styles does not, so none of Phases 1–3 would
+   appear on a normal refresh. Bumped to `?v=4`. This is now written into the convention explicitly,
+   since the rule previously only described the stylesheet.
+
+`CLAUDE.md`'s convention text was corrected for both — and now says to re-check the real page count
+with a grep rather than trusting a number in prose, which is what let "15" go stale in the first
+place.
+
+**Verification.** Playwright against the already-running dev server (`netstat` checked, not
+restarted), five cases, all passing with zero page errors — then re-run after the cache-bump to
+confirm the bump changed nothing behavioural: (1) the display is a real `BUTTON` with
+`cursor: pointer` and the right `title`; (2) Cancel fires **exactly one** dialog, of type `confirm`,
+whose message contains no "cleared" wording, and the URL does not change — that single-dialog
+assertion is the regression this phase removes, so it is checked directly rather than assumed;
+(3) OK lands on `client_select.html`; (4) on `verification.html`, after forcing an extra
+`setNavModule()` re-render on top of the page's own, the click still works — proving the delegated
+listener survives the `innerHTML` rebuild; (5) with `GET /api/auth/current-client` stubbed via
+`page.route()` to return nulls, the button renders `client-none` and clicking it reaches the picker
+with **zero** dialogs. Also confirmed the bumped URLs return 200 and that the served files actually
+contain the new rules (`nav-client-display:hover`, `goToClientSelect`) — a version bump that serves
+stale content would otherwise look identical. Backend suite: 4 passed, unaffected as expected.
+
+---
+
