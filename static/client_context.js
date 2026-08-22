@@ -59,6 +59,13 @@ async function logoutUser() {
     window.location.href = '/static/login.html';
 }
 
+// Navbar greeting. Was hardcoded in all 15 pages' HTML and had drifted into two variants
+// ("Admin" on 8 pages, "Analyst" on 7) — a meaningless split, since users.role is unused and
+// there is one seeded account. Standardised here as the single source. When a future
+// roles/permissions module renders a real username, this constant is the one place to change:
+// GET /api/auth/current-client returns no user fields today, only client id/name/code.
+const NAV_USER_LABEL = '👤 Welcome, Analyst';
+
 // ---------- GLOBAL QUICK-NAVIGATION MANIFEST ----------
 // Hand-maintained tree describing every navigable destination, grouped exactly like the
 // dashboard's three sections (static/index.html). Not a live scrape of the DOM — whoever
@@ -509,7 +516,9 @@ function renderNavLeft() {
 
     const isDash = isDashboardPage();
     const homeIcon = `<a href="/static/index.html" class="nav-home-icon" title="Go to Dashboard">🏢</a>`;
-    const logoutButton = `<button type="button" class="nav-logout-btn" title="Log out">🚪 Logout</button>`;
+    // Logout is no longer rendered here — it moved to the navbar's right side, beside the Welcome
+    // text, as an icon-only control (see renderNavUser() below). A session action sat oddly among
+    // the brand/nav/search group.
     // Back: chronological history stack (see handleBackArrowClick()) — always intercepted, so a
     // <button> rather than an anchor with a static href. Disabled when there's nowhere to go back
     // to (stack has 0 or 1 entries, i.e. this is the first page visited this session).
@@ -544,7 +553,6 @@ function renderNavLeft() {
             <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
             ${navMenu}
             ${navSearch}
-            ${logoutButton}
         `;
     } else {
         // Non-dashboard: back arrow, up arrow, then home icon, then brand
@@ -555,12 +563,31 @@ function renderNavLeft() {
             <span style="font-weight:700; font-size:24px; letter-spacing:1px; color:white; margin-left:8px;">System Analyst</span>
             ${navMenu}
             ${navSearch}
-            ${logoutButton}
         `;
     }
 
     initNavMenu();
     initNavSearch();
+}
+
+// ---------- RENDER RIGHT SECTION (welcome text + icon-only logout) ----------
+// Fills the .nav-user container every page already has in its navbar markup. That markup used to
+// carry a hardcoded "👤 Welcome, ..." span; the span was deleted from all 15 pages and this is now
+// the only thing that writes the greeting, so the wording can't drift per page again.
+// Selected by class, not id, unlike #navLeft/#clientControl — .nav-user is unique on every page,
+// and introducing an id would mean a second unrelated edit to all 15 files for no benefit.
+// Logout is icon-only here: title AND aria-label both set, since with the text label gone the emoji
+// is the button's only content and an emoji alone is not a reliable accessible name. Its click is
+// handled by the existing document-level .nav-logout-btn listener at the bottom of this file, so
+// moving it out of renderNavLeft() needed no handler change.
+function renderNavUser() {
+    const container = document.querySelector('.nav-user');
+    if (!container) return;
+
+    container.innerHTML = `
+        <span class="nav-user-name">${NAV_USER_LABEL}</span>
+        <button type="button" class="nav-logout-btn" title="Log out" aria-label="Log out">🚪</button>
+    `;
 }
 
 // ---------- QUICK NAVIGATION MENU (⊞ icon + dropdown) ----------
@@ -1063,6 +1090,11 @@ async function initClientContext() {
     await loadSessionClient();
     renderClientControl();
     renderNavLeft();
+    // Renders no session-dependent data, so its position relative to loadSessionClient() doesn't
+    // matter — kept with the other two so clientContextReady keeps meaning "the whole navbar is
+    // ready". Not called from setNavModule()/setNavStats(), which re-render only the client
+    // control; this content is static for the life of the page.
+    renderNavUser();
     // Resolved only once the client cache is populated AND the navbar is rendered, so a page
     // awaiting this gets both.
     resolveClientContextReady();

@@ -40,7 +40,12 @@ body {
     letter-spacing: 1px;
 }
 
+/* Right side of the navbar: welcome text + icon-only logout, both written by renderNavUser()
+   in client_context.js (the hardcoded per-page span that used to live here is gone). */
 .nav-user {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-size: 14px;
     color: #b0bec5;
 }
@@ -129,14 +134,40 @@ body {
 }
 .nav-home-icon:hover,
 .nav-back-arrow:hover,
-.nav-up-arrow:hover {
+.nav-up-arrow:hover,
+.nav-logout-btn:hover {
     background: rgba(255, 255, 255, 0.12);
     transform: scale(1.15);
 }
 .nav-home-icon:active,
 .nav-back-arrow:active:not(:disabled),
-.nav-up-arrow:active {
+.nav-up-arrow:active,
+.nav-logout-btn:active {
     transform: scale(0.9);
+}
+
+/* Icon-only logout (🚪), right side of the navbar next to the welcome text. Previously a text
+   button ("🚪 Logout") with no CSS of its own at all — it rendered as default browser button
+   chrome against the dark navbar. Chrome is reset here and the hover/active feedback is shared
+   with the selector groups above rather than duplicated, keeping every header icon-button one
+   consistent set. */
+.nav-logout-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    border-radius: 50%;
+    padding: 4px;
+    font-family: inherit;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.2s ease;
+}
+.nav-logout-btn:focus-visible {
+    outline: 2px solid #4fc3f7;
+    outline-offset: 2px;
 }
 
 /* .nav-back-arrow/.nav-up-arrow are <button> elements (not anchors) — their destination is

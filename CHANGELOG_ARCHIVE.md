@@ -1095,3 +1095,72 @@ why the verification above saw the new CSS without a bump.
 
 ---
 
+### Phase 2 of 4 — JS-owned Welcome text + icon-only Logout (`static/client_context.js`, `static/style.css`, all 15 HTML pages)
+
+**Two problems, one container.** The navbar's right-hand `.nav-user` div was page-owned markup, and
+it had drifted: the hardcoded `👤 Welcome, …` span said **"Admin" on 8 pages** (clients,
+client_settings, columns, templates, settings, setup, audit_rules, error_dashboard) and
+**"Analyst" on 7** (index, verification, audit_workbook, databank, upload, trial_balance,
+template-viewer). Confirmed with the user as meaningless copy drift rather than a real distinction —
+`users.role` exists in the schema but is nullable and unread, and there is one seeded account.
+Separately, Logout was a text button (`🚪 Logout`) rendered by `renderNavLeft()` into the *left*
+group beside the brand, search and nav icons — an odd home for a session action, and it had **no CSS
+rules of its own at all**, so it rendered as raw default browser-button chrome against the dark
+navbar (plainly visible in the Phase 1 screenshot).
+
+**`renderNavUser()`** is the new sibling to `renderClientControl()`/`renderNavLeft()`, following
+their exact shape (look up container, guard if absent, single `innerHTML` write). It fills
+`.nav-user` with a `.nav-user-name` span plus the icon-only logout button. Selected via
+`document.querySelector('.nav-user')` — a *class*, unlike the id-based `#navLeft`/`#clientControl` —
+because it is unique per page and adding an id would have meant a second, unrelated edit to all 15
+files for no benefit. Called from `initClientContext()` after `renderNavLeft()`: it reads no session
+state, so its position relative to `await loadSessionClient()` is irrelevant, but keeping all three
+renders together preserves what the Phase 1 comment on `clientContextReady` already claims — that
+the promise means the *whole* navbar is ready. Deliberately not called from `setNavModule()`/
+`setNavStats()`, which re-render only the client control; this content is static for the page's life.
+
+**`NAV_USER_LABEL`** holds the greeting as a module-level constant rather than inline in the
+template, so there is one obvious place to change when a future roles/permissions module renders a
+real username — `GET /api/auth/current-client` returns no user fields today, only client
+id/name/code, so nothing dynamic was available to wire here.
+
+**Logout button.** `title` *and* `aria-label` both set: with the text label gone the emoji is the
+button's only content, and an emoji alone is not a reliable accessible name. **Its click handler
+needed no change** — it is a document-level delegated listener on `.nav-logout-btn` at the bottom of
+the file, the same delegation pattern the Back/Up arrows use, so moving the button between
+containers was invisible to it. This was verified by actually clicking it, not assumed.
+
+**CSS.** `.nav-user` gained `display:flex`/`align-items:center`/`gap:10px` (existing font-size/colour
+untouched). New `.nav-logout-btn` rules reset the button chrome and size the icon. The hover and
+active feedback was added by **extending the existing shared selector groups**
+(`.nav-home-icon:hover, .nav-back-arrow:hover, .nav-up-arrow:hover` and the `:active` group below
+it) rather than writing a fourth near-duplicate block — that comment block already states its intent
+is that "all header icon-buttons read as one consistent set", so this honours it. `:focus-visible`
+reuses `.nav-menu-toggle`'s existing `2px solid #4fc3f7`.
+
+**The 15 pages.** 14 carried a byte-identical 3-line block (only the Admin/Analyst word differing),
+collapsed to `<div class="nav-user"></div>` — the div stays as the container JS writes into, only
+the inner span was deleted. `templates.html` was the exception, a single-line variant, identified
+up front and edited individually so a uniform pattern couldn't silently skip it. A first pass using
+a `\x{1F464}` emoji escape in perl matched nothing (byte-vs-character semantics on a UTF-8 file);
+rewritten to match on surrounding structure (`<span>[^<]*Welcome,[^<]*</span>`) instead. A
+follow-up grep confirmed zero `Welcome,` occurrences remain in any HTML file. `login.html`/
+`client_select.html` are correctly untouched — pre-session pages with no navbar and no such span.
+
+**Verification.** Playwright against the user's already-running dev server (port 5000, `netstat`
+checked first, not restarted). Five pages covered deliberately: `index.html` and `verification.html`
+(formerly "Analyst"), `clients.html` and `settings.html` (formerly **"Admin"** — where the
+standardisation is actually visible), and `templates.html` (the one-line markup variant). Per page:
+greeting reads exactly `👤 Welcome, Analyst`; `.nav-user`'s full text contains exactly **one**
+"Welcome" (a missed span would surface as two) and no stale "Admin"; exactly one `.nav-logout-btn`
+whose text is `🚪` with no "Logout" word; the button resolves inside `.nav-user` and *not* inside
+`#navLeft`; both `title` and `aria-label` present; computed style confirming the chrome reset
+(`rgba(0,0,0,0)` background, `border none`, `50%` radius). Then the button was clicked and the run
+followed the redirect to `login.html`, proving the delegated listener survived the container move.
+All checks passed on all five pages with zero console and zero page errors.
+
+**Cache-bust still deferred** to the end of Phase 3 per the user's standing instruction, so browser
+review of this phase needs a hard refresh (Ctrl+F5). Playwright starts cache-empty.
+
+---
+
