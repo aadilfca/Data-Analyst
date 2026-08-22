@@ -17,13 +17,27 @@ let sessionClientCache = { id: null, name: null, code: null };
 // concludes no client is selected. Every page's init must await this promise before reading the
 // client. Created here at parse time (not inside initClientContext()) so it always exists by the
 // time a page script's own onload handler runs, since client_context.js is loaded first everywhere.
-// Always resolves, never rejects — loadSessionClient() swallows its own errors and leaves the cache
-// null, so a rejection here would hang every page instead of letting it render its no-client state.
+// Resolves once the session/navbar are ready, and never rejects — loadSessionClient() swallows
+// its own network/parse errors and leaves the cache null, so a rejection here would hang every
+// page instead of letting it render its no-client state. Exception: on a 401 (invalid/expired
+// session), initClientContext() returns before ever calling resolveClientContextReady() (see
+// its own early-return comment) — this promise is then deliberately left permanently unresolved,
+// since the page is already navigating away to login.html. Resolving it here instead would wake
+// up every page's `await window.clientContextReady` (verification.js, databank.js,
+// trial_balance.js) mid-navigation with a null client cache, reintroducing the exact spurious
+// "please select a client" alert this was built to prevent (confirmed live, 2026-08-22).
 let resolveClientContextReady;
 window.clientContextReady = new Promise(function (resolve) {
     resolveClientContextReady = resolve;
 });
 
+// Returns true if the session is valid (or a network/parse error occurred - see the catch
+// block, which is deliberately treated as "proceed with no client" rather than "invalid
+// session"), false on a 401. The caller (initClientContext()) must check this and bail out
+// on false - a 401 already schedules a redirect to login.html here, but that alone doesn't
+// stop the caller from rendering navbar/client-control state against a null cache, which
+// used to fire a spurious "please select a client" alert and race a second redirect to
+// index.html against this function's own login.html redirect (confirmed live, 2026-08-22).
 async function loadSessionClient() {
     try {
         const res = await fetch(API_BASE + '/api/auth/current-client');
@@ -31,7 +45,7 @@ async function loadSessionClient() {
             // No valid session - bounce to login rather than rendering a page the
             // user isn't allowed to see.
             window.location.href = '/static/login.html';
-            return;
+            return false;
         }
         if (!res.ok) throw new Error('Failed to load session client');
         const data = await res.json();
@@ -40,9 +54,11 @@ async function loadSessionClient() {
             name: data.client_name || null,
             code: data.client_code || null,
         };
+        return true;
     } catch (error) {
         console.warn('⚠️ Failed to load session client:', error.message);
         sessionClientCache = { id: null, name: null, code: null };
+        return true;
     }
 }
 
@@ -1115,7 +1131,15 @@ async function initClientContext() {
     // subresources says nothing about an in-flight fetch() — on a light page onload fires first.
     // Page scripts must therefore await window.clientContextReady (resolved below) rather than
     // assuming their own window.onload runs after this.
-    await loadSessionClient();
+    const sessionValid = await loadSessionClient();
+    if (!sessionValid) {
+        // loadSessionClient() already redirected to login.html on a 401. Stop here rather
+        // than rendering the navbar against a null client cache - that render is what used
+        // to fire enforceClientSelection()'s alert and a second, competing redirect to
+        // index.html. clientContextReady is deliberately left unresolved: the page is
+        // navigating away, so any page script awaiting it should never wake back up here.
+        return;
+    }
     renderClientControl();
     renderNavLeft();
     // Renders no session-dependent data, so its position relative to loadSessionClient() doesn't
