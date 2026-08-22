@@ -153,16 +153,23 @@ def select_client(payload: SelectClientRequest, session=Depends(get_current_user
 
 @router.get("/api/auth/current-client")
 def current_client(session=Depends(get_current_user)):
+    # `username` is returned on all three branches, including the two "no client selected"
+    # ones - client_select.html hits exactly that branch (no client is chosen yet, that page's
+    # whole job) and needs the name for its header greeting. get_current_user() already
+    # selects u.username in its join, so this costs no extra query.
+    username = session["username"]
+
     client_id = session["selected_client_id"]
     if not client_id:
-        return {"client_id": None, "client_name": None, "client_code": None}
+        return {"client_id": None, "client_name": None, "client_code": None, "username": username}
 
     client = _get_client_summary(client_id)
     if not client:
-        return {"client_id": None, "client_name": None, "client_code": None}
+        return {"client_id": None, "client_name": None, "client_code": None, "username": username}
 
     return {
         "client_id": client["id"],
         "client_name": client["client_name"],
         "client_code": client["client_code"],
+        "username": username,
     }

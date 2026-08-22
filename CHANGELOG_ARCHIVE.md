@@ -1643,3 +1643,94 @@ required".
 8. Backend suite: 4 passed. `node --check` clean on both changed JS files.
 
 ---
+
+## Lightweight Header on the Client Cards Page (2026-08-22)
+
+**Requirement (single phase).** `static/client_select.html` — the landing page reached straight
+after login — was the only post-login page in the app with no header at all: no app identity, no
+indication of who was logged in, and **no way to log out without first selecting a client**. Added a
+minimal header showing `System Analyst` / `Module: Client` / `👤 Welcome, <username>` / 🚪 logout.
+
+### Gate check: is there a shared header component to reuse?
+
+The brief gated this phase on the Admin tab-bar work being complete, so it would be known whether a
+genuinely shared header existed. It does — `renderFirmLevelNav()` plus the `.firm-nav-*` CSS family,
+both in `client_context.js`/`style.css`. **But it is not reusable as a renderer here, and this is the
+one design decision worth recording:**
+
+`client_select.html` cannot load `client_context.js` at all. `initClientContext()` runs on
+`DOMContentLoaded`; this page is neither the dashboard nor a member of `FIRM_LEVEL_PAGES`, so
+`enforceClientSelection()` would fire its "⚠️ Please select a client from the Dashboard first" alert
+and redirect to `index.html` — bouncing the user off the very page whose job is selecting a client.
+
+So the brief's stated fallback was taken: **reuse the shared CSS classes verbatim, render the ~10
+lines of markup from this page's own script.** No CSS was duplicated — `style.css` needed no change
+whatsoever, which was the check confirming the classes really are shared rather than settings-specific.
+
+Two deliberate differences from `renderFirmLevelNav()`'s output:
+1. The brand `System Analyst` is a plain `<span>`, not an `<a>` — on the three Admin pages that
+   brand links *to* `client_select.html`, so here it would be a self-link to nowhere.
+2. The area label reads `Module: Client`, not `AREA: Administration` — this is the client picker,
+   not the Admin area.
+
+### The username was not available (decision point)
+
+The app had no real username anywhere: every header rendered the hardcoded constant
+`NAV_USER_LABEL = '👤 Welcome, Analyst'` (`client_context.js:83`), and `GET /api/auth/current-client`
+returned only `client_id`/`client_name`/`client_code`. Two options were put to the user — hardcode a
+fourth copy of the greeting (no backend change, but not the real name, and planting exactly the
+per-page drift `NAV_USER_LABEL` was created to end), or make it real. The user chose to make it real.
+
+`current_client()` now returns `username` on **all three** of its return points — including the two
+"no client selected" null branches, which is the branch this page actually hits (a session that has
+not picked a client yet is this page's normal state; adding the field only to the success branch
+would have shipped a header that never showed a name). `get_current_user()` already selects
+`u.username` in its existing join, so this costs no extra query and no schema change. Purely
+additive: the endpoint's only two callers (`client_context.js`'s `loadSessionClient()` and
+`client_select.js`'s `guardSession()`) read named fields.
+
+### Other changes
+
+- **Page padding moved off `<body>`.** `body { padding: 40px 24px }` would have inset the navbar
+  from the window edges, which no other page does. Body padding is now `0`, with the equivalent
+  padding moved onto `.client-select-header`/`.client-select-grid-wrap`. Their `max-width` went
+  `900px → 948px` to compensate: `box-sizing: border-box` is global (style.css reset), so without
+  that the content column would have silently narrowed by the 48px of new padding.
+- **`logout()` is a local copy** of `client_context.js`'s `logoutUser()`. Required, not laziness:
+  the delegated document-level `.nav-logout-btn` listener also lives in `client_context.js`, which
+  this page does not load. Same contract — POST, then redirect to login regardless of the response,
+  so a failed request can never leave the user stuck.
+- `guardSession()` previously discarded the response body and checked only `res.ok`; it now parses
+  the JSON, since that body is the greeting's only source.
+- Script tag bumped to `client_select.js?v=1` per the per-script cache-bust convention.
+
+### Verification (live, not inferred)
+
+Backend suite: 4 passed. A dev server was already listening on port 5000 (PID 9444, the user's own
+`--reload` process — checked with `netstat` before doing anything, per convention, and not killed);
+it picked the change up on its own.
+
+`GET /api/auth/current-client` with a real logged-in cookie returned
+`{"client_id":null,...,"username":"admin"}` — confirming the null branch, the one that matters here,
+carries the name.
+
+Playwright headless Chromium, full login→logout round trip:
+1. Header text: brand `System Analyst`, area `Module: Client`, greeting `👤 Welcome, admin` (the real
+   username, not the `Analyst` constant), logout button `🚪` with `aria-label="Log out"`.
+2. Navbar geometry `{x:0, y:0, width:1280, height:70}` — full-bleed and flush to the top, i.e. the
+   body-padding move worked.
+3. Content below starts at exactly `y:70` with a `948px` box → `900px` content column, unchanged
+   from before the header existed. No horizontal page scroll.
+4. Client cards still render (2 clients), and the admin `⚙️` gear is still visible and unmoved.
+5. Clicking 🚪 → redirected to `login.html`; navigating back to `client_select.html` bounced
+   straight to `login.html` again, proving the session was genuinely destroyed, not just navigated
+   away from.
+
+### Left deliberately out of scope
+
+`client_context.js:82`'s comment ("`GET /api/auth/current-client` returns no user fields today") is
+now stale. Fixing a comment would require bumping `client_context.js?v=N` across 16 pages, so it was
+logged to `KNOWN_ISSUES.md` instead, to be corrected when `NAV_USER_LABEL` is next touched to render
+the real username app-wide. That app-wide change is itself a separate requirement, not this one.
+
+---

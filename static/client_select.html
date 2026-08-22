@@ -9,13 +9,21 @@
     <style>
         /* Standalone page (no client_context.js/navbar — no client is selected yet, which is
            this page's whole job), same page-specific-style approach as login.html. */
+
+        /* Page padding lives on the two content wrappers below, NOT on body — the header
+           navbar must run flush to the window edges the way it does on every other page,
+           and body padding would inset it. */
         body {
-            padding: 40px 24px;
+            padding: 0;
         }
 
+        /* 948px = the old 900px content width + the 48px of horizontal padding moved here off
+           body. box-sizing is border-box app-wide (style.css reset), so this keeps the content
+           column exactly as wide as it was before the header was added. */
         .client-select-header {
-            max-width: 900px;
+            max-width: 948px;
             margin: 0 auto 28px;
+            padding: 40px 24px 0;
         }
 
         .client-select-header h1 {
@@ -41,8 +49,9 @@
         }
 
         .client-select-grid-wrap {
-            max-width: 900px;
+            max-width: 948px;
             margin: 0 auto;
+            padding: 0 24px 40px;
         }
 
         /* Card content is custom to this page; card shell (.module-card) is reused as-is. */
@@ -81,6 +90,22 @@
 </head>
 
 <body>
+    <!-- Lightweight header. Uses the SAME shell and CSS classes as the Admin pages' firm-level
+         navbar (settings/users/clients), but is filled by this page's own renderClientSelectHeader()
+         rather than client_context.js's renderFirmLevelNav().
+
+         That is deliberate and must not be "fixed" back: this page cannot load client_context.js at
+         all. initClientContext() runs on DOMContentLoaded, and client_select.html is neither the
+         dashboard nor in FIRM_LEVEL_PAGES - so enforceClientSelection() would alert "please select a
+         client first" and redirect to index.html, bouncing the user off the very page whose job is
+         selecting a client. Only the ~10 lines of markup are local; all styling is the shared
+         .firm-nav-* family in style.css. -->
+    <nav class="navbar firm-navbar">
+        <div class="nav-container" id="clientSelectNav">
+            <!-- Will be rendered by client_select.js -->
+        </div>
+    </nav>
+
     <div class="client-select-header">
         <div style="display:flex; justify-content:space-between; align-items:flex-start; max-width:900px; margin:0 auto;">
             <div>
@@ -100,7 +125,7 @@
         <div class="client-select-empty" id="clientSelectEmpty" style="display:none;">No clients match your search.</div>
     </div>
 
-    <script src="/static/client_select.js"></script>
+    <script src="/static/client_select.js?v=1"></script>
 </body>
 
 </html>
