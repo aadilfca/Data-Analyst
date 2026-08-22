@@ -13,12 +13,15 @@
 // GET /api/verification/session/{session_id}/audit_workbook returns one voucher group per
 // voucher — {sr, voucher_no, date, line_count, amount, status, lines: [...]}, each line
 // {detail_id, client_data_id, account_code, account_name, description, amount, status,
-//  procedures: {done, total}, observations: {count, entries}}. Sr/Voucher No./Account are each
+//  procedures: {done, total}, observations: {count, entries}}. Sr/Voucher No./Date are each
 // rendered ONCE per voucher group via a real <td rowspan="line_count">, on the group's first
 // line row only — not a blank placeholder cell repeated down the group, and not extended to
-// cover the subtotal row (see buildSubtotalRowHtml()'s own comment for why). Account's cell
-// merges account_code + account_name (Phase 1's new field) stacked, falling back to the code
-// alone when account_name is null. Further styling polish (hairline borders, zebra striping,
+// cover the subtotal row (see buildSubtotalRowHtml()'s own comment for why). Account is a
+// genuinely per-line field (confirmed fix — previously wrongly rowspan'd off the group's
+// first line, repeating one account down every line of a multi-account voucher), rendered in
+// its own always-present <td> per line, same as Reference. Its cell merges account_code +
+// account_name (Phase 1's field) stacked, falling back to the code alone when account_name is
+// null. Further styling polish (hairline borders, zebra striping,
 // lighter subtotal row, any dedicated Account cell styling) is Phase 3 — this file deliberately
 // reuses only already-existing global CSS classes plus two new unstyled hook classes
 // (aw-account-code/aw-account-name, plain block-level <div>s, no style.css changes this phase):
@@ -207,14 +210,17 @@ function getAwObservationsCellHtml(line) {
 
 // ---------- RENDER ----------
 
-// Sr, Voucher No., and Account are each rendered ONCE per voucher group, via a real
+// Sr, Voucher No., and Date are each rendered ONCE per voucher group, via a real
 // <td rowspan="line_count">, emitted only on the group's first line row (isFirstLine) — not a
-// blank placeholder repeated down the group. Account is sourced from THIS first line
-// (v.lines[0], the same `line` passed in when isFirstLine is true) since it's not a
-// group-level field on the backend response. The rowspan deliberately covers only the
-// line_count line rows, not the subtotal row that may follow — see buildSubtotalRowHtml()'s
-// own comment for why that row needs its own leading cells instead of being covered by this
-// span. groupParityClass ('aw-group-even'/'aw-group-odd') is a pure CSS hook — style.css's
+// blank placeholder repeated down the group. Account (confirmed fix: was previously rowspan'd
+// off the group's first line only, which wrongly repeated line 0's account down every line of
+// a multi-account voucher — e.g. CPV-0126-110) is a genuinely PER-LINE field on the backend
+// response (each line carries its own account_code/account_name), so it's rendered in its own
+// always-present <td> instead, the same way aw-col-reference already is. The Sr/Voucher
+// No./Date rowspan deliberately covers only the line_count line rows, not the subtotal row
+// that may follow — see buildSubtotalRowHtml()'s own comment for why that row needs its own
+// leading cells instead of being covered by this span. groupParityClass ('aw-group-even'/
+// 'aw-group-odd') is a pure CSS hook — style.css's
 // zebra striping needs it since variable-sized voucher groups can't be alternated in plain CSS
 // with no marker. The group-start class (confirmed fix) is a second such hook, stamped only
 // when isFirstLine is true: the row's own first-line-vs-continuation position used to be
@@ -229,15 +235,15 @@ function buildLineRowHtml(v, line, isFirstLine, groupParityClass) {
         <td rowspan="${v.line_count}">${escapeHtml(String(v.sr))}</td>
         <td rowspan="${v.line_count}">${escapeHtml(v.voucher_no)}</td>
         <td rowspan="${v.line_count}">${formatDate(v.date)}</td>
-        <td rowspan="${v.line_count}">${getAwAccountCellHtml(line)}</td>
     ` : '';
     const groupStartClass = isFirstLine ? ' group-start' : '';
     return `
         <tr class="aw-line-row aw-row-clickable ${groupParityClass}${groupStartClass}" data-voucher-no="${escapeHtml(v.voucher_no)}" data-detail-id="${line.detail_id}">
             ${leadingCellsHtml}
+            <td class="aw-col-account">${getAwAccountCellHtml(line)}</td>
             <td class="aw-col-reference">${escapeHtml(line.description || '—')}</td>
             <td class="aw-col-amount">${formatAwAmount(line.amount)}</td>
-            <td>${getAwProceduresCellHtml(line)}</td>
+            <td class="aw-col-procedures">${getAwProceduresCellHtml(line)}</td>
             <td>${getAwObservationsCellHtml(line)}</td>
             <td class="aw-col-status">${getAwStatusBadgeHtml(line.status)}</td>
         </tr>

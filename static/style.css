@@ -6565,8 +6565,11 @@ body {
     letter-spacing: 0.03em;
 }
 /* Sr and Date are short/compact, centered like the pill/ring columns; Procedures holds a centered
-   ring, not flowing text. Voucher No./Account/Observations stay left-aligned via the base
-   .aw-table td rule above. */
+   ring, not flowing text (its own centering is now the explicit .aw-col-procedures rule below,
+   not this nth-child(3)/(7) coincidence - see that rule's comment). Voucher No./Observations
+   stay left-aligned via the base .aw-table td rule above; Account is likewise forced left via
+   its own explicit .aw-col-account rule below, since it's no longer safe to rely on this
+   nth-child rule leaving it alone on every row - see that rule's own comment for why. */
 .aw-table td:nth-child(1),
 .aw-table td:nth-child(3) {
     text-align: center;
@@ -6589,6 +6592,24 @@ body {
     font-variant-numeric: tabular-nums;
 }
 .aw-table td.aw-col-status {
+    text-align: center;
+}
+/* Confirmed fix: Account column made per-line (audit_workbook.js) instead of rowspan'd off the
+   group's first line — its physical nth-child position now differs between a voucher's first
+   line row (position 4) and its continuation rows (position 1, since Sr/Voucher No./Date are
+   rowspan'd away there). td:nth-child(1)'s centering rule above (meant for Sr) would otherwise
+   wrongly center Account on continuation rows only, while it stays left-aligned by default on
+   first-line rows — an explicit class avoids that position-dependent inconsistency, same
+   established reasoning as aw-col-reference/aw-col-amount/aw-col-status just above. */
+.aw-table td.aw-col-account {
+    text-align: left;
+}
+/* Companion fix: the same Account change shifts Procedures off its former continuation-row
+   position 3, so it no longer picks up nth-child(3)'s centering there (a coincidental effect
+   nth-child(7) already gives it deliberately on first-line rows - see the column-proportions
+   comment above). An explicit class keeps its centered-ring look consistent on every row
+   regardless of position, matching the same convention. */
+.aw-table td.aw-col-procedures {
     text-align: center;
 }
 

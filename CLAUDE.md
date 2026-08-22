@@ -246,6 +246,7 @@ each phase.
 - 2026-08-22: Fixed session-expiry bug: 401 on current-client wrongly fired select-client alert/redirect race; loadSessionClient() now signals caller to stop (client_context.js).
 - 2026-08-22: client_context.js cache-bust bumped to v=5 (all 15 pages) so the session-expiry fix actually reaches browsers, not just the server.
 - 2026-08-22: Assign Categories hard-refresh restore now awaits clientContextReady before opening view; avoids null-client 422 (audit_rules.js).
+- 2026-08-22: Audit Workbook Account column now renders per-line, not rowspan'd to group's first line; fixed multi-account display bug (static/audit_workbook.js, style.css).
 
 
 ## Self-maintenance
