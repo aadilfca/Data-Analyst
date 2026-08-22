@@ -1560,3 +1560,86 @@ as `admin`, client "ACME" selected):
 alternative to the `errors="replace"` encode noted in the previous entry.
 
 ---
+
+## Entry-Aware Up/Back Navigation for Client Settings
+
+**Date:** 2026-08-22 | **Files:** `static/client_context.js`, `static/client_settings.html`,
+`static/clients.js`, plus a `client_context.js?v=9` bump on the other 15 pages that load it.
+Phase 3 of 3 (FINAL) — after the admin tab-strip stabilisation and the dashboard Client Settings card.
+
+**Why:** the previous phase gave `client_settings.html` a second door (the dashboard card and the ⊞
+nav entry, both via `getClientSettingsUrl()`), but the page still declared
+`<body data-nav-parent="clients.html">` and shipped a fixed `← Back to Manage Clients` header link.
+A user arriving from the dashboard was pointed back at an admin-gated page they might have no rights
+to. The way out now depends on the way in.
+
+**Read-only check (per the brief's "grep JS redirects, not just HTML hrefs" note, which caught two
+missed redirects in an earlier Admin phase):** `client_settings.js` contains **no** `location.href`,
+redirect, or guard logic at all — its only navigation-relevant read is `?client_id=` in
+`loadClientSettings()`. `client_settings.html` has no inline script. Nothing hidden was found; that
+file was not edited.
+
+**Back was deliberately left alone.** The ← arrow is already the chronological sessionStorage stack,
+which returns to whatever page you actually came from. One nuance recorded rather than "fixed":
+`clients.html` is a firm-level page and `initClientContext()` deliberately keeps firm-level pages out
+of that stack, so Back will never return to the cogwheel. Up is precisely the mechanism that covers
+that door — which is why the fix belongs in `getUpTarget()` and not in the history stack.
+
+**Mechanism chosen: an explicit `&from=` stamp, over inferring the door from the history stack.**
+Both were compared; the param wins on three counts, not just the obvious one:
+1. It is part of the URL, so it survives a refresh, a restored or duplicated tab, and a pasted link.
+   `sessionStorage` is per-tab and empty in a new one.
+2. Inference is *structurally* unable to detect the admin door at all — the stack excludes firm-level
+   pages by design, so `clients.html` is never in it. The door that most needs distinguishing is the
+   one inference cannot see.
+3. Each door declares its own identity at its own call site, greppable, rather than depending on
+   stack-shape assumptions a later nav change could silently invalidate.
+Cost: every door must remember to stamp. Mitigated by there being exactly two call sites and a safe
+fallback.
+
+**What was built** (all in `client_context.js` unless noted):
+
+1. **`NAV_ENTRY_SOURCES`** — whitelist table beside `NAV_PARENT_MAP`, mapping a `from` key to
+   `{file, label}`: `clients` → `clients.html` / "Manage Clients", `dashboard` → `index.html` /
+   "Dashboard". **A lookup, never `'/static/' + fromParam`** — concatenating the raw param would be
+   an open redirect. Unknown or absent keys fall through.
+2. **`getNavEntrySource()`** — reads `?from=`, returns the whitelisted entry or null. Shared by the
+   two consumers below so the arrow and the link cannot disagree, which is exactly how they drifted
+   apart originally.
+3. **`getUpTarget()`** — one new highest-priority step ahead of `data-nav-parent`. The original
+   `data-nav-parent` → `NAV_PARENT_MAP` → `index.html` chain is untouched beneath it, so every other
+   page resolves exactly as before (verified: `columns.html` still → `setup.html`).
+4. **`renderUpLinks()`** — points any anchor marked `data-nav-up-link` at `getUpTarget()`'s result
+   and relabels it from the same table. Opt-in per anchor, so no other `.back-link` in the app is
+   affected. Called from `initClientContext()`'s client-scoped branch. With no recognised `from`, it
+   labels whatever `getUpTarget()` actually resolved (looked up by filename) rather than trusting the
+   HTML's shipped text.
+5. **`getClientSettingsUrl()`** now appends `&from=dashboard`, covering both the card and the nav
+   entry in one edit. The no-client branch (→ `client_select.html`) is unchanged.
+6. **`client_settings.html`** — `data-nav-parent` removed (the hardcoded assumption being fixed); the
+   header link marked `data-nav-up-link` with a dashboard-pointing pre-JS default. Navigation
+   attributes only; no content, styling, form or explainer changes.
+7. **`clients.js`** — one line: `&from=clients` on the cogwheel redirect.
+
+**Fallback choice (confirmed with the user):** with no `from` at all — a hand-typed URL, an old
+bookmark, a pre-change saved link — Up goes to the **dashboard**, not `clients.html`. A Standard User
+is then never sent by a nav control to a page `clients.js` would bounce them off with "Admin access
+required".
+
+**Verified live** (Playwright, headless Chromium, logged in as `admin`, client "ACME"):
+1. Dashboard card → `?client_id=1&from=dashboard`; `getUpTarget()` = `/static/index.html`; link read
+   "← Back to Dashboard"; clicking Up actually landed on `index.html`.
+2. ⊞ nav entry → identical stamped URL and Up behaviour.
+3. `clients.html` cogwheel → `&from=clients`; `getUpTarget()` = `/static/clients.html`; link read
+   "← Back to Manage Clients"; Up landed on `clients.html`.
+4. Hard reload on a `from=clients` URL → resolution survived intact (the case inference fails).
+5. No `from` → `/static/index.html` + "← Back to Dashboard", prefixes still loaded ("Voucher prefix
+   configuration for ACME").
+6. Injection guard: `from=https://evil.com`, `from=nonsense`, `from=../../etc/passwd` — all three
+   fell through to `/static/index.html`, no attacker-controlled target.
+7. Regressions: `columns.html` still → `setup.html` (its `data-nav-parent`), `databank.html`/
+   `upload.html` still → `index.html`, and none of the three carries a `data-nav-up-link` anchor, so
+   `renderUpLinks()` is a no-op there. `client_context.js?v=9` confirmed actually fetched.
+8. Backend suite: 4 passed. `node --check` clean on both changed JS files.
+
+---

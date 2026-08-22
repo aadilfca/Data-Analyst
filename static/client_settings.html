@@ -147,7 +147,12 @@
     </style>
 </head>
 
-<body data-nav-module="Client Settings" data-nav-parent="clients.html">
+<!-- No data-nav-parent: this page has two legitimate doors (the clients.html cogwheel and the
+     dashboard card / ⊞ nav entry), so a single static parent is always wrong for one of them.
+     Up resolves from the ?from= stamp instead — see NAV_ENTRY_SOURCES/getUpTarget() in
+     client_context.js. With no stamp it falls through to the dashboard, which every logged-in user
+     can reach, rather than to the admin-gated clients.html this used to hardcode. -->
+<body data-nav-module="Client Settings">
     <!-- Navbar -->
     <nav class="navbar">
         <div class="nav-container">
@@ -162,7 +167,9 @@
 
     <div class="main-container">
         <header class="module-header">
-            <a href="/static/clients.html" class="back-link">← Back to Manage Clients</a>
+            <!-- href/label are rewritten to match the Up arrow by renderUpLinks() (client_context.js);
+                 the values here are only the pre-JS default. -->
+            <a href="/static/index.html" class="back-link" data-nav-up-link>← Back to Dashboard</a>
             <h1>⚙️ Client Settings</h1>
             <p id="clientNameHeading">Voucher prefix configuration</p>
         </header>
@@ -240,7 +247,7 @@
         <div id="settingsStatus" class="upload-status" style="margin-top:16px; display:none;"></div>
     </div>
 
-    <script src="/static/client_context.js?v=8"></script>
+    <script src="/static/client_context.js?v=9"></script>
     <script src="/static/client_settings.js"></script>
 </body>
 

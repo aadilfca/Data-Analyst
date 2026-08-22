@@ -184,7 +184,11 @@ function renderClients(clients) {
         settingsBtn.style.marginLeft = '8px';
         settingsBtn.title = 'Client settings';
         settingsBtn.addEventListener('click', () => {
-            window.location.href = '/static/client_settings.html?client_id=' + client.id;
+            // &from=clients stamps this as the Admin-area door, so Client Settings' Up arrow and
+            // back-link return here rather than to the dashboard — see NAV_ENTRY_SOURCES in
+            // client_context.js. Note this is the one door the Back arrow can't cover: clients.html
+            // is a firm-level page and is deliberately kept out of the Back history stack.
+            window.location.href = '/static/client_settings.html?client_id=' + client.id + '&from=clients';
         });
 
         // Audit rules (placeholder) — inert again per user decision: audit_rules.html is a

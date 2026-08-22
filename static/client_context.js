@@ -282,11 +282,17 @@ function getSelectedClientCode() {
  * Deliberately synchronous: every caller resolves this on a real click/render, long after
  * loadSessionClient() has populated the cache, so there's no clientContextReady race to await here —
  * and if one somehow read it early, the null branch degrades to the picker rather than breaking.
+ *
+ * `&from=dashboard` stamps this as the client-scoped door (dashboard card + ⊞ nav entry, both of
+ * which resolve through here), so client_settings.html's Up arrow and back-link return to the
+ * dashboard rather than to the Admin-area clients.html the page used to hardcode. The Admin door
+ * stamps its own `&from=clients` at its own call site in clients.js — see NAV_ENTRY_SOURCES.
+ * The no-client branch keeps no `from`: it goes to the picker, not to Client Settings at all.
  */
 function getClientSettingsUrl() {
     const clientId = getSelectedClientId();
     return clientId
-        ? '/static/client_settings.html?client_id=' + clientId
+        ? '/static/client_settings.html?client_id=' + clientId + '&from=dashboard'
         : '/static/client_select.html';
 }
 window.getClientSettingsUrl = getClientSettingsUrl;
@@ -454,11 +460,48 @@ const NAV_PARENT_MAP = {
     // 'somepage.html': 'parentpage.html',
 };
 
+// ---------- ENTRY-POINT ("?from=") SOURCES ----------
+// A page reachable through more than one door can't have a single correct static parent. Client
+// Settings is the first such page: the clients.html cogwheel (Admin area) and the dashboard card /
+// ⊞ nav entry are both legitimate ways in, and its old hardcoded data-nav-parent="clients.html"
+// sent every dashboard visitor back to an admin-gated page they may not even have rights to.
+// Each door stamps its own identity onto the URL (&from=<key>) and this table turns that key into a
+// destination + a human label for the header's own back-link.
+// Chosen over inferring the door from the Back history stack: the param is part of the URL, so it
+// survives a refresh, a restored/duplicated tab and a pasted link, none of which sessionStorage
+// does — and the stack deliberately excludes firm-level pages, so it structurally cannot see
+// clients.html, the very door that most needs distinguishing.
+// SECURITY: this is a whitelist lookup on purpose. Never build a path by concatenating the raw
+// param ('/static/' + fromParam) — that is an open redirect. An unknown/absent key simply falls
+// through to the normal resolution chain below.
+const NAV_ENTRY_SOURCES = {
+    clients: { file: 'clients.html', label: 'Manage Clients' },
+    dashboard: { file: 'index.html', label: 'Dashboard' },
+};
+
+/**
+ * Resolve the current page's entry point from ?from=, or null when it's absent/unrecognised.
+ * Shared by getUpTarget() and renderUpLinks() so the Up arrow and the in-page back-link can never
+ * disagree about where "back" is — drifting apart is exactly how client_settings.html ended up with
+ * an arrow and a link pointing at two different ideas of its parent.
+ */
+function getNavEntrySource() {
+    const params = new URLSearchParams(window.location.search);
+    const from = params.get('from');
+    if (!from) return null;
+    return NAV_ENTRY_SOURCES[from] || null;
+}
+
 /**
  * Resolve the Up arrow's destination for the current page.
- * Priority: <body data-nav-parent="..."> override, then NAV_PARENT_MAP, then index.html.
+ * Priority: ?from= entry point, then <body data-nav-parent="..."> override, then NAV_PARENT_MAP,
+ * then index.html. The three original steps are unchanged — a page with no ?from= resolves exactly
+ * as it did before this existed.
  */
 function getUpTarget() {
+    const entrySource = getNavEntrySource();
+    if (entrySource) return '/static/' + entrySource.file;
+
     const override = document.body.getAttribute('data-nav-parent');
     if (override) return '/static/' + override;
 
@@ -467,6 +510,32 @@ function getUpTarget() {
     if (mapped) return '/static/' + mapped;
 
     return '/static/index.html';
+}
+
+/**
+ * Point any in-page back-link marked `data-nav-up-link` at the same destination the Up arrow would
+ * use, relabelling it to match ("← Back to Manage Clients" / "← Back to Dashboard").
+ * Opt-in per anchor, so no existing .back-link anywhere else in the app is affected. Called from
+ * initClientContext()'s client-scoped branch; a page with no such anchor is a no-op.
+ * With no recognised ?from=, the label follows getUpTarget()'s own fallback — index.html — rather
+ * than whatever text the HTML happened to ship with, keeping link and arrow in agreement.
+ */
+function renderUpLinks() {
+    const links = document.querySelectorAll('[data-nav-up-link]');
+    if (!links.length) return;
+
+    const entrySource = getNavEntrySource();
+    const target = getUpTarget();
+    // No ?from=: fall back to naming whatever getUpTarget() actually resolved, looked up in the same
+    // table by filename so the label can't contradict the href.
+    const targetFile = target.split('/').pop();
+    const matched = Object.values(NAV_ENTRY_SOURCES).find(source => source.file === targetFile);
+    const label = (entrySource || matched || { label: 'Dashboard' }).label;
+
+    links.forEach(link => {
+        link.setAttribute('href', target);
+        link.textContent = '← Back to ' + label;
+    });
 }
 
 // ---------- BACK: CHRONOLOGICAL HISTORY STACK ----------
@@ -1320,6 +1389,9 @@ async function initClientContext() {
     } else {
         renderClientControl();
         renderNavLeft();
+        // Entry-aware in-page back-links (opt-in via data-nav-up-link). Rendered alongside the
+        // navbar so the link and the Up arrow are resolved from the same getUpTarget() call.
+        renderUpLinks();
         // Renders no session-dependent data, so its position relative to loadSessionClient() doesn't
         // matter — kept with the other two so clientContextReady keeps meaning "the whole navbar is
         // ready". Not called from setNavModule()/setNavStats(), which re-render only the client
