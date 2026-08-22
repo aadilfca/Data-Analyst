@@ -45,7 +45,11 @@ body {
     color: #b0bec5;
 }
 
-/* ---------- CLIENT DROPDOWN IN NAVBAR ---------- */
+/* ---------- CLIENT CONTROLS (navbar #clientControl container) ----------
+   The old "🏢 Client" <select> rules (and the .nav-client label that titled it) were removed
+   along with the dropdown itself — client selection lives on static/client_select.html now, and
+   the navbar shows the fixed read-only .nav-client-display below instead. This .nav-client
+   container class is still on every page's #clientControl div, so it stays. */
 .nav-client {
     display: flex;
     align-items: center;
@@ -53,55 +57,25 @@ body {
     margin: 0 15px;
 }
 
-.nav-client label {
-    font-size: 12px;
-    font-weight: 600;
-    color: #94a3b8;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
-}
-
-/* ---------- CLIENT CONTROLS (dropdown + badge) ---------- */
-.nav-client {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 0 15px;
-}
-
-.nav-client label {
-    font-size: 12px;
-    font-weight: 600;
-    color: #94a3b8;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
-}
-
-/* Dropdown (Dashboard only) */
-.nav-client select {
-    padding: 6px 12px;
-    border: 2px solid #334155;
-    border-radius: 6px;
-    background: #1e293b;
-    color: #f1f5f9;
+/* Fixed read-only "Client: [Name]" display, rendered on every protected page by
+   renderClientControl() in client_context.js. Deliberately identical in look to the pill this
+   replaced — these values were previously an inline style="..." on that markup's .nav-client-name
+   span, moved here rather than restyled, so the header reads the same as before. */
+.nav-client-display {
     font-size: 13px;
     font-weight: 500;
-    cursor: pointer;
-    min-width: 160px;
-    max-width: 220px;
-    transition: all 0.2s;
-}
-.nav-client select:hover { border-color: #475569; }
-.nav-client select:focus {
-    outline: none;
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
-}
-.nav-client select option {
-    background: #1e293b;
     color: #f1f5f9;
+    background: #1e293b;
+    padding: 2px 12px;
+    border-radius: 16px;
+    border: 1px solid #334155;
+    white-space: nowrap;
+}
+/* Session with no client selected yet — same amber tokens as .client-badge.client-none below,
+   not a new one-off colour. */
+.nav-client-display.client-none {
+    color: #fbbf24;
+    border-color: #f59e0b;
 }
 
 /* Badge (non-Dashboard pages) */

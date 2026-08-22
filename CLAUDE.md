@@ -641,3 +641,4 @@ Do this automatically at the end of the session without being asked.
 - 2026-08-22: Session-backed client selection Phase 6 of 7 (routers/auth.py + static/client_select.js/client_context.js, databank.js shadow-fn fix) done.
 - 2026-08-22: Wire flow + guard pages Phase 7/7 FINAL (root route main.py, session-check+Logout client_context.js, guard client_select.js).
 - 2026-08-22: Fixed client-context load-order race - added window.clientContextReady signal, awaited in trial_balance/databank/verification.js; verification.js dead localStorage fallback removed; 15 HTML cache-bust.
+- 2026-08-22: Header client area redesign Phase 1 of 4 (dropdown replaced by fixed read-only Client display, static/client_context.js + static/style.css) done.

@@ -1015,3 +1015,83 @@ A **control run** was added specifically to prove the test could actually fail r
 ---
 
 
+## Global Header Client Area Redesign (4-phase requirement, in progress)
+
+**Goal.** Replace the leftover pre-session `🏢 Client` dropdown in the navbar with a fixed,
+read-only `Client: [Name]` display on every protected page; move Logout to an icon-only control
+beside the Welcome text; and make switching clients an explicit confirm-then-go-to-Client-Selection
+action. No backend or schema changes anywhere in the requirement — session-overwrite on client
+selection already works via `PUT /api/auth/select-client`.
+
+Phases: **1** fixed client display (this entry) · **2** JS-owned Welcome text + icon-only Logout ·
+**3** click-to-switch flow, then the `?v=N` cache-bust across all 15 pages · **4** cleanup of the
+now-stale `renderClientBadge()`/`goToDashboard()`/`enforceClientSelection()`/`updateClientDependentUI()`.
+
+### Phase 1 of 4 — fixed read-only client display (`static/client_context.js` + `static/style.css`)
+
+**Why the dropdown was wrong, not merely redundant.** Before the User module landed, the
+dashboard's `<select>` *was* client selection, and every other page rendered a read-only badge of
+whatever it had set. Selection now happens on `static/client_select.html` and persists on the
+session row, so the dropdown had become a second, competing writer of the same session value —
+and it existed only on the dashboard, so the header read differently page to page.
+
+**Removed** (all dropdown-only, all unreachable once the `<select>` goes): the `clientList`/
+`selectedClientId`/`clientSelectElement` module state, `getClientSelect()`, `loadClientDropdown()`,
+and `updateSelectedClient()`. This also drops a `GET /api/clients` fetch from every dashboard load
+— `clientList` had no other consumer. `updateSelectedClient()`'s own `PUT /api/auth/select-client`
+is superseded by `client_select.js`'s call, so no write path is lost.
+
+**`renderClientControl()` rewritten.** It no longer branches on `isDashboardPage()` for *what kind
+of control* to render — both paths now render the same `<span class="nav-client-display">Client:
+<strong>NAME</strong></span>`. The dashboard gets that alone; non-dashboard pages keep their
+existing `AREA: <module>` and `#navStats` spans, inline styles untouched, exactly as before. A
+session with no client resolved (`GET /api/auth/current-client` returns nulls when
+`selected_client_id` is unset) renders an explicit `Client: None selected` in the amber
+`.client-none` variant rather than a blank pill.
+
+Rendered as a `<span>`, not a `<button>`: this phase's display is genuinely read-only, and Phase 3
+is what adds interactivity with its own delegated click handler. Landing a clickable-looking
+element a phase early would have been a dead control in the interim.
+
+**No new readiness gating was needed** — a point worth recording, since the brief asked for
+`window.clientContextReady` gating here. `renderClientControl()` is already called from *inside*
+`initClientContext()`, after `await loadSessionClient()`, so the cache is populated before it
+renders; `clientContextReady` resolves after both. The load-order race that signal exists for only
+affects page scripts reading the client from their own `window.onload` (see "Client Context
+Load-Order Race" above). Nothing in this phase touches `window.onload`.
+
+**`window.updateNavClientName()` retargeted, not deleted.** Its only caller was the removed
+`updateSelectedClient()`, so it is now uncalled — the client can no longer change without a page
+navigation, which re-renders the display anyway. But it is a `window.*` export, so rather than
+leave it silently querying the now-nonexistent `.nav-client-name`, its selector was repointed at
+`.nav-client-display` and it was flagged in-comment for removal in Phase 4.
+
+**CSS.** Removed the `.nav-client select` rules and the `.nav-client label` that titled the
+dropdown. Also collapsed a pre-existing duplicate: `.nav-client`/`.nav-client label` were declared
+twice, identically, under two different section headings (`CLIENT DROPDOWN IN NAVBAR` and
+`CLIENT CONTROLS`) — one copy kept, since `.nav-client` is still the `#clientControl` container
+class in all 15 pages' HTML. Added `.nav-client-display` carrying the pill styling that previously
+lived as an inline `style="…"` on the old `.nav-client-name` span — *moved* out of JS into CSS
+rather than restyled, so the header looks identical to before; plus `.nav-client-display.client-none`
+reusing `.client-badge.client-none`'s existing amber tokens (`#fbbf24`/`#f59e0b`) rather than
+introducing new colours. `.client-badge`'s own rules were kept — `renderClientBadge()` still
+references them until Phase 4 removes both together.
+
+**Verification.** Playwright against the user's already-running dev server (port 5000, confirmed
+via `netstat` first and deliberately not restarted — a `--reload` server was live in the user's own
+terminal). Logged in as the seeded admin, selected a client from the Client Cards page, then
+inspected the header on three pages: `index.html` (dashboard), `databank.html` (non-dashboard), and
+`verification.html` (which re-renders the navbar at runtime via `setNavModule()`, so it proves the
+display survives a re-render). On all three: `.nav-client-display` present reading `Client: ACME`,
+computed style confirming the pill rendered from the new CSS (`rgb(30, 41, 59)` background, 16px
+radius), `#globalClientSelect` absent, the old `.nav-client-name` absent, and `AREA:` correct on
+the two non-dashboard pages. Zero console errors and zero page errors across the run. The single
+`GET /api/clients` observed was `client_select.js`'s own card-loading call, not a dashboard one.
+
+**Cache-bust deliberately deferred.** Per the user's instruction the `?v=N` bump happens once, at
+the end of Phase 3 (the last CSS-touching phase), rather than per phase — so reviewing Phases 1–2
+in a real browser needs a hard refresh (Ctrl+F5). Playwright starts with an empty cache, which is
+why the verification above saw the new CSS without a bump.
+
+---
+

@@ -184,87 +184,13 @@ function flattenNavManifest() {
     return flat;
 }
 
-// ---------- STATE ----------
-let clientList = [];
-let selectedClientId = null;
-let clientSelectElement = null;
-
-// ---------- DOM REFS ----------
-function getClientSelect() {
-    if (!clientSelectElement) {
-        clientSelectElement = document.getElementById('globalClientSelect');
-    }
-    return clientSelectElement;
-}
-
-// ---------- LOAD CLIENTS (for dropdown) ----------
-async function loadClientDropdown() {
-    const select = getClientSelect();
-    if (!select) return;
-
-    try {
-        const res = await fetch(API_BASE + '/api/clients');
-        if (!res.ok) throw new Error('Failed to fetch clients');
-        clientList = await res.json();
-
-        const currentVal = select.value;
-        select.innerHTML = '<option value="">-- Select Client --</option>';
-        clientList.forEach(client => {
-            const opt = document.createElement('option');
-            opt.value = client.id;
-            opt.textContent = client.client_code + ' - ' + client.client_name;
-            select.appendChild(opt);
-        });
-
-        // Restore selection from the session-backed cache (loaded before this runs)
-        const savedId = sessionClientCache.id;
-        if (savedId && clientList.some(c => c.id == savedId)) {
-            select.value = savedId;
-        } else if (currentVal && clientList.some(c => c.id == currentVal)) {
-            select.value = currentVal;
-        }
-        await updateSelectedClient();
-    } catch (error) {
-        console.error('⚠️ Error loading clients:', error.message);
-        select.innerHTML = '<option value="">⚠️ Failed to load clients</option>';
-    }
-}
-
-// ---------- UPDATE SELECTED CLIENT (from dropdown) ----------
-async function updateSelectedClient() {
-    const select = getClientSelect();
-    if (!select) return;
-    const id = select.value || null;
-    selectedClientId = id;
-    if (id) {
-        const client = clientList.find(c => c.id == id);
-        try {
-            const res = await fetch(API_BASE + '/api/auth/select-client', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ client_id: Number(id) }),
-            });
-            if (!res.ok) throw new Error('Failed to select client');
-            sessionClientCache = {
-                id,
-                name: client ? client.client_name : null,
-                code: client ? client.client_code : null,
-            };
-        } catch (error) {
-            console.error('⚠️ Failed to select client:', error.message);
-        }
-    } else {
-        // No "unselect" endpoint exists (not requested by this phase) — just reflect the
-        // cleared dropdown locally; the session's own selected_client_id is left as-is.
-        sessionClientCache = { id: null, name: null, code: null };
-    }
-    updateClientDependentUI();
-    // If we are on a non-dashboard page, update the client name in the navbar
-    if (!isDashboardPage()) {
-        const name = getSelectedClientName() || 'No Client';
-        updateNavClientName(name);
-    }
-}
+// The dashboard's "🏢 Client" <select> and everything that served it (clientList/
+// selectedClientId/clientSelectElement state, getClientSelect(), loadClientDropdown(),
+// updateSelectedClient()) were removed once client selection moved onto the session:
+// static/client_select.html is now the only place a client is picked, and it writes the
+// choice via its own PUT /api/auth/select-client. Keeping a second, dashboard-only picker
+// here meant two competing ways to change the same session value. The navbar now shows a
+// fixed read-only display instead — see renderClientControl() below.
 
 // ---------- UI UPDATES (for upload page) ----------
 function updateClientDependentUI() {
@@ -320,35 +246,32 @@ function enforceClientSelection() {
     return true;
 }
 
-// ---------- RENDER CLIENT CONTROL (dropdown or badge) ----------
+// ---------- RENDER CLIENT CONTROL (fixed read-only client display) ----------
+// One display on every protected page, dashboard included — the old dashboard-only dropdown
+// is gone (see the note above updateClientDependentUI()). The pill's own styling now lives in
+// style.css as .nav-client-display rather than the inline style="..." this markup used to carry.
+// AREA/stats remain non-dashboard-only and keep their existing inline styles untouched.
+// Safe to render synchronously: initClientContext() awaits loadSessionClient() before calling
+// this, so sessionClientCache is already populated — no window.onload dependency anywhere here.
 function renderClientControl() {
     const container = document.getElementById('clientControl');
     if (!container) return;
 
-    // Determine if we are on the dashboard
-    const isDash = isDashboardPage();
+    // A session can legitimately have no client yet (GET /api/auth/current-client returns nulls
+    // when selected_client_id is unset), so this renders an explicit state rather than blank.
+    const clientName = getSelectedClientName();
+    const clientDisplay = clientName
+        ? `<span class="nav-client-display">Client: <strong>${clientName}</strong></span>`
+        : `<span class="nav-client-display client-none">Client: None selected</span>`;
 
-    if (isDash) {
-        // Dashboard: show dropdown for client selection, no back arrow
-        container.innerHTML = `
-            <label for="globalClientSelect">🏢 Client</label>
-            <select id="globalClientSelect">
-                <option value="">-- Select --</option>
-            </select>
-        `;
-        // Re-bind the select element and load clients
-        clientSelectElement = document.getElementById('globalClientSelect');
-        loadClientDropdown();
-        // Add change listener
-        clientSelectElement.addEventListener('change', updateSelectedClient);
+    if (isDashboardPage()) {
+        container.innerHTML = clientDisplay;
     } else {
-        // Non-dashboard: show back arrow, client badge, AREA, stats
-        const clientName = getSelectedClientName() || 'No Client';
         const moduleName = window._appNav?.module || 'Dashboard';
         const statsText = window._appNav?.stats || '';
 
-                container.innerHTML = `
-            <span class="nav-client-name" style="font-weight:500; font-size:13px; color:#f1f5f9; background:#1e293b; padding:2px 12px; border-radius:16px; border:1px solid #334155; white-space:nowrap;">${clientName}</span>
+        container.innerHTML = `
+            ${clientDisplay}
             <span class="nav-area" style="font-weight:600; font-size:14px; color:#e0f2fe; letter-spacing:0.3px; white-space:nowrap;">AREA: ${moduleName}</span>
             <span id="navStats" style="font-size:13px; color:#94a3b8; white-space:nowrap;">${statsText}</span>
         `;
@@ -392,13 +315,19 @@ window.setNavStats = function(stats) {
 };
 
 /**
- * Update the client name displayed in the navbar (used after client change)
+ * Update the client name displayed in the navbar.
+ * Its only caller was the removed updateSelectedClient(), so nothing invokes this today — the
+ * client can no longer change without a page navigation, which re-renders the display anyway.
+ * Kept (and repointed at the renamed .nav-client-display element rather than the old
+ * .nav-client-name) only because it is a window.* export; flagged for removal in Phase 4.
  * @param {string} name - The client name (e.g., "ACME")
  */
 window.updateNavClientName = function(name) {
-    const clientSpan = document.querySelector('.nav-client-name');
+    const clientSpan = document.querySelector('.nav-client-display');
     if (clientSpan) {
-        clientSpan.textContent = name || 'No Client';
+        clientSpan.innerHTML = name
+            ? `Client: <strong>${name}</strong>`
+            : 'Client: None selected';
     }
 };
 
