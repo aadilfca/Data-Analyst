@@ -2,6 +2,7 @@ import sqlite3
 import time
 import os
 import shutil
+import bcrypt
 from datetime import datetime
 
 DB_NAME = "test.db"
@@ -2553,6 +2554,51 @@ def init_db():
             print("✅ Added last_synced_text column to voucher_line_observations")
         except Exception as e:
             print("⚠️ Could not add last_synced_text column to voucher_line_observations:", e)
+
+        # ---------- USERS & SESSIONS (new User module, Phase 1 of 7: schema only) ----------
+        # Foundational tables for the upcoming Login -> Client Cards -> Dashboard entry flow.
+        # role is nullable/unused until the follow-on roles/permissions module populates it.
+        # No ALTER-TABLE upgrade block needed - brand-new tables, no prior data anywhere.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                role TEXT,
+                last_login TIMESTAMP
+            )
+        ''')
+
+        # token is the session's own primary key (a securely-generated random string minted by
+        # the future login endpoint, not this phase's concern). selected_client_id is nullable
+        # and added now even though it's only wired up in a later phase, since it lives on this
+        # same table. FOREIGN KEY clauses are documentation/intent only, same convention as the
+        # rest of this file (PRAGMA foreign_keys is never turned ON) - future endpoints validate
+        # referenced ids explicitly.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                expiry TIMESTAMP NOT NULL,
+                selected_client_id INTEGER,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (selected_client_id) REFERENCES clients(id) ON DELETE SET NULL
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)")
+        print("✅ Created users/sessions tables")
+
+        # Seed a single admin user (same "seed if empty" pattern as error_codes/master_columns
+        # above) - credentials are a build-time placeholder until a change-password flow exists.
+        existing_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if existing_users == 0:
+            admin_password_hash = bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode()
+            conn.execute(
+                "INSERT INTO users (username, password_hash, is_active, role, last_login) VALUES (?, ?, ?, ?, ?)",
+                ("admin", admin_password_hash, 1, None, None)
+            )
+            print("✅ Seeded admin user")
 
         conn.commit()
         print("✅ Database initialization complete")
