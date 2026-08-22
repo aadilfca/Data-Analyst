@@ -26,9 +26,7 @@ loginForm.addEventListener('submit', async (e) => {
         });
 
         if (res.ok) {
-            // Placeholder redirect target until Phase 5 (Client Cards page) lands —
-            // swap this for /static/client_select.html once that page exists.
-            window.location.href = '/static/index.html';
+            window.location.href = '/static/client_select.html';
             return;
         }
 

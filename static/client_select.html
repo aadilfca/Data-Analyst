@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Client</title>
+    <link rel="stylesheet" href="/static/style.css?v=8">
+    <style>
+        /* Standalone page (no client_context.js/navbar — no client is selected yet, which is
+           this page's whole job), same page-specific-style approach as login.html. */
+        body {
+            padding: 40px 24px;
+        }
+
+        .client-select-header {
+            max-width: 900px;
+            margin: 0 auto 28px;
+        }
+
+        .client-select-header h1 {
+            font-size: 24px;
+            color: #1a1a2e;
+            margin-bottom: 4px;
+        }
+
+        .client-select-header p.subtitle {
+            font-size: 14px;
+            color: #94a3b8;
+            margin-bottom: 20px;
+        }
+
+        #clientSearchInput {
+            width: 100%;
+            max-width: 420px;
+            padding: 10px 14px;
+            border: 1px solid #d0d5dd;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+        }
+
+        .client-select-grid-wrap {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        /* Card content is custom to this page; card shell (.module-card) is reused as-is. */
+        .client-card-avatar {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: #e0f2fe;
+            color: #0369a1;
+            font-size: 22px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 14px;
+        }
+
+        .client-card-code {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #f1f5f9;
+            color: #475569;
+            margin-bottom: 8px;
+        }
+
+        .client-select-empty {
+            text-align: center;
+            color: #94a3b8;
+            font-size: 14px;
+            padding: 40px 0;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="client-select-header">
+        <h1>Select a Client</h1>
+        <p class="subtitle">Choose a client to continue to the dashboard.</p>
+        <input type="text" id="clientSearchInput" placeholder="Search by name or code">
+    </div>
+
+    <div class="client-select-grid-wrap">
+        <div class="module-grid" id="clientCardGrid"></div>
+        <div class="client-select-empty" id="clientSelectEmpty" style="display:none;">No clients match your search.</div>
+    </div>
+
+    <script src="/static/client_select.js"></script>
+</body>
+
+</html>
