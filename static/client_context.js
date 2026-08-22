@@ -79,7 +79,9 @@ async function logoutUser() {
 // ("Admin" on 8 pages, "Analyst" on 7) — a meaningless split, since users.role is unused and
 // there is one seeded account. Standardised here as the single source. When a future
 // roles/permissions module renders a real username, this constant is the one place to change:
-// GET /api/auth/current-client returns no user fields today, only client id/name/code.
+// GET /api/auth/current-client DOES now return `username` (added for client_select.html's header,
+// which renders the real name), so switching this greeting to the live value is a small change —
+// it just needs the app-wide cache-bump that touching this file entails.
 const NAV_USER_LABEL = '👤 Welcome, Analyst';
 
 // ---------- GLOBAL QUICK-NAVIGATION MANIFEST ----------
@@ -287,13 +289,19 @@ function getSelectedClientCode() {
  * which resolve through here), so client_settings.html's Up arrow and back-link return to the
  * dashboard rather than to the Admin-area clients.html the page used to hardcode. The Admin door
  * stamps its own `&from=clients` at its own call site in clients.js — see NAV_ENTRY_SOURCES.
- * The no-client branch keeps no `from`: it goes to the picker, not to Client Settings at all.
+ *
+ * The no-client branch carries `?next=client_settings` so the picker can return the user to Client
+ * Settings once they choose a client, instead of dropping them on the dashboard and silently
+ * discarding what they actually asked for. Only this bare key is written — never a path or URL:
+ * client_select.js resolves it through its own NEXT_DESTINATIONS whitelist, for the same
+ * open-redirect reason NAV_ENTRY_SOURCES is a lookup table. That whitelist lives there rather than
+ * here because client_select.html is a standalone pre-session page that cannot load this file at all.
  */
 function getClientSettingsUrl() {
     const clientId = getSelectedClientId();
     return clientId
         ? '/static/client_settings.html?client_id=' + clientId + '&from=dashboard'
-        : '/static/client_select.html';
+        : '/static/client_select.html?next=client_settings';
 }
 window.getClientSettingsUrl = getClientSettingsUrl;
 

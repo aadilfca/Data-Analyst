@@ -1829,3 +1829,109 @@ selected" while the page heading reads "Voucher prefix configuration for ACME" �
 Cosmetic only; fixing it means touching `renderClientControl()`, outside this brief's scope.
 
 ---
+
+## Fix: Dashboard Card Loses Intent When No Client Is Selected (2026-08-22)
+
+**Phase 2 of 2 (Fix Mode), completing the pair opened by the read-only investigation.** Phase 1 fixed
+the `clients.html` cogwheel; this fixes "Fault A", the other half.
+
+### The bug
+
+Clicking the dashboard's "⚙️ Client Settings" card — or the ⊞ nav entry — with no client selected sent
+the user to `client_select.html`, and after they picked a client they landed on the **dashboard**, not
+Client Settings. Their original intent was silently discarded.
+
+Phase 1 could not have fixed this, and this is worth recording because the two faults share a symptom
+and a file: this redirect happens **at click time**, inside `getClientSettingsUrl()`, *before* any
+navigation occurs — so `client_settings.html` never loads and Phase 1's `enforceClientSelection()`
+guard never runs on this path. Confirmed before scoping, at the user's explicit request.
+
+The "pass `client_id` in the address" alternative was considered and rejected upstream: in the
+no-client state there is no id to pass. That is the whole problem.
+
+### The fix
+
+`getClientSettingsUrl()`'s no-client branch now returns `/static/client_select.html?next=client_settings`.
+`client_select.js`'s `selectClient()` resolves that key after a successful selection and routes to
+`/static/client_settings.html?client_id=<just-selected-id>&from=dashboard`.
+
+One change covers **both** entry points, because the dashboard card (`script.js`'s
+`MODULE_CARD_DESTINATIONS`) and the ⊞ nav entry (`NAV_MANIFEST`) already resolve through that single
+shared helper.
+
+### Where the whitelist lives, and why (the one real design decision)
+
+`NEXT_DESTINATIONS` lives in **`client_select.js`**, not beside `NAV_ENTRY_SOURCES` in
+`client_context.js`, for a structural reason: `client_select.html` is a standalone pre-session page
+that **cannot load `client_context.js` at all** (loading it would trip `enforceClientSelection()` and
+bounce the user off the very page whose job is selecting a client — the same constraint that shaped
+the lightweight-header phase). So the consumer cannot read a table defined in the stamper.
+
+This is also the better placement on its own merits: the security-critical resolution sits at the
+point of use, and there is exactly one copy rather than two that can drift.
+
+`client_context.js` writes only a bare key (`client_settings`) that means nothing on its own — never a
+path or URL.
+
+```js
+const NEXT_DESTINATIONS = {
+    client_settings: { file: 'client_settings.html', from: 'dashboard' },
+};
+```
+
+`from` is carried as data on the destination rather than hardcoded where the URL is built, so the
+arriving page's Up arrow/back-link resolve through `NAV_ENTRY_SOURCES` to the door the user actually
+came through. `from=dashboard` is correct here because both stamping entry points are the
+client-scoped door — matching what `getClientSettingsUrl()`'s *other* branch already stamps when a
+client is selected. The Admin door keeps its own `from=clients` at its own call site, untouched.
+
+**SECURITY:** `resolveNextUrl()` is a whitelist lookup, never concatenation. `'/static/' + nextParam`
+would be an open redirect — the exact failure mode CLAUDE.md already calls out for `NAV_ENTRY_SOURCES`.
+An unknown or absent key returns `null` and `selectClient()` falls back to `/static/index.html`, i.e.
+precisely the previous behaviour.
+
+### Dependency on Phase 1 worth noting
+
+This phase *relies* on Phase 1: the destination now loads with no session client only because Phase 1
+taught `enforceClientSelection()` to accept a URL-supplied `client_id`. Without it, the `?next=` hop
+would have delivered the user to a page that immediately evicted them — the two fixes compose.
+
+### Verification (live)
+
+`node --check` clean on both changed files. Backend suite 4 passed (no backend change; run as a guard).
+
+1. **The fix** — fresh login, no client picked, dashboard → Client Settings card:
+   step 1 → `client_select.html?next=client_settings`; after clicking a client card, step 2 →
+   `client_settings.html?client_id=1&from=dashboard`, rendering real data ("Voucher prefix
+   configuration for ACME"), zero alerts, Up arrow/back-link reading "← Back to Dashboard" →
+   `/static/index.html`.
+2. **⊞ nav entry** — `getClientSettingsUrl()` resolved to the same stamped picker URL, confirming both
+   doors are covered by the one helper.
+3. **Open-redirect regression** — `?next=https://evil.com`, `?next=../../etc/passwd`, `?next=nonsense`
+   and `?next=//evil.com` (protocol-relative, the one most likely to slip past a naive check): all four
+   fell through to `/static/index.html` after selection. No attacker-controlled destination.
+4. **No-regression** — a plain login with no `?next=` still lands on the dashboard after selection.
+5. **Phase 1 still holds** — cogwheel with no client selected still reaches
+   `client_settings.html?client_id=1&from=clients` with "← Back to Manage Clients" and no alert;
+   `databank.html?client_id=1` still blocked (1 alert, redirected to `index.html`).
+6. **Client already selected** — dashboard card still goes straight to Client Settings, no picker hop.
+7. `client_context.js?v=11` and `client_select.js?v=2` both confirmed actually fetched. Both files
+   changed, so both were bumped — bumping one and not the other would ship a half-applied change.
+
+`client_select.html` needed no markup change; its only edit was the `client_select.js?v=` bump.
+
+### Also in this commit
+
+`NAV_USER_LABEL`'s comment in `client_context.js` corrected — it claimed
+`GET /api/auth/current-client` "returns no user fields today", untrue since that endpoint gained
+`username`. Deferred one phase earlier purely because it would have cost an app-wide cache-bump; this
+phase needed that bump anyway, so it came free. Its `KNOWN_ISSUES.md` row stays in place per that
+file's own append-only rule.
+
+### Known limitation (flagged, logged, not fixed)
+
+If the session expires mid-flow, `guardSession()` bounces to `login.html`, and `login.js` returns to
+`client_select.html` **without** the `?next=` — intent is lost. Rare, and the outcome is safe (picker,
+then dashboard). Logged to `KNOWN_ISSUES.md` rather than widening this phase's scope.
+
+---

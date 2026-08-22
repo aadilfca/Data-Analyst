@@ -57,6 +57,41 @@ function renderClients(clients) {
     });
 }
 
+// ---------- POST-SELECTION INTENT ("?next=") ----------
+// A user who asks for a client-scoped page while no client is selected gets sent here first. Without
+// this, picking a client dropped them on the dashboard and silently discarded what they actually
+// asked for. The requesting page stamps ?next=<key> (currently only getClientSettingsUrl() in
+// client_context.js) and this table turns that key back into a real destination.
+//
+// `from` travels with the destination rather than being hardcoded at the build site, so the arriving
+// page's Up arrow/back-link resolve through client_context.js's NAV_ENTRY_SOURCES to the door the
+// user actually came through — here the dashboard, since that is where both stamping entry points
+// (the #clientSettingsCard and the ⊞ nav entry) live.
+//
+// SECURITY: this is a whitelist lookup on purpose, mirroring NAV_ENTRY_SOURCES. Never build a path
+// by concatenating the raw param ('/static/' + nextParam) — that is an open redirect. An unknown or
+// absent key resolves to null and the caller falls back to the dashboard.
+//
+// The table lives here, in the file that CONSUMES the param, rather than beside NAV_ENTRY_SOURCES in
+// client_context.js: this is a standalone pre-session page that cannot load that file (see the <nav>
+// comment in client_select.html). One copy at the point of use also can't drift the way two would.
+const NEXT_DESTINATIONS = {
+    client_settings: { file: 'client_settings.html', from: 'dashboard' },
+};
+
+// Returns a fully-built destination URL for the just-selected client, or null when there is no
+// recognised ?next= to honour.
+function resolveNextUrl(clientId) {
+    const params = new URLSearchParams(window.location.search);
+    const next = params.get('next');
+    if (!next) return null;
+
+    const destination = NEXT_DESTINATIONS[next];
+    if (!destination) return null;
+
+    return '/static/' + destination.file + '?client_id=' + clientId + '&from=' + destination.from;
+}
+
 async function selectClient(client) {
     try {
         const res = await fetch('/api/auth/select-client', {
@@ -65,7 +100,8 @@ async function selectClient(client) {
             body: JSON.stringify({ client_id: client.id }),
         });
         if (!res.ok) throw new Error('Failed to select client');
-        window.location.href = '/static/index.html';
+        // With no (or an unrecognised) ?next=, this is exactly the previous behaviour.
+        window.location.href = resolveNextUrl(client.id) || '/static/index.html';
     } catch (err) {
         clientCardGrid.innerHTML = '';
         clientSelectEmpty.textContent = 'Could not select client. Please try again.';
