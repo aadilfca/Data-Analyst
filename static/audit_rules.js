@@ -258,6 +258,7 @@ function removeField(value) {
 // fetch. Only active templates are offered, matching how the rest of the app treats
 // is_active=0 templates as retired.
 async function loadTemplatesForDocuments() {
+    if (arTemplateSelect) window.LoadingUI.showFieldLoading(arTemplateSelect);
     try {
         const res = await fetch(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to fetch templates');
@@ -267,6 +268,8 @@ async function loadTemplatesForDocuments() {
     } catch (error) {
         // Non-fatal: the Template field just stays at its "-- None --" default if this fails.
         console.error('Failed to load templates for Documents:', error);
+    } finally {
+        if (arTemplateSelect) window.LoadingUI.hideFieldLoading(arTemplateSelect);
     }
 }
 

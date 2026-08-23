@@ -661,6 +661,7 @@ function renderDateFormatPreview(samples) {
 
 // ---------- LOAD TEMPLATES ----------
 async function loadTemplates() {
+    if (templateDropdown) window.LoadingUI.showFieldLoading(templateDropdown);
     try {
         const res = await fetch(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to load templates');
@@ -679,6 +680,8 @@ async function loadTemplates() {
         console.error('Error loading templates:', error);
         setBadge('❌ Failed to load templates', 'error');
         showStatus('❌ Failed to load templates: ' + error.message, 'error');
+    } finally {
+        if (templateDropdown) window.LoadingUI.hideFieldLoading(templateDropdown);
     }
 }
 
