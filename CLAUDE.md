@@ -275,6 +275,8 @@ mandatory at the START of every session that's about to touch this file, not jus
 - 2026-08-23: Skeleton loading wired, Phase 5b of 6 (final) - verification.js voucher grid on session start/Prev-Next; loading_ui.js added to verification.html; verified via Playwright.
 - 2026-08-23: Inline field-loading wired, Phase 6a/6b of 6 - upload.js templateDropdown, audit_rules.js arTemplateSelect use LoadingUI.showFieldLoading; verified via Playwright.
 - 2026-08-23: Added standing git workflow rule to Workflow rules - auto-commit+push after phase, only post user confirmation (CLAUDE.md).
+- 2026-08-23: Fast-data-handling Phase 1 of 13 - GZipMiddleware added to main.py, app-wide gzip compression for slow-connection responses.
+- 2026-08-23: Postgres index audit Phase 2 of 13 - audit_postgres_indexes.py added, created missing client_data(client_id,template_id,is_deleted) index.
 
 
 ## Self-maintenance
