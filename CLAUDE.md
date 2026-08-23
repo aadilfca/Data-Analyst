@@ -272,6 +272,7 @@ requirement up as soon as it completes, rather than leaving the per-phase lines 
 - 2026-08-23: Supabase migration Phase 4 of 8 - auth/users/clients routers cut over to Postgres (_pg functions), boolean/timestamptz type fixes, verified end-to-end live.
 - 2026-08-23: Supabase migration Phase 5 of 8 - data/import_export/templates routers cut to Postgres; JSONB, date-object, and batch-insert fixes; verified live.
 - 2026-08-23: Supabase migration Phase 7 of 8 - render.yaml Blueprint added, main.py reads PORT env var for Render deploy handoff.
+- 2026-08-23: Supabase migration Phase 8 of 8, FINAL - API_BASE made relative (client_context.js), verified live end-to-end against Render+Supabase, migration complete.
 
 
 ## Self-maintenance
