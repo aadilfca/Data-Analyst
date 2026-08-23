@@ -1349,6 +1349,7 @@ async function loadNextTransaction(detailId = null) {
     if (!currentSessionId) return;
     try {
         isNavigating = true;
+        window.LoadingUI.showSkeleton(document.getElementById('voucherLinesContainer'), 3);
         const url = `${API_BASE}/api/verification/next/${currentSessionId}`;
         const res = await fetch(url);
         if (!res.ok) {
@@ -3347,6 +3348,7 @@ function applyVoucherNavRenderData(data) {
 async function moveToAdjacentVoucher(direction) {
     if (!currentSessionId || !currentDetailId) return false;
     try {
+        window.LoadingUI.showSkeleton(document.getElementById('voucherLinesContainer'), 3);
         const url = `${API_BASE}/api/verification/voucher_nav/${currentSessionId}?current_detail_id=${currentDetailId}&direction=${direction}`;
         const res = await fetch(url);
         if (!res.ok) return false;
