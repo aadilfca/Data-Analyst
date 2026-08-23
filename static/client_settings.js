@@ -179,6 +179,8 @@ async function loadClientSettings() {
 // ---------- SAVE ----------
 async function saveSettings() {
     try {
+        window.LoadingUI.showSpinner(saveBtn, 'Saving');
+
         // Server expects VoucherPrefixesUpdate field names (category.field, e.g.
         // "cash_payment"), not the display category names (category.key) prefixState is
         // keyed by — those contain spaces and aren't valid Pydantic field names.
@@ -202,6 +204,8 @@ async function saveSettings() {
         showSettingsStatus('✅ ' + result.message, 'success');
     } catch (error) {
         showSettingsStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(saveBtn);
     }
 }
 

@@ -456,7 +456,7 @@ function startNewDocument() {
 }
 
 // ---------- SAVE ----------
-async function saveDocument() {
+async function saveDocument(triggerBtn) {
     const name = arNameInput.value.trim();
     if (!name) {
         showDetailStatus('❌ Name is required.', 'error');
@@ -516,6 +516,8 @@ async function saveDocument() {
     };
 
     try {
+        window.LoadingUI.showSpinner(triggerBtn, 'Saving');
+
         let url = API_BASE + '/api/audit-rules/documents';
         let method = 'POST';
         if (editingId) {
@@ -541,6 +543,8 @@ async function saveDocument() {
         await selectDocument(savedId);
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(triggerBtn);
     }
 }
 
@@ -813,7 +817,7 @@ arTemplateSelect.addEventListener('change', renderFieldsDropdown);
 // type changes, so the form always reflects what the chosen type can actually carry.
 arDocumentTypeSelect.addEventListener('change', updateDocumentTypeVisibility);
 
-arSaveBtn.addEventListener('click', saveDocument);
+arSaveBtn.addEventListener('click', () => saveDocument(arSaveBtn));
 arDeleteBtn.addEventListener('click', deleteDocument);
 arRestoreBtn.addEventListener('click', restoreDocument);
 
@@ -1301,7 +1305,7 @@ function startNewCrossCheck() {
 }
 
 // ---------- SAVE ----------
-async function saveCrossCheck() {
+async function saveCrossCheck(triggerBtn) {
     const name = arCrossCheckNameInput.value.trim();
     const compareField = arCompareFieldSelect.value;
     const comparisonType = arComparisonTypeSelect.value;
@@ -1328,6 +1332,8 @@ async function saveCrossCheck() {
     };
 
     try {
+        window.LoadingUI.showSpinner(triggerBtn, 'Saving');
+
         let url = API_BASE + '/api/audit-rules/cross-checks';
         let method = 'POST';
         if (editingCrossCheckId) {
@@ -1352,6 +1358,8 @@ async function saveCrossCheck() {
         await selectCrossCheck(savedId);
     } catch (error) {
         showCrossCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(triggerBtn);
     }
 }
 
@@ -1402,7 +1410,7 @@ arAddDocumentBtn.addEventListener('click', addDocumentToCrossCheck);
 arCompareFieldSelect.addEventListener('change', updateCompareToVoucherLineHint);
 arCompareToVoucherLineCheckbox.addEventListener('change', updateCompareToVoucherLineHint);
 
-arCrossCheckSaveBtn.addEventListener('click', saveCrossCheck);
+arCrossCheckSaveBtn.addEventListener('click', () => saveCrossCheck(arCrossCheckSaveBtn));
 arCrossCheckDeleteBtn.addEventListener('click', deleteCrossCheck);
 arCrossCheckRestoreBtn.addEventListener('click', restoreCrossCheck);
 
@@ -2153,7 +2161,7 @@ function startNewCategory() {
 }
 
 // ---------- SAVE ----------
-async function saveCategory() {
+async function saveCategory(triggerBtn) {
     const name = arCategoryNameInput.value.trim();
     if (!name) {
         showCategoryDetailStatus('❌ Name is required.', 'error');
@@ -2179,6 +2187,8 @@ async function saveCategory() {
     };
 
     try {
+        window.LoadingUI.showSpinner(triggerBtn, 'Saving');
+
         let url = API_BASE + '/api/audit-rules/categories';
         let method = 'POST';
         if (editingCategoryId) {
@@ -2208,6 +2218,8 @@ async function saveCategory() {
         await selectCategory(savedId);
     } catch (error) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(triggerBtn);
     }
 }
 
@@ -2258,7 +2270,7 @@ arCategoryAddDocumentSelect.addEventListener('change', () => {
 });
 arCategoryAddCrossCheckBtn.addEventListener('click', addCategoryCrossCheck);
 
-arCategorySaveBtn.addEventListener('click', saveCategory);
+arCategorySaveBtn.addEventListener('click', () => saveCategory(arCategorySaveBtn));
 arCategoryDeleteBtn.addEventListener('click', deleteCategory);
 arCategoryRestoreBtn.addEventListener('click', restoreCategory);
 
@@ -3149,7 +3161,7 @@ function startNewVoucherCheck() {
 }
 
 // ---------- SAVE / DELETE / RESTORE ----------
-async function saveVoucherCheck() {
+async function saveVoucherCheck(triggerBtn) {
     const name = arVoucherCheckNameInput.value.trim();
     if (!name) {
         showVoucherCheckDetailStatus('⚠️ Name is required.', 'error');
@@ -3159,6 +3171,8 @@ async function saveVoucherCheck() {
     const payload = { name: name, authority: arVoucherCheckAuthorityInput.value.trim() || null };
 
     try {
+        window.LoadingUI.showSpinner(triggerBtn, 'Saving');
+
         let url = API_BASE + '/api/audit-rules/voucher-checks';
         let method = 'POST';
         if (editingVoucherCheckId) {
@@ -3181,6 +3195,8 @@ async function saveVoucherCheck() {
         await selectVoucherCheck(savedId);
     } catch (error) {
         showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(triggerBtn);
     }
 }
 
@@ -3221,6 +3237,6 @@ async function restoreVoucherCheck() {
 arVoucherCheckAddNewBtn.addEventListener('click', startNewVoucherCheck);
 arVoucherCheckShowInactiveCheckbox.addEventListener('change', loadVoucherChecks);
 
-arVoucherCheckSaveBtn.addEventListener('click', saveVoucherCheck);
+arVoucherCheckSaveBtn.addEventListener('click', () => saveVoucherCheck(arVoucherCheckSaveBtn));
 arVoucherCheckDeleteBtn.addEventListener('click', deleteVoucherCheck);
 arVoucherCheckRestoreBtn.addEventListener('click', restoreVoucherCheck);

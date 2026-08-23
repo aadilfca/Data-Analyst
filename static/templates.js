@@ -416,7 +416,7 @@ function closeQuickAddColumnModal() {
 
 // Creates the column in the master table and appends it to the template's
 // selected-columns list in the same step. keepModalOpen === true is "Save and New".
-async function saveQuickAddColumn(keepModalOpen) {
+async function saveQuickAddColumn(keepModalOpen, triggerBtn) {
     const name = quickAddColName.value.trim();
     const type = quickAddColType.value;
     const category = quickAddColCategory.value.trim();
@@ -428,6 +428,8 @@ async function saveQuickAddColumn(keepModalOpen) {
     }
 
     try {
+        window.LoadingUI.showSpinner(triggerBtn, 'Saving');
+
         const res = await fetch(API_BASE + '/api/columns', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -469,6 +471,8 @@ async function saveQuickAddColumn(keepModalOpen) {
 
     } catch (error) {
         showQuickAddModalStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(triggerBtn);
     }
 }
 
@@ -480,11 +484,11 @@ quickAddCancelBtn.addEventListener('click', closeQuickAddColumnModal);
 quickAddOverlay.addEventListener('click', closeQuickAddColumnModal);
 quickAddSaveBtn.addEventListener('click', function(e) {
     e.preventDefault();
-    saveQuickAddColumn(false);
+    saveQuickAddColumn(false, quickAddSaveBtn);
 });
 quickAddSaveAndNewBtn.addEventListener('click', function(e) {
     e.preventDefault();
-    saveQuickAddColumn(true);
+    saveQuickAddColumn(true, quickAddSaveAndNewBtn);
 });
 
 // ---------- ADD / REMOVE SELECTED ----------
@@ -694,8 +698,11 @@ document.getElementById('templateForm').addEventListener('submit', async functio
     }
 
     const selectedIds = selectedColumns.map(c => c.id);
+    const saveTemplateBtn = document.getElementById('saveTemplateBtn');
 
     try {
+        window.LoadingUI.showSpinner(saveTemplateBtn, 'Saving');
+
         let url = API_BASE + '/api/templates';
         let method = 'POST';
         const payload = { template_name: name, selected_columns: selectedIds, rate_source: rateSourceSelect.value, has_subtotals_by_default: hasSubtotalsCheckbox.checked };
@@ -726,6 +733,8 @@ document.getElementById('templateForm').addEventListener('submit', async functio
 
     } catch (error) {
         showModalStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(saveTemplateBtn);
     }
 });
 

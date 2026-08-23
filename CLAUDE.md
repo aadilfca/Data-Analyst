@@ -269,6 +269,7 @@ mandatory at the START of every session that's about to touch this file, not jus
 - 2026-08-23: Data Bank preview skeleton wired, Phase 3 of 6 - fetchPreviewData() uses LoadingUI.showSkeleton() with real/fallback column count; verified live via Playwright.
 - 2026-08-23: Upload/Import spinner wired, Phase 4 of 6 - performImport() uses LoadingUI.showSpinner/hideSpinner (upload.js, upload.html); Validate step left untouched; verified via Playwright.
 - 2026-08-23: Save spinner wired, Phase 4a of 6 - saveClient()/saveColumn() use LoadingUI.showSpinner/hideSpinner per-button (clients.js, columns.js); verified via Playwright.
+- 2026-08-23: Save spinner wired, Phase 4b of 6 (final) - audit_rules.js (4 entities), templates.js, client_settings.js use LoadingUI; verified via Playwright w/ hard refresh.
 
 
 ## Self-maintenance
