@@ -34,7 +34,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from database import execute_query, execute_write, get_raw_conn, log_audit
+from database import execute_query_pg, execute_write_pg, get_raw_conn_pg, release_raw_conn_pg, log_audit
+from psycopg2.extras import Json
 
 router = APIRouter()
 
@@ -259,10 +260,10 @@ def find_conflicting_uploads(client_id: int, period_start: str, period_end: str)
     more than one conflicting row can exist (e.g. repeated failed attempts at
     the same period).
     """
-    return execute_query(
+    return execute_query_pg(
         """
         SELECT * FROM trial_balance_uploads
-        WHERE client_id = ? AND period_start = ? AND period_end = ?
+        WHERE client_id = %s AND period_start = %s AND period_end = %s
         ORDER BY uploaded_at DESC
         """,
         (client_id, period_start, period_end)
@@ -363,7 +364,7 @@ async def upload_trial_balance(
     upload + classify + store (no separate retrieval/review endpoint yet).
     """
     # 1. Client must exist and be active.
-    client_rows = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client_rows = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client_rows:
         raise HTTPException(404, "Client not found")
 
@@ -413,8 +414,8 @@ async def upload_trial_balance(
             # (documented elsewhere in this codebase's own conventions), so a
             # bare parent-row delete would silently leave orphaned account rows.
             for old_upload in conflicts:
-                execute_write("DELETE FROM trial_balance_accounts WHERE upload_id = ?", (old_upload["id"],))
-                execute_write("DELETE FROM trial_balance_uploads WHERE id = ?", (old_upload["id"],))
+                execute_write_pg("DELETE FROM trial_balance_accounts WHERE upload_id = %s", (old_upload["id"],))
+                execute_write_pg("DELETE FROM trial_balance_uploads WHERE id = %s", (old_upload["id"],))
             log_audit("Analyst", "Delete", "TrialBalance",
                        f"Overwrote {len(conflicts)} prior trial balance upload(s) for client "
                        f"{client_id}, exact period {period_start} to {period_end}")
@@ -422,11 +423,12 @@ async def upload_trial_balance(
     # 4. Create the upload row immediately (status='pending') so even a
     # failed parse below leaves a visible, queryable record rather than
     # silently vanishing.
-    upload_id = execute_write(
+    upload_id = execute_write_pg(
         """
         INSERT INTO trial_balance_uploads
             (client_id, as_of_date, file_name, status, period_start, period_end, period_type)
-        VALUES (?, ?, ?, 'pending', ?, ?, ?)
+        VALUES (%s, %s, %s, 'pending', %s, %s, %s)
+        RETURNING id
         """,
         (client_id, as_of_date, file.filename, period_start, period_end, period_type)
     )
@@ -496,7 +498,9 @@ async def upload_trial_balance(
                 # raw_row_data is a JSON safety net (mirrors client_data.row_data's
                 # existing convention) since TB formats vary across clients -
                 # every cell is already a plain string thanks to dtype=str above.
-                "raw_row_data": json.dumps(row),
+                # JSONB column - wrapped in Json(...) so psycopg2/Postgres own the
+                # actual encoding, not a pre-encoded JSON string.
+                "raw_row_data": Json(row),
             })
 
         if not accounts:
@@ -511,8 +515,8 @@ async def upload_trial_balance(
         # account code that already has a saved assignment. A code with no
         # match is simply left unassigned (category_id stays None) - that's
         # the "genuinely new account code" case the brief calls out.
-        assignment_rows = execute_query(
-            "SELECT account_code, category_id FROM account_category_assignments WHERE client_id = ?",
+        assignment_rows = execute_query_pg(
+            "SELECT account_code, category_id FROM account_category_assignments WHERE client_id = %s",
             (client_id,)
         )
         carried_categories = {r["account_code"]: r["category_id"] for r in assignment_rows}
@@ -525,20 +529,21 @@ async def upload_trial_balance(
             account["classification"] = classification[code]
             account["category_id"] = carried_categories.get(code)
 
-        # 9. Bulk insert in one transaction (same BEGIN/loop/commit/rollback
-        # shape already used by templates.py's import_backup()).
-        conn = get_raw_conn()
+        # 9. Bulk insert in one transaction (same loop/commit/rollback shape
+        # already used by templates.py's import_backup() - no explicit BEGIN
+        # needed, psycopg2 auto-starts a transaction on the first statement).
+        conn = get_raw_conn_pg()
         try:
-            conn.execute("BEGIN TRANSACTION")
+            cur = conn.cursor()
             for account in accounts:
-                conn.execute(
+                cur.execute(
                     """
                     INSERT INTO trial_balance_accounts
                         (upload_id, account_code, account_name, parent_account_code, level,
                          classification, opening_dr, opening_cr, period_dr, period_cr,
                          closing_dr, closing_cr, source_account_type, sort_order, raw_row_data,
                          category_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         upload_id, account["account_code"], account["account_name"],
@@ -553,7 +558,7 @@ async def upload_trial_balance(
             conn.rollback()
             raise
         finally:
-            conn.close()
+            release_raw_conn_pg(conn)
 
         # Summarize any skipped/duplicate rows in notes - visible without
         # having blocked the rest of the file.
@@ -564,8 +569,8 @@ async def upload_trial_balance(
             notes_parts.append(f"{duplicate_code_count} duplicate code row(s) skipped")
         notes = "; ".join(notes_parts) if notes_parts else None
 
-        execute_write(
-            "UPDATE trial_balance_uploads SET status = 'parsed', row_count = ?, notes = ? WHERE id = ?",
+        execute_write_pg(
+            "UPDATE trial_balance_uploads SET status = 'parsed', row_count = %s, notes = %s WHERE id = %s",
             (len(accounts), notes, upload_id)
         )
 
@@ -589,8 +594,8 @@ async def upload_trial_balance(
         # Leave the upload row visible with status='error' rather than
         # deleting it - the 'error' status + notes column exist for exactly
         # this case (Phase 1 schema).
-        execute_write(
-            "UPDATE trial_balance_uploads SET status = 'error', notes = ? WHERE id = ?",
+        execute_write_pg(
+            "UPDATE trial_balance_uploads SET status = 'error', notes = %s WHERE id = %s",
             (str(e), upload_id)
         )
         raise HTTPException(400, f"Trial balance parsing failed: {e}")
@@ -678,7 +683,7 @@ def _require_upload(upload_id: int):
     genuinely had none) is NOT an error here - it just returns an empty
     list / all-zero counts, since that's a legitimate state, not a bad request.
     """
-    upload_rows = execute_query("SELECT id FROM trial_balance_uploads WHERE id = ?", (upload_id,))
+    upload_rows = execute_query_pg("SELECT id FROM trial_balance_uploads WHERE id = %s", (upload_id,))
     if not upload_rows:
         raise HTTPException(404, "Trial balance upload not found")
 
@@ -698,16 +703,16 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
     """
     _require_upload(upload_id)
 
-    query = "SELECT * FROM trial_balance_accounts WHERE upload_id = ?"
+    query = "SELECT * FROM trial_balance_accounts WHERE upload_id = %s"
     params = [upload_id]
     if is_leaf is not None:
         # classification is stored as the text 'leaf'/'parent' (Phase 1/2) -
         # is_leaf is the boolean shape the brief asks the response to expose.
-        query += " AND classification = ?"
+        query += " AND classification = %s"
         params.append('leaf' if is_leaf else 'parent')
     query += " ORDER BY sort_order"
 
-    rows = execute_query(query, tuple(params))
+    rows = execute_query_pg(query, tuple(params))
 
     accounts = [
         {
@@ -750,15 +755,15 @@ def list_trial_balance_uploads(client_id: int):
     No filtering/pagination this phase, per the locked scope - a client's
     full upload history is returned in one call.
     """
-    client_rows = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client_rows = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client_rows:
         raise HTTPException(404, "Client not found")
 
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT id, period_start, period_end, period_type, status, row_count
         FROM trial_balance_uploads
-        WHERE client_id = ?
+        WHERE client_id = %s
         ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
         """,
         (client_id,)
@@ -792,14 +797,14 @@ def delete_trial_balance_upload(upload_id: int):
     _require_upload(upload_id)
 
     # Count first so the audit log can name how many account rows went with it.
-    count_rows = execute_query(
-        "SELECT COUNT(*) as count FROM trial_balance_accounts WHERE upload_id = ?",
+    count_rows = execute_query_pg(
+        "SELECT COUNT(*) as count FROM trial_balance_accounts WHERE upload_id = %s",
         (upload_id,)
     )
     account_count = count_rows[0]["count"] if count_rows else 0
 
-    execute_write("DELETE FROM trial_balance_accounts WHERE upload_id = ?", (upload_id,))
-    execute_write("DELETE FROM trial_balance_uploads WHERE id = ?", (upload_id,))
+    execute_write_pg("DELETE FROM trial_balance_accounts WHERE upload_id = %s", (upload_id,))
+    execute_write_pg("DELETE FROM trial_balance_uploads WHERE id = %s", (upload_id,))
 
     log_audit("Analyst", "Delete", "TrialBalance",
                f"Deleted trial balance upload {upload_id} and its {account_count} account row(s)")
@@ -817,8 +822,8 @@ def get_trial_balance_summary(upload_id: int):
     """
     _require_upload(upload_id)
 
-    rows = execute_query(
-        "SELECT classification, COUNT(*) as count FROM trial_balance_accounts WHERE upload_id = ? GROUP BY classification",
+    rows = execute_query_pg(
+        "SELECT classification, COUNT(*) as count FROM trial_balance_accounts WHERE upload_id = %s GROUP BY classification",
         (upload_id,)
     )
     counts = {r["classification"]: r["count"] for r in rows}
@@ -847,17 +852,17 @@ def override_account_classification(account_id: int, payload: AccountOverrideReq
     list_trial_balance_accounts() already uses, so the frontend can splice the
     response straight into its rendered row with no reshaping.
     """
-    account_rows = execute_query("SELECT id FROM trial_balance_accounts WHERE id = ?", (account_id,))
+    account_rows = execute_query_pg("SELECT id FROM trial_balance_accounts WHERE id = %s", (account_id,))
     if not account_rows:
         raise HTTPException(404, "Trial balance account not found")
 
     new_classification = 'leaf' if payload.is_leaf else 'parent'
-    execute_write(
-        "UPDATE trial_balance_accounts SET classification = ?, manually_overridden = 1 WHERE id = ?",
+    execute_write_pg(
+        "UPDATE trial_balance_accounts SET classification = %s, manually_overridden = TRUE WHERE id = %s",
         (new_classification, account_id)
     )
 
-    updated_rows = execute_query("SELECT * FROM trial_balance_accounts WHERE id = ?", (account_id,))
+    updated_rows = execute_query_pg("SELECT * FROM trial_balance_accounts WHERE id = %s", (account_id,))
     r = updated_rows[0]
 
     log_audit("Analyst", "Update", "TrialBalance",
@@ -892,8 +897,8 @@ def _validate_active_category(category_id: int) -> None:
     """Category must exist and be active before any write - mirrors this
     file's existing _require_upload() style. audit_rule_categories has no
     dedicated getter helper in database.py, so this queries it directly."""
-    rows = execute_query(
-        "SELECT id FROM audit_rule_categories WHERE id = ? AND is_active = 1",
+    rows = execute_query_pg(
+        "SELECT id FROM audit_rule_categories WHERE id = %s AND is_active = TRUE",
         (category_id,)
     )
     if not rows:
@@ -910,10 +915,10 @@ def upsert_account_category_assignment(client_id: int, account_code: str, catego
     persisted as-is - the persistent table mirrors trial_balance_accounts'
     own category_id exactly, including "explicitly cleared".
     """
-    execute_write(
+    execute_write_pg(
         """
         INSERT INTO account_category_assignments (client_id, account_code, category_id)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
         ON CONFLICT(client_id, account_code)
         DO UPDATE SET category_id = excluded.category_id, updated_at = CURRENT_TIMESTAMP
         """,
@@ -930,11 +935,11 @@ def _find_latest_parsed_upload(client_id: int):
     (confirmed fix) so "latest" is defined identically in both places.
     Returns the raw upload row, or None if no parsed upload exists.
     """
-    upload_rows = execute_query(
+    upload_rows = execute_query_pg(
         """
         SELECT id, period_start, period_end, period_type, as_of_date
         FROM trial_balance_uploads
-        WHERE client_id = ? AND status = 'parsed'
+        WHERE client_id = %s AND status = 'parsed'
         ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
         LIMIT 1
         """,
@@ -952,7 +957,7 @@ def get_latest_trial_balance_accounts(client_id: int):
     account with its current category assignment (if any), for the Assign
     Categories page (Phase 5).
     """
-    client_rows = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client_rows = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client_rows:
         raise HTTPException(404, "Client not found")
 
@@ -960,12 +965,12 @@ def get_latest_trial_balance_accounts(client_id: int):
     if not upload:
         raise HTTPException(404, "No parsed trial balance found for this client")
 
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT a.*, c.name AS category_name, c.is_active AS category_is_active
         FROM trial_balance_accounts a
         LEFT JOIN audit_rule_categories c ON a.category_id = c.id
-        WHERE a.upload_id = ?
+        WHERE a.upload_id = %s
         ORDER BY a.sort_order
         """,
         (upload["id"],)
@@ -1014,7 +1019,7 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
         regardless of its current value. Only reached via an explicit UI
         action (Phase 5), never the default path.
     """
-    account_rows = execute_query("SELECT * FROM trial_balance_accounts WHERE id = ?", (payload.account_id,))
+    account_rows = execute_query_pg("SELECT * FROM trial_balance_accounts WHERE id = %s", (payload.account_id,))
     if not account_rows:
         raise HTTPException(404, "Trial balance account not found")
     target = account_rows[0]
@@ -1028,16 +1033,16 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
     # upload_id -> trial_balance_uploads.client_id) - needed for the
     # persistent account_category_assignments upserts below (Verification
     # link, Phase 2), keyed by client_id + account_code.
-    upload_rows = execute_query(
-        "SELECT client_id FROM trial_balance_uploads WHERE id = ?", (target["upload_id"],)
+    upload_rows = execute_query_pg(
+        "SELECT client_id FROM trial_balance_uploads WHERE id = %s", (target["upload_id"],)
     )
     client_id = upload_rows[0]["client_id"] if upload_rows else None
 
     # Target account's own assignment is unconditional - this is the explicit
     # action requested, regardless of force_apply or its current value. When
     # payload.category_id is None this writes NULL, i.e. clears the category.
-    execute_write(
-        "UPDATE trial_balance_accounts SET category_id = ? WHERE id = ?",
+    execute_write_pg(
+        "UPDATE trial_balance_accounts SET category_id = %s WHERE id = %s",
         (payload.category_id, payload.account_id)
     )
     if client_id is not None:
@@ -1056,13 +1061,13 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
         # requirement, Phase 4) so smart-fill below can tell a descendant's
         # existing assignment apart from a stale one pointing at a since-
         # deactivated Category - the two are treated identically ("empty").
-        sibling_rows = execute_query(
+        sibling_rows = execute_query_pg(
             """
             SELECT s.id, s.account_code, s.parent_account_code, s.category_id,
                    c.is_active AS category_is_active
             FROM trial_balance_accounts s
             LEFT JOIN audit_rule_categories c ON c.id = s.category_id
-            WHERE s.upload_id = ?
+            WHERE s.upload_id = %s
             """,
             (target["upload_id"],)
         )
@@ -1091,9 +1096,9 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
                 descendants_skipped.append(row["id"])
 
         if descendants_updated:
-            placeholders = ",".join("?" for _ in descendants_updated)
-            execute_write(
-                f"UPDATE trial_balance_accounts SET category_id = ? WHERE id IN ({placeholders})",
+            placeholders = ",".join("%s" for _ in descendants_updated)
+            execute_write_pg(
+                f"UPDATE trial_balance_accounts SET category_id = %s WHERE id IN ({placeholders})",
                 tuple([payload.category_id] + descendants_updated)
             )
             # Mirror every actually-updated descendant into the persistent
@@ -1135,7 +1140,7 @@ def reset_trial_balance_categories(client_id: int):
     _find_latest_parsed_upload()), so the two endpoints can never disagree on
     which upload "the current one" means.
     """
-    client_rows = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client_rows = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client_rows:
         raise HTTPException(404, "Client not found")
 
@@ -1148,13 +1153,13 @@ def reset_trial_balance_categories(client_id: int):
     # had a category cleared (rather than reporting the upload's full row
     # count, which would overstate a reset that finds most rows already
     # unassigned).
-    count_rows = execute_query(
-        "SELECT COUNT(*) as count FROM trial_balance_accounts WHERE upload_id = ? AND category_id IS NOT NULL",
+    count_rows = execute_query_pg(
+        "SELECT COUNT(*) as count FROM trial_balance_accounts WHERE upload_id = %s AND category_id IS NOT NULL",
         (upload_id,)
     )
     reset_count = count_rows[0]["count"] if count_rows else 0
 
-    execute_write("UPDATE trial_balance_accounts SET category_id = NULL WHERE upload_id = ?", (upload_id,))
+    execute_write_pg("UPDATE trial_balance_accounts SET category_id = NULL WHERE upload_id = %s", (upload_id,))
 
     log_audit("Analyst", "Update", "TrialBalance",
                f"Reset all category assignments for client {client_id}'s latest trial balance "

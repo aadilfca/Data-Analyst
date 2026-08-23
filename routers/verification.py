@@ -6,8 +6,9 @@
 
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
-from database import execute_query, execute_write, log_audit, log_data_audit, get_raw_conn, get_client_voucher_prefixes
-from datetime import datetime
+from database import execute_query_pg, execute_write_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg
+from psycopg2.extras import Json
+from datetime import datetime, timezone
 import json
 import re
 from typing import List, Optional, Dict, Any
@@ -45,6 +46,18 @@ router = APIRouter()
 # ==============================================
 # HELPER FUNCTIONS
 # ==============================================
+
+# Postgres cutover: checked_at/updated_at columns are TIMESTAMPTZ now, not SQLite TEXT
+# CURRENT_TIMESTAMP strings - psycopg2 returns real (tz-aware) datetime objects. The
+# `(r['checked_at'] or '') > (existing['checked_at'] or '')` "sorts correctly as a string"
+# pattern used throughout this file to find the most-recently-touched sibling row breaks
+# under Postgres: comparing a real datetime against the '' fallback (or two rows where one
+# is None and the other a datetime) raises TypeError. This sentinel/helper pair replaces the
+# `or ''` fallback with a real minimum datetime, so comparisons stay well-typed either way.
+_MIN_TS = datetime.min.replace(tzinfo=timezone.utc)
+
+def _ts_sort_key(value):
+    return value if value is not None else _MIN_TS
 
 def match_voucher_category(voucher_id: str, client_prefixes: dict) -> Optional[str]:
     """
@@ -95,6 +108,21 @@ def get_column_value(row_data: dict, aliases: list) -> Optional[str]:
 # GET /api/verification/category-for-account) without a network round-trip.
 ACCOUNT_CODE_ALIASES = ['Account Detail', 'Account Details', 'Account Code', 'Account No', 'Account Number', 'Code', 'Ledger Code', 'AccountID', 'Account Head', 'Ledger Detail']
 
+def get_account_code_value(row_data: dict) -> Optional[str]:
+    """
+    get_column_value(row_data, ACCOUNT_CODE_ALIASES), coerced to str (Postgres cutover fix).
+    An account code column is typically declared Text, but a purely-numeric code (e.g. "5001")
+    often comes back from the Excel import as a raw Python int/float in row_data (JSONB doesn't
+    force a declared column's Python type). Every caller here immediately binds this value into
+    a query comparing it against a real TEXT column (trial_balance_accounts.account_code,
+    account_category_assignments.account_code) - Postgres raises "operator does not exist: text
+    = integer" for a bare int/float param there, whereas SQLite's dynamic typing silently
+    tolerated the mismatch. str() once here, at the single resolution point, is simpler and
+    safer than fixing it at every call site.
+    """
+    value = get_column_value(row_data, ACCOUNT_CODE_ALIASES)
+    return str(value) if value is not None else None
+
 # Audit Workbook Phase 1 (backend rollup endpoint): same alias list as verification.js's
 # VOUCHER_LINE_DESCRIPTION_ALIASES, ported here so a voucher row's description can be resolved
 # server-side the same way the frontend already does for the voucher table.
@@ -136,17 +164,17 @@ def _has_pending_account_head_note(voucher_line_id: int) -> bool:
     sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
     if not sibling_ids:
         return False
-    placeholders = ",".join("?" for _ in sibling_ids)
-    rows = execute_query(
+    placeholders = ",".join("%s" for _ in sibling_ids)
+    rows = execute_query_pg(
         f"""
         SELECT observation_text, updated_at FROM voucher_line_observations
-        WHERE voucher_line_id IN ({placeholders}) AND document_id = ?
+        WHERE voucher_line_id IN ({placeholders}) AND document_id = %s
         """,
         tuple(sibling_ids) + (ACCOUNT_HEAD_OBSERVATION_DOC_ID,)
     )
     if not rows:
         return False
-    latest = max(rows, key=lambda r: r['updated_at'] or '')
+    latest = max(rows, key=lambda r: _ts_sort_key(r['updated_at']))
     return bool((latest['observation_text'] or '').strip())
 
 
@@ -201,12 +229,12 @@ def _write_shortfall_observations(voucher_line_id: int, cross_check_result: dict
         for rule_result in results:
             sentinel_id = _cross_check_shortfall_sentinel_doc_id(rule_result['cross_check_id'])
             text = _format_shortfall_observation_text(rule_result) if rule_result['status'] == 'shortfall' else ''
-            execute_write(
+            execute_write_pg(
                 """
                 INSERT INTO voucher_line_observations (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
-                VALUES (?, ?, ?, 0, 'System', CURRENT_TIMESTAMP)
+                VALUES (%s, %s, %s, FALSE, 'System', CURRENT_TIMESTAMP)
                 ON CONFLICT(voucher_line_id, document_id)
-                DO UPDATE SET observation_text = excluded.observation_text, synced = 0, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP
+                DO UPDATE SET observation_text = excluded.observation_text, synced = FALSE, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP
                 """,
                 (voucher_line_id, sentinel_id, text)
             )
@@ -260,13 +288,13 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
                      without a GET request writing to the database.
     """
     gates: List[dict] = []
-    line = execute_query(
+    line = execute_query_pg(
         """
         SELECT vd.id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id
         FROM verification_details vd
         JOIN client_data cd ON cd.id = vd.client_data_id
         JOIN verification_sessions vs ON vs.id = vd.session_id
-        WHERE vd.id = ?
+        WHERE vd.id = %s
         """,
         (voucher_line_id,)
     )
@@ -290,7 +318,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # this exact column, so a physical bill's Amount is compared to the voucher line the same way.
     voucher_amount = _cross_check_numeric(row['extract_amount'])
 
-    account_code = get_column_value(row_data, ACCOUNT_CODE_ALIASES)
+    account_code = get_account_code_value(row_data)
     if not account_code:
         if detail:
             return {"cleared_status": None, "matrix_version_applied": None, "gates": [],
@@ -306,22 +334,22 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # account not in the latest TB. Applied here too so the status engine can't disagree
     # with what the Verification UI's Type column is already showing for the same line.
     cat_rows = None
-    upload_rows = execute_query(
+    upload_rows = execute_query_pg(
         """
         SELECT id FROM trial_balance_uploads
-        WHERE client_id = ? AND status = 'parsed'
+        WHERE client_id = %s AND status = 'parsed'
         ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
         LIMIT 1
         """,
         (client_id,)
     )
     if upload_rows:
-        tb_rows = execute_query(
+        tb_rows = execute_query_pg(
             """
             SELECT a.category_id, c.name AS category_name, c.matrix_version
             FROM trial_balance_accounts a
-            LEFT JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = 1
-            WHERE a.upload_id = ? AND a.account_code = ?
+            LEFT JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = TRUE
+            WHERE a.upload_id = %s AND a.account_code = %s
             """,
             (upload_rows[0]['id'], account_code)
         )
@@ -329,12 +357,12 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
             cat_rows = tb_rows
 
     if cat_rows is None:
-        assignment_rows = execute_query(
+        assignment_rows = execute_query_pg(
             """
             SELECT aca.category_id, arc.name AS category_name, arc.matrix_version
             FROM account_category_assignments aca
-            LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = 1
-            WHERE aca.client_id = ? AND aca.account_code = ?
+            LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = TRUE
+            WHERE aca.client_id = %s AND aca.account_code = %s
             """,
             (client_id, account_code)
         )
@@ -353,7 +381,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     matrix_version = cat_rows[0]['matrix_version']
 
     sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id) or [voucher_line_id]
-    placeholders = ",".join("?" for _ in sibling_ids)
+    placeholders = ",".join("%s" for _ in sibling_ids)
 
     # 1. Document requirement check: Category's required documents, each satisfied one of two
     # ways depending on whether it has a linked Data Bank template.
@@ -374,7 +402,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # would silently resolve "satisfied" via role ticks alone, with no bill data ever checked).
     required_doc_types = {d['document_id']: d['document_type'] for d in required_docs if d['is_active']}
 
-    linked_rows = execute_query(
+    linked_rows = execute_query_pg(
         f"""
         SELECT DISTINCT document_id FROM voucher_line_documents
         WHERE voucher_line_id IN ({placeholders}) AND status = 'active'
@@ -394,8 +422,8 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # deliberately unsatisfiable too, mirroring that same rule, not a new inconsistency).
     required_template_ids = {}
     if required_doc_ids:
-        doc_ph = ",".join("?" for _ in required_doc_ids)
-        template_rows = execute_query(
+        doc_ph = ",".join("%s" for _ in required_doc_ids)
+        template_rows = execute_query_pg(
             f"SELECT id, template_id FROM audit_rule_documents WHERE id IN ({doc_ph})",
             tuple(required_doc_ids)
         )
@@ -415,8 +443,8 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # this can't disagree with what the Supporting Documents modal itself shows for the same line.
     role_ticks_by_doc: Dict[int, Dict[str, bool]] = {}
     if no_template_required_ids:
-        nt_ph = ",".join("?" for _ in no_template_required_ids)
-        tick_rows = execute_query(
+        nt_ph = ",".join("%s" for _ in no_template_required_ids)
+        tick_rows = execute_query_pg(
             f"""
             SELECT document_id, role_name, is_checked, checked_at
             FROM voucher_line_procedure_checks
@@ -428,7 +456,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         for r in tick_rows:
             key = (r['document_id'], r['role_name'])
             existing = latest_tick.get(key)
-            if existing is None or (r['checked_at'] or '') > (existing['checked_at'] or ''):
+            if existing is None or _ts_sort_key(r['checked_at']) > _ts_sort_key(existing['checked_at']):
                 latest_tick[key] = r
         for (did, role_name), r in latest_tick.items():
             role_ticks_by_doc.setdefault(did, {})[role_name] = bool(r['is_checked'])
@@ -539,10 +567,10 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     if transaction_ref:
         # `name` is selected purely for detail mode's plain-English gate text - the gate logic
         # itself still only ever compares ids, exactly as before.
-        active_checks = execute_query("SELECT id, name FROM audit_rule_voucher_checks WHERE is_active = 1")
+        active_checks = execute_query_pg("SELECT id, name FROM audit_rule_voucher_checks WHERE is_active = TRUE")
         active_check_ids = {c['id'] for c in active_checks}
-        ticked_rows = execute_query(
-            "SELECT check_id FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ? AND state = 'done'",
+        ticked_rows = execute_query_pg(
+            "SELECT check_id FROM voucher_check_status WHERE client_id = %s AND transaction_ref = %s AND state = 'done'",
             (client_id, transaction_ref)
         )
         ticked_check_ids = {r['check_id'] for r in ticked_rows}
@@ -564,10 +592,10 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         ))
 
     # 3. Signature-exception check: defaults OK, fails only on a confirmed flagged mismatch.
-    sig_rows = execute_query(
+    sig_rows = execute_query_pg(
         f"""
         SELECT COUNT(*) as cnt FROM voucher_line_documents
-        WHERE voucher_line_id IN ({placeholders}) AND status = 'active' AND signature_exception = 1
+        WHERE voucher_line_id IN ({placeholders}) AND status = 'active' AND signature_exception = TRUE
         """,
         tuple(sibling_ids)
     )
@@ -685,8 +713,8 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     cleared_status = "Cleared" if all_ok else "Query"
 
     if persist:
-        execute_write(
-            "UPDATE verification_details SET cleared_status = ?, matrix_version_applied = ? WHERE id = ?",
+        execute_write_pg(
+            "UPDATE verification_details SET cleared_status = %s, matrix_version_applied = %s WHERE id = %s",
             (cleared_status, matrix_version, voucher_line_id)
         )
 
@@ -752,7 +780,7 @@ def is_cashbook_leg_row(row: dict, category: Optional[str]) -> bool:
     return False
 
 def get_row_data(client_data_id: int) -> dict:
-    rows = execute_query("SELECT row_data FROM client_data WHERE id = ?", (client_data_id,))
+    rows = execute_query_pg("SELECT row_data FROM client_data WHERE id = %s", (client_data_id,))
     if not rows:
         return {}
     rd = rows[0]['row_data']
@@ -788,12 +816,12 @@ def parse_row_data(raw_value: Any) -> Optional[Dict[str, Any]]:
 
 def get_template_columns(template_id: int) -> list:
     """Fetch a template's active columns ordered by sort_order (lowest first), for document_group_id computation."""
-    return execute_query(
+    return execute_query_pg(
         """
         SELECT m.id AS column_id, m.column_name, m.data_type, p.sort_order
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = ? AND m.is_active = 1
+        WHERE p.template_id = %s AND m.is_active = TRUE
         ORDER BY p.sort_order ASC
         """,
         (template_id,)
@@ -817,8 +845,8 @@ def get_document_field_value(client_data_id: int, field_name: str) -> Optional[A
     if not client_data_id or not field_name or not field_name.strip():
         return None
 
-    rows = execute_query(
-        "SELECT row_data, template_id FROM client_data WHERE id = ?", (client_data_id,)
+    rows = execute_query_pg(
+        "SELECT row_data, template_id FROM client_data WHERE id = %s", (client_data_id,)
     )
     if not rows:
         return None
@@ -880,9 +908,9 @@ def flatten_procedure_data(proc_data: dict) -> dict:
 @router.get("/api/verification/stats")
 def get_verification_stats():
     try:
-        total = execute_query("SELECT COUNT(*) as count FROM verifications")[0]['count']
-        pending = execute_query("SELECT COUNT(*) as count FROM verifications WHERE status = 'Pending'")[0]['count']
-        approved = execute_query("SELECT COUNT(*) as count FROM verifications WHERE status = 'Approved'")[0]['count']
+        total = execute_query_pg("SELECT COUNT(*) as count FROM verifications")[0]['count']
+        pending = execute_query_pg("SELECT COUNT(*) as count FROM verifications WHERE status = 'Pending'")[0]['count']
+        approved = execute_query_pg("SELECT COUNT(*) as count FROM verifications WHERE status = 'Approved'")[0]['count']
     except:
         total = pending = approved = 0
     return {"total": total, "pending": pending, "approved": approved, "rejected": 0}
@@ -902,7 +930,7 @@ def get_cashbooks(
     # mixed into one undifferentiated list. Omitted keeps today's unfiltered behavior.
     category_group: Optional[str] = Query(None, pattern="^(cash|bank)$", description="'cash' or 'bank' - restricts discovery to that category group")
 ):
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
     try:
@@ -913,18 +941,18 @@ def get_cashbooks(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
 
-    client_prefixes = get_client_voucher_prefixes(client_id)
+    client_prefixes = get_client_voucher_prefixes_pg(client_id)
     if category_group == 'cash':
         client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Cash Payment', 'Cash Receipt')}
     elif category_group == 'bank':
         client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Bank Payment', 'Bank Receipt')}
 
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT id, row_data
         FROM client_data
-        WHERE client_id = ? AND is_deleted = 0 AND change_detection_status != 'deleted'
-          AND extract_date BETWEEN ? AND ?
+        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
+          AND extract_date BETWEEN %s AND %s
         ORDER BY extract_date
         """,
         (client_id, date_start, date_end)
@@ -983,21 +1011,21 @@ def get_latest_cashbook_date(
     over all client_data - that would default to a month that has data for an
     unrelated template (e.g. Purchase Order) but no actual cashbook rows.
     """
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
-    client_prefixes = get_client_voucher_prefixes(client_id)
+    client_prefixes = get_client_voucher_prefixes_pg(client_id)
     if category_group == 'cash':
         client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Cash Payment', 'Cash Receipt')}
     elif category_group == 'bank':
         client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Bank Payment', 'Bank Receipt')}
 
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT row_data, extract_date
         FROM client_data
-        WHERE client_id = ? AND is_deleted = 0 AND change_detection_status != 'deleted'
+        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
         ORDER BY extract_date DESC
         """,
         (client_id,)
@@ -1026,7 +1054,7 @@ def start_verification_session(
     # 7-8 add the dashboard entry points/UI that will pass 'bank' - no caller does yet).
     session_type: str = Query('cash', pattern="^(cash|bank)$", description="'cash' or 'bank'")
 ):
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
     try:
@@ -1037,13 +1065,13 @@ def start_verification_session(
     if period_start > period_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    client_prefixes = get_client_voucher_prefixes(client_id)
-    rows = execute_query(
+    client_prefixes = get_client_voucher_prefixes_pg(client_id)
+    rows = execute_query_pg(
         """
         SELECT id, row_data, extract_date, extract_amount
         FROM client_data
-        WHERE client_id = ? AND is_deleted = 0 AND change_detection_status != 'deleted'
-          AND extract_date BETWEEN ? AND ?
+        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
+          AND extract_date BETWEEN %s AND %s
         ORDER BY extract_date
         """,
         (client_id, period_start, period_end)
@@ -1135,32 +1163,34 @@ def start_verification_session(
         raise HTTPException(400, f"No transactions found for cashbook '{cashbook_name}' in the given period.")
     
         # Insert session header
-    session_id = execute_write(
+    session_id = execute_write_pg(
         """
         INSERT INTO verification_sessions (client_id, cashbook_name, period_start, period_end, created_by, status, total_transactions, session_type)
-        VALUES (?, ?, ?, ?, ?, 'In Progress', ?, ?)
+        VALUES (%s, %s, %s, %s, %s, 'In Progress', %s, %s)
+        RETURNING id
         """,
         (client_id, cashbook_name, period_start, period_end, created_by, len(transactions_to_verify), session_type)
     )
-    
+
     # Prepare parameters for all details in one batch
     detail_params = []
     for trans in transactions_to_verify:
         detail_params.append((session_id, trans['client_data_id'], trans['voucher_id']))
-    
+
     # Insert all details in a single transaction (fast)
-    conn = get_raw_conn()
+    conn = get_raw_conn_pg()
     try:
-        conn.executemany(
+        cur = conn.cursor()
+        cur.executemany(
             """
             INSERT INTO verification_details (session_id, client_data_id, transaction_ref, status, validation_status)
-            VALUES (?, ?, ?, 'Pending', 'Pending')
+            VALUES (%s, %s, %s, 'Pending', 'Pending')
             """,
             detail_params
         )
         conn.commit()
     finally:
-        conn.close()
+        release_raw_conn_pg(conn)
 
     # Bug fix ("Cleared" reverting to "Pending" on module switch/restart): start_verification_session()
     # has no "resume an existing session" logic (see _resolve_sibling_voucher_line_ids()'s own
@@ -1177,26 +1207,26 @@ def start_verification_session(
     # proactively reclassifies an already-Cleared line when its matrix_version changes; this just
     # extends that same existing tolerance across a session restart. The next real save on this line
     # still recomputes it fresh, exactly as before.
-    execute_write(
+    execute_write_pg(
         """
         UPDATE verification_details
         SET cleared_status = (
                 SELECT vd2.cleared_status FROM verification_details vd2
                 WHERE vd2.client_data_id = verification_details.client_data_id
-                  AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                  AND vd2.session_id != %s AND vd2.cleared_status IS NOT NULL
                 ORDER BY vd2.id DESC LIMIT 1
             ),
             matrix_version_applied = (
                 SELECT vd2.matrix_version_applied FROM verification_details vd2
                 WHERE vd2.client_data_id = verification_details.client_data_id
-                  AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                  AND vd2.session_id != %s AND vd2.cleared_status IS NOT NULL
                 ORDER BY vd2.id DESC LIMIT 1
             )
-        WHERE session_id = ?
+        WHERE session_id = %s
           AND EXISTS (
                 SELECT 1 FROM verification_details vd2
                 WHERE vd2.client_data_id = verification_details.client_data_id
-                  AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                  AND vd2.session_id != %s AND vd2.cleared_status IS NOT NULL
             )
         """,
         (session_id, session_id, session_id, session_id)
@@ -1234,7 +1264,7 @@ def _build_verification_line(d: dict) -> dict:
     transaction_type = procedure_data.get('transaction_type', '')
 
     # --- Phase 3: Fetch change_detection info for the transaction ---
-    change_info = execute_query(
+    change_info = execute_query_pg(
         """
         SELECT cd.change_detection_status, cd.version,
                dal.old_row_data
@@ -1245,7 +1275,7 @@ def _build_verification_line(d: dict) -> dict:
                 SELECT MAX(id) FROM data_audit_log
                 WHERE client_data_id = cd.id AND action = 'UPDATE'
             )
-        WHERE cd.id = ?
+        WHERE cd.id = %s
         """,
         (d['client_data_id'],)
     )
@@ -1296,7 +1326,7 @@ def _fetch_session_details_grouped(session_id: int) -> list:
     way). Ordered by client_data_id so line/voucher order matches the
     physical row order. Does not filter by status.
     """
-    details = execute_query(
+    details = execute_query_pg(
         """
         SELECT vd.id, vd.client_data_id, vd.transaction_ref, vd.line_items, vd.procedure_data,
                vd.validation_status, vd.validation_message, vd.status, vd.observations,
@@ -1304,7 +1334,7 @@ def _fetch_session_details_grouped(session_id: int) -> list:
                cd.template_id, cd.row_data, cd.extract_date
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
-        WHERE vd.session_id = ? AND vd.range_status = 'active'
+        WHERE vd.session_id = %s AND vd.range_status = 'active'
         ORDER BY cd.id ASC
         """,
         (session_id,)
@@ -1334,7 +1364,7 @@ def get_next_transaction(session_id: int):
     using the same document-key logic as import's compare_transactions
     (get_document_group_id), computed at query time (not persisted).
     """
-    session = execute_query("SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
+    session = execute_query_pg("SELECT id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'", (session_id,))
     if not session:
         raise HTTPException(404, "Verification session not found or cancelled.")
 
@@ -1421,7 +1451,7 @@ def get_voucher_nav(
     client_data_id — the same physical row order /next already uses for
     lines within a voucher.
     """
-    session = execute_query("SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
+    session = execute_query_pg("SELECT id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'", (session_id,))
     if not session:
         raise HTTPException(404, "Verification session not found or cancelled.")
 
@@ -1449,7 +1479,7 @@ def verify_voucher_checks(
     voucher, mirroring the button-disable condition Phase 3's frontend will also enforce
     client-side.
     """
-    session = execute_query("SELECT id, client_id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'", (session_id,))
+    session = execute_query_pg("SELECT id, client_id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'", (session_id,))
     if not session:
         raise HTTPException(404, "Verification session not found or cancelled.")
     client_id = session[0]['client_id']
@@ -1462,11 +1492,11 @@ def verify_voucher_checks(
     transaction_ref = current['transaction_ref']
     voucher_rows = [d for d in details if d['_doc_group_id'] == current['_doc_group_id']]
 
-    active_checks = execute_query(
-        "SELECT id, name FROM audit_rule_voucher_checks WHERE is_active = 1 ORDER BY sort_order"
+    active_checks = execute_query_pg(
+        "SELECT id, name FROM audit_rule_voucher_checks WHERE is_active = TRUE ORDER BY sort_order"
     )
-    status_rows = execute_query(
-        "SELECT check_id, state FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ?",
+    status_rows = execute_query_pg(
+        "SELECT check_id, state FROM voucher_check_status WHERE client_id = %s AND transaction_ref = %s",
         (client_id, transaction_ref)
     )
     state_by_check_id = {r['check_id']: r['state'] for r in status_rows}
@@ -1478,9 +1508,9 @@ def verify_voucher_checks(
 
     not_done_ids = {c['id'] for c in active_checks if state_by_check_id.get(c['id']) == 'not_done'}
     for c in active_checks:
-        execute_write(
-            "UPDATE voucher_check_status SET flagged_in_observations = ? WHERE client_id = ? AND transaction_ref = ? AND check_id = ?",
-            (1 if c['id'] in not_done_ids else 0, client_id, transaction_ref, c['id'])
+        execute_write_pg(
+            "UPDATE voucher_check_status SET flagged_in_observations = %s WHERE client_id = %s AND transaction_ref = %s AND check_id = %s",
+            (c['id'] in not_done_ids, client_id, transaction_ref, c['id'])
         )
 
     for row in voucher_rows:
@@ -1498,8 +1528,8 @@ def save_line_items(
     transaction_type: Optional[str] = Body(None, embed=True),
     procedure_data: Optional[Dict[str, Any]] = Body(None, embed=True)
 ):
-    detail = execute_query(
-        "SELECT id, status FROM verification_details WHERE id = ?",
+    detail = execute_query_pg(
+        "SELECT id, status FROM verification_details WHERE id = %s",
         (detail_id,)
     )
     if not detail:
@@ -1523,26 +1553,27 @@ def save_line_items(
         except:
             raise HTTPException(400, "Qty, Rate, and Calculated Amount must be numeric.")
     
-    line_items_json = json.dumps(line_items)
-    updates = {"line_items": line_items_json}
+    # line_items/procedure_data are JSONB columns - written via Json(...) so
+    # psycopg2/Postgres own the actual encoding, not a pre-encoded JSON string.
+    updates = {"line_items": Json(line_items)}
     if transaction_type is not None:
         if procedure_data is not None:
             proc = procedure_data.copy()
             proc['transaction_type'] = transaction_type
-            updates["procedure_data"] = json.dumps(proc)
+            updates["procedure_data"] = Json(proc)
         else:
-            updates["procedure_data"] = json.dumps({"transaction_type": transaction_type})
+            updates["procedure_data"] = Json({"transaction_type": transaction_type})
     elif procedure_data is not None:
-        updates["procedure_data"] = json.dumps(procedure_data)
+        updates["procedure_data"] = Json(procedure_data)
     
     set_clauses = []
     params = []
     for key, value in updates.items():
-        set_clauses.append(f"{key} = ?")
+        set_clauses.append(f"{key} = %s")
         params.append(value)
     params.append(detail_id)
-    sql = f"UPDATE verification_details SET {', '.join(set_clauses)} WHERE id = ?"
-    execute_write(sql, params)
+    sql = f"UPDATE verification_details SET {', '.join(set_clauses)} WHERE id = %s"
+    execute_write_pg(sql, params)
 
     # Phase 6: roll any unsynced per-document observation entries into this line's own
     # Observation field. save_line_items() is the single chokepoint every Save/Next/Prev/
@@ -1566,12 +1597,12 @@ def validate_transaction(
     detail_id: int = Body(..., embed=True),
     inventory_flag: bool = Body(False, embed=True)
 ):
-    detail = execute_query(
+    detail = execute_query_pg(
         """
         SELECT vd.id, vd.client_data_id, vd.line_items, vd.status, cd.extract_amount
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
-        WHERE vd.id = ?
+        WHERE vd.id = %s
         """,
         (detail_id,)
     )
@@ -1600,11 +1631,11 @@ def validate_transaction(
         message = f"Validation passed: Sum of line items ({total_line_amount:.2f}) matches transaction amount ({transaction_amount:.2f})."
     else:
         message = f"Validation failed: Sum of line items ({total_line_amount:.2f}) does not match transaction amount ({transaction_amount:.2f}). Difference: {total_line_amount - transaction_amount:.2f}"
-    execute_write(
+    execute_write_pg(
         """
         UPDATE verification_details
-        SET validation_status = ?, validation_message = ?
-        WHERE id = ?
+        SET validation_status = %s, validation_message = %s
+        WHERE id = %s
         """,
         (validation_status, message, detail_id)
     )
@@ -1621,8 +1652,8 @@ def complete_transaction(
     detail_id: int = Body(..., embed=True),
     verified_by: str = "Analyst"
 ):
-    detail = execute_query(
-        "SELECT id, validation_status, status FROM verification_details WHERE id = ?",
+    detail = execute_query_pg(
+        "SELECT id, validation_status, status FROM verification_details WHERE id = %s",
         (detail_id,)
     )
     if not detail:
@@ -1634,25 +1665,26 @@ def complete_transaction(
     if d['validation_status'] != 'Passed':
         raise HTTPException(400, "Transaction validation has not passed. Please validate first.")
     
-    now = datetime.now().isoformat()
-    execute_write(
+    # verified_at is TIMESTAMPTZ - pass a real tz-aware datetime object, not an isoformat string.
+    now = datetime.now(timezone.utc)
+    execute_write_pg(
         """
         UPDATE verification_details
-        SET status = 'Verified', verified_by = ?, verified_at = ?
-        WHERE id = ?
+        SET status = 'Verified', verified_by = %s, verified_at = %s
+        WHERE id = %s
         """,
         (verified_by, now, detail_id)
     )
     
-    session_id = execute_query(
-        "SELECT session_id FROM verification_details WHERE id = ?",
+    session_id = execute_query_pg(
+        "SELECT session_id FROM verification_details WHERE id = %s",
         (detail_id,)
     )[0]['session_id']
-    execute_write(
+    execute_write_pg(
         """
         UPDATE verification_sessions
         SET verified_count = verified_count + 1
-        WHERE id = ?
+        WHERE id = %s
         """,
         (session_id,)
     )
@@ -1667,25 +1699,25 @@ def get_supporting_documents(
     template_id: int = Query(..., description="Template ID to filter (e.g., Purchase Orders)"),
     limit: int = Query(50, description="Max rows to return")
 ):
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive.")
-    template = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (template_id,))
+    template = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
     if not template:
         raise HTTPException(404, "Template not found or inactive.")
     
     query = """
         SELECT id, row_data, extract_amount, extract_date
         FROM client_data
-        WHERE client_id = ? AND template_id = ? AND is_deleted = 0
+        WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
           AND EXISTS (
-              SELECT 1 FROM json_each(row_data) 
-              WHERE LOWER(value) LIKE LOWER(?)
+              SELECT 1 FROM jsonb_each_text(row_data)
+              WHERE LOWER(value) LIKE LOWER(%s)
           )
         ORDER BY extract_date DESC
-        LIMIT ?
+        LIMIT %s
     """
-    rows = execute_query(query, (client_id, template_id, f"%{search}%", limit))
+    rows = execute_query_pg(query, (client_id, template_id, f"%{search}%", limit))
     
     result = []
     for row in rows:
@@ -1716,7 +1748,7 @@ def preview_cashbook(
     Uses the same logic as start_verification_session but returns only the rows.
     """
     # Validate client
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
     
@@ -1729,15 +1761,15 @@ def preview_cashbook(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    client_prefixes = get_client_voucher_prefixes(client_id)
+    client_prefixes = get_client_voucher_prefixes_pg(client_id)
 
     # Fetch rows
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT id, row_data, extract_date, extract_amount
         FROM client_data
-        WHERE client_id = ? AND is_deleted = 0 AND change_detection_status != 'deleted'
-          AND extract_date BETWEEN ? AND ?
+        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
+          AND extract_date BETWEEN %s AND %s
         ORDER BY extract_date
         """,
         (client_id, date_start, date_end)
@@ -1848,8 +1880,8 @@ def preview_cashbook(
     voucher_status_map: Dict[str, str] = {}
     all_client_data_ids = [t['client_data_id'] for t in transactions]
     if all_client_data_ids:
-        placeholders = ",".join("?" for _ in all_client_data_ids)
-        vd_rows = execute_query(
+        placeholders = ",".join("%s" for _ in all_client_data_ids)
+        vd_rows = execute_query_pg(
             f"""
             SELECT client_data_id, cleared_status, id
             FROM verification_details
@@ -1920,12 +1952,12 @@ def get_audited_cashbook(session_id: int):
     Returns session header and list of transactions.
     """
     # Get session info
-    session = execute_query(
+    session = execute_query_pg(
         """
         SELECT id, client_id, cashbook_name, period_start, period_end, 
                total_transactions, verified_count, status, created_by, created_at
         FROM verification_sessions
-        WHERE id = ? AND status != 'Cancelled'
+        WHERE id = %s AND status != 'Cancelled'
         """,
         (session_id,)
     )
@@ -1934,7 +1966,7 @@ def get_audited_cashbook(session_id: int):
     
     s = session[0]
     # Get all details
-    details = execute_query(
+    details = execute_query_pg(
         """
         SELECT vd.id, vd.client_data_id, vd.transaction_ref, vd.line_items, vd.procedure_data,
                vd.validation_status, vd.validation_message, vd.status as verification_status,
@@ -1943,7 +1975,7 @@ def get_audited_cashbook(session_id: int):
                cd.row_data, cd.extract_amount, cd.extract_date
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
-        WHERE vd.session_id = ? AND vd.range_status = 'active'
+        WHERE vd.session_id = %s AND vd.range_status = 'active'
         ORDER BY vd.id
         """,
         (session_id,)
@@ -2020,11 +2052,11 @@ def get_session_progress(session_id: int):
     Lightweight endpoint to get only the progress counts for a session.
     Returns total_transactions and verified_count.
     """
-    session = execute_query(
+    session = execute_query_pg(
         """
         SELECT total_transactions, verified_count
         FROM verification_sessions
-        WHERE id = ? AND status != 'Cancelled'
+        WHERE id = %s AND status != 'Cancelled'
         """,
         (session_id,)
     )
@@ -2066,15 +2098,15 @@ def get_voucher_stats(session_id: int):
 
     cleared + query + pending always equals total. See _rollup_voucher_status() for the rule.
     """
-    session = execute_query(
-        "SELECT id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'",
+    session = execute_query_pg(
+        "SELECT id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'",
         (session_id,)
     )
     if not session:
         raise HTTPException(404, "Session not found or cancelled.")
 
-    rows = execute_query(
-        "SELECT transaction_ref, cleared_status FROM verification_details WHERE session_id = ? AND range_status = 'active'",
+    rows = execute_query_pg(
+        "SELECT transaction_ref, cleared_status FROM verification_details WHERE session_id = %s AND range_status = 'active'",
         (session_id,)
     )
 
@@ -2115,24 +2147,24 @@ def _audit_workbook_resolve_categories(client_id: int, account_codes: set) -> Di
         return resolved
 
     codes = list(account_codes)
-    placeholders = ",".join("?" for _ in codes)
+    placeholders = ",".join("%s" for _ in codes)
 
-    upload_rows = execute_query(
+    upload_rows = execute_query_pg(
         """
         SELECT id FROM trial_balance_uploads
-        WHERE client_id = ? AND status = 'parsed'
+        WHERE client_id = %s AND status = 'parsed'
         ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
         LIMIT 1
         """,
         (client_id,)
     )
     if upload_rows:
-        tb_rows = execute_query(
+        tb_rows = execute_query_pg(
             f"""
             SELECT a.account_code, a.category_id
             FROM trial_balance_accounts a
-            JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = 1
-            WHERE a.upload_id = ? AND a.account_code IN ({placeholders})
+            JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = TRUE
+            WHERE a.upload_id = %s AND a.account_code IN ({placeholders})
             """,
             tuple([upload_rows[0]['id']] + codes)
         )
@@ -2141,13 +2173,13 @@ def _audit_workbook_resolve_categories(client_id: int, account_codes: set) -> Di
 
     remaining = [code for code, cat_id in resolved.items() if cat_id is None]
     if remaining:
-        rem_ph = ",".join("?" for _ in remaining)
-        assignment_rows = execute_query(
+        rem_ph = ",".join("%s" for _ in remaining)
+        assignment_rows = execute_query_pg(
             f"""
             SELECT aca.account_code, aca.category_id
             FROM account_category_assignments aca
-            JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = 1
-            WHERE aca.client_id = ? AND aca.account_code IN ({rem_ph})
+            JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = TRUE
+            WHERE aca.client_id = %s AND aca.account_code IN ({rem_ph})
             """,
             tuple([client_id] + remaining)
         )
@@ -2172,23 +2204,23 @@ def _audit_workbook_resolve_account_names(client_id: int, account_codes: set) ->
         return resolved
 
     codes = list(account_codes)
-    placeholders = ",".join("?" for _ in codes)
+    placeholders = ",".join("%s" for _ in codes)
 
-    upload_rows = execute_query(
+    upload_rows = execute_query_pg(
         """
         SELECT id FROM trial_balance_uploads
-        WHERE client_id = ? AND status = 'parsed'
+        WHERE client_id = %s AND status = 'parsed'
         ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
         LIMIT 1
         """,
         (client_id,)
     )
     if upload_rows:
-        tb_rows = execute_query(
+        tb_rows = execute_query_pg(
             f"""
             SELECT account_code, account_name
             FROM trial_balance_accounts
-            WHERE upload_id = ? AND account_code IN ({placeholders})
+            WHERE upload_id = %s AND account_code IN ({placeholders})
             """,
             tuple([upload_rows[0]['id']] + codes)
         )
@@ -2214,8 +2246,8 @@ def _audit_workbook_resolve_category_names(category_ids: set) -> Dict[int, Optio
     if not category_ids:
         return resolved
     ids = list(category_ids)
-    placeholders = ",".join("?" for _ in ids)
-    rows = execute_query(
+    placeholders = ",".join("%s" for _ in ids)
+    rows = execute_query_pg(
         f"SELECT id, name FROM audit_rule_categories WHERE id IN ({placeholders})",
         tuple(ids)
     )
@@ -2279,21 +2311,21 @@ def get_audit_workbook(session_id: int):
     Data Bank search/browse) - the session's real client, not whatever the global navbar client
     picker happens to have selected at the time, which can silently disagree.
     """
-    session = execute_query(
-        "SELECT id, client_id FROM verification_sessions WHERE id = ? AND status != 'Cancelled'",
+    session = execute_query_pg(
+        "SELECT id, client_id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'",
         (session_id,)
     )
     if not session:
         raise HTTPException(404, "Session not found or cancelled.")
     client_id = session[0]['client_id']
 
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT vd.id AS detail_id, vd.transaction_ref, vd.cleared_status,
                cd.id AS client_data_id, cd.extract_amount, cd.extract_date, cd.row_data
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
-        WHERE vd.session_id = ? AND vd.range_status = 'active'
+        WHERE vd.session_id = %s AND vd.range_status = 'active'
         ORDER BY cd.id ASC
         """,
         (session_id,)
@@ -2315,7 +2347,7 @@ def get_audit_workbook(session_id: int):
             row_data = json.loads(row_data) if isinstance(row_data, str) else (row_data or {})
         except Exception:
             row_data = {}
-        account_code = get_column_value(row_data, ACCOUNT_CODE_ALIASES)
+        account_code = get_account_code_value(row_data)
         description = get_column_value(row_data, DESCRIPTION_ALIASES)
         parsed_lines.append({
             "detail_id": r['detail_id'],
@@ -2344,11 +2376,11 @@ def get_audit_workbook(session_id: int):
     }
     category_name_by_id = _audit_workbook_resolve_category_names(distinct_category_ids)
 
-    cd_placeholders = ",".join("?" for _ in client_data_ids)
+    cd_placeholders = ",".join("%s" for _ in client_data_ids)
 
     # Linked evidence: {client_data_id: {document_id, ...}}
     linked_doc_ids_by_cd: Dict[int, set] = {}
-    linked_rows = execute_query(
+    linked_rows = execute_query_pg(
         f"""
         SELECT vd2.client_data_id, vld.document_id
         FROM voucher_line_documents vld
@@ -2364,7 +2396,7 @@ def get_audit_workbook(session_id: int):
     # latest checked_at per (client_data_id, document_id, role_name) - same rule
     # compute_and_persist_cleared_status()'s role_ticks_by_doc already uses per line.
     role_ticks_by_cd: Dict[int, Dict[int, Dict[str, bool]]] = {}
-    tick_rows = execute_query(
+    tick_rows = execute_query_pg(
         f"""
         SELECT vd2.client_data_id, vpc.document_id, vpc.role_name, vpc.is_checked, vpc.checked_at
         FROM voucher_line_procedure_checks vpc
@@ -2377,7 +2409,7 @@ def get_audit_workbook(session_id: int):
     for r in tick_rows:
         key = (r['client_data_id'], r['document_id'], r['role_name'])
         existing = latest_tick.get(key)
-        if existing is None or (r['checked_at'] or '') > (existing['checked_at'] or ''):
+        if existing is None or _ts_sort_key(r['checked_at']) > _ts_sort_key(existing['checked_at']):
             latest_tick[key] = r
     for (cd_id, doc_id, role_name), r in latest_tick.items():
         role_ticks_by_cd.setdefault(cd_id, {}).setdefault(doc_id, {})[role_name] = bool(r['is_checked'])
@@ -2392,7 +2424,7 @@ def get_audit_workbook(session_id: int):
     # uses - then only that session's bills/items are kept, never a mix of two sessions' bills
     # under one document.
     bills_by_cd: Dict[int, Dict[int, list]] = {}
-    header_rows = execute_query(
+    header_rows = execute_query_pg(
         f"""
         SELECT vd2.client_data_id, vpb.id, vpb.voucher_line_id, vpb.document_id,
                vpb.bill_no, vpb.bill_date, vpb.vendor_name, vpb.updated_at
@@ -2405,7 +2437,7 @@ def get_audit_workbook(session_id: int):
     winning_session_by_key: Dict[tuple, tuple] = {}
     for r in header_rows:
         key = (r['client_data_id'], r['document_id'])
-        candidate = (r['updated_at'] or '', r['voucher_line_id'])
+        candidate = (_ts_sort_key(r['updated_at']), r['voucher_line_id'])
         existing = winning_session_by_key.get(key)
         if existing is None or candidate > existing:
             winning_session_by_key[key] = candidate
@@ -2422,8 +2454,8 @@ def get_audit_workbook(session_id: int):
         bills_by_cd.setdefault(r['client_data_id'], {}).setdefault(r['document_id'], []).append(shell)
 
     if winning_bill_ids:
-        bid_placeholders = ",".join("?" for _ in winning_bill_ids)
-        item_rows = execute_query(
+        bid_placeholders = ",".join("%s" for _ in winning_bill_ids)
+        item_rows = execute_query_pg(
             f"SELECT bill_id, amount FROM voucher_line_physical_bill_items WHERE bill_id IN ({bid_placeholders})",
             tuple(winning_bill_ids)
         )
@@ -2434,16 +2466,16 @@ def get_audit_workbook(session_id: int):
     # when zero voucher-level checks are configured - mirrors check #2's voucher_checks_ok.
     voucher_checks_ok_by_ref: Dict[str, bool] = {}
     if transaction_refs:
-        active_checks = execute_query("SELECT id FROM audit_rule_voucher_checks WHERE is_active = 1")
+        active_checks = execute_query_pg("SELECT id FROM audit_rule_voucher_checks WHERE is_active = TRUE")
         active_check_ids = {c['id'] for c in active_checks}
         if not active_check_ids:
             voucher_checks_ok_by_ref = {ref: True for ref in transaction_refs}
         else:
-            ref_placeholders = ",".join("?" for _ in transaction_refs)
-            ticked_rows = execute_query(
+            ref_placeholders = ",".join("%s" for _ in transaction_refs)
+            ticked_rows = execute_query_pg(
                 f"""
                 SELECT transaction_ref, check_id FROM voucher_check_status
-                WHERE client_id = ? AND state = 'done' AND transaction_ref IN ({ref_placeholders})
+                WHERE client_id = %s AND state = 'done' AND transaction_ref IN ({ref_placeholders})
                 """,
                 tuple([client_id] + list(transaction_refs))
             )
@@ -2459,7 +2491,7 @@ def get_audit_workbook(session_id: int):
     # updated_at per (client_data_id, document_id), non-blank text only - same rule
     # updateObservationsCellForLine()'s nonEmpty filter already applies.
     observations_by_cd: Dict[int, list] = {}
-    obs_rows = execute_query(
+    obs_rows = execute_query_pg(
         f"""
         SELECT vd2.client_data_id, vlo.document_id, vlo.observation_text, vlo.updated_at,
                ard.name AS document_name
@@ -2474,7 +2506,7 @@ def get_audit_workbook(session_id: int):
     for r in obs_rows:
         key = (r['client_data_id'], r['document_id'])
         existing = latest_obs.get(key)
-        if existing is None or (r['updated_at'] or '') > (existing['updated_at'] or ''):
+        if existing is None or _ts_sort_key(r['updated_at']) > _ts_sort_key(existing['updated_at']):
             latest_obs[key] = r
     for (cd_id, doc_id), r in sorted(latest_obs.items(), key=lambda kv: kv[0][1]):
         text = (r['observation_text'] or '').strip()
@@ -2585,8 +2617,8 @@ def reconcile_session_range(
     range_status='active', so this endpoint only needs to flip that flag, not touch those
     endpoints' own logic further.
     """
-    session = execute_query(
-        "SELECT id, client_id, cashbook_name FROM verification_sessions WHERE id = ? AND status != 'Cancelled'",
+    session = execute_query_pg(
+        "SELECT id, client_id, cashbook_name FROM verification_sessions WHERE id = %s AND status != 'Cancelled'",
         (session_id,)
     )
     if not session:
@@ -2606,13 +2638,13 @@ def reconcile_session_range(
     # --- Re-run the same voucher-discovery logic as start_verification_session(), against the
     # session's existing client_id/cashbook_name but the new date range. Deliberately duplicated
     # rather than shared via a helper, to keep this addition purely additive - see the plan note.
-    client_prefixes = get_client_voucher_prefixes(client_id)
-    rows = execute_query(
+    client_prefixes = get_client_voucher_prefixes_pg(client_id)
+    rows = execute_query_pg(
         """
         SELECT id, row_data, extract_date, extract_amount
         FROM client_data
-        WHERE client_id = ? AND is_deleted = 0 AND change_detection_status != 'deleted'
-          AND extract_date BETWEEN ? AND ?
+        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
+          AND extract_date BETWEEN %s AND %s
         ORDER BY extract_date
         """,
         (client_id, period_start, period_end)
@@ -2678,8 +2710,8 @@ def reconcile_session_range(
     target_ids = set(target.keys())
 
     # --- Existing verification_details rows for this session, regardless of range_status.
-    existing = execute_query(
-        "SELECT id, client_data_id, range_status FROM verification_details WHERE session_id = ?",
+    existing = execute_query_pg(
+        "SELECT id, client_data_id, range_status FROM verification_details WHERE session_id = %s",
         (session_id,)
     )
     existing_by_client_data_id = {r['client_data_id']: r for r in existing}
@@ -2702,51 +2734,52 @@ def reconcile_session_range(
     added_count = 0
     if new_client_data_ids:
         detail_params = [(session_id, cdid, target[cdid]) for cdid in new_client_data_ids]
-        conn = get_raw_conn()
+        conn = get_raw_conn_pg()
         try:
-            conn.executemany(
+            cur = conn.cursor()
+            cur.executemany(
                 """
                 INSERT INTO verification_details (session_id, client_data_id, transaction_ref, status, validation_status, range_status)
-                VALUES (?, ?, ?, 'Pending', 'Pending', 'active')
+                VALUES (%s, %s, %s, 'Pending', 'Pending', 'active')
                 """,
                 detail_params
             )
             conn.commit()
         finally:
-            conn.close()
+            release_raw_conn_pg(conn)
         added_count = len(new_client_data_ids)
 
-        placeholders = ",".join("?" * len(new_client_data_ids))
-        new_rows = execute_query(
+        placeholders = ",".join(["%s"] * len(new_client_data_ids))
+        new_rows = execute_query_pg(
             f"""
             SELECT id FROM verification_details
-            WHERE session_id = ? AND range_status = 'active' AND client_data_id IN ({placeholders})
+            WHERE session_id = %s AND range_status = 'active' AND client_data_id IN ({placeholders})
             """,
             (session_id, *new_client_data_ids)
         )
         new_detail_ids = [r['id'] for r in new_rows]
         if new_detail_ids:
-            id_placeholders = ",".join("?" * len(new_detail_ids))
-            execute_write(
+            id_placeholders = ",".join(["%s"] * len(new_detail_ids))
+            execute_write_pg(
                 f"""
                 UPDATE verification_details
                 SET cleared_status = (
                         SELECT vd2.cleared_status FROM verification_details vd2
                         WHERE vd2.client_data_id = verification_details.client_data_id
-                          AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                          AND vd2.session_id != %s AND vd2.cleared_status IS NOT NULL
                         ORDER BY vd2.id DESC LIMIT 1
                     ),
                     matrix_version_applied = (
                         SELECT vd2.matrix_version_applied FROM verification_details vd2
                         WHERE vd2.client_data_id = verification_details.client_data_id
-                          AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                          AND vd2.session_id != %s AND vd2.cleared_status IS NOT NULL
                         ORDER BY vd2.id DESC LIMIT 1
                     )
                 WHERE id IN ({id_placeholders})
                   AND EXISTS (
                         SELECT 1 FROM verification_details vd2
                         WHERE vd2.client_data_id = verification_details.client_data_id
-                          AND vd2.session_id != ? AND vd2.cleared_status IS NOT NULL
+                          AND vd2.session_id != %s AND vd2.cleared_status IS NOT NULL
                     )
                 """,
                 (session_id, session_id, *new_detail_ids, session_id)
@@ -2755,12 +2788,12 @@ def reconcile_session_range(
     # --- Reactivate rows that fell out of range before and are now back in.
     reactivated_count = 0
     if reactivate_ids:
-        placeholders = ",".join("?" * len(reactivate_ids))
-        execute_write(
+        placeholders = ",".join(["%s"] * len(reactivate_ids))
+        execute_write_pg(
             f"""
             UPDATE verification_details
             SET range_status = 'active', excluded_at = NULL
-            WHERE session_id = ? AND client_data_id IN ({placeholders})
+            WHERE session_id = %s AND client_data_id IN ({placeholders})
             """,
             (session_id, *reactivate_ids)
         )
@@ -2769,8 +2802,8 @@ def reconcile_session_range(
     # --- Exclude rows that are no longer in range.
     excluded_detail_ids = [r['id'] for r in exclude_detail_rows]
     if excluded_detail_ids:
-        placeholders = ",".join("?" * len(excluded_detail_ids))
-        execute_write(
+        placeholders = ",".join(["%s"] * len(excluded_detail_ids))
+        execute_write_pg(
             f"""
             UPDATE verification_details
             SET range_status = 'excluded', excluded_at = CURRENT_TIMESTAMP
@@ -2779,13 +2812,13 @@ def reconcile_session_range(
             tuple(excluded_detail_ids)
         )
 
-    total_active = execute_query(
-        "SELECT COUNT(*) as c FROM verification_details WHERE session_id = ? AND range_status = 'active'",
+    total_active = execute_query_pg(
+        "SELECT COUNT(*) as c FROM verification_details WHERE session_id = %s AND range_status = 'active'",
         (session_id,)
     )[0]['c']
 
-    execute_write(
-        "UPDATE verification_sessions SET period_start = ?, period_end = ?, total_transactions = ? WHERE id = ?",
+    execute_write_pg(
+        "UPDATE verification_sessions SET period_start = %s, period_end = %s, total_transactions = %s WHERE id = %s",
         (period_start, period_end, total_active, session_id)
     )
 
@@ -2873,7 +2906,10 @@ def export_audited_cashbook_excel(session_id: int):
             "Validation Status": t.get('validation_status', ''),
             "Verification Status": t.get('verification_status', ''),
             "Verified By": t.get('verified_by', ''),
-            "Verified At": t.get('verified_at', '')
+            # verified_at is TIMESTAMPTZ (tz-aware) now - Excel/openpyxl rejects a tz-aware
+            # datetime outright, so it's formatted to a plain string here rather than passed
+            # through raw.
+            "Verified At": t['verified_at'].strftime('%d/%m/%Y %H:%M') if t.get('verified_at') else ''
         }
         # If there are line items, we could expand them; but for simplicity we'll put the first line item's data
         line_items = t.get('line_items', [])
@@ -2949,8 +2985,8 @@ def get_audit_guidance(
     Category. Cross-checks are surfaced as read-only guidance text only in this phase -
     automated comparison against real voucher data is a separate, deferred requirement.
     """
-    rows = execute_query(
-        "SELECT id, kb_overview FROM audit_rule_categories WHERE name = ? AND is_active = 1",
+    rows = execute_query_pg(
+        "SELECT id, kb_overview FROM audit_rule_categories WHERE name = %s AND is_active = TRUE",
         (transaction_type,)
     )
     if not rows:
@@ -2992,7 +3028,7 @@ def get_category_for_account(
     convention used elsewhere in this codebase (e.g. the Supporting Documents
     modal's locked tab for an already-referenced inactive Document).
     """
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
@@ -3004,22 +3040,22 @@ def get_category_for_account(
     # cached copy, not the live TB, and confirmed (2026-07-30) to be able to drift stale
     # relative to it. So the live TB wins whenever the account is present in it; the
     # assignments table is used only as a fallback for an account not in the latest TB.
-    upload_rows = execute_query(
+    upload_rows = execute_query_pg(
         """
         SELECT id FROM trial_balance_uploads
-        WHERE client_id = ? AND status = 'parsed'
+        WHERE client_id = %s AND status = 'parsed'
         ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
         LIMIT 1
         """,
         (client_id,)
     )
     if upload_rows:
-        tb_rows = execute_query(
+        tb_rows = execute_query_pg(
             """
             SELECT a.category_id, c.name AS category_name
             FROM trial_balance_accounts a
             LEFT JOIN audit_rule_categories c ON c.id = a.category_id
-            WHERE a.upload_id = ? AND a.account_code = ?
+            WHERE a.upload_id = %s AND a.account_code = %s
             """,
             (upload_rows[0]['id'], account_code)
         )
@@ -3035,13 +3071,13 @@ def get_category_for_account(
     # assignment explicitly cleared to NULL. A category's own is_active
     # state is deliberately NOT folded into this join - a since-deactivated
     # category is still a real, displayable match here (see docstring).
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT aca.category_id, arc.name AS category_name
         FROM account_category_assignments aca
         LEFT JOIN audit_rule_categories arc
             ON arc.id = aca.category_id
-        WHERE aca.client_id = ? AND aca.account_code = ?
+        WHERE aca.client_id = %s AND aca.account_code = %s
         """,
         (client_id, account_code)
     )
@@ -3107,16 +3143,16 @@ def suggest_account_head(
     category-for-account's "absence is a normal outcome" convention. This
     only recommends; it never creates a Chart-of-Accounts head.
     """
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
     no_match_response = {"matched": False, "message": "No match — new head likely needed", "suggestions": []}
 
-    upload_rows = execute_query(
+    upload_rows = execute_query_pg(
         """
         SELECT id FROM trial_balance_uploads
-        WHERE client_id = ? AND status = 'parsed'
+        WHERE client_id = %s AND status = 'parsed'
         ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
         LIMIT 1
         """,
@@ -3125,12 +3161,12 @@ def suggest_account_head(
     if not upload_rows:
         return no_match_response
 
-    accounts = execute_query(
+    accounts = execute_query_pg(
         """
         SELECT a.account_code, a.account_name, a.category_id, c.name AS category_name
         FROM trial_balance_accounts a
-        LEFT JOIN audit_rule_categories c ON a.category_id = c.id AND c.is_active = 1
-        WHERE a.upload_id = ? AND a.classification = 'leaf'
+        LEFT JOIN audit_rule_categories c ON a.category_id = c.id AND c.is_active = TRUE
+        WHERE a.upload_id = %s AND a.classification = 'leaf'
         """,
         (upload_rows[0]['id'],)
     )
@@ -3200,11 +3236,11 @@ def get_voucher_checks_status(
     auth_roles and performed_by_name are both gone - Phase 1 already dropped the role concept
     from Audit Rules entirely, and this model has no "performed by" field anymore either.
     """
-    checks = execute_query(
-        "SELECT id, name, sort_order FROM audit_rule_voucher_checks WHERE is_active = 1 ORDER BY sort_order"
+    checks = execute_query_pg(
+        "SELECT id, name, sort_order FROM audit_rule_voucher_checks WHERE is_active = TRUE ORDER BY sort_order"
     )
-    status_rows = execute_query(
-        "SELECT check_id, state FROM voucher_check_status WHERE client_id = ? AND transaction_ref = ?",
+    status_rows = execute_query_pg(
+        "SELECT check_id, state FROM voucher_check_status WHERE client_id = %s AND transaction_ref = %s",
         (client_id, transaction_ref)
     )
     status_by_check_id = {r['check_id']: r for r in status_rows}
@@ -3240,17 +3276,17 @@ def save_voucher_check_status(
     if state not in VOUCHER_CHECK_STATES:
         raise HTTPException(400, f"Invalid state '{state}' - must be one of {VOUCHER_CHECK_STATES}.")
 
-    check = execute_query(
-        "SELECT id FROM audit_rule_voucher_checks WHERE id = ? AND is_active = 1",
+    check = execute_query_pg(
+        "SELECT id FROM audit_rule_voucher_checks WHERE id = %s AND is_active = TRUE",
         (check_id,)
     )
     if not check:
         raise HTTPException(400, f"Check {check_id} is not a configured active voucher-level check.")
 
-    execute_write(
+    execute_write_pg(
         """
         INSERT INTO voucher_check_status (client_id, transaction_ref, check_id, state, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
         ON CONFLICT(client_id, transaction_ref, check_id)
         DO UPDATE SET state = excluded.state, updated_at = CURRENT_TIMESTAMP
         """,
@@ -3294,17 +3330,17 @@ def _resolve_sibling_voucher_line_ids(voucher_line_id: int) -> Optional[List[int
 
     Returns every verification_details.id (across ALL sessions, past and present) that shares the
     same underlying client_data_id as voucher_line_id - i.e. every copy of this exact accounting
-    line - so a caller can query "WHERE voucher_line_id IN (...)" instead of "= ?" and see
+    line - so a caller can query "WHERE voucher_line_id IN (...)" instead of "= %s" and see
     assignments/ticks/observations regardless of which session they were made under. Returns None
     if voucher_line_id itself doesn't exist (caller 404s, same as before this fix). Writes are NOT
     affected by this helper - they still target whichever voucher_line_id the caller passes in,
     exactly as before.
     """
-    line = execute_query("SELECT client_data_id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    line = execute_query_pg("SELECT client_data_id FROM verification_details WHERE id = %s", (voucher_line_id,))
     if not line:
         return None
-    siblings = execute_query(
-        "SELECT id FROM verification_details WHERE client_data_id = ?",
+    siblings = execute_query_pg(
+        "SELECT id FROM verification_details WHERE client_data_id = %s",
         (line[0]['client_data_id'],)
     )
     return [s['id'] for s in siblings]
@@ -3323,24 +3359,24 @@ def assign_supporting_document(
     UNIQUE(client_data_id) constraint is the ultimate backstop, but this check gives a
     clear 400 naming the existing voucher instead of a raw DB-constraint error).
     """
-    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    line = execute_query_pg("SELECT id FROM verification_details WHERE id = %s", (voucher_line_id,))
     if not line:
         raise HTTPException(404, "Voucher line not found.")
 
-    row = execute_query("SELECT id FROM client_data WHERE id = ? AND is_deleted = 0", (client_data_id,))
+    row = execute_query_pg("SELECT id FROM client_data WHERE id = %s AND is_deleted = FALSE", (client_data_id,))
     if not row:
         raise HTTPException(404, "Data Bank row not found or has been deleted.")
 
-    doc = execute_query("SELECT id FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
+    doc = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (document_id,))
     if not doc:
         raise HTTPException(404, "Document not found or inactive.")
 
-    existing = execute_query(
+    existing = execute_query_pg(
         """
         SELECT vld.id, vld.voucher_line_id, vd.transaction_ref
         FROM voucher_line_documents vld
         JOIN verification_details vd ON vd.id = vld.voucher_line_id
-        WHERE vld.client_data_id = ? AND vld.status = 'active'
+        WHERE vld.client_data_id = %s AND vld.status = 'active'
         """,
         (client_data_id,)
     )
@@ -3350,10 +3386,11 @@ def assign_supporting_document(
             f"This Data Bank row is already assigned to voucher '{existing[0]['transaction_ref']}' (line {existing[0]['voucher_line_id']})."
         )
 
-    assignment_id = execute_write(
+    assignment_id = execute_write_pg(
         """
         INSERT INTO voucher_line_documents (voucher_line_id, client_data_id, document_id, linked_by)
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id
         """,
         (voucher_line_id, client_data_id, document_id, linked_by)
     )
@@ -3361,8 +3398,8 @@ def assign_supporting_document(
     log_audit(linked_by, "Assign Supporting Document", "Verification",
                f"Linked client_data {client_data_id} to voucher line {voucher_line_id} (document {document_id}).")
 
-    linked_row = execute_query(
-        "SELECT id, voucher_line_id, client_data_id, document_id, linked_by, linked_at FROM voucher_line_documents WHERE id = ?",
+    linked_row = execute_query_pg(
+        "SELECT id, voucher_line_id, client_data_id, document_id, linked_by, linked_at FROM voucher_line_documents WHERE id = %s",
         (assignment_id,)
     )[0]
     return dict(linked_row)
@@ -3387,8 +3424,8 @@ def get_voucher_line_documents(voucher_line_id: int):
     if sibling_ids is None:
         raise HTTPException(404, "Voucher line not found.")
 
-    placeholders = ",".join("?" for _ in sibling_ids)
-    rows = execute_query(
+    placeholders = ",".join("%s" for _ in sibling_ids)
+    rows = execute_query_pg(
         f"""
         SELECT vld.id, vld.voucher_line_id, vld.client_data_id, vld.document_id,
                vld.linked_by, vld.linked_at, vld.signature_exception,
@@ -3442,16 +3479,16 @@ def set_signature_exception(
     document's signature_specimens entry (Phase 1). Simple update-and-return, mirroring
     toggle_procedure_check()'s shape.
     """
-    row = execute_query(
-        "SELECT id, voucher_line_id FROM voucher_line_documents WHERE id = ? AND status = 'active'",
+    row = execute_query_pg(
+        "SELECT id, voucher_line_id FROM voucher_line_documents WHERE id = %s AND status = 'active'",
         (assignment_id,)
     )
     if not row:
         raise HTTPException(404, "Linked evidence row not found or no longer active.")
 
-    execute_write(
-        "UPDATE voucher_line_documents SET signature_exception = ? WHERE id = ?",
-        (1 if signature_exception else 0, assignment_id)
+    execute_write_pg(
+        "UPDATE voucher_line_documents SET signature_exception = %s WHERE id = %s",
+        (signature_exception, assignment_id)
     )
     log_audit("Analyst", "Set Signature Exception", "Verification",
               f"Assignment {assignment_id}: signature_exception={signature_exception}.")
@@ -3473,8 +3510,8 @@ def unassign_supporting_document(
     that is a deliberate choice, not an oversight (see the confirmed requirement).
     404s on an unknown id or one that's already unassigned (nothing to undo twice).
     """
-    link = execute_query(
-        "SELECT id, voucher_line_id, client_data_id, document_id, status FROM voucher_line_documents WHERE id = ?",
+    link = execute_query_pg(
+        "SELECT id, voucher_line_id, client_data_id, document_id, status FROM voucher_line_documents WHERE id = %s",
         (assignment_id,)
     )
     if not link:
@@ -3482,8 +3519,8 @@ def unassign_supporting_document(
     if link[0]['status'] != 'active':
         raise HTTPException(404, "This supporting document link has already been unassigned.")
 
-    execute_write(
-        "UPDATE voucher_line_documents SET status = 'unassigned', unassigned_at = CURRENT_TIMESTAMP WHERE id = ?",
+    execute_write_pg(
+        "UPDATE voucher_line_documents SET status = 'unassigned', unassigned_at = CURRENT_TIMESTAMP WHERE id = %s",
         (assignment_id,)
     )
 
@@ -3527,8 +3564,8 @@ def get_procedure_checks(voucher_line_id: int):
     if sibling_ids is None:
         raise HTTPException(404, "Voucher line not found.")
 
-    placeholders = ",".join("?" for _ in sibling_ids)
-    rows = execute_query(
+    placeholders = ",".join("%s" for _ in sibling_ids)
+    rows = execute_query_pg(
         f"""
         SELECT vlpc.document_id, vlpc.role_name, vlpc.is_checked, vlpc.checked_by, vlpc.checked_at,
                ard.name AS document_name, ard.is_active AS document_is_active
@@ -3539,13 +3576,13 @@ def get_procedure_checks(voucher_line_id: int):
         tuple(sibling_ids)
     )
     # Dedup by (document_id, role_name), keeping whichever sibling's row was checked/unchecked
-    # most recently - checked_at is a SQLite CURRENT_TIMESTAMP string ("YYYY-MM-DD HH:MM:SS"),
-    # which sorts correctly as a plain string comparison.
+    # most recently - checked_at is a real TIMESTAMPTZ value now (Postgres), compared via
+    # _ts_sort_key() so None/real-datetime rows sort correctly against each other.
     latest_by_key: Dict[tuple, dict] = {}
     for r in rows:
         key = (r['document_id'], r['role_name'])
         existing = latest_by_key.get(key)
-        if existing is None or (r['checked_at'] or '') > (existing['checked_at'] or ''):
+        if existing is None or _ts_sort_key(r['checked_at']) > _ts_sort_key(existing['checked_at']):
             latest_by_key[key] = r
 
     checks = [
@@ -3579,39 +3616,39 @@ def set_procedure_check(
     (voucher_line_id, document_id, role_name) so re-ticking the same role updates the
     existing row instead of creating a duplicate.
     """
-    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    line = execute_query_pg("SELECT id FROM verification_details WHERE id = %s", (voucher_line_id,))
     if not line:
         raise HTTPException(404, "Voucher line not found.")
 
-    doc = execute_query("SELECT id FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
+    doc = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (document_id,))
     if not doc:
         raise HTTPException(404, "Document not found or inactive.")
 
-    role = execute_query(
-        "SELECT id FROM audit_rule_document_auth_roles WHERE document_id = ? AND role_name = ?",
+    role = execute_query_pg(
+        "SELECT id FROM audit_rule_document_auth_roles WHERE document_id = %s AND role_name = %s",
         (document_id, role_name)
     )
     if not role:
         raise HTTPException(400, f"'{role_name}' is not a configured auth role for this document.")
 
-    execute_write(
+    execute_write_pg(
         """
         INSERT INTO voucher_line_procedure_checks (voucher_line_id, document_id, role_name, is_checked, checked_by, checked_at)
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
         ON CONFLICT(voucher_line_id, document_id, role_name)
         DO UPDATE SET is_checked = excluded.is_checked, checked_by = excluded.checked_by, checked_at = CURRENT_TIMESTAMP
         """,
-        (voucher_line_id, document_id, role_name, 1 if is_checked else 0, checked_by)
+        (voucher_line_id, document_id, role_name, is_checked, checked_by)
     )
 
     log_audit(checked_by, "Set Audit Procedure Check", "Verification",
                f"Set '{role_name}' ({document_id}) to {is_checked} for voucher line {voucher_line_id}.")
 
-    updated = execute_query(
+    updated = execute_query_pg(
         """
         SELECT voucher_line_id, document_id, role_name, is_checked, checked_by, checked_at
         FROM voucher_line_procedure_checks
-        WHERE voucher_line_id = ? AND document_id = ? AND role_name = ?
+        WHERE voucher_line_id = %s AND document_id = %s AND role_name = %s
         """,
         (voucher_line_id, document_id, role_name)
     )[0]
@@ -3690,12 +3727,12 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
             # save_line_items()/save_line_observation() already validated it exists).
             return
 
-        placeholders = ",".join("?" for _ in sibling_ids)
+        placeholders = ",".join("%s" for _ in sibling_ids)
         # LEFT JOIN (not INNER) so the reserved ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel entry -
         # which has no matching audit_rule_documents row by design - isn't silently dropped from
         # the rollup; its document_name comes back NULL and is handled in the block-building loop
         # below instead.
-        all_entries = execute_query(
+        all_entries = execute_query_pg(
             f"""
             SELECT vlo.id, vlo.document_id, vlo.observation_text, vlo.updated_at,
                    ard.name AS document_name
@@ -3713,7 +3750,7 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
         latest_by_doc: Dict[int, dict] = {}
         for entry in all_entries:
             existing = latest_by_doc.get(entry['document_id'])
-            if existing is None or (entry['updated_at'] or '') > (existing['updated_at'] or ''):
+            if existing is None or _ts_sort_key(entry['updated_at']) > _ts_sort_key(existing['updated_at']):
                 latest_by_doc[entry['document_id']] = entry
 
         # One labelled block per document that currently has non-blank text - a blank/cleared
@@ -3744,24 +3781,24 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
         # Voucher-check blocks: derived from this line's own (client_id, transaction_ref), not
         # from sibling ids - voucher_check_status is deliberately keyed session-independently
         # (see that table's own schema comment), so a plain lookup on the line itself is enough.
-        line_row = execute_query(
+        line_row = execute_query_pg(
             """
             SELECT vd.transaction_ref, vs.client_id
             FROM verification_details vd
             JOIN verification_sessions vs ON vs.id = vd.session_id
-            WHERE vd.id = ?
+            WHERE vd.id = %s
             """,
             (voucher_line_id,)
         )
         check_blocks: List[str] = []
         if line_row:
-            check_rows = execute_query(
+            check_rows = execute_query_pg(
                 """
                 SELECT arvc.name
                 FROM voucher_check_status vcs
                 JOIN audit_rule_voucher_checks arvc ON arvc.id = vcs.check_id
-                WHERE vcs.client_id = ? AND vcs.transaction_ref = ?
-                  AND arvc.is_active = 1 AND vcs.flagged_in_observations = 1
+                WHERE vcs.client_id = %s AND vcs.transaction_ref = %s
+                  AND arvc.is_active = TRUE AND vcs.flagged_in_observations = TRUE
                 ORDER BY arvc.sort_order
                 """,
                 (line_row[0]['client_id'], line_row[0]['transaction_ref'])
@@ -3771,16 +3808,16 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
         blocks = check_blocks + doc_blocks
         new_text = "\n".join(blocks) if blocks else None
 
-        execute_write(
-            "UPDATE verification_details SET observations = ? WHERE id = ?",
+        execute_write_pg(
+            "UPDATE verification_details SET observations = %s WHERE id = %s",
             (new_text, voucher_line_id)
         )
 
         # Bookkeeping only under this rebuild design (see docstring) - kept accurate for
         # consistency/audit visibility, not because anything still reads it to gate behaviour.
         for entry in all_entries:
-            execute_write(
-                "UPDATE voucher_line_observations SET synced = 1, last_synced_text = ? WHERE id = ?",
+            execute_write_pg(
+                "UPDATE voucher_line_observations SET synced = TRUE, last_synced_text = %s WHERE id = %s",
                 (entry['observation_text'], entry['id'])
             )
     except Exception as exc:
@@ -3808,8 +3845,8 @@ def get_line_observations(voucher_line_id: int):
     if sibling_ids is None:
         raise HTTPException(404, "Voucher line not found.")
 
-    placeholders = ",".join("?" for _ in sibling_ids)
-    rows = execute_query(
+    placeholders = ",".join("%s" for _ in sibling_ids)
+    rows = execute_query_pg(
         f"""
         SELECT vlo.document_id, vlo.observation_text, vlo.synced, vlo.last_synced_text,
                vlo.updated_by, vlo.updated_at,
@@ -3821,11 +3858,11 @@ def get_line_observations(voucher_line_id: int):
         tuple(sibling_ids)
     )
     # Dedup by document_id, keeping whichever sibling's entry was updated most recently -
-    # updated_at is a SQLite CURRENT_TIMESTAMP string, sorts correctly as a string comparison.
+    # updated_at is a real TIMESTAMPTZ value now (Postgres), compared via _ts_sort_key().
     latest_by_doc: Dict[int, dict] = {}
     for r in rows:
         existing = latest_by_doc.get(r['document_id'])
-        if existing is None or (r['updated_at'] or '') > (existing['updated_at'] or ''):
+        if existing is None or _ts_sort_key(r['updated_at']) > _ts_sort_key(existing['updated_at']):
             latest_by_doc[r['document_id']] = r
 
     entries = [
@@ -3875,23 +3912,23 @@ def save_line_observation(
     line has already been validated/completed - reasonable, since this only ever touches the
     observations field, not validation state.
     """
-    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    line = execute_query_pg("SELECT id FROM verification_details WHERE id = %s", (voucher_line_id,))
     if not line:
         raise HTTPException(404, "Voucher line not found.")
 
     # ACCOUNT_HEAD_OBSERVATION_DOC_ID is a reserved sentinel, not a real audit_rule_documents row -
     # skip the existence/active check for it (see the constant's definition above).
     if document_id != ACCOUNT_HEAD_OBSERVATION_DOC_ID:
-        doc = execute_query("SELECT id FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
+        doc = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (document_id,))
         if not doc:
             raise HTTPException(404, "Document not found or inactive.")
 
-    execute_write(
+    execute_write_pg(
         """
         INSERT INTO voucher_line_observations (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
-        VALUES (?, ?, ?, 0, ?, CURRENT_TIMESTAMP)
+        VALUES (%s, %s, %s, FALSE, %s, CURRENT_TIMESTAMP)
         ON CONFLICT(voucher_line_id, document_id)
-        DO UPDATE SET observation_text = excluded.observation_text, synced = 0, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP
+        DO UPDATE SET observation_text = excluded.observation_text, synced = FALSE, updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP
         """,
         (voucher_line_id, document_id, observation_text, updated_by)
     )
@@ -3904,11 +3941,11 @@ def save_line_observation(
     # correctly reflects the roll-up that just happened, not a stale pre-sync value.
     sync_line_observations_to_voucher(voucher_line_id)
 
-    updated = execute_query(
+    updated = execute_query_pg(
         """
         SELECT voucher_line_id, document_id, observation_text, synced, updated_by, updated_at
         FROM voucher_line_observations
-        WHERE voucher_line_id = ? AND document_id = ?
+        WHERE voucher_line_id = %s AND document_id = %s
         """,
         (voucher_line_id, document_id)
     )[0]
@@ -3916,8 +3953,8 @@ def save_line_observation(
     # Confirmed fix, 2026-07-25: also return the line's own current rolled-up Observation text
     # (post-sync, since the call above already ran) so the frontend can update the voucher
     # table's OBSERVATIONS cell immediately, without a full voucher reload.
-    voucher_row = execute_query(
-        "SELECT observations FROM verification_details WHERE id = ?",
+    voucher_row = execute_query_pg(
+        "SELECT observations FROM verification_details WHERE id = %s",
         (voucher_line_id,)
     )
     voucher_observations = voucher_row[0]['observations'] if voucher_row else None
@@ -3988,8 +4025,8 @@ def resolve_physical_bill_fields_from_source(source_client_data_id: int, source_
     if source_type not in PHYSICAL_BILL_SOURCE_TYPES:
         raise HTTPException(400, f"Invalid source_type '{source_type}'. Must be one of: {', '.join(PHYSICAL_BILL_SOURCE_TYPES)}")
 
-    source_rows = execute_query(
-        "SELECT id, client_id, template_id, row_data, is_deleted FROM client_data WHERE id = ?",
+    source_rows = execute_query_pg(
+        "SELECT id, client_id, template_id, row_data, is_deleted FROM client_data WHERE id = %s",
         (source_client_data_id,)
     )
     if not source_rows:
@@ -3998,7 +4035,7 @@ def resolve_physical_bill_fields_from_source(source_client_data_id: int, source_
     if source_row['is_deleted']:
         raise HTTPException(400, "Source row has been deleted.")
 
-    source_template = execute_query("SELECT id, template_name FROM templates WHERE id = ?", (source_row['template_id'],))
+    source_template = execute_query_pg("SELECT id, template_name FROM templates WHERE id = %s", (source_row['template_id'],))
     expected_name = PHYSICAL_BILL_SOURCE_TEMPLATE_NAMES[source_type]
     if not source_template or source_template[0]['template_name'].strip().lower() != expected_name:
         actual_name = source_template[0]['template_name'] if source_template else 'Unknown'
@@ -4089,8 +4126,8 @@ def _fetch_physical_bill_items(bill_ids: List[int]) -> Dict[int, list]:
     """
     if not bill_ids:
         return {}
-    placeholders = ",".join("?" for _ in bill_ids)
-    rows = execute_query(
+    placeholders = ",".join("%s" for _ in bill_ids)
+    rows = execute_query_pg(
         f"""
         SELECT id, bill_id, item_name, quantity, rate, amount,
                source_document_row_id, source_template, sort_order, created_at, updated_at
@@ -4159,14 +4196,14 @@ def _fetch_physical_bills_for_document(voucher_line_id: int, document_id: int) -
     bills for the same document. get_voucher_line_physical_bills() below is the sibling-
     resolved batch read used everywhere else (Supporting Documents modal, Cleared/Query gate).
     """
-    header_rows = execute_query(
+    header_rows = execute_query_pg(
         """
         SELECT vpb.id, vpb.voucher_line_id, vpb.document_id, vpb.bill_no, vpb.bill_date,
                vpb.vendor_name, vpb.sort_order, vpb.created_at, vpb.updated_at,
                ard.name AS document_name, ard.is_active AS document_is_active
         FROM voucher_line_physical_bills vpb
         LEFT JOIN audit_rule_documents ard ON ard.id = vpb.document_id
-        WHERE vpb.voucher_line_id = ? AND vpb.document_id = ?
+        WHERE vpb.voucher_line_id = %s AND vpb.document_id = %s
         ORDER BY vpb.sort_order, vpb.id
         """,
         (voucher_line_id, document_id)
@@ -4216,11 +4253,11 @@ def save_physical_bill(
     No check here that the grand total matches the voucher line's own amount - that's the
     Cleared/Query gate's job (_evaluate_physical_bill_completion()), not this endpoint's.
     """
-    line = execute_query("SELECT id FROM verification_details WHERE id = ?", (voucher_line_id,))
+    line = execute_query_pg("SELECT id FROM verification_details WHERE id = %s", (voucher_line_id,))
     if not line:
         raise HTTPException(404, "Voucher line not found.")
 
-    doc = execute_query("SELECT id FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
+    doc = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (document_id,))
     if not doc:
         raise HTTPException(404, "Document not found or inactive.")
 
@@ -4290,47 +4327,55 @@ def save_physical_bill(
             "items": parsed_items,
         })
 
-    conn = get_raw_conn()
+    conn = get_raw_conn_pg()
     try:
-        existing_bill_ids = [r[0] for r in conn.execute(
-            "SELECT id FROM voucher_line_physical_bills WHERE voucher_line_id = ? AND document_id = ?",
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM voucher_line_physical_bills WHERE voucher_line_id = %s AND document_id = %s",
             (voucher_line_id, document_id)
-        ).fetchall()]
+        )
+        existing_bill_ids = [r[0] for r in cur.fetchall()]
         if existing_bill_ids:
-            item_placeholders = ",".join("?" for _ in existing_bill_ids)
-            conn.execute(
+            item_placeholders = ",".join("%s" for _ in existing_bill_ids)
+            cur.execute(
                 f"DELETE FROM voucher_line_physical_bill_items WHERE bill_id IN ({item_placeholders})",
                 existing_bill_ids
             )
-        conn.execute(
-            "DELETE FROM voucher_line_physical_bills WHERE voucher_line_id = ? AND document_id = ?",
+        cur.execute(
+            "DELETE FROM voucher_line_physical_bills WHERE voucher_line_id = %s AND document_id = %s",
             (voucher_line_id, document_id)
         )
 
         for bill_sort, bill in enumerate(cleaned_bills):
-            cursor = conn.execute(
+            # RETURNING id + fetchone() (Postgres cutover fix) - psycopg2 cursors have no
+            # SQLite-style lastrowid attribute.
+            cur.execute(
                 """
                 INSERT INTO voucher_line_physical_bills
                     (voucher_line_id, document_id, bill_no, bill_date, vendor_name, sort_order, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                RETURNING id
                 """,
                 (voucher_line_id, document_id, bill['bill_no'], bill['bill_date'], bill['vendor_name'], bill_sort)
             )
-            bill_id = cursor.lastrowid
+            bill_id = cur.fetchone()[0]
             for item_sort, item in enumerate(bill['items']):
-                conn.execute(
+                cur.execute(
                     """
                     INSERT INTO voucher_line_physical_bill_items
                         (bill_id, item_name, quantity, rate, amount, source_document_row_id,
                          source_template, sort_order, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                     """,
                     (bill_id, item['item_name'], item['quantity'], item['rate'], item['amount'],
                      item['source_document_row_id'], item['source_template'], item_sort)
                 )
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
-        conn.close()
+        release_raw_conn_pg(conn)
 
     log_audit(updated_by, "Save Physical Bill", "Verification",
                f"Saved {len(cleaned_bills)} physical bill(s) for document {document_id} on voucher line {voucher_line_id}.")
@@ -4366,8 +4411,8 @@ def get_voucher_line_physical_bills(voucher_line_id: int):
     if sibling_ids is None:
         raise HTTPException(404, "Voucher line not found.")
 
-    placeholders = ",".join("?" for _ in sibling_ids)
-    header_rows = execute_query(
+    placeholders = ",".join("%s" for _ in sibling_ids)
+    header_rows = execute_query_pg(
         f"""
         SELECT vpb.id, vpb.voucher_line_id, vpb.document_id, vpb.bill_no, vpb.bill_date,
                vpb.vendor_name, vpb.sort_order, vpb.created_at, vpb.updated_at,
@@ -4382,7 +4427,7 @@ def get_voucher_line_physical_bills(voucher_line_id: int):
 
     winning_session_by_doc: Dict[int, tuple] = {}
     for r in header_rows:
-        candidate = (r['updated_at'] or '', r['voucher_line_id'])
+        candidate = (_ts_sort_key(r['updated_at']), r['voucher_line_id'])
         existing = winning_session_by_doc.get(r['document_id'])
         if existing is None or candidate > existing:
             winning_session_by_doc[r['document_id']] = candidate
@@ -4462,8 +4507,8 @@ def get_assignment_status_map(client_data_ids: List[int]) -> Dict[int, dict]:
     """
     if not client_data_ids:
         return {}
-    placeholders = ",".join("?" for _ in client_data_ids)
-    rows = execute_query(
+    placeholders = ",".join("%s" for _ in client_data_ids)
+    rows = execute_query_pg(
         f"""
         SELECT vld.client_data_id, vld.voucher_line_id, vd.transaction_ref, vd.session_id,
                vd.client_data_id AS voucher_line_client_data_id,
@@ -4674,12 +4719,12 @@ def _get_category_cross_check_configs(category_id: int) -> List[dict]:
     documents[] order is audit_rule_cross_check_documents.sort_order - that ordering IS the
     chain, and the whole engine's direction logic depends on it.
     """
-    rule_rows = execute_query(
+    rule_rows = execute_query_pg(
         """
         SELECT c.id, c.name, c.compare_field, c.comparison_type, c.compare_to_voucher_line
         FROM audit_rule_category_cross_checks cc
         JOIN audit_rule_cross_checks c ON c.id = cc.cross_check_id
-        WHERE cc.category_id = ? AND c.is_active = 1
+        WHERE cc.category_id = %s AND c.is_active = TRUE
         ORDER BY cc.sort_order
         """,
         (category_id,)
@@ -4687,12 +4732,12 @@ def _get_category_cross_check_configs(category_id: int) -> List[dict]:
 
     configs = []
     for r in rule_rows:
-        doc_rows = execute_query(
+        doc_rows = execute_query_pg(
             """
             SELECT ccd.document_id, ccd.sort_order, d.name AS document_name
             FROM audit_rule_cross_check_documents ccd
             JOIN audit_rule_documents d ON d.id = ccd.document_id
-            WHERE ccd.cross_check_id = ?
+            WHERE ccd.cross_check_id = %s
             ORDER BY ccd.sort_order
             """,
             (r['id'],)
@@ -4729,8 +4774,8 @@ def _get_linked_evidence_by_document(voucher_line_id: int) -> Dict[int, List[int
     if not sibling_ids:
         return {}
 
-    placeholders = ",".join("?" for _ in sibling_ids)
-    rows = execute_query(
+    placeholders = ",".join("%s" for _ in sibling_ids)
+    rows = execute_query_pg(
         f"""
         SELECT document_id, client_data_id
         FROM voucher_line_documents
@@ -4984,13 +5029,13 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
     Returns a structured result; writes nothing, persists nothing, decides nothing. Never
     raises - every failure path returns evaluated=False with a reason.
     """
-    line = execute_query(
+    line = execute_query_pg(
         """
         SELECT vd.id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id
         FROM verification_details vd
         JOIN client_data cd ON cd.id = vd.client_data_id
         JOIN verification_sessions vs ON vs.id = vd.session_id
-        WHERE vd.id = ?
+        WHERE vd.id = %s
         """,
         (voucher_line_id,)
     )
@@ -5019,7 +5064,7 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
                 row_data = {}
         row_data = row_data or {}
 
-        account_code = get_column_value(row_data, ACCOUNT_CODE_ALIASES)
+        account_code = get_account_code_value(row_data)
         if not account_code:
             return {
                 "voucher_line_id": voucher_line_id,
@@ -5028,12 +5073,12 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
                 "summary": dict(empty_summary), "results": [],
             }
 
-        cat_rows = execute_query(
+        cat_rows = execute_query_pg(
             """
             SELECT aca.category_id, arc.name AS category_name
             FROM account_category_assignments aca
-            LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = 1
-            WHERE aca.client_id = ? AND aca.account_code = ?
+            LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = TRUE
+            WHERE aca.client_id = %s AND aca.account_code = %s
             """,
             (client_id, account_code)
         )
@@ -5047,8 +5092,8 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
         category_id = cat_rows[0]['category_id']
         category_name = cat_rows[0]['category_name']
     else:
-        name_rows = execute_query(
-            "SELECT name FROM audit_rule_categories WHERE id = ? AND is_active = 1", (category_id,)
+        name_rows = execute_query_pg(
+            "SELECT name FROM audit_rule_categories WHERE id = %s AND is_active = TRUE", (category_id,)
         )
         if not name_rows:
             return {

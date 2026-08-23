@@ -9,7 +9,7 @@
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 from typing import Optional, List, Dict
-from database import execute_query, execute_write, log_audit
+from database import execute_query_pg, execute_write_pg, log_audit
 
 router = APIRouter()
 
@@ -49,8 +49,8 @@ class DocumentUpdate(BaseModel):
 
 # ---------- HELPERS ----------
 def get_document_auth_roles(document_id: int) -> List[str]:
-    rows = execute_query(
-        "SELECT role_name FROM audit_rule_document_auth_roles WHERE document_id = ? ORDER BY sort_order",
+    rows = execute_query_pg(
+        "SELECT role_name FROM audit_rule_document_auth_roles WHERE document_id = %s ORDER BY sort_order",
         (document_id,)
     )
     return [r["role_name"] for r in rows]
@@ -66,8 +66,8 @@ def is_approval_role(role_name: str) -> bool:
 
 def get_document_auth_role_authorities(document_id: int) -> dict:
     """Return {role_name: required_authority} for a Document's roles that have one set."""
-    rows = execute_query(
-        "SELECT role_name, required_authority FROM audit_rule_document_auth_roles WHERE document_id = ? ORDER BY sort_order",
+    rows = execute_query_pg(
+        "SELECT role_name, required_authority FROM audit_rule_document_auth_roles WHERE document_id = %s ORDER BY sort_order",
         (document_id,)
     )
     return {r["role_name"]: r["required_authority"] for r in rows if r["required_authority"]}
@@ -80,12 +80,12 @@ def get_required_documents_with_authority(category_id: int) -> List[dict]:
     routers/verification.py's compute_and_persist_cleared_status() for the Document-level
     Approved-by authority gate (new, confirmed requirement).
     """
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT d.id as document_id, d.name
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
-        WHERE cd.category_id = ? AND cd.is_required = 1 AND d.is_active = 1
+        WHERE cd.category_id = %s AND cd.is_required = TRUE AND d.is_active = TRUE
         """,
         (category_id,)
     )
@@ -101,11 +101,11 @@ def has_matching_active_specimen(client_id: int, document_id: int, role_name: st
     True if an ACTIVE Signature Specimen exists for this client+document+role whose Authority
     exactly matches (case/whitespace-insensitive) required_authority.
     """
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT id FROM signature_specimens
-        WHERE client_id = ? AND document_id = ? AND role_name = ? AND is_active = 1
-          AND TRIM(LOWER(authority)) = TRIM(LOWER(?))
+        WHERE client_id = %s AND document_id = %s AND role_name = %s AND is_active = TRUE
+          AND TRIM(LOWER(authority)) = TRIM(LOWER(%s))
         """,
         (client_id, document_id, role_name, required_authority)
     )
@@ -130,15 +130,15 @@ def check_approved_by_authority_gate(client_id: int, category_id: int) -> bool:
     return True
 
 def get_document_cross_check_fields(document_id: int) -> List[str]:
-    rows = execute_query(
-        "SELECT field_name FROM audit_rule_document_fields WHERE document_id = ? ORDER BY sort_order",
+    rows = execute_query_pg(
+        "SELECT field_name FROM audit_rule_document_fields WHERE document_id = %s ORDER BY sort_order",
         (document_id,)
     )
     return [r["field_name"] for r in rows]
 
 def get_document_used_by_count(document_id: int) -> int:
-    rows = execute_query(
-        "SELECT COUNT(*) as cnt FROM audit_rule_category_documents WHERE document_id = ?",
+    rows = execute_query_pg(
+        "SELECT COUNT(*) as cnt FROM audit_rule_category_documents WHERE document_id = %s",
         (document_id,)
     )
     return rows[0]["cnt"] if rows else 0
@@ -167,7 +167,7 @@ def validate_document_template_id(template_id: Optional[int]):
     """Raises HTTPException(400) if template_id is set but doesn't reference an active template."""
     if template_id is None:
         return
-    rows = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (template_id,))
+    rows = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
     if not rows:
         raise HTTPException(400, f"Template ID {template_id} not found or inactive")
 
@@ -241,11 +241,11 @@ def save_document_auth_roles(document_id: int, auth_roles: List[str], required_a
     server-side rather than relying on the UI alone.
     """
     required_authority_map = required_authority_map or {}
-    execute_write("DELETE FROM audit_rule_document_auth_roles WHERE document_id = ?", (document_id,))
+    execute_write_pg("DELETE FROM audit_rule_document_auth_roles WHERE document_id = %s", (document_id,))
     for idx, role_name in enumerate(auth_roles):
         required_authority = required_authority_map.get(role_name) if is_approval_role(role_name) else None
-        execute_write(
-            "INSERT INTO audit_rule_document_auth_roles (document_id, role_name, sort_order, required_authority) VALUES (?, ?, ?, ?)",
+        execute_write_pg(
+            "INSERT INTO audit_rule_document_auth_roles (document_id, role_name, sort_order, required_authority) VALUES (%s, %s, %s, %s)",
             (document_id, role_name, idx, required_authority)
         )
 
@@ -259,11 +259,11 @@ def resolve_field_name_to_master_column_id(template_id: Optional[int], field_nam
     """
     if not template_id:
         return None
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT mc.id FROM master_columns mc
         JOIN template_column_mappings tcm ON tcm.column_id = mc.id
-        WHERE tcm.template_id = ? AND LOWER(TRIM(mc.column_name)) = LOWER(TRIM(?))
+        WHERE tcm.template_id = %s AND LOWER(TRIM(mc.column_name)) = LOWER(TRIM(%s))
         """,
         (template_id, field_name)
     )
@@ -278,13 +278,13 @@ def save_document_cross_check_fields(document_id: int, cross_check_fields: List[
     phase's dropdown UI lands, never silently dropped. field_name itself is unchanged/still
     authoritative for the API's existing List[str] contract.
     """
-    doc_rows = execute_query("SELECT template_id FROM audit_rule_documents WHERE id = ?", (document_id,))
+    doc_rows = execute_query_pg("SELECT template_id FROM audit_rule_documents WHERE id = %s", (document_id,))
     template_id = doc_rows[0]["template_id"] if doc_rows else None
-    execute_write("DELETE FROM audit_rule_document_fields WHERE document_id = ?", (document_id,))
+    execute_write_pg("DELETE FROM audit_rule_document_fields WHERE document_id = %s", (document_id,))
     for idx, field_name in enumerate(cross_check_fields):
         master_column_id = resolve_field_name_to_master_column_id(template_id, field_name)
-        execute_write(
-            "INSERT INTO audit_rule_document_fields (document_id, field_name, sort_order, master_column_id) VALUES (?, ?, ?, ?)",
+        execute_write_pg(
+            "INSERT INTO audit_rule_document_fields (document_id, field_name, sort_order, master_column_id) VALUES (%s, %s, %s, %s)",
             (document_id, field_name, idx, master_column_id)
         )
 
@@ -298,14 +298,14 @@ def get_documents(include_inactive: bool = False):
     """
     query = "SELECT * FROM audit_rule_documents"
     if not include_inactive:
-        query += " WHERE is_active = 1"
+        query += " WHERE is_active = TRUE"
     query += " ORDER BY name"
-    rows = execute_query(query)
+    rows = execute_query_pg(query)
     return [row_to_document(r) for r in rows]
 
 @router.get("/api/audit-rules/documents/{document_id}")
 def get_document(document_id: int):
-    rows = execute_query("SELECT * FROM audit_rule_documents WHERE id = ?", (document_id,))
+    rows = execute_query_pg("SELECT * FROM audit_rule_documents WHERE id = %s", (document_id,))
     if not rows:
         raise HTTPException(404, "Document not found")
     return row_to_document(rows[0])
@@ -318,8 +318,8 @@ def create_document(document: DocumentCreate):
     )
     validate_document_template_id(template_id)
     validate_document_risk_rating(document.risk_rating)
-    document_id = execute_write(
-        "INSERT INTO audit_rule_documents (name, kb_note, template_id, risk_rating, document_type) VALUES (?, ?, ?, ?, ?)",
+    document_id = execute_write_pg(
+        "INSERT INTO audit_rule_documents (name, kb_note, template_id, risk_rating, document_type) VALUES (%s, %s, %s, %s, %s) RETURNING id",
         (document.name, document.kb_note, template_id, document.risk_rating, document_type)
     )
     save_document_auth_roles(document_id, document.auth_roles, document.auth_role_authorities)
@@ -330,7 +330,7 @@ def create_document(document: DocumentCreate):
 
 @router.put("/api/audit-rules/documents/{document_id}")
 def update_document(document_id: int, document: DocumentUpdate):
-    existing = execute_query("SELECT id FROM audit_rule_documents WHERE id = ?", (document_id,))
+    existing = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s", (document_id,))
     if not existing:
         raise HTTPException(404, "Document not found")
     document_type = resolve_document_type(document.document_type)
@@ -340,8 +340,8 @@ def update_document(document_id: int, document: DocumentUpdate):
     validate_document_template_id(template_id)
     validate_document_risk_rating(document.risk_rating)
 
-    execute_write(
-        "UPDATE audit_rule_documents SET name = ?, kb_note = ?, template_id = ?, risk_rating = ?, document_type = ? WHERE id = ?",
+    execute_write_pg(
+        "UPDATE audit_rule_documents SET name = %s, kb_note = %s, template_id = %s, risk_rating = %s, document_type = %s WHERE id = %s",
         (document.name, document.kb_note, template_id, document.risk_rating, document_type, document_id)
     )
     save_document_auth_roles(document_id, document.auth_roles, document.auth_role_authorities)
@@ -355,12 +355,12 @@ def update_document(document_id: int, document: DocumentUpdate):
 @router.delete("/api/audit-rules/documents/{document_id}")
 def delete_document(document_id: int):
     """
-    Soft-delete a Document (set is_active = 0).
+    Soft-delete a Document (set is_active = FALSE).
     """
-    existing = execute_query("SELECT name FROM audit_rule_documents WHERE id = ? AND is_active = 1", (document_id,))
+    existing = execute_query_pg("SELECT name FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (document_id,))
     if not existing:
         raise HTTPException(404, "Active Document not found")
-    execute_write("UPDATE audit_rule_documents SET is_active = 0 WHERE id = ?", (document_id,))
+    execute_write_pg("UPDATE audit_rule_documents SET is_active = FALSE WHERE id = %s", (document_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Document: {existing[0]['name']} (ID: {document_id})")
     return {"message": "Document deleted (soft-delete) successfully"}
 
@@ -369,10 +369,10 @@ def restore_document(document_id: int):
     """
     Restore a soft-deleted Document.
     """
-    existing = execute_query("SELECT name FROM audit_rule_documents WHERE id = ? AND is_active = 0", (document_id,))
+    existing = execute_query_pg("SELECT name FROM audit_rule_documents WHERE id = %s AND is_active = FALSE", (document_id,))
     if not existing:
         raise HTTPException(404, "Inactive Document not found")
-    execute_write("UPDATE audit_rule_documents SET is_active = 1 WHERE id = ?", (document_id,))
+    execute_write_pg("UPDATE audit_rule_documents SET is_active = TRUE WHERE id = %s", (document_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Document: {existing[0]['name']} (ID: {document_id})")
     return {"message": "Document restored successfully"}
 
@@ -414,12 +414,12 @@ class CrossCheckUpdate(BaseModel):
 
 # ---------- HELPERS ----------
 def get_cross_check_documents(cross_check_id: int) -> List[dict]:
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT d.id as document_id, d.name
         FROM audit_rule_cross_check_documents ccd
         JOIN audit_rule_documents d ON ccd.document_id = d.id
-        WHERE ccd.cross_check_id = ?
+        WHERE ccd.cross_check_id = %s
         ORDER BY ccd.sort_order
         """,
         (cross_check_id,)
@@ -427,8 +427,8 @@ def get_cross_check_documents(cross_check_id: int) -> List[dict]:
     return [{"document_id": r["document_id"], "name": r["name"]} for r in rows]
 
 def get_cross_check_used_by_count(cross_check_id: int) -> int:
-    rows = execute_query(
-        "SELECT COUNT(*) as cnt FROM audit_rule_category_cross_checks WHERE cross_check_id = ?",
+    rows = execute_query_pg(
+        "SELECT COUNT(*) as cnt FROM audit_rule_category_cross_checks WHERE cross_check_id = %s",
         (cross_check_id,)
     )
     return rows[0]["cnt"] if rows else 0
@@ -449,10 +449,10 @@ def row_to_cross_check(row: dict) -> dict:
 
 def save_cross_check_documents(cross_check_id: int, document_ids: List[int]):
     """Replace a Cross-check's ordered document list (delete-then-reinsert)."""
-    execute_write("DELETE FROM audit_rule_cross_check_documents WHERE cross_check_id = ?", (cross_check_id,))
+    execute_write_pg("DELETE FROM audit_rule_cross_check_documents WHERE cross_check_id = %s", (cross_check_id,))
     for idx, document_id in enumerate(document_ids):
-        execute_write(
-            "INSERT INTO audit_rule_cross_check_documents (cross_check_id, document_id, sort_order) VALUES (?, ?, ?)",
+        execute_write_pg(
+            "INSERT INTO audit_rule_cross_check_documents (cross_check_id, document_id, sort_order) VALUES (%s, %s, %s)",
             (cross_check_id, document_id, idx)
         )
 
@@ -473,7 +473,7 @@ def validate_cross_check_payload(compare_field: str, comparison_type: str, docum
         raise HTTPException(400, "compare_to_voucher_line requires at least one Document (used as the anchor)")
 
     for document_id in document_ids:
-        doc_rows = execute_query("SELECT name FROM audit_rule_documents WHERE id = ?", (document_id,))
+        doc_rows = execute_query_pg("SELECT name FROM audit_rule_documents WHERE id = %s", (document_id,))
         if not doc_rows:
             raise HTTPException(400, f"Document ID {document_id} not found")
         doc_fields = get_document_cross_check_fields(document_id)
@@ -493,14 +493,14 @@ def get_cross_checks(include_inactive: bool = False):
     """
     query = "SELECT * FROM audit_rule_cross_checks"
     if not include_inactive:
-        query += " WHERE is_active = 1"
+        query += " WHERE is_active = TRUE"
     query += " ORDER BY name"
-    rows = execute_query(query)
+    rows = execute_query_pg(query)
     return [row_to_cross_check(r) for r in rows]
 
 @router.get("/api/audit-rules/cross-checks/{cross_check_id}")
 def get_cross_check(cross_check_id: int):
-    rows = execute_query("SELECT * FROM audit_rule_cross_checks WHERE id = ?", (cross_check_id,))
+    rows = execute_query_pg("SELECT * FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
     if not rows:
         raise HTTPException(404, "Cross-check not found")
     return row_to_cross_check(rows[0])
@@ -512,9 +512,9 @@ def create_cross_check(cross_check: CrossCheckCreate):
         cross_check.compare_to_voucher_line
     )
 
-    cross_check_id = execute_write(
-        "INSERT INTO audit_rule_cross_checks (name, compare_field, comparison_type, compare_to_voucher_line) VALUES (?, ?, ?, ?)",
-        (cross_check.name, cross_check.compare_field, cross_check.comparison_type, int(cross_check.compare_to_voucher_line))
+    cross_check_id = execute_write_pg(
+        "INSERT INTO audit_rule_cross_checks (name, compare_field, comparison_type, compare_to_voucher_line) VALUES (%s, %s, %s, %s) RETURNING id",
+        (cross_check.name, cross_check.compare_field, cross_check.comparison_type, cross_check.compare_to_voucher_line)
     )
     save_cross_check_documents(cross_check_id, cross_check.document_ids)
 
@@ -523,7 +523,7 @@ def create_cross_check(cross_check: CrossCheckCreate):
 
 @router.put("/api/audit-rules/cross-checks/{cross_check_id}")
 def update_cross_check(cross_check_id: int, cross_check: CrossCheckUpdate):
-    existing = execute_query("SELECT id FROM audit_rule_cross_checks WHERE id = ?", (cross_check_id,))
+    existing = execute_query_pg("SELECT id FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
     if not existing:
         raise HTTPException(404, "Cross-check not found")
 
@@ -532,9 +532,9 @@ def update_cross_check(cross_check_id: int, cross_check: CrossCheckUpdate):
         cross_check.compare_to_voucher_line
     )
 
-    execute_write(
-        "UPDATE audit_rule_cross_checks SET name = ?, compare_field = ?, comparison_type = ?, compare_to_voucher_line = ? WHERE id = ?",
-        (cross_check.name, cross_check.compare_field, cross_check.comparison_type, int(cross_check.compare_to_voucher_line), cross_check_id)
+    execute_write_pg(
+        "UPDATE audit_rule_cross_checks SET name = %s, compare_field = %s, comparison_type = %s, compare_to_voucher_line = %s WHERE id = %s",
+        (cross_check.name, cross_check.compare_field, cross_check.comparison_type, cross_check.compare_to_voucher_line, cross_check_id)
     )
     save_cross_check_documents(cross_check_id, cross_check.document_ids)
 
@@ -544,12 +544,12 @@ def update_cross_check(cross_check_id: int, cross_check: CrossCheckUpdate):
 @router.delete("/api/audit-rules/cross-checks/{cross_check_id}")
 def delete_cross_check(cross_check_id: int):
     """
-    Soft-delete a Cross-check (set is_active = 0).
+    Soft-delete a Cross-check (set is_active = FALSE).
     """
-    existing = execute_query("SELECT name FROM audit_rule_cross_checks WHERE id = ? AND is_active = 1", (cross_check_id,))
+    existing = execute_query_pg("SELECT name FROM audit_rule_cross_checks WHERE id = %s AND is_active = TRUE", (cross_check_id,))
     if not existing:
         raise HTTPException(404, "Active Cross-check not found")
-    execute_write("UPDATE audit_rule_cross_checks SET is_active = 0 WHERE id = ?", (cross_check_id,))
+    execute_write_pg("UPDATE audit_rule_cross_checks SET is_active = FALSE WHERE id = %s", (cross_check_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Cross-check: {existing[0]['name']} (ID: {cross_check_id})")
     return {"message": "Cross-check deleted (soft-delete) successfully"}
 
@@ -558,10 +558,10 @@ def restore_cross_check(cross_check_id: int):
     """
     Restore a soft-deleted Cross-check.
     """
-    existing = execute_query("SELECT name FROM audit_rule_cross_checks WHERE id = ? AND is_active = 0", (cross_check_id,))
+    existing = execute_query_pg("SELECT name FROM audit_rule_cross_checks WHERE id = %s AND is_active = FALSE", (cross_check_id,))
     if not existing:
         raise HTTPException(404, "Inactive Cross-check not found")
-    execute_write("UPDATE audit_rule_cross_checks SET is_active = 1 WHERE id = ?", (cross_check_id,))
+    execute_write_pg("UPDATE audit_rule_cross_checks SET is_active = TRUE WHERE id = %s", (cross_check_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Cross-check: {existing[0]['name']} (ID: {cross_check_id})")
     return {"message": "Cross-check restored successfully"}
 
@@ -624,12 +624,12 @@ def validate_category_evidence_type(evidence_type: Optional[str]):
 
 # ---------- HELPERS ----------
 def get_category_documents(category_id: int) -> List[dict]:
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT d.id as document_id, d.name, cd.is_required, d.is_active, d.document_type
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
-        WHERE cd.category_id = ?
+        WHERE cd.category_id = %s
         ORDER BY cd.sort_order
         """,
         (category_id,)
@@ -662,19 +662,19 @@ def get_category_documents(category_id: int) -> List[dict]:
 
 def get_category_document_requireds(category_id: int) -> dict:
     """Return {document_id: is_required (0/1)} for a Category's current document list."""
-    rows = execute_query(
-        "SELECT document_id, is_required FROM audit_rule_category_documents WHERE category_id = ?",
+    rows = execute_query_pg(
+        "SELECT document_id, is_required FROM audit_rule_category_documents WHERE category_id = %s",
         (category_id,)
     )
     return {r["document_id"]: r["is_required"] for r in rows}
 
 def get_category_cross_checks(category_id: int) -> List[dict]:
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT c.id as cross_check_id, c.name
         FROM audit_rule_category_cross_checks cc
         JOIN audit_rule_cross_checks c ON cc.cross_check_id = c.id
-        WHERE cc.category_id = ?
+        WHERE cc.category_id = %s
         ORDER BY cc.sort_order
         """,
         (category_id,)
@@ -687,12 +687,12 @@ def get_category_active_cross_checks_count(category_id: int) -> int:
     still attached doesn't count as 'required' (mirrors what the evaluation engine in
     routers/verification.py actually evaluates).
     """
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT COUNT(*) as cnt
         FROM audit_rule_category_cross_checks cc
         JOIN audit_rule_cross_checks c ON cc.cross_check_id = c.id
-        WHERE cc.category_id = ? AND c.is_active = 1
+        WHERE cc.category_id = %s AND c.is_active = TRUE
         """,
         (category_id,)
     )
@@ -705,12 +705,12 @@ def get_category_active_cross_checks_count(category_id: int) -> int:
 # get_category_documents()/get_category_cross_checks() above (used by the Categories CRUD
 # response) are untouched.
 def get_category_guidance_documents(category_id: int) -> List[dict]:
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT d.id as document_id, d.name, d.kb_note, d.template_id, d.risk_rating, d.transaction_level_approval, d.document_type
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
-        WHERE cd.category_id = ? AND d.is_active = 1
+        WHERE cd.category_id = %s AND d.is_active = TRUE
         ORDER BY cd.sort_order
         """,
         (category_id,)
@@ -736,24 +736,24 @@ def get_category_guidance_documents(category_id: int) -> List[dict]:
     ]
 
 def get_category_guidance_cross_checks(category_id: int) -> List[dict]:
-    rows = execute_query(
+    rows = execute_query_pg(
         """
         SELECT c.id as cross_check_id, c.name, c.compare_field, c.comparison_type
         FROM audit_rule_category_cross_checks cc
         JOIN audit_rule_cross_checks c ON cc.cross_check_id = c.id
-        WHERE cc.category_id = ? AND c.is_active = 1
+        WHERE cc.category_id = %s AND c.is_active = TRUE
         ORDER BY cc.sort_order
         """,
         (category_id,)
     )
     result = []
     for r in rows:
-        doc_rows = execute_query(
+        doc_rows = execute_query_pg(
             """
             SELECT d.name
             FROM audit_rule_cross_check_documents ccd
             JOIN audit_rule_documents d ON ccd.document_id = d.id
-            WHERE ccd.cross_check_id = ?
+            WHERE ccd.cross_check_id = %s
             ORDER BY ccd.sort_order
             """,
             (r["cross_check_id"],)
@@ -806,11 +806,11 @@ def save_category_documents(category_id: int, document_ids: List[int]):
     7, was removed alongside the column - confirmed requirement, 2026-08-02.)
     """
     existing_requireds = get_category_document_requireds(category_id)
-    execute_write("DELETE FROM audit_rule_category_documents WHERE category_id = ?", (category_id,))
+    execute_write_pg("DELETE FROM audit_rule_category_documents WHERE category_id = %s", (category_id,))
     for idx, document_id in enumerate(document_ids):
-        is_required = existing_requireds.get(document_id, 1)
-        execute_write(
-            "INSERT INTO audit_rule_category_documents (category_id, document_id, sort_order, is_required) VALUES (?, ?, ?, ?)",
+        is_required = existing_requireds.get(document_id, True)
+        execute_write_pg(
+            "INSERT INTO audit_rule_category_documents (category_id, document_id, sort_order, is_required) VALUES (%s, %s, %s, %s)",
             (category_id, document_id, idx, is_required)
         )
 
@@ -821,17 +821,17 @@ def bump_category_matrix_version(category_id: int):
     as a separate manual action. Lets a later phase's verification_details.matrix_version_applied
     detect a stale classification without silently reclassifying an already-Cleared voucher.
     """
-    execute_write(
-        "UPDATE audit_rule_categories SET matrix_version = matrix_version + 1 WHERE id = ?",
+    execute_write_pg(
+        "UPDATE audit_rule_categories SET matrix_version = matrix_version + 1 WHERE id = %s",
         (category_id,)
     )
 
 def save_category_cross_checks(category_id: int, cross_check_ids: List[int]):
     """Replace a Category's Cross-check list (delete-then-reinsert)."""
-    execute_write("DELETE FROM audit_rule_category_cross_checks WHERE category_id = ?", (category_id,))
+    execute_write_pg("DELETE FROM audit_rule_category_cross_checks WHERE category_id = %s", (category_id,))
     for idx, cross_check_id in enumerate(cross_check_ids):
-        execute_write(
-            "INSERT INTO audit_rule_category_cross_checks (category_id, cross_check_id, sort_order) VALUES (?, ?, ?)",
+        execute_write_pg(
+            "INSERT INTO audit_rule_category_cross_checks (category_id, cross_check_id, sort_order) VALUES (%s, %s, %s)",
             (category_id, cross_check_id, idx)
         )
 
@@ -844,17 +844,17 @@ def validate_category_payload(document_ids: List[int], cross_check_ids: List[int
     """
     doc_id_set = set()
     for document_id in document_ids:
-        rows = execute_query("SELECT id FROM audit_rule_documents WHERE id = ?", (document_id,))
+        rows = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s", (document_id,))
         if not rows:
             raise HTTPException(400, f"Document ID {document_id} not found")
         doc_id_set.add(document_id)
 
     for cross_check_id in cross_check_ids:
-        cc_rows = execute_query("SELECT name FROM audit_rule_cross_checks WHERE id = ?", (cross_check_id,))
+        cc_rows = execute_query_pg("SELECT name FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
         if not cc_rows:
             raise HTTPException(400, f"Cross-check ID {cross_check_id} not found")
-        cc_doc_rows = execute_query(
-            "SELECT document_id FROM audit_rule_cross_check_documents WHERE cross_check_id = ?",
+        cc_doc_rows = execute_query_pg(
+            "SELECT document_id FROM audit_rule_cross_check_documents WHERE cross_check_id = %s",
             (cross_check_id,)
         )
         cc_doc_ids = [r["document_id"] for r in cc_doc_rows]
@@ -876,14 +876,14 @@ def get_categories(include_inactive: bool = False):
     """
     query = "SELECT * FROM audit_rule_categories"
     if not include_inactive:
-        query += " WHERE is_active = 1"
+        query += " WHERE is_active = TRUE"
     query += " ORDER BY name"
-    rows = execute_query(query)
+    rows = execute_query_pg(query)
     return [row_to_category(r) for r in rows]
 
 @router.get("/api/audit-rules/categories/{category_id}")
 def get_category(category_id: int):
-    rows = execute_query("SELECT * FROM audit_rule_categories WHERE id = ?", (category_id,))
+    rows = execute_query_pg("SELECT * FROM audit_rule_categories WHERE id = %s", (category_id,))
     if not rows:
         raise HTTPException(404, "Category not found")
     return row_to_category(rows[0])
@@ -893,8 +893,8 @@ def create_category(category: CategoryCreate):
     validate_category_evidence_type(category.evidence_type)
     validate_category_payload(category.document_ids, category.cross_check_ids)
 
-    category_id = execute_write(
-        "INSERT INTO audit_rule_categories (name, kb_overview, evidence_type) VALUES (?, ?, ?)",
+    category_id = execute_write_pg(
+        "INSERT INTO audit_rule_categories (name, kb_overview, evidence_type) VALUES (%s, %s, %s) RETURNING id",
         (category.name, category.kb_overview, category.evidence_type)
     )
     save_category_documents(category_id, category.document_ids)
@@ -905,7 +905,7 @@ def create_category(category: CategoryCreate):
 
 @router.put("/api/audit-rules/categories/{category_id}")
 def update_category(category_id: int, category: CategoryUpdate):
-    existing = execute_query("SELECT id FROM audit_rule_categories WHERE id = ?", (category_id,))
+    existing = execute_query_pg("SELECT id FROM audit_rule_categories WHERE id = %s", (category_id,))
     if not existing:
         raise HTTPException(404, "Category not found")
 
@@ -920,8 +920,8 @@ def update_category(category_id: int, category: CategoryUpdate):
     # matrix_version bump below. Cross-check changes deliberately do not bump the version.
     old_document_ids = set(get_category_document_requireds(category_id).keys())
 
-    execute_write(
-        "UPDATE audit_rule_categories SET name = ?, kb_overview = ?, evidence_type = ? WHERE id = ?",
+    execute_write_pg(
+        "UPDATE audit_rule_categories SET name = %s, kb_overview = %s, evidence_type = %s WHERE id = %s",
         (category.name, category.kb_overview, category.evidence_type, category_id)
     )
     save_category_documents(category_id, category.document_ids)
@@ -936,12 +936,12 @@ def update_category(category_id: int, category: CategoryUpdate):
 @router.delete("/api/audit-rules/categories/{category_id}")
 def delete_category(category_id: int):
     """
-    Soft-delete a Category (set is_active = 0).
+    Soft-delete a Category (set is_active = FALSE).
     """
-    existing = execute_query("SELECT name FROM audit_rule_categories WHERE id = ? AND is_active = 1", (category_id,))
+    existing = execute_query_pg("SELECT name FROM audit_rule_categories WHERE id = %s AND is_active = TRUE", (category_id,))
     if not existing:
         raise HTTPException(404, "Active Category not found")
-    execute_write("UPDATE audit_rule_categories SET is_active = 0 WHERE id = ?", (category_id,))
+    execute_write_pg("UPDATE audit_rule_categories SET is_active = FALSE WHERE id = %s", (category_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Category: {existing[0]['name']} (ID: {category_id})")
     return {"message": "Category deleted (soft-delete) successfully"}
 
@@ -950,10 +950,10 @@ def restore_category(category_id: int):
     """
     Restore a soft-deleted Category.
     """
-    existing = execute_query("SELECT name FROM audit_rule_categories WHERE id = ? AND is_active = 0", (category_id,))
+    existing = execute_query_pg("SELECT name FROM audit_rule_categories WHERE id = %s AND is_active = FALSE", (category_id,))
     if not existing:
         raise HTTPException(404, "Inactive Category not found")
-    execute_write("UPDATE audit_rule_categories SET is_active = 1 WHERE id = ?", (category_id,))
+    execute_write_pg("UPDATE audit_rule_categories SET is_active = TRUE WHERE id = %s", (category_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Category: {existing[0]['name']} (ID: {category_id})")
     return {"message": "Category restored successfully"}
 
@@ -967,7 +967,7 @@ def get_category_cleared_requirements(category_id: int):
     reads) and get_category_active_cross_checks_count() above. Voucher-level checks and
     Account Head are global gates (not category-specific), always required.
     """
-    existing = execute_query("SELECT id, evidence_type FROM audit_rule_categories WHERE id = ?", (category_id,))
+    existing = execute_query_pg("SELECT id, evidence_type FROM audit_rule_categories WHERE id = %s", (category_id,))
     if not existing:
         raise HTTPException(404, "Category not found")
 
@@ -1026,18 +1026,18 @@ class VoucherCheckUpdate(BaseModel):
 # section going forward (non-destructive-schema convention) - these two helpers are kept
 # defined but no longer called from the CRUD endpoints below.
 def get_voucher_check_auth_roles(voucher_check_id: int) -> List[str]:
-    rows = execute_query(
-        "SELECT role_name FROM audit_rule_voucher_check_auth_roles WHERE voucher_check_id = ? ORDER BY sort_order",
+    rows = execute_query_pg(
+        "SELECT role_name FROM audit_rule_voucher_check_auth_roles WHERE voucher_check_id = %s ORDER BY sort_order",
         (voucher_check_id,)
     )
     return [r["role_name"] for r in rows]
 
 def save_voucher_check_auth_roles(voucher_check_id: int, auth_roles: List[str]):
     """Replace a voucher check's authorisation-roles list (delete-then-reinsert)."""
-    execute_write("DELETE FROM audit_rule_voucher_check_auth_roles WHERE voucher_check_id = ?", (voucher_check_id,))
+    execute_write_pg("DELETE FROM audit_rule_voucher_check_auth_roles WHERE voucher_check_id = %s", (voucher_check_id,))
     for idx, role_name in enumerate(auth_roles):
-        execute_write(
-            "INSERT INTO audit_rule_voucher_check_auth_roles (voucher_check_id, role_name, sort_order) VALUES (?, ?, ?)",
+        execute_write_pg(
+            "INSERT INTO audit_rule_voucher_check_auth_roles (voucher_check_id, role_name, sort_order) VALUES (%s, %s, %s)",
             (voucher_check_id, role_name, idx)
         )
 
@@ -1057,7 +1057,7 @@ def get_next_voucher_check_sort_order() -> int:
     Next sort_order value to append a new check at the end of the list. Computed across all
     rows (active or not) so a soft-deleted row's slot isn't reused unexpectedly.
     """
-    rows = execute_query("SELECT COALESCE(MAX(sort_order), -1) as max_order FROM audit_rule_voucher_checks")
+    rows = execute_query_pg("SELECT COALESCE(MAX(sort_order), -1) as max_order FROM audit_rule_voucher_checks")
     return rows[0]["max_order"] + 1
 
 # ---------- ENDPOINTS ----------
@@ -1071,14 +1071,14 @@ def get_voucher_checks(include_inactive: bool = False):
     """
     query = "SELECT * FROM audit_rule_voucher_checks"
     if not include_inactive:
-        query += " WHERE is_active = 1"
+        query += " WHERE is_active = TRUE"
     query += " ORDER BY sort_order"
-    rows = execute_query(query)
+    rows = execute_query_pg(query)
     return [row_to_voucher_check(r) for r in rows]
 
 @router.get("/api/audit-rules/voucher-checks/{voucher_check_id}")
 def get_voucher_check(voucher_check_id: int):
-    rows = execute_query("SELECT * FROM audit_rule_voucher_checks WHERE id = ?", (voucher_check_id,))
+    rows = execute_query_pg("SELECT * FROM audit_rule_voucher_checks WHERE id = %s", (voucher_check_id,))
     if not rows:
         raise HTTPException(404, "Voucher check not found")
     return row_to_voucher_check(rows[0])
@@ -1086,8 +1086,8 @@ def get_voucher_check(voucher_check_id: int):
 @router.post("/api/audit-rules/voucher-checks")
 def create_voucher_check(voucher_check: VoucherCheckCreate):
     sort_order = get_next_voucher_check_sort_order()
-    voucher_check_id = execute_write(
-        "INSERT INTO audit_rule_voucher_checks (name, sort_order, authority) VALUES (?, ?, ?)",
+    voucher_check_id = execute_write_pg(
+        "INSERT INTO audit_rule_voucher_checks (name, sort_order, authority) VALUES (%s, %s, %s) RETURNING id",
         (voucher_check.name, sort_order, voucher_check.authority)
     )
 
@@ -1096,12 +1096,12 @@ def create_voucher_check(voucher_check: VoucherCheckCreate):
 
 @router.put("/api/audit-rules/voucher-checks/{voucher_check_id}")
 def update_voucher_check(voucher_check_id: int, voucher_check: VoucherCheckUpdate):
-    existing = execute_query("SELECT id FROM audit_rule_voucher_checks WHERE id = ?", (voucher_check_id,))
+    existing = execute_query_pg("SELECT id FROM audit_rule_voucher_checks WHERE id = %s", (voucher_check_id,))
     if not existing:
         raise HTTPException(404, "Voucher check not found")
 
-    execute_write(
-        "UPDATE audit_rule_voucher_checks SET name = ?, authority = ? WHERE id = ?",
+    execute_write_pg(
+        "UPDATE audit_rule_voucher_checks SET name = %s, authority = %s WHERE id = %s",
         (voucher_check.name, voucher_check.authority, voucher_check_id)
     )
 
@@ -1111,12 +1111,12 @@ def update_voucher_check(voucher_check_id: int, voucher_check: VoucherCheckUpdat
 @router.delete("/api/audit-rules/voucher-checks/{voucher_check_id}")
 def delete_voucher_check(voucher_check_id: int):
     """
-    Soft-delete a voucher check (set is_active = 0).
+    Soft-delete a voucher check (set is_active = FALSE).
     """
-    existing = execute_query("SELECT name FROM audit_rule_voucher_checks WHERE id = ? AND is_active = 1", (voucher_check_id,))
+    existing = execute_query_pg("SELECT name FROM audit_rule_voucher_checks WHERE id = %s AND is_active = TRUE", (voucher_check_id,))
     if not existing:
         raise HTTPException(404, "Active voucher check not found")
-    execute_write("UPDATE audit_rule_voucher_checks SET is_active = 0 WHERE id = ?", (voucher_check_id,))
+    execute_write_pg("UPDATE audit_rule_voucher_checks SET is_active = FALSE WHERE id = %s", (voucher_check_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted voucher check: {existing[0]['name']} (ID: {voucher_check_id})")
     return {"message": "Voucher check deleted (soft-delete) successfully"}
 
@@ -1125,10 +1125,10 @@ def restore_voucher_check(voucher_check_id: int):
     """
     Restore a soft-deleted voucher check.
     """
-    existing = execute_query("SELECT name FROM audit_rule_voucher_checks WHERE id = ? AND is_active = 0", (voucher_check_id,))
+    existing = execute_query_pg("SELECT name FROM audit_rule_voucher_checks WHERE id = %s AND is_active = FALSE", (voucher_check_id,))
     if not existing:
         raise HTTPException(404, "Inactive voucher check not found")
-    execute_write("UPDATE audit_rule_voucher_checks SET is_active = 1 WHERE id = ?", (voucher_check_id,))
+    execute_write_pg("UPDATE audit_rule_voucher_checks SET is_active = TRUE WHERE id = %s", (voucher_check_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored voucher check: {existing[0]['name']} (ID: {voucher_check_id})")
     return {"message": "Voucher check restored successfully"}
 
@@ -1136,8 +1136,8 @@ def restore_voucher_check(voucher_check_id: int):
 def reorder_voucher_checks(check_ids: List[int] = Body(...)):
     """Update sort_order for all voucher checks, same pattern as reorder_template_columns()."""
     for idx, check_id in enumerate(check_ids):
-        execute_write(
-            "UPDATE audit_rule_voucher_checks SET sort_order = ? WHERE id = ?",
+        execute_write_pg(
+            "UPDATE audit_rule_voucher_checks SET sort_order = %s WHERE id = %s",
             (idx, check_id)
         )
     log_audit("Admin", "Reorder", "AuditRules", "Reordered voucher checks")
@@ -1183,7 +1183,7 @@ class SignatureSpecimenUpdate(BaseModel):
 # ---------- HELPERS ----------
 def validate_client_id(client_id: int):
     """Raises HTTPException(400) if client_id doesn't reference an active client."""
-    rows = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    rows = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not rows:
         raise HTTPException(400, f"Client ID {client_id} not found or inactive")
 
@@ -1193,7 +1193,7 @@ def validate_signature_specimen_payload(document_id: int, role_name: str):
     Document's configured auth roles - mirrors validate_cross_check_payload()'s compare_field
     check against a Document's cross_check_fields.
     """
-    doc_rows = execute_query("SELECT name FROM audit_rule_documents WHERE id = ?", (document_id,))
+    doc_rows = execute_query_pg("SELECT name FROM audit_rule_documents WHERE id = %s", (document_id,))
     if not doc_rows:
         raise HTTPException(400, f"Document ID {document_id} not found")
     auth_roles = get_document_auth_roles(document_id)
@@ -1217,14 +1217,14 @@ def validate_no_duplicate_active_signatory(client_id: int, document_id: int, rol
     an update to a specimen's own row skip checking itself.
     """
     query = (
-        "SELECT id FROM signature_specimens WHERE client_id = ? AND document_id = ? AND role_name = ? "
-        "AND is_active = 1 AND TRIM(LOWER(expected_signatory_name)) = TRIM(LOWER(?))"
+        "SELECT id FROM signature_specimens WHERE client_id = %s AND document_id = %s AND role_name = %s "
+        "AND is_active = TRUE AND TRIM(LOWER(expected_signatory_name)) = TRIM(LOWER(%s))"
     )
     params = [client_id, document_id, role_name, expected_signatory_name]
     if exclude_id is not None:
-        query += " AND id != ?"
+        query += " AND id != %s"
         params.append(exclude_id)
-    existing = execute_query(query, tuple(params))
+    existing = execute_query_pg(query, tuple(params))
     if existing:
         raise HTTPException(
             400,
@@ -1262,20 +1262,20 @@ def get_signature_specimens(client_id: int, document_id: Optional[int] = None, i
     specimens are returned. Set include_inactive=True to get all (Soft-delete conversion,
     Phase 1 of 4).
     """
-    query = SIGNATURE_SPECIMEN_SELECT + " WHERE s.client_id = ?"
+    query = SIGNATURE_SPECIMEN_SELECT + " WHERE s.client_id = %s"
     params = [client_id]
     if document_id is not None:
-        query += " AND s.document_id = ?"
+        query += " AND s.document_id = %s"
         params.append(document_id)
     if not include_inactive:
-        query += " AND s.is_active = 1"
+        query += " AND s.is_active = TRUE"
     query += " ORDER BY d.name, s.role_name"
-    rows = execute_query(query, tuple(params))
+    rows = execute_query_pg(query, tuple(params))
     return [row_to_signature_specimen(r) for r in rows]
 
 @router.get("/api/audit-rules/signature-specimens/{specimen_id}")
 def get_signature_specimen(specimen_id: int):
-    rows = execute_query(SIGNATURE_SPECIMEN_SELECT + " WHERE s.id = ?", (specimen_id,))
+    rows = execute_query_pg(SIGNATURE_SPECIMEN_SELECT + " WHERE s.id = %s", (specimen_id,))
     if not rows:
         raise HTTPException(404, "Signature specimen not found")
     return row_to_signature_specimen(rows[0])
@@ -1286,8 +1286,8 @@ def create_signature_specimen(specimen: SignatureSpecimenCreate):
     validate_signature_specimen_payload(specimen.document_id, specimen.role_name)
     validate_no_duplicate_active_signatory(specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name)
 
-    specimen_id = execute_write(
-        "INSERT INTO signature_specimens (client_id, document_id, role_name, expected_signatory_name, authority) VALUES (?, ?, ?, ?, ?)",
+    specimen_id = execute_write_pg(
+        "INSERT INTO signature_specimens (client_id, document_id, role_name, expected_signatory_name, authority) VALUES (%s, %s, %s, %s, %s) RETURNING id",
         (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name, specimen.authority)
     )
 
@@ -1299,7 +1299,7 @@ def create_signature_specimen(specimen: SignatureSpecimenCreate):
 
 @router.put("/api/audit-rules/signature-specimens/{specimen_id}")
 def update_signature_specimen(specimen_id: int, specimen: SignatureSpecimenUpdate):
-    existing = execute_query("SELECT id FROM signature_specimens WHERE id = ?", (specimen_id,))
+    existing = execute_query_pg("SELECT id FROM signature_specimens WHERE id = %s", (specimen_id,))
     if not existing:
         raise HTTPException(404, "Signature specimen not found")
 
@@ -1307,9 +1307,9 @@ def update_signature_specimen(specimen_id: int, specimen: SignatureSpecimenUpdat
     validate_signature_specimen_payload(specimen.document_id, specimen.role_name)
     validate_no_duplicate_active_signatory(specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name, exclude_id=specimen_id)
 
-    execute_write(
-        "UPDATE signature_specimens SET client_id = ?, document_id = ?, role_name = ?, "
-        "expected_signatory_name = ?, authority = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    execute_write_pg(
+        "UPDATE signature_specimens SET client_id = %s, document_id = %s, role_name = %s, "
+        "expected_signatory_name = %s, authority = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
         (specimen.client_id, specimen.document_id, specimen.role_name, specimen.expected_signatory_name, specimen.authority, specimen_id)
     )
 
@@ -1319,17 +1319,17 @@ def update_signature_specimen(specimen_id: int, specimen: SignatureSpecimenUpdat
 @router.delete("/api/audit-rules/signature-specimens/{specimen_id}")
 def delete_signature_specimen(specimen_id: int):
     """
-    Soft-delete a signature specimen (set is_active = 0). This is the normal "Delete" action -
+    Soft-delete a signature specimen (set is_active = FALSE). This is the normal "Delete" action -
     for a genuine data-entry mistake needing permanent removal, use the separate hard-delete
     endpoint below.
     """
-    existing = execute_query(
-        "SELECT expected_signatory_name FROM signature_specimens WHERE id = ? AND is_active = 1",
+    existing = execute_query_pg(
+        "SELECT expected_signatory_name FROM signature_specimens WHERE id = %s AND is_active = TRUE",
         (specimen_id,)
     )
     if not existing:
         raise HTTPException(404, "Active signature specimen not found")
-    execute_write("UPDATE signature_specimens SET is_active = 0 WHERE id = ?", (specimen_id,))
+    execute_write_pg("UPDATE signature_specimens SET is_active = FALSE WHERE id = %s", (specimen_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
     return {"message": "Signature specimen deleted (soft-delete) successfully"}
 
@@ -1338,13 +1338,13 @@ def restore_signature_specimen(specimen_id: int):
     """
     Restore a soft-deleted signature specimen.
     """
-    existing = execute_query(
-        "SELECT expected_signatory_name FROM signature_specimens WHERE id = ? AND is_active = 0",
+    existing = execute_query_pg(
+        "SELECT expected_signatory_name FROM signature_specimens WHERE id = %s AND is_active = FALSE",
         (specimen_id,)
     )
     if not existing:
         raise HTTPException(404, "Inactive signature specimen not found")
-    execute_write("UPDATE signature_specimens SET is_active = 1 WHERE id = ?", (specimen_id,))
+    execute_write_pg("UPDATE signature_specimens SET is_active = TRUE WHERE id = %s", (specimen_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
     return {"message": "Signature specimen restored successfully"}
 
@@ -1356,10 +1356,10 @@ def hard_delete_signature_specimen(specimen_id: int):
     changes. Works regardless of current is_active state (an active or already-deactivated row
     can both be hard-deleted).
     """
-    existing = execute_query("SELECT expected_signatory_name FROM signature_specimens WHERE id = ?", (specimen_id,))
+    existing = execute_query_pg("SELECT expected_signatory_name FROM signature_specimens WHERE id = %s", (specimen_id,))
     if not existing:
         raise HTTPException(404, "Signature specimen not found")
-    execute_write("DELETE FROM signature_specimens WHERE id = ?", (specimen_id,))
+    execute_write_pg("DELETE FROM signature_specimens WHERE id = %s", (specimen_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Hard-deleted (permanent) signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
     return {"message": "Signature specimen permanently deleted"}
 
@@ -1376,18 +1376,18 @@ class CategoryDocumentRequiredUpdate(BaseModel):
 
 @router.put("/api/audit-rules/categories/{category_id}/documents/{document_id}/required")
 def update_category_document_required(category_id: int, document_id: int, payload: CategoryDocumentRequiredUpdate):
-    existing = execute_query(
-        "SELECT is_required FROM audit_rule_category_documents WHERE category_id = ? AND document_id = ?",
+    existing = execute_query_pg(
+        "SELECT is_required FROM audit_rule_category_documents WHERE category_id = %s AND document_id = %s",
         (category_id, document_id)
     )
     if not existing:
         raise HTTPException(404, "This Document is not part of this Category")
 
-    new_value = 1 if payload.is_required else 0
+    new_value = payload.is_required
     changed = bool(existing[0]["is_required"]) != payload.is_required
 
-    execute_write(
-        "UPDATE audit_rule_category_documents SET is_required = ? WHERE category_id = ? AND document_id = ?",
+    execute_write_pg(
+        "UPDATE audit_rule_category_documents SET is_required = %s WHERE category_id = %s AND document_id = %s",
         (new_value, category_id, document_id)
     )
     if changed:
@@ -1411,13 +1411,13 @@ class DocumentTransactionLevelApprovalUpdate(BaseModel):
 
 @router.put("/api/audit-rules/documents/{document_id}/transaction-level-approval")
 def update_document_transaction_level_approval(document_id: int, payload: DocumentTransactionLevelApprovalUpdate):
-    existing = execute_query("SELECT id FROM audit_rule_documents WHERE id = ?", (document_id,))
+    existing = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s", (document_id,))
     if not existing:
         raise HTTPException(404, "Document not found")
 
-    new_value = 1 if payload.transaction_level_approval else 0
-    execute_write(
-        "UPDATE audit_rule_documents SET transaction_level_approval = ? WHERE id = ?",
+    new_value = payload.transaction_level_approval
+    execute_write_pg(
+        "UPDATE audit_rule_documents SET transaction_level_approval = %s WHERE id = %s",
         (new_value, document_id)
     )
 
