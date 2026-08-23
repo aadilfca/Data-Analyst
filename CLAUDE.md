@@ -139,6 +139,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 - Before editing, list files to be touched and wait for my confirmation. This is TWO separate hard stops, not one — even if my brief already includes a "files likely affected" list: (1) reply with the candidate file list only, no Read/Edit/Write on those files yet, and wait for me to confirm/adjust it in a separate reply; (2) only after that, enter Plan Mode, propose the approach for the current phase only, and wait for my explicit approval before implementing. A file list inside my own brief is a draft for you to restate back, never an implicit go-ahead.
 - Use Plan Mode for anything touching more than one file
 - One phase at a time, stop for review after each
+- Git workflow: After completing a phase, wait for the user to test and confirm it's working. Only then run git add, commit locally using the commit message provided in the brief, and push to GitHub. Never commit or push before user confirmation.
 - If at any point a change would require touching a file outside the confirmed list for the current phase, stop and ask before proceeding — never silently expand scope
 - On completing a phase, close with a two-column summary table (`Change Required` / `Developed As`), one row per distinct change, plain language, no code snippets
 - **Status log budget**: each entry in the Status log below is ONE line, ~25 words max — what changed + file(s) touched, no verification/investigation detail. Full detail always goes to `CHANGELOG_ARCHIVE.md`, referenced by heading name, not repeated here.
@@ -273,6 +274,7 @@ mandatory at the START of every session that's about to touch this file, not jus
 - 2026-08-23: Skeleton loading wired, Phase 5a of 6 - audit_rules.js's 4 entity list loads use LoadingUI.showSkeleton(); verified via Playwright incl. Sortable drag-reorder.
 - 2026-08-23: Skeleton loading wired, Phase 5b of 6 (final) - verification.js voucher grid on session start/Prev-Next; loading_ui.js added to verification.html; verified via Playwright.
 - 2026-08-23: Inline field-loading wired, Phase 6a/6b of 6 - upload.js templateDropdown, audit_rules.js arTemplateSelect use LoadingUI.showFieldLoading; verified via Playwright.
+- 2026-08-23: Added standing git workflow rule to Workflow rules - auto-commit+push after phase, only post user confirmation (CLAUDE.md).
 
 
 ## Self-maintenance
