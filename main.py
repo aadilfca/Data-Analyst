@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, RedirectResponse
 from database import init_db, log_error, get_error_code_for_exception, execute_query
+import os
 from routers import dashboard, verification, import_export, templates, clients, data, error_log, settings, audit_rules, trial_balance, auth, users
 from routers.auth import get_current_user
 from datetime import datetime
@@ -220,6 +221,26 @@ async def global_exception_handler(request: Request, exc: Exception):
 def startup():
     print("🚀 Starting System Analyst App...")
     init_db()
+
+    # Supabase (Postgres) migration, Phase 2 of 8: best-effort, non-fatal -
+    # SQLite (above) remains the app's real database until Phase 3 confirms
+    # Postgres works end-to-end, so any failure here (DATABASE_URL unset,
+    # bad credentials, unreachable project) must never block startup.
+    try:
+        from database import get_pg_pool, get_raw_conn_pg, release_raw_conn_pg, init_db_postgres
+        if os.environ.get("DATABASE_URL"):
+            get_pg_pool()
+            pg_conn = get_raw_conn_pg()
+            try:
+                init_db_postgres(pg_conn)
+            finally:
+                release_raw_conn_pg(pg_conn)
+            print("✅ Postgres (Supabase) schema initialized")
+        else:
+            print("ℹ️ DATABASE_URL not set — skipping Postgres init (SQLite-only mode)")
+    except Exception as e:
+        print(f"⚠️ Postgres init skipped (non-fatal): {e}")
+
     print("✅ App ready!")
 
 if __name__ == "__main__":

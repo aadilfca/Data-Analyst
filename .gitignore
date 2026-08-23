@@ -33,3 +33,8 @@ venv/
 uvicorn_err.log
 uvicorn_out.log
 *.log
+
+# ---------- LOCAL SECRETS ----------
+# Holds the real Supabase DATABASE_URL (Phase 2 of the Supabase/Render migration)
+# - never committed. See .env.example for the documented, safe-to-share shape.
+.env

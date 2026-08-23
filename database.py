@@ -5,6 +5,13 @@ import shutil
 import bcrypt
 from datetime import datetime
 
+import psycopg2
+import psycopg2.extras
+import psycopg2.pool
+from dotenv import load_dotenv
+
+load_dotenv()
+
 DB_NAME = "test.db"
 # Print absolute path for verification
 print(f"📁 Database path: {os.path.abspath(DB_NAME)}")
@@ -3679,6 +3686,140 @@ def _seed_postgres_data(conn):
             ("admin", admin_password_hash, True, "admin", None)
         )
         print("[postgres] seeded admin user")
+
+
+# ============================================================================
+# POSTGRES (SUPABASE) CONNECTION LAYER - Phase 2 of 8 of the Supabase/Render
+# migration.
+# ============================================================================
+# Pooled, env-var-driven Postgres equivalents of the SQLite helpers above
+# (get_db/execute_query/execute_write/get_raw_conn). Purely additive: no
+# SQLite function is touched, DB_NAME/get_db()/execute_query()/execute_write()/
+# get_raw_conn()/init_db() all behave exactly as before. These functions exist
+# so a Supabase project can actually be connected to and initialized (see
+# main.py's startup handler) - Phase 3+ is what migrates individual routers
+# over to calling these instead of the SQLite versions.
+#
+# Uses a psycopg2 ThreadedConnectionPool (not SQLAlchemy) to match this
+# codebase's existing raw-SQL-plus-dict-rows style. Connections are borrowed
+# from the pool and returned (never closed) when done - RealDictCursor is
+# what gives rows dict-like access, the Postgres analogue of sqlite3.Row.
+#
+# Postgres uses %s placeholders (not SQLite's ?) - callers write native
+# psycopg2-style SQL, same convention _seed_postgres_data() (above) already
+# uses.
+_pg_pool = None
+
+
+def get_pg_pool():
+    """
+    Lazily create and cache a module-level connection pool on first call.
+    Raises a clear error if DATABASE_URL isn't set - callers (main.py's
+    startup wiring) decide whether that's fatal or just logged, this
+    function itself doesn't swallow the error.
+    """
+    global _pg_pool
+    if _pg_pool is not None:
+        return _pg_pool
+
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL is not set - copy .env.example to .env and fill in "
+            "your Supabase connection string, or set it as a real environment "
+            "variable (Render, Phase 7)."
+        )
+
+    min_conn = int(os.environ.get("PG_POOL_MIN", "1"))
+    max_conn = int(os.environ.get("PG_POOL_MAX", "10"))
+    _pg_pool = psycopg2.pool.ThreadedConnectionPool(min_conn, max_conn, dsn=database_url)
+    print(f"[postgres] connection pool created (min={min_conn}, max={max_conn})")
+    return _pg_pool
+
+
+class _PooledConnection:
+    """
+    Context-manager wrapper returned by get_db_pg(): `with get_db_pg() as conn:`
+    borrows a connection from the pool and returns it (never closes it) when
+    the block exits - the pooled analogue of SQLite's get_db(), which opens
+    and closes a real file connection every call.
+    """
+    def __init__(self):
+        self._pool = get_pg_pool()
+        self._conn = self._pool.getconn()
+
+    def __enter__(self):
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None:
+            self._conn.rollback()
+        self._pool.putconn(self._conn)
+        return False
+
+
+def get_db_pg():
+    """Postgres equivalent of get_db() - use as `with get_db_pg() as conn:`."""
+    return _PooledConnection()
+
+
+def execute_query_pg(query, params=None):
+    """
+    Postgres equivalent of execute_query(): borrows a pooled connection, runs
+    a SELECT with a RealDictCursor, returns a list of dicts, returns the
+    connection to the pool. Uses %s placeholders (psycopg2 native), not
+    SQLite's ?.
+    """
+    with get_db_pg() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(query, params or ())
+            return [dict(row) for row in cur.fetchall()]
+
+
+def execute_write_pg(query, params=None):
+    """
+    Postgres equivalent of execute_write(): borrows a pooled connection, runs
+    an INSERT/UPDATE/DELETE, commits, returns the connection to the pool.
+    Postgres has no sqlite3-style lastrowid - a caller that needs the new
+    row's id should add RETURNING id to its own query (already the pattern
+    _seed_postgres_data() above uses) and read it off the first returned row.
+    """
+    with get_db_pg() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params or ())
+            conn.commit()
+            if cur.description:
+                row = cur.fetchone()
+                return row[0] if row else None
+            return None
+
+
+def get_raw_conn_pg():
+    """
+    Postgres equivalent of get_raw_conn(): borrows a connection for a caller
+    that wants to manage its own transaction/cursor directly (e.g.
+    init_db_postgres(), which expects a conn with .cursor()/.commit()). Pair
+    with release_raw_conn_pg(conn) instead of conn.close() - closing a pooled
+    connection directly would just discard it rather than returning it.
+    """
+    return get_pg_pool().getconn()
+
+
+def release_raw_conn_pg(conn):
+    """Returns a connection borrowed via get_raw_conn_pg() back to the pool."""
+    get_pg_pool().putconn(conn)
+
+
+def close_pg_pool():
+    """
+    Closes every pooled connection. Only meant for process shutdown - not
+    called anywhere yet (no shutdown hook exists this phase).
+    """
+    global _pg_pool
+    if _pg_pool is not None:
+        _pg_pool.closeall()
+        _pg_pool = None
+        print("[postgres] connection pool closed")
 
 
 def log_error(

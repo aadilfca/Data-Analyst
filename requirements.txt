@@ -20,6 +20,14 @@ xlrd==2.0.2
 rapidfuzz==3.14.5
 bcrypt==5.0.0
 
+# --- Supabase (Postgres) migration, Phase 2 of 8: pooled connection layer
+#     alongside the existing SQLite path (see database.py's init_db_postgres()/
+#     get_pg_pool()). psycopg2-binary is the Postgres driver; python-dotenv
+#     loads DATABASE_URL from a local .env file (a no-op on Render, Phase 7,
+#     where the real env var is injected directly). ---
+psycopg2-binary==2.9.12
+python-dotenv==1.2.3
+
 # --- Testing & AI-assisted development tools (not needed to run the app,
 #     but needed for Claude Code to write/verify automated tests and check
 #     UI changes in a real browser) ---
