@@ -355,6 +355,46 @@ function hasUrlSuppliedClient() {
     return URL_CLIENT_SCOPED_PAGES.includes(currentFile) && getUrlClientId() !== null;
 }
 
+// Mirrors sessionClientCache in shape, so the pill's data source stays a simple synchronous read.
+// Populated (or left null) by loadUrlClient() below; getUrlClientName() is its only reader.
+let urlClientCache = { id: null, name: null };
+
+// Resolves the URL-supplied client's NAME for the navbar pill on a page in URL_CLIENT_SCOPED_PAGES.
+// A no-op everywhere else. Called once from initClientContext(), right after loadSessionClient() -
+// that call is already async and already awaits a real network fetch, so this adds no new timing
+// model and no separate clientContextReady race.
+//
+// On the dashboard door the URL id and the session id are always the same value (getClientSettingsUrl()
+// stamps the session's own selected client), so this skips the extra fetch and just copies the
+// session's already-loaded name. Only the Admin door (a URL id with no matching session client) ever
+// needs a real GET /api/clients/{id}.
+//
+// Errors are swallowed and leave the cache null, matching loadSessionClient()'s own warn-only
+// convention - a failed lookup degrades to today's "Client: None selected" pill, never a broken navbar.
+async function loadUrlClient() {
+    if (!hasUrlSuppliedClient()) return;
+
+    const urlId = getUrlClientId();
+    if (urlId === getSelectedClientId()) {
+        urlClientCache = { id: urlId, name: getSelectedClientName() };
+        return;
+    }
+
+    try {
+        const res = await fetch(API_BASE + '/api/clients/' + urlId);
+        if (!res.ok) throw new Error('Failed to load URL-supplied client');
+        const client = await res.json();
+        urlClientCache = { id: urlId, name: client.client_name || null };
+    } catch (error) {
+        console.warn('⚠️ Failed to load URL-supplied client:', error.message);
+        urlClientCache = { id: null, name: null };
+    }
+}
+
+function getUrlClientName() {
+    return urlClientCache.name;
+}
+
 // ---------- ENFORCE CLIENT SELECTION ----------
 function enforceClientSelection() {
     if (!isClientSelected()) {
@@ -394,7 +434,13 @@ function renderClientControl() {
     // Both states are clickable and both lead to client_select.html — see the delegated
     // .nav-client-display listener at the bottom of this file for how the two differ (the
     // no-client state skips the confirm, since there's nothing to lose).
-    const clientName = getSelectedClientName();
+    //
+    // getUrlClientName() takes priority when present: on a page in URL_CLIENT_SCOPED_PAGES reached
+    // with no session client (the Admin door), the URL's client is the one actually on screen, so a
+    // pill showing "None selected" would contradict the page heading - and worse, render the
+    // client-none variant, whose click handler skips the confirm dialog and jumps straight to the
+    // picker. Everywhere else this is null and the pill behaves exactly as before.
+    const clientName = getUrlClientName() || getSelectedClientName();
     const clientDisplay = clientName
         ? `<button type="button" class="nav-client-display" title="Switch client">Client: <strong>${clientName}</strong></button>`
         : `<button type="button" class="nav-client-display client-none" title="Select a client">Client: None selected</button>`;
@@ -1420,6 +1466,10 @@ async function initClientContext() {
         // navigating away, so any page script awaiting it should never wake back up here.
         return;
     }
+    // A no-op on every page except one carrying a whitelisted, valid ?client_id= (see
+    // hasUrlSuppliedClient() above) - resolves that client's NAME so the navbar pill can show it
+    // instead of "None selected" on an admin-door visit with no session client selected.
+    await loadUrlClient();
     // Firm-level Admin pages get their own independent header instead of the client-scoped one -
     // see renderFirmLevelNav() above for what it deliberately leaves out and why. Everything before
     // this point (the pending-restore consume, loadSessionClient() and its 401 early-return) is

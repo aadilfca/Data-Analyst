@@ -1935,3 +1935,96 @@ If the session expires mid-flow, `guardSession()` bounces to `login.html`, and `
 then dashboard). Logged to `KNOWN_ISSUES.md` rather than widening this phase's scope.
 
 ---
+
+## Fix: Navbar Client Pill Ignores URL-Supplied client_id (2026-08-22)
+
+**A third fault in the same family as Phase 1's Fault B and Phase 2's Fault A**, found via a
+read-only investigation the user asked for after reporting that the 🏢 home icon seemed to bounce
+them to `client_select.html` from `client_settings.html?client_id=3&from=clients`.
+
+### Investigation first — the 🏢 icon was cleared, not the culprit
+
+Traced before any code was touched: the 🏢 icon (`client_context.js:710`) is a **static anchor** —
+`<a href="/static/index.html" class="nav-home-icon">`. No click handler is bound to it anywhere, no
+Up/Back resolution logic runs on it, and `git log -L` on that line showed the href has been
+`/static/index.html` since the icon was created and has never changed. Reproduced live from the
+user's exact URL: clicking it landed correctly on the dashboard.
+
+The user then clarified they'd actually clicked the **"Client: None selected" pill**, not the icon —
+confirmed live on the same URL: that pill sent the user to `client_select.html` immediately, with no
+confirmation.
+
+### Root cause
+
+`renderClientControl()`'s pill (`client_context.js:388-417`) decided its state purely from
+`getSelectedClientName()` — the session cache — never looking at the URL. On
+`client_settings.html?client_id=3&from=clients` (the Admin cogwheel door, which by design has no
+session client selected), this rendered "Client: None selected" while the page heading correctly
+showed the real client's data.
+
+**Not cosmetic.** The null name renders the pill's `client-none` CSS class, and the existing
+delegated click handler (`document.addEventListener('click', ...)` further down the same file)
+branches on that exact class: `client-none` skips the confirm dialog entirely ("nothing selected yet
+— nothing to lose") and jumps straight to the picker. That unannounced jump was the reported symptom.
+
+Same class of fault as Fault B (Phase 1): a control consulting session state while ignoring an
+available, valid URL parameter. Different control, same root cause.
+
+### The fix
+
+`static/client_context.js` only — `client_settings.js` needed no change (see "Rejected" below).
+
+- **`urlClientCache`** (`{id, name}`) — mirrors the shape of the existing `sessionClientCache`, so the
+  pill's data source stays a simple synchronous read.
+- **`loadUrlClient()`** — async, called once from `initClientContext()` immediately after
+  `loadSessionClient()` succeeds. A no-op unless Phase 1's `hasUrlSuppliedClient()` is true. When the
+  URL id equals the session id (the dashboard-door path, where they're always the same value), it
+  copies the already-loaded session name rather than firing a redundant `GET /api/clients/{id}` —
+  confirmed live: exactly one such request fired on that path, from `client_settings.js`'s own
+  loader, none from this new code. Only the Admin door (URL id, no session client) issues the real
+  fetch. Errors are swallowed and leave the cache null, matching `loadSessionClient()`'s own
+  warn-only convention — a failed lookup degrades to today's "None selected", never a broken navbar.
+- **`getUrlClientName()`** — trivial synchronous getter, same shape as `getSelectedClientName()`.
+- **`renderClientControl()`** — one line: `getUrlClientName() || getSelectedClientName()`. Everything
+  else follows automatically — a real name renders the normal pill (no `client-none` class), so the
+  **existing, untouched** click handler naturally takes the `confirmSwitchClient()` branch. The bug
+  was the state the handler was given, not its branching, so the handler itself needed no change.
+
+On a disagreement between a URL client and a session client, the URL wins — it's the one actually on
+screen, and a pill contradicting the page heading was the entire bug. This only ever engages on
+`URL_CLIENT_SCOPED_PAGES`; every other page is bit-identical to before.
+
+### Rejected: feed the pill from `client_settings.js` via `updateNavClientName()`
+
+Considered because that file already fetches the client's name for its own heading. Rejected on
+three counts: (1) `updateNavClientName()` only rewrites `innerHTML` — it never touches the
+`client-none` class, so the confirm-skipping bug, the actual defect, would survive untouched;
+(2) it would race — the navbar renders before that page's own fetch resolves, so the pill would
+visibly flash "None selected" before correcting itself; (3) it would fix exactly one page, leaving
+any future URL-scoped page to remember to call it. Fixing the control itself, once, in
+`client_context.js` avoids all three. `updateNavClientName()` is left as-is — already documented
+elsewhere as legacy/unused and flagged for a future removal pass.
+
+### Verification (live)
+
+`node --check` clean. Backend suite 4 passed (no backend change; run as a guard).
+
+1. **The fix** — admin door, no session client: pill reads "Client: ACME" (not "None selected"),
+   carries the plain `nav-client-display` class (not `client-none`); clicking it raises the confirm
+   dialog ("Switch client? Any unsaved work on this page may be lost."); dismissing leaves the user
+   on the same page.
+2. **No extra fetch on the dashboard door** — with a client selected, `client_settings.html`'s
+   resource list showed exactly one `/api/clients/1` request (the page's own loader); `loadUrlClient()`
+   correctly took its early-return branch.
+3. **Genuinely-no-client state unchanged** — dashboard with no client selected still shows "Client:
+   None selected" with the `client-none` class, and clicking it still skips straight to the picker
+   with no dialog (there is no URL client to prefer there).
+4. **Unaffected page unchanged** — `databank.html` with a client selected renders the pill exactly as
+   before.
+5. **Phase 1 regressions** — cogwheel with no session client still reaches Client Settings with no
+   alert (and now, additionally, the correct pill); `databank.html?client_id=1` still blocked.
+6. **Phase 2 regression** — dashboard card with no client still round-trips through `?next=` back to
+   Client Settings, now with the correct pill too.
+7. `client_context.js?v=12` (bumped from `v=11`) confirmed actually fetched.
+
+---
