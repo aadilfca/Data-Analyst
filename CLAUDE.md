@@ -267,6 +267,7 @@ requirement up as soon as it completes, rather than leaving the per-phase lines 
 - 2026-08-23: client_settings.html header now entry-aware - admin door (?from=clients) gets firm-level chrome, dashboard door unchanged (client_context.js, client_settings.html).
 - 2026-08-23: Supabase migration Phase 1 of 8 - init_db_postgres()/_seed_postgres_data() added to database.py, full 42-table Postgres schema, not yet wired up.
 - 2026-08-23: Supabase migration Phase 2 of 8 - pooled psycopg2 connection layer in database.py, wired into main.py startup (non-fatal, additive). database.py Architecture bullet compressed.
+- 2026-08-23: Supabase migration Phase 3 of 8 - live connectivity test against real Supabase project confirmed, no code changes needed.
 
 
 ## Self-maintenance
