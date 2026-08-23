@@ -278,6 +278,7 @@ requirement up as soon as it completes, rather than leaving the per-phase lines 
 - 2026-08-23: Supabase data migration Phase 1 of 4 - migrate_to_supabase.py skeleton, dual connections, FK-safe table order, dry-run row-count report.
 - 2026-08-23: Supabase data migration Phase 2 of 4 - migrate_to_supabase.py type-conversion layer, schema-derived bool/date/JSONB conversion, --preview-convert.
 - 2026-08-23: Supabase data migration Phase 3 of 4 - real migration run, 409336/409362 rows migrated with ids preserved, 26 pre-existing orphaned rows skipped.
+- 2026-08-23: Supabase data migration Phase 4 of 4, FINAL - migrate_to_supabase.py --verify mode; row-count diff, FK spot-checks confirm migration held, 0 shortfalls.
 
 
 ## Self-maintenance

@@ -31,14 +31,21 @@ too much to hold open in one transaction against a pooled connection) -- a
 useful side effect is the script is safely re-runnable if it fails partway,
 since a re-run's delete phase always fully wipes any partial state first.
 Requires typing "MIGRATE" at a confirmation prompt before writing anything.
-  - Phase 4 will add formal post-migration verification (row-count diff, FK
-    spot-checks) -- Phase 1's existing dry-run report already gives an
-    informal version of this today.
+Run live 2026-08-23: 409,336 of 409,362 rows migrated; 26 skipped (pre-existing
+dangling FK references SQLite never enforced -- see Phase 4 below).
+
+Phase 4 (FINAL, this phase): formal, repeatable post-migration verification
+(--verify, read-only) -- a row-count diff that correctly accounts for the
+legitimate dangling-reference skips (rather than a naive equality check that
+would misreport those 3 tables as mismatched), plus FK spot-checks sampled
+across every relationship in the schema, confirming id preservation actually
+held. Additive only -- does not touch Phase 1-3's already-proven-live code.
 
 Not wired into any API endpoint -- run manually on demand:
     python migrate_to_supabase.py                    (dry-run row-count report, no writes)
     python migrate_to_supabase.py --preview-convert   (also prints one converted sample row per table)
     python migrate_to_supabase.py --run              (WRITES: full wipe-and-replace, asks for confirmation first)
+    python migrate_to_supabase.py --verify           (post-migration row-count + FK verification, read-only)
 """
 import argparse
 import json
@@ -475,6 +482,179 @@ def print_migration_report(results: dict):
         print(f"\n{total_skipped} row(s) were skipped due to a dangling FK reference SQLite never enforced -- see WARNING lines above for details.")
 
 
+def count_dangling_rows(sqlite_conn, pg_conn, table: str, fk_constraints: dict, valid_id_cache: dict) -> int:
+    """
+    Read-only count of SQLite rows in `table` whose FK column value doesn't
+    resolve in the corresponding Postgres referenced table -- the same check
+    migrate_table() (Phase 3) applies when deciding what to skip during a
+    real write, reimplemented separately here (not refactored out of
+    migrate_table()) so this verification pass can't risk touching that
+    already-proven-live write path. valid_id_cache is the caller's dict,
+    reused across tables/calls to avoid re-querying the same referenced
+    table's id set repeatedly.
+    """
+    table_fks = fk_constraints.get(table, [])
+    if not table_fks:
+        return 0
+
+    def get_valid_ids(ref_table, ref_column):
+        key = (ref_table, ref_column)
+        if key not in valid_id_cache:
+            cur = pg_conn.cursor()
+            cur.execute(f'SELECT "{ref_column}" FROM {ref_table}')
+            valid_id_cache[key] = {r[0] for r in cur.fetchall()}
+        return valid_id_cache[key]
+
+    sqlite_columns = get_sqlite_columns(sqlite_conn, table)
+    table_fks = [fk for fk in table_fks if fk[0] in sqlite_columns]
+    if not table_fks:
+        return 0
+
+    rows = sqlite_conn.execute(f"SELECT * FROM {table}").fetchall()
+    dangling = 0
+    for row in rows:
+        row_dict = dict(row)
+        for fk_column, ref_table, ref_column in table_fks:
+            value = row_dict.get(fk_column)
+            if value is not None and value not in get_valid_ids(ref_table, ref_column):
+                dangling += 1
+                break
+    return dangling
+
+
+def verify_row_counts(sqlite_conn, pg_conn, fk_constraints: dict) -> list:
+    """
+    Row-count diff for every table, adjusted for legitimate dangling-reference
+    skips (count_dangling_rows()) -- a naive sqlite_count == postgres_count
+    check would misreport the tables with a known dangling reference (e.g.
+    data_audit_log, off by the 1 orphaned row confirmed live 2026-08-23) as a
+    real mismatch. Returns a list of per-table dicts with a MATCH/MISMATCH
+    status. Read-only.
+    """
+    valid_id_cache = {}
+    results = []
+    for table in TABLES_IN_FK_ORDER:
+        sqlite_count = count_sqlite(sqlite_conn, table)
+        postgres_count = count_postgres(pg_conn, table)
+        dangling_count = count_dangling_rows(sqlite_conn, pg_conn, table, fk_constraints, valid_id_cache)
+        expected_postgres_count = sqlite_count - dangling_count
+        if postgres_count == expected_postgres_count:
+            status = "MATCH"
+        elif postgres_count > expected_postgres_count:
+            # Postgres is the live app's real database post-migration -- a
+            # count higher than expected most likely means real usage
+            # happened since the migration ran (new sessions, new
+            # verification work, etc.), not data loss. Flagged separately
+            # from a genuine SHORTFALL so this expected, healthy case
+            # doesn't read as an alarm.
+            status = "GREW (likely live usage since migration)"
+        else:
+            status = "SHORTFALL"
+        results.append({
+            "table": table,
+            "sqlite_count": sqlite_count,
+            "postgres_count": postgres_count,
+            "dangling_count": dangling_count,
+            "expected_postgres_count": expected_postgres_count,
+            "status": status,
+        })
+    return results
+
+
+def verify_fk_spot_checks(sqlite_conn, pg_conn, fk_constraints: dict, sample_size: int = 5) -> list:
+    """
+    For every real FK relationship in the schema (table, fk_column, ref_table,
+    ref_column), samples up to `sample_size` rows from the migrated Postgres
+    child table (non-null fk_column) and compares that same row id's
+    fk_column value between SQLite and Postgres. This is the direct test of
+    what Phase 3 was supposed to guarantee -- id preservation held, so a
+    given row's relationships still point at the same place on both sides --
+    not a check of Postgres's own internal FK validity, which its real FK
+    constraints already guarantee structurally and would be redundant to
+    re-check. Returns a list of per-relationship dicts. Read-only.
+    """
+    results = []
+    for table in TABLES_IN_FK_ORDER:
+        # sessions.token is the one non-identity, non-"id" primary key in the
+        # whole schema (see NON_IDENTITY_TABLES) -- every other table samples
+        # by its "id" column.
+        pk_col = "token" if table in NON_IDENTITY_TABLES else "id"
+
+        for fk_column, ref_table, ref_column in fk_constraints.get(table, []):
+            pg_cur = pg_conn.cursor()
+            pg_cur.execute(
+                f'SELECT "{pk_col}", "{fk_column}" FROM {table} WHERE "{fk_column}" IS NOT NULL LIMIT %s',
+                (sample_size,)
+            )
+            sampled = pg_cur.fetchall()
+
+            checked = 0
+            mismatches = []
+            for row_id, pg_fk_value in sampled:
+                sqlite_row = sqlite_conn.execute(
+                    f'SELECT "{fk_column}" FROM {table} WHERE "{pk_col}" = ?', (row_id,)
+                ).fetchone()
+                if sqlite_row is None:
+                    continue
+                checked += 1
+                if sqlite_row[0] != pg_fk_value:
+                    mismatches.append((row_id, sqlite_row[0], pg_fk_value))
+
+            if checked == 0:
+                continue
+            results.append({
+                "table": table,
+                "fk_column": fk_column,
+                "ref_table": ref_table,
+                "checked": checked,
+                "mismatches": mismatches,
+            })
+    return results
+
+
+def print_verification_report(row_count_results: list, fk_spot_check_results: list):
+    print()
+    print("=" * 78)
+    print("SQLite -> Supabase Migration: Post-Migration Verification (--verify)")
+    print("=" * 78)
+    print("\n-- Row-Count Diff (adjusted for known dangling-reference skips) --")
+    print(f"{'Table':<42} {'SQLite':>8} {'Postgres':>9} {'Dangling':>9}  Status")
+    print("-" * 78)
+    shortfall_count = 0
+    grew_count = 0
+    for r in row_count_results:
+        if r["status"] == "SHORTFALL":
+            shortfall_count += 1
+        elif r["status"].startswith("GREW"):
+            grew_count += 1
+        print(f"{r['table']:<42} {r['sqlite_count']:>8} {r['postgres_count']:>9} {r['dangling_count']:>9}  {r['status']}")
+    print("-" * 78)
+    if shortfall_count:
+        print(f"{shortfall_count} table(s) SHORTFALL -- Postgres has FEWER rows than expected, not explained by a known dangling reference. This is a real problem -- investigate before trusting the migration.")
+    else:
+        print("No SHORTFALLs -- Postgres never has fewer rows than SQLite + known dangling skips can explain.")
+    if grew_count:
+        print(f"{grew_count} table(s) GREW beyond the migrated snapshot -- expected if the live app has been used since the migration ran (Postgres is now the real database, SQLite is a frozen snapshot).")
+
+    print("\n-- FK Spot-Checks (sampled rows per relationship, id preservation across both DBs) --")
+    if not fk_spot_check_results:
+        print("No FK relationships had any sampled rows to check (empty tables).")
+    else:
+        total_checked = 0
+        total_mismatches = 0
+        for r in fk_spot_check_results:
+            total_checked += r["checked"]
+            total_mismatches += len(r["mismatches"])
+            status = "OK" if not r["mismatches"] else f"{len(r['mismatches'])} MISMATCH"
+            print(f"  {r['table']}.{r['fk_column']} -> {r['ref_table']}: {r['checked']} sampled, {status}")
+            for row_id, sqlite_val, pg_val in r["mismatches"]:
+                print(f"      id={row_id}: sqlite={sqlite_val!r} != postgres={pg_val!r}")
+        print("-" * 78)
+        print(f"{total_checked} row(s) sampled across {len(fk_spot_check_results)} relationship(s), {total_mismatches} mismatch(es).")
+
+    print("=" * 78)
+
+
 def print_report(results: list, run_mode: bool):
     print()
     print("=" * 78)
@@ -506,7 +686,21 @@ if __name__ == "__main__":
     )
     parser.add_argument("--run", action="store_true", help="Perform a real, full wipe-and-replace write of all 42 tables. Asks for a typed confirmation first.")
     parser.add_argument("--preview-convert", action="store_true", help="Also print one type-converted sample row per table (bool/date/jsonb columns only). Read-only.")
+    parser.add_argument("--verify", action="store_true", help="Run post-migration verification (row-count diff adjusted for known dangling-reference skips, plus FK spot-checks). Read-only.")
     args = parser.parse_args()
+
+    if args.verify:
+        sqlite_conn = get_db()
+        pg_conn = get_raw_conn_pg()
+        try:
+            fk_constraints = get_fk_constraints(pg_conn)
+            row_count_results = verify_row_counts(sqlite_conn, pg_conn, fk_constraints)
+            fk_spot_check_results = verify_fk_spot_checks(sqlite_conn, pg_conn, fk_constraints)
+            print_verification_report(row_count_results, fk_spot_check_results)
+        finally:
+            sqlite_conn.close()
+            release_raw_conn_pg(pg_conn)
+        raise SystemExit(0)
 
     report = scan()
     print_report(report, run_mode=args.run)
