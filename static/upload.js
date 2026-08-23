@@ -1878,8 +1878,7 @@ if (importBtn) {
 // ---------- PERFORM IMPORT (after validation) ----------
 async function performImport(payload) {
     try {
-        importBtn.disabled = true;
-        importBtn.innerHTML = 'Processing...';
+        window.LoadingUI.showSpinner(importBtn, 'Importing');
         showStatus('⏳ Importing data...', 'loading');
         setBadge('⏳ Importing...', 'loading');
         showImportProgressBar();
@@ -1954,8 +1953,7 @@ async function performImport(payload) {
     } finally {
         clearInterval(importProgressPollInterval);
         hideImportProgressBar();
-        importBtn.disabled = false;
-        importBtn.innerHTML = '🚀 Upload';
+        window.LoadingUI.hideSpinner(importBtn);
     }
 }
 
