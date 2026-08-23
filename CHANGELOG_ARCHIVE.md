@@ -2072,4 +2072,42 @@ untouched — this is chrome only.
    unchanged — `#clientScopedNavContainer` shown, `#firmNav` hidden, no `firm-navbar` class, client
    pill populated, back-link href `/static/index.html` with label "← Back to Dashboard".
 
+## Shared Loading UI
+
+**Date:** 2026-08-23 | **Files:** `static/loading_ui.js` (new), `static/style.css`, `static/login.html`/`.js`, `static/databank.html`/`.js`.
+
+**Why:** No page in the app gave immediate visual feedback on click/fetch — either nothing showed until data arrived, or a page rolled its own one-off spinner (Audit Workbook's `.aw-spinner`). A shared, reusable utility was requested so future pages wire in a consistent pattern instead of reinventing it. 6-phase requirement: (1) build the utility, (2) prove spinner+message on Login, (3) prove skeleton on Data Bank preview, (4) roll out remaining action spinners, (5) roll out remaining skeleton lists, (6) roll out inline field loading.
+
+### Phase 1 — the utility (`static/loading_ui.js`, `static/style.css`)
+
+Namespaced under `window.LoadingUI` (not bare globals — this file's own Conventions section flags the exact collision risk, e.g. `error_dashboard.js`'s stale `STORAGE_KEY`). Per-element original state (innerHTML/disabled, active escalation timeout) tracked in a `WeakMap`, not `dataset`, so it garbage-collects if an element is removed mid-load and never leaks custom attributes into markup.
+
+- `showSkeleton(container, rows, options)` / `hideSkeleton(container)` — auto-detects a `<tbody>`/`<table>`/`<tr>` container (renders `<tr><td colspan="...">` shimmer bars, `options.columns` default 1) vs. a generic container (renders `<div class="ui-skeleton-row">` bars). Renders synchronously, no delay.
+- `showSpinner(target, message)` / `hideSpinner(target)` — swaps a button/action area's content for a spinner + message, disables it if it's a button. A 3-second `setTimeout` updates only the *message text* to `"${message} — still working…"` if the call is still active when it fires — the spinner itself never changes appearance, satisfying "instant feedback, message escalates."
+- `showFieldLoading(field)` / `hideFieldLoading(field)` — disables a `<select>`/`<input>`, inserts a small absolutely-positioned spinner right after it. Sets the field's parent to `position: relative` only if it was `static`, recording that so `hideFieldLoading` reverts only what it actually changed.
+
+CSS block (`static/style.css`, appended at file end): `.ui-skeleton-bar`/`.ui-skeleton-row`/`.ui-skeleton-cell` + `@keyframes ui-skeleton-shimmer` (linear-gradient sweep, `#e2e8f0`/`#f1f5f9` tokens already used elsewhere in the file); `.ui-spinner`/`.ui-spinner-sm` + `@keyframes ui-spin` (same border-spin technique as the pre-existing `.aw-spinner`, independently named so the two stay decoupled); `.ui-btn-spinner-content`/`.ui-btn-spinner-message`; `.ui-field-loading`/`.ui-field-spinner`; a `@media (prefers-reduced-motion: reduce)` block disabling both the shimmer and spin animations, falling back to a flat/static tone — still visually distinct as "loading" with no motion.
+
+### Phase 2 — Login (`static/login.html`, `static/login.js`)
+
+Added `<script src="/static/loading_ui.js">` before `login.js`'s own tag (script order matters). In the submit handler, `loginSubmitBtn.disabled = true` was replaced with `window.LoadingUI.showSpinner(loginSubmitBtn, 'Logging in')` (called synchronously before `fetch()`), and the `finally` block's `loginSubmitBtn.disabled = false` was replaced with `window.LoadingUI.hideSpinner(loginSubmitBtn)`. No other logic touched.
+
+**Verification (live, Playwright, async route interception delaying the login endpoint 4s so timing could be observed without blocking the test driver):** spinner + "Logging in" appeared and the button was disabled within 0.3s of click; message read "Logging in — still working…" at the 3.3s mark; on the delayed response resolving, button correctly restored to "Log In" (enabled) with the existing generic error message shown, and a successful login still redirected to `client_select.html` as before.
+
+### Phase 3 — Data Bank preview (`static/databank.html`, `static/databank.js`)
+
+`fetchPreviewData()` (the single chokepoint every refetch already funnels through — initial `openPreview()`, all four pagination buttons, page-size change, Sunday/data-quality filter changes, debounced search, Apply/Clear) had its hardcoded loading placeholder row (`<span class="spinner">`, not a real defined class) replaced with `window.LoadingUI.showSkeleton(previewTableBody, 8, { columns: getPreviewSkeletonColumnCount() })`. `previewTableHead.innerHTML = ''` and `previewCountInfo.textContent = 'Loading...'` were left untouched (pre-existing behavior).
+
+`getPreviewSkeletonColumnCount()` (new small helper) returns, in preference order: (1) `templateColumnsCache[previewTemplateId].length + 1` (reusing the existing cache `fetchTemplateColumns()` already populates — no new cache) if already known this session; (2) `previewTableHead`'s current live `<th>` count, true for every pagination/filter refetch since a header already rendered from the prior fetch; (3) `undefined`, letting `showSkeleton`'s own 1-column default apply — only reached on a template's very first-ever preview open this session, when the real shape genuinely isn't known yet.
+
+The subtotal toggle listener (re-renders from `previewCachedRows`, no network call) was correctly left untouched — no skeleton fires there.
+
+**Verification (live, Playwright, `/api/data/preview` delayed via async route interception, a real client+template with data, date range widened to guarantee rows):**
+1. Initial open: skeleton (8 rows) caught mid-flight with `colspan="1"` (fallback — no cache/header yet), confirming the documented fallback path.
+2. Real data lands: 65 rows, real header renders 8 `<th>` columns.
+3. Pagination click (Next Page): skeleton reappears instantly, this time with `colspan="8"` — matching the real column count via the cache/header-count logic.
+4. Subtotal toggle: confirmed no skeleton appears (no network call fired).
+
+Incidentally found and logged to `KNOWN_ISSUES.md` (not fixed, out of scope): `GET /api/data/overdue-uploads` 500s — `TypeError: '<' not supported between instances of 'datetime.date' and 'datetime.datetime'` in `routers/data.py`'s `_count_business_days_elapsed`.
+
 ---

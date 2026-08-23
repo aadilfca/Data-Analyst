@@ -1099,6 +1099,21 @@ async function fetchTemplateSubtotalDefault(templateId) {
     }
 }
 
+// Skeleton column count for fetchPreviewData()'s loading state (Shared Loading
+// UI, Phase 3 of 6) — prefers the cached column list templateColumnsCache
+// already holds for this template (fetchTemplateColumns() below, +1 for the
+// S.No column), falls back to whatever header is currently rendered from a
+// prior fetch, and only falls back further to LoadingUI's own 1-column
+// default on a template's very first preview open this session, when the
+// real shape genuinely isn't known yet.
+function getPreviewSkeletonColumnCount() {
+    const cached = templateColumnsCache[previewTemplateId];
+    if (cached && cached.length) return cached.length + 1;
+    const headerCount = previewTableHead.querySelectorAll('th').length;
+    if (headerCount) return headerCount;
+    return undefined;
+}
+
 // ---------- FETCH PREVIEW DATA ----------
 async function fetchPreviewData() {
     const clientId = getSelectedClientId();
@@ -1118,9 +1133,7 @@ async function fetchPreviewData() {
     }
 
     isPreviewLoading = true;
-    previewTableBody.innerHTML = `<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">
-        <span class="spinner"></span> Loading data...
-    </td></tr>`;
+    window.LoadingUI.showSkeleton(previewTableBody, 8, { columns: getPreviewSkeletonColumnCount() });
     previewTableHead.innerHTML = '';
     previewCountInfo.textContent = 'Loading...';
 
