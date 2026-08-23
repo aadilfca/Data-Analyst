@@ -8,21 +8,32 @@ This is NOT a repeatable sync -- it's a one-shot cutover script. File uploads
 (the uploads/ folder) are explicitly out of scope; that's a separate Supabase
 Storage requirement.
 
-Phase 1 (this phase): connect to both databases, walk every table in
-FK-safe order, and print a dry-run row-count comparison. No writes, no type
-conversion yet.
-  - Phase 2 will add the SQLite->Postgres type-conversion layer (booleans,
-    dates, timestamps, JSON->JSONB).
+Phase 1 (done): connect to both databases, walk every table in FK-safe
+order, and print a dry-run row-count comparison. No writes, no type
+conversion.
+
+Phase 2 (this phase): the SQLite->Postgres type-conversion layer (booleans,
+dates/timestamps, JSON->JSONB) that Phase 3's real writes will depend on.
+Column types are read live from Postgres's own information_schema (not a
+hand-maintained map) so the conversion logic can never silently drift out of
+sync with database.py's init_db_postgres() schema. Still zero writes --
+--preview-convert only prints a sample converted row per table for manual
+verification.
   - Phase 3 will add real write mode with id preservation (OVERRIDING SYSTEM
-    VALUE + setval(), same pattern as routers/templates.py's import_backup()).
+    VALUE + setval(), same pattern as routers/templates.py's import_backup()),
+    using convert_row() from this phase on every row before insert.
   - Phase 4 will add post-migration verification (row-count diff, FK
     spot-checks).
 
 Not wired into any API endpoint -- run manually on demand:
-    python migrate_to_supabase.py            (dry-run report only, no writes)
-    python migrate_to_supabase.py --run      (Phase 1: still no writes -- see below)
+    python migrate_to_supabase.py                    (dry-run row-count report, no writes)
+    python migrate_to_supabase.py --preview-convert   (also prints one converted sample row per table)
+    python migrate_to_supabase.py --run              (Phase 1-2: still no writes -- see below)
 """
 import argparse
+import json
+
+from psycopg2.extras import Json
 
 from database import get_db, get_raw_conn_pg, release_raw_conn_pg
 
@@ -124,6 +135,111 @@ def scan() -> list:
     return results
 
 
+def get_postgres_column_types(pg_conn) -> dict:
+    """
+    Reads each table's real column types straight from Postgres's own
+    information_schema -- not a hand-maintained map -- so conversion logic
+    can never silently drift out of sync with database.py's
+    init_db_postgres() schema. Returns {table: {column: data_type}}, e.g.
+    {"clients": {"id": "integer", "is_active": "boolean", ...}, ...}.
+    """
+    cur = pg_conn.cursor()
+    cur.execute(
+        "SELECT table_name, column_name, data_type FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = ANY(%s)",
+        (TABLES_IN_FK_ORDER,)
+    )
+    column_types = {table: {} for table in TABLES_IN_FK_ORDER}
+    for table_name, column_name, data_type in cur.fetchall():
+        column_types[table_name][column_name] = data_type
+    return column_types
+
+
+def convert_value(pg_type: str, value):
+    """
+    Converts one SQLite-sourced value into the shape psycopg2 needs for the
+    target Postgres column type. None always stays None regardless of type.
+      - boolean:            SQLite's 0/1 -> Python bool (Postgres rejects an
+                             implicit int->bool cast on insert).
+      - date / timestamp*:  left as the ISO-formatted string SQLite already
+                             stores (CURRENT_TIMESTAMP/date columns are
+                             "YYYY-MM-DD[ HH:MM:SS]", which Postgres parses
+                             natively on insert -- no need to hand-parse into
+                             date/datetime objects).
+      - jsonb:               SQLite's json.dumps() string -> json.loads() ->
+                             psycopg2.extras.Json(...), same convention
+                             routers/templates.py's import_backup() uses. A
+                             value that's already a dict/list is wrapped
+                             directly (defensive -- sqlite3.Row never
+                             actually produces this).
+      - anything else:      passed through unchanged (TEXT/INTEGER/REAL).
+    """
+    if value is None:
+        return None
+    if pg_type == "boolean":
+        return bool(value)
+    if pg_type == "jsonb":
+        if isinstance(value, (dict, list)):
+            return Json(value)
+        return Json(json.loads(value))
+    return value
+
+
+def convert_row(row: dict, column_types: dict) -> dict:
+    """
+    Applies convert_value() to every column in one SQLite row dict, using the
+    target table's {column: data_type} map from get_postgres_column_types().
+    A column Postgres doesn't recognise (shouldn't happen) defaults to a
+    plain passthrough rather than raising.
+    """
+    return {
+        col: convert_value(column_types.get(col, "text"), val)
+        for col, val in row.items()
+    }
+
+
+CONVERTED_TYPE_PREFIXES = ("boolean", "date", "timestamp", "jsonb")
+
+
+def preview_convert(sqlite_conn, pg_column_types: dict):
+    """
+    For each table, pulls one sample SQLite row (if any exist) and prints its
+    before/after values for only the columns whose Postgres type actually
+    changes shape (bool/date/timestamp/jsonb) -- plain passthrough columns are
+    omitted as noise. Read-only: no writes to either database.
+    """
+    print()
+    print("=" * 78)
+    print("Type-Conversion Preview (one sample row per table, converted columns only)")
+    print("=" * 78)
+
+    for table in TABLES_IN_FK_ORDER:
+        column_types = pg_column_types.get(table, {})
+        interesting_cols = [
+            col for col, pg_type in column_types.items()
+            if pg_type.startswith(CONVERTED_TYPE_PREFIXES)
+        ]
+        if not interesting_cols:
+            continue
+
+        row = sqlite_conn.execute(f"SELECT * FROM {table} LIMIT 1").fetchone()
+        if row is None:
+            continue
+
+        row_dict = dict(row)
+        converted = convert_row(row_dict, column_types)
+
+        print(f"\n{table}:")
+        for col in interesting_cols:
+            if col not in row_dict:
+                continue
+            before = row_dict[col]
+            after = converted[col]
+            print(f"    {col} ({column_types[col]}): {before!r} -> {after!r}")
+
+    print("\n" + "=" * 78)
+
+
 def print_report(results: list, run_mode: bool):
     print()
     print("=" * 78)
@@ -153,11 +269,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Migrate real data from SQLite (test.db) into Supabase (Postgres), preserving original ids."
     )
-    parser.add_argument("--run", action="store_true", help="Reserved for a later phase -- Phase 1 never writes, regardless of this flag.")
+    parser.add_argument("--run", action="store_true", help="Reserved for a later phase -- Phases 1-2 never write, regardless of this flag.")
+    parser.add_argument("--preview-convert", action="store_true", help="Also print one type-converted sample row per table (bool/date/jsonb columns only). Still read-only.")
     args = parser.parse_args()
 
     report = scan()
     print_report(report, run_mode=args.run)
 
-    print("\nPhase 1 skeleton only -- no data was written to Postgres.")
-    print("Type conversion (Phase 2) and id-preserving writes (Phase 3) are not yet implemented.")
+    if args.preview_convert:
+        sqlite_conn = get_db()
+        pg_conn = get_raw_conn_pg()
+        try:
+            pg_column_types = get_postgres_column_types(pg_conn)
+            preview_convert(sqlite_conn, pg_column_types)
+        finally:
+            sqlite_conn.close()
+            release_raw_conn_pg(pg_conn)
+
+    print("\nPhase 1-2 skeleton only -- no data was written to Postgres.")
+    print("Id-preserving writes (Phase 3) are not yet implemented.")
