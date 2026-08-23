@@ -342,7 +342,7 @@ function clearForm() {
 }
 
 // ---------- SAVE FUNCTION ----------
-async function saveColumn(keepModalOpen) {
+async function saveColumn(keepModalOpen, triggerBtn) {
     const name = colName.value.trim();
     const type = colType.value;
     const category = colCategory.value.trim();
@@ -360,6 +360,8 @@ async function saveColumn(keepModalOpen) {
     };
 
     try {
+        window.LoadingUI.showSpinner(triggerBtn, 'Saving');
+
         let url = API_BASE + '/api/columns';
         let method = 'POST';
         if (editingId) {
@@ -406,6 +408,8 @@ async function saveColumn(keepModalOpen) {
     } catch (error) {
         showModalStatus('❌ Error: ' + error.message, 'error');
         return false;
+    } finally {
+        window.LoadingUI.hideSpinner(triggerBtn);
     }
 }
 
@@ -418,13 +422,13 @@ document.getElementById('columnForm').addEventListener('submit', function(e) {
 // Save button – close modal after save
 saveBtn.addEventListener('click', function(e) {
     e.preventDefault();
-    saveColumn(false);
+    saveColumn(false, saveBtn);
 });
 
 // Save and New button – keep modal open after save
 saveAndNewBtn.addEventListener('click', function(e) {
     e.preventDefault();
-    saveColumn(true);
+    saveColumn(true, saveAndNewBtn);
 });
 
 // ---------- SEARCH ----------

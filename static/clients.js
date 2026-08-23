@@ -363,7 +363,7 @@ function clearForm() {
 }
 
 // ---------- SAVE FUNCTION ----------
-async function saveClient(keepModalOpen) {
+async function saveClient(keepModalOpen, triggerBtn) {
     const code = clientCode.value.trim();
     const name = clientName.value.trim();
 
@@ -388,6 +388,8 @@ async function saveClient(keepModalOpen) {
     };
 
     try {
+        window.LoadingUI.showSpinner(triggerBtn, 'Saving');
+
         let url = API_BASE + '/api/clients';
         let method = 'POST';
         if (editingId) {
@@ -428,6 +430,8 @@ async function saveClient(keepModalOpen) {
     } catch (error) {
         showModalStatus('❌ Error: ' + error.message, 'error');
         return false;
+    } finally {
+        window.LoadingUI.hideSpinner(triggerBtn);
     }
 }
 
@@ -439,12 +443,12 @@ document.getElementById('clientForm').addEventListener('submit', function(e) {
 // ---------- BUTTON HANDLERS ----------
 saveBtn.addEventListener('click', function(e) {
     e.preventDefault();
-    saveClient(false);
+    saveClient(false, saveBtn);
 });
 
 saveAndNewBtn.addEventListener('click', function(e) {
     e.preventDefault();
-    saveClient(true);
+    saveClient(true, saveAndNewBtn);
 });
 
 // ---------- ESC KEY ----------

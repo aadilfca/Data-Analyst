@@ -267,7 +267,8 @@ mandatory at the START of every session that's about to touch this file, not jus
 - 2026-08-23: Shared loading UI utility built, Phase 1 of 6 - loading_ui.js (LoadingUI.showSkeleton/showSpinner/showFieldLoading) + style.css block, no page wiring yet.
 - 2026-08-23: Login page spinner wired, Phase 2 of 6 - loading_ui.js loaded, login.js uses LoadingUI.showSpinner/hideSpinner on submit; verified live via Playwright.
 - 2026-08-23: Data Bank preview skeleton wired, Phase 3 of 6 - fetchPreviewData() uses LoadingUI.showSkeleton() with real/fallback column count; verified live via Playwright.
-- 2026-08-23: Upload/Import spinner wired, Phase 4a of 6 - performImport() uses LoadingUI.showSpinner/hideSpinner (upload.js, upload.html); Validate step left untouched; verified via Playwright.
+- 2026-08-23: Upload/Import spinner wired, Phase 4 of 6 - performImport() uses LoadingUI.showSpinner/hideSpinner (upload.js, upload.html); Validate step left untouched; verified via Playwright.
+- 2026-08-23: Save spinner wired, Phase 4a of 6 - saveClient()/saveColumn() use LoadingUI.showSpinner/hideSpinner per-button (clients.js, columns.js); verified via Playwright.
 
 
 ## Self-maintenance
