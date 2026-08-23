@@ -2166,6 +2166,33 @@ body {
     transform: translateY(0);
 }
 
+/* "Retrying..." toast (static/api_utils.js's apiFetch()) - same fixed bottom-right/pill/
+   .show-class-toggle structure as .voucher-verify-toast above, but amber (a waiting state,
+   not a success state) and with no auto-dismiss timer: it stays visible for exactly the
+   1.5s retry wait and is hidden explicitly once that attempt resolves. Standalone utility,
+   not yet wired into any page. */
+.api-retry-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 5000;
+    padding: 10px 18px;
+    border-radius: 20px;
+    background: #fef3c7;
+    color: #92400e;
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    opacity: 0;
+    transform: translateY(8px);
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.api-retry-toast.show {
+    opacity: 1;
+    transform: translateY(0);
+}
+
 /* ----- Voucher Panel -----
    Spans the full visible width — .main-container.verification-active already has zero padding, so
    100% is the true available width. Was previously capped at 65%; widened per direct request once
