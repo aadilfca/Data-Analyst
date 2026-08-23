@@ -16,7 +16,7 @@ loginForm.addEventListener('submit', async (e) => {
     const password = document.getElementById('passwordInput').value;
 
     loginError.style.display = 'none';
-    loginSubmitBtn.disabled = true;
+    window.LoadingUI.showSpinner(loginSubmitBtn, 'Logging in');
 
     try {
         const res = await fetch('/api/auth/login', {
@@ -38,6 +38,6 @@ loginForm.addEventListener('submit', async (e) => {
         loginError.textContent = 'Could not reach the server. Please try again.';
         loginError.style.display = 'block';
     } finally {
-        loginSubmitBtn.disabled = false;
+        window.LoadingUI.hideSpinner(loginSubmitBtn);
     }
 });
