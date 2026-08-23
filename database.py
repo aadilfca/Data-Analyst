@@ -2612,6 +2612,1075 @@ def init_db():
             print("🔌 Database connection closed")
     # ---------- ERROR HANDLING HELPER FUNCTIONS ----------
 
+
+# ============================================================================
+# POSTGRES (SUPABASE) SCHEMA - Phase 1 of 8 of the Supabase/Render migration.
+# ============================================================================
+# Hand-ported, idiomatic Postgres equivalent of everything init_db() (above)
+# builds for SQLite. This function is NOT wired into app startup yet - no
+# connection layer/env-var switch exists (that's Phase 2). It targets a
+# brand-new, empty Supabase project only - there is no existing Postgres
+# database to upgrade in place, so none of init_db()'s ALTER TABLE/rebuild
+# scaffolding is needed here; every table is written directly in its final
+# shape. `conn` is any DB-API connection exposing .cursor()/.commit()
+# (psycopg2/psycopg - the connection layer itself lands in Phase 2).
+#
+# Deliberate differences from the SQLite schema (confirmed with the user):
+#  - INTEGER 0/1 flags -> BOOLEAN; JSON-in-TEXT columns -> JSONB; TEXT date
+#    columns -> DATE; TEXT/TIMESTAMP audit columns -> TIMESTAMPTZ DEFAULT now().
+#  - Every FK declared in the SQLite DDL is a REAL, enforced constraint here
+#    (SQLite never enabled PRAGMA foreign_keys, so those were advisory only).
+#    A column that had NO FK declared in SQLite (error_log.error_code_id,
+#    audit_rule_document_fields.master_column_id, trial_balance_accounts.
+#    category_id, account_category_assignments.category_id) stays a plain
+#    column here too - not a place to invent new enforcement.
+#  - data_audit_log.changed_at: get_data_audit_history() (above) queries a
+#    changed_at column the SQLite table never actually had (only created_at) -
+#    a genuine pre-existing bug. Fixed here by naming the column changed_at.
+#  - client_voucher_prefixes.prefix used SQLite's COLLATE NOCASE (no direct
+#    Postgres equivalent) - ported via the citext extension instead.
+#  - No new CHECK constraints beyond what the SQLite DDL already enforces.
+#    Several columns have documented-but-unenforced value sets in code
+#    comments elsewhere in this file (range_status, cleared_status,
+#    risk_rating, period_type, state, change_detection_status,
+#    data_quality_flag) - left as plain typed columns, matching today's
+#    actual (unenforced) behavior, since Phase 3-6 hasn't verified every
+#    app code path against a stricter constraint yet.
+def init_db_postgres(conn):
+    cur = conn.cursor()
+
+    def run(sql, label=None):
+        cur.execute(sql)
+        if label:
+            print(f"[postgres] created {label}")
+
+    # citext gives client_voucher_prefixes.prefix the same case-insensitive
+    # comparison/uniqueness SQLite's COLLATE NOCASE provided.
+    run("CREATE EXTENSION IF NOT EXISTS citext")
+
+    # ---------- 1. master_columns ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS master_columns (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            column_name TEXT NOT NULL UNIQUE,
+            data_type TEXT NOT NULL,
+            category TEXT DEFAULT 'General',
+            is_active BOOLEAN DEFAULT TRUE,
+            notes TEXT
+        )
+    ''', "master_columns")
+
+    # ---------- 2. templates ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS templates (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            template_name TEXT NOT NULL UNIQUE,
+            created_by TEXT DEFAULT 'Admin',
+            created_date TIMESTAMPTZ DEFAULT now(),
+            is_active BOOLEAN DEFAULT TRUE,
+            is_system BOOLEAN DEFAULT FALSE,
+            has_subtotals_by_default BOOLEAN DEFAULT FALSE,
+            rate_source TEXT
+        )
+    ''', "templates")
+
+    # ---------- 3. clients ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS clients (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_code TEXT UNIQUE NOT NULL,
+            client_name TEXT NOT NULL,
+            industry TEXT,
+            contact_person TEXT,
+            email TEXT,
+            phone TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "clients")
+
+    # ---------- 4. audit_rule_documents ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_documents (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            name TEXT NOT NULL,
+            kb_note TEXT,
+            template_id INTEGER REFERENCES templates(id),
+            is_active BOOLEAN DEFAULT TRUE,
+            document_type TEXT NOT NULL DEFAULT 'linked_template'
+                CHECK (document_type IN ('linked_template', 'physical_bill')),
+            created_at TIMESTAMPTZ DEFAULT now(),
+            risk_rating TEXT,
+            transaction_level_approval BOOLEAN DEFAULT FALSE
+        )
+    ''', "audit_rule_documents")
+
+    # ---------- 5. template_column_mappings ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS template_column_mappings (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            column_id INTEGER NOT NULL REFERENCES master_columns(id) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(template_id, column_id)
+        )
+    ''', "template_column_mappings")
+
+    # ---------- 6. uploaded_files ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS uploaded_files (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            file_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_type TEXT,
+            record_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'Pending',
+            upload_date TIMESTAMPTZ DEFAULT now(),
+            client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL
+        )
+    ''', "uploaded_files")
+
+    # ---------- 7. verifications ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS verifications (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            file_id INTEGER REFERENCES uploaded_files(id),
+            item_id INTEGER,
+            status TEXT DEFAULT 'Pending',
+            verified_by TEXT,
+            verified_date TIMESTAMPTZ,
+            comments TEXT
+        )
+    ''', "verifications")
+
+    # ---------- 8. audit_log ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            "user" TEXT NOT NULL,
+            action TEXT NOT NULL,
+            module TEXT NOT NULL,
+            details TEXT,
+            "timestamp" TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "audit_log")
+
+    # ---------- 9. client_data ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS client_data (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            upload_id INTEGER NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+            row_data JSONB NOT NULL,
+            extract_amount REAL,
+            extract_date DATE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            created_by TEXT DEFAULT 'Analyst',
+            is_deleted BOOLEAN DEFAULT FALSE,
+            version INTEGER DEFAULT 1,
+            data_quality_flag TEXT DEFAULT NULL,
+            document_group_id TEXT DEFAULT NULL,
+            change_detection_status TEXT DEFAULT 'active',
+            rate_source TEXT DEFAULT NULL
+        )
+    ''', "client_data")
+    run("CREATE INDEX IF NOT EXISTS idx_client_data_client_deleted_extract_date ON client_data (client_id, is_deleted, extract_date)")
+    run("CREATE INDEX IF NOT EXISTS idx_client_data_client ON client_data (client_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_client_data_template ON client_data (template_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_client_data_upload ON client_data (upload_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_client_data_date ON client_data (extract_date)")
+    run("CREATE INDEX IF NOT EXISTS idx_client_data_deleted ON client_data (is_deleted)")
+    run("CREATE INDEX IF NOT EXISTS idx_client_data_client_date ON client_data (client_id, extract_date)")
+
+    # ---------- 10. error_codes ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS error_codes (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            code TEXT UNIQUE NOT NULL,
+            severity TEXT NOT NULL,
+            category TEXT NOT NULL,
+            user_message TEXT NOT NULL,
+            tech_description TEXT,
+            suggested_action TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "error_codes")
+
+    # ---------- 11. error_log ----------
+    # error_code_id has no FK in the SQLite source (advisory-only reference to
+    # error_codes) - left as a plain column here too, per the "only port
+    # declared FKs" decision.
+    run('''
+        CREATE TABLE IF NOT EXISTS error_log (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            error_code_id INTEGER,
+            error_code TEXT,
+            user_id TEXT DEFAULT 'System',
+            client_id INTEGER,
+            module TEXT,
+            endpoint TEXT,
+            method TEXT,
+            status_code INTEGER,
+            error_category TEXT,
+            error_message TEXT,
+            file_name TEXT,
+            line_number INTEGER,
+            code_context TEXT,
+            stack_trace TEXT,
+            input_data JSONB,
+            suggested_fix TEXT,
+            is_resolved BOOLEAN DEFAULT FALSE,
+            resolution_notes TEXT,
+            resolved_by TEXT,
+            resolved_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "error_log")
+    run("CREATE INDEX IF NOT EXISTS idx_error_log_code ON error_log (error_code)")
+    run("CREATE INDEX IF NOT EXISTS idx_error_log_module ON error_log (module)")
+    run("CREATE INDEX IF NOT EXISTS idx_error_log_created ON error_log (created_at)")
+    run("CREATE INDEX IF NOT EXISTS idx_error_log_resolved ON error_log (is_resolved)")
+    run("CREATE INDEX IF NOT EXISTS idx_error_log_category ON error_log (error_category)")
+
+    # ---------- 12. verification_sessions ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS verification_sessions (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            cashbook_name TEXT NOT NULL,
+            period_start DATE NOT NULL,
+            period_end DATE NOT NULL,
+            created_by TEXT DEFAULT 'Analyst',
+            created_at TIMESTAMPTZ DEFAULT now(),
+            status TEXT DEFAULT 'In Progress',
+            total_transactions INTEGER DEFAULT 0,
+            verified_count INTEGER DEFAULT 0,
+            session_type TEXT NOT NULL DEFAULT 'cash'
+        )
+    ''', "verification_sessions")
+    run("CREATE INDEX IF NOT EXISTS idx_verification_sessions_client ON verification_sessions (client_id)")
+
+    # ---------- 13. verification_details ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS verification_details (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            session_id INTEGER NOT NULL REFERENCES verification_sessions(id) ON DELETE CASCADE,
+            client_data_id INTEGER NOT NULL REFERENCES client_data(id) ON DELETE CASCADE,
+            transaction_ref TEXT,
+            line_items JSONB,
+            procedure_data JSONB,
+            validation_status TEXT DEFAULT 'Pending',
+            validation_message TEXT,
+            status TEXT DEFAULT 'Pending',
+            comments TEXT,
+            observations TEXT,
+            verified_by TEXT,
+            verified_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            cleared_status TEXT,
+            matrix_version_applied INTEGER,
+            range_status TEXT NOT NULL DEFAULT 'active',
+            excluded_at TIMESTAMPTZ
+        )
+    ''', "verification_details")
+    run("CREATE INDEX IF NOT EXISTS idx_verification_details_session ON verification_details (session_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_verification_details_clientdata ON verification_details (client_data_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_verification_details_status ON verification_details (status)")
+    run("CREATE INDEX IF NOT EXISTS idx_verification_details_validation ON verification_details (validation_status)")
+
+    # ---------- 14. audit_procedure_library ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_procedure_library (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            transaction_type TEXT UNIQUE NOT NULL,
+            management_controls TEXT,
+            audit_risks TEXT,
+            audit_procedures TEXT,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "audit_procedure_library")
+
+    # ---------- 15. app_settings ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS app_settings (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            key TEXT UNIQUE NOT NULL,
+            value TEXT NOT NULL,
+            description TEXT,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "app_settings")
+
+    # ---------- 16. data_audit_log ----------
+    # changed_at (not created_at): fixes get_data_audit_history()'s pre-existing
+    # "no such column" bug - see the module-level comment above.
+    run('''
+        CREATE TABLE IF NOT EXISTS data_audit_log (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_data_id INTEGER NOT NULL REFERENCES client_data(id) ON DELETE CASCADE,
+            "user" TEXT DEFAULT 'System',
+            action TEXT NOT NULL,
+            old_row_data JSONB,
+            new_row_data JSONB,
+            changed_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "data_audit_log")
+    run("CREATE INDEX IF NOT EXISTS idx_data_audit_log_clientdata ON data_audit_log (client_data_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_data_audit_log_action ON data_audit_log (action)")
+
+    # ---------- 17. client_voucher_prefixes ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS client_voucher_prefixes (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            category TEXT NOT NULL CHECK (category IN
+                ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt', 'Journal')),
+            prefix CITEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, category, prefix)
+        )
+    ''', "client_voucher_prefixes")
+    run("CREATE INDEX IF NOT EXISTS idx_client_voucher_prefixes_client ON client_voucher_prefixes (client_id)")
+
+    # ---------- 18. saved_column_mappings ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS saved_column_mappings (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            template_column_id INTEGER NOT NULL,
+            excel_column TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, template_id, template_column_id)
+        )
+    ''', "saved_column_mappings")
+    run("CREATE INDEX IF NOT EXISTS idx_saved_column_mappings_client_template ON saved_column_mappings (client_id, template_id)")
+
+    # ---------- 19. client_template_upload_frequency ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS client_template_upload_frequency (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            frequency TEXT NOT NULL DEFAULT 'Daily' CHECK (frequency IN ('Daily', 'Weekly', 'Monthly')),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, template_id)
+        )
+    ''', "client_template_upload_frequency")
+    run("CREATE INDEX IF NOT EXISTS idx_upload_frequency_client_template ON client_template_upload_frequency (client_id, template_id)")
+
+    # ---------- 20. audit_rule_document_fields ----------
+    # master_column_id has no FK in the SQLite source (best-effort resolved
+    # link, app-validated) - left as a plain column here too.
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_document_fields (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+            field_name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            master_column_id INTEGER,
+            UNIQUE(document_id, field_name)
+        )
+    ''', "audit_rule_document_fields")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_document_fields_document ON audit_rule_document_fields (document_id)")
+
+    # ---------- 21. audit_rule_document_auth_roles ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_document_auth_roles (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+            role_name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            required_authority TEXT,
+            UNIQUE(document_id, role_name)
+        )
+    ''', "audit_rule_document_auth_roles")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_document_auth_roles_document ON audit_rule_document_auth_roles (document_id)")
+
+    # ---------- 22. audit_rule_cross_checks ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_cross_checks (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            name TEXT NOT NULL,
+            compare_field TEXT NOT NULL,
+            comparison_type TEXT NOT NULL CHECK (comparison_type IN
+                ('All equal', 'Sequential increasing', 'Sequential decreasing',
+                 'Within tolerance %', 'Must be equal', 'May be less, never more')),
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            compare_to_voucher_line BOOLEAN DEFAULT FALSE
+        )
+    ''', "audit_rule_cross_checks")
+
+    # ---------- 23. audit_rule_cross_check_documents ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_cross_check_documents (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            cross_check_id INTEGER NOT NULL REFERENCES audit_rule_cross_checks(id) ON DELETE CASCADE,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(cross_check_id, document_id)
+        )
+    ''', "audit_rule_cross_check_documents")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_documents_crosscheck ON audit_rule_cross_check_documents (cross_check_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_documents_document ON audit_rule_cross_check_documents (document_id)")
+
+    # ---------- 24. audit_rule_categories ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_categories (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            name TEXT NOT NULL,
+            kb_overview TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            evidence_type TEXT CHECK (evidence_type IN ('billable', 'non_billable')),
+            created_at TIMESTAMPTZ DEFAULT now(),
+            matrix_version INTEGER NOT NULL DEFAULT 1
+        )
+    ''', "audit_rule_categories")
+
+    # ---------- 25. audit_rule_category_documents ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_category_documents (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            category_id INTEGER NOT NULL REFERENCES audit_rule_categories(id) ON DELETE CASCADE,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_required BOOLEAN NOT NULL DEFAULT TRUE,
+            UNIQUE(category_id, document_id)
+        )
+    ''', "audit_rule_category_documents")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_category_documents_category ON audit_rule_category_documents (category_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_category_documents_document ON audit_rule_category_documents (document_id)")
+
+    # ---------- 26. audit_rule_category_cross_checks ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_category_cross_checks (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            category_id INTEGER NOT NULL REFERENCES audit_rule_categories(id) ON DELETE CASCADE,
+            cross_check_id INTEGER NOT NULL REFERENCES audit_rule_cross_checks(id) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(category_id, cross_check_id)
+        )
+    ''', "audit_rule_category_cross_checks")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_category ON audit_rule_category_cross_checks (category_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_crosscheck ON audit_rule_category_cross_checks (cross_check_id)")
+
+    # ---------- 27. signature_specimens ----------
+    # No table-level UNIQUE (deliberate - matches the SQLite final shape,
+    # which relaxed this so a new specimen can replace an inactive one;
+    # uniqueness among ACTIVE rows is enforced in application code).
+    run('''
+        CREATE TABLE IF NOT EXISTS signature_specimens (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+            role_name TEXT NOT NULL,
+            expected_signatory_name TEXT NOT NULL,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            authority TEXT
+        )
+    ''', "signature_specimens")
+    run("CREATE INDEX IF NOT EXISTS idx_signature_specimens_client ON signature_specimens (client_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_signature_specimens_document ON signature_specimens (document_id)")
+
+    # ---------- 28. holidays ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS holidays (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            holiday_date DATE NOT NULL,
+            label TEXT NOT NULL,
+            repeats_yearly BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "holidays")
+    run("CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays (holiday_date)")
+
+    # ---------- 29. trial_balance_uploads ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS trial_balance_uploads (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            as_of_date DATE NOT NULL,
+            file_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'parsed', 'error')),
+            row_count INTEGER DEFAULT 0,
+            notes TEXT,
+            uploaded_at TIMESTAMPTZ DEFAULT now(),
+            period_start DATE,
+            period_end DATE,
+            period_type TEXT
+        )
+    ''', "trial_balance_uploads")
+    run("CREATE INDEX IF NOT EXISTS idx_trial_balance_uploads_client ON trial_balance_uploads (client_id)")
+
+    # ---------- 30. trial_balance_accounts ----------
+    # category_id has no FK in the SQLite source (soft link to
+    # audit_rule_categories.id) - left as a plain column here too.
+    run('''
+        CREATE TABLE IF NOT EXISTS trial_balance_accounts (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            upload_id INTEGER NOT NULL REFERENCES trial_balance_uploads(id) ON DELETE CASCADE,
+            account_code TEXT NOT NULL,
+            account_name TEXT,
+            parent_account_code TEXT,
+            level INTEGER NOT NULL DEFAULT 1,
+            classification TEXT NOT NULL CHECK (classification IN ('parent', 'leaf')),
+            debit_amount REAL,
+            credit_amount REAL,
+            opening_dr REAL,
+            opening_cr REAL,
+            period_dr REAL,
+            period_cr REAL,
+            closing_dr REAL,
+            closing_cr REAL,
+            source_account_type TEXT,
+            manually_overridden BOOLEAN NOT NULL DEFAULT FALSE,
+            category_id INTEGER,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            raw_row_data JSONB,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(upload_id, account_code)
+        )
+    ''', "trial_balance_accounts")
+    run("CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_upload ON trial_balance_accounts (upload_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_trial_balance_accounts_parent ON trial_balance_accounts (upload_id, parent_account_code)")
+
+    # ---------- 31. account_category_assignments ----------
+    # category_id has no FK in the SQLite source - left as a plain column here too.
+    run('''
+        CREATE TABLE IF NOT EXISTS account_category_assignments (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            account_code TEXT NOT NULL,
+            category_id INTEGER,
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, account_code)
+        )
+    ''', "account_category_assignments")
+    run("CREATE INDEX IF NOT EXISTS idx_account_category_assignments_client ON account_category_assignments (client_id)")
+
+    # ---------- 32. voucher_line_documents ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS voucher_line_documents (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            voucher_line_id INTEGER NOT NULL REFERENCES verification_details(id) ON DELETE CASCADE,
+            client_data_id INTEGER NOT NULL REFERENCES client_data(id) ON DELETE CASCADE,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id),
+            linked_by TEXT DEFAULT 'Analyst',
+            linked_at TIMESTAMPTZ DEFAULT now(),
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'unassigned')),
+            unassigned_at TIMESTAMPTZ,
+            signature_exception BOOLEAN DEFAULT FALSE
+        )
+    ''', "voucher_line_documents")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_line_documents_line ON voucher_line_documents (voucher_line_id)")
+    run('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_voucher_line_documents_active_client_data
+        ON voucher_line_documents (client_data_id) WHERE status = 'active'
+    ''')
+
+    # ---------- 33. voucher_line_procedure_checks ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS voucher_line_procedure_checks (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            voucher_line_id INTEGER NOT NULL REFERENCES verification_details(id) ON DELETE CASCADE,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id),
+            role_name TEXT NOT NULL,
+            is_checked BOOLEAN NOT NULL DEFAULT FALSE,
+            checked_by TEXT,
+            checked_at TIMESTAMPTZ,
+            UNIQUE(voucher_line_id, document_id, role_name)
+        )
+    ''', "voucher_line_procedure_checks")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_line_procedure_checks_line ON voucher_line_procedure_checks (voucher_line_id)")
+
+    # ---------- 34. voucher_line_physical_bills ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS voucher_line_physical_bills (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            voucher_line_id INTEGER NOT NULL REFERENCES verification_details(id) ON DELETE CASCADE,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id),
+            bill_no TEXT,
+            bill_date DATE,
+            vendor_name TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "voucher_line_physical_bills")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_line_physical_bills_line ON voucher_line_physical_bills (voucher_line_id)")
+
+    # ---------- 35. voucher_line_physical_bill_items ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS voucher_line_physical_bill_items (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            bill_id INTEGER NOT NULL REFERENCES voucher_line_physical_bills(id) ON DELETE CASCADE,
+            item_name TEXT,
+            quantity REAL,
+            rate REAL,
+            amount REAL,
+            source_document_row_id INTEGER,
+            source_template TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "voucher_line_physical_bill_items")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_line_physical_bill_items_bill ON voucher_line_physical_bill_items (bill_id)")
+
+    # ---------- 36. voucher_approvals ----------
+    # Superseded/dead (see CLAUDE.md), ported anyway for parity with the
+    # SQLite schema - no reads/writes hit it, so its presence is inert.
+    run('''
+        CREATE TABLE IF NOT EXISTS voucher_approvals (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            transaction_ref TEXT NOT NULL,
+            prepared_by TEXT,
+            checked_by TEXT,
+            approved_by TEXT,
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, transaction_ref)
+        )
+    ''', "voucher_approvals")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_approvals_client_ref ON voucher_approvals (client_id, transaction_ref)")
+
+    # ---------- 37. audit_rule_voucher_checks ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_voucher_checks (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            authority TEXT
+        )
+    ''', "audit_rule_voucher_checks")
+
+    # ---------- 38. audit_rule_voucher_check_auth_roles ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_voucher_check_auth_roles (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            voucher_check_id INTEGER NOT NULL REFERENCES audit_rule_voucher_checks(id) ON DELETE CASCADE,
+            role_name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(voucher_check_id, role_name)
+        )
+    ''', "audit_rule_voucher_check_auth_roles")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_voucher_check_auth_roles_check ON audit_rule_voucher_check_auth_roles (voucher_check_id)")
+
+    # ---------- 39. voucher_check_status ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS voucher_check_status (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            transaction_ref TEXT NOT NULL,
+            check_id INTEGER NOT NULL REFERENCES audit_rule_voucher_checks(id),
+            ticked BOOLEAN NOT NULL DEFAULT FALSE,
+            performed_by_name TEXT,
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            state TEXT NOT NULL DEFAULT 'untouched',
+            flagged_in_observations BOOLEAN NOT NULL DEFAULT FALSE,
+            UNIQUE(client_id, transaction_ref, check_id)
+        )
+    ''', "voucher_check_status")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_check_status_client_ref ON voucher_check_status (client_id, transaction_ref)")
+
+    # ---------- 40. voucher_line_observations ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS voucher_line_observations (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            voucher_line_id INTEGER NOT NULL REFERENCES verification_details(id) ON DELETE CASCADE,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id),
+            observation_text TEXT,
+            synced BOOLEAN NOT NULL DEFAULT FALSE,
+            last_synced_text TEXT,
+            updated_by TEXT DEFAULT 'Analyst',
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(voucher_line_id, document_id)
+        )
+    ''', "voucher_line_observations")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_line_observations_line ON voucher_line_observations (voucher_line_id)")
+
+    # ---------- 41. users ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            role TEXT,
+            last_login TIMESTAMPTZ
+        )
+    ''', "users")
+
+    # ---------- 42. sessions ----------
+    # token stays a plain TEXT PRIMARY KEY (app-generated, not sequential) -
+    # the one table in this schema with a non-identity primary key.
+    run('''
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            expiry TIMESTAMPTZ NOT NULL,
+            selected_client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL
+        )
+    ''', "sessions")
+    run("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)")
+
+    conn.commit()
+    print("[postgres] all tables/indexes created")
+
+    _seed_postgres_data(conn)
+
+    conn.commit()
+    print("[postgres] schema initialization complete")
+
+
+def _seed_postgres_data(conn):
+    """
+    Seed data for a fresh Supabase/Postgres database - the same seed content
+    init_db() inserts for SQLite (error_codes, audit_procedure_library,
+    master_columns defaults, the "Transaction Report" system template + Rate
+    column wiring, app_settings, the 7 legacy Audit Rules categories, and the
+    admin user), using INSERT ... ON CONFLICT DO NOTHING for idempotency
+    instead of SQLite's "count == 0" checks.
+    """
+    cur = conn.cursor()
+
+    # ---- error_codes (16 rows) ----
+    error_codes = [
+        ("ERR-SYN-001", "Error", "Syntax",
+         "The system tried to use something that doesn't exist – like a missing function or variable.",
+         "NameError: name '...' is not defined",
+         "Check the spelling of the function/variable name. Make sure it is imported or defined before use."),
+        ("ERR-SYN-002", "Error", "Syntax",
+         "The system encountered a syntax error – a missing bracket, comma, or a typo in the code.",
+         "SyntaxError: invalid syntax",
+         "Check the code for missing brackets '()', '{}', '[]', or missing commas. Look at the highlighted line in the error report."),
+        ("ERR-IMP-001", "Error", "Import",
+         "The system could not import a required module or function.",
+         "ImportError: No module named '...'",
+         "Check if the module is installed (e.g., with `pip install`). If it's a local file, make sure the file name and path are correct."),
+        ("ERR-IMP-002", "Error", "Import",
+         "The system tried to import something that doesn't exist in the module.",
+         "ImportError: cannot import name '...'",
+         "Check the spelling of the function/class name. Make sure it is exported in the module."),
+        ("ERR-DB-001", "Fatal", "Database",
+         "The system could not connect to the database. This might be because the database file is missing or corrupted.",
+         "sqlite3.OperationalError: unable to open database file",
+         "Check that the database file exists in the correct location. Restart the server and try again."),
+        ("ERR-DB-002", "Error", "Database",
+         "A database constraint was violated – e.g., trying to insert a duplicate unique value.",
+         "sqlite3.IntegrityError: UNIQUE constraint failed",
+         "Check the data you are trying to insert. Make sure no duplicate values exist in unique columns (like Invoice Number)."),
+        ("ERR-DB-003", "Error", "Database",
+         "The database operation failed because the table structure doesn't match the query.",
+         "sqlite3.OperationalError: no such table/column",
+         "This may happen after upgrading the app. Try restarting the server and check if the database schema is up to date."),
+        ("ERR-NET-001", "Fatal", "Network",
+         "The system could not connect to the server or the server is not responding.",
+         "ConnectionError: Failed to connect to server",
+         "Make sure the server is running. Check your internet connection and firewall settings."),
+        ("ERR-NET-002", "Error", "Network",
+         "The server took too long to respond (timeout).",
+         "TimeoutError: Request timed out",
+         "Try again later. If this keeps happening, check the server load and network speed."),
+        ("ERR-VAL-001", "Warning", "Validation",
+         "The data you entered is incorrect – e.g., missing required fields, invalid format, or duplicate value.",
+         "ValidationError: Invalid input",
+         "Check your input data. Make sure all required fields are filled and in the correct format. For duplicates, use a different unique value."),
+        ("ERR-VAL-002", "Warning", "Validation",
+         "The file you uploaded is not supported. Only Excel files (.xlsx, .xls) are allowed.",
+         "HTTPException: Only .xlsx and .xls files are supported",
+         "Convert your file to .xlsx or .xls format and try again."),
+        ("ERR-VAL-003", "Warning", "Validation",
+         "A required unique column was not selected for update mode. Please select a unique column.",
+         "HTTPException: Unique ID column is required when mode is 'Update Existing'",
+         "In the upload mapping, select a column (like Invoice Number) as the 'Unique ID'."),
+        ("ERR-SYS-001", "Fatal", "System",
+         "A critical system error occurred. This could be due to a bug in the code or a missing file.",
+         "Internal Server Error (500)",
+         "Restart the server. If the problem persists, contact your developer and provide the error report."),
+        ("ERR-SYS-002", "Error", "System",
+         "The system ran out of memory or resources.",
+         "MemoryError",
+         "Restart the server. If you are processing large files, try splitting them into smaller chunks."),
+        ("ERR-UNK-001", "Error", "Unknown",
+         "An unknown error occurred. We don't yet have specific information about this error.",
+         "Unknown error",
+         "Please use the 'Report Error' button to send this error to your developer for investigation."),
+    ]
+    cur.executemany(
+        """
+        INSERT INTO error_codes (code, severity, category, user_message, tech_description, suggested_action)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (code) DO NOTHING
+        """,
+        error_codes
+    )
+    print(f"[postgres] seeded error_codes ({len(error_codes)} rows)")
+
+    # ---- audit_procedure_library (7 rows) ----
+    library_data = [
+        ("Material Purchased",
+         "Authorized Purchase demand; Approved Purchase order; Signed Gate pass; Inspection note; Store receiving; Vendor bill",
+         "Unauthorized purchases; Inflated quantities; Unapproved vendors; Missing GRN",
+         "Verify purchase demand authorization; Check PO approval; Inspect gate pass; Review inspection note; Match GRN with PO; Compare vendor bill with PO/GRN; Reconcile quantities and amounts"),
+        ("Repair & Maintenance (In-house)",
+         "Authorized Purchase demand; Signature of relevant supervisor on bill; Vendor bill",
+         "Unapproved repairs; Overcharging; Duplicate bills",
+         "Check purchase demand authorization; Verify supervisor signature on bill; Review vendor bill for reasonableness; Compare with maintenance log if available"),
+        ("Fuel Expense",
+         "Vehicle log; Fuel receipts; Mileage records",
+         "Unexplained fuel consumption; Theft; Unauthorized vehicles",
+         "Reconcile fuel receipts with vehicle log; Check mileage against fuel consumption; Verify authorized vehicles"),
+        ("Short Term Advance against Salary",
+         "Approved advance request; Employee acknowledgment; Payroll deduction schedule",
+         "Unauthorized advances; Non-recovery; Duplicate advances",
+         "Verify approved advance request; Check employee acknowledgment; Review deduction schedule; Confirm with payroll records"),
+        ("Payment to Contractors",
+         "Signed contract; Work completion certificate; Tax deduction certificate; Vendor bill",
+         "Fake contractors; Unauthorized work; Overpayment; Non-deduction of tax",
+         "Review contract; Inspect work completion certificate; Verify tax deduction; Match vendor bill with contract"),
+        ("Fixed Asset Purchased",
+         "Capital budget approval; Purchase order; Gate pass; Inspection note; Asset tagging",
+         "Unauthorized purchase; Misclassification as expense; Incorrect valuation; Missing asset",
+         "Check capital budget approval; Verify PO; Inspect gate pass; Review inspection note; Ensure asset tagged and entered in fixed asset register"),
+        ("Kitchen Expenses",
+         "Daily consumption report; Purchase invoices; Inventory count",
+         "Theft; Over-purchasing; Unauthorized items; Missing invoices",
+         "Reconcile purchase invoices with consumption report; Verify inventory count; Check for approved purchase; Review daily consumption logs"),
+    ]
+    cur.executemany(
+        """
+        INSERT INTO audit_procedure_library (transaction_type, management_controls, audit_risks, audit_procedures)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (transaction_type) DO NOTHING
+        """,
+        library_data
+    )
+    print(f"[postgres] seeded audit_procedure_library ({len(library_data)} rows)")
+
+    # ---- master_columns defaults (14 rows) ----
+    default_columns = [
+        ('Invoice Number', 'Text', 'Sales'),
+        ('Invoice Date', 'Date', 'Sales'),
+        ('Customer Name', 'Text', 'Customer'),
+        ('Customer ID', 'Text', 'Customer'),
+        ('Amount', 'Numeric', 'Financial'),
+        ('Tax Amount', 'Numeric', 'Financial'),
+        ('Total Amount', 'Numeric', 'Financial'),
+        ('Payment Status', 'Text', 'Payment'),
+        ('Payment Date', 'Date', 'Payment'),
+        ('Bank Name', 'Text', 'Banking'),
+        ('Account Number', 'Text', 'Banking'),
+        ('Transaction Date', 'Date', 'Banking'),
+        ('Description', 'Text', 'General'),
+        ('Reference', 'Text', 'General'),
+    ]
+    cur.executemany(
+        """
+        INSERT INTO master_columns (column_name, data_type, category)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (column_name) DO NOTHING
+        """,
+        default_columns
+    )
+    print(f"[postgres] seeded master_columns defaults ({len(default_columns)} rows)")
+
+    # ---- system template: Transaction Report + its 7 columns ----
+    cur.execute("SELECT id FROM templates WHERE template_name = 'Transaction Report'")
+    tpl_row = cur.fetchone()
+    if not tpl_row:
+        cur.execute(
+            "INSERT INTO templates (template_name, created_by, is_system, has_subtotals_by_default) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            ("Transaction Report", "System", True, True)
+        )
+        tpl_id = cur.fetchone()[0]
+        required_columns = [
+            ("Voucher ID", "Text", "Transaction"),
+            ("Transaction Date", "Date", "Transaction"),
+            ("Account Detail", "Text", "Accounting"),
+            ("Account Name", "Text", "Accounting"),
+            ("Voucher Detail", "Text", "Transaction"),
+            ("Debit Amount", "Numeric", "Financial"),
+            ("Credit Amount", "Numeric", "Financial"),
+        ]
+        col_ids = []
+        for col_name, data_type, category in required_columns:
+            cur.execute("SELECT id FROM master_columns WHERE column_name = %s", (col_name,))
+            row = cur.fetchone()
+            if row:
+                col_id = row[0]
+            else:
+                cur.execute(
+                    "INSERT INTO master_columns (column_name, data_type, category) VALUES (%s, %s, %s) RETURNING id",
+                    (col_name, data_type, category)
+                )
+                col_id = cur.fetchone()[0]
+            col_ids.append(col_id)
+        for idx, col_id in enumerate(col_ids):
+            cur.execute(
+                "INSERT INTO template_column_mappings (template_id, column_id, sort_order) VALUES (%s, %s, %s)",
+                (tpl_id, col_id, idx)
+            )
+        print("[postgres] seeded system template: Transaction Report")
+    else:
+        tpl_id = tpl_row[0]
+        cur.execute(
+            "UPDATE templates SET is_system = TRUE, has_subtotals_by_default = TRUE WHERE id = %s",
+            (tpl_id,)
+        )
+
+    # ---- Rate column, attached after Quantity on Purchase Order / Store
+    # Receiving / Vendor Bill (mirrors the SQLite retroactive-attach block) ----
+    cur.execute("SELECT id FROM master_columns WHERE column_name = 'Rate'")
+    rate_row = cur.fetchone()
+    if rate_row:
+        rate_col_id = rate_row[0]
+    else:
+        cur.execute("SELECT category FROM master_columns WHERE column_name = 'Amount'")
+        amount_row = cur.fetchone()
+        rate_category = amount_row[0] if amount_row and amount_row[0] else 'General'
+        cur.execute(
+            "INSERT INTO master_columns (column_name, data_type, category) VALUES (%s, %s, %s) RETURNING id",
+            ('Rate', 'Numeric', rate_category)
+        )
+        rate_col_id = cur.fetchone()[0]
+        print("[postgres] created column: Rate")
+
+    rate_eligible_template_names = ('purchase order', 'store receiving', 'vendor bill')
+    cur.execute(
+        "SELECT id, template_name FROM templates WHERE LOWER(template_name) IN (%s, %s, %s)",
+        rate_eligible_template_names
+    )
+    eligible_templates = cur.fetchall()
+    for tpl_row_id, tpl_name in eligible_templates:
+        cur.execute(
+            "SELECT 1 FROM template_column_mappings WHERE template_id = %s AND column_id = %s",
+            (tpl_row_id, rate_col_id)
+        )
+        if cur.fetchone():
+            continue
+
+        cur.execute(
+            "SELECT column_id FROM template_column_mappings WHERE template_id = %s ORDER BY sort_order ASC",
+            (tpl_row_id,)
+        )
+        existing_col_ids = [row[0] for row in cur.fetchall()]
+
+        cur.execute("SELECT id FROM master_columns WHERE column_name = 'Quantity'")
+        qty_row = cur.fetchone()
+        if not qty_row or qty_row[0] not in existing_col_ids:
+            print(f"[postgres] skipped attaching Rate to template '{tpl_name}': no Quantity column found")
+            continue
+        qty_col_id = qty_row[0]
+
+        qty_index = existing_col_ids.index(qty_col_id)
+        new_col_ids = existing_col_ids[:qty_index + 1] + [rate_col_id] + existing_col_ids[qty_index + 1:]
+
+        cur.execute("DELETE FROM template_column_mappings WHERE template_id = %s", (tpl_row_id,))
+        for idx, col_id in enumerate(new_col_ids):
+            cur.execute(
+                "INSERT INTO template_column_mappings (template_id, column_id, sort_order) VALUES (%s, %s, %s)",
+                (tpl_row_id, col_id, idx)
+            )
+        print(f"[postgres] attached Rate column to template '{tpl_name}' (positioned after Quantity)")
+
+    # ---- app_settings (6 keys) ----
+    default_settings = [
+        ('date_format', 'DD/MM/YYYY', 'Global date format for display'),
+        ('amount_grouping', '000', 'Amount grouping: 000 (thousands) or Lacs'),
+        ('decimal_precision', '0', 'Default decimal places for amounts (0, 2, 4)'),
+        ('rate_precision', '0', 'Decimal places for derived/imported Rate column (0, 2, 4)'),
+        ('default_date_range', 'Current Month', 'Default date range for dashboards'),
+        ('materiality_threshold', '50000', 'Threshold for flagging high-value items'),
+    ]
+    cur.executemany(
+        """
+        INSERT INTO app_settings (key, value, description)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (key) DO NOTHING
+        """,
+        default_settings
+    )
+    print(f"[postgres] seeded app_settings ({len(default_settings)} rows)")
+
+    # ---- audit_rule_categories: 7 legacy transaction types (KB text only) ----
+    legacy_category_kb = {
+        "Material Purchased": (
+            "Management Controls: Authorized Purchase demand; Approved Purchase order; "
+            "Signed Gate pass; Inspection note; Store receiving; Vendor bill\n\n"
+            "Audit Risks: Unauthorized purchases; Inflated quantities; Unapproved vendors; Missing GRN\n\n"
+            "Audit Procedures: Verify purchase demand authorization; Check PO approval; Inspect gate pass; "
+            "Review inspection note; Match GRN with PO; Compare vendor bill with PO/GRN; Reconcile quantities and amounts"
+        ),
+        "Repair & Maintenance (In-house)": (
+            "Management Controls: Authorized Purchase demand; Signature of relevant supervisor on bill; Vendor bill\n\n"
+            "Audit Risks: Unapproved repairs; Overcharging; Duplicate bills\n\n"
+            "Audit Procedures: Check purchase demand authorization; Verify supervisor signature on bill; "
+            "Review vendor bill for reasonableness; Compare with maintenance log if available"
+        ),
+        "Fuel Expense": (
+            "Management Controls: Vehicle log; Fuel receipts; Mileage records\n\n"
+            "Audit Risks: Unexplained fuel consumption; Theft; Unauthorized vehicles\n\n"
+            "Audit Procedures: Reconcile fuel receipts with vehicle log; Check mileage against fuel consumption; "
+            "Verify authorized vehicles"
+        ),
+        "Short Term Advance against Salary": (
+            "Management Controls: Approved advance request; Employee acknowledgment; Payroll deduction schedule\n\n"
+            "Audit Risks: Unauthorized advances; Non-recovery; Duplicate advances\n\n"
+            "Audit Procedures: Verify approved advance request; Check employee acknowledgment; "
+            "Review deduction schedule; Confirm with payroll records"
+        ),
+        "Payment to Contractors": (
+            "Management Controls: Signed contract; Work completion certificate; Tax deduction certificate; Vendor bill\n\n"
+            "Audit Risks: Fake contractors; Unauthorized work; Overpayment; Non-deduction of tax\n\n"
+            "Audit Procedures: Review contract; Inspect work completion certificate; Verify tax deduction; "
+            "Match vendor bill with contract"
+        ),
+        "Fixed Asset Purchased": (
+            "Management Controls: Capital budget approval; Purchase order; Gate pass; Inspection note; Asset tagging\n\n"
+            "Audit Risks: Unauthorized purchase; Misclassification as expense; Incorrect valuation; Missing asset\n\n"
+            "Audit Procedures: Check capital budget approval; Verify PO; Inspect gate pass; Review inspection note; "
+            "Ensure asset tagged and entered in fixed asset register"
+        ),
+        "Kitchen Expenses": (
+            "Management Controls: Daily consumption report; Purchase invoices; Inventory count\n\n"
+            "Audit Risks: Theft; Over-purchasing; Unauthorized items; Missing invoices\n\n"
+            "Audit Procedures: Reconcile purchase invoices with consumption report; Verify inventory count; "
+            "Check for approved purchase; Review daily consumption logs"
+        ),
+    }
+    migrated_count = 0
+    for cat_name, kb_overview in legacy_category_kb.items():
+        cur.execute("SELECT id FROM audit_rule_categories WHERE name = %s", (cat_name,))
+        if not cur.fetchone():
+            cur.execute(
+                "INSERT INTO audit_rule_categories (name, kb_overview) VALUES (%s, %s)",
+                (cat_name, kb_overview)
+            )
+            migrated_count += 1
+    if migrated_count:
+        print(f"[postgres] seeded {migrated_count} legacy transaction type(s) into Audit Rules Categories")
+
+    # ---- admin user (username 'admin', placeholder password 'admin123') ----
+    cur.execute("SELECT COUNT(*) FROM users")
+    if cur.fetchone()[0] == 0:
+        admin_password_hash = bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode()
+        cur.execute(
+            "INSERT INTO users (username, password_hash, is_active, role, last_login) VALUES (%s, %s, %s, %s, %s)",
+            ("admin", admin_password_hash, True, "admin", None)
+        )
+        print("[postgres] seeded admin user")
+
+
 def log_error(
     error_code_id=None,
     error_code=None,
