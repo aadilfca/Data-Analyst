@@ -6847,3 +6847,104 @@ body {
     color: #1a1a2e;
     border-bottom: none;
 }
+
+/* ---------- SHARED LOADING UI (loading_ui.js) ----------
+   Generic, reusable loading primitives driven by window.LoadingUI (static/loading_ui.js) —
+   skeleton screens, a button/action spinner, and inline field loading. Deliberately separate
+   from .aw-spinner/@keyframes aw-spin above (same border-spin technique, same #e2e8f0/#3b82f6
+   tokens) rather than reusing that rule directly — this file's own convention is purpose-scoped,
+   non-shared classes per module (aw-/nav-/firm-), so a shared utility gets its own ui- prefix
+   instead of coupling to Audit Workbook's rule. Not yet wired into any page — page-by-page
+   rollout is a later phase; this block only needs to exist and render correctly on its own. */
+
+/* Skeleton shimmer — a sweeping lighter band across the #e2e8f0 base tone, both tokens already
+   used throughout this file for muted/hover backgrounds (no new one-off colors introduced). */
+.ui-skeleton-bar {
+    display: block;
+    height: 16px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+    background-size: 200% 100%;
+    animation: ui-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.ui-skeleton-row {
+    padding: 6px 0;
+}
+.ui-skeleton-row:not(:last-child) {
+    margin-bottom: 8px;
+}
+/* Table-row variant (container is a <tbody>/<table>) — a real <tr>/<td> so it stays valid
+   table markup, colspan set by the caller via showSkeleton(container, rows, {columns}). */
+.ui-skeleton-cell {
+    padding: 10px 16px;
+}
+@keyframes ui-skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Spinner — same border-spin technique/colors as .aw-spinner above, independently named so this
+   shared utility isn't coupled to Audit Workbook's own rule. */
+.ui-spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 3px solid #e2e8f0;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: ui-spin 0.8s linear infinite;
+}
+.ui-spinner-sm {
+    width: 14px;
+    height: 14px;
+    border-width: 2px;
+}
+@keyframes ui-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Button/action spinner content (LoadingUI.showSpinner) — flex row of spinner + escalating
+   message text, swapped in for the button's own content while loading. Dimming/disabled look
+   reuses the same opacity/cursor language already established on .btn-upload:disabled etc.,
+   rather than introducing a new disabled-state color. */
+.ui-btn-spinner-content {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.ui-btn-spinner-message {
+    font-size: inherit;
+    font-weight: inherit;
+}
+
+/* Inline field loading (LoadingUI.showFieldLoading/hideFieldLoading) — the field itself dims
+   slightly; the spinner is a small absolutely-positioned element inserted right after it in the
+   DOM (see loading_ui.js for the position:relative handling on its parent). */
+.ui-field-loading {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+.ui-field-spinner {
+    position: absolute;
+    top: 50%;
+    right: 10px;
+    transform: translateY(-50%);
+    display: inline-flex;
+    pointer-events: none;
+}
+
+/* Reduced-motion fallback (confirmed accessibility requirement): skip the shimmer/spin
+   animations entirely rather than just slowing them down, falling back to a flat, static tone —
+   still visually distinct as "loading" without any motion. */
+@media (prefers-reduced-motion: reduce) {
+    .ui-skeleton-bar {
+        animation: none;
+        background: #e2e8f0;
+    }
+    .ui-spinner {
+        animation: none;
+    }
+    .ui-field-spinner .ui-spinner {
+        animation: none;
+    }
+}
