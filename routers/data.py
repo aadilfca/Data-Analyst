@@ -114,17 +114,12 @@ def attach_assignment_flags(rows):
                                                   "{voucher_id} [{line_srno}]" instead of the
                                                   voucher number alone
       - assigned_to_line_client_data_id: int|None -> the STABLE client_data_id of the assigned
-                                                  row's own voucher line (bug fix, Phase 3 of 4).
-                                                  assigned_to_voucher_line is only meaningful
-                                                  within whichever verification session the
-                                                  assignment was made under (a new session
-                                                  recreates verification_details rows from
-                                                  scratch for every voucher), so it can no
-                                                  longer be compared directly against a
-                                                  "currently open" line's own id to decide
-                                                  "is this the same line" - the frontend should
-                                                  compare THIS field against the current line's
-                                                  own client_data_id instead.
+                                                  row's own voucher line (bug fix, Phase 3 of 4),
+                                                  used instead of the voucher_line_id itself since
+                                                  a new verification session recreates
+                                                  verification_details rows from scratch for every
+                                                  voucher - the frontend compares THIS field
+                                                  against the current line's own client_data_id.
     document_id/document_name (bug fix) let the Supporting Documents modal tell "assigned to
     THIS voucher line under a DIFFERENT Document tab" apart from a true same-tab match - without
     them, the Browse modal's Status column and a document tab's own Linked Evidence table could
@@ -140,7 +135,6 @@ def attach_assignment_flags(rows):
         match = assigned_map.get(r["id"])
         if match:
             r["is_assigned"] = True
-            r["assigned_to_voucher_line"] = match["voucher_line_id"]
             r["assigned_to_voucher_id"] = match["voucher_id"]
             r["assigned_to_document_id"] = match["document_id"]
             r["assigned_to_document_name"] = match["document_name"]
@@ -148,7 +142,6 @@ def attach_assignment_flags(rows):
             r["assigned_to_line_client_data_id"] = match["voucher_line_client_data_id"]
         else:
             r["is_assigned"] = False
-            r["assigned_to_voucher_line"] = None
             r["assigned_to_voucher_id"] = None
             r["assigned_to_document_id"] = None
             r["assigned_to_document_name"] = None
@@ -571,7 +564,7 @@ def get_preview_rows(
     # Pagination
     offset = (page - 1) * limit
     data_sql = f"""
-        SELECT cd.id, cd.row_data, cd.extract_amount, cd.extract_date, cd.created_at, cd.data_quality_flag, cd.rate_source
+        SELECT cd.id, cd.row_data, cd.extract_amount, cd.extract_date, cd.data_quality_flag, cd.rate_source
         FROM client_data cd
         WHERE {where_sql}
         ORDER BY cd.extract_date DESC, cd.id
@@ -590,7 +583,6 @@ def get_preview_rows(
             "row_data": row_dict,
             "extract_amount": r["extract_amount"],
             "extract_date": r["extract_date"],
-            "created_at": format_datetime(r["created_at"]),
             "data_quality_flag": r["data_quality_flag"],
             # Rate-derivation requirement, Phase 10 (FINAL): per-row provenance for the Rate
             # column (imported/derived/None), read straight from client_data — not the

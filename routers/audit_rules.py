@@ -154,14 +154,22 @@ def row_to_document(row: dict) -> dict:
         # Physical Bill evidence type (Phase 2 of 8). The `or` fallback is defensive only -
         # Phase 1's ALTER backfilled every existing row to 'linked_template'.
         "document_type": row.get("document_type") or 'linked_template',
-        "transaction_level_approval": bool(row.get("transaction_level_approval") or 0),
         "is_active": bool(row["is_active"]),
-        "created_at": row["created_at"],
         "auth_roles": get_document_auth_roles(document_id),
         "auth_role_authorities": get_document_auth_role_authorities(document_id),
         "cross_check_fields": get_document_cross_check_fields(document_id),
         "used_by_categories_count": get_document_used_by_count(document_id)
     }
+
+def row_to_document_list(row: dict) -> dict:
+    """
+    Lean shape for the Documents LIST endpoint (Column trimming, Phase 4 of 13) -
+    renderDocumentList() (static/audit_rules.js) only reads id/name/is_active per row, so the
+    list endpoint no longer pays for row_to_document()'s 4 extra per-row queries
+    (auth_roles/auth_role_authorities/cross_check_fields/used_by_categories_count) that only
+    the detail view (selectDocument(), via the single-item GET) actually needs.
+    """
+    return {"id": row["id"], "name": row["name"], "is_active": bool(row["is_active"])}
 
 def validate_document_template_id(template_id: Optional[int]):
     """Raises HTTPException(400) if template_id is set but doesn't reference an active template."""
@@ -301,7 +309,7 @@ def get_documents(include_inactive: bool = False):
         query += " WHERE is_active = TRUE"
     query += " ORDER BY name"
     rows = execute_query_pg(query)
-    return [row_to_document(r) for r in rows]
+    return [row_to_document_list(r) for r in rows]
 
 @router.get("/api/audit-rules/documents/{document_id}")
 def get_document(document_id: int):
@@ -442,10 +450,19 @@ def row_to_cross_check(row: dict) -> dict:
         "comparison_type": row["comparison_type"],
         "compare_to_voucher_line": bool(row.get("compare_to_voucher_line") or 0),
         "is_active": bool(row["is_active"]),
-        "created_at": row["created_at"],
         "documents": get_cross_check_documents(cross_check_id),
         "used_by_categories_count": get_cross_check_used_by_count(cross_check_id)
     }
+
+def row_to_cross_check_list(row: dict) -> dict:
+    """
+    Lean shape for the Cross-checks LIST endpoint (Column trimming, Phase 4 of 13) -
+    renderCrossCheckList() (static/audit_rules.js) only reads id/name/is_active per row, so the
+    list endpoint no longer pays for row_to_cross_check()'s per-row documents JOIN +
+    used_by_categories_count query that only the detail view (selectCrossCheck(), via the
+    single-item GET) actually needs.
+    """
+    return {"id": row["id"], "name": row["name"], "is_active": bool(row["is_active"])}
 
 def save_cross_check_documents(cross_check_id: int, document_ids: List[int]):
     """Replace a Cross-check's ordered document list (delete-then-reinsert)."""
@@ -496,7 +513,7 @@ def get_cross_checks(include_inactive: bool = False):
         query += " WHERE is_active = TRUE"
     query += " ORDER BY name"
     rows = execute_query_pg(query)
-    return [row_to_cross_check(r) for r in rows]
+    return [row_to_cross_check_list(r) for r in rows]
 
 @router.get("/api/audit-rules/cross-checks/{cross_check_id}")
 def get_cross_check(cross_check_id: int):
@@ -783,7 +800,6 @@ def row_to_category(row: dict) -> dict:
         "name": row["name"],
         "kb_overview": row.get("kb_overview"),
         "is_active": bool(row["is_active"]),
-        "created_at": row["created_at"],
         # Physical Bill evidence type (Phase 3 of 8). Returned raw, NULL included - an existing
         # Category predating this field stays visibly unclassified rather than being silently
         # presented as one of the two values.
@@ -1047,9 +1063,7 @@ def row_to_voucher_check(row: dict) -> dict:
         "id": voucher_check_id,
         "name": row["name"],
         "authority": row.get("authority"),
-        "sort_order": row["sort_order"],
         "is_active": bool(row["is_active"]),
-        "created_at": row["created_at"],
     }
 
 def get_next_voucher_check_sort_order() -> int:
