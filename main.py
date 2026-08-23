@@ -1,6 +1,7 @@
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, RedirectResponse
 from database import init_db, log_error, get_error_code_for_exception, execute_query
@@ -21,6 +22,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Fast-data-handling Phase 1 of 13: compress responses over slow connections (Sialkot)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # ---------- ROOT ROUTE: LOGIN → CLIENT CARDS ENTRY FLOW ----------
