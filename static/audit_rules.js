@@ -80,6 +80,7 @@ function showDetailStatus(message, type) {
 // ---------- LOAD & RENDER LIST ----------
 async function loadDocuments() {
     const includeInactive = arShowInactiveCheckbox.checked;
+    window.LoadingUI.showSkeleton(arListBody, 6);
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/documents?include_inactive=' + includeInactive);
         if (!res.ok) throw new Error('Failed to load documents');
@@ -977,6 +978,7 @@ function getDocumentById(id) {
 // ---------- LOAD & RENDER LIST ----------
 async function loadCrossChecks() {
     const includeInactive = arCrossCheckShowInactiveCheckbox.checked;
+    window.LoadingUI.showSkeleton(arCrossCheckListBody, 6);
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=' + includeInactive);
         if (!res.ok) throw new Error('Failed to load cross-checks');
@@ -1648,6 +1650,7 @@ function getCrossCheckById(id) {
 // ---------- LOAD & RENDER LIST ----------
 async function loadCategories() {
     const includeInactive = arCategoryShowInactiveCheckbox.checked;
+    window.LoadingUI.showSkeleton(arCategoryListBody, 6);
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive);
         if (!res.ok) throw new Error('Failed to load categories');
@@ -3011,6 +3014,7 @@ function showVoucherCheckDetailStatus(message, type) {
 async function loadVoucherChecks() {
     initVoucherCheckSortable();
     const includeInactive = arVoucherCheckShowInactiveCheckbox.checked;
+    window.LoadingUI.showSkeleton(arVoucherCheckListBody, 6);
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks?include_inactive=' + includeInactive);
         if (!res.ok) throw new Error('Failed to load voucher-level checks');
