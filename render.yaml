@@ -1,0 +1,17 @@
+# Render Blueprint - Supabase (Postgres) migration, Phase 7 of 8.
+# Connect this repo on Render as a "Blueprint" and it auto-provisions the
+# service below. DATABASE_URL is a secret (sync: false) - Render prompts
+# for it during setup rather than storing it here; use the same Supabase
+# pooler connection string documented in .env.example.
+services:
+  - type: web
+    name: internal-audit-app
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.13.0
