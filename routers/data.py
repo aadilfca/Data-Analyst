@@ -3,10 +3,10 @@
 # ==============================================
 
 from fastapi import APIRouter, HTTPException, Query
-from database import execute_query, execute_write, log_audit, log_data_audit, get_data_audit_history, diff_row_data, estimate_client_data_size
+from database import execute_query_pg, execute_write_pg, log_audit, log_data_audit_pg, get_data_audit_history_pg, diff_row_data, estimate_client_data_size_pg
 from typing import Optional, List
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, date
 import calendar
 import json
 # Voucher Supporting-Document Linking (Phase 2 of 6): reuses verification.py's own
@@ -34,9 +34,42 @@ class RowData(BaseModel):
     created_at: str
 
 # ---------- HELPER ----------
+def _coerce_date_str(value):
+    """
+    Postgres cutover: extract_date/holiday_date etc. are DATE columns now, not
+    TEXT - psycopg2 returns real date/datetime objects, not 'YYYY-MM-DD'
+    strings. This normalizes either shape to a plain 'YYYY-MM-DD' string, for
+    the string-keyed comparisons/lookups this file does throughout (exact_dates
+    sets, date_str-in-dict membership checks, etc.). A value that's already a
+    string is returned unchanged.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (date, datetime)):
+        return value.strftime('%Y-%m-%d')
+    return value
+
+
+def _coerce_date_obj(value):
+    """
+    Companion to _coerce_date_str(): normalizes either a string or an already
+    -date/datetime value to a real date/datetime object, for code that needs
+    to do ordinal arithmetic (_count_business_days_elapsed()'s day-by-day walk).
+    """
+    if isinstance(value, (date, datetime)):
+        return value
+    return datetime.fromisoformat(value)
+
+
 def format_datetime(dt_str):
     try:
-        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        # Postgres cutover: upload_date/created_at/etc. are TIMESTAMPTZ now, not
+        # TEXT - psycopg2 returns a real datetime object, which has no
+        # .replace('Z', ...) string method to call.
+        if isinstance(dt_str, datetime):
+            dt = dt_str
+        else:
+            dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
         return dt.strftime('%d/%m/%Y %H:%M')
     except:
         return dt_str
@@ -52,8 +85,8 @@ def attach_history_flags(rows):
     if not rows:
         return
     row_ids = [r["id"] for r in rows]
-    placeholders = ','.join(['?'] * len(row_ids))
-    counts = execute_query(
+    placeholders = ','.join(['%s'] * len(row_ids))
+    counts = execute_query_pg(
         f"SELECT client_data_id, COUNT(*) as cnt FROM data_audit_log "
         f"WHERE client_data_id IN ({placeholders}) GROUP BY client_data_id",
         row_ids
@@ -131,14 +164,14 @@ def get_datasets(client_id: int = Query(..., description="Client ID")):
     Uses both uploaded_files.client_id and client_data.client_id to handle missing client_id in uploaded_files.
     """
     # Verify client exists
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
     # Get all uploads that either have client_id matching OR have client_data rows with that client_id
-    uploads = execute_query(
+    uploads = execute_query_pg(
         """
-        SELECT 
+        SELECT
             u.id AS upload_id,
             u.file_name,
             u.upload_date,
@@ -148,13 +181,13 @@ def get_datasets(client_id: int = Query(..., description="Client ID")):
             COALESCE(t.template_name, 'Unknown') AS template_name,
             COUNT(cd2.id) AS actual_row_count
         FROM uploaded_files u
-        LEFT JOIN client_data cd ON cd.upload_id = u.id AND cd.is_deleted = 0
+        LEFT JOIN client_data cd ON cd.upload_id = u.id AND cd.is_deleted = FALSE
         LEFT JOIN templates t ON t.id = cd.template_id
-        LEFT JOIN client_data cd2 ON cd2.upload_id = u.id AND cd2.is_deleted = 0
-        WHERE (u.client_id = ? OR EXISTS (
-            SELECT 1 FROM client_data cd3 WHERE cd3.upload_id = u.id AND cd3.client_id = ? AND cd3.is_deleted = 0
+        LEFT JOIN client_data cd2 ON cd2.upload_id = u.id AND cd2.is_deleted = FALSE
+        WHERE (u.client_id = %s OR EXISTS (
+            SELECT 1 FROM client_data cd3 WHERE cd3.upload_id = u.id AND cd3.client_id = %s AND cd3.is_deleted = FALSE
         ))
-        GROUP BY u.id
+        GROUP BY u.id, t.id, cd.template_id, t.template_name
         ORDER BY u.upload_date DESC
         """,
         (client_id, client_id)
@@ -164,7 +197,7 @@ def get_datasets(client_id: int = Query(..., description="Client ID")):
         # If template_name is 'Unknown' but we have a template_id, try to fetch name
         template_name = row["template_name"]
         if template_name == "Unknown" and row["template_id"]:
-            tpl = execute_query("SELECT template_name FROM templates WHERE id = ?", (row["template_id"],))
+            tpl = execute_query_pg("SELECT template_name FROM templates WHERE id = %s", (row["template_id"],))
             if tpl:
                 template_name = tpl[0]["template_name"]
 
@@ -179,11 +212,11 @@ def get_datasets(client_id: int = Query(..., description="Client ID")):
         })
     
     # Also include uploads that are still pending (no data yet) but have matching client_id
-    pending = execute_query(
+    pending = execute_query_pg(
         """
         SELECT id, file_name, upload_date, status, record_count
         FROM uploaded_files
-        WHERE client_id = ? AND status = 'Pending'
+        WHERE client_id = %s AND status = 'Pending'
         ORDER BY upload_date DESC
         """,
         (client_id,)
@@ -210,11 +243,11 @@ def get_client_db_size(client_id: int = Query(..., description="Client ID")):
     aggregated across all of this client's templates. See database.py's
     estimate_client_data_size() for the estimation formula/caveats.
     """
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
-    result = estimate_client_data_size(client_id=client_id)
+    result = estimate_client_data_size_pg(client_id=client_id)
     result["client_id"] = client_id
     return result
 
@@ -249,18 +282,18 @@ def set_upload_frequency(payload: UploadFrequencyUpdate):
     if payload.frequency not in VALID_UPLOAD_FREQUENCIES:
         raise HTTPException(400, f"frequency must be one of {VALID_UPLOAD_FREQUENCIES}")
 
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (payload.client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (payload.client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
-    template = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (payload.template_id,))
+    template = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (payload.template_id,))
     if not template:
         raise HTTPException(404, "Template not found or inactive")
 
-    execute_write(
+    execute_write_pg(
         """
         INSERT INTO client_template_upload_frequency (client_id, template_id, frequency, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
         ON CONFLICT(client_id, template_id) DO UPDATE SET
             frequency = excluded.frequency,
             updated_at = CURRENT_TIMESTAMP
@@ -285,18 +318,18 @@ def _get_all_holidays_lookup():
       - repeating_month_days: set of (month, day) tuples for repeats_yearly=1
         holidays, so they match any year
     """
-    holiday_rows = execute_query("SELECT holiday_date, repeats_yearly FROM holidays")
+    holiday_rows = execute_query_pg("SELECT holiday_date, repeats_yearly FROM holidays")
     exact_dates = set()
     repeating_month_days = set()
     for h in holiday_rows:
         if h["repeats_yearly"]:
             try:
-                d = datetime.fromisoformat(h["holiday_date"])
+                d = _coerce_date_obj(h["holiday_date"])
             except ValueError:
                 continue
             repeating_month_days.add((d.month, d.day))
         else:
-            exact_dates.add(h["holiday_date"])
+            exact_dates.add(_coerce_date_str(h["holiday_date"]))
     return exact_dates, repeating_month_days
 
 
@@ -318,8 +351,8 @@ def _count_business_days_elapsed(last_upload_date: str, today_str: str, exact_da
     inclusive. 0 means today is still within the same business day the last
     upload was made (or earlier), i.e. no gap has opened up yet.
     """
-    start = datetime.fromisoformat(last_upload_date)
-    end = datetime.fromisoformat(today_str)
+    start = _coerce_date_obj(last_upload_date)
+    end = _coerce_date_obj(today_str)
     count = 0
     current = start
     while current < end:
@@ -340,14 +373,20 @@ def compute_overdue_uploads(client_id: Optional[int] = None) -> list:
     frequency_lookup). Returns only pairs that are actually overdue
     (days_overdue > 0), sorted most-overdue-first.
     """
-    where = ["cd.is_deleted = 0", "c.is_active = 1", "t.is_active = 1"]
+    where = ["cd.is_deleted = FALSE", "c.is_active = TRUE", "t.is_active = TRUE"]
     params = []
     if client_id is not None:
-        where.append("cd.client_id = ?")
+        where.append("cd.client_id = %s")
         params.append(client_id)
     where_sql = " AND ".join(where)
 
-    pairs = execute_query(
+    # GROUP BY includes c.client_name/t.template_name explicitly (Postgres cutover
+    # fix): unlike SQLite, Postgres only infers functional dependency on a
+    # grouped column via that TABLE's own primary key being in GROUP BY - cd.id
+    # isn't grouped here, cd.client_id/cd.template_id are, so c.client_name/
+    # t.template_name (from joined tables) must be listed explicitly or Postgres
+    # raises "column must appear in GROUP BY clause".
+    pairs = execute_query_pg(
         f"""
         SELECT cd.client_id, c.client_name, cd.template_id, t.template_name,
                MAX(cd.extract_date) as last_upload_date
@@ -355,18 +394,18 @@ def compute_overdue_uploads(client_id: Optional[int] = None) -> list:
         JOIN clients c ON c.id = cd.client_id
         JOIN templates t ON t.id = cd.template_id
         WHERE {where_sql}
-        GROUP BY cd.client_id, cd.template_id
+        GROUP BY cd.client_id, c.client_name, cd.template_id, t.template_name
         """,
         params
     )
 
     if client_id is not None:
-        freq_rows = execute_query(
-            "SELECT client_id, template_id, frequency FROM client_template_upload_frequency WHERE client_id = ?",
+        freq_rows = execute_query_pg(
+            "SELECT client_id, template_id, frequency FROM client_template_upload_frequency WHERE client_id = %s",
             (client_id,)
         )
     else:
-        freq_rows = execute_query(
+        freq_rows = execute_query_pg(
             "SELECT client_id, template_id, frequency FROM client_template_upload_frequency"
         )
     freq_lookup = {(r["client_id"], r["template_id"]): r["frequency"] for r in freq_rows}
@@ -388,7 +427,7 @@ def compute_overdue_uploads(client_id: Optional[int] = None) -> list:
                 "client_name": r["client_name"],
                 "template_id": r["template_id"],
                 "template_name": r["template_name"],
-                "last_upload_date": r["last_upload_date"],
+                "last_upload_date": _coerce_date_str(r["last_upload_date"]),
                 "frequency": frequency,
                 "days_overdue": days_overdue,
             })
@@ -403,7 +442,7 @@ def get_client_overdue_uploads(client_id: int = Query(..., description="Client I
     Client Data module: overdue-upload list for a single client, sorted
     most-overdue-first. See compute_overdue_uploads() for the detection logic.
     """
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
@@ -435,11 +474,11 @@ def get_preview_rows(
     Returns rows, total count, Sunday count, and pagination info.
     """
     # Validate client and template exist
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
-    
-    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (template_id,))
+
+    template = execute_query_pg("SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
     
@@ -465,24 +504,25 @@ def get_preview_rows(
 
     # Build WHERE clause dynamically (base filters, excluding sunday_only)
     base_where = [
-        "cd.client_id = ?",
-        "cd.template_id = ?",
-        "cd.is_deleted = 0",
-        "cd.extract_date BETWEEN ? AND ?"
+        "cd.client_id = %s",
+        "cd.template_id = %s",
+        "cd.is_deleted = FALSE",
+        "cd.extract_date BETWEEN %s AND %s"
     ]
     base_params = [client_id, template_id, date_start, date_end]
 
-    # Search in row_data (case-insensitive) – use json_each to search all values
+    # Search in row_data (case-insensitive) – jsonb_each_text is the Postgres
+    # equivalent of SQLite's json_each for searching all values in a JSONB column.
     if search:
-        base_where.append("EXISTS (SELECT 1 FROM json_each(cd.row_data) WHERE LOWER(value) LIKE LOWER(?))")
+        base_where.append("EXISTS (SELECT 1 FROM jsonb_each_text(cd.row_data) WHERE LOWER(value) LIKE LOWER(%s))")
         base_params.append(f"%{search}%")
 
     # Amount range
     if amount_min is not None:
-        base_where.append("cd.extract_amount >= ?")
+        base_where.append("cd.extract_amount >= %s")
         base_params.append(amount_min)
     if amount_max is not None:
-        base_where.append("cd.extract_amount <= ?")
+        base_where.append("cd.extract_amount <= %s")
         base_params.append(amount_max)
 
     # Data quality flag ('incomplete' = force-imported with a blank critical
@@ -498,13 +538,13 @@ def get_preview_rows(
     final_where = base_where.copy()
     final_params = base_params.copy()
     if sunday_only:
-        final_where.append("strftime('%w', cd.extract_date) = '0'")
+        final_where.append("EXTRACT(DOW FROM cd.extract_date) = 0")
 
     where_sql = " AND ".join(final_where)
 
     # Get total count
     count_sql = f"SELECT COUNT(*) as total FROM client_data cd WHERE {where_sql}"
-    total_result = execute_query(count_sql, final_params)
+    total_result = execute_query_pg(count_sql, final_params)
     total_count = total_result[0]['total'] if total_result else 0
 
     if total_count == 0:
@@ -523,9 +563,9 @@ def get_preview_rows(
 
     # Get Sunday count (for footer) – uses base filters only, without the
     # sunday_only filter, so it always reflects the full filtered range.
-    sunday_where = base_where + ["strftime('%w', cd.extract_date) = '0'"]
+    sunday_where = base_where + ["EXTRACT(DOW FROM cd.extract_date) = 0"]
     sunday_sql = f"SELECT COUNT(*) as sunday_count FROM client_data cd WHERE {' AND '.join(sunday_where)}"
-    sunday_result = execute_query(sunday_sql, base_params)
+    sunday_result = execute_query_pg(sunday_sql, base_params)
     sunday_count = sunday_result[0]['sunday_count'] if sunday_result else 0
 
     # Pagination
@@ -535,18 +575,16 @@ def get_preview_rows(
         FROM client_data cd
         WHERE {where_sql}
         ORDER BY cd.extract_date DESC, cd.id
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
     """
     data_params = final_params + [limit, offset]
-    rows = execute_query(data_sql, data_params)
+    rows = execute_query_pg(data_sql, data_params)
 
-    # Format rows
+    # Format rows. row_data is JSONB - execute_query_pg already returns a
+    # native dict (or {} if NULL), no json.loads() needed.
     result_rows = []
     for r in rows:
-        try:
-            row_dict = json.loads(r["row_data"])
-        except:
-            row_dict = {}
+        row_dict = r["row_data"] or {}
         result_rows.append({
             "id": r["id"],
             "row_data": row_dict,
@@ -596,47 +634,47 @@ def get_dataset_rows(
     Get paginated rows for a specific upload, with optional search/filters.
     """
     # Check upload exists
-    upload = execute_query(
-        "SELECT id, client_id, status FROM uploaded_files WHERE id = ?",
+    upload = execute_query_pg(
+        "SELECT id, client_id, status FROM uploaded_files WHERE id = %s",
         (upload_id,)
     )
     if not upload:
         raise HTTPException(404, "Upload not found")
-    
+
     # Build WHERE clause dynamically
-    where_clauses = ["upload_id = ? AND is_deleted = 0"]
+    where_clauses = ["upload_id = %s AND is_deleted = FALSE"]
     params = [upload_id]
-    
-    # Search in row_data JSON (case-insensitive)
+
+    # Search in row_data JSONB (case-insensitive) - jsonb_each_text is the
+    # Postgres equivalent of SQLite's json_each for searching all values.
     if search:
-        # SQLite JSON search: use json_each to search all values
         where_clauses.append(
-            "EXISTS (SELECT 1 FROM json_each(row_data) WHERE LOWER(value) LIKE LOWER(?))"
+            "EXISTS (SELECT 1 FROM jsonb_each_text(row_data) WHERE LOWER(value) LIKE LOWER(%s))"
         )
         params.append(f"%{search}%")
-    
+
     # Amount range
     if amount_min is not None:
-        where_clauses.append("extract_amount >= ?")
+        where_clauses.append("extract_amount >= %s")
         params.append(amount_min)
     if amount_max is not None:
-        where_clauses.append("extract_amount <= ?")
+        where_clauses.append("extract_amount <= %s")
         params.append(amount_max)
-    
+
     # Date range
     if date_start:
-        where_clauses.append("extract_date >= ?")
+        where_clauses.append("extract_date >= %s")
         params.append(date_start)
     if date_end:
-        where_clauses.append("extract_date <= ?")
+        where_clauses.append("extract_date <= %s")
         params.append(date_end)
-    
+
     where_sql = " AND ".join(where_clauses)
-    
+
     # Get total count with filters
     count_sql = f"SELECT COUNT(*) as count FROM client_data WHERE {where_sql}"
-    total = execute_query(count_sql, params)[0]['count']
-    
+    total = execute_query_pg(count_sql, params)[0]['count']
+
     if total == 0:
         return {
             "upload_id": upload_id,
@@ -645,24 +683,22 @@ def get_dataset_rows(
             "limit": limit,
             "rows": []
         }
-    
+
     offset = (page - 1) * limit
     data_sql = f"""
         SELECT id, row_data, extract_amount, extract_date, created_at
         FROM client_data
         WHERE {where_sql}
         ORDER BY id
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
     """
     params.extend([limit, offset])
-    rows = execute_query(data_sql, params)
-    
+    rows = execute_query_pg(data_sql, params)
+
+    # row_data is JSONB - already a native dict, no json.loads() needed.
     result_rows = []
     for r in rows:
-        try:
-            row_dict = json.loads(r["row_data"])
-        except:
-            row_dict = {}
+        row_dict = r["row_data"] or {}
         result_rows.append({
             "id": r["id"],
             "row_data": row_dict,
@@ -687,38 +723,38 @@ def delete_dataset(upload_id: int):
     """
     Soft-delete all rows of a dataset (set is_deleted=1) and mark upload as 'Deleted'.
     """
-    upload = execute_query(
-        "SELECT id, file_name FROM uploaded_files WHERE id = ?",
+    upload = execute_query_pg(
+        "SELECT id, file_name FROM uploaded_files WHERE id = %s",
         (upload_id,)
     )
     if not upload:
         raise HTTPException(404, "Upload not found")
-    
+
     # Fetch all rows in this dataset (to log their data before deletion)
-    rows = execute_query(
-        "SELECT id, row_data FROM client_data WHERE upload_id = ? AND is_deleted = 0",
+    rows = execute_query_pg(
+        "SELECT id, row_data FROM client_data WHERE upload_id = %s AND is_deleted = FALSE",
         (upload_id,)
     )
-    
+
     # Soft-delete all rows
-    execute_write(
-        "UPDATE client_data SET is_deleted = 1 WHERE upload_id = ?",
+    execute_write_pg(
+        "UPDATE client_data SET is_deleted = TRUE WHERE upload_id = %s",
         (upload_id,)
     )
-    
-    # Log each row deletion
-    import json
+
+    # Log each row deletion. row_data is JSONB - already a native dict, no
+    # json.loads() needed.
     for row in rows:
-        old_data = json.loads(row["row_data"]) if row["row_data"] else {}
-        log_data_audit(row["id"], "Analyst", "DELETE", old_data, None)
-    
+        old_data = row["row_data"] or {}
+        log_data_audit_pg(row["id"], "Analyst", "DELETE", old_data, None)
+
     # Update upload status
-    execute_write(
-        "UPDATE uploaded_files SET status = 'Deleted' WHERE id = ?",
+    execute_write_pg(
+        "UPDATE uploaded_files SET status = 'Deleted' WHERE id = %s",
         (upload_id,)
     )
     log_audit("Analyst", "Delete", "DataBank", f"Deleted dataset upload_id={upload_id} ({len(rows)} rows)")
-    
+
     return {"message": f"Dataset '{upload[0]['file_name']}' deleted successfully ({len(rows)} rows)"}
 
 @router.post("/api/data/datasets/{upload_id}/restore")
@@ -726,37 +762,37 @@ def restore_dataset(upload_id: int):
     """
     Restore a soft-deleted dataset.
     """
-    upload = execute_query(
-        "SELECT id, file_name FROM uploaded_files WHERE id = ? AND status = 'Deleted'",
+    upload = execute_query_pg(
+        "SELECT id, file_name FROM uploaded_files WHERE id = %s AND status = 'Deleted'",
         (upload_id,)
     )
     if not upload:
         raise HTTPException(404, "Deleted upload not found")
-    
+
     # Fetch rows that are currently deleted
-    rows = execute_query(
-        "SELECT id, row_data FROM client_data WHERE upload_id = ? AND is_deleted = 1",
+    rows = execute_query_pg(
+        "SELECT id, row_data FROM client_data WHERE upload_id = %s AND is_deleted = TRUE",
         (upload_id,)
     )
-    
-    # Restore rows (set is_deleted = 0)
-    execute_write(
-        "UPDATE client_data SET is_deleted = 0 WHERE upload_id = ?",
+
+    # Restore rows (set is_deleted = FALSE)
+    execute_write_pg(
+        "UPDATE client_data SET is_deleted = FALSE WHERE upload_id = %s",
         (upload_id,)
     )
-    
-    # Log each row restore
-    import json
+
+    # Log each row restore. row_data is JSONB - already a native dict, no
+    # json.loads() needed.
     for row in rows:
-        new_data = json.loads(row["row_data"]) if row["row_data"] else {}
-        log_data_audit(row["id"], "Analyst", "RESTORE", None, new_data)
-    
-    execute_write(
-        "UPDATE uploaded_files SET status = 'Imported' WHERE id = ?",
+        new_data = row["row_data"] or {}
+        log_data_audit_pg(row["id"], "Analyst", "RESTORE", None, new_data)
+
+    execute_write_pg(
+        "UPDATE uploaded_files SET status = 'Imported' WHERE id = %s",
         (upload_id,)
     )
     log_audit("Analyst", "Restore", "DataBank", f"Restored dataset upload_id={upload_id} ({len(rows)} rows)")
-    
+
     return {"message": f"Dataset '{upload[0]['file_name']}' restored successfully ({len(rows)} rows)"}
 
 @router.delete("/api/data/template/{template_id}")
@@ -769,46 +805,46 @@ def delete_template_data(
     Also marks all associated uploaded_files as 'Deleted'.
     """
     # Verify client exists
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
-    
+
     # Verify template exists and is active
-    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (template_id,))
+    template = execute_query_pg("SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
     if not template:
         raise HTTPException(404, "Template not found or inactive")
-    
+
     # Get all upload_ids for this client+template that have data
-    uploads = execute_query(
+    uploads = execute_query_pg(
         """
         SELECT DISTINCT upload_id
         FROM client_data
-        WHERE client_id = ? AND template_id = ? AND is_deleted = 0
+        WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
         """,
         (client_id, template_id)
     )
-    
+
     if not uploads:
         return {"message": f"No data found for template '{template[0]['template_name']}' and client {client_id}."}
-    
+
     # Count rows to be deleted
-    count_result = execute_query(
-        "SELECT COUNT(*) as count FROM client_data WHERE client_id = ? AND template_id = ? AND is_deleted = 0",
+    count_result = execute_query_pg(
+        "SELECT COUNT(*) as count FROM client_data WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE",
         (client_id, template_id)
     )
     row_count = count_result[0]['count'] if count_result else 0
-    
+
     # Soft-delete client_data rows
-    execute_write(
-        "UPDATE client_data SET is_deleted = 1 WHERE client_id = ? AND template_id = ? AND is_deleted = 0",
+    execute_write_pg(
+        "UPDATE client_data SET is_deleted = TRUE WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE",
         (client_id, template_id)
     )
-    
+
     # Mark uploaded_files as 'Deleted'
-    upload_ids = [str(u['upload_id']) for u in uploads]
+    upload_ids = [u['upload_id'] for u in uploads]
     if upload_ids:
-        placeholders = ','.join(['?'] * len(upload_ids))
-        execute_write(
+        placeholders = ','.join(['%s'] * len(upload_ids))
+        execute_write_pg(
             f"UPDATE uploaded_files SET status = 'Deleted' WHERE id IN ({placeholders})",
             upload_ids
         )
@@ -835,16 +871,18 @@ def get_row_history(client_data_id: int):
     old-value -> new-value changes, computed generically so it works for any
     template's column set.
     """
-    row = execute_query("SELECT id FROM client_data WHERE id = ?", (client_data_id,))
+    row = execute_query_pg("SELECT id FROM client_data WHERE id = %s", (client_data_id,))
     if not row:
         raise HTTPException(404, "Row not found")
 
-    audit_rows = get_data_audit_history(client_data_id)
+    audit_rows = get_data_audit_history_pg(client_data_id)
 
+    # old_row_data/new_row_data are JSONB - already native dicts (or None), no
+    # json.loads() needed.
     revisions = []
     for a in audit_rows:
-        old_data = json.loads(a["old_row_data"]) if a["old_row_data"] else None
-        new_data = json.loads(a["new_row_data"]) if a["new_row_data"] else None
+        old_data = a["old_row_data"]
+        new_data = a["new_row_data"]
         revisions.append({
             "action": a["action"],
             "user": a["user"],
@@ -873,12 +911,12 @@ def get_template_columns_ordered(template_id: int) -> list:
     already used by get_document_group_id()/get_critical_field_columns() in
     routers/import_export.py.
     """
-    return execute_query(
+    return execute_query_pg(
         """
         SELECT m.column_name, m.data_type
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = ? AND m.is_active = 1
+        WHERE p.template_id = %s AND m.is_active = TRUE
         ORDER BY p.sort_order ASC
         """,
         (template_id,)
@@ -908,12 +946,12 @@ def get_template_document_key_column(template_id: int) -> Optional[str]:
     convention used elsewhere for voucher/document grouping. Returns None if
     the template has no active columns configured.
     """
-    row = execute_query(
+    row = execute_query_pg(
         """
         SELECT m.column_name
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = ? AND m.is_active = 1
+        WHERE p.template_id = %s AND m.is_active = TRUE
         ORDER BY p.sort_order ASC
         LIMIT 1
         """,
@@ -948,72 +986,72 @@ def get_availability(
     - filtered_status: 'complete' if filtered rows > 0, else 'missing'
     """
     # Validate client exists
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
-    
+
     # Validate date format
     try:
         datetime.fromisoformat(date_start)
         datetime.fromisoformat(date_end)
     except ValueError:
         raise HTTPException(400, "Invalid date format. Use YYYY-MM-DD.")
-    
+
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
-    
+
     # ------------------------------------------------------------
     # 1. FIRST QUERY: Filtered data (matching the date range)
     # ------------------------------------------------------------
     filtered_query = """
-        SELECT 
+        SELECT
             t.id AS template_id,
             t.template_name,
             COALESCE(COUNT(cd.id), 0) AS filtered_row_count,
-            COALESCE(SUM(CASE WHEN strftime('%w', cd.extract_date) = '0' THEN 1 ELSE 0 END), 0) AS filtered_sunday_count
+            COALESCE(SUM(CASE WHEN EXTRACT(DOW FROM cd.extract_date) = 0 THEN 1 ELSE 0 END), 0) AS filtered_sunday_count
         FROM templates t
-        LEFT JOIN client_data cd 
-            ON cd.template_id = t.id 
-            AND cd.client_id = ? 
-            AND cd.is_deleted = 0 
-            AND cd.extract_date BETWEEN ? AND ?
+        LEFT JOIN client_data cd
+            ON cd.template_id = t.id
+            AND cd.client_id = %s
+            AND cd.is_deleted = FALSE
+            AND cd.extract_date BETWEEN %s AND %s
     """
     params = [client_id, date_start, date_end]
-    
+
     if template_id is not None:
-        filtered_query += " AND t.id = ?"
+        filtered_query += " AND t.id = %s"
         params.append(template_id)
-    
-    filtered_query += " WHERE t.is_active = 1"
+
+    filtered_query += " WHERE t.is_active = TRUE"
     filtered_query += " GROUP BY t.id ORDER BY t.template_name"
-    
-    filtered_rows = execute_query(filtered_query, params)
-    
+
+    filtered_rows = execute_query_pg(filtered_query, params)
+
     # ------------------------------------------------------------
     # 2. SECOND QUERY: Total data (unfiltered, all time)
     # ------------------------------------------------------------
     total_query = """
-        SELECT 
+        SELECT
             t.id AS template_id,
             COALESCE(COUNT(cd.id), 0) AS total_row_count,
             MIN(cd.extract_date) AS date_min,
             MAX(cd.extract_date) AS date_max
         FROM templates t
-        LEFT JOIN client_data cd 
-            ON cd.template_id = t.id 
-            AND cd.client_id = ? 
-            AND cd.is_deleted = 0
+        LEFT JOIN client_data cd
+            ON cd.template_id = t.id
+            AND cd.client_id = %s
+            AND cd.is_deleted = FALSE
     """
     total_params = [client_id]
-    
+
     if template_id is not None:
-        total_query += " AND t.id = ?"
+        total_query += " AND t.id = %s"
         total_params.append(template_id)
-    
-    total_query += " WHERE t.is_active = 1"
+
+    total_query += " WHERE t.is_active = TRUE"
     total_query += " GROUP BY t.id ORDER BY t.template_name"
-    
-    total_rows = execute_query(total_query, total_params)
+
+    total_rows = execute_query_pg(total_query, total_params)
 
     # ------------------------------------------------------------
     # 2b. Unique document counts per template (for "No of Documents") -
@@ -1027,13 +1065,16 @@ def get_availability(
         tid = row["template_id"]
         key_column = get_template_document_key_column(tid)
         if key_column:
-            doc_count_result = execute_query(
-                """
-                SELECT COUNT(DISTINCT json_extract(cd.row_data, ?)) as doc_count
+            # json_extract(row_data, '$."col"') -> the JSONB ->> text-extraction
+            # operator. key_column comes from master_columns (not raw user
+            # input), same trust model as the SQLite version's f-string embed.
+            doc_count_result = execute_query_pg(
+                f"""
+                SELECT COUNT(DISTINCT cd.row_data->>'{key_column}') as doc_count
                 FROM client_data cd
-                WHERE cd.client_id = ? AND cd.template_id = ? AND cd.is_deleted = 0
+                WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
                 """,
-                (f'$."{key_column}"', client_id, tid)
+                (client_id, tid)
             )
             document_count_lookup[tid] = doc_count_result[0]["doc_count"] if doc_count_result else 0
         else:
@@ -1044,8 +1085,8 @@ def get_availability(
     # 2c. Upload Frequency (Overdue Uploads Phase C1) - one batched query for
     # every template this client has a saved frequency for; absent = Daily.
     # ------------------------------------------------------------
-    frequency_rows = execute_query(
-        "SELECT template_id, frequency FROM client_template_upload_frequency WHERE client_id = ?",
+    frequency_rows = execute_query_pg(
+        "SELECT template_id, frequency FROM client_template_upload_frequency WHERE client_id = %s",
         (client_id,)
     )
     frequency_lookup = {r["template_id"]: r["frequency"] for r in frequency_rows}
@@ -1073,8 +1114,8 @@ def get_availability(
         
         # Database size visibility: per-template estimated storage footprint
         # (unfiltered, all-time - same scope as total_row_count), reusing
-        # estimate_client_data_size() rather than a separate endpoint.
-        size_estimate = estimate_client_data_size(client_id=client_id, template_id=tid)
+        # estimate_client_data_size_pg() rather than a separate endpoint.
+        size_estimate = estimate_client_data_size_pg(client_id=client_id, template_id=tid)
 
         result.append({
             "template_id": tid,
@@ -1111,24 +1152,27 @@ def _resolve_holidays_for_month(year: int, month: int) -> dict:
     Sundays are NOT part of this lookup - they stay separate, hardcoded
     day-of-week logic, per the confirmed Phase 1 design.
     """
-    month_prefix = f"{year:04d}-{month:02d}"
-    holiday_rows = execute_query("SELECT holiday_date, label, repeats_yearly FROM holidays")
+    holiday_rows = execute_query_pg("SELECT holiday_date, label, repeats_yearly FROM holidays")
 
     resolved = {}
     for h in holiday_rows:
         if h["repeats_yearly"]:
             # Project this holiday's month/day onto the requested year.
             try:
-                original = datetime.fromisoformat(h["holiday_date"])
+                original = _coerce_date_obj(h["holiday_date"])
             except ValueError:
                 continue  # skip a malformed stored date rather than fail the whole request
             if original.month != month:
                 continue
             date_str = f"{year:04d}-{month:02d}-{original.day:02d}"
         else:
-            if not h["holiday_date"].startswith(month_prefix):
+            # holiday_date is a DATE column now (a real date object, not TEXT) -
+            # compare year/month directly instead of the old string .startswith()
+            # (which a date object has no such method for).
+            original = _coerce_date_obj(h["holiday_date"])
+            if original.year != year or original.month != month:
                 continue
-            date_str = h["holiday_date"]
+            date_str = _coerce_date_str(h["holiday_date"])
         resolved[date_str] = h["label"]
 
     return resolved
@@ -1156,14 +1200,14 @@ def get_availability_calendar(
     still-in-use date-picker/buttons UI - that endpoint is unchanged.
     """
     # Validate client exists (same convention as every other Data Bank endpoint)
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
     # Validate every requested template exists and is active
     templates_by_id = {}
     for tid in template_ids:
-        tpl = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (tid,))
+        tpl = execute_query_pg("SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE", (tid,))
         if not tpl:
             raise HTTPException(404, f"Template not found or inactive: {tid}")
         templates_by_id[tid] = tpl[0]["template_name"]
@@ -1180,15 +1224,18 @@ def get_availability_calendar(
     templates_result = []
     for tid in template_ids:
         # Distinct dates this template actually has data for, within the month
-        present_rows = execute_query(
+        present_rows = execute_query_pg(
             """
             SELECT DISTINCT extract_date FROM client_data
-            WHERE client_id = ? AND template_id = ? AND is_deleted = 0
-              AND extract_date BETWEEN ? AND ?
+            WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
+              AND extract_date BETWEEN %s AND %s
             """,
             (client_id, tid, month_start, month_end)
         )
-        present_dates = {r["extract_date"] for r in present_rows}
+        # extract_date is a DATE column now (a real date object) - coerce to the
+        # 'YYYY-MM-DD' string form so the `date_str in present_dates` membership
+        # check below (against Python-generated strings) keeps working.
+        present_dates = {_coerce_date_str(r["extract_date"]) for r in present_rows}
 
         days = []
         present_count = missing_count = sunday_count = holiday_count = 0

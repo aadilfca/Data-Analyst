@@ -2,7 +2,11 @@ from fastapi import APIRouter, File, UploadFile, HTTPException, Body
 from fastapi.responses import StreamingResponse
 import os, json, openpyxl, pandas as pd
 from io import BytesIO
-from database import execute_query, execute_write, log_audit, get_raw_conn, log_data_audit, execute_batch, execute_batch_insert_with_ids
+from database import (
+    execute_query_pg, execute_write_pg, log_audit, get_raw_conn_pg, release_raw_conn_pg,
+    log_data_audit_pg, execute_batch_pg, execute_batch_insert_with_ids_pg,
+)
+from psycopg2.extras import Json
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, time
@@ -191,24 +195,26 @@ def filter_excluded_rows(rows: list, excluded_rows: Optional[List[int]]) -> list
 
 def count_new_and_existing_rows(client_id: int, template_id: int, rows: list, template_cols: list, mapping_dict: dict):
     """Count rows that are new versus already present for the same client/template."""
-    existing_rows = execute_query(
+    existing_rows = execute_query_pg(
         """
         SELECT row_data
         FROM client_data
-        WHERE client_id = ? AND template_id = ? AND is_deleted = 0
+        WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
         """,
         (client_id, template_id),
     )
 
+    # row_data is JSONB - execute_query_pg already returns a native dict, not a
+    # JSON string, so no json.loads() step is needed before re-serializing for
+    # the comparison set.
     seen_existing = set()
     for row in existing_rows:
         raw = row.get("row_data")
-        if isinstance(raw, str):
+        if raw is not None:
             try:
-                parsed = json.loads(raw)
-                seen_existing.add(json.dumps(parsed, sort_keys=True, ensure_ascii=False))
+                seen_existing.add(json.dumps(raw, sort_keys=True, ensure_ascii=False))
             except Exception:
-                seen_existing.add(raw)
+                seen_existing.add(str(raw))
 
     new_count = 0
     existing_count = 0
@@ -261,13 +267,13 @@ def compare_transactions(client_id: int, template_id: int, template_cols: list,
     }
 
     # Fetch existing client_data rows for this client+template, with their document_group_id and validation status
-    existing_rows = execute_query(
+    existing_rows = execute_query_pg(
         """
         SELECT cd.id, cd.row_data, cd.version, cd.document_group_id,
                vd.validation_status, vd.id AS verification_detail_id
         FROM client_data cd
         LEFT JOIN verification_details vd ON vd.client_data_id = cd.id
-        WHERE cd.client_id = ? AND cd.template_id = ? AND cd.is_deleted = 0 AND cd.change_detection_status != 'deleted'
+        WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE AND cd.change_detection_status != 'deleted'
         """,
         (client_id, template_id)
     )
@@ -467,7 +473,7 @@ def get_rate_precision() -> int:
     or unparseable, same defensive convention as everywhere else that reads a
     setting expected to be a small int (0/2/4).
     """
-    rows = execute_query("SELECT value FROM app_settings WHERE key = 'rate_precision'")
+    rows = execute_query_pg("SELECT value FROM app_settings WHERE key = 'rate_precision'")
     if not rows:
         return 0
     try:
@@ -772,8 +778,8 @@ async def import_excel(file: UploadFile = File(...)):
     file_path = os.path.join(upload_dir, file.filename)
     with open(file_path, "wb") as f:
         f.write(contents)
-    file_id = execute_write(
-        "INSERT INTO uploaded_files (file_name, file_path, file_type, record_count, status) VALUES (?, ?, ?, ?, ?)",
+    file_id = execute_write_pg(
+        "INSERT INTO uploaded_files (file_name, file_path, file_type, record_count, status) VALUES (%s, %s, %s, %s, %s) RETURNING id",
         (file.filename, file_path, 'excel', len(df), 'Pending')
     )
     log_audit("Analyst", "Upload", "Import", f"Uploaded file: {file.filename} ({len(df)} rows)")
@@ -787,12 +793,12 @@ def auto_map_headers(request: AutoMapRequest):
     sheet_name = request.sheet_name
 
     # Fetch template columns
-    template_cols = execute_query(
+    template_cols = execute_query_pg(
         """
         SELECT m.id AS column_id, m.column_name, m.data_type, p.sort_order
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = ? AND m.is_active = 1
+        WHERE p.template_id = %s AND m.is_active = TRUE
         ORDER BY p.sort_order ASC
         """,
         (template_id,)
@@ -800,7 +806,7 @@ def auto_map_headers(request: AutoMapRequest):
     if not template_cols:
         raise HTTPException(400, "Template has no columns")
 
-    file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (file_id,))
+    file_info = execute_query_pg("SELECT file_path FROM uploaded_files WHERE id = %s", (file_id,))
     if not file_info:
         raise HTTPException(404, "File not found")
 
@@ -870,15 +876,15 @@ def save_column_mapping(request: SaveMappingRequest):
     delete-then-reinsert, same pattern used elsewhere in this app for replacing an
     ordered/child row set (e.g. update_template() in routers/templates.py).
     """
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
-    template = execute_query("SELECT id FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    template = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
 
-    execute_write(
-        "DELETE FROM saved_column_mappings WHERE client_id = ? AND template_id = ?",
+    execute_write_pg(
+        "DELETE FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
         (request.client_id, request.template_id)
     )
 
@@ -887,10 +893,10 @@ def save_column_mapping(request: SaveMappingRequest):
         # Nothing meaningful to save for a column that wasn't matched to an Excel header.
         if not entry.excel_column or not entry.excel_column.strip():
             continue
-        execute_write(
+        execute_write_pg(
             """
             INSERT INTO saved_column_mappings (client_id, template_id, template_column_id, excel_column)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
             """,
             (request.client_id, request.template_id, entry.template_column_id, entry.excel_column)
         )
@@ -908,8 +914,8 @@ def get_saved_column_mapping(client_id: int, template_id: int):
     result rather than 404 when nothing is saved yet -- Phase A2's auto-apply-on-load only needs
     to check has_saved_mapping, no special-case error handling required on the frontend.
     """
-    rows = execute_query(
-        "SELECT template_column_id, excel_column FROM saved_column_mappings WHERE client_id = ? AND template_id = ?",
+    rows = execute_query_pg(
+        "SELECT template_column_id, excel_column FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
         (client_id, template_id)
     )
     return {
@@ -927,14 +933,14 @@ def delete_saved_column_mapping(client_id: int, template_id: int):
     upload.js) sees has_saved_mapping: false and falls back to ordinary auto-mapping, identical to
     a client+template that never had a saved mapping.
     """
-    existing = execute_query(
-        "SELECT COUNT(*) AS cnt FROM saved_column_mappings WHERE client_id = ? AND template_id = ?",
+    existing = execute_query_pg(
+        "SELECT COUNT(*) AS cnt FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
         (client_id, template_id)
     )
     deleted_count = existing[0]["cnt"] if existing else 0
 
-    execute_write(
-        "DELETE FROM saved_column_mappings WHERE client_id = ? AND template_id = ?",
+    execute_write_pg(
+        "DELETE FROM saved_column_mappings WHERE client_id = %s AND template_id = %s",
         (client_id, template_id)
     )
 
@@ -951,23 +957,23 @@ def check_duplicates(request: ImportRequest):
     Returns a list of duplicate records with old and new values for comparison.
     """
     # Validate template, file, and client
-    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    template = execute_query_pg("SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
-    file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
+    file_info = execute_query_pg("SELECT file_path FROM uploaded_files WHERE id = %s", (request.file_id,))
     if not file_info:
         raise HTTPException(404, "File not found")
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
     # Get template columns with their types
-    template_cols = execute_query(
+    template_cols = execute_query_pg(
         """
         SELECT m.id, m.column_name, m.data_type
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = ? AND m.is_active = 1
+        WHERE p.template_id = %s AND m.is_active = TRUE
         ORDER BY p.sort_order ASC
         """,
         (request.template_id,)
@@ -1025,19 +1031,21 @@ def check_duplicates(request: ImportRequest):
         if unique_value is None or unique_value == '':
             continue
 
-                # Case‑insensitive matching – compare lowercased values
-        existing = execute_query(
+                # Case‑insensitive matching – compare lowercased values. json_extract's
+                # '$."col"' path -> the JSONB ->> text-extraction operator.
+        existing = execute_query_pg(
             """
             SELECT id, row_data, extract_amount, extract_date
             FROM client_data
-            WHERE client_id = ? AND template_id = ? AND is_deleted = 0
-            AND LOWER(json_extract(row_data, '$."{}"')) = LOWER(?)
+            WHERE client_id = %s AND template_id = %s AND is_deleted = FALSE
+            AND LOWER(row_data->>'{}') = LOWER(%s)
             """.format(unique_col_name),
             (request.client_id, request.template_id, str(unique_value))
         )
 
         if existing:
-            old_data = json.loads(existing[0]['row_data']) if existing[0]['row_data'] else {}
+            # row_data is JSONB - already a native dict, no json.loads() needed.
+            old_data = existing[0]['row_data'] or {}
             # Get the column names from the template
             col_names = [col['column_name'] for col in template_cols]
             duplicates.append({
@@ -1063,7 +1071,7 @@ def preview_date_format(request: DatePreviewRequest):
     validate_only()/validate_and_import() do, so the preview can never
     disagree with what those endpoints will actually do.
     """
-    file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
+    file_info = execute_query_pg("SELECT file_path FROM uploaded_files WHERE id = %s", (request.file_id,))
     if not file_info:
         raise HTTPException(404, "File not found")
 
@@ -1141,15 +1149,15 @@ def validate_only(request: ImportRequest):
     Returns row-by-row validation errors.
     """
     # Validate template and file
-    template = execute_query("SELECT id, template_name, rate_source FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    template = execute_query_pg("SELECT id, template_name, rate_source FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
-    file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
+    file_info = execute_query_pg("SELECT file_path FROM uploaded_files WHERE id = %s", (request.file_id,))
     if not file_info:
         raise HTTPException(404, "File not found")
 
     # Validate client exists
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
@@ -1159,12 +1167,12 @@ def validate_only(request: ImportRequest):
     effective_order = request.date_order if request.date_order else DEFAULT_DATE_ORDER
 
     # Get template columns with their types
-    template_cols = execute_query(
+    template_cols = execute_query_pg(
         """
         SELECT m.id, m.column_name, m.data_type
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = ? AND m.is_active = 1
+        WHERE p.template_id = %s AND m.is_active = TRUE
         ORDER BY p.sort_order ASC
         """,
         (request.template_id,)
@@ -1343,23 +1351,26 @@ def validate_only(request: ImportRequest):
     }
 
 DATA_AUDIT_LOG_INSERT_SQL = (
-    "INSERT INTO data_audit_log (client_data_id, user, action, old_row_data, new_row_data) "
-    "VALUES (?, ?, ?, ?, ?)"
+    'INSERT INTO data_audit_log (client_data_id, "user", action, old_row_data, new_row_data) '
+    "VALUES (%s, %s, %s, %s, %s)"
 )
 
 
 def _audit_row_params(client_data_id, action, old_data=None, new_data=None, user="Analyst"):
     """
     Builds one params tuple for DATA_AUDIT_LOG_INSERT_SQL, matching
-    log_data_audit()'s own JSON-encoding convention exactly (used for the
-    batched import write path instead of calling log_data_audit() per row).
+    log_data_audit_pg()'s own encoding convention exactly (used for the batched
+    import write path instead of calling log_data_audit_pg() per row).
+    old_row_data/new_row_data are JSONB - passed via Json(..., dumps=...) with
+    the same default=str fallback json.dumps() used, rather than double
+    -encoding to a JSON string ourselves.
     """
     return (
         client_data_id,
         user,
         action,
-        json.dumps(old_data, default=str) if old_data else None,
-        json.dumps(new_data, default=str) if new_data else None,
+        Json(old_data, dumps=lambda d: json.dumps(d, default=str)) if old_data else None,
+        Json(new_data, dumps=lambda d: json.dumps(d, default=str)) if new_data else None,
     )
 
 
@@ -1367,14 +1378,14 @@ def _audit_row_params(client_data_id, action, old_data=None, new_data=None, user
 @router.post("/api/upload/import")
 def validate_and_import(request: ImportRequest):
     # Validate template and file
-    template = execute_query("SELECT id, template_name, rate_source FROM templates WHERE id = ? AND is_active = 1", (request.template_id,))
+    template = execute_query_pg("SELECT id, template_name, rate_source FROM templates WHERE id = %s AND is_active = TRUE", (request.template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
-    file_info = execute_query("SELECT file_path FROM uploaded_files WHERE id = ?", (request.file_id,))
+    file_info = execute_query_pg("SELECT file_path FROM uploaded_files WHERE id = %s", (request.file_id,))
     if not file_info:
         raise HTTPException(404, "File not found")
     # Validate client exists
-    client = execute_query("SELECT id FROM clients WHERE id = ? AND is_active = 1", (request.client_id,))
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (request.client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
@@ -1384,12 +1395,12 @@ def validate_and_import(request: ImportRequest):
     effective_order = request.date_order if request.date_order else DEFAULT_DATE_ORDER
 
     # Get template columns with their types
-    template_cols = execute_query(
+    template_cols = execute_query_pg(
         """
         SELECT m.id, m.column_name, m.data_type
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = ? AND m.is_active = 1
+        WHERE p.template_id = %s AND m.is_active = TRUE
         ORDER BY p.sort_order ASC
         """,
         (request.template_id,)
@@ -1556,8 +1567,8 @@ def validate_and_import(request: ImportRequest):
 
     # ---- IMPORT: Use change_detection result to decide per-row action ----
     # Update uploaded_files status and set client_id
-    execute_write(
-        "UPDATE uploaded_files SET status = 'Imported', client_id = ? WHERE id = ?",
+    execute_write_pg(
+        "UPDATE uploaded_files SET status = 'Imported', client_id = %s WHERE id = %s",
         (request.client_id, request.file_id)
     )
 
@@ -1573,13 +1584,14 @@ def validate_and_import(request: ImportRequest):
         progress_total = len(rows)
     IMPORT_PROGRESS[request.file_id] = {"current": 0, "total": progress_total, "status": "processing"}
 
-    # Reuse a single connection for the whole write phase instead of opening/closing
-    # a new sqlite3 connection (and re-setting PRAGMAs) on every row write -- this was
-    # 94.6% of total import time for a ~4,900-row import. Each write category below is
-    # batched via executemany() in chunks (database.py's execute_batch()/
-    # execute_batch_insert_with_ids()), committing per chunk rather than per row or in
-    # one giant transaction.
-    conn = get_raw_conn()
+    # Reuse a single pooled connection for the whole write phase instead of
+    # borrowing/returning one per row - this was 94.6% of total import time for
+    # a ~4,900-row import under the original SQLite version. Each write category
+    # below is batched (database.py's execute_batch_pg()/
+    # execute_batch_insert_with_ids_pg(), via psycopg2.extras.execute_batch()/
+    # execute_values()), committing per chunk rather than per row or in one
+    # giant transaction.
+    conn = get_raw_conn_pg()
     try:
         if change_detection is not None and change_detection.get("unchanged") is not None:
             # --- Re-upload scenario: handle each category ---
@@ -1608,7 +1620,7 @@ def validate_and_import(request: ImportRequest):
                 # extraction bug above was fixed.
                 amount, date_str = extract_columns_from_row(new_row_data, template_cols, effective_delimiter, effective_order)
                 changed_client_data_params.append(
-                    (json.dumps(new_row_data, default=str), new_version, doc_group_id, data_quality_flag, rate_source, amount, date_str, cid)
+                    (Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), new_version, doc_group_id, data_quality_flag, rate_source, amount, date_str, cid)
                 )
                 changed_audit_params.append(_audit_row_params(cid, "UPDATE", item["old_row_data"], new_row_data))
                 if item.get("verification_detail_id"):
@@ -1618,23 +1630,23 @@ def validate_and_import(request: ImportRequest):
                 IMPORT_PROGRESS[request.file_id]["current"] += 1
 
             if changed_client_data_params:
-                execute_batch(
+                execute_batch_pg(
                     conn,
                     """
                     UPDATE client_data
-                    SET row_data = ?, version = ?, document_group_id = ?, change_detection_status = 'updated', data_quality_flag = ?, rate_source = ?, extract_amount = ?, extract_date = ?
-                    WHERE id = ?
+                    SET row_data = %s, version = %s, document_group_id = %s, change_detection_status = 'updated', data_quality_flag = %s, rate_source = %s, extract_amount = %s, extract_date = %s
+                    WHERE id = %s
                     """,
                     changed_client_data_params
                 )
             if changed_verification_params:
-                execute_batch(
+                execute_batch_pg(
                     conn,
-                    "UPDATE verification_details SET validation_status = 'Pending' WHERE id = ?",
+                    "UPDATE verification_details SET validation_status = 'Pending' WHERE id = %s",
                     changed_verification_params
                 )
             if changed_audit_params:
-                execute_batch(conn, DATA_AUDIT_LOG_INSERT_SQL, changed_audit_params)
+                execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, changed_audit_params)
 
             # 3. New: insert fresh rows
             new_client_data_params = []
@@ -1647,27 +1659,27 @@ def validate_and_import(request: ImportRequest):
                 data_quality_flag = compute_data_quality_flag(new_row_data, critical_cols)
                 new_client_data_params.append(
                     (request.client_id, request.template_id, request.file_id,
-                     json.dumps(new_row_data, default=str), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
+                     Json(new_row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
                 )
                 new_row_data_list.append(new_row_data)
                 inserted_count += 1
                 IMPORT_PROGRESS[request.file_id]["current"] += 1
 
             if new_client_data_params:
-                new_ids = execute_batch_insert_with_ids(
+                new_ids = execute_batch_insert_with_ids_pg(
                     conn,
                     """
                     INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'added', ?, ?, ?)
+                    VALUES %s RETURNING id
                     """,
                     new_client_data_params,
-                    table="client_data"
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, 'added', %s, %s, %s)"
                 )
                 new_audit_params = [
                     _audit_row_params(row_id, "INSERT", None, new_row_data)
                     for row_id, new_row_data in zip(new_ids, new_row_data_list)
                 ]
-                execute_batch(conn, DATA_AUDIT_LOG_INSERT_SQL, new_audit_params)
+                execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, new_audit_params)
 
             # 4. Missing: flag existing rows as 'deleted' for auditor review (soft flag)
             missing_client_data_params = []
@@ -1680,13 +1692,13 @@ def validate_and_import(request: ImportRequest):
                 IMPORT_PROGRESS[request.file_id]["current"] += 1
 
             if missing_client_data_params:
-                execute_batch(
+                execute_batch_pg(
                     conn,
-                    "UPDATE client_data SET change_detection_status = 'deleted' WHERE id = ?",
+                    "UPDATE client_data SET change_detection_status = 'deleted' WHERE id = %s",
                     missing_client_data_params
                 )
             if missing_audit_params:
-                execute_batch(conn, DATA_AUDIT_LOG_INSERT_SQL, missing_audit_params)
+                execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, missing_audit_params)
 
         else:
             # --- First-time upload (no existing data with valid composite key): insert all rows as new ---
@@ -1720,29 +1732,29 @@ def validate_and_import(request: ImportRequest):
 
                 first_upload_client_data_params.append(
                     (request.client_id, request.template_id, request.file_id,
-                     json.dumps(row_data, default=str), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
+                     Json(row_data, dumps=lambda d: json.dumps(d, default=str)), amount, date_str, "Analyst", 1, doc_group_id, data_quality_flag, rate_source)
                 )
                 first_upload_row_data_list.append(row_data)
                 inserted_count += 1
                 IMPORT_PROGRESS[request.file_id]["current"] += 1
 
             if first_upload_client_data_params:
-                first_upload_ids = execute_batch_insert_with_ids(
+                first_upload_ids = execute_batch_insert_with_ids_pg(
                     conn,
                     """
                     INSERT INTO client_data (client_id, template_id, upload_id, row_data, extract_amount, extract_date, created_by, version, change_detection_status, document_group_id, data_quality_flag, rate_source)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                    VALUES %s RETURNING id
                     """,
                     first_upload_client_data_params,
-                    table="client_data"
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, %s, %s)"
                 )
                 first_upload_audit_params = [
                     _audit_row_params(row_id, "INSERT", None, row_data)
                     for row_id, row_data in zip(first_upload_ids, first_upload_row_data_list)
                 ]
-                execute_batch(conn, DATA_AUDIT_LOG_INSERT_SQL, first_upload_audit_params)
+                execute_batch_pg(conn, DATA_AUDIT_LOG_INSERT_SQL, first_upload_audit_params)
     finally:
-        conn.close()
+        release_raw_conn_pg(conn)
 
     log_audit("Analyst", "Import", "Upload",
               f"Imported {inserted_count} new, {updated_count} updated, {deleted_count} flagged missing for client {request.client_id}, template {template[0]['template_name']}, file ID {request.file_id}")
@@ -1775,15 +1787,15 @@ def get_import_status(file_id: int):
 # ---------- DOWNLOAD TEMPLATE ----------
 @router.get("/api/upload/download-template/{template_id}")
 def download_template(template_id: int):
-    template = execute_query("SELECT id, template_name FROM templates WHERE id = ? AND is_active = 1", (template_id,))
+    template = execute_query_pg("SELECT id, template_name FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
     if not template:
         raise HTTPException(404, "Template not found")
-    columns = execute_query(
+    columns = execute_query_pg(
         """
         SELECT m.column_name, m.data_type
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = ? AND m.is_active = 1
+        WHERE p.template_id = %s AND m.is_active = TRUE
         ORDER BY p.sort_order ASC
         """,
         (template_id,)
@@ -1847,7 +1859,7 @@ def download_template(template_id: int):
 # ---------- GET FILE DETAILS ----------
 @router.get("/api/upload/file/{file_id}")
 def get_file_details(file_id: int):
-    file_info = execute_query("SELECT * FROM uploaded_files WHERE id = ?", (file_id,))
+    file_info = execute_query_pg("SELECT * FROM uploaded_files WHERE id = %s", (file_id,))
     if not file_info:
         raise HTTPException(404, "File not found")
     return file_info[0]

@@ -3863,6 +3863,129 @@ def save_client_voucher_prefixes_pg(client_id, prefixes):
         release_raw_conn_pg(conn)
 
 
+def execute_batch_pg(conn, query, params_list, chunk_size=500):
+    """
+    Postgres equivalent of execute_batch(): runs `query` once per params tuple
+    via psycopg2.extras.execute_batch(), in chunks of chunk_size, committing
+    after each chunk - same partial-durability contract as the SQLite version
+    (a chunk that raises rolls back only that chunk; already-committed chunks
+    stay committed). For UPDATE/plain-INSERT batches with no ids to collect -
+    see execute_batch_insert_with_ids_pg() for that case.
+    """
+    cur = conn.cursor()
+    for i in range(0, len(params_list), chunk_size):
+        chunk = params_list[i:i + chunk_size]
+        try:
+            psycopg2.extras.execute_batch(cur, query, chunk)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def execute_batch_insert_with_ids_pg(conn, query, params_list, chunk_size=500, template=None):
+    """
+    Postgres equivalent of execute_batch_insert_with_ids() - NOT a rowid-
+    guessing trick (SQLite's MAX(id)+1.. approach relies on single-writer
+    guarantees that don't hold under Postgres's real concurrency model).
+    Instead uses psycopg2.extras.execute_values() against a query ending in
+    RETURNING id, relying on Postgres's well-established behavior that a
+    plain multi-row INSERT ... VALUES ... RETURNING returns rows in the same
+    order as the input list (true for a bare INSERT with no ON CONFLICT/
+    subquery reordering, which is all this app ever does).
+
+    `query` should end in "VALUES %s RETURNING id" (execute_values replaces
+    the single %s with the multi-row VALUES list). If a row also needs an
+    inline SQL literal alongside the bound columns (e.g. a fixed 'active'/
+    'added' status the SQLite version wrote as a literal in the VALUES
+    clause), pass `template` - a string like "(%s, %s, 'active', %s)" -
+    since execute_values' auto-generated template can't interleave a literal
+    constant with bound values.
+
+    Same chunked-commit contract as execute_batch_pg(): each chunk commits
+    independently, so a failure partway through a huge import still preserves
+    everything already written.
+    """
+    cur = conn.cursor()
+    ids = []
+    for i in range(0, len(params_list), chunk_size):
+        chunk = params_list[i:i + chunk_size]
+        try:
+            results = psycopg2.extras.execute_values(cur, query, chunk, template=template, fetch=True)
+            ids.extend(row[0] for row in results)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return ids
+
+
+def estimate_client_data_size_pg(client_id: int = None, template_id: int = None) -> dict:
+    """
+    Postgres equivalent of estimate_client_data_size() - same formula/shape,
+    but LENGTH() needs an explicit ::text cast since Postgres's LENGTH()
+    doesn't accept jsonb directly (row_data is JSONB here, TEXT in SQLite).
+    """
+    where_clauses = ["is_deleted = FALSE"]
+    params = []
+    if client_id is not None:
+        where_clauses.append("client_id = %s")
+        params.append(client_id)
+    if template_id is not None:
+        where_clauses.append("template_id = %s")
+        params.append(template_id)
+    where_sql = " AND ".join(where_clauses)
+
+    result = execute_query_pg(
+        f"SELECT COALESCE(SUM(LENGTH(row_data::text)), 0) as data_bytes, COUNT(*) as row_count "
+        f"FROM client_data WHERE {where_sql}",
+        params
+    )
+    data_bytes = result[0]["data_bytes"] if result else 0
+    row_count = result[0]["row_count"] if result else 0
+    total_bytes = data_bytes + (row_count * ROW_OVERHEAD_BYTES)
+
+    return {
+        "total_bytes": total_bytes,
+        "row_count": row_count,
+        "formatted": format_bytes(total_bytes)
+    }
+
+
+def log_data_audit_pg(client_data_id, user, action, old_data=None, new_data=None):
+    """
+    Postgres equivalent of log_data_audit() - old_row_data/new_row_data are
+    JSONB here, so they're passed via psycopg2.extras.Json(...) rather than
+    json.dumps() (letting psycopg2/Postgres own the actual encoding).
+    """
+    try:
+        execute_write_pg(
+            "INSERT INTO data_audit_log (client_data_id, \"user\", action, old_row_data, new_row_data) VALUES (%s, %s, %s, %s, %s)",
+            (
+                client_data_id,
+                user,
+                action,
+                psycopg2.extras.Json(old_data) if old_data else None,
+                psycopg2.extras.Json(new_data) if new_data else None,
+            )
+        )
+    except Exception as e:
+        print(f"⚠️ Failed to log data audit (Postgres): {e}")
+
+
+def get_data_audit_history_pg(client_data_id):
+    """
+    Postgres equivalent of get_data_audit_history() - old_row_data/new_row_data
+    come back as native dicts (or None) already, not JSON text, since the
+    columns are JSONB.
+    """
+    return execute_query_pg(
+        "SELECT id, \"user\", action, old_row_data, new_row_data, changed_at "
+        "FROM data_audit_log WHERE client_data_id = %s ORDER BY changed_at ASC",
+        (client_data_id,)
+    )
+
+
 def log_error(
     error_code_id=None,
     error_code=None,
