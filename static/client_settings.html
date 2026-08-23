@@ -153,9 +153,13 @@
      client_context.js. With no stamp it falls through to the dashboard, which every logged-in user
      can reach, rather than to the admin-gated clients.html this used to hardcode. -->
 <body data-nav-module="Client Settings">
-    <!-- Navbar -->
-    <nav class="navbar">
-        <div class="nav-container">
+    <!-- Navbar. Two legitimate doors: ?from=dashboard (client-scoped chrome, the first container
+         below) and ?from=clients (the Admin door via clients.html's cogwheel, which must render
+         firm-level chrome instead — no client pill, ⊞ nav dropdown, search, or home icon — so the
+         admin pathway never leaks into the main client-scoped app). client_context.js's
+         initClientContext() picks which container to show/populate; see isClientSettingsAdminDoor(). -->
+    <nav class="navbar" id="clientSettingsNavbar">
+        <div class="nav-container" id="clientScopedNavContainer">
             <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
             <div id="navLeft"></div>
             <div class="nav-client" id="clientControl">
@@ -163,6 +167,9 @@
             </div>
             <div class="nav-user"></div>
         </div>
+        <!-- Firm-level chrome, shown/populated only via the Admin door — see renderFirmLevelNav()
+             in client_context.js and the same #firmNav pattern on settings.html/users.html/clients.html. -->
+        <div class="nav-container" id="firmNav" style="display:none;"></div>
     </nav>
 
     <div class="main-container">

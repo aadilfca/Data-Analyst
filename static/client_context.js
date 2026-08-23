@@ -327,6 +327,16 @@ function isFirmLevelPage() {
     return FIRM_LEVEL_PAGES.includes(currentFile);
 }
 
+// True only for client_settings.html opened via the Admin door (clients.html's cogwheel).
+// Deliberately NOT added to FIRM_LEVEL_PAGES: that list applies unconditionally, and this page
+// must keep its normal client-scoped chrome on the other door (?from=dashboard).
+function isClientSettingsAdminDoor() {
+    const currentFile = window.location.pathname.split('/').pop() || '';
+    if (currentFile !== 'client_settings.html') return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('from') === 'clients';
+}
+
 // Pages that read their own client from ?client_id= in the URL instead of from the session.
 // A named lookup list, NOT a general opt-out — same convention as FIRM_LEVEL_PAGES above and
 // NAV_ENTRY_SOURCES below. Only add a page here if its OWN loader actually reads ?client_id=
@@ -1449,7 +1459,7 @@ async function initClientContext() {
     // client_select.html's gear icon, never as part of a client's workflow, so letting them onto the
     // stack would make an Admin page the Back destination of a client-scoped page later in the
     // session - exactly the cross-territory jump this whole change removes.
-    if (!isFirmLevelPage()) {
+    if (!isFirmLevelPage() && !isClientSettingsAdminDoor()) {
         pushCurrentPageToHistory();
     }
     // Populate the session-backed client cache before anything renders that depends on it
@@ -1480,6 +1490,16 @@ async function initClientContext() {
         // container (page content, under the module header) rather than into the navbar - see
         // renderFirmLevelTabs() above.
         renderFirmLevelTabs();
+    } else if (isClientSettingsAdminDoor()) {
+        // client_settings.html via the Admin door: same firm-level navbar as the three Admin
+        // pages, but no tab strip (this isn't one of them) and no FIRM_LEVEL_PAGES membership
+        // (it must not get this chrome on the other door). The page's own in-page "← Back to ..."
+        // link resolves via ?from= the same as any client-scoped page, so renderUpLinks() still runs.
+        document.getElementById('clientSettingsNavbar').classList.add('firm-navbar');
+        document.getElementById('clientScopedNavContainer').style.display = 'none';
+        document.getElementById('firmNav').style.display = '';
+        renderFirmLevelNav();
+        renderUpLinks();
     } else {
         renderClientControl();
         renderNavLeft();

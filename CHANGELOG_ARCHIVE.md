@@ -2027,4 +2027,49 @@ elsewhere as legacy/unused and flagged for a future removal pass.
    Client Settings, now with the correct pill too.
 7. `client_context.js?v=12` (bumped from `v=11`) confirmed actually fetched.
 
+## Entry-Aware Header Chrome for Client Settings
+
+**Date:** 2026-08-23 | **Files:** `static/client_context.js`, `static/client_settings.html`.
+
+**Why:** `client_settings.html` always rendered the full client-scoped navbar (client pill, ⊞ nav
+dropdown, search, 🏢 home icon) regardless of entry point. That let the Admin door (`clients.html`'s
+⚙️ cogwheel, `?from=clients`) leak into the main client-scoped app, which it must never do — that
+pathway is meant to stay entirely outside the main app, the same way `settings.html`/`users.html`/
+`clients.html` already render firm-level-only chrome via `renderFirmLevelNav()`.
+
+**Fix, not access control:** `enforceClientSelection()`'s URL-`client_id` whitelist behaviour was
+untouched — this is chrome only.
+
+**What was built:**
+
+1. `isClientSettingsAdminDoor()` (`client_context.js`) — true only when the current file is
+   `client_settings.html` *and* `?from=clients`. Deliberately not folded into `FIRM_LEVEL_PAGES`:
+   that list applies unconditionally, and this page must keep its normal client-scoped chrome on
+   the other door (`?from=dashboard`).
+2. `client_settings.html`'s single `<div class="nav-container">` was split into two siblings inside
+   `<nav class="navbar" id="clientSettingsNavbar">`: the original client-scoped one (now
+   `id="clientScopedNavContainer"`) and a new, initially-hidden `id="firmNav"` container matching
+   the pattern the three Admin pages already use for `renderFirmLevelNav()`.
+3. `initClientContext()` gained a new branch, between the existing `isFirmLevelPage()` branch and
+   the client-scoped `else`: on the admin door it adds the `firm-navbar` class to the navbar
+   (`.nav-container`'s `justify-content` is its only visual effect — confirmed in `style.css`),
+   hides `#clientScopedNavContainer`, shows `#firmNav`, calls `renderFirmLevelNav()`, and still
+   calls `renderUpLinks()` so the page's own in-page "← Back to Manage Clients" link (already
+   resolved via the pre-existing `NAV_ENTRY_SOURCES`/`getUpTarget()` `?from=` lookup) keeps working.
+   `renderFirmLevelTabs()` is deliberately NOT called — this isn't one of the three true Admin
+   pages, so it gets the firm-level navbar but no tab strip.
+4. The Back-history exemption before `pushCurrentPageToHistory()` was extended to also cover
+   `isClientSettingsAdminDoor()`, so the admin door never becomes a client-scoped page's Back
+   destination — same reasoning already applied to the three firm-level pages.
+
+### Verification (live, Playwright against the running dev server)
+
+1. **Admin door** (`clients.html` cogwheel → `client_settings.html?client_id=1&from=clients`):
+   `#firmNav` rendered (`display: flex`, populated with the firm-level brand/area/logout markup),
+   `#clientScopedNavContainer` hidden (`display: none`), in-page back-link href `/static/clients.html`
+   with label "← Back to Manage Clients".
+2. **Dashboard door** (`client_select.html` → dashboard → `client_settings.html?client_id=1&from=dashboard`):
+   unchanged — `#clientScopedNavContainer` shown, `#firmNav` hidden, no `firm-navbar` class, client
+   pill populated, back-link href `/static/index.html` with label "← Back to Dashboard".
+
 ---
