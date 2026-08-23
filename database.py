@@ -3822,6 +3822,47 @@ def close_pg_pool():
         print("[postgres] connection pool closed")
 
 
+def get_client_voucher_prefixes_pg(client_id):
+    """
+    Postgres equivalent of get_client_voucher_prefixes() - same shape/return
+    (see that function's docstring), via execute_query_pg().
+    """
+    rows = execute_query_pg(
+        "SELECT category, prefix FROM client_voucher_prefixes WHERE client_id = %s ORDER BY category, prefix",
+        (client_id,)
+    )
+    result = {category: [] for category in VOUCHER_PREFIX_CATEGORIES}
+    for row in rows:
+        result[row["category"]].append(row["prefix"])
+    return result
+
+
+def save_client_voucher_prefixes_pg(client_id, prefixes):
+    """
+    Postgres equivalent of save_client_voucher_prefixes() - same replace-all
+    -in-one-transaction semantics, via a raw pooled connection instead of
+    SQLite's lock-retry loop (Postgres doesn't need that retry pattern - a
+    real transaction just blocks/serializes instead of raising "database is
+    locked").
+    """
+    conn = get_raw_conn_pg()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM client_voucher_prefixes WHERE client_id = %s", (client_id,))
+        for category in VOUCHER_PREFIX_CATEGORIES:
+            for prefix in prefixes.get(category, []):
+                cur.execute(
+                    "INSERT INTO client_voucher_prefixes (client_id, category, prefix) VALUES (%s, %s, %s)",
+                    (client_id, category, prefix)
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        release_raw_conn_pg(conn)
+
+
 def log_error(
     error_code_id=None,
     error_code=None,

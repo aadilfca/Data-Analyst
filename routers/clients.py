@@ -5,7 +5,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
-from database import execute_query, execute_write, log_audit, get_client_voucher_prefixes, save_client_voucher_prefixes, DEFAULT_VOUCHER_PREFIXES
+from database import execute_query_pg, execute_write_pg, log_audit, get_client_voucher_prefixes_pg, save_client_voucher_prefixes_pg, DEFAULT_VOUCHER_PREFIXES
 from datetime import datetime
 from routers.auth import require_admin
 
@@ -62,6 +62,7 @@ class ClientResponse(BaseModel):
 
 # ---------- HELPER ----------
 def row_to_client(row: dict) -> dict:
+    created_at = row["created_at"]
     return {
         "id": row["id"],
         "client_code": row["client_code"],
@@ -71,7 +72,9 @@ def row_to_client(row: dict) -> dict:
         "email": row.get("email"),
         "phone": row.get("phone"),
         "is_active": bool(row["is_active"]),
-        "created_at": row["created_at"]
+        # created_at is TIMESTAMPTZ on Postgres (a real datetime, not a
+        # string) - ClientResponse.created_at is typed str, so normalize here.
+        "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else created_at
     }
 
 # ---------- ENDPOINTS ----------
@@ -84,14 +87,14 @@ def get_clients(include_inactive: bool = False):
     """
     query = "SELECT * FROM clients"
     if not include_inactive:
-        query += " WHERE is_active = 1"
+        query += " WHERE is_active = TRUE"
     query += " ORDER BY client_name"
-    rows = execute_query(query)
+    rows = execute_query_pg(query)
     return [row_to_client(r) for r in rows]
 
 @router.get("/api/clients/{client_id}", response_model=ClientResponse)
 def get_client(client_id: int, session=Depends(require_admin)):
-    rows = execute_query("SELECT * FROM clients WHERE id = ?", (client_id,))
+    rows = execute_query_pg("SELECT * FROM clients WHERE id = %s", (client_id,))
     if not rows:
         raise HTTPException(404, "Client not found")
     return row_to_client(rows[0])
@@ -99,14 +102,15 @@ def get_client(client_id: int, session=Depends(require_admin)):
 @router.post("/api/clients", response_model=dict)
 def create_client(client: ClientCreate, session=Depends(require_admin)):
     # Check for duplicate client_code
-    existing = execute_query("SELECT id FROM clients WHERE client_code = ?", (client.client_code,))
+    existing = execute_query_pg("SELECT id FROM clients WHERE client_code = %s", (client.client_code,))
     if existing:
         raise HTTPException(400, f"Client code '{client.client_code}' already exists")
-    
-    client_id = execute_write(
+
+    client_id = execute_write_pg(
         """
         INSERT INTO clients (client_code, client_name, industry, contact_person, email, phone)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
         """,
         (client.client_code, client.client_name, client.industry,
          client.contact_person, client.email, client.phone)
@@ -114,31 +118,31 @@ def create_client(client: ClientCreate, session=Depends(require_admin)):
     # Seed the new client with the default voucher prefixes (CPV/CRV/BPV/BRV/JV) so voucher
     # detection works out of the box - previously a client had none until manually configured
     # via the Client Settings page.
-    save_client_voucher_prefixes(client_id, DEFAULT_VOUCHER_PREFIXES)
+    save_client_voucher_prefixes_pg(client_id, DEFAULT_VOUCHER_PREFIXES)
 
     log_audit("Admin", "Create", "Clients", f"Created client: {client.client_code} - {client.client_name}")
     return {"message": f"Client '{client.client_name}' created successfully", "client_id": client_id}
 
 @router.put("/api/clients/{client_id}", response_model=dict)
 def update_client(client_id: int, client: ClientUpdate, session=Depends(require_admin)):
-    existing = execute_query("SELECT id FROM clients WHERE id = ?", (client_id,))
+    existing = execute_query_pg("SELECT id FROM clients WHERE id = %s", (client_id,))
     if not existing:
         raise HTTPException(404, "Client not found")
-    
+
     # Check duplicate client_code for other clients
-    dup = execute_query("SELECT id FROM clients WHERE client_code = ? AND id != ?", (client.client_code, client_id))
+    dup = execute_query_pg("SELECT id FROM clients WHERE client_code = %s AND id != %s", (client.client_code, client_id))
     if dup:
         raise HTTPException(400, f"Client code '{client.client_code}' is already used by another client")
-    
-    execute_write(
+
+    execute_write_pg(
         """
         UPDATE clients
-        SET client_code = ?, client_name = ?, industry = ?, contact_person = ?, email = ?, phone = ?, is_active = ?
-        WHERE id = ?
+        SET client_code = %s, client_name = %s, industry = %s, contact_person = %s, email = %s, phone = %s, is_active = %s
+        WHERE id = %s
         """,
         (client.client_code, client.client_name, client.industry,
          client.contact_person, client.email, client.phone,
-         1 if client.is_active else 0, client_id)
+         client.is_active, client_id)
     )
     log_audit("Admin", "Update", "Clients", f"Updated client ID {client_id}")
     return {"message": f"Client updated successfully"}
@@ -146,12 +150,12 @@ def update_client(client_id: int, client: ClientUpdate, session=Depends(require_
 @router.delete("/api/clients/{client_id}", response_model=dict)
 def delete_client(client_id: int, session=Depends(require_admin)):
     """
-    Soft-delete a client (set is_active = 0).
+    Soft-delete a client (set is_active = FALSE).
     """
-    existing = execute_query("SELECT client_name FROM clients WHERE id = ? AND is_active = 1", (client_id,))
+    existing = execute_query_pg("SELECT client_name FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not existing:
         raise HTTPException(404, "Active client not found")
-    execute_write("UPDATE clients SET is_active = 0 WHERE id = ?", (client_id,))
+    execute_write_pg("UPDATE clients SET is_active = FALSE WHERE id = %s", (client_id,))
     log_audit("Admin", "Delete", "Clients", f"Soft-deleted client: {existing[0]['client_name']} (ID: {client_id})")
     return {"message": f"Client deleted (soft-delete) successfully"}
 
@@ -160,10 +164,10 @@ def restore_client(client_id: int, session=Depends(require_admin)):
     """
     Restore a soft-deleted client.
     """
-    existing = execute_query("SELECT client_name FROM clients WHERE id = ? AND is_active = 0", (client_id,))
+    existing = execute_query_pg("SELECT client_name FROM clients WHERE id = %s AND is_active = FALSE", (client_id,))
     if not existing:
         raise HTTPException(404, "Inactive client not found")
-    execute_write("UPDATE clients SET is_active = 1 WHERE id = ?", (client_id,))
+    execute_write_pg("UPDATE clients SET is_active = TRUE WHERE id = %s", (client_id,))
     log_audit("Admin", "Restore", "Clients", f"Restored client: {existing[0]['client_name']} (ID: {client_id})")
     return {"message": f"Client restored successfully"}
 
@@ -173,10 +177,10 @@ def get_voucher_prefixes(client_id: int, session=Depends(require_admin)):
     Get a client's voucher prefix configuration (Cash Payment/Cash Receipt/Bank Payment/
     Bank Receipt/Journal), including seeded defaults.
     """
-    existing = execute_query("SELECT id FROM clients WHERE id = ?", (client_id,))
+    existing = execute_query_pg("SELECT id FROM clients WHERE id = %s", (client_id,))
     if not existing:
         raise HTTPException(404, "Client not found")
-    return get_client_voucher_prefixes(client_id)
+    return get_client_voucher_prefixes_pg(client_id)
 
 @router.put("/api/clients/{client_id}/voucher-prefixes", response_model=dict)
 def update_voucher_prefixes(client_id: int, payload: VoucherPrefixesUpdate, session=Depends(require_admin)):
@@ -185,7 +189,7 @@ def update_voucher_prefixes(client_id: int, payload: VoucherPrefixesUpdate, sess
     category is valid. Rejects a prefix that appears under more than one
     category for the same client.
     """
-    existing = execute_query("SELECT id FROM clients WHERE id = ?", (client_id,))
+    existing = execute_query_pg("SELECT id FROM clients WHERE id = %s", (client_id,))
     if not existing:
         raise HTTPException(404, "Client not found")
 
@@ -217,6 +221,6 @@ def update_voucher_prefixes(client_id: int, payload: VoucherPrefixesUpdate, sess
                 )
             prefix_to_category[key] = category
 
-    save_client_voucher_prefixes(client_id, prefixes)
+    save_client_voucher_prefixes_pg(client_id, prefixes)
     log_audit("Admin", "Update", "Clients", f"Updated voucher prefixes for client ID {client_id}")
     return {"message": "Voucher prefixes updated successfully", "prefixes": prefixes}

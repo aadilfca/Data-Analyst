@@ -3,13 +3,13 @@
 # ==============================================
 
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from database import execute_query, execute_write, log_error
+from database import execute_query_pg, execute_write_pg, log_error
 
 router = APIRouter()
 
@@ -28,7 +28,7 @@ class SelectClientRequest(BaseModel):
 
 @router.post("/api/auth/login")
 def login(payload: LoginRequest, response: Response):
-    rows = execute_query("SELECT * FROM users WHERE username = ?", (payload.username,))
+    rows = execute_query_pg("SELECT * FROM users WHERE username = %s", (payload.username,))
     user = rows[0] if rows else None
 
     if not user or not bcrypt.checkpw(payload.password.encode(), user["password_hash"].encode()):
@@ -56,15 +56,15 @@ def login(payload: LoginRequest, response: Response):
         raise HTTPException(403, "Account is inactive")
 
     token = secrets.token_hex(32)
-    expiry = datetime.now() + timedelta(hours=SESSION_DURATION_HOURS)
+    expiry = datetime.now(timezone.utc) + timedelta(hours=SESSION_DURATION_HOURS)
 
-    execute_write(
-        "INSERT INTO sessions (token, user_id, expiry) VALUES (?, ?, ?)",
-        (token, user["id"], expiry.isoformat()),
+    execute_write_pg(
+        "INSERT INTO sessions (token, user_id, expiry) VALUES (%s, %s, %s)",
+        (token, user["id"], expiry),
     )
-    execute_write(
-        "UPDATE users SET last_login = ? WHERE id = ?",
-        (datetime.now().isoformat(), user["id"]),
+    execute_write_pg(
+        "UPDATE users SET last_login = %s WHERE id = %s",
+        (datetime.now(timezone.utc), user["id"]),
     )
 
     response.set_cookie(
@@ -82,7 +82,7 @@ def login(payload: LoginRequest, response: Response):
 def logout(request: Request, response: Response):
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if token:
-        execute_write("DELETE FROM sessions WHERE token = ?", (token,))
+        execute_write_pg("DELETE FROM sessions WHERE token = %s", (token,))
     response.delete_cookie(SESSION_COOKIE_NAME)
     return {"success": True}
 
@@ -99,16 +99,18 @@ def get_current_user(request: Request):
     if not token:
         raise HTTPException(401, "Not authenticated")
 
-    rows = execute_query(
+    rows = execute_query_pg(
         "SELECT s.*, u.username, u.is_active, u.role FROM sessions s "
-        "JOIN users u ON u.id = s.user_id WHERE s.token = ?",
+        "JOIN users u ON u.id = s.user_id WHERE s.token = %s",
         (token,),
     )
     session = rows[0] if rows else None
     if not session:
         raise HTTPException(401, "Not authenticated")
 
-    if datetime.fromisoformat(session["expiry"]) < datetime.now():
+    # sessions.expiry is TIMESTAMPTZ - psycopg2 already returns a tz-aware
+    # datetime, not a string, so this compares directly (no fromisoformat()).
+    if session["expiry"] < datetime.now(timezone.utc):
         raise HTTPException(401, "Session expired")
 
     return session
@@ -126,8 +128,8 @@ def require_admin(session=Depends(get_current_user)):
 
 
 def _get_client_summary(client_id):
-    rows = execute_query(
-        "SELECT id, client_name, client_code FROM clients WHERE id = ?", (client_id,)
+    rows = execute_query_pg(
+        "SELECT id, client_name, client_code FROM clients WHERE id = %s", (client_id,)
     )
     return rows[0] if rows else None
 
@@ -138,8 +140,8 @@ def select_client(payload: SelectClientRequest, session=Depends(get_current_user
     if not client:
         raise HTTPException(404, "Client not found")
 
-    execute_write(
-        "UPDATE sessions SET selected_client_id = ? WHERE token = ?",
+    execute_write_pg(
+        "UPDATE sessions SET selected_client_id = %s WHERE token = %s",
         (client["id"], session["token"]),
     )
 
