@@ -2,7 +2,9 @@
 // 🌐 GLOBAL CLIENT CONTEXT – Centralised Switching
 // ==============================================
 
-const API_BASE = 'http://localhost:5000';
+// Relative on purpose: main.py mounts /static on the same FastAPI app that serves the API, so the
+// frontend and backend are always same-origin — localhost:5000 in dev, the Render URL in prod.
+const API_BASE = '';
 
 // Session-backed selected-client cache (replaces the old localStorage handoff). Populated once
 // per page load by loadSessionClient() (called from initClientContext() before anything renders
