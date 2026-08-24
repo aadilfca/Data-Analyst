@@ -281,6 +281,7 @@ mandatory at the START of every session that's about to touch this file, not jus
 - 2026-08-23: Column trimming Phase 4 of 13 - dropped unread fields (data.py preview, audit_rules.py 4 entities); lean list-only row builders cut Documents/Cross-checks list N+1 queries.
 - 2026-08-23: Column trimming Phase 5 of 13 - trimmed trial_balance.py accounts/latest-accounts queries+fields and templates.py get_template()/get_templates()/get_columns() to UI-read columns.
 - 2026-08-23: Debounce wiring Phase 6 of 13 - databank.js preview search retimed 400ms->300ms; audit_rules.js has no search input, nothing to wire this phase.
+- 2026-08-23: Debounce wiring Phase 7 of 13 - no code change; template-viewer.js's search is already an in-memory filter (no fetch), trial_balance.js has no search input.
 
 
 ## Self-maintenance
