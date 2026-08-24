@@ -3435,8 +3435,31 @@ document.addEventListener('DOMContentLoaded', function() {
 // renderVoucherLines()) rather than the bare currentTransactionType/procedureData/lineItems
 // globals, which are legacy leftovers from the removed standalone view and not reconciled with
 // voucherLineState.
+// Concurrency guard: multiple independent triggers (per-check toggle, "check all", Prev/Next,
+// a fast double-click, etc.) can all try to save the same detail_id before an earlier save for
+// that same line has finished. Firing them concurrently doesn't parallelize anything — they
+// queue behind each other on the same-row DB lock, so total save duration grows with every
+// stacked call instead of staying flat. inFlightLineSaves makes a second call for a detail_id
+// already being saved await/reuse that same in-flight request instead of issuing a duplicate
+// POST — this is the single chokepoint every caller (saveAllVoucherLines(), toggleAllVoucherChecks()
+// via hostAdapter, etc.) funnels through, so guarding here covers all of them.
+const inFlightLineSaves = new Map(); // detailId -> Promise
+
 async function saveLineItems(detailId = currentDetailId) {
     if (!detailId) return;
+    if (inFlightLineSaves.has(detailId)) {
+        return inFlightLineSaves.get(detailId);
+    }
+    const savePromise = doSaveLineItems(detailId);
+    inFlightLineSaves.set(detailId, savePromise);
+    try {
+        return await savePromise;
+    } finally {
+        inFlightLineSaves.delete(detailId);
+    }
+}
+
+async function doSaveLineItems(detailId) {
     if (!voucherLineState[detailId]) {
         voucherLineState[detailId] = { transactionType: '', procedureData: {}, lineItems: [] };
     }
