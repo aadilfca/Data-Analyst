@@ -60,15 +60,25 @@ let allMasterColumns = [];
 window.allMasterColumns = [];
 let selectedColumns = [];
 let closeMatchDebounceTimer = null;
+let masterColumnsLoaded = false;
+let templatesCache = null;
 
 // ---------- LOAD TEMPLATES ----------
-async function loadTemplates() {
+// forceRefresh=true bypasses the cache after a create/edit/delete that changed server
+// state (Fast Data Handling, Phase 8) -- the initial load leaves the cache empty so it
+// fetches normally.
+async function loadTemplates(forceRefresh = false) {
+    if (templatesCache && !forceRefresh) {
+        renderTemplates(templatesCache);
+        totalCountSpan.textContent = templatesCache.length;
+        return;
+    }
     try {
         const res = await fetch(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to fetch templates');
-        const templates = await res.json();
-        renderTemplates(templates);
-        totalCountSpan.textContent = templates.length;
+        templatesCache = await res.json();
+        renderTemplates(templatesCache);
+        totalCountSpan.textContent = templatesCache.length;
     } catch (error) {
         showStatus('❌ Error loading templates: ' + error.message, 'error');
         templatesBody.innerHTML = '';
@@ -193,14 +203,18 @@ function renderTemplates(templates) {
 }
 
 // ---------- LOAD MASTER COLUMNS ----------
+// Fetch-once cache (Fast Data Handling, Phase 8) -- this used to re-fetch on every
+// Add/Edit modal open and every Preview open. No invalidation needed: Quick Add already
+// patches allMasterColumns directly (see saveQuickAddColumn()), so the cache stays correct.
 async function loadMasterColumns() {
+    if (masterColumnsLoaded) return allMasterColumns;
     try {
         const res = await fetch(API_BASE + '/api/columns');
         if (!res.ok) throw new Error('Failed to fetch columns');
-        const columns = await res.json();
-        allMasterColumns = columns;
-        window.allMasterColumns = columns;
-        return columns;
+        allMasterColumns = await res.json();
+        window.allMasterColumns = allMasterColumns;
+        masterColumnsLoaded = true;
+        return allMasterColumns;
     } catch (error) {
         return [];
     }
@@ -727,7 +741,7 @@ document.getElementById('templateForm').addEventListener('submit', async functio
         showModalStatus('✅ ' + result.message, 'success');
         setTimeout(() => {
             closeModal();
-            loadTemplates();
+            loadTemplates(true);
             showStatus('✅ Template saved successfully!', 'success');
         }, 800);
 
@@ -748,7 +762,7 @@ async function confirmDelete(id, name) {
         const result = await res.json();
         if (!res.ok) throw new Error(result.message || result.detail || 'Failed to delete template');
         showStatus('✅ ' + result.message, 'success');
-        loadTemplates();
+        loadTemplates(true);
     } catch (error) {
         showStatus('❌ Error deleting template: ' + error.message, 'error');
     }

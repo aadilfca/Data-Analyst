@@ -79,11 +79,9 @@ function setupSorting() {
 }
 
 // ---------- LOAD CLIENTS ----------
-async function loadClients() {
+async function loadClients(forceRefresh = false) {
     try {
-        const res = await fetch(API_BASE + '/api/clients?include_inactive=true');
-        if (!res.ok) throw new Error('Failed to fetch clients');
-        const clients = await res.json();
+        const clients = await window.getClientsList(forceRefresh);
         window.clientData = clients;
         const sorted = sortClients(clients, sortColumn, sortAscending);
         renderClients(sorted);
@@ -297,7 +295,7 @@ async function confirmDelete(id, name) {
             throw new Error(result.message || result.detail || 'Failed to delete client');
         }
         showStatus('✅ ' + result.message, 'success');
-        loadClients();
+        loadClients(true);
     } catch (error) {
         showStatus('❌ Error deactivating client: ' + error.message, 'error');
     }
@@ -315,7 +313,7 @@ async function confirmRestore(id, name) {
             throw new Error(result.message || result.detail || 'Failed to restore client');
         }
         showStatus('✅ ' + result.message, 'success');
-        loadClients();
+        loadClients(true);
     } catch (error) {
         showStatus('❌ Error restoring client: ' + error.message, 'error');
     }
@@ -411,7 +409,7 @@ async function saveClient(keepModalOpen, triggerBtn) {
 
         showModalStatus('✅ ' + result.message, 'success');
 
-        await loadClients();
+        await loadClients(true);
 
         if (keepModalOpen) {
             clearForm();

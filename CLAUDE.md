@@ -282,6 +282,7 @@ mandatory at the START of every session that's about to touch this file, not jus
 - 2026-08-23: Column trimming Phase 5 of 13 - trimmed trial_balance.py accounts/latest-accounts queries+fields and templates.py get_template()/get_templates()/get_columns() to UI-read columns.
 - 2026-08-23: Debounce wiring Phase 6 of 13 - databank.js preview search retimed 400ms->300ms; audit_rules.js has no search input, nothing to wire this phase.
 - 2026-08-23: Debounce wiring Phase 7 of 13 - no code change; template-viewer.js's search is already an in-memory filter (no fetch), trial_balance.js has no search input.
+- 2026-08-24: Reference-data cache Phase 8 of 13 - client_context.js/clients.js/templates.js cache clients/templates/columns lists per tab, forceRefresh on mutations.
 
 
 ## Self-maintenance

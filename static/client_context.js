@@ -899,6 +899,21 @@ function isAdminUser() {
     return adminProbePromise;
 }
 
+// Memoised clients list cache (Fast Data Handling, Phase 8) - clients.js's loadClients()
+// re-fetches this same include_inactive=true list on every page action; caching it here
+// (not in clients.js) keeps the fetch/cache logic next to the other shared reference-data
+// fetches this file already owns. forceRefresh=true bypasses the cache after a mutation
+// clients.js knows changed server state (create/edit/delete/restore).
+let clientsListCache = null;
+
+async function getClientsList(forceRefresh = false) {
+    if (clientsListCache && !forceRefresh) return clientsListCache;
+    const res = await fetch(`${API_BASE}/api/clients?include_inactive=true`);
+    if (!res.ok) throw new Error('Failed to fetch clients');
+    clientsListCache = await res.json();
+    return clientsListCache;
+}
+
 // Fills the #firmTabs container each Admin page declares (an empty div - the page supplies no tab
 // markup of its own). Active state is derived from the current filename, the same read
 // isFirmLevelPage() uses, so "you are here" always comes from the URL rather than a hardcoded
@@ -1531,6 +1546,7 @@ window.enforceClientSelection = enforceClientSelection;
 // Shared admin probe - exposed so an Admin page's own guard (clients.js's checkAdminAccess())
 // reuses this one memoised request instead of issuing a second identical one.
 window.isAdminUser = isAdminUser;
+window.getClientsList = getClientsList;
 window.onClientChange = null; // Hook for page-specific logic
 
 // ---------- AUTO-INIT ON DOM READY ----------
