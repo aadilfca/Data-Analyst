@@ -1,5 +1,6 @@
 import sqlite3
 import time
+import contextvars  # TEMPORARY INSTRUMENTATION - remove alongside the db-stats wrapper below
 import os
 import shutil
 import bcrypt
@@ -3763,6 +3764,41 @@ def get_db_pg():
     return _PooledConnection()
 
 
+# === TEMPORARY INSTRUMENTATION - DB round-trip counter/timer ===============
+# Measures how many execute_query_pg/execute_write_pg calls happen, and how
+# much cumulative time they take, within one request. Inert unless a request
+# explicitly calls _reset_db_stats() first (see routers/verification.py's
+# save_line_items()). Remove this whole block, the two _instrument_db_call
+# decorator applications below, and the reset/read call sites once the
+# measurement is done - see PERFORMANCE_INVESTIGATION.md.
+_db_stats_var = contextvars.ContextVar("_db_stats_var", default=None)
+
+
+def _reset_db_stats():
+    _db_stats_var.set({"calls": 0, "db_time": 0.0})
+
+
+def _get_db_stats():
+    stats = _db_stats_var.get()
+    return stats if stats is not None else {"calls": 0, "db_time": 0.0}
+
+
+def _instrument_db_call(fn):
+    def wrapper(*args, **kwargs):
+        stats = _db_stats_var.get()
+        if stats is None:
+            return fn(*args, **kwargs)
+        start = time.perf_counter()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            stats["calls"] += 1
+            stats["db_time"] += time.perf_counter() - start
+    return wrapper
+# === END TEMPORARY INSTRUMENTATION (setup) ==================================
+
+
+@_instrument_db_call  # TEMPORARY INSTRUMENTATION - remove this line to revert
 def execute_query_pg(query, params=None):
     """
     Postgres equivalent of execute_query(): borrows a pooled connection, runs
@@ -3776,6 +3812,7 @@ def execute_query_pg(query, params=None):
             return [dict(row) for row in cur.fetchall()]
 
 
+@_instrument_db_call  # TEMPORARY INSTRUMENTATION - remove this line to revert
 def execute_write_pg(query, params=None):
     """
     Postgres equivalent of execute_write(): borrows a pooled connection, runs

@@ -7,10 +7,12 @@
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
 from database import execute_query_pg, execute_write_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg
+from database import _reset_db_stats, _get_db_stats  # TEMPORARY INSTRUMENTATION - remove with the rest of this block
 from psycopg2.extras import Json
 from datetime import datetime, timezone
 import json
 import re
+import time  # TEMPORARY INSTRUMENTATION - remove if nothing else in this file needs it
 from typing import List, Optional, Dict, Any
 import io
 import pandas as pd
@@ -1528,6 +1530,29 @@ def save_line_items(
     transaction_type: Optional[str] = Body(None, embed=True),
     procedure_data: Optional[Dict[str, Any]] = Body(None, embed=True)
 ):
+    # TEMPORARY INSTRUMENTATION - remove the reset/start lines here, the
+    # try/finally wrapping the body below (dedent it back), and the log
+    # block in the finally clause, once round-trip counts are captured.
+    _reset_db_stats()
+    _instrumentation_start = time.perf_counter()
+    try:
+        return _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data)
+    finally:
+        _db_stats = _get_db_stats()
+        _total_request_ms = (time.perf_counter() - _instrumentation_start) * 1000
+        print(
+            f"[timing] save_line_items detail_id={detail_id} "
+            f"total_calls={_db_stats['calls']} "
+            f"total_db_time={_db_stats['db_time'] * 1000:.1f}ms "
+            f"total_request_time={_total_request_ms:.1f}ms"
+        )
+
+
+# TEMPORARY INSTRUMENTATION - this is save_line_items()'s original body, split
+# out only so the finally block above can wrap it regardless of which path
+# (success or any raise) it exits through. Merge this back into
+# save_line_items() and delete this wrapper split when instrumentation is removed.
+def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data):
     detail = execute_query_pg(
         "SELECT id, status FROM verification_details WHERE id = %s",
         (detail_id,)
