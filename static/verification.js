@@ -695,7 +695,7 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
         let anchorDate = new Date();
         try {
             const latestParams = new URLSearchParams({ client_id: clientId, category_group: currentType });
-            const latestRes = await fetch(`${API_BASE}/api/verification/latest_cashbook_date?${latestParams}`);
+            const latestRes = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/latest_cashbook_date?${latestParams}`);
             if (latestRes.ok) {
                 const latestData = await latestRes.json();
                 if (latestData.latest_date) {
@@ -719,7 +719,7 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
             date_end: end,
             category_group: currentType
         });
-        const res = await fetch(`${API_BASE}/api/verification/cashbooks?${params}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/cashbooks?${params}`);
         if (!res.ok) {
             const err = await res.json();
             throw new Error(err.detail || `Failed to fetch ${bookWord}s`);
@@ -1077,7 +1077,7 @@ async function fetchCashbookData() {
         limit: cashbookPageSize
     });
     try {
-        const res = await fetch(`${API_BASE}/api/verification/preview_cashbook?${params}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/preview_cashbook?${params}`);
         if (!res.ok) {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to fetch cashbook data');
@@ -1318,7 +1318,7 @@ async function restoreSessionView(sessionId) {
         return;
     }
     try {
-        const res = await fetch(`${API_BASE}/api/verification/audited_cashbook/${sessionId}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/audited_cashbook/${sessionId}`);
         if (!res.ok) {
             showDashboardWithMessage('This verification session is no longer available.');
             return;
@@ -1351,7 +1351,7 @@ async function loadNextTransaction(detailId = null) {
         isNavigating = true;
         window.LoadingUI.showSkeleton(document.getElementById('voucherLinesContainer'), 3);
         const url = `${API_BASE}/api/verification/next/${currentSessionId}`;
-        const res = await fetch(url);
+        const res = await window.ApiUtils.apiFetch(url);
         if (!res.ok) {
             const err = await res.json();
         if (err.detail && err.detail.includes('All transactions')) {
@@ -1614,7 +1614,7 @@ async function fetchAuditGuidanceData(type, forceRefresh = false) {
     if (!forceRefresh && Object.prototype.hasOwnProperty.call(auditGuidanceCache, type)) {
         return auditGuidanceCache[type];
     }
-    const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
+    const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
     if (res.status === 404) {
         auditGuidanceCache[type] = null;
         return null;
@@ -1632,7 +1632,7 @@ async function fetchAuditGuidanceData(type, forceRefresh = false) {
 // the cell itself.
 async function fetchAssignedDocumentRecords(uid) {
     try {
-        const res = await fetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
         if (!res.ok) return [];
         const data = await res.json();
         return data.documents || [];
@@ -1648,7 +1648,7 @@ async function fetchAssignedDocumentRecords(uid) {
 // been opened. Same fail-soft-to-[] convention as fetchAssignedDocumentRecords().
 async function fetchProcedureChecksForLine(uid) {
     try {
-        const res = await fetch(`${API_BASE}/api/verification/procedure_checks/${uid}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_checks/${uid}`);
         if (!res.ok) return [];
         const data = await res.json();
         return data.checks || [];
@@ -1664,7 +1664,7 @@ async function fetchProcedureChecksForLine(uid) {
 // fetchAssignedDocumentRecords()/fetchProcedureChecksForLine().
 async function fetchPhysicalBillsForLine(uid) {
     try {
-        const res = await fetch(`${API_BASE}/api/verification/physical_bills/${uid}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/physical_bills/${uid}`);
         if (!res.ok) return [];
         const data = await res.json();
         return data.bills || [];
@@ -1849,7 +1849,7 @@ async function updateProceduresCellForLine(uid, type) {
 // breaks the cell itself.
 async function fetchLineObservationEntries(uid) {
     try {
-        const res = await fetch(`${API_BASE}/api/verification/line_observations/${uid}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/line_observations/${uid}`);
         if (!res.ok) return [];
         const data = await res.json();
         return data.entries || [];
@@ -2039,7 +2039,7 @@ async function autoFillCategoryForLine(uid, accountCode) {
         } else {
             const clientId = getClientId();
             const params = new URLSearchParams({ client_id: clientId, account_code: accountCode });
-            const res = await fetch(`${API_BASE}/api/verification/category-for-account?${params}`);
+            const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/category-for-account?${params}`);
             if (!res.ok) throw new Error('Failed to look up category for account');
             const data = await res.json();
             categoryName = data.matched ? data.category_name : null;
@@ -2246,7 +2246,7 @@ async function showLineStatusReasonPopover(cell, uid) {
     lineStatusReasonUid = uid;
 
     try {
-        const response = await fetch(`${API_BASE}/api/verification/line_status_reason/${uid}`);
+        const response = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/line_status_reason/${uid}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         // Discard a stale response if the popover was closed or switched to another line while
@@ -2696,7 +2696,7 @@ function buildAuditGuidanceTable(data) {
 async function refreshVoucherStats() {
     if (!currentSessionId) return;
     try {
-        const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/voucher_stats`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/session/${currentSessionId}/voucher_stats`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         voucherStatsCache = await res.json();
         const totalEl = document.getElementById('voucherStatTotal');
@@ -2735,7 +2735,7 @@ async function updateProgressDisplay() {
                 let total = totalTransactions;
                 if (total === 0) {
                     try {
-                        const res = await fetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
+                        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/session/${currentSessionId}/progress`);
                         if (res.ok) {
                             const data = await res.json();
                             total = data.total_transactions || 0;
@@ -2964,7 +2964,7 @@ async function loadTransactionList(showPopover = false, forceRefresh = false) {
 
     // Fetch all transactions for this session
     try {
-        const res = await fetch(`${API_BASE}/api/verification/audited_cashbook/${currentSessionId}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/audited_cashbook/${currentSessionId}`);
         if (!res.ok) {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to fetch transaction list');
@@ -3350,7 +3350,7 @@ async function moveToAdjacentVoucher(direction) {
     try {
         window.LoadingUI.showSkeleton(document.getElementById('voucherLinesContainer'), 3);
         const url = `${API_BASE}/api/verification/voucher_nav/${currentSessionId}?current_detail_id=${currentDetailId}&direction=${direction}`;
-        const res = await fetch(url);
+        const res = await window.ApiUtils.apiFetch(url);
         if (!res.ok) return false;
         const data = await res.json();
         if (data.boundary) return false;
@@ -3699,7 +3699,7 @@ async function searchSupportingDocuments() {
             template_id: templateId,
             limit: 20
         });
-        const res = await fetch(`${API_BASE}/api/verification/supporting?${params}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/supporting?${params}`);
         if (!res.ok) throw new Error('Failed to search');
         const data = await res.json();
         const docs = data.supporting_documents || [];
@@ -4028,7 +4028,7 @@ const TEMPLATE_LINK_ICON_FALLBACK = '📁';
 async function loadDataLinksCards() {
     if (!dataLinksCardStrip) return;
     try {
-        const res = await fetch('/api/templates');
+        const res = await window.ApiUtils.apiFetch('/api/templates');
         if (!res.ok) throw new Error('Failed to load templates');
         const templates = await res.json();
 
@@ -4067,7 +4067,7 @@ async function loadDataLinksCards() {
 
 async function loadVerificationStats() {
     try {
-        const res = await fetch('/api/verification/stats');
+        const res = await window.ApiUtils.apiFetch('/api/verification/stats');
         if (res.ok) {
             const stats = await res.json();
             document.getElementById('pendingCount').textContent = stats.pending || 0;

@@ -96,7 +96,7 @@ async function loadDocuments() {
     const includeInactive = arShowInactiveCheckbox.checked;
     window.LoadingUI.showSkeleton(arListBody, 6);
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/documents?include_inactive=' + includeInactive + '&limit=' + DOCUMENTS_PAGE_SIZE + '&offset=0');
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents?include_inactive=' + includeInactive + '&limit=' + DOCUMENTS_PAGE_SIZE + '&offset=0');
         if (!res.ok) throw new Error('Failed to load documents');
         documentItems = await res.json();
         documentsOffset = documentItems.length;
@@ -117,7 +117,7 @@ async function loadMoreDocuments() {
     const includeInactive = arShowInactiveCheckbox.checked;
     window.LoadingUI.showSpinner(arLoadMoreBtn, 'Loading');
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/documents?include_inactive=' + includeInactive + '&limit=' + DOCUMENTS_PAGE_SIZE + '&offset=' + documentsOffset);
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents?include_inactive=' + includeInactive + '&limit=' + DOCUMENTS_PAGE_SIZE + '&offset=' + documentsOffset);
         if (!res.ok) throw new Error('Failed to load more documents');
         const nextPage = await res.json();
         documentItems = documentItems.concat(nextPage);
@@ -306,7 +306,7 @@ function removeField(value) {
 async function loadTemplatesForDocuments() {
     if (arTemplateSelect) window.LoadingUI.showFieldLoading(arTemplateSelect);
     try {
-        const res = await fetch(API_BASE + '/api/templates');
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to fetch templates');
         const templates = await res.json();
         arTemplateSelect.innerHTML = '<option value="">-- None --</option>' +
@@ -333,7 +333,7 @@ async function fetchArTemplateColumns(templateId) {
         return arTemplateColumnsCache[templateId];
     }
     try {
-        const res = await fetch(API_BASE + '/api/templates/' + templateId);
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/templates/' + templateId);
         if (!res.ok) { arTemplateColumnsCache[templateId] = []; return []; }
         const data = await res.json();
         const columns = (data.columns || []).map(c => ({ id: c.id, column_name: c.column_name }));
@@ -422,7 +422,7 @@ async function toggleDocumentTransactionLevelApproval(checked) {
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectDocument(id) {
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/documents/' + id);
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + id);
         if (!res.ok) throw new Error('Document not found');
         const doc = await res.json();
 
@@ -652,7 +652,7 @@ let currentSpecimensDoc = null;
 async function loadDocumentSignatureSpecimens(doc) {
     currentSpecimensDoc = doc;
     try {
-        const res = await fetch(
+        const res = await window.ApiUtils.apiFetch(
             API_BASE + '/api/audit-rules/signature-specimens?client_id=' + getSelectedClientId() +
             '&document_id=' + doc.id + '&include_inactive=true'
         );
@@ -1019,7 +1019,7 @@ function showCrossCheckDetailStatus(message, type) {
 // ---------- DOCUMENT CACHE (for the add-document picker + field eligibility) ----------
 async function loadAllDocumentsForCrossChecks() {
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/documents?include_inactive=false');
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents?include_inactive=false');
         if (!res.ok) throw new Error('Failed to load documents');
         allDocuments = await res.json();
     } catch (error) {
@@ -1037,7 +1037,7 @@ async function loadCrossChecks() {
     const includeInactive = arCrossCheckShowInactiveCheckbox.checked;
     window.LoadingUI.showSkeleton(arCrossCheckListBody, 6);
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=' + includeInactive + '&limit=' + CROSS_CHECKS_PAGE_SIZE + '&offset=0');
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=' + includeInactive + '&limit=' + CROSS_CHECKS_PAGE_SIZE + '&offset=0');
         if (!res.ok) throw new Error('Failed to load cross-checks');
         crossCheckItems = await res.json();
         crossChecksOffset = crossCheckItems.length;
@@ -1056,7 +1056,7 @@ async function loadMoreCrossChecks() {
     const includeInactive = arCrossCheckShowInactiveCheckbox.checked;
     window.LoadingUI.showSpinner(arCrossCheckLoadMoreBtn, 'Loading');
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=' + includeInactive + '&limit=' + CROSS_CHECKS_PAGE_SIZE + '&offset=' + crossChecksOffset);
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=' + includeInactive + '&limit=' + CROSS_CHECKS_PAGE_SIZE + '&offset=' + crossChecksOffset);
         if (!res.ok) throw new Error('Failed to load more cross-checks');
         const nextPage = await res.json();
         crossCheckItems = crossCheckItems.concat(nextPage);
@@ -1334,7 +1334,7 @@ function updateCompareToVoucherLineHint() {
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectCrossCheck(id) {
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/cross-checks/' + id);
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks/' + id);
         if (!res.ok) throw new Error('Cross-check not found');
         const cc = await res.json();
 
@@ -1621,7 +1621,7 @@ async function renderCategoryClearedRequirements(categoryId) {
     arCategoryClearedRequirementsList.appendChild(loading);
 
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/categories/' + categoryId + '/cleared-requirements');
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories/' + categoryId + '/cleared-requirements');
         if (!res.ok) throw new Error('Failed to load cleared-requirements summary');
         const data = await res.json();
         renderClearedRequirementsBullets(data);
@@ -1724,7 +1724,7 @@ function showCategoryDetailStatus(message, type) {
 // ---------- CROSS-CHECK CACHE (for the add-cross-check picker + removal warning) ----------
 async function loadAllCrossChecksForCategories() {
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=false');
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=false');
         if (!res.ok) throw new Error('Failed to load cross-checks');
         allCrossChecks = await res.json();
     } catch (error) {
@@ -1764,7 +1764,7 @@ async function loadCategories() {
     }
     window.LoadingUI.showSkeleton(arCategoryListBody, 6);
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive + '&limit=' + CATEGORIES_PAGE_SIZE + '&offset=0');
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive + '&limit=' + CATEGORIES_PAGE_SIZE + '&offset=0');
         if (!res.ok) throw new Error('Failed to load categories');
         const categories = await res.json();
         const total = parseInt(res.headers.get('X-Total-Count'), 10) || categories.length;
@@ -1785,7 +1785,7 @@ async function loadMoreCategories() {
     if (!cached) return;
     window.LoadingUI.showSpinner(arCategoryLoadMoreBtn, 'Loading');
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive + '&limit=' + CATEGORIES_PAGE_SIZE + '&offset=' + cached.items.length);
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive + '&limit=' + CATEGORIES_PAGE_SIZE + '&offset=' + cached.items.length);
         if (!res.ok) throw new Error('Failed to load more categories');
         const nextPage = await res.json();
         cached.items = cached.items.concat(nextPage);
@@ -2234,7 +2234,7 @@ function removeCategoryCrossCheck(ccId) {
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectCategory(id) {
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/categories/' + id);
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories/' + id);
         if (!res.ok) throw new Error('Category not found');
         const cat = await res.json();
 
@@ -2582,8 +2582,8 @@ async function loadAssignCategoriesData() {
 
     try {
         const [categoriesRes, accountsRes] = await Promise.all([
-            fetch(API_BASE + '/api/audit-rules/categories?include_inactive=false'),
-            fetch(API_BASE + '/api/trial-balance/latest-accounts?client_id=' + clientId)
+            window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories?include_inactive=false'),
+            window.ApiUtils.apiFetch(API_BASE + '/api/trial-balance/latest-accounts?client_id=' + clientId)
         ]);
 
         if (!categoriesRes.ok) throw new Error('Failed to load categories');
@@ -2654,7 +2654,7 @@ function renderAssignCategoriesTable() {
 // scroll container itself, so scroll position is naturally preserved.
 async function refreshAssignCategoriesCategoryOptions() {
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/categories?include_inactive=false');
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories?include_inactive=false');
         if (!res.ok) throw new Error('Failed to load categories');
         const categories = await res.json();
         assignCategoriesCategoryOptions = categories.map(c => ({ id: c.id, name: c.name }));
@@ -3165,7 +3165,7 @@ async function loadVoucherChecks() {
     const includeInactive = arVoucherCheckShowInactiveCheckbox.checked;
     window.LoadingUI.showSkeleton(arVoucherCheckListBody, 6);
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks?include_inactive=' + includeInactive);
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/voucher-checks?include_inactive=' + includeInactive);
         if (!res.ok) throw new Error('Failed to load voucher-level checks');
         const checks = await res.json(); // already ORDER BY sort_order server-side -- do not re-sort here
         allVoucherChecksCache = checks;
@@ -3269,7 +3269,7 @@ function initVoucherCheckSortable() {
 // ---------- SELECT / NEW ----------
 async function selectVoucherCheck(id) {
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks/' + id);
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/voucher-checks/' + id);
         if (!res.ok) throw new Error('Voucher-level check not found');
         const check = await res.json();
 
