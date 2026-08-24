@@ -280,6 +280,7 @@ mandatory at the START of every session that's about to touch this file, not jus
 - 2026-08-23: Postgres index audit Phase 2 of 13 - audit_postgres_indexes.py added, created missing client_data(client_id,template_id,is_deleted) index.
 - 2026-08-23: Column trimming Phase 4 of 13 - dropped unread fields (data.py preview, audit_rules.py 4 entities); lean list-only row builders cut Documents/Cross-checks list N+1 queries.
 - 2026-08-23: Column trimming Phase 5 of 13 - trimmed trial_balance.py accounts/latest-accounts queries+fields and templates.py get_template()/get_templates()/get_columns() to UI-read columns.
+- 2026-08-23: Debounce wiring Phase 6 of 13 - databank.js preview search retimed 400ms->300ms; audit_rules.js has no search input, nothing to wire this phase.
 
 
 ## Self-maintenance

@@ -1688,7 +1688,7 @@ searchInput.addEventListener('input', function() {
             currentPage = 1;
             fetchPreviewData();
         }
-    }, 400);
+    }, 300);  // Fast Data Handling Phase 6 of 13: retimed from 400ms to 300ms
 });
 
 // Amount filters – apply on Enter key
