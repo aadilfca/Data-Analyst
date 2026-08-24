@@ -1651,13 +1651,30 @@ function getCrossCheckById(id) {
 }
 
 // ---------- LOAD & RENDER LIST ----------
+// Fetch-once-per-toggle-state cache (Fast Data Handling, Phase 9) -- switchEntityType('categories')
+// re-fetches this same list every time the user switches back to this rail tab, and selectCategory()
+// (below) calls loadCategories() on every row click just to move the highlight. Neither actually
+// needs fresh server data, so both now serve from cache. Keyed by the show-inactive toggle state
+// since that changes the query. invalidateCategoriesListCache() clears both keys on this page's own
+// create/edit/delete/restore, which are the only actions that can change what this list should show.
+let categoriesListCache = { true: null, false: null };
+
+function invalidateCategoriesListCache() {
+    categoriesListCache = { true: null, false: null };
+}
+
 async function loadCategories() {
     const includeInactive = arCategoryShowInactiveCheckbox.checked;
+    if (categoriesListCache[includeInactive]) {
+        renderCategoryList(categoriesListCache[includeInactive]);
+        return;
+    }
     window.LoadingUI.showSkeleton(arCategoryListBody, 6);
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive);
         if (!res.ok) throw new Error('Failed to load categories');
         const categories = await res.json();
+        categoriesListCache[includeInactive] = categories;
         renderCategoryList(categories);
     } catch (error) {
         arCategoryListBody.innerHTML = '';
@@ -2220,6 +2237,7 @@ async function saveCategory(triggerBtn) {
         // POST doesn't echo back the full row, so re-fetch the list, then re-select
         // to refresh the detail panel's is_active/used_by state from the server.
         const savedId = editingCategoryId || result.category_id;
+        invalidateCategoriesListCache();
         await loadCategories();
         await selectCategory(savedId);
     } catch (error) {
@@ -2240,6 +2258,7 @@ async function deleteCategory() {
         if (!res.ok) throw new Error(result.detail || result.message || 'Failed to delete category');
 
         showCategoryDetailStatus('✅ ' + result.message, 'success');
+        invalidateCategoriesListCache();
         await loadCategories();
         await selectCategory(editingCategoryId);
     } catch (error) {
@@ -2256,6 +2275,7 @@ async function restoreCategory() {
         if (!res.ok) throw new Error(result.detail || result.message || 'Failed to restore category');
 
         showCategoryDetailStatus('✅ ' + result.message, 'success');
+        invalidateCategoriesListCache();
         await loadCategories();
         await selectCategory(editingCategoryId);
     } catch (error) {
