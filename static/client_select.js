@@ -14,17 +14,89 @@ const clientCardGrid = document.getElementById('clientCardGrid');
 const clientSelectEmpty = document.getElementById('clientSelectEmpty');
 const clientSearchInput = document.getElementById('clientSearchInput');
 
+// ---------- PAGINATION (Fast Data Handling, Phase 11 of 13) ----------
+// Page-number style (limit/offset + X-Total-Count + Prev/Next), a deliberately different
+// frontend interaction from Phase 10's "Load more" (Audit Rules lists) — this is a card grid,
+// not an accumulating list. Search is server-side (?search=) rather than filtering an
+// in-memory array, so Prev/Next and search compose correctly: a client-side-only filter would
+// silently miss matches on pages not yet loaded.
+const CLIENTS_PAGE_SIZE = 20;
+let clientsOffset = 0;
+let clientsTotal = 0;
+let currentSearchTerm = '';
+let searchDebounceTimer = null;
+
 async function loadClients() {
     try {
-        const res = await fetch('/api/clients');
+        const params = new URLSearchParams();
+        params.set('limit', CLIENTS_PAGE_SIZE);
+        params.set('offset', clientsOffset);
+        if (currentSearchTerm) params.set('search', currentSearchTerm);
+
+        const res = await fetch('/api/clients?' + params.toString());
         if (!res.ok) throw new Error('Failed to load clients');
         allClients = await res.json();
+        clientsTotal = parseInt(res.headers.get('X-Total-Count'), 10) || allClients.length;
         renderClients(allClients);
+        renderPaginationBar();
     } catch (err) {
         clientCardGrid.innerHTML = '';
         clientSelectEmpty.textContent = 'Could not load clients. Please try again.';
         clientSelectEmpty.style.display = 'block';
     }
+}
+
+// Builds the Prev/Next bar via createElement/inline styles (client_select.html carries no
+// markup or CSS of its own for this — same "construct via JS" approach templates.js's preview
+// modal already uses elsewhere in this codebase). Injected once, right after the card grid.
+function renderPaginationBar() {
+    let bar = document.getElementById('clientPaginationBar');
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = 'clientPaginationBar';
+        bar.style.cssText = 'display:flex; align-items:center; justify-content:center; gap:16px; margin-top:20px;';
+        clientCardGrid.insertAdjacentElement('afterend', bar);
+    }
+
+    if (clientsTotal === 0 || clientsTotal <= CLIENTS_PAGE_SIZE) {
+        bar.style.display = 'none';
+        return;
+    }
+    bar.style.display = 'flex';
+    bar.innerHTML = '';
+
+    const pageStart = clientsOffset + 1;
+    const pageEnd = Math.min(clientsOffset + CLIENTS_PAGE_SIZE, clientsTotal);
+
+    const btnStyle = 'padding:8px 16px; border:1px solid #d0d5dd; border-radius:8px; background:white; font-size:13px;';
+
+    const prevBtn = document.createElement('button');
+    prevBtn.type = 'button';
+    prevBtn.textContent = '← Prev';
+    prevBtn.disabled = clientsOffset === 0;
+    prevBtn.style.cssText = btnStyle + (prevBtn.disabled ? ' opacity:0.5; cursor:not-allowed;' : ' cursor:pointer;');
+    prevBtn.addEventListener('click', () => {
+        clientsOffset = Math.max(0, clientsOffset - CLIENTS_PAGE_SIZE);
+        loadClients();
+    });
+
+    const label = document.createElement('span');
+    label.textContent = `Showing ${pageStart}–${pageEnd} of ${clientsTotal}`;
+    label.style.cssText = 'font-size:13px; color:#64748b;';
+
+    const nextBtn = document.createElement('button');
+    nextBtn.type = 'button';
+    nextBtn.textContent = 'Next →';
+    nextBtn.disabled = pageEnd >= clientsTotal;
+    nextBtn.style.cssText = btnStyle + (nextBtn.disabled ? ' opacity:0.5; cursor:not-allowed;' : ' cursor:pointer;');
+    nextBtn.addEventListener('click', () => {
+        clientsOffset += CLIENTS_PAGE_SIZE;
+        loadClients();
+    });
+
+    bar.appendChild(prevBtn);
+    bar.appendChild(label);
+    bar.appendChild(nextBtn);
 }
 
 function renderClients(clients) {
@@ -109,18 +181,17 @@ async function selectClient(client) {
     }
 }
 
-function filterClients(searchTerm) {
-    if (!searchTerm) {
-        renderClients(allClients);
-        return;
-    }
-    const filtered = allClients.filter(client => {
-        const name = (client.client_name || '').toLowerCase();
-        const code = (client.client_code || '').toLowerCase();
-        const industry = (client.industry || '').toLowerCase();
-        return name.includes(searchTerm) || code.includes(searchTerm) || industry.includes(searchTerm);
-    });
-    renderClients(filtered);
+// Debounced (~300ms, matching this app's established pre-api_utils.js debounce convention —
+// e.g. audit_rules.js's close-match hint) re-query against the server's ?search= param, rather
+// than filtering allClients client-side: allClients only ever holds the current page now.
+function handleSearchInput(rawValue) {
+    const term = rawValue.trim().toLowerCase();
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+        currentSearchTerm = term;
+        clientsOffset = 0;
+        loadClients();
+    }, 300);
 }
 
 function escapeHtml(str) {
@@ -130,7 +201,7 @@ function escapeHtml(str) {
 }
 
 clientSearchInput.addEventListener('input', function () {
-    filterClients(this.value.trim().toLowerCase());
+    handleSearchInput(this.value);
 });
 
 // Admin-only Settings entry point (Admin area, Phase 7 of 8) - same GET /api/users 403-probe

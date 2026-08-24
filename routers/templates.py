@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Query, Response
 from database import execute_query_pg, execute_write_pg, log_audit, get_raw_conn_pg, release_raw_conn_pg
 from psycopg2.extras import Json
 import json
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -165,11 +165,23 @@ class TemplateUpdate(BaseModel):
     has_subtotals_by_default: bool = False
 
 @router.get("/api/templates")
-def get_templates():
-    """Return all active templates with their columns (ordered by sort_order)."""
-    templates = execute_query_pg(
-        "SELECT id, template_name, created_by, created_date, is_active, rate_source, has_subtotals_by_default FROM templates WHERE is_active = TRUE ORDER BY template_name"
-    )
+def get_templates(
+    response: Response,
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """Return active templates with their columns (ordered by sort_order).
+    limit/offset optionally paginate the top-level template rows (Fast Data Handling Phase 11
+    of 13, backend support only this phase) -- omitted (every current caller: templates.js's
+    cache, upload.js's dropdown, audit_rules.js's template select) returns the full list with
+    no X-Total-Count header, unchanged from before this phase."""
+    base_query = "SELECT id, template_name, created_by, created_date, is_active, rate_source, has_subtotals_by_default FROM templates WHERE is_active = TRUE"
+    if limit is not None:
+        total = execute_query_pg("SELECT COUNT(*) as cnt FROM templates WHERE is_active = TRUE")[0]["cnt"]
+        response.headers["X-Total-Count"] = str(total)
+        templates = execute_query_pg(base_query + " ORDER BY template_name LIMIT %s OFFSET %s", (limit, offset))
+    else:
+        templates = execute_query_pg(base_query + " ORDER BY template_name")
     for t in templates:
         mappings = execute_query_pg(
             """

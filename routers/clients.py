@@ -2,7 +2,7 @@
 # 🏢 CLIENT MANAGEMENT ROUTER
 # ==============================================
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from typing import Optional, List
 from database import execute_query_pg, execute_write_pg, log_audit, get_client_voucher_prefixes_pg, save_client_voucher_prefixes_pg, DEFAULT_VOUCHER_PREFIXES
@@ -80,16 +80,42 @@ def row_to_client(row: dict) -> dict:
 # ---------- ENDPOINTS ----------
 
 @router.get("/api/clients", response_model=List[ClientResponse])
-def get_clients(include_inactive: bool = False):
+def get_clients(
+    response: Response,
+    include_inactive: bool = False,
+    search: Optional[str] = None,
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
     """
-    Get all clients. By default, only active clients are returned.
-    Set include_inactive=True to get all.
+    Get clients, optionally filtered by is_active/search and paginated.
+    - include_inactive=False (default): active clients only.
+    - search: case-insensitive substring match against client_code/client_name/industry.
+    - limit/offset: when limit is omitted (every caller before Fast Data Handling Phase 11 of 13,
+      including the Admin Manage Clients page's reference-data cache), the full matching list is
+      returned exactly as before, no X-Total-Count header. When limit is set, the result is
+      paginated and X-Total-Count carries the total matching row count (Client Cards' Prev/Next
+      pagination is the only caller that sets it today).
     """
-    query = "SELECT * FROM clients"
+    where_clauses = []
+    params = []
     if not include_inactive:
-        query += " WHERE is_active = TRUE"
-    query += " ORDER BY client_name"
-    rows = execute_query_pg(query)
+        where_clauses.append("is_active = TRUE")
+    if search:
+        where_clauses.append("(client_code ILIKE %s OR client_name ILIKE %s OR industry ILIKE %s)")
+        like = f"%{search}%"
+        params.extend([like, like, like])
+    where_sql = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    if limit is not None:
+        total = execute_query_pg("SELECT COUNT(*) as cnt FROM clients" + where_sql, tuple(params))[0]["cnt"]
+        response.headers["X-Total-Count"] = str(total)
+        rows = execute_query_pg(
+            "SELECT * FROM clients" + where_sql + " ORDER BY client_name LIMIT %s OFFSET %s",
+            tuple(params) + (limit, offset)
+        )
+    else:
+        rows = execute_query_pg("SELECT * FROM clients" + where_sql + " ORDER BY client_name", tuple(params))
     return [row_to_client(r) for r in rows]
 
 @router.get("/api/clients/{client_id}", response_model=ClientResponse)
