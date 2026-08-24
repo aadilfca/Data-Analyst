@@ -123,10 +123,37 @@ def check_approved_by_authority_gate(client_id: int, category_id: int) -> bool:
     with the user). A Document/role with no Required Authority set imposes no requirement;
     vacuously True if no required Document has any Required Authority configured at all.
     """
-    for doc in get_required_documents_with_authority(category_id):
-        for role_name, required_authority in doc["required_authorities"].items():
-            if not has_matching_active_specimen(client_id, doc["document_id"], role_name, required_authority):
-                return False
+    docs = get_required_documents_with_authority(category_id)
+    required_pairs = [
+        (doc["document_id"], role_name, required_authority)
+        for doc in docs
+        for role_name, required_authority in doc["required_authorities"].items()
+    ]
+    if not required_pairs:
+        return True
+
+    # Batched: one query for every required document's active specimens instead of one
+    # has_matching_active_specimen() query per (document x role) pair - this gate runs on every
+    # save_line_items() call, so the per-pair query loop was a direct contributor to that call's
+    # total DB round-trip count. .strip().lower() reproduces the original per-pair query's
+    # TRIM(LOWER(...)) = TRIM(LOWER(...)) comparison exactly.
+    doc_ids = list({pair[0] for pair in required_pairs})
+    placeholders = ",".join("%s" for _ in doc_ids)
+    specimens = execute_query_pg(
+        f"""
+        SELECT document_id, role_name, authority
+        FROM signature_specimens
+        WHERE client_id = %s AND document_id IN ({placeholders}) AND is_active = TRUE
+        """,
+        (client_id, *doc_ids)
+    )
+    specimen_keys = {
+        (s["document_id"], s["role_name"], (s["authority"] or "").strip().lower())
+        for s in specimens
+    }
+    for document_id, role_name, required_authority in required_pairs:
+        if (document_id, role_name, (required_authority or "").strip().lower()) not in specimen_keys:
+            return False
     return True
 
 def get_document_cross_check_fields(document_id: int) -> List[str]:

@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
-from database import execute_query_pg, execute_write_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg
+from database import execute_query_pg, execute_write_pg, execute_batch_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg
 from database import _reset_db_stats, _get_db_stats  # TEMPORARY INSTRUMENTATION - remove with the rest of this block
 from psycopg2.extras import Json
 from datetime import datetime, timezone
@@ -3840,11 +3840,21 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
 
         # Bookkeeping only under this rebuild design (see docstring) - kept accurate for
         # consistency/audit visibility, not because anything still reads it to gate behaviour.
-        for entry in all_entries:
-            execute_write_pg(
-                "UPDATE voucher_line_observations SET synced = TRUE, last_synced_text = %s WHERE id = %s",
-                (entry['observation_text'], entry['id'])
-            )
+        # Batched via execute_batch_pg() (one connection, one pipelined round-trip) rather than
+        # one execute_write_pg() call per entry - each of those borrowed/released its own pooled
+        # connection and round-tripped separately, which is what made this loop a real contributor
+        # to save_line_items()'s total DB round-trip count (see routers/import_export.py's own
+        # get_raw_conn_pg()/execute_batch_pg()/release_raw_conn_pg() usage for the same pattern).
+        if all_entries:
+            conn = get_raw_conn_pg()
+            try:
+                execute_batch_pg(
+                    conn,
+                    "UPDATE voucher_line_observations SET synced = TRUE, last_synced_text = %s WHERE id = %s",
+                    [(entry['observation_text'], entry['id']) for entry in all_entries]
+                )
+            finally:
+                release_raw_conn_pg(conn)
     except Exception as exc:
         # Deliberately swallow - observation roll-up must never block a line save.
         print(f"⚠️ sync_line_observations_to_voucher failed for line {voucher_line_id}: {exc}")
