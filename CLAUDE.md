@@ -278,6 +278,8 @@ mandatory at the START of every session that's about to touch this file, not jus
 - 2026-08-23: Added standing git workflow rule to Workflow rules - auto-commit+push after phase, only post user confirmation (CLAUDE.md).
 - 2026-08-23: Fast-data-handling Phase 1 of 13 - GZipMiddleware added to main.py, app-wide gzip compression for slow-connection responses.
 - 2026-08-23: Postgres index audit Phase 2 of 13 - audit_postgres_indexes.py added, created missing client_data(client_id,template_id,is_deleted) index.
+- 2026-08-23: Column trimming Phase 4 of 13 - dropped unread fields (data.py preview, audit_rules.py 4 entities); lean list-only row builders cut Documents/Cross-checks list N+1 queries.
+- 2026-08-23: Column trimming Phase 5 of 13 - trimmed trial_balance.py accounts/latest-accounts queries+fields and templates.py get_template()/get_templates()/get_columns() to UI-read columns.
 
 
 ## Self-maintenance

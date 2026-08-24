@@ -23,7 +23,10 @@ class ColumnUpdate(BaseModel):
 
 @router.get("/api/columns")
 def get_columns():
-    return execute_query_pg("SELECT id, column_name, data_type, category, is_active, notes FROM master_columns WHERE is_active = TRUE ORDER BY category, column_name")
+    # is_active is omitted here (unlike /api/columns/all below) - this endpoint already
+    # filters WHERE is_active = TRUE, so the field would be redundant on every row it
+    # can ever return (Column trimming, Phase 5 of 13).
+    return execute_query_pg("SELECT id, column_name, data_type, category, notes FROM master_columns WHERE is_active = TRUE ORDER BY category, column_name")
 
 @router.get("/api/columns/all")
 def get_all_columns():
@@ -170,7 +173,7 @@ def get_templates():
     for t in templates:
         mappings = execute_query_pg(
             """
-            SELECT m.id, m.column_name, m.data_type, m.category, p.sort_order
+            SELECT m.id, m.column_name, m.data_type, p.sort_order
             FROM template_column_mappings p
             JOIN master_columns m ON p.column_id = m.id
             WHERE p.template_id = %s AND m.is_active = TRUE
@@ -183,13 +186,16 @@ def get_templates():
 
 @router.get("/api/templates/{template_id}")
 def get_template(template_id: int):
-    result = execute_query_pg("SELECT * FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
+    result = execute_query_pg(
+        "SELECT id, template_name, has_subtotals_by_default FROM templates WHERE id = %s AND is_active = TRUE",
+        (template_id,)
+    )
     if not result:
         raise HTTPException(404, "Template not found")
     template = result[0]
     mappings = execute_query_pg(
         """
-        SELECT m.id, m.column_name, m.data_type, m.category, p.sort_order
+        SELECT m.column_name, m.data_type
         FROM template_column_mappings p
         JOIN master_columns m ON p.column_id = m.id
         WHERE p.template_id = %s AND m.is_active = TRUE

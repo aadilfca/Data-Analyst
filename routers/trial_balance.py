@@ -703,7 +703,7 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
     """
     _require_upload(upload_id)
 
-    query = "SELECT * FROM trial_balance_accounts WHERE upload_id = %s"
+    query = "SELECT id, account_code, account_name, level, classification, manually_overridden FROM trial_balance_accounts WHERE upload_id = %s"
     params = [upload_id]
     if is_leaf is not None:
         # classification is stored as the text 'leaf'/'parent' (Phase 1/2) -
@@ -719,16 +719,8 @@ def list_trial_balance_accounts(upload_id: int, is_leaf: Optional[bool] = None):
             "id": r["id"],
             "account_code": r["account_code"],
             "account_name": r["account_name"],
-            "parent_account_code": r["parent_account_code"],
             "level": r["level"],
             "is_leaf": r["classification"] == "leaf",
-            "opening_dr": r["opening_dr"],
-            "opening_cr": r["opening_cr"],
-            "period_dr": r["period_dr"],
-            "period_cr": r["period_cr"],
-            "closing_dr": r["closing_dr"],
-            "closing_cr": r["closing_cr"],
-            "source_account_type": r["source_account_type"],
             "manually_overridden": bool(r["manually_overridden"]),
         }
         for r in rows
@@ -862,7 +854,11 @@ def override_account_classification(account_id: int, payload: AccountOverrideReq
         (new_classification, account_id)
     )
 
-    updated_rows = execute_query_pg("SELECT * FROM trial_balance_accounts WHERE id = %s", (account_id,))
+    updated_rows = execute_query_pg(
+        "SELECT id, account_code, account_name, level, classification, manually_overridden, upload_id "
+        "FROM trial_balance_accounts WHERE id = %s",
+        (account_id,)
+    )
     r = updated_rows[0]
 
     log_audit("Analyst", "Update", "TrialBalance",
@@ -873,16 +869,8 @@ def override_account_classification(account_id: int, payload: AccountOverrideReq
         "id": r["id"],
         "account_code": r["account_code"],
         "account_name": r["account_name"],
-        "parent_account_code": r["parent_account_code"],
         "level": r["level"],
         "is_leaf": r["classification"] == "leaf",
-        "opening_dr": r["opening_dr"],
-        "opening_cr": r["opening_cr"],
-        "period_dr": r["period_dr"],
-        "period_cr": r["period_cr"],
-        "closing_dr": r["closing_dr"],
-        "closing_cr": r["closing_cr"],
-        "source_account_type": r["source_account_type"],
         "manually_overridden": bool(r["manually_overridden"]),
     }
 
@@ -967,7 +955,8 @@ def get_latest_trial_balance_accounts(client_id: int):
 
     rows = execute_query_pg(
         """
-        SELECT a.*, c.name AS category_name, c.is_active AS category_is_active
+        SELECT a.id, a.account_code, a.account_name, a.classification, a.category_id,
+               c.name AS category_name
         FROM trial_balance_accounts a
         LEFT JOIN audit_rule_categories c ON a.category_id = c.id
         WHERE a.upload_id = %s
@@ -981,8 +970,6 @@ def get_latest_trial_balance_accounts(client_id: int):
             "id": r["id"],
             "account_code": r["account_code"],
             "account_name": r["account_name"],
-            "parent_account_code": r["parent_account_code"],
-            "level": r["level"],
             "is_leaf": r["classification"] == "leaf",
             "category_id": r["category_id"],
             "category_name": r["category_name"],
@@ -991,7 +978,6 @@ def get_latest_trial_balance_accounts(client_id: int):
     ]
 
     return {
-        "upload_id": upload["id"],
         "period_start": upload["period_start"],
         "period_end": upload["period_end"],
         "period_type": upload["period_type"],
