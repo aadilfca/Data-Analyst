@@ -5,7 +5,7 @@
 // ---------- LOAD DASHBOARD STATS ----------
 async function loadDashboardStats() {
     try {
-        const res = await fetch('/api/dashboard/stats');
+        const res = await window.ApiUtils.apiFetch('/api/dashboard/stats');
         if (res.ok) {
             const stats = await res.json();
             const lastUpload = stats.last_upload ? formatDate(stats.last_upload) : 'Never';
@@ -26,7 +26,7 @@ async function loadDashboardStats() {
 // ---------- LOAD QUICK OVERVIEW KPI STATS (Phase B2) ----------
 async function loadKpiStats() {
     try {
-        const res = await fetch('/api/dashboard/kpi-stats');
+        const res = await window.ApiUtils.apiFetch('/api/dashboard/kpi-stats');
         if (res.ok) {
             const data = await res.json();
             document.getElementById('openQueries').textContent = data.open_queries ?? 0;
@@ -80,7 +80,7 @@ function renderOverdueUploadsTable() {
 
 async function loadOverdueUploads() {
     try {
-        const res = await fetch('/api/dashboard/overdue-uploads');
+        const res = await window.ApiUtils.apiFetch('/api/dashboard/overdue-uploads');
         if (res.ok) {
             const data = await res.json();
             overdueUploadsData = data.overdue || [];
@@ -104,7 +104,7 @@ function toggleOverdueUploadsPanel() {
 // ---------- LOAD DATABASE SIZE (Database Size Visibility, Phase A2) ----------
 async function loadDbSize() {
     try {
-        const res = await fetch('/api/dashboard/db-size');
+        const res = await window.ApiUtils.apiFetch('/api/dashboard/db-size');
         if (res.ok) {
             const data = await res.json();
             document.getElementById('dbSize').textContent = data.formatted || '0 B';

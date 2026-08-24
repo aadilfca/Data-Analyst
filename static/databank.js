@@ -1164,7 +1164,7 @@ async function fetchPreviewData() {
     }
 
     try {
-        const res = await fetch(`${API_BASE}/api/data/preview?${params.toString()}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/data/preview?${params.toString()}`);
         if (!res.ok) {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to fetch preview');
