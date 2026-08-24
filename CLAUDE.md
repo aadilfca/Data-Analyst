@@ -178,17 +178,24 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Status log
 
 **Full detail for every entry below lives in `CHANGELOG_ARCHIVE.md`**, under the matching heading —
-these lines are pointers, not the record. Compressed three times: 2026-08-22 (408 entries → 73,
-then that day's own per-phase tail rolled up to 77), and 2026-08-23 (77 grew to 96 over the day's
-Supabase/Render migration + data-migration phases before being rolled up again to 77). Multi-phase
-requirements are one line each rather than one line per phase, since a phase-by-phase trail is
-exactly what the archive is for. Keep it that way — one line per requirement, ~25 words, and roll a
-finished multi-phase requirement up into its single line rather than appending each phase.
-**Each of the three passes was needed because each phase of a live requirement got its own line as
-it landed, which is what pushed the log past its 80-line trigger. Roll a multi-phase requirement up
-as soon as it completes, rather than leaving the per-phase lines for a later pass — this has now
-recurred three times and is clearly not self-correcting on its own; treat the drift-trigger check as
-mandatory at the START of every session that's about to touch this file, not just when reminded.**
+these lines are pointers, not the record. Compressed four times: 2026-08-22 (408 entries → 73,
+then that day's own per-phase tail rolled up to 77), 2026-08-23 (77 grew to 96 over the day's
+Supabase/Render migration + data-migration phases before being rolled up again to 77), and
+2026-08-24 (77 grew to 93 by the next day, rolled back to 85 by collapsing the finished 6-phase
+Shared Loading UI project into one line — the remaining gap above 80 is the still-in-progress
+13-phase Fast Data Handling project's per-phase lines, correctly left un-rolled per the rule below
+until it completes). Multi-phase requirements are one line each rather than one line per phase, since
+a phase-by-phase trail is exactly what the archive is for. Keep it that way — one line per
+requirement, ~25 words, and roll a finished multi-phase requirement up into its single line rather
+than appending each phase.
+**Each of the first three passes was needed because each phase of a live requirement got its own
+line as it landed, which is what pushed the log past its 80-line trigger. Roll a multi-phase
+requirement up as soon as it completes, rather than leaving the per-phase lines for a later pass —
+this recurred three times and is clearly not self-correcting on its own; treat the drift-trigger
+check as mandatory at the START of every session that's about to touch this file, not just when
+reminded. Expect the log to sit above 80 lines for the duration of Fast Data Handling (13 phases,
+5 remaining as of 2026-08-24) — that is expected drift from one active project, not a repeat of the
+original problem, and will collapse to one line once that project finishes.**
 
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.
@@ -266,15 +273,7 @@ mandatory at the START of every session that's about to touch this file, not jus
 - 2026-08-23: Postgres cutover Phase 6 - Verification/Audit Rules/Trial Balance routers, plus attach_assignment_flags() is_assigned fix (data.py).
 - 2026-08-23: Supabase/Render migration complete, 8 phases - Postgres schema + pooled connections (database.py), full router cutover to Postgres, Render deploy (render.yaml), relative API_BASE, verified live.
 - 2026-08-23: Supabase data migration complete, 4 phases - migrate_to_supabase.py: dry-run report, type-conversion layer, real run (409336/409362 rows migrated, ids preserved), --verify mode confirms 0 shortfalls.
-- 2026-08-23: Shared loading UI utility built, Phase 1 of 6 - loading_ui.js (LoadingUI.showSkeleton/showSpinner/showFieldLoading) + style.css block, no page wiring yet.
-- 2026-08-23: Login page spinner wired, Phase 2 of 6 - loading_ui.js loaded, login.js uses LoadingUI.showSpinner/hideSpinner on submit; verified live via Playwright.
-- 2026-08-23: Data Bank preview skeleton wired, Phase 3 of 6 - fetchPreviewData() uses LoadingUI.showSkeleton() with real/fallback column count; verified live via Playwright.
-- 2026-08-23: Upload/Import spinner wired, Phase 4 of 6 - performImport() uses LoadingUI.showSpinner/hideSpinner (upload.js, upload.html); Validate step left untouched; verified via Playwright.
-- 2026-08-23: Save spinner wired, Phase 4a of 6 - saveClient()/saveColumn() use LoadingUI.showSpinner/hideSpinner per-button (clients.js, columns.js); verified via Playwright.
-- 2026-08-23: Save spinner wired, Phase 4b of 6 (final) - audit_rules.js (4 entities), templates.js, client_settings.js use LoadingUI; verified via Playwright w/ hard refresh.
-- 2026-08-23: Skeleton loading wired, Phase 5a of 6 - audit_rules.js's 4 entity list loads use LoadingUI.showSkeleton(); verified via Playwright incl. Sortable drag-reorder.
-- 2026-08-23: Skeleton loading wired, Phase 5b of 6 (final) - verification.js voucher grid on session start/Prev-Next; loading_ui.js added to verification.html; verified via Playwright.
-- 2026-08-23: Inline field-loading wired, Phase 6a/6b of 6 - upload.js templateDropdown, audit_rules.js arTemplateSelect use LoadingUI.showFieldLoading; verified via Playwright.
+- 2026-08-23: Shared Loading UI utility, 6 phases (+4a/4b/5a/5b/6a/6b sub-phases) - loading_ui.js built and wired across login/Data Bank/Upload/save actions/Audit Rules/Verification.
 - 2026-08-23: Added standing git workflow rule to Workflow rules - auto-commit+push after phase, only post user confirmation (CLAUDE.md).
 - 2026-08-23: Fast-data-handling Phase 1 of 13 - GZipMiddleware added to main.py, app-wide gzip compression for slow-connection responses.
 - 2026-08-23: Postgres index audit Phase 2 of 13 - audit_postgres_indexes.py added, created missing client_data(client_id,template_id,is_deleted) index.
