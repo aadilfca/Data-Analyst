@@ -986,6 +986,21 @@ async function performVerifyVoucherChecks(uid) {
     if (btn) btn.disabled = true;
     if (verifyOnlyBtn) verifyOnlyBtn.disabled = true;
     try {
+        // Defensive re-check (fixes verify_voucher_checks 400s reaching the server for a
+        // voucher the UI itself doesn't believe is ready): voucherChecksCache is fetched once
+        // by ensureVoucherChecksLoaded() and cached forever per transaction_ref for the rest of
+        // the page session, and both buttons' disabled state defaults to enabled until
+        // updateVerifyFooterButton() has actually run for the voucher currently in view - a gap
+        // proven to matter once already (a check added mid-session, e.g. via Audit Rules, would
+        // go undetected by an already-warmed cache). Force a fresh read here, immediately before
+        // the real request, so this guard can never disagree with what verify_voucher_checks()
+        // itself enforces server-side.
+        delete voucherChecksCache[hostAdapter.currentVoucherId];
+        const freshChecks = await ensureVoucherChecksLoaded(hostAdapter.getClientId(), hostAdapter.currentVoucherId);
+        if (!isVoucherChecksAllTouched(freshChecks || [])) {
+            hostAdapter.showStatus('Mark every voucher-level check before verifying.', 'error');
+            return null;
+        }
         await hostAdapter.saveLineItems(uid);
         await flushPhysicalBillEntries(uid);
         const res = await fetch(`${API_BASE}/api/verification/verify_voucher_checks`, {
