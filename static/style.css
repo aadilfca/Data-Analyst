@@ -6027,6 +6027,13 @@ body {
     background: #e2e8f0;
 }
 
+/* Pagination "Load more" button (Fast Data Handling, Phase 10 of 13) — reuses
+   .ar-btn-chip-add's neutral styling, centered under a list pane. */
+.ar-btn-load-more {
+    display: block;
+    margin: 10px auto 4px;
+}
+
 /* ----- Detail panel action buttons ----- */
 .ar-detail-actions {
     display: flex;

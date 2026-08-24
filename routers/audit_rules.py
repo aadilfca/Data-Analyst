@@ -6,7 +6,7 @@
 # Categories) in the Audit Rules module now have CRUD. Categories is the entity a
 # voucher will eventually reference (wired up in Phase 9).
 
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Query, Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from database import execute_query_pg, execute_write_pg, log_audit
@@ -298,17 +298,33 @@ def save_document_cross_check_fields(document_id: int, cross_check_fields: List[
 
 # ---------- ENDPOINTS ----------
 
+def fetch_paginated_rows(response: Response, base_query: str, count_query: str, order_by: str, limit: Optional[int], offset: int) -> list:
+    """
+    Shared pagination helper (Fast Data Handling, Phase 10 of 13) for the three list
+    endpoints below. limit=None (every existing caller before this phase) runs the query
+    unpaginated, exactly as before - fully backward compatible for callers that need the
+    full list (pickers/caches, see the frontend call-site inventory). limit set applies
+    LIMIT/OFFSET and sets X-Total-Count so the frontend's "Load more" button knows when to
+    stop - the response body stays the same bare-array shape either way, so no consumer's
+    res.json() parsing needs to change.
+    """
+    if limit is None:
+        return execute_query_pg(base_query + " " + order_by)
+    total = execute_query_pg(count_query)[0]["cnt"]
+    response.headers["X-Total-Count"] = str(total)
+    return execute_query_pg(base_query + " " + order_by + " LIMIT %s OFFSET %s", (limit, offset))
+
 @router.get("/api/audit-rules/documents")
-def get_documents(include_inactive: bool = False):
+def get_documents(response: Response, include_inactive: bool = False, limit: Optional[int] = Query(None, ge=1, le=200), offset: int = Query(0, ge=0)):
     """
     Get all Documents. By default, only active Documents are returned.
-    Set include_inactive=True to get all.
+    Set include_inactive=True to get all. Optional limit/offset paginate the result
+    (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above.
     """
-    query = "SELECT * FROM audit_rule_documents"
-    if not include_inactive:
-        query += " WHERE is_active = TRUE"
-    query += " ORDER BY name"
-    rows = execute_query_pg(query)
+    where = "" if include_inactive else " WHERE is_active = TRUE"
+    base_query = "SELECT * FROM audit_rule_documents" + where
+    count_query = "SELECT COUNT(*) as cnt FROM audit_rule_documents" + where
+    rows = fetch_paginated_rows(response, base_query, count_query, "ORDER BY name", limit, offset)
     return [row_to_document_list(r) for r in rows]
 
 @router.get("/api/audit-rules/documents/{document_id}")
@@ -503,16 +519,16 @@ def validate_cross_check_payload(compare_field: str, comparison_type: str, docum
 # ---------- ENDPOINTS ----------
 
 @router.get("/api/audit-rules/cross-checks")
-def get_cross_checks(include_inactive: bool = False):
+def get_cross_checks(response: Response, include_inactive: bool = False, limit: Optional[int] = Query(None, ge=1, le=200), offset: int = Query(0, ge=0)):
     """
     Get all Cross-checks. By default, only active Cross-checks are returned.
-    Set include_inactive=True to get all.
+    Set include_inactive=True to get all. Optional limit/offset paginate the result
+    (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above.
     """
-    query = "SELECT * FROM audit_rule_cross_checks"
-    if not include_inactive:
-        query += " WHERE is_active = TRUE"
-    query += " ORDER BY name"
-    rows = execute_query_pg(query)
+    where = "" if include_inactive else " WHERE is_active = TRUE"
+    base_query = "SELECT * FROM audit_rule_cross_checks" + where
+    count_query = "SELECT COUNT(*) as cnt FROM audit_rule_cross_checks" + where
+    rows = fetch_paginated_rows(response, base_query, count_query, "ORDER BY name", limit, offset)
     return [row_to_cross_check_list(r) for r in rows]
 
 @router.get("/api/audit-rules/cross-checks/{cross_check_id}")
@@ -885,16 +901,16 @@ def validate_category_payload(document_ids: List[int], cross_check_ids: List[int
 # ---------- ENDPOINTS ----------
 
 @router.get("/api/audit-rules/categories")
-def get_categories(include_inactive: bool = False):
+def get_categories(response: Response, include_inactive: bool = False, limit: Optional[int] = Query(None, ge=1, le=200), offset: int = Query(0, ge=0)):
     """
     Get all Categories. By default, only active Categories are returned.
-    Set include_inactive=True to get all.
+    Set include_inactive=True to get all. Optional limit/offset paginate the result
+    (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above.
     """
-    query = "SELECT * FROM audit_rule_categories"
-    if not include_inactive:
-        query += " WHERE is_active = TRUE"
-    query += " ORDER BY name"
-    rows = execute_query_pg(query)
+    where = "" if include_inactive else " WHERE is_active = TRUE"
+    base_query = "SELECT * FROM audit_rule_categories" + where
+    count_query = "SELECT COUNT(*) as cnt FROM audit_rule_categories" + where
+    rows = fetch_paginated_rows(response, base_query, count_query, "ORDER BY name", limit, offset)
     return [row_to_category(r) for r in rows]
 
 @router.get("/api/audit-rules/categories/{category_id}")

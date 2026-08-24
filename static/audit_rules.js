@@ -35,6 +35,17 @@ const arListBody = document.getElementById('arListBody');
 const arListEmptyMessage = document.getElementById('arListEmptyMessage');
 const arShowInactiveCheckbox = document.getElementById('arShowInactiveCheckbox');
 const arAddNewBtn = document.getElementById('arAddNewBtn');
+const arLoadMoreBtn = document.getElementById('arLoadMoreBtn');
+
+// Pagination (Fast Data Handling, Phase 10 of 13). PAGE_SIZE matches the backend's Query(..., le=200)
+// ceiling with room to spare. documentsOffset/documentsTotal/documentItems track the accumulated
+// "Load more" state for the currently-loaded filter (Show inactive toggle); loadDocuments() always
+// resets these back to page 1, mirroring every other "fresh load" call site (toggle change, entity
+// switch, post-save/delete/restore refresh).
+const DOCUMENTS_PAGE_SIZE = 30;
+let documentsOffset = 0;
+let documentsTotal = 0;
+let documentItems = [];
 
 const arDetailEmpty = document.getElementById('arDetailEmpty');
 const arDetailForm = document.getElementById('arDetailForm');
@@ -78,19 +89,51 @@ function showDetailStatus(message, type) {
 }
 
 // ---------- LOAD & RENDER LIST ----------
+// Fresh load (page 1) — called on toggle change, entity-switch, and every post-save/delete/
+// restore refresh. Always resets documentsOffset/documentItems, same as every other entity's
+// "fresh load" reset point below.
 async function loadDocuments() {
     const includeInactive = arShowInactiveCheckbox.checked;
     window.LoadingUI.showSkeleton(arListBody, 6);
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/documents?include_inactive=' + includeInactive);
+        const res = await fetch(API_BASE + '/api/audit-rules/documents?include_inactive=' + includeInactive + '&limit=' + DOCUMENTS_PAGE_SIZE + '&offset=0');
         if (!res.ok) throw new Error('Failed to load documents');
-        const documents = await res.json();
-        renderDocumentList(documents);
+        documentItems = await res.json();
+        documentsOffset = documentItems.length;
+        documentsTotal = parseInt(res.headers.get('X-Total-Count'), 10) || documentItems.length;
+        renderDocumentList(documentItems);
+        updateDocumentsLoadMoreVisibility();
     } catch (error) {
         arListBody.innerHTML = '';
         arListEmptyMessage.textContent = '❌ Error loading documents: ' + error.message;
         arListEmptyMessage.style.display = 'block';
+        arLoadMoreBtn.style.display = 'none';
     }
+}
+
+// Appends the next page onto documentItems/arListBody without touching already-rendered rows,
+// so the currently-selected/highlighted row (if any) isn't disturbed.
+async function loadMoreDocuments() {
+    const includeInactive = arShowInactiveCheckbox.checked;
+    window.LoadingUI.showSpinner(arLoadMoreBtn, 'Loading');
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/documents?include_inactive=' + includeInactive + '&limit=' + DOCUMENTS_PAGE_SIZE + '&offset=' + documentsOffset);
+        if (!res.ok) throw new Error('Failed to load more documents');
+        const nextPage = await res.json();
+        documentItems = documentItems.concat(nextPage);
+        documentsOffset = documentItems.length;
+        documentsTotal = parseInt(res.headers.get('X-Total-Count'), 10) || documentsTotal;
+        appendDocumentRows(nextPage);
+        updateDocumentsLoadMoreVisibility();
+    } catch (error) {
+        showDetailStatus('❌ Error loading more documents: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(arLoadMoreBtn);
+    }
+}
+
+function updateDocumentsLoadMoreVisibility() {
+    arLoadMoreBtn.style.display = (documentItems.length < documentsTotal) ? 'block' : 'none';
 }
 
 function renderDocumentList(documents) {
@@ -102,7 +145,10 @@ function renderDocumentList(documents) {
         return;
     }
     arListEmptyMessage.style.display = 'none';
+    appendDocumentRows(documents);
+}
 
+function appendDocumentRows(documents) {
     documents.forEach(doc => {
         const row = document.createElement('div');
         row.className = 'ar-list-row' + (doc.is_active ? '' : ' ar-list-row-inactive');
@@ -804,6 +850,7 @@ async function hardDeleteSignatureSpecimen(specimenId, name, role) {
 // ---------- WIRE UP EVENT LISTENERS ----------
 arAddNewBtn.addEventListener('click', startNewDocument);
 arShowInactiveCheckbox.addEventListener('change', loadDocuments);
+arLoadMoreBtn.addEventListener('click', loadMoreDocuments);
 
 arRolesAddBtn.addEventListener('click', addRole);
 arRolesInput.addEventListener('keydown', function(e) {
@@ -917,6 +964,13 @@ const arCrossCheckListBody = document.getElementById('arCrossCheckListBody');
 const arCrossCheckListEmptyMessage = document.getElementById('arCrossCheckListEmptyMessage');
 const arCrossCheckShowInactiveCheckbox = document.getElementById('arCrossCheckShowInactiveCheckbox');
 const arCrossCheckAddNewBtn = document.getElementById('arCrossCheckAddNewBtn');
+const arCrossCheckLoadMoreBtn = document.getElementById('arCrossCheckLoadMoreBtn');
+
+// Pagination (Fast Data Handling, Phase 10 of 13) — same shape as Documents' above.
+const CROSS_CHECKS_PAGE_SIZE = 30;
+let crossChecksOffset = 0;
+let crossChecksTotal = 0;
+let crossCheckItems = [];
 
 const arCrossCheckDetailEmpty = document.getElementById('arCrossCheckDetailEmpty');
 const arCrossCheckDetailForm = document.getElementById('arCrossCheckDetailForm');
@@ -983,15 +1037,42 @@ async function loadCrossChecks() {
     const includeInactive = arCrossCheckShowInactiveCheckbox.checked;
     window.LoadingUI.showSkeleton(arCrossCheckListBody, 6);
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=' + includeInactive);
+        const res = await fetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=' + includeInactive + '&limit=' + CROSS_CHECKS_PAGE_SIZE + '&offset=0');
         if (!res.ok) throw new Error('Failed to load cross-checks');
-        const crossChecks = await res.json();
-        renderCrossCheckList(crossChecks);
+        crossCheckItems = await res.json();
+        crossChecksOffset = crossCheckItems.length;
+        crossChecksTotal = parseInt(res.headers.get('X-Total-Count'), 10) || crossCheckItems.length;
+        renderCrossCheckList(crossCheckItems);
+        updateCrossChecksLoadMoreVisibility();
     } catch (error) {
         arCrossCheckListBody.innerHTML = '';
         arCrossCheckListEmptyMessage.textContent = '❌ Error loading cross-checks: ' + error.message;
         arCrossCheckListEmptyMessage.style.display = 'block';
+        arCrossCheckLoadMoreBtn.style.display = 'none';
     }
+}
+
+async function loadMoreCrossChecks() {
+    const includeInactive = arCrossCheckShowInactiveCheckbox.checked;
+    window.LoadingUI.showSpinner(arCrossCheckLoadMoreBtn, 'Loading');
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=' + includeInactive + '&limit=' + CROSS_CHECKS_PAGE_SIZE + '&offset=' + crossChecksOffset);
+        if (!res.ok) throw new Error('Failed to load more cross-checks');
+        const nextPage = await res.json();
+        crossCheckItems = crossCheckItems.concat(nextPage);
+        crossChecksOffset = crossCheckItems.length;
+        crossChecksTotal = parseInt(res.headers.get('X-Total-Count'), 10) || crossChecksTotal;
+        appendCrossCheckRows(nextPage);
+        updateCrossChecksLoadMoreVisibility();
+    } catch (error) {
+        showCrossCheckDetailStatus('❌ Error loading more cross-checks: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(arCrossCheckLoadMoreBtn);
+    }
+}
+
+function updateCrossChecksLoadMoreVisibility() {
+    arCrossCheckLoadMoreBtn.style.display = (crossCheckItems.length < crossChecksTotal) ? 'block' : 'none';
 }
 
 function renderCrossCheckList(crossChecks) {
@@ -1003,7 +1084,10 @@ function renderCrossCheckList(crossChecks) {
         return;
     }
     arCrossCheckListEmptyMessage.style.display = 'none';
+    appendCrossCheckRows(crossChecks);
+}
 
+function appendCrossCheckRows(crossChecks) {
     crossChecks.forEach(cc => {
         const row = document.createElement('div');
         row.className = 'ar-list-row' + (cc.is_active ? '' : ' ar-list-row-inactive');
@@ -1410,6 +1494,7 @@ arRailVoucherChecks.addEventListener('click', () => switchEntityType('voucher-ch
 
 arCrossCheckAddNewBtn.addEventListener('click', startNewCrossCheck);
 arCrossCheckShowInactiveCheckbox.addEventListener('change', loadCrossChecks);
+arCrossCheckLoadMoreBtn.addEventListener('click', loadMoreCrossChecks);
 
 arAddDocumentBtn.addEventListener('click', addDocumentToCrossCheck);
 arCompareFieldSelect.addEventListener('change', updateCompareToVoucherLineHint);
@@ -1434,6 +1519,8 @@ const arCategoryListBody = document.getElementById('arCategoryListBody');
 const arCategoryListEmptyMessage = document.getElementById('arCategoryListEmptyMessage');
 const arCategoryShowInactiveCheckbox = document.getElementById('arCategoryShowInactiveCheckbox');
 const arCategoryAddNewBtn = document.getElementById('arCategoryAddNewBtn');
+const arCategoryLoadMoreBtn = document.getElementById('arCategoryLoadMoreBtn');
+const CATEGORIES_PAGE_SIZE = 30;
 
 const arCategoryDetailEmpty = document.getElementById('arCategoryDetailEmpty');
 const arCategoryDetailForm = document.getElementById('arCategoryDetailForm');
@@ -1651,12 +1738,16 @@ function getCrossCheckById(id) {
 }
 
 // ---------- LOAD & RENDER LIST ----------
-// Fetch-once-per-toggle-state cache (Fast Data Handling, Phase 9) -- switchEntityType('categories')
-// re-fetches this same list every time the user switches back to this rail tab, and selectCategory()
-// (below) calls loadCategories() on every row click just to move the highlight. Neither actually
-// needs fresh server data, so both now serve from cache. Keyed by the show-inactive toggle state
-// since that changes the query. invalidateCategoriesListCache() clears both keys on this page's own
-// create/edit/delete/restore, which are the only actions that can change what this list should show.
+// Fetch-once-per-toggle-state cache (Fast Data Handling, Phase 9), now pagination-aware (Phase
+// 10 of 13): each key holds {items, total} rather than a bare array -- items is everything
+// loaded so far (page 1 plus any "Load more" pages), total comes from the backend's
+// X-Total-Count header. switchEntityType('categories') re-fetches this same list every time the
+// user switches back to this rail tab, and selectCategory() (below) calls loadCategories() on
+// every row click just to move the highlight -- neither needs fresh server data, so both still
+// serve from cache (now restoring however many pages were already loaded, not just page 1).
+// invalidateCategoriesListCache() clears both keys on this page's own create/edit/delete/
+// restore, which are the only actions that can change what this list should show -- the next
+// loadCategories() call then re-fetches from page 1, the correct pagination reset point too.
 let categoriesListCache = { true: null, false: null };
 
 function invalidateCategoriesListCache() {
@@ -1665,22 +1756,53 @@ function invalidateCategoriesListCache() {
 
 async function loadCategories() {
     const includeInactive = arCategoryShowInactiveCheckbox.checked;
-    if (categoriesListCache[includeInactive]) {
-        renderCategoryList(categoriesListCache[includeInactive]);
+    const cached = categoriesListCache[includeInactive];
+    if (cached) {
+        renderCategoryList(cached.items);
+        updateCategoriesLoadMoreVisibility();
         return;
     }
     window.LoadingUI.showSkeleton(arCategoryListBody, 6);
     try {
-        const res = await fetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive);
+        const res = await fetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive + '&limit=' + CATEGORIES_PAGE_SIZE + '&offset=0');
         if (!res.ok) throw new Error('Failed to load categories');
         const categories = await res.json();
-        categoriesListCache[includeInactive] = categories;
+        const total = parseInt(res.headers.get('X-Total-Count'), 10) || categories.length;
+        categoriesListCache[includeInactive] = { items: categories, total: total };
         renderCategoryList(categories);
+        updateCategoriesLoadMoreVisibility();
     } catch (error) {
         arCategoryListBody.innerHTML = '';
         arCategoryListEmptyMessage.textContent = '❌ Error loading categories: ' + error.message;
         arCategoryListEmptyMessage.style.display = 'block';
+        arCategoryLoadMoreBtn.style.display = 'none';
     }
+}
+
+async function loadMoreCategories() {
+    const includeInactive = arCategoryShowInactiveCheckbox.checked;
+    const cached = categoriesListCache[includeInactive];
+    if (!cached) return;
+    window.LoadingUI.showSpinner(arCategoryLoadMoreBtn, 'Loading');
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive + '&limit=' + CATEGORIES_PAGE_SIZE + '&offset=' + cached.items.length);
+        if (!res.ok) throw new Error('Failed to load more categories');
+        const nextPage = await res.json();
+        cached.items = cached.items.concat(nextPage);
+        cached.total = parseInt(res.headers.get('X-Total-Count'), 10) || cached.total;
+        appendCategoryRows(nextPage);
+        updateCategoriesLoadMoreVisibility();
+    } catch (error) {
+        showCategoryDetailStatus('❌ Error loading more categories: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(arCategoryLoadMoreBtn);
+    }
+}
+
+function updateCategoriesLoadMoreVisibility() {
+    const includeInactive = arCategoryShowInactiveCheckbox.checked;
+    const cached = categoriesListCache[includeInactive];
+    arCategoryLoadMoreBtn.style.display = (cached && cached.items.length < cached.total) ? 'block' : 'none';
 }
 
 function renderCategoryList(categories) {
@@ -1692,7 +1814,10 @@ function renderCategoryList(categories) {
         return;
     }
     arCategoryListEmptyMessage.style.display = 'none';
+    appendCategoryRows(categories);
+}
 
+function appendCategoryRows(categories) {
     categories.forEach(cat => {
         // ar-category-list-card gives this row a card surface (border/radius/padding) so the
         // two-line name + rule-count block reads as a discrete item — Categories only, the other
@@ -2286,6 +2411,7 @@ async function restoreCategory() {
 // ---------- WIRE UP EVENT LISTENERS ----------
 arCategoryAddNewBtn.addEventListener('click', startNewCategory);
 arCategoryShowInactiveCheckbox.addEventListener('change', loadCategories);
+arCategoryLoadMoreBtn.addEventListener('click', loadMoreCategories);
 
 arCategoryAddDocumentBtn.addEventListener('click', addCategoryDocument);
 // Confirmed fix: Add button stays hidden until a real, selectable (non-placeholder,
