@@ -276,6 +276,7 @@ original problem, and will collapse to one line once that project finishes.**
 - 2026-08-23: Shared Loading UI utility, 6 phases (+4a/4b/5a/5b/6a/6b sub-phases) - loading_ui.js built and wired across login/Data Bank/Upload/save actions/Audit Rules/Verification.
 - 2026-08-23: Added standing git workflow rule to Workflow rules - auto-commit+push after phase, only post user confirmation (CLAUDE.md).
 - 2026-08-24: Fast Data Handling for slow connections, 13 phases (COMPLETE) - gzip, index audit, apiFetch retry wrapper, column trimming, debounce, ref-data caching, pagination, retry wiring.
+- 2026-08-24: Performance investigation (read-only) - root causes ranked: region mismatch (Oregon/Mumbai), sequential round-trips; query cost ruled out via EXPLAIN ANALYZE. See PERFORMANCE_INVESTIGATION.md.
 
 
 ## Self-maintenance
