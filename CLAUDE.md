@@ -280,6 +280,7 @@ original problem, and will collapse to one line once that project finishes.**
 - 2026-08-24: Performance investigation (read-only) - root causes ranked: region mismatch (Oregon/Mumbai), sequential round-trips; query cost ruled out via EXPLAIN ANALYZE. See PERFORMANCE_INVESTIGATION.md.
 - 2026-08-24: save_line_items concurrency guard, in-flight promise map keyed by detail_id — fixes DB lock queueing from overlapping check-all saves (verification.js).
 - 2026-08-24: Batched save_line_items N+1 loops (verification.py observation sync, audit_rules.py authority gate) — fewer DB round-trips per save.
+- 2026-08-24: Deactivated 6 leftover PW test voucher-checks contaminating Leather Crop data — CRV-0126-102 flipped Query to Cleared; CRV-0126-104's 400 is unrelated, real checks untouched.
 
 
 ## Self-maintenance
