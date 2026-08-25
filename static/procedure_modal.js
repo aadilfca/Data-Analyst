@@ -880,8 +880,14 @@ async function navigateProcedureModalLine(delta) {
     // cleared_status recomputes and the badge refreshes every time the modal moves between
     // lines — the badge lives in the main table, hidden behind the modal while it's open, so
     // this is the natural point for it to catch up.
-    await hostAdapter.saveLineItems(uid);
-    await flushPhysicalBillEntries(uid);
+    const navBackBtn = document.getElementById('procedureModalBackBtn');
+    if (window.LoadingUI) window.LoadingUI.showProgressBar(navBackBtn, { mode: 'indeterminate', message: 'Saving…' });
+    try {
+        await hostAdapter.saveLineItems(uid);
+        await flushPhysicalBillEntries(uid);
+    } finally {
+        if (window.LoadingUI) window.LoadingUI.hideProgressBar(navBackBtn);
+    }
     await openProcedureModal(newUid);
 }
 
@@ -948,8 +954,13 @@ async function closeProcedureModal() {
     // recomputes cleared_status (Validation Rules Phase 5) so the main table's badge is caught up
     // by the time the modal is gone.
     if (currentProcedureModalUid) {
-        await hostAdapter.saveLineItems(currentProcedureModalUid);
-        await flushPhysicalBillEntries(currentProcedureModalUid);
+        if (window.LoadingUI) window.LoadingUI.showProgressBar(procedureModalClose, { mode: 'indeterminate', message: 'Saving…' });
+        try {
+            await hostAdapter.saveLineItems(currentProcedureModalUid);
+            await flushPhysicalBillEntries(currentProcedureModalUid);
+        } finally {
+            if (window.LoadingUI) window.LoadingUI.hideProgressBar(procedureModalClose);
+        }
     }
     hideProcedureModalOnly();
 }
@@ -1003,11 +1014,13 @@ function updateVerifyFooterButton(uid) {
 // callers that don't need the next-voucher payload (e.g. the plain Verify button) simply leave it
 // unread. Disables/re-enables BOTH verify-type buttons around the request, not just the one
 // clicked, so a click on the other button can't double-submit while this one is in flight.
-async function performVerifyVoucherChecks(uid) {
+async function performVerifyVoucherChecks(uid, triggerBtn) {
     const btn = document.getElementById('procedureModalVerifyBtn');
     const verifyOnlyBtn = document.getElementById('procedureModalVerifyOnlyBtn');
     if (btn) btn.disabled = true;
     if (verifyOnlyBtn) verifyOnlyBtn.disabled = true;
+    const progressTarget = triggerBtn || btn;
+    if (window.LoadingUI) window.LoadingUI.showProgressBar(progressTarget, { mode: 'indeterminate', message: 'Saving…' });
     try {
         // Defensive re-check (fixes verify_voucher_checks 400s reaching the server for a
         // voucher the UI itself doesn't believe is ready): voucherChecksCache is fetched once
@@ -1030,7 +1043,7 @@ async function performVerifyVoucherChecks(uid) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: hostAdapter.currentSessionId, current_detail_id: uid })
-        }, { target: btn, message: 'Verifying' });
+        });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             hostAdapter.showStatus(err.detail || 'Could not verify voucher-level checks — please try again.', 'error');
@@ -1042,6 +1055,7 @@ async function performVerifyVoucherChecks(uid) {
         hostAdapter.showStatus('Could not verify voucher-level checks — please try again.', 'error');
         return null;
     } finally {
+        if (window.LoadingUI) window.LoadingUI.hideProgressBar(progressTarget);
         // Restores each button to its real gate-driven state (isVoucherChecksAllTouched()) rather
         // than blindly re-enabling — updateVerifyFooterButton() is the single source of truth for
         // both buttons' disabled state, called by every caller of this helper right after.
@@ -1060,7 +1074,7 @@ async function verifyAndAdvanceVoucher() {
     if (!uid) return;
     const btn = document.getElementById('procedureModalVerifyBtn');
     if (btn && btn.disabled) return;
-    const data = await performVerifyVoucherChecks(uid);
+    const data = await performVerifyVoucherChecks(uid, btn);
     if (!data) return;
 
     // Line-first stepping: hostAdapter.saveLineItems() inside the helper above already refreshed this line's
@@ -1100,7 +1114,7 @@ async function verifyAndStay() {
     if (!uid) return;
     const verifyOnlyBtn = document.getElementById('procedureModalVerifyOnlyBtn');
     if (verifyOnlyBtn && verifyOnlyBtn.disabled) return;
-    const data = await performVerifyVoucherChecks(uid);
+    const data = await performVerifyVoucherChecks(uid, verifyOnlyBtn);
     if (!data) return;
     // Already saved above — hide only, don't re-save via closeProcedureModal().
     hideProcedureModalOnly();

@@ -142,6 +142,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 
 ## Workflow rules
 - Before editing, list files to be touched and wait for my confirmation. This is TWO separate hard stops, not one — even if my brief already includes a "files likely affected" list: (1) reply with the candidate file list only, no Read/Edit/Write on those files yet, and wait for me to confirm/adjust it in a separate reply; (2) only after that, enter Plan Mode, propose the approach for the current phase only, and wait for my explicit approval before implementing. A file list inside my own brief is a draft for you to restate back, never an implicit go-ahead.
+- **Any point during development where continuing requires my (Aadil's) approval or judgment call — not just the two file-list/Plan Mode hard stops above — Claude Code must stop and ask, then continue only once I've answered.** This covers things like: a UI-verification step is blocked by an environment issue and continuing means escalating into unrelated investigation (DB queries, chasing an unrelated hang/bug) instead of reporting the blocker; a fix would require touching something outside the confirmed scope; or the right next step is genuinely ambiguous. Don't keep working through a blocker on your own judgment hoping to resolve it — surface it and wait. Added 2026-08-25 after a session spent 30+ minutes chasing an environment hang (unrelated `start_session` bug, see `KNOWN_ISSUES.md`) instead of stopping to report it once the first couple of attempts failed.
 - Use Plan Mode for anything touching more than one file
 - One phase at a time, stop for review after each
 - Git workflow: After completing a phase, wait for the user to test and confirm it's working. Only then run git add, commit locally using the commit message provided in the brief, and push to GitHub. Never commit or push before user confirmation.
@@ -297,6 +298,8 @@ original problem, and will collapse to one line once that project finishes.**
 - 2026-08-25: Processing/Loading UI for Verification, Phase 4 of 7 — skeleton rows wired onto the Cashbook table (fetchCashbookData(), verification.js).
 - 2026-08-25: Processing/Loading UI for Verification, Phase 5 of 7 — estimated progress bar with transaction count on the Verify button (startSessionFromCashbook(), verification.js).
 - 2026-08-25: Procedure-badge click spinner capped at "Loading" via new `showSpinner()` `escalate:false` option — reverted earlier title-badge reroute (loading_ui.js, procedure_modal.js, verification.js).
+- 2026-08-25: Processing/Loading UI for Verification, Phase 7 of 7 FINAL — procedure modal Close/Back/Verify/Verify & Next buttons show shared Saving progress bar (procedure_modal.js).
+- 2026-08-25: Logged start_session hang bug in KNOWN_ISSUES.md; added standing rule to stop and ask whenever continuing needs Aadil's approval/judgment.
 
 
 ## Self-maintenance
