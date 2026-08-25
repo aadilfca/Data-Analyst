@@ -685,6 +685,7 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
         popupStartBtn.disabled = true;
         return;
     }
+    window.LoadingUI.showFieldLoading(popupCashbookSelect, { prominent: true });
     // Bank Verification (Phase 8): book-type-specific copy, since this same function serves both
     // Cash and Bank discovery now (only the category_group filter/wording differs).
     const bookWord = currentType === 'bank' ? 'bankbook' : 'cashbook';
@@ -727,6 +728,7 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
             throw new Error(err.detail || `Failed to fetch ${bookWord}s`);
         }
         const data = await res.json();
+        window.LoadingUI.hideFieldLoading(popupCashbookSelect);
         if (data.cashbooks && data.cashbooks.length > 0) {
             popupCashbookSelect.innerHTML = `<option value="">-- Select ${bookWordCap} --</option>`;
             data.cashbooks.forEach(cb => {
@@ -754,6 +756,7 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
         }
     } catch (e) {
         console.error(`Error loading ${bookWord}s:`, e);
+        window.LoadingUI.hideFieldLoading(popupCashbookSelect);
         popupCashbookSelect.innerHTML = '<option value="">⚠️ Error loading</option>';
         popupCashbookSelect.disabled = true;
         showPopupError(`Failed to load ${bookWord}s: ` + e.message);
