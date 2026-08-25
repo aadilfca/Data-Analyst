@@ -7,6 +7,7 @@ from database import execute_query_pg, execute_write_pg, log_audit, log_data_aud
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime, date
+import asyncio
 import calendar
 import json
 # Voucher Supporting-Document Linking (Phase 2 of 6): reuses verification.py's own
@@ -952,8 +953,38 @@ def get_template_document_key_column(template_id: int) -> Optional[str]:
     return row[0]["column_name"] if row else None
 
 
+async def _compute_document_count(client_id: int, tid: int, fallback_row_count: int) -> int:
+    """
+    Threaded worker for one template's document count (see the 2b comment
+    below) - runs get_template_document_key_column() + the doc-count query
+    off the event loop via asyncio.to_thread().
+    """
+    key_column = await asyncio.to_thread(get_template_document_key_column, tid)
+    if not key_column:
+        # Template has no configured columns - fall back to the raw row count
+        return fallback_row_count
+    # json_extract(row_data, '$."col"') -> the JSONB ->> text-extraction
+    # operator. key_column comes from master_columns (not raw user input),
+    # same trust model as the SQLite version's f-string embed.
+    doc_count_result = await asyncio.to_thread(
+        execute_query_pg,
+        f"""
+        SELECT COUNT(DISTINCT cd.row_data->>'{key_column}') as doc_count
+        FROM client_data cd
+        WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+        """,
+        (client_id, tid)
+    )
+    return doc_count_result[0]["doc_count"] if doc_count_result else 0
+
+
+async def _compute_size_estimate(client_id: int, tid: int) -> dict:
+    """Threaded worker for one template's estimated storage footprint."""
+    return await asyncio.to_thread(estimate_client_data_size_pg, client_id=client_id, template_id=tid)
+
+
 @router.get("/api/data/availability")
-def get_availability(
+async def get_availability(
     client_id: int = Query(..., description="Client ID"),
     template_id: Optional[int] = Query(None, description="Filter by template ID"),
     date_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
@@ -976,9 +1007,17 @@ def get_availability(
     - sunday_count: Sunday rows matching the filter (for preview context)
     - status: 'complete' if any data exists (unfiltered), else 'missing'
     - filtered_status: 'complete' if filtered rows > 0, else 'missing'
+
+    Fast Data Handling / concurrency: the independent queries below (filtered
+    rows, total rows, upload frequency, and the per-template document-count/
+    size-estimate lookups) run concurrently via asyncio.to_thread() +
+    asyncio.gather() instead of sequentially, cutting the number of serial
+    round-trips to Postgres for this one request. execute_query_pg()/
+    estimate_client_data_size_pg() themselves stay synchronous (psycopg2) -
+    only the call sites here are threaded.
     """
     # Validate client exists
-    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
+    client = await asyncio.to_thread(execute_query_pg, "SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
@@ -993,7 +1032,7 @@ def get_availability(
         raise HTTPException(400, "Start date must be before or equal to end date.")
 
     # ------------------------------------------------------------
-    # 1. FIRST QUERY: Filtered data (matching the date range)
+    # 1. Filtered data (matching the date range)
     # ------------------------------------------------------------
     filtered_query = """
         SELECT
@@ -1017,10 +1056,8 @@ def get_availability(
     filtered_query += " WHERE t.is_active = TRUE"
     filtered_query += " GROUP BY t.id ORDER BY t.template_name"
 
-    filtered_rows = execute_query_pg(filtered_query, params)
-
     # ------------------------------------------------------------
-    # 2. SECOND QUERY: Total data (unfiltered, all time)
+    # 2. Total data (unfiltered, all time)
     # ------------------------------------------------------------
     total_query = """
         SELECT
@@ -1043,71 +1080,65 @@ def get_availability(
     total_query += " WHERE t.is_active = TRUE"
     total_query += " GROUP BY t.id ORDER BY t.template_name"
 
-    total_rows = execute_query_pg(total_query, total_params)
-
-    # ------------------------------------------------------------
-    # 2b. Unique document counts per template (for "No of Documents") -
-    # counts distinct document-key values instead of raw rows, since several
-    # lines can belong to one voucher/document. Uses each template's own
-    # document-key column (first column by sort_order), same convention
-    # get_document_group_id() (routers/import_export.py) already uses.
-    # ------------------------------------------------------------
-    document_count_lookup = {}
-    for row in total_rows:
-        tid = row["template_id"]
-        key_column = get_template_document_key_column(tid)
-        if key_column:
-            # json_extract(row_data, '$."col"') -> the JSONB ->> text-extraction
-            # operator. key_column comes from master_columns (not raw user
-            # input), same trust model as the SQLite version's f-string embed.
-            doc_count_result = execute_query_pg(
-                f"""
-                SELECT COUNT(DISTINCT cd.row_data->>'{key_column}') as doc_count
-                FROM client_data cd
-                WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
-                """,
-                (client_id, tid)
-            )
-            document_count_lookup[tid] = doc_count_result[0]["doc_count"] if doc_count_result else 0
-        else:
-            # Template has no configured columns - fall back to the raw row count
-            document_count_lookup[tid] = row["total_row_count"]
-
-    # ------------------------------------------------------------
-    # 2c. Upload Frequency (Overdue Uploads Phase C1) - one batched query for
-    # every template this client has a saved frequency for; absent = Daily.
-    # ------------------------------------------------------------
-    frequency_rows = execute_query_pg(
-        "SELECT template_id, frequency FROM client_template_upload_frequency WHERE client_id = %s",
-        (client_id,)
+    # 1, 2, and the upload-frequency lookup below are all independent of each
+    # other (none depends on another's result) - run them concurrently.
+    filtered_rows, total_rows, frequency_rows = await asyncio.gather(
+        asyncio.to_thread(execute_query_pg, filtered_query, params),
+        asyncio.to_thread(execute_query_pg, total_query, total_params),
+        asyncio.to_thread(
+            execute_query_pg,
+            "SELECT template_id, frequency FROM client_template_upload_frequency WHERE client_id = %s",
+            (client_id,)
+        ),
     )
     frequency_lookup = {r["template_id"]: r["frequency"] for r in frequency_rows}
+
+    # ------------------------------------------------------------
+    # 2b/2c. Per-template document counts (for "No of Documents") and
+    # estimated storage size - both depend on the template id list from
+    # total_rows (step 2 above), but are independent of each other and across
+    # templates, so every template's pair of lookups runs concurrently.
+    # ------------------------------------------------------------
+    total_lookup = {row["template_id"]: row for row in total_rows}
+    template_ids = list(total_lookup.keys())
+
+    per_template_results = await asyncio.gather(*[
+        asyncio.gather(
+            _compute_document_count(client_id, tid, total_lookup[tid]["total_row_count"]),
+            _compute_size_estimate(client_id, tid),
+        )
+        for tid in template_ids
+    ])
+    document_count_lookup = {}
+    size_estimate_lookup = {}
+    for tid, (doc_count, size_estimate) in zip(template_ids, per_template_results):
+        document_count_lookup[tid] = doc_count
+        size_estimate_lookup[tid] = size_estimate
 
     # ------------------------------------------------------------
     # 3. Merge results
     # ------------------------------------------------------------
     result = []
-    
+
     # Create a lookup for filtered data
     filtered_lookup = {row["template_id"]: row for row in filtered_rows}
-    total_lookup = {row["template_id"]: row for row in total_rows}
-    
+
     # Get all template IDs from both queries
     all_template_ids = set(filtered_lookup.keys()) | set(total_lookup.keys())
-    
+
     for tid in all_template_ids:
         filtered = filtered_lookup.get(tid, {"template_name": "Unknown", "filtered_row_count": 0, "filtered_sunday_count": 0})
         total = total_lookup.get(tid, {"total_row_count": 0, "date_min": None, "date_max": None})
-        
+
         # Determine status: if total_row_count > 0, the template has data (complete)
         status = "complete" if total["total_row_count"] > 0 else "missing"
         # Filtered status: if filtered_row_count > 0, the filter matches some data
         filtered_status = "complete" if filtered["filtered_row_count"] > 0 else "missing"
-        
+
         # Database size visibility: per-template estimated storage footprint
         # (unfiltered, all-time - same scope as total_row_count), reusing
         # estimate_client_data_size_pg() rather than a separate endpoint.
-        size_estimate = estimate_client_data_size_pg(client_id=client_id, template_id=tid)
+        size_estimate = size_estimate_lookup.get(tid) or estimate_client_data_size_pg(client_id=client_id, template_id=tid)
 
         result.append({
             "template_id": tid,
