@@ -45,6 +45,15 @@ let isNavigating = false;
 // detail_id. Fully separate from currentTransactionType/procedureData above, which remain
 // scoped to the session's single "active" line — no shared state between the two.
 let voucherLineState = {};
+// Processing/Loading UI, Phase 6: incremented once per renderVoucherHeader() call (once per new
+// voucher painted) — lets a slow-resolving PREVIOUS voucher's completion recognize itself as
+// stale and skip hiding the badge, instead of wrongly hiding the NEW voucher's still-loading one.
+let voucherLoadToken = 0;
+// Ref-counted so two independent producers (the automatic per-voucher line batch in
+// renderVoucherLines(), and openProcedureModal()'s click-triggered loads via the adapter) can each
+// show/hide this one shared badge without one hiding it out from under the other. Reset to 0 in
+// renderVoucherHeader() — see the voucherLoadToken comment above for why.
+let voucherLoadingBadgeRefCount = 0;
 // Phase C: transient click-to-lock focus aid — the detail_id of the one voucher line currently
 // "locked"/dimmed, or null if none. Purely visual, not persisted; reset whenever a new voucher's
 // lines are rendered (see renderVoucherLines()).
@@ -97,6 +106,8 @@ function buildProcedureModalAdapter() {
         computeLineRiskData,
         updateProgressDisplay,
         applyVoucherNavRenderData,
+        showVoucherLoadingBadge,
+        hideVoucherLoadingBadge,
         get VOUCHER_LINE_ACCOUNT_NAME_ALIASES() { return VOUCHER_LINE_ACCOUNT_NAME_ALIASES; },
         get VOUCHER_LINE_DESCRIPTION_ALIASES() { return VOUCHER_LINE_DESCRIPTION_ALIASES; },
         get currentVoucherId() { return currentVoucherId; },
@@ -1493,6 +1504,7 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
                         <span class="vh-icon" id="transactionListIcon" title="View all vouchers" style="cursor:pointer;">
                             <span class="vh-icon-symbol">🔍</span>
                         </span>
+                        <span class="voucher-loading-badge-slot" id="voucherLoadingBadgeSlot"></span>
                     </div>
                     <div class="voucher-subtitle">${rangeText}<span id="voucherPositionCounter">${posText}</span></div>
                 </div>
@@ -1505,6 +1517,10 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
     // next render (any other navigation) shows the reserved slot blank, with no explicit
     // per-call-site clearing needed anywhere else.
     voucherNavCaptionText = '';
+    // Processing/Loading UI, Phase 6: this is "a new voucher just got painted" - invalidate any
+    // still-pending previous voucher's loading badge tracking (see voucherLoadToken's own comment).
+    voucherLoadToken++;
+    voucherLoadingBadgeRefCount = 0;
 
     const cashbookBar = document.getElementById('cashbookBar');
     if (cashbookBar) {
@@ -1582,6 +1598,24 @@ function clearVoucherHeader() {
     if (cashbookBar) cashbookBar.innerHTML = '';
     // Reset so a later session's first render doesn't briefly show this session's stale counts.
     voucherStatsCache = null;
+}
+
+// Processing/Loading UI, Phase 6: persistent badge next to the voucher title, shared by two
+// producers — the automatic per-voucher line batch (renderVoucherLines()) and
+// openProcedureModal()'s click-triggered loads (via the adapter, see buildProcedureModalAdapter())
+// — so it only actually hides once both are done. Looks up #voucherLoadingBadgeSlot fresh on every
+// call since renderVoucherHeader() rebuilds it as a new DOM node on every voucher render.
+function showVoucherLoadingBadge(message) {
+    voucherLoadingBadgeRefCount++;
+    const slot = document.getElementById('voucherLoadingBadgeSlot');
+    if (slot && window.LoadingUI) window.LoadingUI.showBadge(slot, message || 'Loading…');
+}
+
+function hideVoucherLoadingBadge() {
+    if (voucherLoadingBadgeRefCount > 0) voucherLoadingBadgeRefCount--;
+    if (voucherLoadingBadgeRefCount > 0) return;
+    const slot = document.getElementById('voucherLoadingBadgeSlot');
+    if (slot && window.LoadingUI) window.LoadingUI.hideBadge(slot);
 }
 
 // Audit Workbook (Phase 5, FINAL): navigates to the read-only per-voucher rollup page for the
@@ -1994,11 +2028,17 @@ function applyCategoryToTypeCell(uid, categoryName) {
         // Shared across all three cell updates so a cold auditGuidanceCache only triggers one
         // network fetch per line instead of each of them racing to fetch it independently.
         const guidancePromise = fetchAuditGuidanceData(categoryName);
-        updateProceduresCellForLine(uid, categoryName, guidancePromise);
+        // Processing/Loading UI, Phase 6: returned (not fire-and-forget) so renderVoucherLines()
+        // can track when this line's procedure badge — specifically, the one assumption #3 of the
+        // voucher-loading badge cares about — has actually resolved. Observations/Risk aren't part
+        // of that signal (per the confirmed brief), so their own promises stay un-awaited here.
+        const proceduresPromise = updateProceduresCellForLine(uid, categoryName, guidancePromise);
         updateObservationsCellForLine(uid, categoryName, guidancePromise);
         updateRiskCellForLine(uid, categoryName, guidancePromise);
+        return proceduresPromise;
     } else {
         applyRiskToCell(uid, null);
+        return Promise.resolve();
     }
 }
 
@@ -2069,8 +2109,7 @@ async function updateRiskCellForLine(uid, type, guidancePromise) {
 // that case there is nothing to look up, so it's treated as unassigned without a network call.
 async function autoFillCategoryForLine(uid, accountCode) {
     if (!accountCode || accountCode === '—') {
-        applyCategoryToTypeCell(uid, null);
-        return;
+        return applyCategoryToTypeCell(uid, null);
     }
 
     let categoryName = null;
@@ -2091,7 +2130,7 @@ async function autoFillCategoryForLine(uid, accountCode) {
         categoryName = null; // fail safe to unassigned — not cached, so a later attempt can retry
     }
 
-    applyCategoryToTypeCell(uid, categoryName);
+    return applyCategoryToTypeCell(uid, categoryName);
 }
 
 // Order matches .voucher-line-summary-grid's columns: Sr No., Date, Account Code, Account Type,
@@ -2533,11 +2572,18 @@ async function renderVoucherLines(lines, voucherDate) {
 
     // Type auto-fill (Verification ↔ Assign Categories link, Phase 4): look up each line's Category
     // by its account code and populate the read-only Type cell — replaces the old dropdown-sync
-    // loop that read a manually-saved value. Fire-and-forget per line; each call safely no-ops if
-    // its row is no longer in the DOM by the time the lookup resolves.
-    lineAccountCodes.forEach(({ uid, accountCode }) => {
-        autoFillCategoryForLine(uid, accountCode);
-    });
+    // loop that read a manually-saved value. Each call safely no-ops if its row is no longer in the
+    // DOM by the time the lookup resolves.
+    // Processing/Loading UI, Phase 6: the voucher-loading badge (next to the title, shown by
+    // renderVoucherHeader()'s paired call) tracks this whole batch via the promises these calls now
+    // return — myLoadToken guards against a stale (superseded-by-a-newer-voucher) batch hiding the
+    // badge out from under the voucher that's actually on screen now.
+    const myLoadToken = voucherLoadToken;
+    showVoucherLoadingBadge();
+    Promise.all(lineAccountCodes.map(({ uid, accountCode }) => autoFillCategoryForLine(uid, accountCode)))
+        .then(() => {
+            if (myLoadToken === voucherLoadToken) hideVoucherLoadingBadge();
+        });
 
     // Phase 4: attach each line's change-alert icon (only present for lines flagged 'updated').
     lines.forEach(line => {

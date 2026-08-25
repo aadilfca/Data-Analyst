@@ -582,7 +582,19 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // (navigateProcedureModalLine/verifyAndAdvanceVoucher call this with no triggerEl, since
     // there's no click event to attach to and the modal is already visible).
     const spinnerTarget = triggerEl || document.getElementById('procedureModalPanels');
-    if (window.LoadingUI) window.LoadingUI.showSpinner(spinnerTarget, 'Loading');
+    // Processing/Loading UI, Phase 6: a triggerEl-driven open means the clicked element is a
+    // narrow Procedures/Observations table cell badge/flag — spinning it in place used to
+    // escalate (LoadingUI's 3s "— still working…" message) and overflow past the column
+    // (confirmed bug). When the host page provides the shared voucher-loading badge (Verification
+    // does; Audit Workbook's adapter doesn't have it), route there instead and leave the clicked
+    // badge's own content undisturbed. The no-triggerEl re-navigation case already targets the
+    // wide panels container, so it keeps the spinner unchanged — no overflow risk there.
+    const useHostBadge = !!(triggerEl && hostAdapter && typeof hostAdapter.showVoucherLoadingBadge === 'function');
+    if (useHostBadge) {
+        hostAdapter.showVoucherLoadingBadge();
+    } else if (window.LoadingUI) {
+        window.LoadingUI.showSpinner(spinnerTarget, 'Loading');
+    }
 
     try {
         // forceRefresh=true — bypasses auditGuidanceCache so this Category's Document list and each
@@ -825,7 +837,11 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     activateProcedureTab(uid, activeDocId);
     updateProcedureModalSavedNote(uid);
     } finally {
-        if (window.LoadingUI) window.LoadingUI.hideSpinner(spinnerTarget);
+        if (useHostBadge) {
+            hostAdapter.hideVoucherLoadingBadge();
+        } else if (window.LoadingUI) {
+            window.LoadingUI.hideSpinner(spinnerTarget);
+        }
     }
 }
 
