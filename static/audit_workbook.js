@@ -816,7 +816,7 @@ awTableBody.addEventListener('click', function (e) {
         const detailId = procTarget.getAttribute('data-detail-id');
         const found = awFindLineByDetailId(detailId);
         if (found) {
-            openProcedureModal(String(found.line.detail_id), null, buildAuditWorkbookAdapter(found.voucher));
+            openProcedureModal(String(found.line.detail_id), null, buildAuditWorkbookAdapter(found.voucher), procTarget);
         }
         return;
     }

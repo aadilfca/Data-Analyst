@@ -1828,7 +1828,7 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
         cell.innerHTML = `<div class="voucher-line-proc-expanded-list" data-uid="${uid}">${itemsHtml}</div>`;
         cell.querySelector('.voucher-line-proc-expanded-list')?.addEventListener('click', function(e) {
             e.stopPropagation();
-            openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter());
+            openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter(), this);
         });
         return;
     }
@@ -1845,7 +1845,7 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
     `;
     cell.querySelector('.voucher-line-procedures-badge')?.addEventListener('click', function(e) {
         e.stopPropagation();
-        openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter());
+        openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter(), this);
     });
 }
 
@@ -1910,7 +1910,7 @@ async function updateObservationsCellForLine(uid, type, guidancePromise) {
         cell.innerHTML = `<div class="voucher-line-obs-expanded-list" data-uid="${uid}">${itemsHtml}</div>`;
         cell.querySelector('.voucher-line-obs-expanded-list')?.addEventListener('click', function(e) {
             e.stopPropagation();
-            openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter());
+            openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter(), this);
         });
         return;
     }
@@ -1923,7 +1923,7 @@ async function updateObservationsCellForLine(uid, type, guidancePromise) {
     cell.innerHTML = `<span class="voucher-line-obs-flag" data-uid="${uid}" title="${count} observation${count === 1 ? '' : 's'} recorded">⚑ ${count}</span>`;
     cell.querySelector('.voucher-line-obs-flag')?.addEventListener('click', function(e) {
         e.stopPropagation();
-        openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter());
+        openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter(), this);
     });
 }
 

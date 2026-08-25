@@ -264,7 +264,7 @@ async function fetchLatestTbAccounts(clientId) {
         return latestTbAccountsCache;
     }
     try {
-        const res = await fetch(`${API_BASE}/api/trial-balance/latest-accounts?client_id=${encodeURIComponent(clientId)}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/trial-balance/latest-accounts?client_id=${encodeURIComponent(clientId)}`);
         if (!res.ok) {
             latestTbAccountsCache = [];
             return latestTbAccountsCache;
@@ -297,7 +297,7 @@ async function fetchTemplateColumns(templateId) {
         return templateColumnsCache[templateId];
     }
     try {
-        const res = await fetch(`${API_BASE}/api/templates/${templateId}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/templates/${templateId}`);
         if (!res.ok) {
             templateColumnsCache[templateId] = [];
             templateNameCache[templateId] = '';
@@ -399,23 +399,30 @@ async function toggleValidatePanel() {
     const uid = currentProcedureModalUid;
     if (!uid) return;
 
-    panel.innerHTML = '<p class="lsr-reason">Loading…</p>';
+    if (window.LoadingUI) {
+        window.LoadingUI.showSpinner(panel, 'Loading');
+    } else {
+        panel.innerHTML = '<p class="lsr-reason">Loading…</p>';
+    }
     panel.style.display = 'block';
     validatePanelLoadingUid = uid;
 
     try {
-        const response = await fetch(`${API_BASE}/api/verification/line_status_reason/${uid}`);
+        const response = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/line_status_reason/${uid}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         // Discard a stale response if the panel was closed or the modal moved to a different
-        // line while this fetch was in flight.
+        // line while this fetch was in flight. Do NOT hideSpinner here - a newer request for a
+        // different line may already have its own spinner active on this same singleton panel.
         if (validatePanelLoadingUid !== uid) return;
+        if (window.LoadingUI) window.LoadingUI.hideSpinner(panel);
         validatePanelData = data;
         validatePanelShowNA = false;
         renderValidatePanel();
     } catch (e) {
         if (validatePanelLoadingUid !== uid) return;
         console.warn('Unable to load line status reason:', e);
+        if (window.LoadingUI) window.LoadingUI.hideSpinner(panel);
         panel.innerHTML = '<p class="lsr-reason">Unable to load the status breakdown.</p>';
     }
 }
@@ -454,7 +461,7 @@ async function fetchProcedureRows(templateId, search, page, limit) {
         limit: limit
     });
     if (search) params.set('search', search);
-    const res = await fetch(`${API_BASE}/api/data/preview?${params}`);
+    const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/data/preview?${params}`);
     if (!res.ok) throw new Error('Failed to fetch Data Bank rows.');
     return res.json();
 }
@@ -563,25 +570,33 @@ function getProcedureTabState(uid, docId) {
 // assigned Category. initialDocId (optional) pre-selects that document's tab; otherwise the
 // first document's tab opens. No-ops if the line has no Category assigned yet (nothing to build
 // tabs from) or its Category has no documents.
-async function openProcedureModal(uid, initialDocId = null, adapter = null) {
+async function openProcedureModal(uid, initialDocId = null, adapter = null, triggerEl = null) {
     if (adapter) hostAdapter = adapter;
     if (!procedureModal) return;
     const lineState = hostAdapter.voucherLineState[uid];
     const type = lineState && lineState.transactionType;
     if (!type) return;
 
-    // forceRefresh=true — bypasses auditGuidanceCache so this Category's Document list and each
-    // Document's auth_roles always reflect Audit Rules' live state on open, same "re-fetched
-    // fresh on every open" convention as assignedRecords/procedureChecks just below.
-    let guidance = null;
+    // Spinner target: the clicked badge/pill on a fresh open (triggerEl, passed by the caller),
+    // or the panel container itself on an internal re-navigation between already-open lines
+    // (navigateProcedureModalLine/verifyAndAdvanceVoucher call this with no triggerEl, since
+    // there's no click event to attach to and the modal is already visible).
+    const spinnerTarget = triggerEl || document.getElementById('procedureModalPanels');
+    if (window.LoadingUI) window.LoadingUI.showSpinner(spinnerTarget, 'Loading');
+
     try {
-        guidance = await hostAdapter.fetchAuditGuidanceData(type, true);
-    } catch (e) {
-        console.error('Failed to load Supporting Documents modal data:', e);
-        return;
-    }
-    const guidanceDocuments = (guidance && guidance.documents) || [];
-    if (!guidanceDocuments.length) return;
+        // forceRefresh=true — bypasses auditGuidanceCache so this Category's Document list and each
+        // Document's auth_roles always reflect Audit Rules' live state on open, same "re-fetched
+        // fresh on every open" convention as assignedRecords/procedureChecks just below.
+        let guidance = null;
+        try {
+            guidance = await hostAdapter.fetchAuditGuidanceData(type, true);
+        } catch (e) {
+            console.error('Failed to load Supporting Documents modal data:', e);
+            return;
+        }
+        const guidanceDocuments = (guidance && guidance.documents) || [];
+        if (!guidanceDocuments.length) return;
 
     // Validation Rules Phase 5: prepend a synthetic, non-document "Voucher Line" tab holding the
     // Prepared/Checked/Approved By fields — always present as the first rail entry, distinct from
@@ -606,7 +621,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null) {
     // fetched fresh on every open so both can never drift from true server state.
     let assignedRecords = [];
     try {
-        const res = await fetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
         if (res.ok) {
             const assignData = await res.json();
             assignedRecords = assignData.documents || [];
@@ -621,7 +636,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null) {
     // never blocks the modal opening; re-fetched fresh on every open for the same reason.
     let procedureChecks = [];
     try {
-        const checksRes = await fetch(`${API_BASE}/api/verification/procedure_checks/${uid}`);
+        const checksRes = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_checks/${uid}`);
         if (checksRes.ok) {
             const checksData = await checksRes.json();
             procedureChecks = checksData.checks || [];
@@ -635,7 +650,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null) {
     // on every open so a saved note is never silently stale.
     let observationEntries = [];
     try {
-        const obsRes = await fetch(`${API_BASE}/api/verification/line_observations/${uid}`);
+        const obsRes = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/line_observations/${uid}`);
         if (obsRes.ok) {
             const obsData = await obsRes.json();
             observationEntries = obsData.entries || [];
@@ -666,7 +681,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null) {
     // procedureChecks/observationEntries above.
     let crossCheckResults = [];
     try {
-        const ccRes = await fetch(`${API_BASE}/api/verification/cross_check_results/${uid}`);
+        const ccRes = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/cross_check_results/${uid}`);
         if (ccRes.ok) {
             const ccData = await ccRes.json();
             crossCheckResults = ccData.results || [];
@@ -809,6 +824,9 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null) {
     renderProcedureModalTabs(uid);
     activateProcedureTab(uid, activeDocId);
     updateProcedureModalSavedNote(uid);
+    } finally {
+        if (window.LoadingUI) window.LoadingUI.hideSpinner(spinnerTarget);
+    }
 }
 
 // Reflects whether any tab for this line has an unsaved (typed-but-not-yet-flushed) observation —
@@ -1128,7 +1146,7 @@ async function ensureVoucherChecksLoaded(clientId, transactionRef) {
     const loadPromise = (async () => {
         try {
             const params = new URLSearchParams({ client_id: clientId, transaction_ref: transactionRef });
-            const res = await fetch(`${API_BASE}/api/verification/voucher_checks?${params}`);
+            const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/voucher_checks?${params}`);
             if (res.ok) {
                 const data = await res.json();
                 voucherChecksCache[transactionRef] = data.map(c => ({
@@ -1810,7 +1828,7 @@ async function fetchAccountHeadSuggestions(uid) {
     try {
         const params = new URLSearchParams({ client_id: clientId, description: description });
         if (category) params.set('category', category);
-        const res = await fetch(`/api/verification/suggest-account-head?${params.toString()}`);
+        const res = await window.ApiUtils.apiFetch(`/api/verification/suggest-account-head?${params.toString()}`);
         const data = await res.json();
         state.matched = !!data.matched;
         state.suggestions = data.suggestions || [];
