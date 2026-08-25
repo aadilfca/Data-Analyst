@@ -283,6 +283,8 @@ original problem, and will collapse to one line once that project finishes.**
 - 2026-08-24: Deactivated 6 leftover PW test voucher-checks contaminating Leather Crop data — CRV-0126-102 flipped Query to Cleared; CRV-0126-104's 400 is unrelated, real checks untouched.
 - 2026-08-24: Fixed verify_voucher_checks 400 reachability gap — performVerifyVoucherChecks() now re-fetches fresh voucher-checks state before sending (procedure_modal.js).
 - 2026-08-25: Batched verify_voucher_checks()'s per-check UPDATE loop into 2 set-based updates; per-line observation-sync loop left unbatched, documented why (verification.py).
+- 2026-08-25: Parallelized per-line fetch chain (audit_guidance shared once, doc/check/observation fetches concurrent) via Promise.all, verified via Playwright (verification.js).
+- 2026-08-25: Final speed investigation (free-tier vs code gaps documented, PERFORMANCE_INVESTIGATION.md) + render.yaml service name corrected (internal-audit-app → 2.-Python-App).
 
 
 ## Self-maintenance
