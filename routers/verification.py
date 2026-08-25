@@ -1509,12 +1509,32 @@ def verify_voucher_checks(
         raise HTTPException(400, f"Cannot verify: {len(untouched)} check(s) still not marked ({names}).")
 
     not_done_ids = {c['id'] for c in active_checks if state_by_check_id.get(c['id']) == 'not_done'}
-    for c in active_checks:
+    # Batched (was one UPDATE per active check): every active check's flagged_in_observations
+    # is purely a function of not_done_ids membership, so this partitions into at most 2
+    # set-based UPDATEs instead of N.
+    done_ids = [c['id'] for c in active_checks if c['id'] not in not_done_ids]
+    if not_done_ids:
+        placeholders = ",".join("%s" for _ in not_done_ids)
         execute_write_pg(
-            "UPDATE voucher_check_status SET flagged_in_observations = %s WHERE client_id = %s AND transaction_ref = %s AND check_id = %s",
-            (c['id'] in not_done_ids, client_id, transaction_ref, c['id'])
+            f"UPDATE voucher_check_status SET flagged_in_observations = TRUE "
+            f"WHERE client_id = %s AND transaction_ref = %s AND check_id IN ({placeholders})",
+            (client_id, transaction_ref, *not_done_ids)
+        )
+    if done_ids:
+        placeholders = ",".join("%s" for _ in done_ids)
+        execute_write_pg(
+            f"UPDATE voucher_check_status SET flagged_in_observations = FALSE "
+            f"WHERE client_id = %s AND transaction_ref = %s AND check_id IN ({placeholders})",
+            (client_id, transaction_ref, *done_ids)
         )
 
+    # Not batched, deliberately: sync_line_observations_to_voucher() isn't a single write per
+    # line - it resolves sibling ids, runs its own SELECTs/dedup, and writes both
+    # verification_details and voucher_line_observations per line, with its own try/except so
+    # one line's failure never blocks another's. Collapsing this across lines would mean
+    # rewriting a shared function (also called per-line elsewhere in this file) with detailed
+    # correctness invariants documented in its own docstring - not worth the risk for what's
+    # normally just a handful of lines per voucher.
     for row in voucher_rows:
         sync_line_observations_to_voucher(row['id'])
 
