@@ -7053,6 +7053,13 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+/* Voucher-title loading badge (verification.js's showVoucherLoadingBadge()) — an .ui-badge
+   carrying a small spinner icon before its text, gap between the two since .ui-badge itself has
+   none (a plain text badge needs none). The spinner reuses .ui-spinner-sm's own animation/sizing
+   unchanged. */
+.voucher-loading-badge {
+    gap: 6px;
+}
 .ui-badge-warning {
     background: #fef3c7;
     color: #b45309;

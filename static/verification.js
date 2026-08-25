@@ -1598,22 +1598,29 @@ function clearVoucherHeader() {
     voucherStatsCache = null;
 }
 
-// Processing/Loading UI, Phase 6: persistent badge next to the voucher title, shared by two
-// producers — the automatic per-voucher line batch (renderVoucherLines()) and
-// openProcedureModal()'s click-triggered loads (via the adapter, see buildProcedureModalAdapter())
-// — so it only actually hides once both are done. Looks up #voucherLoadingBadgeSlot fresh on every
-// call since renderVoucherHeader() rebuilds it as a new DOM node on every voucher render.
+// Persistent badge next to the voucher title, shown for the whole-voucher automatic load only
+// (renderVoucherLines()'s per-line batch, driven by the ref count below) — unrelated to a
+// Procedures/Observations badge click, which shows its own in-field spinner instead (see
+// openProcedureModal() in procedure_modal.js). Ref-counted rather than a plain boolean so an
+// in-flight batch from a just-superseded voucher (see the myLoadToken guard where this is called)
+// can never wrongly hide the current voucher's badge. Looks up #voucherLoadingBadgeSlot fresh on
+// every call since renderVoucherHeader() rebuilds it as a new DOM node on every voucher render.
+// Built directly (not via LoadingUI.showBadge, which is text-only) so it can carry a small spinner
+// icon alongside the message — .ui-badge still supplies the overflow-safe pill styling.
 function showVoucherLoadingBadge(message) {
     voucherLoadingBadgeRefCount++;
     const slot = document.getElementById('voucherLoadingBadgeSlot');
-    if (slot && window.LoadingUI) window.LoadingUI.showBadge(slot, message || 'Loading…');
+    if (!slot) return;
+    slot.innerHTML = `<span class="ui-badge voucher-loading-badge">` +
+        `<span class="ui-spinner ui-spinner-sm"></span>` +
+        `<span>${escapeHtml(message || 'Loading…')}</span></span>`;
 }
 
 function hideVoucherLoadingBadge() {
     if (voucherLoadingBadgeRefCount > 0) voucherLoadingBadgeRefCount--;
     if (voucherLoadingBadgeRefCount > 0) return;
     const slot = document.getElementById('voucherLoadingBadgeSlot');
-    if (slot && window.LoadingUI) window.LoadingUI.hideBadge(slot);
+    if (slot) slot.innerHTML = '';
 }
 
 // Audit Workbook (Phase 5, FINAL): navigates to the read-only per-voucher rollup page for the
