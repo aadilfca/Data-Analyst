@@ -1227,9 +1227,28 @@ async function startSessionFromCashbook() {
         showStatus('⚠️ Start must be ≤ end.', 'error');
         return;
     }
+    // No real progress feed from start_session (the backend only returns total_transactions once
+    // the whole build is done) - cashbookTotalRows (fetchCashbookData(), already populated since
+    // this button lives on the same cashbook view) is used as an upfront estimate, animated toward
+    // completion on a timer, same as loading_ui.js's own 'simulated' curve.
+    let progressIntervalId = null;
     try {
-        startVerificationBtn.disabled = true;
-        startVerificationBtn.textContent = '⏳ Starting...';
+        const estimatedTotal = cashbookTotalRows || 0;
+        if (estimatedTotal > 0) {
+            window.LoadingUI.showProgressBar(startVerificationBtn, {
+                mode: 'determinate',
+                total: estimatedTotal,
+                message: 'Loading transactions'
+            });
+            const startTime = Date.now();
+            progressIntervalId = setInterval(function () {
+                const elapsed = Date.now() - startTime;
+                const current = Math.floor(estimatedTotal * 0.9 * (1 - Math.exp(-elapsed / 2000)));
+                window.LoadingUI.updateProgressBar(startVerificationBtn, current, estimatedTotal);
+            }, 150);
+        } else {
+            window.LoadingUI.showProgressBar(startVerificationBtn, { mode: 'indeterminate', message: 'Starting verification…' });
+        }
         const params = new URLSearchParams({
             client_id: clientId,
             cashbook_name: selectedCashbook,
@@ -1249,13 +1268,21 @@ async function startSessionFromCashbook() {
         }
             const data = await res.json();
         totalTransactions = data.total_transactions || 0;
+        if (progressIntervalId) {
+            clearInterval(progressIntervalId);
+            progressIntervalId = null;
+        }
+        window.LoadingUI.updateProgressBar(startVerificationBtn, totalTransactions, totalTransactions);
         await activateSessionView(data.session_id);
     } catch (error) {
+        if (progressIntervalId) {
+            clearInterval(progressIntervalId);
+            progressIntervalId = null;
+        }
         console.error('Error starting session:', error);
         showStatus('❌ Error starting verification: ' + error.message, 'error');
     } finally {
-        startVerificationBtn.disabled = false;
-        startVerificationBtn.textContent = '✅ Verification';
+        window.LoadingUI.hideProgressBar(startVerificationBtn);
     }
 }
 
