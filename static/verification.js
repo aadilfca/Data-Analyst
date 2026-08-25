@@ -1730,7 +1730,7 @@ function toggleColumnsExpanded() {
 // Completion mirrors isProcedureDocumentComplete() (template doc → assigned; no-template doc →
 // every configured role ticked) but computed standalone here, since procedureModalState is only
 // populated once the modal has actually been opened for this line.
-async function updateProceduresCellForLine(uid, type) {
+async function updateProceduresCellForLine(uid, type, guidancePromise) {
     // Targets the inner slot, not the outer .voucher-line-procedures-cell — the cell also holds
     // the persistent risk dot (see applyRiskToCell()), which must survive this function's
     // innerHTML rewrites rather than being wiped out by them.
@@ -1741,9 +1741,14 @@ async function updateProceduresCellForLine(uid, type) {
         return;
     }
     cell.innerHTML = '<span style="color:#94a3b8; font-size:12px;">Loading…</span>';
+    // These two don't depend on the guidance fetch's result — start them immediately rather than
+    // after guidance resolves (per-line fetch batching). Fail-soft to [] internally, so letting
+    // them run even when the early "no documents" return below fires is harmless.
+    const assignedPromise = fetchAssignedDocumentRecords(uid);
+    const checksListPromise = fetchProcedureChecksForLine(uid);
     let data = null;
     try {
-        data = await fetchAuditGuidanceData(type);
+        data = await (guidancePromise || fetchAuditGuidanceData(type));
     } catch (e) {
         console.error('Failed to load Procedures documents:', e);
     }
@@ -1765,8 +1770,8 @@ async function updateProceduresCellForLine(uid, type) {
     const needsVoucherChecks = documents.some(doc => doc.transaction_level_approval);
     const needsPhysicalBills = documents.some(doc => doc.document_type === 'physical_bill');
     const [assignedRecords, procedureChecks, checks, physicalBills] = await Promise.all([
-        fetchAssignedDocumentRecords(uid),
-        fetchProcedureChecksForLine(uid),
+        assignedPromise,
+        checksListPromise,
         needsVoucherChecks ? ensureVoucherChecksLoaded(getClientId(), currentVoucherId) : Promise.resolve(null),
         needsPhysicalBills ? fetchPhysicalBillsForLine(uid) : Promise.resolve([])
     ]);
@@ -1862,7 +1867,7 @@ async function fetchLineObservationEntries(uid) {
 // Renders the Observations column's flag+count for one line — replaces the old raw-text preview.
 // Reading the actual observation text now requires opening the modal (each document's own
 // Observation segment), matching the v7 prototype exactly.
-async function updateObservationsCellForLine(uid, type) {
+async function updateObservationsCellForLine(uid, type, guidancePromise) {
     const cell = document.querySelector(`.voucher-line-observations-cell[data-detail-id="${uid}"]`);
     if (!cell) return;
     if (!type) {
@@ -1889,7 +1894,7 @@ async function updateObservationsCellForLine(uid, type) {
         // Procedures cell already draws from, no new endpoint.
         let data = null;
         try {
-            data = await fetchAuditGuidanceData(type);
+            data = await (guidancePromise || fetchAuditGuidanceData(type));
         } catch (e) {
             console.error('Failed to load document names for expanded Observations:', e);
         }
@@ -1953,9 +1958,12 @@ function applyCategoryToTypeCell(uid, categoryName) {
     // the category resolves — same "only call on a real match" convention the old Supporting cell
     // used, so an Unassigned line's cells simply stay blank rather than being explicitly cleared.
     if (categoryName) {
-        updateProceduresCellForLine(uid, categoryName);
-        updateObservationsCellForLine(uid, categoryName);
-        updateRiskCellForLine(uid, categoryName);
+        // Shared across all three cell updates so a cold auditGuidanceCache only triggers one
+        // network fetch per line instead of each of them racing to fetch it independently.
+        const guidancePromise = fetchAuditGuidanceData(categoryName);
+        updateProceduresCellForLine(uid, categoryName, guidancePromise);
+        updateObservationsCellForLine(uid, categoryName, guidancePromise);
+        updateRiskCellForLine(uid, categoryName, guidancePromise);
     } else {
         applyRiskToCell(uid, null);
     }
@@ -2008,14 +2016,14 @@ function applyRiskToCell(uid, riskData) {
 // Looks up the Risk cell's data for one line's Category, mirroring updateProceduresCellForLine()'s
 // shape (blank on no type, stale-guard re-check after the await since the line's Category can
 // change while this fetch is in flight).
-async function updateRiskCellForLine(uid, type) {
+async function updateRiskCellForLine(uid, type, guidancePromise) {
     if (!type) {
         applyRiskToCell(uid, null);
         return;
     }
     let data = null;
     try {
-        data = await fetchAuditGuidanceData(type);
+        data = await (guidancePromise || fetchAuditGuidanceData(type));
     } catch (e) {
         console.error('Failed to load Risk indicator:', e);
     }
