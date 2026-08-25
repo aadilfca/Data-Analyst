@@ -1021,11 +1021,11 @@ async function performVerifyVoucherChecks(uid) {
         }
         await hostAdapter.saveLineItems(uid);
         await flushPhysicalBillEntries(uid);
-        const res = await fetch(`${API_BASE}/api/verification/verify_voucher_checks`, {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/verify_voucher_checks`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: hostAdapter.currentSessionId, current_detail_id: uid })
-        });
+        }, { target: btn, message: 'Verifying' });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             hostAdapter.showStatus(err.detail || 'Could not verify voucher-level checks — please try again.', 'error');
@@ -1239,7 +1239,7 @@ function renderVoucherChecksBar(uid) {
             const previousState = check.state;
             check.state = newState;
             try {
-                const res = await fetch(`${API_BASE}/api/verification/save_voucher_check`, {
+                const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_voucher_check`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1248,7 +1248,7 @@ function renderVoucherChecksBar(uid) {
                         check_id: checkId,
                         state: newState
                     })
-                });
+                }, { target: this, message: 'Saving' });
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
                     throw new Error(err.detail || 'Failed to save voucher check.');
@@ -1289,8 +1289,15 @@ async function toggleAllVoucherChecks(uid) {
     toChange.forEach(c => { previousStates[c.id] = c.state; c.state = newState; });
     renderVoucherChecksBar(uid);
 
+    // Re-queried after the render above (not the click's own captured element) since that render
+    // just replaced the select-all button's DOM node - a spinner on the old reference would be
+    // invisible. Shown once for the whole batch, not per-item (LoadingUI's show/hide state is a
+    // single WeakMap slot per element - N concurrent calls on the same button would race).
+    const selectAllBtn = document.getElementById('procedureVoucherChecksSelectAllBtn');
+    if (window.LoadingUI && selectAllBtn) window.LoadingUI.showSpinner(selectAllBtn, 'Saving');
+
     try {
-        const responses = await Promise.all(toChange.map(c => fetch(`${API_BASE}/api/verification/save_voucher_check`, {
+        const responses = await Promise.all(toChange.map(c => window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_voucher_check`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1314,6 +1321,8 @@ async function toggleAllVoucherChecks(uid) {
         toChange.forEach(c => { c.state = previousStates[c.id]; });
         hostAdapter.showStatus('Failed to update all checks — please try again.', 'error');
         renderVoucherChecksBar(uid);
+    } finally {
+        if (window.LoadingUI && selectAllBtn) window.LoadingUI.hideSpinner(selectAllBtn);
     }
 }
 
@@ -1478,7 +1487,7 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
     // new state immediately (see toggleProcedureCheck()), no separate Save action.
     container.querySelectorAll('.procedure-checklist-checkbox').forEach(cb => {
         cb.addEventListener('change', function() {
-            toggleProcedureCheck(uid, docId, this.dataset.role, this.checked);
+            toggleProcedureCheck(uid, docId, this.dataset.role, this.checked, this);
         });
     });
 
@@ -1559,8 +1568,7 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
     if (copyBtn) {
         copyBtn.addEventListener('click', async function() {
             if (copyBtn.disabled) return;
-            copyBtn.disabled = true;
-            await saveLineObservation(uid, docId);
+            await saveLineObservation(uid, docId, copyBtn);
             refreshObservationButtons();
         });
     }
@@ -2039,7 +2047,7 @@ function renderProcedureModalPanel(uid, docId) {
         // Unassign requirement: one click listener per ✕ unlink button in the Linked Evidence table.
         container.querySelectorAll('.procedure-unlink-btn').forEach(btn => {
             btn.addEventListener('click', function() {
-                unassignSupportingDocument(uid, docId, parseInt(this.dataset.assignmentId));
+                unassignSupportingDocument(uid, docId, parseInt(this.dataset.assignmentId), this);
             });
         });
 
@@ -2085,8 +2093,13 @@ async function toggleAllProcedureChecks(uid, docId) {
     renderProcedureModalPanel(uid, docId);
     renderProcedureModalTabs(uid);
 
+    // Same re-query-after-render + single-spinner-for-the-whole-batch reasoning as
+    // toggleAllVoucherChecks() above.
+    const selectAllBtn = document.getElementById('procedureChecklistSelectAllBtn');
+    if (window.LoadingUI && selectAllBtn) window.LoadingUI.showSpinner(selectAllBtn, 'Saving');
+
     try {
-        const responses = await Promise.all(toChange.map(role => fetch(`${API_BASE}/api/verification/procedure_checks`, {
+        const responses = await Promise.all(toChange.map(role => window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/procedure_checks`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2124,6 +2137,8 @@ async function toggleAllProcedureChecks(uid, docId) {
         hostAdapter.showStatus('Failed to update all procedures — please try again.', 'error');
         renderProcedureModalPanel(uid, docId);
         renderProcedureModalTabs(uid);
+    } finally {
+        if (window.LoadingUI && selectAllBtn) window.LoadingUI.hideSpinner(selectAllBtn);
     }
 }
 
@@ -2580,7 +2595,7 @@ async function savePhysicalBillEntry(uid, docId) {
     const bills = tabState.physicalBills || [];
 
     try {
-        const res = await fetch(`${API_BASE}/api/verification/save_physical_bill`, {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_physical_bill`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2684,7 +2699,7 @@ function renderProcedureSearchDropdown(uid, docId) {
     dropdown.querySelectorAll('.procedure-result-item:not(.locked)').forEach(item => {
         item.addEventListener('click', async function() {
             const row = results.find(r => r.id === parseInt(this.dataset.id));
-            if (row) await selectProcedureDocument(uid, docId, row);
+            if (row) await selectProcedureDocument(uid, docId, row, this);
         });
     });
 }
@@ -2695,16 +2710,17 @@ function renderProcedureSearchDropdown(uid, docId) {
 // already carry everything the selected-lines table needs (row_data/extract_date/extract_amount).
 // Returns true on success, false on failure, so callers (the dropdown and the browse modal) can
 // each decide what to do next (clear the dropdown vs. keep the browse modal open and refresh it).
-async function selectProcedureDocument(uid, docId, row) {
+// target (optional) is the clicked dropdown item/browse-table row, for a LoadingUI spinner.
+async function selectProcedureDocument(uid, docId, row, target = null) {
     const lineState = hostAdapter.procedureModalState[uid];
     if (!lineState) return false;
     const tabState = getProcedureTabState(uid, docId);
     try {
-        const res = await fetch(`${API_BASE}/api/verification/assign_document`, {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/assign_document`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ voucher_line_id: parseInt(uid), client_data_id: row.id, document_id: docId })
-        });
+        }, { target, message: 'Assigning' });
         if (!res.ok) {
             // A real race, not hypothetical — the row's own UNIQUE(client_data_id) constraint is
             // the actual enforcement, so a concurrent assignment elsewhere can land first.
@@ -2743,7 +2759,7 @@ async function selectProcedureDocument(uid, docId, row) {
 // re-renders — reusing the exact same buildSelectedLinesTable()/getSelectedLinesSummary() logic
 // Phase 4 already built, so the running total and Matches/mismatch badge recalculate automatically
 // with no separate recompute path. Observation text for the tab is deliberately left untouched.
-async function unassignSupportingDocument(uid, docId, assignmentId) {
+async function unassignSupportingDocument(uid, docId, assignmentId, target = null) {
     if (!confirm('Unlink this evidence from the voucher line? The Data Bank row will become available to assign elsewhere.')) {
         return;
     }
@@ -2752,11 +2768,11 @@ async function unassignSupportingDocument(uid, docId, assignmentId) {
     const tabState = getProcedureTabState(uid, docId);
 
     try {
-        const res = await fetch(`${API_BASE}/api/verification/unassign_document`, {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/unassign_document`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ assignment_id: assignmentId })
-        });
+        }, { target, message: 'Unlinking' });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             hostAdapter.showStatus(err.detail || 'Failed to unlink evidence — please try again.', 'error');
@@ -2928,14 +2944,14 @@ function buildProcedureChecklist(uid, docId) {
 // Persists one checkbox toggle. Updates local state from the server's response on success (no
 // re-render needed — the checkbox already reflects the click); on failure, reverts the in-memory
 // state and re-renders so the checkbox visually snaps back to its prior value.
-async function toggleProcedureCheck(uid, docId, roleName, isChecked) {
+async function toggleProcedureCheck(uid, docId, roleName, isChecked, target = null) {
     const tabState = getProcedureTabState(uid, docId);
     const previousState = tabState.checklist[roleName] ? { ...tabState.checklist[roleName] } : null;
     if (!tabState.checklist[roleName]) tabState.checklist[roleName] = {};
     tabState.checklist[roleName].is_checked = isChecked;
 
     try {
-        const res = await fetch(`${API_BASE}/api/verification/procedure_checks`, {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/procedure_checks`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2944,7 +2960,7 @@ async function toggleProcedureCheck(uid, docId, roleName, isChecked) {
                 role_name: roleName,
                 is_checked: isChecked
             })
-        });
+        }, { target, message: 'Saving' });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.detail || 'Failed to save procedure check.');
@@ -2982,7 +2998,7 @@ async function toggleSignatureException(uid, docId, assignmentId, isChecked) {
     if (sel) sel.signature_exception = isChecked;
 
     try {
-        const res = await fetch(`${API_BASE}/api/verification/set_signature_exception`, {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/set_signature_exception`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ assignment_id: assignmentId, signature_exception: isChecked })
@@ -3098,10 +3114,10 @@ function buildObservationSection(uid, docId) {
 // Observation field the next time that line is saved (hostAdapter.saveLineItems(), via
 // sync_line_observations_to_voucher() in routers/verification.py), and also immediately here since
 // save_line_observation() itself calls that same sync function.
-async function saveLineObservation(uid, docId) {
+async function saveLineObservation(uid, docId, target = null) {
     const tabState = getProcedureTabState(uid, docId);
     try {
-        const res = await fetch(`${API_BASE}/api/verification/save_line_observation`, {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_line_observation`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -3109,7 +3125,7 @@ async function saveLineObservation(uid, docId) {
                 document_id: docId,
                 observation_text: tabState.observation || ''
             })
-        });
+        }, { target, message: 'Saving' });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.detail || 'Failed to save observation.');
@@ -3159,7 +3175,7 @@ async function flushAccountHeadNoMatchNote(uid) {
     if (state.mode !== 'nomatch' || !state.noMatchDirty) return;
 
     try {
-        const res = await fetch(`${API_BASE}/api/verification/save_line_observation`, {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_line_observation`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -3390,7 +3406,7 @@ function renderProcedureBrowseTable() {
                 // whether the row is currently hidden by the status filter.
                 const row = rows.find(r => r.id === parseInt(this.dataset.id));
                 if (!row) return;
-                const success = await selectProcedureDocument(uid, docId, row);
+                const success = await selectProcedureDocument(uid, docId, row, this);
                 if (success) {
                     closeProcedureBrowseModal();
                 } else {
