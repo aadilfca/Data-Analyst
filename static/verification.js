@@ -138,6 +138,8 @@ const popupPeriodEnd = document.getElementById('popupPeriodEnd');
 // Client Data Links card strip - populated dynamically by loadDataLinksCards() from the real
 // templates list, so it never needs a hardcoded per-template edit again.
 const dataLinksCardStrip = document.getElementById('dataLinksCardStrip');
+// Quick Stats card grid - loading target for loadVerificationStats()'s spinner.
+const verificationStatsGrid = document.querySelector('.stats-grid');
 
 const statusDiv = document.getElementById('verificationStatus');
 // voucherVerifyToast DOM ref now lives in procedure_modal.js.
@@ -4058,6 +4060,7 @@ const TEMPLATE_LINK_ICON_FALLBACK = '📁';
 // gets/keeps a correct shortcut card with no HTML/JS edits required.
 async function loadDataLinksCards() {
     if (!dataLinksCardStrip) return;
+    window.LoadingUI.showSkeleton(dataLinksCardStrip, 4);
     try {
         const res = await window.ApiUtils.apiFetch('/api/templates');
         if (!res.ok) throw new Error('Failed to load templates');
@@ -4097,10 +4100,12 @@ async function loadDataLinksCards() {
 }
 
 async function loadVerificationStats() {
+    if (verificationStatsGrid) window.LoadingUI.showSpinner(verificationStatsGrid, 'Loading stats');
     try {
         const res = await window.ApiUtils.apiFetch('/api/verification/stats');
-        if (res.ok) {
-            const stats = await res.json();
+        const stats = res.ok ? await res.json() : null;
+        if (verificationStatsGrid) window.LoadingUI.hideSpinner(verificationStatsGrid);
+        if (stats) {
             document.getElementById('pendingCount').textContent = stats.pending || 0;
             document.getElementById('verifiedToday').textContent = stats.approved || 0;
             document.getElementById('totalVerified').textContent = stats.total || 0;
@@ -4110,6 +4115,7 @@ async function loadVerificationStats() {
             document.getElementById('totalVerified').textContent = '0';
         }
     } catch (error) {
+        if (verificationStatsGrid) window.LoadingUI.hideSpinner(verificationStatsGrid);
         document.getElementById('pendingCount').textContent = '0';
         document.getElementById('verifiedToday').textContent = '0';
         document.getElementById('totalVerified').textContent = '0';
