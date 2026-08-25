@@ -290,6 +290,7 @@ original problem, and will collapse to one line once that project finishes.**
 - 2026-08-25: Final speed investigation (free-tier vs code gaps documented, PERFORMANCE_INVESTIGATION.md) + render.yaml service name corrected (internal-audit-app → 2.-Python-App).
 - 2026-08-25: Fixed dashboard.py's stats/KPI endpoints reading stale SQLite instead of Postgres — now query execute_query_pg, matching migrated routers.
 - 2026-08-25: Shared Loading UI (Procedure Modal Wiring), 3 phases — apiFetchMutate()+bypass guard built, then all of procedure_modal.js's GET/POST calls wired to apiFetch/apiFetchMutate/LoadingUI.
+- 2026-08-25: Fixed get_availability connection pool exhaustion — semaphore caps concurrent per-template DB calls, PG_POOL_MAX default bumped 10 to 15 (routers/data.py, database.py).
 
 
 ## Self-maintenance

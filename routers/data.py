@@ -953,6 +953,12 @@ def get_template_document_key_column(template_id: int) -> Optional[str]:
     return row[0]["column_name"] if row else None
 
 
+# Caps how many of get_availability()'s per-template DB calls run at once -
+# without this, a client with many templates fires 2 connections per template
+# fully in parallel and exhausts the Postgres pool (PG_POOL_MAX, database.py).
+_AVAILABILITY_DB_SEMAPHORE = asyncio.Semaphore(5)
+
+
 async def _compute_document_count(client_id: int, tid: int, fallback_row_count: int) -> int:
     """
     Threaded worker for one template's document count (see the 2b comment
@@ -966,21 +972,23 @@ async def _compute_document_count(client_id: int, tid: int, fallback_row_count: 
     # json_extract(row_data, '$."col"') -> the JSONB ->> text-extraction
     # operator. key_column comes from master_columns (not raw user input),
     # same trust model as the SQLite version's f-string embed.
-    doc_count_result = await asyncio.to_thread(
-        execute_query_pg,
-        f"""
-        SELECT COUNT(DISTINCT cd.row_data->>'{key_column}') as doc_count
-        FROM client_data cd
-        WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
-        """,
-        (client_id, tid)
-    )
+    async with _AVAILABILITY_DB_SEMAPHORE:
+        doc_count_result = await asyncio.to_thread(
+            execute_query_pg,
+            f"""
+            SELECT COUNT(DISTINCT cd.row_data->>'{key_column}') as doc_count
+            FROM client_data cd
+            WHERE cd.client_id = %s AND cd.template_id = %s AND cd.is_deleted = FALSE
+            """,
+            (client_id, tid)
+        )
     return doc_count_result[0]["doc_count"] if doc_count_result else 0
 
 
 async def _compute_size_estimate(client_id: int, tid: int) -> dict:
     """Threaded worker for one template's estimated storage footprint."""
-    return await asyncio.to_thread(estimate_client_data_size_pg, client_id=client_id, template_id=tid)
+    async with _AVAILABILITY_DB_SEMAPHORE:
+        return await asyncio.to_thread(estimate_client_data_size_pg, client_id=client_id, template_id=tid)
 
 
 @router.get("/api/data/availability")

@@ -3732,7 +3732,7 @@ def get_pg_pool():
         )
 
     min_conn = int(os.environ.get("PG_POOL_MIN", "1"))
-    max_conn = int(os.environ.get("PG_POOL_MAX", "10"))
+    max_conn = int(os.environ.get("PG_POOL_MAX", "15"))
     _pg_pool = psycopg2.pool.ThreadedConnectionPool(min_conn, max_conn, dsn=database_url)
     print(f"[postgres] connection pool created (min={min_conn}, max={max_conn})")
     return _pg_pool
