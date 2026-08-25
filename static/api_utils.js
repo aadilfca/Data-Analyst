@@ -6,6 +6,18 @@
 (function () {
     'use strict';
 
+    // Captured before window.fetch is overridden below (the bypass guard) — every internal
+    // call in this file must go through this, never window.fetch, or it would recurse into
+    // its own guard.
+    const nativeFetch = window.fetch.bind(window);
+    const INTERNAL_TAG = '__apiUtilsInternal';
+
+    // Shallow-copies options rather than mutating the caller's object, since a caller may
+    // reuse/inspect its options object after the call.
+    function taggedOptions(options) {
+        return Object.assign({}, options, { [INTERNAL_TAG]: true });
+    }
+
     // ---- Toast markup (self-injected, mirrors procedure_modal.js's #voucherVerifyToast) ----
     const TOAST_MARKUP = '<div id="apiRetryToast" class="api-retry-toast">Retrying...</div>';
     document.body.insertAdjacentHTML('beforeend', TOAST_MARKUP);
@@ -42,7 +54,7 @@
         let firstError = null;
         let firstResponse = null;
         try {
-            firstResponse = await fetch(url, options);
+            firstResponse = await nativeFetch(url, taggedOptions(options));
         } catch (err) {
             firstError = err;
         }
@@ -55,7 +67,7 @@
         showRetryToast();
         try {
             await delay(RETRY_DELAY_MS);
-            return await fetch(url, options);
+            return await nativeFetch(url, taggedOptions(options));
         } finally {
             hideRetryToast();
         }
@@ -104,5 +116,56 @@
         return fetchWithRetry(url, opts);
     }
 
-    window.ApiUtils = { apiFetch: apiFetch };
+    // apiFetchMutate(url, options, config) - the apiFetch sibling for POST/PUT/DELETE calls.
+    // Same fetch()-contract (resolves to a Response) but never retries (retry-on-write risks
+    // double-submits) and never debounces. config.target, if given an element, gets a
+    // LoadingUI spinner for the call's duration; config.message is its label (default 'Saving').
+    // Both are optional - omitted (or LoadingUI not loaded on the page) means a plain tagged
+    // fetch with no spinner, never a throw for that reason.
+    function apiFetchMutate(url, options, config) {
+        const opts = options || {};
+        const cfg = config || {};
+        const target = cfg.target;
+        if (target && window.LoadingUI) {
+            window.LoadingUI.showSpinner(target, cfg.message || 'Saving');
+        }
+        return nativeFetch(url, taggedOptions(opts)).finally(function () {
+            if (target && window.LoadingUI) window.LoadingUI.hideSpinner(target);
+        });
+    }
+
+    // ---- Dev-console bypass guard ----
+    // Warns (once per endpoint+method per page session) when something calls fetch() against
+    // /api/ directly instead of through apiFetch/apiFetchMutate above, so a future file can't
+    // silently skip this wiring the way procedure_modal.js originally did. Purely advisory -
+    // never throws, never alters the request/response, and always passes through to the real
+    // fetch unchanged.
+    const warnedKeys = new Set();
+
+    function dedupKey(method, url) {
+        // Querystring stripped - the goal is "flag this call site in the source once", not
+        // once per distinct client_id/upload_id/etc. value passed on a given call.
+        const path = String(url).split('?')[0];
+        return method + ' ' + path;
+    }
+
+    window.fetch = function (input, init) {
+        const opts = init || {};
+        const isInternal = opts && opts[INTERNAL_TAG] === true;
+        if (!isInternal) {
+            const url = typeof input === 'string' ? input : (input && input.url) || '';
+            if (url.indexOf('/api/') !== -1) {
+                const method = (opts.method || (typeof input === 'object' && input.method) || 'GET').toUpperCase();
+                const key = dedupKey(method, url);
+                if (!warnedKeys.has(key)) {
+                    warnedKeys.add(key);
+                    console.warn('[ApiUtils] Bypassed apiFetch/apiFetchMutate: ' + method + ' ' + url +
+                        ' — route /api/ calls through window.ApiUtils so retry/spinner/debounce wiring stays consistent.');
+                }
+            }
+        }
+        return nativeFetch.call(window, input, init);
+    };
+
+    window.ApiUtils = { apiFetch: apiFetch, apiFetchMutate: apiFetchMutate };
 })();
