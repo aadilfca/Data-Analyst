@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from datetime import datetime
-from database import execute_query, estimate_client_data_size
+from database import execute_query, execute_query_pg, estimate_client_data_size
 from routers.verification import _rollup_voucher_status
 from routers.data import compute_overdue_uploads
 
@@ -17,19 +17,19 @@ def test():
 @router.get("/api/dashboard/stats")
 def get_dashboard_stats():
     try:
-        uploaded = execute_query("SELECT COUNT(*) as count FROM uploaded_files")[0]['count']
+        uploaded = execute_query_pg("SELECT COUNT(*) as count FROM uploaded_files")[0]['count']
     except:
         uploaded = 0
     try:
-        pending = execute_query("SELECT COUNT(*) as count FROM verifications WHERE status = 'Pending'")[0]['count']
+        pending = execute_query_pg("SELECT COUNT(*) as count FROM verifications WHERE status = 'Pending'")[0]['count']
     except:
         pending = 0
     try:
-        total_records = execute_query("SELECT COUNT(*) as count FROM client_data WHERE is_deleted = 0")[0]['count']
+        total_records = execute_query_pg("SELECT COUNT(*) as count FROM client_data WHERE is_deleted = FALSE")[0]['count']
     except:
         total_records = 0
     try:
-        last_upload = execute_query("SELECT upload_date FROM uploaded_files ORDER BY upload_date DESC LIMIT 1")
+        last_upload = execute_query_pg("SELECT upload_date FROM uploaded_files ORDER BY upload_date DESC LIMIT 1")
         last_upload = last_upload[0]['upload_date'] if last_upload else None
     except:
         last_upload = None
@@ -62,7 +62,7 @@ def get_dashboard_kpi_stats():
     # Open Queries: literal row count of Query-status lines, active rows only (range_status
     # 'active' avoids double-counting stale rows left behind by a reopened/orphaned session -
     # see routers/verification.py's dedup notes for why this matters).
-    open_queries = execute_query(
+    open_queries = execute_query_pg(
         "SELECT COUNT(*) as count FROM verification_details WHERE cleared_status = 'Query' AND range_status = 'active'"
     )[0]['count']
 
@@ -71,7 +71,7 @@ def get_dashboard_kpi_stats():
     # used elsewhere in that file (keep the highest verification_details.id per client_data_id,
     # since a reopened cashbook inserts a fresh row per line every time), just without a
     # session_id filter.
-    rows = execute_query("""
+    rows = execute_query_pg("""
         SELECT vd.id, vd.client_data_id, vd.transaction_ref, vd.cleared_status, vs.client_id
         FROM verification_details vd
         JOIN verification_sessions vs ON vd.session_id = vs.id
