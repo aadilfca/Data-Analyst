@@ -1073,6 +1073,7 @@ async function fetchCashbookData() {
     }
     cashbookStatus.textContent = '⏳ Loading...';
     cashbookFetchBtn.disabled = true;
+    window.LoadingUI.showSkeleton(cashbookTableWrapper, 8);
     const params = new URLSearchParams({
         client_id: clientId,
         cashbook_name: selectedCashbook,
