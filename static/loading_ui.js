@@ -49,8 +49,12 @@
 
     // Button/action spinner. Only the message text escalates after 3s — the spinner
     // itself is shown instantly and never changes appearance.
-    function showSpinner(target, message) {
+    // options.escalate (default true) can be set false to skip the 3s escalation entirely,
+    // keeping the message capped at its original text — for a target too narrow to hold the
+    // longer escalated message (e.g. a table-cell badge), rather than a button with room to spare.
+    function showSpinner(target, message, options) {
         if (!target) return;
+        const escalate = !options || options.escalate !== false;
         const isButton = target.tagName === 'BUTTON' || target.disabled !== undefined;
         const saved = {
             html: target.innerHTML,
@@ -73,9 +77,11 @@
         target.appendChild(wrapper);
         if (isButton) target.disabled = true;
 
-        saved.timeoutId = setTimeout(function () {
-            msgSpan.textContent = (message || 'Loading…') + ' — still working…';
-        }, 3000);
+        if (escalate) {
+            saved.timeoutId = setTimeout(function () {
+                msgSpan.textContent = (message || 'Loading…') + ' — still working…';
+            }, 3000);
+        }
 
         spinnerState.set(target, saved);
     }

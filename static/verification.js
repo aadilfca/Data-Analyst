@@ -106,8 +106,6 @@ function buildProcedureModalAdapter() {
         computeLineRiskData,
         updateProgressDisplay,
         applyVoucherNavRenderData,
-        showVoucherLoadingBadge,
-        hideVoucherLoadingBadge,
         get VOUCHER_LINE_ACCOUNT_NAME_ALIASES() { return VOUCHER_LINE_ACCOUNT_NAME_ALIASES; },
         get VOUCHER_LINE_DESCRIPTION_ALIASES() { return VOUCHER_LINE_DESCRIPTION_ALIASES; },
         get currentVoucherId() { return currentVoucherId; },

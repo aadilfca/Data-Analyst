@@ -2148,3 +2148,58 @@ This completes the 13-phase Fast Data Handling requirement.
 This completes the 3-phase Shared Loading UI (Procedure Modal Wiring) requirement — `procedure_modal.js` is now fully wired, matching every other module.
 
 ---
+
+## Procedure Badge Loading — Escalation Overflow Fix
+
+**Date:** 2026-08-25 | **Files:** `static/loading_ui.js`, `static/procedure_modal.js`, `static/verification.js`.
+
+**Why:** Clicking a voucher line's Procedures/Observations badge to open the Supporting Documents
+modal put a `LoadingUI.showSpinner()` directly on the clicked badge. That primitive auto-escalates
+its message to `"<message> — still working…"` after 3 seconds — fine on a wide button, but the
+clicked badge lives in a narrow table cell, so the escalated text visibly overflowed past the
+column (confirmed via screenshot: "Loading — still working…" spilling from Procedures into
+Observations on Leather Crop's CPV-0126-100).
+
+**First attempt (superseded):** an earlier pass this session tried fixing this by relocating the
+click-triggered spinner entirely off the cell, onto a new persistent badge next to the voucher
+title (`#voucherLoadingBadgeSlot`, ref-counted `showVoucherLoadingBadge`/`hideVoucherLoadingBadge`
+in `verification.js`, wired through `procedure_modal.js`'s `openProcedureModal()` via the host
+adapter). That work was committed directly by the user outside this session's normal
+test-then-commit flow (`f87a78b "Procedure badge processing fixed"`) before the user clarified the
+actual requirement was two separate, narrower things — see below.
+
+**Confirmed requirement (final):** (1) the click-triggered loading indicator must stay **inside the
+field** — same spinner+"Loading" look, just never let the text grow past that; other `showSpinner`
+callers app-wide (Save/Import buttons etc.) must keep escalating exactly as before. (2) A **separate**,
+professionally-designed loading indicator next to the voucher title for the automatic per-voucher
+load (line items + every line's procedure badge, on session start or Prev/Next) — confirmed to
+stay, since it's a different, legitimate need from (1). Only mini-phase (1) is done here; the
+title-badge mechanism from the superseded commit above remains in `verification.js`
+(`voucherLoadToken`/`voucherLoadingBadgeRefCount`, `showVoucherLoadingBadge`/
+`hideVoucherLoadingBadge`, the `#voucherLoadingBadgeSlot` markup in `renderVoucherHeader()`, and the
+`Promise.all` tracking in `renderVoucherLines()`) as the base for mini-phase (2)'s visual polish,
+still pending.
+
+**Implementation:** `loading_ui.js`'s `showSpinner(target, message, options)` gained a 3rd,
+optional `options.escalate` flag (default `true` — every existing caller unaffected); when
+explicitly `false`, the 3s `setTimeout` that appends the escalated text is simply never scheduled.
+`procedure_modal.js`'s `openProcedureModal()` reverted the host-adapter reroute back to a plain
+`showSpinner(spinnerTarget, 'Loading', { escalate: !triggerEl })` — a click-triggered open
+(`triggerEl` set, the narrow-cell case that overflowed) gets the capped message; the internal
+re-navigation case (`navigateProcedureModalLine`/`verifyAndAdvanceVoucher`, no `triggerEl`, targets
+the wide `#procedureModalPanels` container) keeps the default escalating message, since it has room
+and was never the reported bug. `verification.js`'s `buildProcedureModalAdapter()` dropped the two
+now-unused `showVoucherLoadingBadge`/`hideVoucherLoadingBadge` entries (procedure_modal.js no
+longer calls them; the underlying functions stay, called directly by `renderVoucherHeader()`/
+`renderVoucherLines()` for the still-pending mini-phase 2).
+
+**Verified:** an isolated Playwright test loaded the real `loading_ui.js` standalone (bypassing the
+app's own DB-flakiness-prone session-start flow) and confirmed all three cases live — `{escalate:
+false}` stays at "Loading" past 4 seconds, the default (omitted option) still escalates at 3s
+exactly as before, and explicit `{escalate: true}` matches the default. `node --check` passed on
+all three edited files. The full in-app click-to-modal flow was not exercised end-to-end this
+session — Verification session-start was hanging/highly variable against the remote Supabase DB
+during testing, unrelated to this change (see "Performance investigation" Status log entries) —
+flagged to the user rather than claimed as verified.
+
+---
