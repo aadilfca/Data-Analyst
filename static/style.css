@@ -6967,7 +6967,98 @@ body {
     pointer-events: none;
 }
 
-/* Reduced-motion fallback (confirmed accessibility requirement): skip the shimmer/spin
+/* Prominent field loading (LoadingUI.showFieldLoading(field, {prominent: true})) — a dimmed
+   overlay covering the field itself plus a larger centered spinner, for a field whose stale
+   content would actively mislead (e.g. a dropdown mid-reload) rather than just being unavailable. */
+.ui-field-loading-prominent {
+    opacity: 0.35;
+}
+.ui-field-overlay-prominent {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.65);
+    pointer-events: none;
+}
+.ui-spinner-lg {
+    width: 26px;
+    height: 26px;
+    border-width: 3px;
+}
+
+/* Progress bar (LoadingUI.showProgressBar/updateProgressBar/hideProgressBar) — determinate (real
+   x/x, caller-driven), simulated (elapsed-time estimate, no real progress data available yet), and
+   indeterminate (labelled sliding bar, e.g. "Saving…") all share the same track/fill markup. */
+.ui-progress-bar-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 120px;
+}
+.ui-progress-bar-label {
+    font-size: 13px;
+    color: #64748b;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+.ui-progress-bar-counter {
+    font-variant-numeric: tabular-nums;
+}
+.ui-progress-bar-track {
+    position: relative;
+    width: 100%;
+    height: 8px;
+    border-radius: 4px;
+    background: #e2e8f0;
+    overflow: hidden;
+}
+.ui-progress-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: #3b82f6;
+    transition: width 0.2s ease;
+}
+.ui-progress-bar-indeterminate .ui-progress-bar-fill {
+    position: absolute;
+    width: 40%;
+    animation: ui-progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes ui-progress-slide {
+    0% { left: -40%; }
+    100% { left: 100%; }
+}
+
+/* Persistent badge (LoadingUI.showBadge/updateBadge/hideBadge) — stays until explicitly hidden,
+   unlike the transient primitives above. Overflow/wrap handled from the start: nowrap + ellipsis
+   inside its own box so a long message can't blow out a tight header/title bar; the badge can still
+   only shrink as far as its flex parent allows it to (parent needs its own min-width: 0 to let the
+   ellipsis actually engage — not something this rule can force on an arbitrary caller's layout). */
+.ui-badge {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    max-width: 100%;
+    min-width: 0;
+    flex-shrink: 1;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: #eff6ff;
+    color: #3b82f6;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ui-badge-warning {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+/* Reduced-motion fallback (confirmed accessibility requirement): skip the shimmer/spin/slide
    animations entirely rather than just slowing them down, falling back to a flat, static tone —
    still visually distinct as "loading" without any motion. */
 @media (prefers-reduced-motion: reduce) {
@@ -6980,5 +7071,10 @@ body {
     }
     .ui-field-spinner .ui-spinner {
         animation: none;
+    }
+    .ui-progress-bar-indeterminate .ui-progress-bar-fill {
+        animation: none;
+        position: static;
+        width: 60%;
     }
 }
