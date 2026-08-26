@@ -284,6 +284,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-26: Fast Modal-Open Data follow-ups — bumped procedure_modal.js/verification.js cache-bust (missed in Phase 1/2 commits); fixed fetchAuditGuidanceData in-flight-request race, mirroring ensureVoucherChecksLoaded.
 - 2026-08-26: Verification save performance — start_verification_session's per-row insert replaced with execute_values (single round trip); _resolve_sibling_voucher_line_ids memoized in save_line_items (33->27 calls).
 - 2026-08-26: Wrapped global_exception_handler's blocking SQLite calls (execute_query, log_error) in run_in_threadpool - prevents event-loop freeze under lock contention (main.py).
+- 2026-08-26: Fixed overdue-uploads date/datetime mismatch - _coerce_date_obj always returns date now, not a mix (routers/data.py).
 
 
 ## Self-maintenance
