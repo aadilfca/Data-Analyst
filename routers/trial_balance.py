@@ -36,6 +36,7 @@ from pydantic import BaseModel
 
 from database import execute_query_pg, execute_write_pg, get_raw_conn_pg, release_raw_conn_pg, log_audit
 from psycopg2.extras import Json
+from routers.audit_rules import invalidate_category_for_account_cache
 
 router = APIRouter()
 
@@ -573,6 +574,7 @@ async def upload_trial_balance(
             "UPDATE trial_balance_uploads SET status = 'parsed', row_count = %s, notes = %s WHERE id = %s",
             (len(accounts), notes, upload_id)
         )
+        invalidate_category_for_account_cache(client_id)
 
         parent_count = sum(1 for a in accounts if a["classification"] == "parent")
         leaf_count = len(accounts) - parent_count
@@ -1097,6 +1099,9 @@ def assign_trial_balance_category(payload: CategoryAssignmentRequest):
                 for row in descendants:
                     if row["id"] in updated_id_set:
                         upsert_account_category_assignment(client_id, row["account_code"], payload.category_id)
+
+    if client_id is not None:
+        invalidate_category_for_account_cache(client_id)
 
     category_label = payload.category_id if payload.category_id is not None else "None (cleared)"
     log_audit("Analyst", "Update", "TrialBalance",
