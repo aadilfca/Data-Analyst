@@ -307,7 +307,8 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     gates: List[dict] = []
     line = execute_query_pg(
         """
-        SELECT vd.id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id
+        SELECT vd.id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id,
+               vd.category_id_applied, vd.category_name_applied
         FROM verification_details vd
         JOIN client_data cd ON cd.id = vd.client_data_id
         JOIN verification_sessions vs ON vs.id = vd.session_id
@@ -343,59 +344,76 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
                               "Cleared/Query is not computed for it."}
         return None
 
-    # Category resolution mirrors get_category_for_account() (2026-07-30 fix): prefer the
-    # client's latest parsed Trial Balance's own category_id for this account_code - that's
-    # what Assign Categories itself shows/edits, and account_category_assignments (below) is
-    # a persisted mirror that can drift stale relative to it. The live TB wins whenever the
-    # account is present in it; the assignments table is used only as a fallback for an
-    # account not in the latest TB. Applied here too so the status engine can't disagree
-    # with what the Verification UI's Type column is already showing for the same line.
-    cat_rows = None
-    upload_rows = execute_query_pg(
-        """
-        SELECT id FROM trial_balance_uploads
-        WHERE client_id = %s AND status = 'parsed'
-        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
-        LIMIT 1
-        """,
-        (client_id,)
-    )
-    if upload_rows:
-        tb_rows = execute_query_pg(
-            """
-            SELECT a.category_id, c.name AS category_name, c.matrix_version
-            FROM trial_balance_accounts a
-            LEFT JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = TRUE
-            WHERE a.upload_id = %s AND a.account_code = %s
-            """,
-            (upload_rows[0]['id'], account_code)
+    # Freeze Category on voucher lines: once a line has been successfully classified/persisted
+    # once, category_id_applied is set and permanently governs it from then on - a later TB
+    # re-upload/deletion/reassignment must not retroactively reinterpret already-audited work.
+    # Only a not-yet-frozen line resolves live (TB-first, assignments-fallback, unchanged below).
+    if row['category_id_applied'] is not None:
+        # matrix_version is still re-checked live for the frozen category - a separate, already-
+        # solved staleness problem via matrix_version_applied, orthogonal to category identity.
+        # A since-deactivated category still resolves here, same "still a real, displayable
+        # match" convention as get_category_for_account()'s own docstring.
+        category_id = row['category_id_applied']
+        category_name = row['category_name_applied']
+        mv_rows = execute_query_pg(
+            "SELECT matrix_version FROM audit_rule_categories WHERE id = %s", (category_id,)
         )
-        if tb_rows and tb_rows[0]['category_name']:
-            cat_rows = tb_rows
-
-    if cat_rows is None:
-        assignment_rows = execute_query_pg(
+        matrix_version = mv_rows[0]['matrix_version'] if mv_rows else None
+    else:
+        # Category resolution mirrors get_category_for_account() (2026-07-30 fix): prefer the
+        # client's latest parsed Trial Balance's own category_id for this account_code - that's
+        # what Assign Categories itself shows/edits, and account_category_assignments (below) is
+        # a persisted mirror that can drift stale relative to it. The live TB wins whenever the
+        # account is present in it; the assignments table is used only as a fallback for an
+        # account not in the latest TB. Applied here too so the status engine can't disagree
+        # with what the Verification UI's Type column is already showing for the same line.
+        cat_rows = None
+        upload_rows = execute_query_pg(
             """
-            SELECT aca.category_id, arc.name AS category_name, arc.matrix_version
-            FROM account_category_assignments aca
-            LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = TRUE
-            WHERE aca.client_id = %s AND aca.account_code = %s
+            SELECT id FROM trial_balance_uploads
+            WHERE client_id = %s AND status = 'parsed'
+            ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
+            LIMIT 1
             """,
-            (client_id, account_code)
+            (client_id,)
         )
-        if assignment_rows and assignment_rows[0]['category_name']:
-            cat_rows = assignment_rows
+        if upload_rows:
+            tb_rows = execute_query_pg(
+                """
+                SELECT a.category_id, c.name AS category_name, c.matrix_version
+                FROM trial_balance_accounts a
+                LEFT JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = TRUE
+                WHERE a.upload_id = %s AND a.account_code = %s
+                """,
+                (upload_rows[0]['id'], account_code)
+            )
+            if tb_rows and tb_rows[0]['category_name']:
+                cat_rows = tb_rows
 
-    if not cat_rows or not cat_rows[0]['category_id'] or not cat_rows[0]['category_name']:
-        if detail:
-            return {"cleared_status": None, "matrix_version_applied": None, "gates": [],
-                    "reason": f"Account code {account_code} has no active Category assigned, so "
-                              "Cleared/Query is not computed for this line. Assign one under "
-                              "Audit Rules → Assign Categories."}
-        return None
+        if cat_rows is None:
+            assignment_rows = execute_query_pg(
+                """
+                SELECT aca.category_id, arc.name AS category_name, arc.matrix_version
+                FROM account_category_assignments aca
+                LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = TRUE
+                WHERE aca.client_id = %s AND aca.account_code = %s
+                """,
+                (client_id, account_code)
+            )
+            if assignment_rows and assignment_rows[0]['category_name']:
+                cat_rows = assignment_rows
 
-    category_id = cat_rows[0]['category_id']
-    matrix_version = cat_rows[0]['matrix_version']
+        if not cat_rows or not cat_rows[0]['category_id'] or not cat_rows[0]['category_name']:
+            if detail:
+                return {"cleared_status": None, "matrix_version_applied": None, "gates": [],
+                        "reason": f"Account code {account_code} has no active Category assigned, so "
+                                  "Cleared/Query is not computed for this line. Assign one under "
+                                  "Audit Rules → Assign Categories."}
+            return None
+
+        category_id = cat_rows[0]['category_id']
+        matrix_version = cat_rows[0]['matrix_version']
+        category_name = cat_rows[0]['category_name']
 
     if sibling_ids is None:
         sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id) or [voucher_line_id]
@@ -733,12 +751,23 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     cleared_status = "Cleared" if all_ok else "Query"
 
     if persist:
-        execute_write_pg(
-            "UPDATE verification_details SET cleared_status = %s, matrix_version_applied = %s WHERE id = %s",
-            (cleared_status, matrix_version, voucher_line_id)
-        )
+        if row['category_id_applied'] is None:
+            # First successful persist for this line - freeze the category now, alongside the
+            # existing cleared_status/matrix_version_applied write. Every later save leaves
+            # category_id_applied/category_name_applied untouched (see the else branch).
+            execute_write_pg(
+                "UPDATE verification_details SET cleared_status = %s, matrix_version_applied = %s, "
+                "category_id_applied = %s, category_name_applied = %s WHERE id = %s",
+                (cleared_status, matrix_version, category_id, category_name, voucher_line_id)
+            )
+        else:
+            execute_write_pg(
+                "UPDATE verification_details SET cleared_status = %s, matrix_version_applied = %s WHERE id = %s",
+                (cleared_status, matrix_version, voucher_line_id)
+            )
 
-    result = {"cleared_status": cleared_status, "matrix_version_applied": matrix_version}
+    result = {"cleared_status": cleared_status, "matrix_version_applied": matrix_version,
+              "category_id_applied": category_id, "category_name_applied": category_name}
     if detail:
         # Failing gates first, then not_applicable, then passing - a stable sort, so gates stay
         # in their original evaluation order within each band.
@@ -1335,7 +1364,9 @@ def _build_verification_line(d: dict) -> dict:
         # compute_and_persist_cleared_status() (Phase 4) - null until a line has been saved at
         # least once with a resolvable Category, same "not yet computed" convention as elsewhere.
         "cleared_status": d.get('cleared_status'),
-        "matrix_version_applied": d.get('matrix_version_applied')
+        "matrix_version_applied": d.get('matrix_version_applied'),
+        "category_id_applied": d.get('category_id_applied'),
+        "category_name_applied": d.get('category_name_applied')
     }
 
 def _fetch_session_details_grouped(session_id: int) -> list:
@@ -1351,6 +1382,7 @@ def _fetch_session_details_grouped(session_id: int) -> list:
         SELECT vd.id, vd.client_data_id, vd.transaction_ref, vd.line_items, vd.procedure_data,
                vd.validation_status, vd.validation_message, vd.status, vd.observations,
                vd.cleared_status, vd.matrix_version_applied,
+               vd.category_id_applied, vd.category_name_applied,
                cd.template_id, cd.row_data, cd.extract_date
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
@@ -1658,6 +1690,8 @@ def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_dat
     if status_result:
         response["cleared_status"] = status_result["cleared_status"]
         response["matrix_version_applied"] = status_result["matrix_version_applied"]
+        response["category_id_applied"] = status_result["category_id_applied"]
+        response["category_name_applied"] = status_result["category_name_applied"]
     return response
 
 @router.post("/api/verification/validate")
@@ -2040,6 +2074,7 @@ def get_audited_cashbook(session_id: int):
                vd.validation_status, vd.validation_message, vd.status as verification_status,
                vd.comments, vd.observations, vd.verified_by, vd.verified_at,
                vd.cleared_status, vd.matrix_version_applied,
+               vd.category_id_applied, vd.category_name_applied,
                cd.row_data, cd.extract_amount, cd.extract_date
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
@@ -2095,7 +2130,12 @@ def get_audited_cashbook(session_id: int):
             # _build_verification_line()'s own d.get('cleared_status')/d.get('matrix_version_applied')
             # — same already-computed columns, no change to how cleared_status is computed.
             "cleared_status": d['cleared_status'],
-            "matrix_version_applied": d['matrix_version_applied']
+            "matrix_version_applied": d['matrix_version_applied'],
+            # Freeze Category on voucher lines: frozen once this line has been saved with a
+            # resolvable Category - the frontend prefers these over a live category-for-account
+            # lookup when present, so an already-audited line can't drift with a later TB change.
+            "category_id_applied": d['category_id_applied'],
+            "category_name_applied": d['category_name_applied']
         }
         transactions.append(trans)
     
@@ -2390,6 +2430,7 @@ def get_audit_workbook(session_id: int):
     rows = execute_query_pg(
         """
         SELECT vd.id AS detail_id, vd.transaction_ref, vd.cleared_status,
+               vd.category_id_applied, vd.category_name_applied,
                cd.id AS client_data_id, cd.extract_amount, cd.extract_date, cd.row_data
         FROM verification_details vd
         JOIN client_data cd ON vd.client_data_id = cd.id
@@ -2421,6 +2462,8 @@ def get_audit_workbook(session_id: int):
             "detail_id": r['detail_id'],
             "transaction_ref": r['transaction_ref'],
             "cleared_status": r['cleared_status'],
+            "category_id_applied": r['category_id_applied'],
+            "category_name_applied": r['category_name_applied'],
             "client_data_id": r['client_data_id'],
             "extract_amount": r['extract_amount'] or 0,
             "extract_date": r['extract_date'],
@@ -2633,7 +2676,18 @@ def get_audit_workbook(session_id: int):
                 "lines": [],
             }
         g = groups[ref]
-        category_id = category_id_by_account_code.get(pl['account_code']) if pl['account_code'] else None
+        # Freeze Category on voucher lines: a frozen line's category_id_applied always wins over
+        # the batched live resolution above, so this view can't disagree with an already-audited
+        # line's frozen category. category_name_applied is used directly rather than
+        # category_name_by_id.get(category_id) - a frozen category might not be in
+        # distinct_category_ids (derived only from LIVE category_id_by_account_code values,
+        # above), which would otherwise wrongly resolve the name to None.
+        if pl['category_id_applied'] is not None:
+            category_id = pl['category_id_applied']
+            category_name = pl['category_name_applied']
+        else:
+            category_id = category_id_by_account_code.get(pl['account_code']) if pl['account_code'] else None
+            category_name = category_name_by_id.get(category_id) if category_id else None
         line_status = pl['cleared_status'] or "Pending"
         entries = observations_by_cd.get(pl['client_data_id'], [])
         g["lines"].append({
@@ -2641,7 +2695,7 @@ def get_audit_workbook(session_id: int):
             "client_data_id": pl['client_data_id'],
             "account_code": pl['account_code'],
             "account_name": account_name_by_code.get(pl['account_code']) if pl['account_code'] else None,
-            "category_name": category_name_by_id.get(category_id) if category_id else None,
+            "category_name": category_name,
             "description": pl['description'],
             "amount": pl['extract_amount'],
             "status": line_status,
