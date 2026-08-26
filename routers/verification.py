@@ -32,7 +32,7 @@ from routers.import_export import (
 )
 # Phase 9 (Audit Rules): audit guidance now sources from Audit Rules Categories instead of
 # the old hardcoded audit_procedure_library table — same cross-router import pattern as above.
-from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch
 # "Why is this line Query?" gate breakdown only (see compute_and_persist_cleared_status()'s
 # detail mode) — the pass/fail answer itself still comes from check_approved_by_authority_gate()
 # above, so the explanation can never disagree with the real gate.
@@ -475,8 +475,10 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         for (did, role_name), r in latest_tick.items():
             role_ticks_by_doc.setdefault(did, {})[role_name] = bool(r['is_checked'])
 
+    no_template_roles_by_doc = get_document_auth_roles_batch(list(no_template_required_ids))
+
     def _no_template_doc_roles(document_id: int) -> List[str]:
-        return get_document_auth_roles(document_id)
+        return no_template_roles_by_doc.get(document_id, [])
 
     def _no_template_doc_satisfied(document_id: int) -> bool:
         roles = _no_template_doc_roles(document_id)

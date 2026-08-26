@@ -72,6 +72,37 @@ def get_document_auth_role_authorities(document_id: int) -> dict:
     )
     return {r["role_name"]: r["required_authority"] for r in rows if r["required_authority"]}
 
+def get_document_auth_roles_batch(document_ids: List[int]) -> Dict[int, List[str]]:
+    """Batched form of get_document_auth_roles() - one IN(...) query for many document_ids."""
+    if not document_ids:
+        return {}
+    ph = ",".join("%s" for _ in document_ids)
+    rows = execute_query_pg(
+        f"SELECT document_id, role_name FROM audit_rule_document_auth_roles "
+        f"WHERE document_id IN ({ph}) ORDER BY document_id, sort_order",
+        tuple(document_ids)
+    )
+    result: Dict[int, List[str]] = {did: [] for did in document_ids}
+    for r in rows:
+        result[r["document_id"]].append(r["role_name"])
+    return result
+
+def get_document_auth_role_authorities_batch(document_ids: List[int]) -> Dict[int, dict]:
+    """Batched form of get_document_auth_role_authorities() - one IN(...) query for many document_ids."""
+    if not document_ids:
+        return {}
+    ph = ",".join("%s" for _ in document_ids)
+    rows = execute_query_pg(
+        f"SELECT document_id, role_name, required_authority FROM audit_rule_document_auth_roles "
+        f"WHERE document_id IN ({ph}) ORDER BY document_id, sort_order",
+        tuple(document_ids)
+    )
+    result: Dict[int, dict] = {did: {} for did in document_ids}
+    for r in rows:
+        if r["required_authority"]:
+            result[r["document_id"]][r["role_name"]] = r["required_authority"]
+    return result
+
 def get_required_documents_with_authority(category_id: int) -> List[dict]:
     """
     Category's documents flagged is_required=1 (Automated cross-document validation engine,
@@ -89,9 +120,11 @@ def get_required_documents_with_authority(category_id: int) -> List[dict]:
         """,
         (category_id,)
     )
+    doc_ids = [r["document_id"] for r in rows]
+    authorities_by_doc = get_document_auth_role_authorities_batch(doc_ids)
     result = []
     for r in rows:
-        authorities = get_document_auth_role_authorities(r["document_id"])
+        authorities = authorities_by_doc.get(r["document_id"], {})
         if authorities:
             result.append({"document_id": r["document_id"], "name": r["name"], "required_authorities": authorities})
     return result
