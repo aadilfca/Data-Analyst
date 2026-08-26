@@ -787,8 +787,19 @@ def delete_trial_balance_upload(upload_id: int):
     the cascade would not actually fire - accounts are deleted explicitly
     first, then the upload row, same two-step order/style already used by the
     Section 2/Phase 5 overwrite-conflict delete above.
+
+    If this delete leaves the client with zero remaining uploads, also clears
+    their account_category_assignments (the persistent mirror table that
+    carries categorizations forward across TB re-uploads) - confirmed fix:
+    without a live TB, get_category_for_account() falls back to this table,
+    which otherwise keeps returning stale categories forever. Only clears
+    on zero-remaining-uploads, not on every delete, so the carry-forward
+    behavior stays intact for a client who still has another upload.
     """
     _require_upload(upload_id)
+
+    upload_rows = execute_query_pg("SELECT client_id FROM trial_balance_uploads WHERE id = %s", (upload_id,))
+    client_id = upload_rows[0]["client_id"] if upload_rows else None
 
     # Count first so the audit log can name how many account rows went with it.
     count_rows = execute_query_pg(
@@ -800,10 +811,24 @@ def delete_trial_balance_upload(upload_id: int):
     execute_write_pg("DELETE FROM trial_balance_accounts WHERE upload_id = %s", (upload_id,))
     execute_write_pg("DELETE FROM trial_balance_uploads WHERE id = %s", (upload_id,))
 
-    log_audit("Analyst", "Delete", "TrialBalance",
-               f"Deleted trial balance upload {upload_id} and its {account_count} account row(s)")
+    assignments_cleared = False
+    if client_id is not None:
+        remaining = execute_query_pg(
+            "SELECT COUNT(*) as count FROM trial_balance_uploads WHERE client_id = %s",
+            (client_id,)
+        )
+        if remaining and remaining[0]["count"] == 0:
+            execute_write_pg("DELETE FROM account_category_assignments WHERE client_id = %s", (client_id,))
+            invalidate_category_for_account_cache(client_id)
+            assignments_cleared = True
 
-    return {"upload_id": upload_id, "deleted": True, "deleted_account_count": account_count}
+    log_audit("Analyst", "Delete", "TrialBalance",
+               f"Deleted trial balance upload {upload_id} and its {account_count} account row(s)"
+               + (f"; client {client_id} had no uploads left, so its category assignments were also cleared"
+                  if assignments_cleared else ""))
+
+    return {"upload_id": upload_id, "deleted": True, "deleted_account_count": account_count,
+            "assignments_cleared": assignments_cleared}
 
 
 @router.get("/api/trial-balance/summary")

@@ -273,6 +273,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-26: category-for-account cache mechanism, Phase 1 of 4 - per-client key helper + scoped `invalidate_category_for_account_cache()` added to `routers/audit_rules.py`.
 - 2026-08-26: category-for-account cache, Phase 2 of 4 - `routers/trial_balance.py` invalidates on TB upload and category assignment (smart-fill/force-apply).
 - 2026-08-26: category-for-account cache, Phase 3 of 4 - `routers/verification.py`'s lookup now reads/writes through the per-client cache.
+- 2026-08-26: TB-delete stale category fix - deleting a client's last upload now clears `account_category_assignments` + invalidates the cache.
 
 
 ## Self-maintenance
