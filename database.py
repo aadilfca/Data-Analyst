@@ -605,6 +605,26 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add cleared_status/matrix_version_applied to verification_details:", e)
 
+        # category_id_applied/category_name_applied (Freeze Category on Voucher Lines):
+        # freezes the Category actually in effect the first time this line is
+        # successfully cleared/classified, the same "don't retroactively reinterpret
+        # already-completed work" rationale as matrix_version_applied above, applied to
+        # the category itself rather than just its matrix version - so a later Trial
+        # Balance re-upload/deletion or category reassignment only affects lines not yet
+        # audited. Both nullable - existing rows start unset until the status engine
+        # first freezes them.
+        try:
+            cur = conn.execute("PRAGMA table_info(verification_details)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'category_id_applied' not in columns:
+                conn.execute("ALTER TABLE verification_details ADD COLUMN category_id_applied INTEGER")
+                print("✅ Added category_id_applied column to verification_details")
+            if 'category_name_applied' not in columns:
+                conn.execute("ALTER TABLE verification_details ADD COLUMN category_name_applied TEXT")
+                print("✅ Added category_name_applied column to verification_details")
+        except Exception as e:
+            print("⚠️ Could not add category_id_applied/category_name_applied to verification_details:", e)
+
         # Schema upgrade (session date-range reconciliation): lets an active verification
         # session's voucher list be re-resolved against a new Place 2 date range without
         # deleting anything. range_status mirrors voucher_line_documents.status ('active'/
@@ -2890,13 +2910,22 @@ def init_db_postgres(conn):
             cleared_status TEXT,
             matrix_version_applied INTEGER,
             range_status TEXT NOT NULL DEFAULT 'active',
-            excluded_at TIMESTAMPTZ
+            excluded_at TIMESTAMPTZ,
+            category_id_applied INTEGER,
+            category_name_applied TEXT
         )
     ''', "verification_details")
     run("CREATE INDEX IF NOT EXISTS idx_verification_details_session ON verification_details (session_id)")
     run("CREATE INDEX IF NOT EXISTS idx_verification_details_clientdata ON verification_details (client_data_id)")
     run("CREATE INDEX IF NOT EXISTS idx_verification_details_status ON verification_details (status)")
     run("CREATE INDEX IF NOT EXISTS idx_verification_details_validation ON verification_details (validation_status)")
+    # category_id_applied/category_name_applied (Freeze Category on Voucher Lines): the live
+    # Supabase table already existed before this pair was added to the schema above, so
+    # CREATE TABLE IF NOT EXISTS is a no-op against it - an explicit ALTER is needed to reach
+    # it, same "don't retroactively reinterpret already-completed work" rationale as
+    # matrix_version_applied (see that column's own comment in the SQLite ALTER block).
+    run("ALTER TABLE verification_details ADD COLUMN IF NOT EXISTS category_id_applied INTEGER")
+    run("ALTER TABLE verification_details ADD COLUMN IF NOT EXISTS category_name_applied TEXT")
 
     # ---------- 14. audit_procedure_library ----------
     run('''
