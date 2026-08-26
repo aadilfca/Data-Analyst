@@ -36,7 +36,7 @@ from routers.import_export import (
 # through the same process-level cache audit_rules.py's own GET endpoints use — guidance
 # content is keyed by Category name/id, not client_id, since Categories aren't client-scoped
 # (see cache_get()/cache_set()'s own docstring in audit_rules.py for why).
-from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch, cache_get, cache_set
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key
 # "Why is this line Query?" gate breakdown only (see compute_and_persist_cleared_status()'s
 # detail mode) — the pass/fail answer itself still comes from check_approved_by_authority_gate()
 # above, so the explanation can never disagree with the real gate.
@@ -3112,10 +3112,20 @@ def get_category_for_account(
     "display contexts keep showing an already-referenced inactive item"
     convention used elsewhere in this codebase (e.g. the Supporting Documents
     modal's locked tab for an already-referenced inactive Document).
+
+    Read-side cache wiring (category-for-account cache, Phase 3): goes through the same
+    process-level cache get_audit_guidance() reads through, but keyed per-client via
+    category_for_account_cache_key() - unlike guidance, this lookup's data is genuinely
+    per-client. Invalidated by routers/trial_balance.py on TB upload and category assignment.
     """
     client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
+
+    cache_key = category_for_account_cache_key(client_id, account_code)
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     # Prefer the client's current (latest parsed) Trial Balance's own category_id for this
     # account_code - this is what Assign Categories itself shows/edits, and is the "correct
@@ -3145,11 +3155,13 @@ def get_category_for_account(
             (upload_rows[0]['id'], account_code)
         )
         if tb_rows and tb_rows[0]['category_name']:
-            return {
+            result = {
                 "matched": True,
                 "category_id": tb_rows[0]['category_id'],
                 "category_name": tb_rows[0]['category_name']
             }
+            cache_set(cache_key, result)
+            return result
 
     # LEFT JOIN means category_name comes back NULL for every genuine
     # "no match" case in one query: no assignment row at all, or an
@@ -3168,13 +3180,17 @@ def get_category_for_account(
     )
 
     if not rows or not rows[0]['category_name']:
-        return {"matched": False, "category_id": None, "category_name": None}
+        result = {"matched": False, "category_id": None, "category_name": None}
+        cache_set(cache_key, result)
+        return result
 
-    return {
+    result = {
         "matched": True,
         "category_id": rows[0]['category_id'],
         "category_name": rows[0]['category_name']
     }
+    cache_set(cache_key, result)
+    return result
 
 # ==============================================
 # ACCOUNT HEAD RECOMMENDATION (Validation Rules, Phase 6 of 7)
