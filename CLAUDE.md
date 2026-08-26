@@ -302,6 +302,7 @@ original problem, and will collapse to one line once that project finishes.**
 - 2026-08-25: Logged start_session hang bug in KNOWN_ISSUES.md; added standing rule to stop and ask whenever continuing needs Aadil's approval/judgment.
 - 2026-08-26: Batch modal-open endpoint (Fast Modal-Open Data, Phase 1 of 4) - GET procedure_modal_data bundles 6 modal-open calls into 1 (verification.py, procedure_modal.js).
 - 2026-08-26: Session-level ref-data caching (Fast Modal-Open Data Phase 2 of 4) - modal open reuses auditGuidanceCache; matrix_version exposed (verification.py, procedure_modal.js, verification.js).
+- 2026-08-26: Bumped procedure_modal.js (v1->v2) and verification.js (v9->v10) cache-bust - Phase 1/2 commits missed this, so browsers may have served stale cached JS.
 
 
 ## Self-maintenance
