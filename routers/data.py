@@ -53,13 +53,18 @@ def _coerce_date_str(value):
 
 def _coerce_date_obj(value):
     """
-    Companion to _coerce_date_str(): normalizes either a string or an already
-    -date/datetime value to a real date/datetime object, for code that needs
-    to do ordinal arithmetic (_count_business_days_elapsed()'s day-by-day walk).
+    Companion to _coerce_date_str(): normalizes a string, date, or datetime
+    value to a plain date object, for code that needs to do ordinal
+    arithmetic (_count_business_days_elapsed()'s day-by-day walk). Always
+    returns date, never datetime - a mixed date/datetime return type here
+    previously broke that function's date < datetime comparison, since one
+    caller passes a real Postgres DATE value and the other a parsed string.
     """
-    if isinstance(value, (date, datetime)):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
         return value
-    return datetime.fromisoformat(value)
+    return datetime.fromisoformat(value).date()
 
 
 def format_datetime(dt_str):
