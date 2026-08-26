@@ -59,6 +59,25 @@ def invalidate_audit_rules_cache():
     with _audit_rules_cache_lock:
         _audit_rules_cache.clear()
 
+def category_for_account_cache_key(client_id: int, account_code: str) -> str:
+    """Key shape for the client-scoped category-for-account cache (Modal Caching Phase 3 extension)."""
+    return f"category_for_account:{client_id}:{account_code}"
+
+def invalidate_category_for_account_cache(client_id: int):
+    """
+    Clear only this client's category-for-account cache entries (key prefix
+    "category_for_account:{client_id}:"), unlike invalidate_audit_rules_cache()'s
+    full clear - this lookup is genuinely per-client, unlike Categories/Documents/
+    Cross-checks. Called by TB upload and category-assignment (smart-fill/force-apply)
+    writes after any change that could affect this client's resolved categories -
+    invalidate-all-for-that-client, not a surgical per-account clear.
+    """
+    prefix = f"category_for_account:{client_id}:"
+    with _audit_rules_cache_lock:
+        keys_to_delete = [k for k in _audit_rules_cache if k.startswith(prefix)]
+        for k in keys_to_delete:
+            del _audit_rules_cache[k]
+
 # ---------- DATA MODELS ----------
 class DocumentCreate(BaseModel):
     name: str

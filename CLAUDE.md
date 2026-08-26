@@ -270,6 +270,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-26: Verification/save write performance - execute_values batch insert, sibling-id memoization, batched auth-role IN queries (Phase B), duplicate cross-check fetch removed (Phase C, final).
 - 2026-08-26: Misc reliability fixes - blocking SQLite calls wrapped in threadpool (main.py); overdue-uploads date/datetime mismatch and false-success error state both fixed.
 - 2026-08-26: Modal Caching Phase 3, 3 sub-phases (COMPLETE) - TTL cache for Categories/Documents/guidance built, wired to reads, verified live end-to-end; global (not per-client) keys, `category-for-account` left uncached.
+- 2026-08-26: category-for-account cache mechanism, Phase 1 of 4 - per-client key helper + scoped `invalidate_category_for_account_cache()` added to `routers/audit_rules.py`.
 
 
 ## Self-maintenance
