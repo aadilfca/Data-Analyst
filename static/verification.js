@@ -1681,20 +1681,37 @@ function getVoucherLineAlias(row, aliases) {
 // carries matrix_version (audit_rule_categories.matrix_version) alongside the rest of the
 // payload — reserved for a future live staleness check; nothing in this phase reads it yet.
 let auditGuidanceCache = {};
+// In-flight-request dedup fix (confirmed live 2026-08-26, HAR-traced): two lines sharing a
+// Category can both trigger fetchAuditGuidanceData() in the same render pass before either
+// fetch resolves — a completed-cache-only check (auditGuidanceCache above) lets both through,
+// since neither has written the cache yet. Mirrors ensureVoucherChecksLoaded()'s
+// voucherChecksLoadingPromises (procedure_modal.js) — same race, same fix shape.
+let auditGuidanceLoadingPromises = {};
 
 async function fetchAuditGuidanceData(type, forceRefresh = false) {
     if (!forceRefresh && Object.prototype.hasOwnProperty.call(auditGuidanceCache, type)) {
         return auditGuidanceCache[type];
     }
-    const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
-    if (res.status === 404) {
-        auditGuidanceCache[type] = null;
-        return null;
+    if (!forceRefresh && auditGuidanceLoadingPromises[type]) {
+        return auditGuidanceLoadingPromises[type];
     }
-    if (!res.ok) throw new Error('Failed to fetch audit guidance');
-    const data = await res.json();
-    auditGuidanceCache[type] = data;
-    return data;
+    const loadPromise = (async () => {
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
+        if (res.status === 404) {
+            auditGuidanceCache[type] = null;
+            return null;
+        }
+        if (!res.ok) throw new Error('Failed to fetch audit guidance');
+        const data = await res.json();
+        auditGuidanceCache[type] = data;
+        return data;
+    })();
+    auditGuidanceLoadingPromises[type] = loadPromise;
+    try {
+        return await loadPromise;
+    } finally {
+        delete auditGuidanceLoadingPromises[type];
+    }
 }
 
 // templateColumnsCache/templateNameCache/fetchTemplateColumns() now live in procedure_modal.js.

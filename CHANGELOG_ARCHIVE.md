@@ -2313,3 +2313,31 @@ returns `matrix_version: 2`, matching `audit_rule_categories` directly. No UI/br
 phase, per the user's explicit instruction — audit procedures are still under active development.
 
 ---
+
+## Session-Level Ref-Data Caching — In-Flight Request Race Fix
+
+**Date:** 2026-08-26 | **Files:** `static/verification.js`, `static/verification.html`.
+
+**Why:** Confirmed live in a HAR trace after deploy: two lines sharing a Category can both call
+`fetchAuditGuidanceData()` in the same render pass (via `autoFillCategoryForLine()`) before
+either fetch resolves — two calls 15ms apart both hit the network for
+`audit_guidance?transaction_type=Salary and advances`. The Phase 2 cache-hit check
+(`auditGuidanceCache`, a hasOwnProperty check) only recognizes an **already-completed** fetch —
+neither of two near-simultaneous callers has written the cache yet, so both proceed to fetch. Same
+race class this codebase already fixed once for `ensureVoucherChecksLoaded()`
+(`voucherChecksLoadingPromises`, procedure_modal.js) — `fetchAuditGuidanceData()` predates that
+fix and was never brought in line with it.
+
+**Fix:** added `auditGuidanceLoadingPromises` (verification.js), mirroring
+`ensureVoucherChecksLoaded()`'s shape exactly — a second call for a `type` already being fetched
+awaits the same in-flight promise instead of starting a new request. The function's existing
+throw-on-`!res.ok` contract is preserved (unlike `ensureVoucherChecksLoaded()`, which swallows
+errors internally) since existing callers (`openProcedureModal()` etc.) already catch it;
+`forceRefresh=true` still bypasses both the completed-cache check and the in-flight check
+unchanged (confirmed no live caller currently passes `true` — Phase 2 removed the last one).
+
+**Verified:** `node --check`. `pytest` — same 2 pre-existing, unrelated failures. `verification.js`
+bumped `?v=10` → `?v=11` (verification.html) in the same commit, per the cache-bust convention
+missed in Phases 1/2 (see the standalone "Cache-Bust Fix" commit immediately before this one).
+
+---
