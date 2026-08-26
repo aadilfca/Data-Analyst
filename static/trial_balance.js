@@ -545,6 +545,58 @@ function checkMappingComplete() {
     return missing.length === 0;
 }
 
+// ---------- IMPORT PROGRESS BAR (Fast Trial Balance upload) ----------
+// Polls GET /api/trial-balance/upload-status/{progress_key} (routers/trial_balance.py) while
+// uploadTrialBalance()'s POST is in flight -- mirrors upload.js's own pollImportProgress()/
+// updateImportProgressBar(), tb-prefixed since this page has its own progressKey scheme
+// (TB upload is a single one-shot endpoint, so the key is generated client-side, not
+// server-issued the way Data Bank's file_id is).
+let tbUploadProgressPollInterval = null;
+
+function showTbUploadProgressBar() {
+    const bar = document.getElementById('tbUploadProgressBar');
+    const fill = document.getElementById('tbUploadProgressFill');
+    const label = document.getElementById('tbUploadProgressLabel');
+    if (!bar) return;
+    if (fill) fill.style.width = '0%';
+    if (label) label.textContent = '0 of 0 accounts uploaded';
+    bar.style.display = 'flex';
+}
+
+function hideTbUploadProgressBar() {
+    const bar = document.getElementById('tbUploadProgressBar');
+    if (bar) bar.style.display = 'none';
+}
+
+function updateTbUploadProgressBar(current, total) {
+    const fill = document.getElementById('tbUploadProgressFill');
+    const label = document.getElementById('tbUploadProgressLabel');
+    const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+    if (fill) fill.style.width = pct + '%';
+    if (label) label.textContent = `${current} of ${total} accounts uploaded`;
+}
+
+function pollTbUploadProgress(progressKey) {
+    tbUploadProgressPollInterval = setInterval(async () => {
+        try {
+            const res = await fetch(API_BASE + '/api/trial-balance/upload-status/' + progressKey);
+            if (!res.ok) return;
+            const status = await res.json();
+            updateTbUploadProgressBar(status.current || 0, status.total || 0);
+        } catch (e) {
+            // Silently skip a failed poll tick -- the next tick (or the final upload
+            // response itself) will resolve the UI either way, same as upload.js's convention.
+        }
+    }, 1000);
+}
+
+function stopTbUploadProgressPoll() {
+    if (tbUploadProgressPollInterval) {
+        clearInterval(tbUploadProgressPollInterval);
+        tbUploadProgressPollInterval = null;
+    }
+}
+
 // ---------- UPLOAD & CLASSIFY ----------
 if (uploadTrialBalanceBtn) {
     uploadTrialBalanceBtn.addEventListener('click', uploadTrialBalance);
@@ -587,6 +639,14 @@ async function uploadTrialBalance() {
     showStatus('Uploading and classifying...', 'loading');
     uploadTrialBalanceBtn.disabled = true;
 
+    // Fast Trial Balance upload: client-generated progress key (TB upload is a single
+    // one-shot endpoint, so there's no server-issued file_id the way Data Bank's two-step
+    // upload flow has). Started before the request fires so the bar is visible for the
+    // whole request, not just after the response comes back.
+    const progressKey = 'tb_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    showTbUploadProgressBar();
+    pollTbUploadProgress(progressKey);
+
     try {
         const formData = new FormData();
         formData.append('client_id', clientId);
@@ -606,6 +666,7 @@ async function uploadTrialBalance() {
         formData.append('period_end', periodEndInput.value);
         formData.append('period_type', periodTypeSelect ? periodTypeSelect.value : '');
         formData.append('confirm_overwrite', confirmOverwrite ? 'true' : 'false');
+        formData.append('progress_key', progressKey);
 
         const res = await fetch(API_BASE + '/api/trial-balance/upload', {
             method: 'POST',
@@ -623,6 +684,10 @@ async function uploadTrialBalance() {
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
     } finally {
+        // Always stop polling and hide the bar no matter how the request ends -- covers
+        // both a successful upload and a thrown error the same way.
+        stopTbUploadProgressPoll();
+        hideTbUploadProgressBar();
         updateClientDependentUI();
     }
 }

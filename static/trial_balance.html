@@ -10,6 +10,37 @@
          uses) to build the small mapping-window preview table's row data. -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
+        /* ---------- IMPORT PROGRESS BAR (Fast Trial Balance upload) ----------
+           Same .import-progress-* class names/rules upload.html already defines in its own
+           inline <style> block (this project keeps this progress-bar CSS local to each page
+           rather than in the shared style.css, confirmed by grepping style.css for it). */
+        .import-progress-bar {
+            flex-basis: 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .import-progress-track {
+            flex: 1 1 auto;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .import-progress-fill {
+            height: 100%;
+            width: 0%;
+            background: #f59e0b;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        .import-progress-label {
+            flex-shrink: 0;
+            font-size: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
         /* ---------- FORM AREA ---------- */
         .tb-form-group {
             background: white;
@@ -526,6 +557,16 @@
             <div class="tb-field-row" style="margin-top:20px; margin-bottom:0;">
                 <button class="btn-primary-action" id="uploadTrialBalanceBtn" type="button" disabled>Upload &amp; Classify</button>
             </div>
+
+            <!-- Fast Trial Balance upload: polls GET /api/trial-balance/upload-status/{progress_key}
+                 (routers/trial_balance.py) while uploadTrialBalance()'s POST is in flight - see
+                 pollTbUploadProgress() in trial_balance.js. Mirrors upload.html's #importProgressBar. -->
+            <div id="tbUploadProgressBar" class="import-progress-bar" style="display:none;">
+                <div class="import-progress-track">
+                    <div class="import-progress-fill" id="tbUploadProgressFill"></div>
+                </div>
+                <div class="import-progress-label" id="tbUploadProgressLabel">0 of 0 accounts uploaded</div>
+            </div>
         </div>
 
         <div class="status-bar info" id="statusBar" style="display:none;">
@@ -618,7 +659,7 @@
     </div>
 
     <script src="/static/client_context.js?v=13"></script>
-    <script src="/static/trial_balance.js?v=5"></script>
+    <script src="/static/trial_balance.js?v=6"></script>
 </body>
 
 </html>

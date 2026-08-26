@@ -279,6 +279,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-26: Freeze Category on voucher lines, Phase 3 of 3 (COMPLETE) - `verification.js` skips live lookup for frozen lines, shows lock icon.
 - 2026-08-26: Manual dev-phase reset - cleared all 611 `account_category_assignments` rows (all clients) ahead of fresh TB re-upload/reassignment.
 - 2026-08-26: Fast TB upload, Phase A of 2 - batched insert (`execute_batch_pg`), async→sync conversion, progress-poll endpoint added.
+- 2026-08-26: Fast TB upload, Phase B of 2 (COMPLETE) - `trial_balance.js`/`.html` get a progress bar, mirroring `upload.js`'s mechanism.
 
 
 ## Self-maintenance
