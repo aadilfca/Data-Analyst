@@ -2531,6 +2531,14 @@ function showAssignCategoriesToast(msg) {
 // existing in-app button click listener ignores the returned promise, so this is fully
 // backward-compatible with that call site.
 async function openAssignCategoriesView() {
+    // Confirmed fix: window.onload firing doesn't guarantee client_context.js's async session
+    // fetch has resolved yet - a fast click on the "Assign Categories" button right after page
+    // load can fire before getSelectedClientId() has a real value, sending client_id=null to
+    // the accounts API (422). Guarding here (not just the URL-restore caller below) covers
+    // every entry path - button click, Verification deep link, and hard-refresh restore - with
+    // one guard instead of needing it duplicated per caller.
+    if (window.clientContextReady) await window.clientContextReady;
+
     arShellContainer.style.display = 'none';
     arAssignCategoriesSection.style.display = 'block';
     assignCategoriesViewOpen = true;
