@@ -2270,3 +2270,46 @@ the field-by-field API comparison was agreed as the right verification level for
 with the user testing the live UI themselves afterward.
 
 ---
+
+## Session-Level Ref-Data Caching
+
+**Date:** 2026-08-26 | **Files:** `routers/verification.py`, `static/procedure_modal.js`, `static/verification.js`.
+
+**Why:** Phase 2 of 4 of "Fast Modal-Open Data" (Phase 1: [[Verification Procedure Modal Batch
+Endpoint]] above). `audit_guidance` — the one modal-open call Phase 1 deliberately kept
+separate — was still called with `forceRefresh=true` on every single modal open, unconditionally
+bypassing the `auditGuidanceCache` that already exists in `verification.js`. Guidance is genuinely
+static within a page session (only changes on an Audit Rules edit), so this was a wasted round
+trip for every line after the first one in the same Category.
+
+**Correction to the brief, confirmed with Aadil before writing code:** the brief assumed
+`matrix_version` would arrive via Phase 1's `procedure_modal_data` endpoint. It doesn't — Phase 1
+deliberately kept guidance out of that endpoint entirely. `get_audit_guidance()` also didn't
+return `matrix_version` at all. Aadil confirmed the fix: add it to `get_audit_guidance()`'s
+existing response (one extra column, one extra return key) rather than routing it through
+`procedure_modal_data`.
+
+**A real constraint, flagged before implementation rather than silently worked around:** there is
+no zero-cost way to check the Category's live `matrix_version` before deciding whether to reuse
+the cache — it only arrives packaged with the full guidance payload, so checking it first would
+require the exact fetch being avoided. So this phase delivers a genuine, working session cache
+(`openProcedureModal()` no longer forces a bypass, so it benefits from the fact that
+`verification.js`'s Supporting-column badge/Guide popover already call `fetchAuditGuidanceData(type)`
+with no `forceRefresh` as each voucher's lines render — guidance is typically already warm by the
+time a modal opens) plus `matrix_version` now captured on every cached entry — but no live
+version-triggered invalidation yet; that's reserved for Phase 3's server-side TTL cache.
+
+**Implementation:** `get_audit_guidance()` (routers/verification.py) adds `matrix_version` to its
+`SELECT` and return dict. `openProcedureModal()` (procedure_modal.js) changes
+`hostAdapter.fetchAuditGuidanceData(type, true)` to `(type, false)`; comment updated. `verification.js`
+needed no logic change — its own `fetchAuditGuidanceData()` call sites (Supporting column, Guide
+popover, risk computation) already defaulted to `forceRefresh=false`; only the stale comment
+documenting `openProcedureModal()`'s old bypass-forever behavior was rewritten.
+
+**Verified:** `node --check`/`ast.parse` on all 3 files. `pytest` run before and after — same 2
+pre-existing, unrelated failures both times (confirmed in Phase 1's own verification). Live dev
+server hit directly: `GET /api/verification/audit_guidance?transaction_type=General%20admin%20expenses`
+returns `matrix_version: 2`, matching `audit_rule_categories` directly. No UI/browser testing this
+phase, per the user's explicit instruction — audit procedures are still under active development.
+
+---

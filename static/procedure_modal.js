@@ -590,12 +590,18 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     if (window.LoadingUI) window.LoadingUI.showSpinner(spinnerTarget, 'Loading', { escalate: !triggerEl });
 
     try {
-        // forceRefresh=true — bypasses auditGuidanceCache so this Category's Document list and each
-        // Document's auth_roles always reflect Audit Rules' live state on open, same "re-fetched
-        // fresh on every open" convention as assignedRecords/procedureChecks just below.
+        // Session-level ref-data caching (Phase 2 of 4): forceRefresh=false — reuses
+        // auditGuidanceCache[type] when already warm instead of re-fetching on every open.
+        // In practice this Category's guidance is usually already cached by the time a modal
+        // opens, since verification.js's Supporting-column badge/Guide popover rendering already
+        // call fetchAuditGuidanceData(type) with no forceRefresh as each voucher's lines render.
+        // Guidance now carries matrix_version (audit_rule_categories.matrix_version) alongside
+        // the rest of the payload, so a cached entry's version is available if a later phase adds
+        // a live staleness check - none exists yet, so this phase is a plain session-lifetime
+        // cache, not a version-triggered one.
         let guidance = null;
         try {
-            guidance = await hostAdapter.fetchAuditGuidanceData(type, true);
+            guidance = await hostAdapter.fetchAuditGuidanceData(type, false);
         } catch (e) {
             console.error('Failed to load Supporting Documents modal data:', e);
             return;

@@ -3031,7 +3031,7 @@ def get_audit_guidance(
     automated comparison against real voucher data is a separate, deferred requirement.
     """
     rows = execute_query_pg(
-        "SELECT id, kb_overview FROM audit_rule_categories WHERE name = %s AND is_active = TRUE",
+        "SELECT id, kb_overview, matrix_version FROM audit_rule_categories WHERE name = %s AND is_active = TRUE",
         (transaction_type,)
     )
     if not rows:
@@ -3041,6 +3041,10 @@ def get_audit_guidance(
         "transaction_type": transaction_type,
         "category_id": category_id,
         "kb_overview": rows[0]['kb_overview'],
+        # Session-level ref-data caching, Phase 2 of 4: exposed so the frontend cache
+        # (auditGuidanceCache, verification.js) can carry this Category's version alongside
+        # its cached guidance - see that file's fetchAuditGuidanceData() for how it's used.
+        "matrix_version": rows[0]['matrix_version'],
         "documents": get_category_guidance_documents(category_id),
         "cross_checks": get_category_guidance_cross_checks(category_id)
     }

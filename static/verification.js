@@ -1674,12 +1674,12 @@ function getVoucherLineAlias(row, aliases) {
 // left to populate options for.)
 
 // GET /api/verification/audit_guidance response, keyed by Category name (the same value the
-// Type dropdown stores) — shared between the "Guide" popover and the Supporting column so
-// selecting a category doesn't trigger two separate fetches for the same data. 404s cache as
-// null; a transient fetch error is deliberately NOT cached, so a later retry can succeed.
-// openProcedureModal() passes forceRefresh=true to bypass this cache — its Document list and
-// per-Document auth_roles (Prepared by/Checked by/Approved by) must reflect Audit Rules' live
-// state on every open, not whatever this Category last returned earlier in the page's lifetime.
+// Type dropdown stores) — shared between the "Guide" popover, the Supporting column, and (as of
+// Session-level ref-data caching, Phase 2 of 4) openProcedureModal(), so a Category's guidance is
+// fetched once per page session and reused everywhere else that needs it. 404s cache as null; a
+// transient fetch error is deliberately NOT cached, so a later retry can succeed. The response now
+// carries matrix_version (audit_rule_categories.matrix_version) alongside the rest of the
+// payload — reserved for a future live staleness check; nothing in this phase reads it yet.
 let auditGuidanceCache = {};
 
 async function fetchAuditGuidanceData(type, forceRefresh = false) {
