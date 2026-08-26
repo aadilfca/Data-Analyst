@@ -185,7 +185,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 **Full detail for every entry below lives in `CHANGELOG_ARCHIVE.md`**, under the matching heading —
 these lines are pointers, not the record. Multi-phase requirements get one line each, not one per
 phase — roll a finished requirement up into its single line as soon as it completes, don't wait for
-a later pass. Compressed five times now (2026-08-22, -23, -24 twice, -26), each time because
+a later pass. Compressed six times now (2026-08-22, -23, -24 twice, -26 twice), each time because
 per-phase lines from an in-flight project accumulated past the ~80-line trigger before being rolled
 up — treat the drift-trigger check as mandatory at the START of every session touching this file,
 not just when reminded. Brief overshoot above 80 during an active multi-phase project is expected
@@ -231,17 +231,14 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-07-29: Account Head Recommendation repositioned; search-select and no-match note added.
 - 2026-07-31: Automated cross-document validation engine, 10 phases (chain-aware evaluation, shortfall observations).
 - 2026-08-01: Rate-derivation requirement, 10 phases, plus historical backfill and a column-order fix.
-- 2026-08-01: Category detail redesign, 3 phases (validation rules grouped, voucher checks moved in, rule-count badge).
-- 2026-08-01: Signature Specimens soft-delete conversion (4 phases) + ID-based Cross-check-eligible Fields (4 phases), including the rename dependency preview.
+- 2026-08-01: Category detail redesign, 3 phases; Signature Specimens soft-delete conversion (4 phases) + ID-based Cross-check-eligible Fields (4 phases, rename dependency preview).
 - 2026-08-01: "No cashbooks found" investigated and fixed (`routers/verification.py` + `static/verification.*`).
 - 2026-08-02: Authority fields added (Signature Specimens/"Approved by" roles/Voucher-level Checks, gate wired) + Category "Approved" checkbox hard-removed, Documents picker merged, Cleared Requirements summary (3 phases).
 - 2026-08-05: Dev/test fixture hard-deletes; inactive items excluded from selection contexts, 5 phases.
 - 2026-08-07: "Verify & Next" now steps through voucher lines before advancing the voucher.
-- 2026-08-08: Audit Rules Categories screen restructured; repo hygiene (`.gitignore`, `git gc`); Code Health Review protocol added.
-- 2026-08-08: Global header search finds in-module features, Phase 1 (`static/search_index.js`, later merged away).
+- 2026-08-08: Audit Rules Categories screen restructured; repo hygiene; Code Health Review protocol added; global header search Phase 1 (`search_index.js`, later merged into `NAV_MANIFEST`).
 - 2026-08-08: Physical Bill evidence type, 8 phases (schema, CRUD, gate wiring, frontend entry).
-- 2026-08-09: `client_data.extract_amount` permanently NULL — fixed, plus `backfill_extract_amount.py`.
-- 2026-08-09: Cleared-status display fixes — pending pill, reload revert, Physical Bill amount-match tick.
+- 2026-08-09: `extract_amount` permanently-NULL bug fixed + backfill; cleared-status display fixes (pending pill, reload revert, amount-match tick).
 - 2026-08-09: Populate Physical Bill from GRN/ERP Vendor Bill, 4 phases; superseded and removed Create-Vendor-Bill-from-GRN.
 - 2026-08-10: Verification session/cashbook UX fixes — state persistence, date-range reconciliation (4 phases), header stats (3 phases).
 - 2026-08-12: Audit Workbook module built, 5 phases, plus line-grain restructure (3 phases) and restyle.
@@ -251,45 +248,28 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-18: Physical Bill auto-save on modal exit, blank-field relaxation, mandatory-field red-border cue.
 - 2026-08-19: Multi-Bill/Multi-Line Physical Bill, 6 phases (nested header+items schema through styling).
 - 2026-08-20: Global header nav rebuild, 6 phases — Up/Back split, NAV_MANIFEST merge, `search_index.js` deleted.
-- 2026-08-20: First/last page buttons on Data Bank and Upload previews; import progress bar, 2 phases.
-- 2026-08-20: Subtotal default flag, 3 phases (schema, template checkbox, Data Bank toggle).
-- 2026-08-21: Database size visibility, 2 phases; dashboard KPI stats, 2 phases plus a 6th card.
+- 2026-08-20: First/last page buttons on Data Bank/Upload previews + import progress bar (2 phases); Subtotal default flag, 3 phases.
+- 2026-08-21: Database size visibility (2 phases) + dashboard KPI stats (2 phases, 6th card); Rate Source 'auto' state, 4 phases; import write perf + native-Excel-date fixes.
 - 2026-08-21: Overdue Uploads, 4 phases — frequency schema, business-day detection, dashboard cards and drill-down.
-- 2026-08-21: Rate Source 'auto' state, 4 phases; import write perf fix; native-Excel-date parse fix.
 - 2026-08-22: User module (Login → Client Cards → Dashboard), 7 phases — `users`/`sessions`, `routers/auth.py`, session-backed client selection.
-- 2026-08-22: Client-context race conditions fixed - load-order signal (`window.clientContextReady`) and session-expiry 401 handling (`client_context.js` bumped to v=5).
 - 2026-08-22: Header client area redesign, Phases 1-3 of 4 - read-only clickable client display, JS-owned Welcome text, icon-only Logout, cache-bust across 17 pages.
-- 2026-08-22: Misc fixes - Assign Categories hard-refresh null-client 422 fixed (`audit_rules.js`); Audit Workbook Account column rendered per-line, not rowspan'd (`audit_workbook.js`, `style.css`).
 - 2026-08-22: Admin area, 8 phases - admin role + require_admin, Manage Users backend/frontend, Settings tabs, Manage Clients gated, own firm-level header + exemptions, Client Select gear icon.
-- 2026-08-22: Client Settings entry points, 3 phases + 3 follow-up fixes - whitelisted `?from=`/`?next=` stamps, URL-scoped `enforceClientSelection()`, URL-aware navbar client pill (`client_context.js`, `client_select.*`, `client_settings.html`).
-- 2026-08-22: Client Cards page given a lightweight header (Module: Client, real username, logout); current-client now returns username (auth.py, client_select.html/.js).
-- 2026-08-23: client_settings.html header now entry-aware - admin door (?from=clients) gets firm-level chrome, dashboard door unchanged (client_context.js, client_settings.html).
-- 2026-08-23: Postgres cutover Phase 6 - Verification/Audit Rules/Trial Balance routers, plus attach_assignment_flags() is_assigned fix (data.py).
-- 2026-08-23: Supabase/Render migration complete, 8 phases - Postgres schema + pooled connections (database.py), full router cutover to Postgres, Render deploy (render.yaml), relative API_BASE, verified live.
-- 2026-08-23: Supabase data migration complete, 4 phases - migrate_to_supabase.py: dry-run report, type-conversion layer, real run (409336/409362 rows migrated, ids preserved), --verify mode confirms 0 shortfalls.
+- 2026-08-22: Client Settings entry points, 3 phases + 3 follow-up fixes - whitelisted `?from=`/`?next=` stamps, URL-scoped `enforceClientSelection()`, URL-aware navbar client pill.
+- 2026-08-22: Misc fixes - client-context race conditions (`window.clientContextReady`, session-expiry 401), Assign Categories null-client 422, Audit Workbook Account column render, Client Cards lightweight header + username on current-client.
+- 2026-08-23: client_settings.html header entry-aware fix; Postgres cutover Phase 6 (Verification/Audit Rules/Trial Balance) + is_assigned fix.
+- 2026-08-23: Supabase/Render migration complete, 8 phases + data migration, 4 phases (COMPLETE) - Postgres schema/pooled connections, full router cutover, Render deploy, 409336/409362 rows migrated, --verify confirms 0 shortfalls.
 - 2026-08-23: Shared Loading UI utility, 6 phases (+4a/4b/5a/5b/6a/6b sub-phases) - loading_ui.js built and wired across login/Data Bank/Upload/save actions/Audit Rules/Verification.
-- 2026-08-23: Added standing git workflow rule to Workflow rules - auto-commit+push after phase, only post user confirmation (CLAUDE.md).
+- 2026-08-23: Added standing git workflow rule to Workflow rules - auto-commit+push after phase, only post user confirmation.
 - 2026-08-24: Fast Data Handling for slow connections, 13 phases (COMPLETE) - gzip, index audit, apiFetch retry wrapper, column trimming, debounce, ref-data caching, pagination, retry wiring.
 - 2026-08-24/25: Performance investigation, 2 passes (read-only) - region mismatch + sequential round-trips ranked as root causes; final pass confirmed free-tier limits vs code gaps. See PERFORMANCE_INVESTIGATION.md.
 - 2026-08-24: Verification save/check reliability — save_line_items concurrency guard (in-flight promise map), batched N+1 loops, deactivated 6 contaminating test voucher-checks, fixed verify_voucher_checks 400 reachability gap.
-- 2026-08-25: verify_voucher_checks() batched into 2 set-based updates; per-line procedure-modal fetches parallelized via Promise.all, verified via Playwright (verification.js).
-- 2026-08-25: render.yaml service name corrected (internal-audit-app → 2.-Python-App); dashboard.py's stats/KPI endpoints fixed to query execute_query_pg instead of stale SQLite, matching migrated routers.
-- 2026-08-25: Shared Loading UI (Procedure Modal Wiring), 3 phases — apiFetchMutate()+bypass guard built, then all of procedure_modal.js's GET/POST calls wired to apiFetch/apiFetchMutate/LoadingUI.
-- 2026-08-25: Fixed get_availability connection pool exhaustion — semaphore caps concurrent per-template DB calls, PG_POOL_MAX default bumped 10 to 15 (routers/data.py, database.py).
-- 2026-08-25: Processing/Loading UI for Verification, 7 phases (COMPLETE) — progress bars/skeletons/field+badge loading across Client Data Links, Quick Stats, Cashbook, Verify button, procedure modal.
-- 2026-08-25: Procedure-badge click spinner capped at "Loading" via new `showSpinner()` `escalate:false` option — reverted earlier title-badge reroute (loading_ui.js, procedure_modal.js, verification.js).
-- 2026-08-25: Logged start_session hang bug in KNOWN_ISSUES.md; added standing rule to stop and ask whenever continuing needs Aadil's approval/judgment.
-- 2026-08-26: Batch modal-open endpoint (Fast Modal-Open Data, Phase 1 of 4) - GET procedure_modal_data bundles 6 modal-open calls into 1 (verification.py, procedure_modal.js).
-- 2026-08-26: Session-level ref-data caching (Fast Modal-Open Data Phase 2 of 4) - modal open reuses auditGuidanceCache; matrix_version exposed (verification.py, procedure_modal.js, verification.js).
-- 2026-08-26: Fast Modal-Open Data follow-ups — bumped procedure_modal.js/verification.js cache-bust (missed in Phase 1/2 commits); fixed fetchAuditGuidanceData in-flight-request race, mirroring ensureVoucherChecksLoaded.
-- 2026-08-26: Verification save performance — start_verification_session's per-row insert replaced with execute_values (single round trip); _resolve_sibling_voucher_line_ids memoized in save_line_items (33->27 calls).
-- 2026-08-26: Wrapped global_exception_handler's blocking SQLite calls (execute_query, log_error) in run_in_threadpool - prevents event-loop freeze under lock contention (main.py).
-- 2026-08-26: Fixed overdue-uploads date/datetime mismatch - _coerce_date_obj always returns date now, not a mix (routers/data.py).
-- 2026-08-26: save_line_items round-trip reduction Phase B - batched get_document_auth_roles/authorities into IN queries (audit_rules.py, verification.py).
-- 2026-08-26: save_line_items round-trip reduction Phase C (final) - eliminated duplicate line-fetch query in evaluate_cross_checks_for_line (verification.py).
-- 2026-08-26: Overdue Uploads widget no longer shows false success on fetch failure - error flag distinguishes failure from empty in loadOverdueUploads/renderOverdueUploadsTable (script.js).
-- 2026-08-26: Modal Caching Phase 3 sub-phase 1 of 3 - in-memory TTL cache + write-side invalidation added to audit_rules.py (Categories/Documents/Cross-checks).
-- 2026-08-26: Modal Caching Phase 3 sub-phase 2 of 3 - GET endpoints for Categories/Documents/Cross-checks/guidance now read through the TTL cache (audit_rules.py, verification.py).
+- 2026-08-25: Verification/save performance fixes - verify_voucher_checks batched, procedure-modal fetches parallelized, get_availability pool exhaustion fixed (PG_POOL_MAX 10→15), procedure-badge spinner capped.
+- 2026-08-25: Shared Loading UI (Procedure Modal Wiring) + Processing/Loading UI for Verification, 10 phases total (COMPLETE) - progress bars/skeletons/spinners wired across Verification.
+- 2026-08-25: render.yaml service name fixed; dashboard stats endpoints fixed to query Postgres; start_session hang logged in KNOWN_ISSUES.md, standing approval-checkpoint rule added.
+- 2026-08-26: Fast Modal-Open Data, 4 phases (COMPLETE) - batch procedure_modal_data endpoint, session-level ref-data caching, cache-bust + in-flight-request-race follow-up fixes.
+- 2026-08-26: Verification/save write performance - execute_values batch insert, sibling-id memoization, batched auth-role IN queries (Phase B), duplicate cross-check fetch removed (Phase C, final).
+- 2026-08-26: Misc reliability fixes - blocking SQLite calls wrapped in threadpool (main.py); overdue-uploads date/datetime mismatch and false-success error state both fixed.
+- 2026-08-26: Modal Caching Phase 3, 3 sub-phases (COMPLETE) - TTL cache for Categories/Documents/guidance built, wired to reads, verified live end-to-end; global (not per-client) keys, `category-for-account` left uncached.
 
 
 ## Self-maintenance
