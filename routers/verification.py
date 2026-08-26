@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
-from database import execute_query_pg, execute_write_pg, execute_batch_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg
+from database import execute_query_pg, execute_write_pg, execute_batch_pg, execute_batch_insert_with_ids_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg
 from database import _reset_db_stats, _get_db_stats  # TEMPORARY INSTRUMENTATION - remove with the rest of this block
 from psycopg2.extras import Json
 from datetime import datetime, timezone
@@ -1179,18 +1179,18 @@ def start_verification_session(
     for trans in transactions_to_verify:
         detail_params.append((session_id, trans['client_data_id'], trans['voucher_id']))
 
-    # Insert all details in a single transaction (fast)
+    # Insert all details in a single round trip via execute_values(), not one round trip per row
     conn = get_raw_conn_pg()
     try:
-        cur = conn.cursor()
-        cur.executemany(
+        execute_batch_insert_with_ids_pg(
+            conn,
             """
             INSERT INTO verification_details (session_id, client_data_id, transaction_ref, status, validation_status)
-            VALUES (%s, %s, %s, 'Pending', 'Pending')
+            VALUES %s RETURNING id
             """,
-            detail_params
+            detail_params,
+            template="(%s, %s, %s, 'Pending', 'Pending')"
         )
-        conn.commit()
     finally:
         release_raw_conn_pg(conn)
 
