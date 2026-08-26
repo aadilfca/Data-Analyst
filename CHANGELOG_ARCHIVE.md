@@ -2203,3 +2203,70 @@ during testing, unrelated to this change (see "Performance investigation" Status
 flagged to the user rather than claimed as verified.
 
 ---
+
+## Verification Procedure Modal Batch Endpoint
+
+**Date:** 2026-08-26 | **Files:** `routers/verification.py`, `static/procedure_modal.js`.
+
+**Why:** Phase 1 of a 4-phase "Fast Modal-Open Data" requirement. Every open of Verification's
+Supporting Documents modal (`openProcedureModal()`) fired a chain of sequential, awaited calls —
+audit guidance, linked documents, procedure checks, observations, physical bills, cross-check
+results, voucher-level checks — each paying the Render<->Supabase cross-region latency floor
+separately (confirmed root cause in `PERFORMANCE_INVESTIGATION.md`). This phase is a checkpoint:
+Aadil measures real timing before Phase 2 (ref-data caching) is scoped further.
+
+**Confirmed scope, via investigation before any code was written:** `suggest-account-head`,
+`line_status_reason`, and `category-for-account` are not part of the on-open sequence at all
+(button-click-only or belong to a different page) — correctly excluded. `audit_guidance` was
+deliberately kept as its own separate call rather than folded in: its result primes
+`auditGuidanceCache[type]` (verification.js), a cache 3 other UI surfaces (Supporting column
+badge, Guide popover, risk computation) read from independently without `forceRefresh`; correctly
+priming that cache from inside the new endpoint would mean either duplicating the cache-write
+logic inside the shared `procedure_modal.js` (which doesn't own that cache) or extending the
+`hostAdapter` contract in both `verification.js` and `audit_workbook.js` — both outside this
+phase's confirmed file list, so the marginal 1-of-7-calls win was not worth expanding scope.
+
+**Backend:** new `GET /api/verification/procedure_modal_data/{voucher_line_id}` (no query params)
+bundles the other 6 calls into one response. Implementation is a thin fan-out calling the
+**existing route functions directly** (in-process Python calls) — `get_voucher_line_documents`,
+`get_procedure_checks`, `get_line_observations`, `get_voucher_line_physical_bills`,
+`get_cross_check_results` — zero query logic duplicated, so the composite can never drift from
+what each standalone endpoint already returns; those endpoints are left in place, unremoved, for
+Audit Workbook or any other consumer of a subset. `client_id`/`transaction_ref` for the
+voucher-checks bundle are derived server-side via one small join (`verification_details` +
+`verification_sessions`), the same pattern `compute_and_persist_cleared_status()` already uses,
+rather than requiring the client to pass `client_id`. 404 is inherited automatically —
+`get_voucher_line_documents()` already raises `HTTPException(404)` for an unknown line, which
+propagates through this handler unchanged. Known, accepted tradeoff: an exception inside any one
+of the 5 wrapped calls now 500s the whole composite instead of failing just that one piece (today
+each of the 6 calls fails independently client-side) — no new try/except was added around these
+long-stable, already-exercised endpoints.
+
+**Frontend:** `openProcedureModal()` replaces 6 separate `let`-declared, individually try/caught
+fetches (`voucher_line_documents`/`procedure_checks`/`line_observations`/`physical_bills`/
+`cross_check_results`/`voucher_checks`) with one `const` fetch to the new endpoint, fail-soft to
+`{}` on the whole call (same convention as what it replaced). `assignedRecords`/`procedureChecks`/
+`observationEntries`/`physicalBillEntries`/`crossCheckResults` become `const`s read straight off
+the composite response's matching keys — all downstream rendering code (tab building, `ahState`
+seeding, etc.) is unchanged, same variable names/shapes. The `ensureVoucherChecksLoaded()` call
+is replaced with a direct write into `voucherChecksCache[hostAdapter.currentVoucherId]` from
+`modalData.voucher_checks`, normalized the same way that function already does
+(`{id, name, sort_order, state}`) — `ensureVoucherChecksLoaded()` itself is left in place, still
+used by `updateProceduresCellForLine()`. `hostAdapter.fetchPhysicalBillsForLine(uid)` is no longer
+called from this function; its other call site (badge updates outside the modal) is untouched.
+Steps 1 (guidance), 2 (template-column warm-up), and 8 (TB accounts) are unchanged, in their
+original positions.
+
+**Verified:** `node --check`/`ast.parse` on both files. Existing `pytest` suite run before and
+after the change on a clean `git stash` — same 2 pre-existing failures both times
+(`test_app_smoke.py`/`test_upload_validation_counts.py`, neither touches these files), confirmed
+unrelated. New endpoint hit directly against a real running dev server with real Supabase data
+(voucher line 85577, real linked evidence): `linked_documents`/`procedure_checks`/`observations`/
+`physical_bills`/`cross_check_results`/`voucher_checks` each compared field-by-field against their
+standalone endpoint's own live response for the same id — all 6 matched exactly. 404 confirmed on
+a bogus voucher_line_id. Browser/UI click-through was intentionally not chased to full coverage —
+audit procedures are still under active development, so there's no stable end-to-end target yet;
+the field-by-field API comparison was agreed as the right verification level for this refactor,
+with the user testing the live UI themselves afterward.
+
+---

@@ -621,48 +621,37 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     const distinctTemplateIds = [...new Set(documents.filter(d => d.template_id).map(d => d.template_id))];
     await Promise.all(distinctTemplateIds.map(fetchTemplateColumns));
 
-    // Full assignment records (not just IDs) for this line — Phase 1's endpoint. Drives the tab
-    // completion dots AND seeds each tab's selected-lines table, grouped by document_id. Re-
-    // fetched fresh on every open so both can never drift from true server state.
-    let assignedRecords = [];
+    // Batch modal-open endpoint (Fast Modal-Open Data, Phase 1 of 4): one call replaces what
+    // used to be 6 separate round trips here (voucher_line_documents/procedure_checks/
+    // line_observations/physical_bills/cross_check_results/voucher_checks) - each paid the same
+    // Render<->Supabase cross-region latency floor separately. audit_guidance stays a separate
+    // call above (it primes auditGuidanceCache, a cache other UI surfaces outside this modal
+    // read from). Fail-soft to {} on the whole call, same convention as the per-call fail-soft
+    // this replaced.
+    let modalData = null;
     try {
-        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_modal_data/${uid}`);
         if (res.ok) {
-            const assignData = await res.json();
-            assignedRecords = assignData.documents || [];
+            modalData = await res.json();
         }
     } catch (e) {
-        console.error('Failed to load Supporting Document assignment status:', e);
+        console.error('Failed to load Supporting Documents modal data:', e);
     }
+    modalData = modalData || {};
+
+    // Full assignment records (not just IDs) for this line. Drives the tab completion dots AND
+    // seeds each tab's selected-lines table, grouped by document_id. Re-fetched fresh on every
+    // open (via the composite call above) so both can never drift from true server state.
+    const assignedRecords = (modalData.linked_documents && modalData.linked_documents.documents) || [];
     const assignedDocIds = new Set(assignedRecords.map(d => d.document_id));
 
-    // Phase 5: every ticked/unticked audit-procedure role for this line, across all documents —
-    // fail-soft to an empty list (same convention as assignedRecords above) so a fetch hiccup
-    // never blocks the modal opening; re-fetched fresh on every open for the same reason.
-    let procedureChecks = [];
-    try {
-        const checksRes = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_checks/${uid}`);
-        if (checksRes.ok) {
-            const checksData = await checksRes.json();
-            procedureChecks = checksData.checks || [];
-        }
-    } catch (e) {
-        console.error('Failed to load audit procedure checks:', e);
-    }
+    // Every ticked/unticked audit-procedure role for this line, across all documents — re-fetched
+    // fresh on every open (via the composite call above).
+    const procedureChecks = (modalData.procedure_checks && modalData.procedure_checks.checks) || [];
 
-    // Phase 6: every saved observation entry for this line, across all documents — same
-    // fail-soft-to-empty convention as assignedRecords/procedureChecks above, re-fetched fresh
-    // on every open so a saved note is never silently stale.
-    let observationEntries = [];
-    try {
-        const obsRes = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/line_observations/${uid}`);
-        if (obsRes.ok) {
-            const obsData = await obsRes.json();
-            observationEntries = obsData.entries || [];
-        }
-    } catch (e) {
-        console.error('Failed to load voucher line observations:', e);
-    }
+    // Every saved observation entry for this line, across all documents — re-fetched fresh on
+    // every open (via the composite call above) so a saved note is never silently stale.
+    const observationEntries = (modalData.observations && modalData.observations.entries) || [];
 
     // Confirmed fix: tabs for Documents not applicable to this line's Category are fully hidden,
     // not rendered greyed-out — `documents` (built from guidanceDocuments above) already IS that
@@ -673,27 +662,16 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // voucher_line_procedure_checks/voucher_line_observations rows are left untouched (data is
     // not deleted, just no longer reachable from this rail).
 
-    // Physical Bill evidence type, Phase 7 of 8: every saved Physical Bill entry for this line,
-    // across all documents - same fail-soft-to-empty, re-fetched-fresh-on-every-open convention
-    // as assignedRecords/procedureChecks/observationEntries above. Shared helper (see
-    // hostAdapter.fetchPhysicalBillsForLine() above) since hostAdapter.updateProceduresCellForLine() also needs this now.
-    const physicalBillEntries = await hostAdapter.fetchPhysicalBillsForLine(uid);
+    // Every saved Physical Bill entry for this line, across all documents - re-fetched fresh on
+    // every open (via the composite call above). hostAdapter.fetchPhysicalBillsForLine() is left
+    // in place, still used independently by hostAdapter.updateProceduresCellForLine() outside
+    // this modal.
+    const physicalBillEntries = (modalData.physical_bills && modalData.physical_bills.bills) || [];
 
-    // Automated cross-document validation engine, Phase 9 of 10: this line's Cross-check
-    // evaluation results (Phase 6/7's already-computed structure - zero new evaluation logic,
-    // this just fetches it), for the Data Table segment's collapsible pass/fail rollup. Same
-    // fail-soft-to-empty, re-fetched-fresh-on-every-open convention as assignedRecords/
-    // procedureChecks/observationEntries above.
-    let crossCheckResults = [];
-    try {
-        const ccRes = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/cross_check_results/${uid}`);
-        if (ccRes.ok) {
-            const ccData = await ccRes.json();
-            crossCheckResults = ccData.results || [];
-        }
-    } catch (e) {
-        console.error('Failed to load cross-check results:', e);
-    }
+    // This line's Cross-check evaluation results (already-computed structure, zero new
+    // evaluation logic), for the Data Table segment's collapsible pass/fail rollup - re-fetched
+    // fresh on every open (via the composite call above).
+    const crossCheckResults = (modalData.cross_check_results && modalData.cross_check_results.results) || [];
 
     // Account Head Recommendation follow-up: re-seed the no-match note from server truth on every
     // open (the ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel entry, if any) — a stale local edit from a
@@ -710,12 +688,18 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // on every open, same fail-soft-to-empty convention as assignedRecords/procedureChecks above.
     await fetchLatestTbAccounts(hostAdapter.getClientId());
 
-    // Generic Voucher-Level Checks cutover: the persistent voucher-level checks bar's data — read
-    // once per voucher (client_id+transaction_ref), reused across every line of that same voucher
-    // rather than re-fetched per line, matching the backend's own "applied to every line of that
-    // voucher" design (Phase 4). hostAdapter.currentVoucherId is this open voucher's transaction_ref, kept in
-    // sync by every navigation function in this module.
-    await ensureVoucherChecksLoaded(hostAdapter.getClientId(), hostAdapter.currentVoucherId);
+    // The persistent voucher-level checks bar's data — now included in the composite call above,
+    // written straight into the same voucherChecksCache ensureVoucherChecksLoaded() and
+    // hostAdapter.updateProceduresCellForLine() both read from, instead of a separate fetch.
+    // ensureVoucherChecksLoaded() itself is left in place, still used by that other call site.
+    if (hostAdapter.currentVoucherId) {
+        voucherChecksCache[hostAdapter.currentVoucherId] = (modalData.voucher_checks || []).map(c => ({
+            id: c.id,
+            name: c.name,
+            sort_order: c.sort_order,
+            state: c.state || 'untouched'
+        }));
+    }
 
     // The voucher line's own amount (for the mismatch badge) — looked up from the already-loaded
     // voucher, no extra fetch needed. String()-normalized: uid arrives as a string whenever this

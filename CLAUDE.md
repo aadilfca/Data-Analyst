@@ -300,6 +300,7 @@ original problem, and will collapse to one line once that project finishes.**
 - 2026-08-25: Procedure-badge click spinner capped at "Loading" via new `showSpinner()` `escalate:false` option — reverted earlier title-badge reroute (loading_ui.js, procedure_modal.js, verification.js).
 - 2026-08-25: Processing/Loading UI for Verification, Phase 7 of 7 FINAL — procedure modal Close/Back/Verify/Verify & Next buttons show shared Saving progress bar (procedure_modal.js).
 - 2026-08-25: Logged start_session hang bug in KNOWN_ISSUES.md; added standing rule to stop and ask whenever continuing needs Aadil's approval/judgment.
+- 2026-08-26: Batch modal-open endpoint (Fast Modal-Open Data, Phase 1 of 4) - GET procedure_modal_data bundles 6 modal-open calls into 1 (verification.py, procedure_modal.js).
 
 
 ## Self-maintenance

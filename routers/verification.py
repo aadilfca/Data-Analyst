@@ -5204,6 +5204,68 @@ def get_cross_check_results(voucher_line_id: int):
     return evaluate_cross_checks_for_line(voucher_line_id)
 
 
+@router.get("/api/verification/procedure_modal_data/{voucher_line_id}")
+def get_procedure_modal_data(voucher_line_id: int):
+    """
+    Batch modal-open endpoint (Fast Modal-Open Data, Phase 1 of 4): everything the Supporting
+    Documents modal (openProcedureModal(), static/procedure_modal.js) fetches on open, EXCEPT
+    audit_guidance - that one stays a separate call, since its result also primes
+    auditGuidanceCache (verification.js), a cache other UI surfaces (Supporting column badge,
+    Guide popover, risk computation) read from independently. Folding it in here would mean
+    duplicating that cache-priming logic outside verification.js/procedure_modal.js's shared
+    scope, out of scope for this phase.
+
+    A thin fan-out to the existing route functions below - zero query logic duplicated or
+    reimplemented, so this can never drift from what each standalone endpoint already returns.
+    Those endpoints are left in place, unremoved, for Audit Workbook or any other consumer of
+    a subset. Collapses 6 client-server round trips (each paying the Render<->Supabase
+    cross-region latency floor separately) into 1.
+
+    404s automatically: get_voucher_line_documents() raises HTTPException(404) for an unknown
+    voucher_line_id, which propagates up through this handler unchanged.
+
+    client_id/transaction_ref (needed for the voucher_checks bundle) are derived server-side
+    via one small join, the same pattern compute_and_persist_cleared_status() already uses -
+    one less thing for client and server to agree on.
+
+    Known tradeoff: an exception inside any one of the 5 wrapped calls now 500s the whole
+    composite instead of failing just that one piece (today each of the 6 calls fails
+    independently client-side). These are long-stable, already-exercised endpoints, so no new
+    try/except is added around them here.
+    """
+    linked_documents = get_voucher_line_documents(voucher_line_id)
+    procedure_checks = get_procedure_checks(voucher_line_id)
+    observations = get_line_observations(voucher_line_id)
+    physical_bills = get_voucher_line_physical_bills(voucher_line_id)
+    cross_check_results = get_cross_check_results(voucher_line_id)
+
+    voucher_row = execute_query_pg(
+        """
+        SELECT vd.transaction_ref, vs.client_id
+        FROM verification_details vd
+        JOIN verification_sessions vs ON vs.id = vd.session_id
+        WHERE vd.id = %s
+        """,
+        (voucher_line_id,)
+    )
+    voucher_checks = []
+    if voucher_row and voucher_row[0]['transaction_ref']:
+        voucher_checks = get_voucher_checks_status(
+            client_id=voucher_row[0]['client_id'],
+            transaction_ref=voucher_row[0]['transaction_ref']
+        )
+
+    return {
+        "voucher_line_id": voucher_line_id,
+        "linked_documents": linked_documents,
+        "procedure_checks": procedure_checks,
+        "observations": observations,
+        "physical_bills": physical_bills,
+        "cross_check_results": cross_check_results,
+        "voucher_checks": voucher_checks,
+    }
+
+
 @router.get("/api/verification/line_status_reason/{voucher_line_id}")
 def get_line_status_reason(voucher_line_id: int):
     """
