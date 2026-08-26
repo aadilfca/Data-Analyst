@@ -5,6 +5,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, RedirectResponse
 from database import init_db, log_error, get_error_code_for_exception, execute_query
+from fastapi.concurrency import run_in_threadpool
 import os
 from routers import dashboard, verification, import_export, templates, clients, data, error_log, settings, audit_rules, trial_balance, auth, users
 from routers.auth import get_current_user
@@ -124,7 +125,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         error_code = "ERR-UNK-001"
         suggested_fix = "Please report this error using the 'Report Error' button."
         # Try to find the unknown error code ID
-        result = execute_query("SELECT id FROM error_codes WHERE code = ?", (error_code,))
+        result = await run_in_threadpool(execute_query, "SELECT id FROM error_codes WHERE code = ?", (error_code,))
         if result:
             error_code_id = result[0]['id']
     
@@ -166,7 +167,8 @@ async def global_exception_handler(request: Request, exc: Exception):
         input_data = dict(request.query_params) if request.query_params else None
 
     # Log the error
-    error_log_id = log_error(
+    error_log_id = await run_in_threadpool(
+        log_error,
         error_code_id=error_code_id,
         error_code=error_code,
         user_id=user_id,
@@ -183,13 +185,13 @@ async def global_exception_handler(request: Request, exc: Exception):
         stack_trace=stack_trace,
         input_data=input_data,
         suggested_fix=suggested_fix
-    )\
-    
+    )
+
     # Build user-friendly response
     # Try to fetch the user_message from error_codes
     user_message = "An unexpected error occurred. Please try again or contact support."
     if error_code_id:
-        result = execute_query("SELECT user_message FROM error_codes WHERE id = ?", (error_code_id,))
+        result = await run_in_threadpool(execute_query, "SELECT user_message FROM error_codes WHERE id = ?", (error_code_id,))
         if result:
             user_message = result[0]['user_message']
     
