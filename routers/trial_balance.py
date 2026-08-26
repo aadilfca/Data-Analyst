@@ -34,11 +34,19 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from database import execute_query_pg, execute_write_pg, get_raw_conn_pg, release_raw_conn_pg, log_audit
+from database import execute_query_pg, execute_write_pg, execute_batch_pg, get_raw_conn_pg, release_raw_conn_pg, log_audit
 from psycopg2.extras import Json
 from routers.audit_rules import invalidate_category_for_account_cache
 
 router = APIRouter()
+
+# In-memory row-parse progress for an in-flight TB upload, keyed by a client-generated
+# progress_key (TB upload is a single one-shot endpoint, unlike Data Bank's separate
+# "upload file -> get file_id -> import" flow, so there's no server-issued id to reuse) -
+# same pattern as import_export.py's IMPORT_PROGRESS/GET /api/upload/import-status/{file_id}.
+# Synchronous single-request upload, no queue/background job - state only lives for the
+# duration of one upload call.
+TB_UPLOAD_PROGRESS: dict = {}
 
 
 class AccountOverrideRequest(BaseModel):
@@ -332,7 +340,7 @@ def classify_accounts(codes: set) -> dict:
 
 
 @router.post("/api/trial-balance/upload")
-async def upload_trial_balance(
+def upload_trial_balance(
     client_id: int = Form(...),
     as_of_date: str = Form(...),
     file: UploadFile = File(...),
@@ -358,6 +366,10 @@ async def upload_trial_balance(
     period_end: Optional[str] = Form(None),
     period_type: Optional[str] = Form(None),
     confirm_overwrite: bool = Form(False),
+    # Fast Trial Balance upload: optional client-generated key for the frontend's progress
+    # poll (GET /api/trial-balance/upload-status/{progress_key}) - see TB_UPLOAD_PROGRESS
+    # above. Entirely optional, so a caller omitting it (e.g. a test) sees no behavior change.
+    progress_key: Optional[str] = Form(None),
 ):
     """
     Upload a client's Trial Balance Excel file, classify every account as
@@ -435,7 +447,11 @@ async def upload_trial_balance(
     )
 
     try:
-        contents = await file.read()
+        # Fast Trial Balance upload: synchronous read (UploadFile.file is a real
+        # SpooledTemporaryFile) - required now that this endpoint is a plain `def`, run in
+        # FastAPI's threadpool so a concurrent progress poll can actually be served while
+        # this request is still in flight (an `async def` here would block the event loop).
+        contents = file.file.read()
         df = read_trial_balance_excel(contents, file.filename)
 
         # Validate the caller-supplied mapping against the file's real headers
@@ -457,6 +473,13 @@ async def upload_trial_balance(
         validate_column_mapping(mapping, df.columns.tolist())
         rows = df.to_dict('records')
 
+        # Fast Trial Balance upload: row-parse progress tracking, mirroring
+        # import_export.py's IMPORT_PROGRESS. Increments during this loop (fast, in-memory),
+        # not during the network-bound batched INSERT further below - same caveat Data
+        # Bank's own progress bar already has, not a new gap.
+        if progress_key:
+            TB_UPLOAD_PROGRESS[progress_key] = {"current": 0, "total": len(rows), "status": "processing"}
+
         # Walk every row once: skip blanks/duplicates, capture the rest.
         # sort_order uses the same "header=1, first data row=2" Excel row
         # numbering convention already established elsewhere in this app.
@@ -466,6 +489,8 @@ async def upload_trial_balance(
         duplicate_code_count = 0
 
         for idx, row in enumerate(rows):
+            if progress_key:
+                TB_UPLOAD_PROGRESS[progress_key]["current"] = idx + 1
             row_number = idx + 2
             code = str(row.get(account_code_column, '')).strip()
             if code == '':
@@ -530,34 +555,34 @@ async def upload_trial_balance(
             account["classification"] = classification[code]
             account["category_id"] = carried_categories.get(code)
 
-        # 9. Bulk insert in one transaction (same loop/commit/rollback shape
-        # already used by templates.py's import_backup() - no explicit BEGIN
-        # needed, psycopg2 auto-starts a transaction on the first statement).
+        # 9. Bulk insert, batched (Fast Trial Balance upload) - one execute_batch_pg() call
+        # instead of one INSERT round-trip per account row, same fix already proven for
+        # Data Bank's own import (routers/import_export.py). execute_batch_pg() commits/
+        # rolls back per chunk internally, so no separate outer try/except is needed here -
+        # this function's own outer except Exception (below) still catches any failure and
+        # marks the upload status='error' exactly as before.
         conn = get_raw_conn_pg()
         try:
-            cur = conn.cursor()
-            for account in accounts:
-                cur.execute(
-                    """
-                    INSERT INTO trial_balance_accounts
-                        (upload_id, account_code, account_name, parent_account_code, level,
-                         classification, opening_dr, opening_cr, period_dr, period_cr,
-                         closing_dr, closing_cr, source_account_type, sort_order, raw_row_data,
-                         category_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        upload_id, account["account_code"], account["account_name"],
-                        account["parent_account_code"], account["level"], account["classification"],
-                        account["opening_dr"], account["opening_cr"], account["period_dr"], account["period_cr"],
-                        account["closing_dr"], account["closing_cr"], account["source_account_type"],
-                        account["sort_order"], account["raw_row_data"], account["category_id"]
-                    )
-                )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+            params_list = [
+                (upload_id, account["account_code"], account["account_name"],
+                 account["parent_account_code"], account["level"], account["classification"],
+                 account["opening_dr"], account["opening_cr"], account["period_dr"], account["period_cr"],
+                 account["closing_dr"], account["closing_cr"], account["source_account_type"],
+                 account["sort_order"], account["raw_row_data"], account["category_id"])
+                for account in accounts
+            ]
+            execute_batch_pg(
+                conn,
+                """
+                INSERT INTO trial_balance_accounts
+                    (upload_id, account_code, account_name, parent_account_code, level,
+                     classification, opening_dr, opening_cr, period_dr, period_cr,
+                     closing_dr, closing_cr, source_account_type, sort_order, raw_row_data,
+                     category_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                params_list
+            )
         finally:
             release_raw_conn_pg(conn)
 
@@ -583,6 +608,9 @@ async def upload_trial_balance(
                    f"Uploaded trial balance for client {client_id}: {len(accounts)} accounts "
                    f"({parent_count} parent, {leaf_count} leaf)")
 
+        if progress_key:
+            TB_UPLOAD_PROGRESS[progress_key]["status"] = "complete"
+
         return {
             "upload_id": upload_id,
             "row_count": len(accounts),
@@ -600,7 +628,15 @@ async def upload_trial_balance(
             "UPDATE trial_balance_uploads SET status = 'error', notes = %s WHERE id = %s",
             (str(e), upload_id)
         )
+        if progress_key:
+            TB_UPLOAD_PROGRESS[progress_key]["status"] = "error"
         raise HTTPException(400, f"Trial balance parsing failed: {e}")
+
+
+@router.get("/api/trial-balance/upload-status/{progress_key}")
+def get_tb_upload_status(progress_key: str):
+    """Polled by the frontend while POST /api/trial-balance/upload is in flight for this key."""
+    return TB_UPLOAD_PROGRESS.get(progress_key, {"current": 0, "total": 0, "status": "idle"})
 
 
 @router.get("/api/trial-balance/check-period-conflict")
