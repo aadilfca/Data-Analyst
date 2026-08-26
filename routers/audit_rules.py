@@ -6,12 +6,58 @@
 # Categories) in the Audit Rules module now have CRUD. Categories is the entity a
 # voucher will eventually reference (wired up in Phase 9).
 
+import time
+import threading
 from fastapi import APIRouter, HTTPException, Body, Query, Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from database import execute_query_pg, execute_write_pg, log_audit
 
 router = APIRouter()
+
+# ==============================================
+# TTL CACHE (Modal Caching Phase 3, sub-phase 1 of 3)
+# ==============================================
+# In-memory, process-level cache for Categories/Documents/guidance reads - sub-phase 2 wires
+# the GET endpoints below, and verification.py's guidance/category-for-account lookups, to
+# read through this. Single-instance Render deployment, so no Redis is needed. TTL is a
+# safety net only; the real invalidation mechanism is explicit, on every write to
+# Documents/Cross-checks/Categories (all three feed guidance content) via
+# invalidate_audit_rules_cache() below. None of these three entities are client-scoped (no
+# client_id column on audit_rule_documents/audit_rule_cross_checks/audit_rule_categories),
+# so a write from any one client's session affects every client's cached reads equally -
+# invalidation always clears the whole cache rather than a per-client slice, regardless of
+# how sub-phase 2 keys its own cache entries.
+AUDIT_RULES_CACHE_TTL_SECONDS = 600  # 10 min safety net
+
+_audit_rules_cache: Dict[str, tuple] = {}  # key -> (expires_at, value)
+_audit_rules_cache_lock = threading.Lock()
+
+def cache_get(key: str):
+    """Return the cached value for key, or None if absent/expired."""
+    with _audit_rules_cache_lock:
+        entry = _audit_rules_cache.get(key)
+        if entry is None:
+            return None
+        expires_at, value = entry
+        if time.monotonic() > expires_at:
+            del _audit_rules_cache[key]
+            return None
+        return value
+
+def cache_set(key: str, value, ttl: float = AUDIT_RULES_CACHE_TTL_SECONDS):
+    """Store value under key with the given TTL (seconds)."""
+    with _audit_rules_cache_lock:
+        _audit_rules_cache[key] = (time.monotonic() + ttl, value)
+
+def invalidate_audit_rules_cache():
+    """
+    Clear the entire cache. Called from every Documents/Cross-checks/Categories write
+    endpoint below (create/update/delete/restore, plus the two per-field toggle endpoints) -
+    see the section comment above for why a full clear, not a scoped one, is correct here.
+    """
+    with _audit_rules_cache_lock:
+        _audit_rules_cache.clear()
 
 # ---------- DATA MODELS ----------
 class DocumentCreate(BaseModel):
@@ -410,6 +456,7 @@ def create_document(document: DocumentCreate):
     save_document_cross_check_fields(document_id, cross_check_fields)
 
     log_audit("Admin", "Create", "AuditRules", f"Created Document: {document.name}")
+    invalidate_audit_rules_cache()
     return {"message": f"Document '{document.name}' created successfully", "document_id": document_id}
 
 @router.put("/api/audit-rules/documents/{document_id}")
@@ -434,6 +481,7 @@ def update_document(document_id: int, document: DocumentUpdate):
     save_document_cross_check_fields(document_id, cross_check_fields)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated Document ID {document_id}")
+    invalidate_audit_rules_cache()
     return {"message": "Document updated successfully"}
 
 @router.delete("/api/audit-rules/documents/{document_id}")
@@ -446,6 +494,7 @@ def delete_document(document_id: int):
         raise HTTPException(404, "Active Document not found")
     execute_write_pg("UPDATE audit_rule_documents SET is_active = FALSE WHERE id = %s", (document_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Document: {existing[0]['name']} (ID: {document_id})")
+    invalidate_audit_rules_cache()
     return {"message": "Document deleted (soft-delete) successfully"}
 
 @router.post("/api/audit-rules/documents/{document_id}/restore")
@@ -458,6 +507,7 @@ def restore_document(document_id: int):
         raise HTTPException(404, "Inactive Document not found")
     execute_write_pg("UPDATE audit_rule_documents SET is_active = TRUE WHERE id = %s", (document_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Document: {existing[0]['name']} (ID: {document_id})")
+    invalidate_audit_rules_cache()
     return {"message": "Document restored successfully"}
 
 
@@ -612,6 +662,7 @@ def create_cross_check(cross_check: CrossCheckCreate):
     save_cross_check_documents(cross_check_id, cross_check.document_ids)
 
     log_audit("Admin", "Create", "AuditRules", f"Created Cross-check: {cross_check.name}")
+    invalidate_audit_rules_cache()
     return {"message": f"Cross-check '{cross_check.name}' created successfully", "cross_check_id": cross_check_id}
 
 @router.put("/api/audit-rules/cross-checks/{cross_check_id}")
@@ -632,6 +683,7 @@ def update_cross_check(cross_check_id: int, cross_check: CrossCheckUpdate):
     save_cross_check_documents(cross_check_id, cross_check.document_ids)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated Cross-check ID {cross_check_id}")
+    invalidate_audit_rules_cache()
     return {"message": "Cross-check updated successfully"}
 
 @router.delete("/api/audit-rules/cross-checks/{cross_check_id}")
@@ -644,6 +696,7 @@ def delete_cross_check(cross_check_id: int):
         raise HTTPException(404, "Active Cross-check not found")
     execute_write_pg("UPDATE audit_rule_cross_checks SET is_active = FALSE WHERE id = %s", (cross_check_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Cross-check: {existing[0]['name']} (ID: {cross_check_id})")
+    invalidate_audit_rules_cache()
     return {"message": "Cross-check deleted (soft-delete) successfully"}
 
 @router.post("/api/audit-rules/cross-checks/{cross_check_id}/restore")
@@ -656,6 +709,7 @@ def restore_cross_check(cross_check_id: int):
         raise HTTPException(404, "Inactive Cross-check not found")
     execute_write_pg("UPDATE audit_rule_cross_checks SET is_active = TRUE WHERE id = %s", (cross_check_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Cross-check: {existing[0]['name']} (ID: {cross_check_id})")
+    invalidate_audit_rules_cache()
     return {"message": "Cross-check restored successfully"}
 
 
@@ -993,6 +1047,7 @@ def create_category(category: CategoryCreate):
     save_category_cross_checks(category_id, category.cross_check_ids)
 
     log_audit("Admin", "Create", "AuditRules", f"Created Category: {category.name}")
+    invalidate_audit_rules_cache()
     return {"message": f"Category '{category.name}' created successfully", "category_id": category_id}
 
 @router.put("/api/audit-rules/categories/{category_id}")
@@ -1023,6 +1078,7 @@ def update_category(category_id: int, category: CategoryUpdate):
         bump_category_matrix_version(category_id)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated Category ID {category_id}")
+    invalidate_audit_rules_cache()
     return {"message": "Category updated successfully"}
 
 @router.delete("/api/audit-rules/categories/{category_id}")
@@ -1035,6 +1091,7 @@ def delete_category(category_id: int):
         raise HTTPException(404, "Active Category not found")
     execute_write_pg("UPDATE audit_rule_categories SET is_active = FALSE WHERE id = %s", (category_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Category: {existing[0]['name']} (ID: {category_id})")
+    invalidate_audit_rules_cache()
     return {"message": "Category deleted (soft-delete) successfully"}
 
 @router.post("/api/audit-rules/categories/{category_id}/restore")
@@ -1047,6 +1104,7 @@ def restore_category(category_id: int):
         raise HTTPException(404, "Inactive Category not found")
     execute_write_pg("UPDATE audit_rule_categories SET is_active = TRUE WHERE id = %s", (category_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Category: {existing[0]['name']} (ID: {category_id})")
+    invalidate_audit_rules_cache()
     return {"message": "Category restored successfully"}
 
 @router.get("/api/audit-rules/categories/{category_id}/cleared-requirements")
@@ -1487,6 +1545,7 @@ def update_category_document_required(category_id: int, document_id: int, payloa
         "Admin", "Update", "AuditRules",
         f"Set is_required={payload.is_required} for Document ID {document_id} in Category ID {category_id}"
     )
+    invalidate_audit_rules_cache()
     return {"category_id": category_id, "document_id": document_id, "is_required": payload.is_required}
 
 
@@ -1515,4 +1574,5 @@ def update_document_transaction_level_approval(document_id: int, payload: Docume
         "Admin", "Update", "AuditRules",
         f"Set transaction_level_approval={payload.transaction_level_approval} for Document ID {document_id}"
     )
+    invalidate_audit_rules_cache()
     return {"document_id": document_id, "transaction_level_approval": payload.transaction_level_approval}
