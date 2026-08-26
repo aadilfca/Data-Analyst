@@ -634,7 +634,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # With zero active Cross-checks configured (true of every category today),
     # evaluate_cross_checks_for_line() returns an empty results list, so this is a no-op until
     # a Cross-check is actually configured and activated. Never raises, per Phase 6's contract.
-    cross_check_result = evaluate_cross_checks_for_line(voucher_line_id, category_id=category_id, sibling_ids=sibling_ids)
+    cross_check_result = evaluate_cross_checks_for_line(voucher_line_id, category_id=category_id, sibling_ids=sibling_ids, voucher_amount=voucher_amount)
     cross_checks_ok = not any(r['status'] == 'fail' for r in cross_check_result['results'])
 
     if detail:
@@ -5098,7 +5098,8 @@ def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, Lis
 
 
 def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[int] = None,
-                                    sibling_ids: Optional[List[int]] = None) -> dict:
+                                    sibling_ids: Optional[List[int]] = None,
+                                    voucher_amount: Optional[float] = None) -> dict:
     """
     Chain-aware cross-document evaluation for one voucher line (Phase 6 of 10).
 
@@ -5114,33 +5115,41 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
     document() - lets compute_and_persist_cleared_status() share its own already-resolved list
     instead of a second redundant resolve.
 
+    voucher_amount is likewise optional - when the caller already has it (compute_and_persist_
+    cleared_status() always does) AND category_id is also supplied, the line-fetch query below
+    is skipped entirely, since with category_id given that query's only remaining use was
+    re-deriving this same value (client_id from that query is otherwise dead once category_id
+    is supplied - the category-resolution branch that needs it never runs on that path). Any
+    caller passing category_id without voucher_amount (or vice versa) still gets the query, so
+    behavior for get_cross_check_results() and any other partial-argument caller is unchanged.
+
     Returns a structured result; writes nothing, persists nothing, decides nothing. Never
     raises - every failure path returns evaluated=False with a reason.
     """
-    line = execute_query_pg(
-        """
-        SELECT vd.id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id
-        FROM verification_details vd
-        JOIN client_data cd ON cd.id = vd.client_data_id
-        JOIN verification_sessions vs ON vs.id = vd.session_id
-        WHERE vd.id = %s
-        """,
-        (voucher_line_id,)
-    )
-
     empty_summary = {"passed": 0, "failed": 0, "shortfall": 0, "not_evaluated": 0}
 
-    if not line:
-        return {
-            "voucher_line_id": voucher_line_id,
-            "category_id": None, "category_name": None,
-            "evaluated": False, "reason": "Voucher line not found.",
-            "summary": dict(empty_summary), "results": [],
-        }
-
-    row = line[0]
-    client_id = row['client_id']
-    voucher_amount = _cross_check_numeric(row['extract_amount'])
+    row = None
+    if category_id is None or voucher_amount is None:
+        line = execute_query_pg(
+            """
+            SELECT vd.id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id
+            FROM verification_details vd
+            JOIN client_data cd ON cd.id = vd.client_data_id
+            JOIN verification_sessions vs ON vs.id = vd.session_id
+            WHERE vd.id = %s
+            """,
+            (voucher_line_id,)
+        )
+        if not line:
+            return {
+                "voucher_line_id": voucher_line_id,
+                "category_id": None, "category_name": None,
+                "evaluated": False, "reason": "Voucher line not found.",
+                "summary": dict(empty_summary), "results": [],
+            }
+        row = line[0]
+        if voucher_amount is None:
+            voucher_amount = _cross_check_numeric(row['extract_amount'])
 
     category_name = None
     if category_id is None:
@@ -5168,7 +5177,7 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
             LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = TRUE
             WHERE aca.client_id = %s AND aca.account_code = %s
             """,
-            (client_id, account_code)
+            (row['client_id'], account_code)
         )
         if not cat_rows or not cat_rows[0]['category_id'] or not cat_rows[0]['category_name']:
             return {
