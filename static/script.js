@@ -49,6 +49,9 @@ async function loadKpiStats() {
 // sorted most-overdue-first by the backend — no client-side re-sort needed.
 // Row-click-to-jump-to-upload-page is deliberately deferred (not built this phase).
 let overdueUploadsData = [];
+// true = last fetch failed (status/network); distinct from a genuinely empty result,
+// so the render function can show an error state instead of "No overdue uploads."
+let overdueUploadsError = false;
 
 function getOverdueSeverityBadge(daysOverdue) {
     // Exact thresholds left to implementation per the brief — a fixed cutoff
@@ -61,9 +64,20 @@ function renderOverdueUploadsTable() {
     const tbody = document.getElementById('overdueUploadsTableBody');
     const noData = document.getElementById('overdueUploadsNoData');
     if (!tbody) return;
+    if (overdueUploadsError) {
+        tbody.innerHTML = '';
+        if (noData) {
+            noData.style.display = 'block';
+            noData.textContent = '⚠️ Couldn\'t load overdue uploads — try again.';
+        }
+        return;
+    }
     if (overdueUploadsData.length === 0) {
         tbody.innerHTML = '';
-        if (noData) noData.style.display = 'block';
+        if (noData) {
+            noData.style.display = 'block';
+            noData.textContent = '✅ No overdue uploads.';
+        }
         return;
     }
     if (noData) noData.style.display = 'none';
@@ -79,6 +93,7 @@ function renderOverdueUploadsTable() {
 }
 
 async function loadOverdueUploads() {
+    overdueUploadsError = false;
     try {
         const res = await window.ApiUtils.apiFetch('/api/dashboard/overdue-uploads');
         if (res.ok) {
@@ -86,12 +101,14 @@ async function loadOverdueUploads() {
             overdueUploadsData = data.overdue || [];
         } else {
             overdueUploadsData = [];
+            overdueUploadsError = true;
         }
     } catch (error) {
         overdueUploadsData = [];
+        overdueUploadsError = true;
     }
     const countEl = document.getElementById('overdueUploadsCount');
-    if (countEl) countEl.textContent = overdueUploadsData.length;
+    if (countEl) countEl.textContent = overdueUploadsError ? '⚠️' : overdueUploadsData.length;
     renderOverdueUploadsTable();
 }
 

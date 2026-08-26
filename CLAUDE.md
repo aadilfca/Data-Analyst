@@ -287,6 +287,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-26: Fixed overdue-uploads date/datetime mismatch - _coerce_date_obj always returns date now, not a mix (routers/data.py).
 - 2026-08-26: save_line_items round-trip reduction Phase B - batched get_document_auth_roles/authorities into IN queries (audit_rules.py, verification.py).
 - 2026-08-26: save_line_items round-trip reduction Phase C (final) - eliminated duplicate line-fetch query in evaluate_cross_checks_for_line (verification.py).
+- 2026-08-26: Overdue Uploads widget no longer shows false success on fetch failure - error flag distinguishes failure from empty in loadOverdueUploads/renderOverdueUploadsTable (script.js).
 
 
 ## Self-maintenance
