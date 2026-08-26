@@ -183,24 +183,13 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Status log
 
 **Full detail for every entry below lives in `CHANGELOG_ARCHIVE.md`**, under the matching heading —
-these lines are pointers, not the record. Compressed four times: 2026-08-22 (408 entries → 73,
-then that day's own per-phase tail rolled up to 77), 2026-08-23 (77 grew to 96 over the day's
-Supabase/Render migration + data-migration phases before being rolled up again to 77), and
-2026-08-24 (77 grew to 93 by the next day, rolled back to 85 by collapsing the finished 6-phase
-Shared Loading UI project into one line — the remaining gap above 80 is the still-in-progress
-13-phase Fast Data Handling project's per-phase lines, correctly left un-rolled per the rule below
-until it completes). Multi-phase requirements are one line each rather than one line per phase, since
-a phase-by-phase trail is exactly what the archive is for. Keep it that way — one line per
-requirement, ~25 words, and roll a finished multi-phase requirement up into its single line rather
-than appending each phase.
-**Each of the first three passes was needed because each phase of a live requirement got its own
-line as it landed, which is what pushed the log past its 80-line trigger. Roll a multi-phase
-requirement up as soon as it completes, rather than leaving the per-phase lines for a later pass —
-this recurred three times and is clearly not self-correcting on its own; treat the drift-trigger
-check as mandatory at the START of every session that's about to touch this file, not just when
-reminded. Expect the log to sit above 80 lines for the duration of Fast Data Handling (13 phases,
-5 remaining as of 2026-08-24) — that is expected drift from one active project, not a repeat of the
-original problem, and will collapse to one line once that project finishes.**
+these lines are pointers, not the record. Multi-phase requirements get one line each, not one per
+phase — roll a finished requirement up into its single line as soon as it completes, don't wait for
+a later pass. Compressed five times now (2026-08-22, -23, -24 twice, -26), each time because
+per-phase lines from an in-flight project accumulated past the ~80-line trigger before being rolled
+up — treat the drift-trigger check as mandatory at the START of every session touching this file,
+not just when reminded. Brief overshoot above 80 during an active multi-phase project is expected
+drift, not a regression — it collapses once that project finishes.
 
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.
@@ -281,31 +270,20 @@ original problem, and will collapse to one line once that project finishes.**
 - 2026-08-23: Shared Loading UI utility, 6 phases (+4a/4b/5a/5b/6a/6b sub-phases) - loading_ui.js built and wired across login/Data Bank/Upload/save actions/Audit Rules/Verification.
 - 2026-08-23: Added standing git workflow rule to Workflow rules - auto-commit+push after phase, only post user confirmation (CLAUDE.md).
 - 2026-08-24: Fast Data Handling for slow connections, 13 phases (COMPLETE) - gzip, index audit, apiFetch retry wrapper, column trimming, debounce, ref-data caching, pagination, retry wiring.
-- 2026-08-24: Performance investigation (read-only) - root causes ranked: region mismatch (Oregon/Mumbai), sequential round-trips; query cost ruled out via EXPLAIN ANALYZE. See PERFORMANCE_INVESTIGATION.md.
-- 2026-08-24: save_line_items concurrency guard, in-flight promise map keyed by detail_id — fixes DB lock queueing from overlapping check-all saves (verification.js).
-- 2026-08-24: Batched save_line_items N+1 loops (verification.py observation sync, audit_rules.py authority gate) — fewer DB round-trips per save.
-- 2026-08-24: Deactivated 6 leftover PW test voucher-checks contaminating Leather Crop data — CRV-0126-102 flipped Query to Cleared; CRV-0126-104's 400 is unrelated, real checks untouched.
-- 2026-08-24: Fixed verify_voucher_checks 400 reachability gap — performVerifyVoucherChecks() now re-fetches fresh voucher-checks state before sending (procedure_modal.js).
-- 2026-08-25: Batched verify_voucher_checks()'s per-check UPDATE loop into 2 set-based updates; per-line observation-sync loop left unbatched, documented why (verification.py).
-- 2026-08-25: Parallelized per-line fetch chain (audit_guidance shared once, doc/check/observation fetches concurrent) via Promise.all, verified via Playwright (verification.js).
-- 2026-08-25: Final speed investigation (free-tier vs code gaps documented, PERFORMANCE_INVESTIGATION.md) + render.yaml service name corrected (internal-audit-app → 2.-Python-App).
-- 2026-08-25: Fixed dashboard.py's stats/KPI endpoints reading stale SQLite instead of Postgres — now query execute_query_pg, matching migrated routers.
+- 2026-08-24/25: Performance investigation, 2 passes (read-only) - region mismatch + sequential round-trips ranked as root causes; final pass confirmed free-tier limits vs code gaps. See PERFORMANCE_INVESTIGATION.md.
+- 2026-08-24: Verification save/check reliability — save_line_items concurrency guard (in-flight promise map), batched N+1 loops, deactivated 6 contaminating test voucher-checks, fixed verify_voucher_checks 400 reachability gap.
+- 2026-08-25: verify_voucher_checks() batched into 2 set-based updates; per-line procedure-modal fetches parallelized via Promise.all, verified via Playwright (verification.js).
+- 2026-08-25: render.yaml service name corrected (internal-audit-app → 2.-Python-App); dashboard.py's stats/KPI endpoints fixed to query execute_query_pg instead of stale SQLite, matching migrated routers.
 - 2026-08-25: Shared Loading UI (Procedure Modal Wiring), 3 phases — apiFetchMutate()+bypass guard built, then all of procedure_modal.js's GET/POST calls wired to apiFetch/apiFetchMutate/LoadingUI.
 - 2026-08-25: Fixed get_availability connection pool exhaustion — semaphore caps concurrent per-template DB calls, PG_POOL_MAX default bumped 10 to 15 (routers/data.py, database.py).
-- 2026-08-25: Processing/Loading UI for Verification, Phase 1 of 7 — progress bar, prominent field loading, badge primitives added (loading_ui.js, style.css).
-- 2026-08-25: Processing/Loading UI for Verification, Phase 2 of 7 — Client Data Links skeleton + Quick Stats spinner wired into verification.js.
-- 2026-08-25: Processing/Loading UI for Verification, Phase 3 of 7 — prominent dimmed loading wired onto the Cashbook dropdown (loadCashbooks(), verification.js).
-- 2026-08-25: Processing/Loading UI for Verification, Phase 4 of 7 — skeleton rows wired onto the Cashbook table (fetchCashbookData(), verification.js).
-- 2026-08-25: Processing/Loading UI for Verification, Phase 5 of 7 — estimated progress bar with transaction count on the Verify button (startSessionFromCashbook(), verification.js).
+- 2026-08-25: Processing/Loading UI for Verification, 7 phases (COMPLETE) — progress bars/skeletons/field+badge loading across Client Data Links, Quick Stats, Cashbook, Verify button, procedure modal.
 - 2026-08-25: Procedure-badge click spinner capped at "Loading" via new `showSpinner()` `escalate:false` option — reverted earlier title-badge reroute (loading_ui.js, procedure_modal.js, verification.js).
-- 2026-08-25: Processing/Loading UI for Verification, Phase 7 of 7 FINAL — procedure modal Close/Back/Verify/Verify & Next buttons show shared Saving progress bar (procedure_modal.js).
 - 2026-08-25: Logged start_session hang bug in KNOWN_ISSUES.md; added standing rule to stop and ask whenever continuing needs Aadil's approval/judgment.
 - 2026-08-26: Batch modal-open endpoint (Fast Modal-Open Data, Phase 1 of 4) - GET procedure_modal_data bundles 6 modal-open calls into 1 (verification.py, procedure_modal.js).
 - 2026-08-26: Session-level ref-data caching (Fast Modal-Open Data Phase 2 of 4) - modal open reuses auditGuidanceCache; matrix_version exposed (verification.py, procedure_modal.js, verification.js).
-- 2026-08-26: Bumped procedure_modal.js (v1->v2) and verification.js (v9->v10) cache-bust - Phase 1/2 commits missed this, so browsers may have served stale cached JS.
-- 2026-08-26: Fixed in-flight-request race in fetchAuditGuidanceData - two lines sharing a Category could both fetch simultaneously; dedupe promise added, mirroring ensureVoucherChecksLoaded (verification.js).
-- 2026-08-26: start_verification_session()'s per-row executemany() insert replaced with execute_values() (execute_batch_insert_with_ids_pg) - single round trip, not one per row (verification.py).
-- 2026-08-26: Memoized _resolve_sibling_voucher_line_ids() in save_line_items chain (4 calls to 1); confirmed 33->27 calls - 6 saved is correct math, not a partial fix (verification.py).
+- 2026-08-26: Fast Modal-Open Data follow-ups — bumped procedure_modal.js/verification.js cache-bust (missed in Phase 1/2 commits); fixed fetchAuditGuidanceData in-flight-request race, mirroring ensureVoucherChecksLoaded.
+- 2026-08-26: Verification save performance — start_verification_session's per-row insert replaced with execute_values (single round trip); _resolve_sibling_voucher_line_ids memoized in save_line_items (33->27 calls).
+- 2026-08-26: Wrapped global_exception_handler's blocking SQLite calls (execute_query, log_error) in run_in_threadpool - prevents event-loop freeze under lock contention (main.py).
 
 
 ## Self-maintenance
