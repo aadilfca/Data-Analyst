@@ -305,6 +305,7 @@ original problem, and will collapse to one line once that project finishes.**
 - 2026-08-26: Bumped procedure_modal.js (v1->v2) and verification.js (v9->v10) cache-bust - Phase 1/2 commits missed this, so browsers may have served stale cached JS.
 - 2026-08-26: Fixed in-flight-request race in fetchAuditGuidanceData - two lines sharing a Category could both fetch simultaneously; dedupe promise added, mirroring ensureVoucherChecksLoaded (verification.js).
 - 2026-08-26: start_verification_session()'s per-row executemany() insert replaced with execute_values() (execute_batch_insert_with_ids_pg) - single round trip, not one per row (verification.py).
+- 2026-08-26: Memoized _resolve_sibling_voucher_line_ids() across save_line_items chain (5 calls to 1) - sibling_ids threaded as optional param through 5 functions (verification.py).
 
 
 ## Self-maintenance

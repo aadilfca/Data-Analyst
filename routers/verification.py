@@ -142,7 +142,7 @@ CROSS_CHECK_SHORTFALL_DOC_ID_BASE = -1000
 def _cross_check_shortfall_sentinel_doc_id(cross_check_id: int) -> int:
     return CROSS_CHECK_SHORTFALL_DOC_ID_BASE - cross_check_id
 
-def _has_pending_account_head_note(voucher_line_id: int) -> bool:
+def _has_pending_account_head_note(voucher_line_id: int, sibling_ids: Optional[List[int]] = None) -> bool:
     """
     True if this voucher line (or any sibling session's copy of it - a cashbook reopen creates
     a fresh verification_details row with no true session-resume, see
@@ -162,8 +162,12 @@ def _has_pending_account_head_note(voucher_line_id: int) -> bool:
     Returns False (not blocking) for an unresolvable voucher line - by the time
     compute_and_persist_cleared_status() would call this, it has already confirmed the line
     exists via its own lookup, so this case is defensive, not a real path.
+
+    sibling_ids: pass the already-resolved list to skip the redundant re-resolve
+    (compute_and_persist_cleared_status() already has it) - resolved here only if omitted.
     """
-    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+    if sibling_ids is None:
+        sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
     if not sibling_ids:
         return False
     placeholders = ",".join("%s" for _ in sibling_ids)
@@ -260,7 +264,8 @@ def _clear_status_gate(key: str, label: str, ok: bool, detail: str = "", not_app
 
 
 def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = False,
-                                       persist: bool = True) -> Optional[dict]:
+                                       persist: bool = True,
+                                       sibling_ids: Optional[List[int]] = None) -> Optional[dict]:
     """
     Validation Rules Phase 4: compute this line's Cleared/Query status. Automated
     cross-document validation engine Phase 7 added a 5th (cross-document evaluation) and 6th
@@ -288,6 +293,12 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
       persist=False - skips the final UPDATE and the shortfall-observation write/re-sync, so a
                      read-only caller (GET /api/verification/line_status_reason) can ask "why?"
                      without a GET request writing to the database.
+
+      sibling_ids   - optional pre-resolved _resolve_sibling_voucher_line_ids() result. When
+                     omitted (every caller today), resolved here exactly as before. Passing it
+                     lets _save_line_items_impl() share one resolve across this function and
+                     the sync_line_observations_to_voucher() call it makes right before this
+                     one, instead of each re-deriving it independently.
     """
     gates: List[dict] = []
     line = execute_query_pg(
@@ -382,7 +393,8 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     category_id = cat_rows[0]['category_id']
     matrix_version = cat_rows[0]['matrix_version']
 
-    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id) or [voucher_line_id]
+    if sibling_ids is None:
+        sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id) or [voucher_line_id]
     placeholders = ",".join("%s" for _ in sibling_ids)
 
     # 1. Document requirement check: Category's required documents, each satisfied one of two
@@ -620,7 +632,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # With zero active Cross-checks configured (true of every category today),
     # evaluate_cross_checks_for_line() returns an empty results list, so this is a no-op until
     # a Cross-check is actually configured and activated. Never raises, per Phase 6's contract.
-    cross_check_result = evaluate_cross_checks_for_line(voucher_line_id, category_id=category_id)
+    cross_check_result = evaluate_cross_checks_for_line(voucher_line_id, category_id=category_id, sibling_ids=sibling_ids)
     cross_checks_ok = not any(r['status'] == 'fail' for r in cross_check_result['results'])
 
     if detail:
@@ -655,14 +667,14 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # persist=False (the read-only "why is this Query?" endpoint) skips this entirely - a GET
     # must not write, and this block is the function's only write other than the UPDATE below.
     if persist and _write_shortfall_observations(voucher_line_id, cross_check_result):
-        sync_line_observations_to_voucher(voucher_line_id)
+        sync_line_observations_to_voucher(voucher_line_id, sibling_ids=sibling_ids)
 
     # 5. Recommended Account Head must be empty. Unconditional - applies to every voucher line
     # regardless of whether a Category resolved above (unlike checks 1/4), per the confirmed
     # Discuss-mode reconciliation. See _has_pending_account_head_note() for what this actually
     # reads - the "Recommended Account Head" UI field itself has no backend persistence; the
     # only real signal is the sentinel Account Head observation note.
-    account_head_ok = not _has_pending_account_head_note(voucher_line_id)
+    account_head_ok = not _has_pending_account_head_note(voucher_line_id, sibling_ids=sibling_ids)
 
     if detail:
         gates.append(_clear_status_gate(
@@ -1581,7 +1593,12 @@ def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_dat
         raise HTTPException(404, "Verification detail not found.")
     if detail[0]['status'] != 'Pending':
         raise HTTPException(400, "Transaction is already verified or skipped.")
-    
+
+    # Resolved once here and threaded through both calls below (and everything they in turn
+    # call) instead of each re-deriving the same answer independently - see
+    # _resolve_sibling_voucher_line_ids()'s own docstring for what this list represents.
+    sibling_ids = _resolve_sibling_voucher_line_ids(detail_id) or [detail_id]
+
     if not isinstance(line_items, list):
         raise HTTPException(400, "line_items must be a list.")
     for item in line_items:
@@ -1623,12 +1640,12 @@ def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_dat
     # Phase 6: roll any unsynced per-document observation entries into this line's own
     # Observation field. save_line_items() is the single chokepoint every Save/Next/Prev/
     # Validate/Complete/Exit path already calls per line, so this is the correct place to sync.
-    sync_line_observations_to_voucher(detail_id)
+    sync_line_observations_to_voucher(detail_id, sibling_ids=sibling_ids)
 
     # Validation Rules Phase 4: recompute Cleared/Query status on every save, same
     # chokepoint as the observation sync directly above. Phase 5: surface the result in the
     # response so the frontend can refresh the line's badge without a second round-trip.
-    status_result = compute_and_persist_cleared_status(detail_id)
+    status_result = compute_and_persist_cleared_status(detail_id, sibling_ids=sibling_ids)
 
     log_audit("Analyst", "Save Line Items", "Verification", f"Detail {detail_id} line items saved.")
     response = {"message": "Line items and procedure data saved successfully."}
@@ -3727,7 +3744,7 @@ def set_procedure_check(
 # helper's docstring) was permanently stranded and never rolled up. See sync function docstring.
 # ==============================================
 
-def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
+def sync_line_observations_to_voucher(voucher_line_id: int, sibling_ids: Optional[List[int]] = None) -> None:
     """
     Rebuild the line's own verification_details.observations field from scratch, from the
     CURRENT state of every document's own observation entry for this line - exactly one
@@ -3770,7 +3787,10 @@ def sync_line_observations_to_voucher(voucher_line_id: int) -> None:
     observation entries.
     """
     try:
-        sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+        # sibling_ids: pass the already-resolved list (save_line_items()'s chain shares one
+        # resolve across this, compute_and_persist_cleared_status(), etc.) to skip a re-resolve.
+        if sibling_ids is None:
+            sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
         if not sibling_ids:
             # voucher_line_id itself doesn't exist - nothing to do (shouldn't happen, since
             # save_line_items()/save_line_observation() already validated it exists).
@@ -4819,17 +4839,19 @@ def _get_category_cross_check_configs(category_id: int) -> List[dict]:
     return configs
 
 
-def _get_linked_evidence_by_document(voucher_line_id: int) -> Dict[int, List[int]]:
+def _get_linked_evidence_by_document(voucher_line_id: int, sibling_ids: Optional[List[int]] = None) -> Dict[int, List[int]]:
     """
     {document_id: [client_data_id, ...]} for every ACTIVELY linked evidence row on this
     voucher line. Resolves sibling verification_details ids first (see
     _resolve_sibling_voucher_line_ids()) so evidence linked in an earlier verification
     session of the same cashbook still counts - same convention
     compute_and_persist_cleared_status() and get_voucher_line_documents() already follow.
+    Pass an already-resolved sibling_ids to skip that re-resolve.
 
     Returns {} for an unknown voucher line rather than raising.
     """
-    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+    if sibling_ids is None:
+        sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
     if not sibling_ids:
         return {}
 
@@ -5073,7 +5095,8 @@ def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, Lis
     return result
 
 
-def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[int] = None) -> dict:
+def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[int] = None,
+                                    sibling_ids: Optional[List[int]] = None) -> dict:
     """
     Chain-aware cross-document evaluation for one voucher line (Phase 6 of 10).
 
@@ -5084,6 +5107,10 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
     Balance-first lookup used by GET /api/verification/category-for-account - that 2026-07-30
     fix only changed the endpoint, and matching the status engine matters more here than
     matching the endpoint. Reconciling those two is a separate, pre-existing concern.
+
+    sibling_ids is likewise optional, passed straight through to _get_linked_evidence_by_
+    document() - lets compute_and_persist_cleared_status() share its own already-resolved list
+    instead of a second redundant resolve.
 
     Returns a structured result; writes nothing, persists nothing, decides nothing. Never
     raises - every failure path returns evaluated=False with a reason.
@@ -5164,7 +5191,7 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
         category_name = name_rows[0]['name']
 
     configs = _get_category_cross_check_configs(category_id)
-    linked_by_document = _get_linked_evidence_by_document(voucher_line_id)
+    linked_by_document = _get_linked_evidence_by_document(voucher_line_id, sibling_ids=sibling_ids)
 
     results = [
         _evaluate_single_cross_check(cfg, linked_by_document, voucher_amount)
