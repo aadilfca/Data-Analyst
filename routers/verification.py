@@ -32,7 +32,11 @@ from routers.import_export import (
 )
 # Phase 9 (Audit Rules): audit guidance now sources from Audit Rules Categories instead of
 # the old hardcoded audit_procedure_library table — same cross-router import pattern as above.
-from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch
+# cache_get/cache_set (Modal Caching Phase 3, sub-phase 2): get_audit_guidance() below reads
+# through the same process-level cache audit_rules.py's own GET endpoints use — guidance
+# content is keyed by Category name/id, not client_id, since Categories aren't client-scoped
+# (see cache_get()/cache_set()'s own docstring in audit_rules.py for why).
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch, cache_get, cache_set
 # "Why is this line Query?" gate breakdown only (see compute_and_persist_cleared_status()'s
 # detail mode) — the pass/fail answer itself still comes from check_approved_by_authority_gate()
 # above, so the explanation can never disagree with the real gate.
@@ -3048,7 +3052,18 @@ def get_audit_guidance(
     Look up audit guidance (KB overview, attached Documents, attached Cross-checks) for a
     Category. Cross-checks are surfaced as read-only guidance text only in this phase -
     automated comparison against real voucher data is a separate, deferred requirement.
+
+    Read-side cache wiring (Modal Caching Phase 3, sub-phase 2): checks the shared
+    process-level cache (audit_rules.py's cache_get/cache_set) before hitting Postgres,
+    keyed on transaction_type (the Category name) - global, not per-client, since Category
+    guidance content doesn't vary by client. Invalidated on any Category/Document/
+    Cross-check write via audit_rules.py's existing invalidate_audit_rules_cache() hooks.
     """
+    cache_key = f"guidance:{transaction_type}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     rows = execute_query_pg(
         "SELECT id, kb_overview, matrix_version FROM audit_rule_categories WHERE name = %s AND is_active = TRUE",
         (transaction_type,)
@@ -3056,7 +3071,7 @@ def get_audit_guidance(
     if not rows:
         raise HTTPException(404, f"No audit guidance found for category '{transaction_type}'.")
     category_id = rows[0]['id']
-    return {
+    result = {
         "transaction_type": transaction_type,
         "category_id": category_id,
         "kb_overview": rows[0]['kb_overview'],
@@ -3067,6 +3082,8 @@ def get_audit_guidance(
         "documents": get_category_guidance_documents(category_id),
         "cross_checks": get_category_guidance_cross_checks(category_id)
     }
+    cache_set(cache_key, result)
+    return result
 
 # ==============================================
 # VERIFICATION ↔ ASSIGN CATEGORIES LINK (Phase 3 of 5)

@@ -404,41 +404,64 @@ def save_document_cross_check_fields(document_id: int, cross_check_fields: List[
 
 # ---------- ENDPOINTS ----------
 
-def fetch_paginated_rows(response: Response, base_query: str, count_query: str, order_by: str, limit: Optional[int], offset: int) -> list:
+def fetch_paginated_rows(base_query: str, count_query: str, order_by: str, limit: Optional[int], offset: int):
     """
     Shared pagination helper (Fast Data Handling, Phase 10 of 13) for the three list
-    endpoints below. limit=None (every existing caller before this phase) runs the query
+    endpoints below. limit=None (every existing caller before that phase) runs the query
     unpaginated, exactly as before - fully backward compatible for callers that need the
     full list (pickers/caches, see the frontend call-site inventory). limit set applies
-    LIMIT/OFFSET and sets X-Total-Count so the frontend's "Load more" button knows when to
-    stop - the response body stays the same bare-array shape either way, so no consumer's
-    res.json() parsing needs to change.
+    LIMIT/OFFSET and returns the full unpaginated total so the frontend's "Load more"
+    button knows when to stop.
+
+    Returns (rows, total) - total is None when limit is None. Header-setting was moved out
+    to each caller (Modal Caching Phase 3, sub-phase 2) so a cache hit and a cache miss can
+    both set X-Total-Count identically from a cached (rows, total) tuple, rather than this
+    helper being the only place able to set it.
     """
     if limit is None:
-        return execute_query_pg(base_query + " " + order_by)
+        return execute_query_pg(base_query + " " + order_by), None
     total = execute_query_pg(count_query)[0]["cnt"]
-    response.headers["X-Total-Count"] = str(total)
-    return execute_query_pg(base_query + " " + order_by + " LIMIT %s OFFSET %s", (limit, offset))
+    rows = execute_query_pg(base_query + " " + order_by + " LIMIT %s OFFSET %s", (limit, offset))
+    return rows, total
 
 @router.get("/api/audit-rules/documents")
 def get_documents(response: Response, include_inactive: bool = False, limit: Optional[int] = Query(None, ge=1, le=200), offset: int = Query(0, ge=0)):
     """
     Get all Documents. By default, only active Documents are returned.
     Set include_inactive=True to get all. Optional limit/offset paginate the result
-    (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above.
+    (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above. Read-side
+    cache wiring (Modal Caching Phase 3, sub-phase 2) - see cache_get()/cache_set() above.
     """
+    cache_key = f"documents:list:{include_inactive}:{limit}:{offset}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        result, total = cached
+        if total is not None:
+            response.headers["X-Total-Count"] = str(total)
+        return result
+
     where = "" if include_inactive else " WHERE is_active = TRUE"
     base_query = "SELECT * FROM audit_rule_documents" + where
     count_query = "SELECT COUNT(*) as cnt FROM audit_rule_documents" + where
-    rows = fetch_paginated_rows(response, base_query, count_query, "ORDER BY name", limit, offset)
-    return [row_to_document_list(r) for r in rows]
+    rows, total = fetch_paginated_rows(base_query, count_query, "ORDER BY name", limit, offset)
+    if total is not None:
+        response.headers["X-Total-Count"] = str(total)
+    result = [row_to_document_list(r) for r in rows]
+    cache_set(cache_key, (result, total))
+    return result
 
 @router.get("/api/audit-rules/documents/{document_id}")
 def get_document(document_id: int):
+    cache_key = f"documents:{document_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
     rows = execute_query_pg("SELECT * FROM audit_rule_documents WHERE id = %s", (document_id,))
     if not rows:
         raise HTTPException(404, "Document not found")
-    return row_to_document(rows[0])
+    result = row_to_document(rows[0])
+    cache_set(cache_key, result)
+    return result
 
 @router.post("/api/audit-rules/documents")
 def create_document(document: DocumentCreate):
@@ -633,20 +656,39 @@ def get_cross_checks(response: Response, include_inactive: bool = False, limit: 
     """
     Get all Cross-checks. By default, only active Cross-checks are returned.
     Set include_inactive=True to get all. Optional limit/offset paginate the result
-    (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above.
+    (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above. Read-side
+    cache wiring (Modal Caching Phase 3, sub-phase 2) - see cache_get()/cache_set() above.
     """
+    cache_key = f"cross_checks:list:{include_inactive}:{limit}:{offset}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        result, total = cached
+        if total is not None:
+            response.headers["X-Total-Count"] = str(total)
+        return result
+
     where = "" if include_inactive else " WHERE is_active = TRUE"
     base_query = "SELECT * FROM audit_rule_cross_checks" + where
     count_query = "SELECT COUNT(*) as cnt FROM audit_rule_cross_checks" + where
-    rows = fetch_paginated_rows(response, base_query, count_query, "ORDER BY name", limit, offset)
-    return [row_to_cross_check_list(r) for r in rows]
+    rows, total = fetch_paginated_rows(base_query, count_query, "ORDER BY name", limit, offset)
+    if total is not None:
+        response.headers["X-Total-Count"] = str(total)
+    result = [row_to_cross_check_list(r) for r in rows]
+    cache_set(cache_key, (result, total))
+    return result
 
 @router.get("/api/audit-rules/cross-checks/{cross_check_id}")
 def get_cross_check(cross_check_id: int):
+    cache_key = f"cross_checks:{cross_check_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
     rows = execute_query_pg("SELECT * FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
     if not rows:
         raise HTTPException(404, "Cross-check not found")
-    return row_to_cross_check(rows[0])
+    result = row_to_cross_check(rows[0])
+    cache_set(cache_key, result)
+    return result
 
 @router.post("/api/audit-rules/cross-checks")
 def create_cross_check(cross_check: CrossCheckCreate):
@@ -1019,20 +1061,39 @@ def get_categories(response: Response, include_inactive: bool = False, limit: Op
     """
     Get all Categories. By default, only active Categories are returned.
     Set include_inactive=True to get all. Optional limit/offset paginate the result
-    (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above.
+    (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above. Read-side
+    cache wiring (Modal Caching Phase 3, sub-phase 2) - see cache_get()/cache_set() above.
     """
+    cache_key = f"categories:list:{include_inactive}:{limit}:{offset}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        result, total = cached
+        if total is not None:
+            response.headers["X-Total-Count"] = str(total)
+        return result
+
     where = "" if include_inactive else " WHERE is_active = TRUE"
     base_query = "SELECT * FROM audit_rule_categories" + where
     count_query = "SELECT COUNT(*) as cnt FROM audit_rule_categories" + where
-    rows = fetch_paginated_rows(response, base_query, count_query, "ORDER BY name", limit, offset)
-    return [row_to_category(r) for r in rows]
+    rows, total = fetch_paginated_rows(base_query, count_query, "ORDER BY name", limit, offset)
+    if total is not None:
+        response.headers["X-Total-Count"] = str(total)
+    result = [row_to_category(r) for r in rows]
+    cache_set(cache_key, (result, total))
+    return result
 
 @router.get("/api/audit-rules/categories/{category_id}")
 def get_category(category_id: int):
+    cache_key = f"categories:{category_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
     rows = execute_query_pg("SELECT * FROM audit_rule_categories WHERE id = %s", (category_id,))
     if not rows:
         raise HTTPException(404, "Category not found")
-    return row_to_category(rows[0])
+    result = row_to_category(rows[0])
+    cache_set(cache_key, result)
+    return result
 
 @router.post("/api/audit-rules/categories")
 def create_category(category: CategoryCreate):
@@ -1117,6 +1178,12 @@ def get_category_cleared_requirements(category_id: int):
     reads) and get_category_active_cross_checks_count() above. Voucher-level checks and
     Account Head are global gates (not category-specific), always required.
     """
+    # Read-side cache wiring (Modal Caching Phase 3, sub-phase 2) - see cache_get()/cache_set() above.
+    cache_key = f"categories:{category_id}:cleared-requirements"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     existing = execute_query_pg("SELECT id, evidence_type FROM audit_rule_categories WHERE id = %s", (category_id,))
     if not existing:
         raise HTTPException(404, "Category not found")
@@ -1138,7 +1205,7 @@ def get_category_cleared_requirements(category_id: int):
         if d["is_required"]
     ]
 
-    return {
+    result = {
         "category_id": category_id,
         "evidence_type": existing[0]["evidence_type"],
         "voucher_level_checks_required": True,
@@ -1146,6 +1213,8 @@ def get_category_cleared_requirements(category_id: int):
         "cross_checks_required": get_category_active_cross_checks_count(category_id) > 0,
         "required_documents": required_documents,
     }
+    cache_set(cache_key, result)
+    return result
 
 
 # ==============================================
