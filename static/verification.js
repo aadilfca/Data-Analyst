@@ -2031,9 +2031,10 @@ let categoryForAccountCache = {};
 // the DOM by data-uid rather than taking element references, so it's a safe no-op if the line's
 // row is no longer present (e.g. the voucher was navigated away from while the lookup was in
 // flight) instead of writing into a detached, stale node.
-function applyCategoryToTypeCell(uid, categoryName) {
+function applyCategoryToTypeCell(uid, categoryName, { frozen = false } = {}) {
     const valueEl = document.querySelector(`.voucher-line-type-value[data-uid="${uid}"]`);
     const iconEl = document.querySelector(`.voucher-line-type-recycle-icon[data-uid="${uid}"]`);
+    const lockEl = document.querySelector(`.voucher-line-type-lock-icon[data-uid="${uid}"]`);
     if (!valueEl) return; // row no longer rendered
 
     if (!voucherLineState[uid]) voucherLineState[uid] = { transactionType: '', procedureData: {} };
@@ -2041,7 +2042,11 @@ function applyCategoryToTypeCell(uid, categoryName) {
     voucherLineState[uid].procedureData.transaction_type = categoryName || '';
 
     valueEl.textContent = categoryName || 'Unassigned';
-    if (iconEl) iconEl.style.display = categoryName ? 'none' : 'inline-flex';
+    // Freeze Category on voucher lines: a frozen line is by construction always matched (only a
+    // successful resolve ever gets frozen), so the recycle icon stays exclusive to the live
+    // "Unassigned" case and the lock icon is exclusive to the frozen case - never both.
+    if (iconEl) iconEl.style.display = (!frozen && !categoryName) ? 'inline-flex' : 'none';
+    if (lockEl) lockEl.style.display = frozen ? 'inline-flex' : 'none';
 
     // Procedures/Observations cells start empty in the template and are only ever populated once
     // the category resolves — same "only call on a real match" convention the old Supporting cell
@@ -2518,7 +2523,11 @@ async function renderVoucherLines(lines, voucherDate) {
         // carry a per-line extract_date) — same fallback renderVoucherHeader() already uses.
         const lineDate = line.extract_date || voucherDate || '—';
         const accountCode = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_CODE_ALIASES);
-        lineAccountCodes.push({ uid, accountCode });
+        lineAccountCodes.push({
+            uid, accountCode,
+            categoryIdApplied: line.category_id_applied,
+            categoryNameApplied: line.category_name_applied
+        });
         const accountName = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_NAME_ALIASES);
         const description = getVoucherLineAlias(row, VOUCHER_LINE_DESCRIPTION_ALIASES);
         const amount = getVoucherLineAmount(row);
@@ -2544,6 +2553,7 @@ async function renderVoucherLines(lines, voucherDate) {
                         <span class="voucher-line-type-value-row">
                             <span class="voucher-line-type-value" data-uid="${uid}">Loading…</span>
                             <span class="voucher-line-type-recycle-icon" data-uid="${uid}" data-account-code="${escapeHtml(accountCode)}" title="No category assigned — click to assign one in Assign Categories" style="display:none">🔄</span>
+                            <span class="voucher-line-type-lock-icon" data-uid="${uid}" title="Category locked — this line was already audited under it; a later Trial Balance change won't affect it" style="display:none; font-size:12px; opacity:0.55;">🔒</span>
                         </span>
                         <span class="voucher-line-type-chips" data-uid="${uid}">
                             <button type="button" class="voucher-line-learn-icon voucher-line-audit-icon" data-uid="${uid}" title="Audit guidance">📋</button>
@@ -2602,10 +2612,16 @@ async function renderVoucherLines(lines, voucherDate) {
     // badge out from under the voucher that's actually on screen now.
     const myLoadToken = voucherLoadToken;
     showVoucherLoadingBadge();
-    Promise.all(lineAccountCodes.map(({ uid, accountCode }) => autoFillCategoryForLine(uid, accountCode)))
-        .then(() => {
-            if (myLoadToken === voucherLoadToken) hideVoucherLoadingBadge();
-        });
+    // Freeze Category on voucher lines: a line whose category is already frozen renders directly
+    // from the already-loaded voucher data - no network call - and skips straight to the locked
+    // state; only a not-yet-frozen line goes through the live category-for-account lookup.
+    Promise.all(lineAccountCodes.map(({ uid, accountCode, categoryIdApplied, categoryNameApplied }) =>
+        categoryIdApplied != null
+            ? applyCategoryToTypeCell(uid, categoryNameApplied, { frozen: true })
+            : autoFillCategoryForLine(uid, accountCode)
+    )).then(() => {
+        if (myLoadToken === voucherLoadToken) hideVoucherLoadingBadge();
+    });
 
     // Phase 4: attach each line's change-alert icon (only present for lines flagged 'updated').
     lines.forEach(line => {
@@ -3636,6 +3652,8 @@ async function doSaveLineItems(detailId) {
             if (cachedLine) {
                 cachedLine.cleared_status = data.cleared_status;
                 cachedLine.matrix_version_applied = data.matrix_version_applied;
+                cachedLine.category_id_applied = data.category_id_applied;
+                cachedLine.category_name_applied = data.category_name_applied;
             }
             // sessionTransactions is a SEPARATE cache from currentVoucherLines — fetched once by
             // loadTransactionList()/loadTransactionListPreservingPosition() at session start and
@@ -3649,8 +3667,15 @@ async function doSaveLineItems(detailId) {
             if (cachedTransaction) {
                 cachedTransaction.cleared_status = data.cleared_status;
                 cachedTransaction.matrix_version_applied = data.matrix_version_applied;
+                cachedTransaction.category_id_applied = data.category_id_applied;
+                cachedTransaction.category_name_applied = data.category_name_applied;
             }
             updateClearedStatusBadgeForLine(detailId, data.cleared_status);
+            // Freeze Category on voucher lines: reflect a first-time freeze immediately, same
+            // "live" refresh the cleared-status badge already gets, without a full re-render.
+            if (data.category_id_applied != null) {
+                applyCategoryToTypeCell(detailId, data.category_name_applied, { frozen: true });
+            }
         }
         // Success – no status bar message
     } catch (e) {

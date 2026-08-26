@@ -276,6 +276,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-26: TB-delete stale category fix - deleting a client's last upload now clears `account_category_assignments` + invalidates the cache.
 - 2026-08-26: Freeze Category on voucher lines, Phase 1 of 3 - `category_id_applied`/`category_name_applied` added to `verification_details` (both DBs).
 - 2026-08-26: Freeze Category on voucher lines, Phase 2 of 3 - `routers/verification.py` freezes/reads `category_id_applied` on first save, all read surfaces prefer it.
+- 2026-08-26: Freeze Category on voucher lines, Phase 3 of 3 (COMPLETE) - `verification.js` skips live lookup for frozen lines, shows lock icon.
 
 
 ## Self-maintenance
