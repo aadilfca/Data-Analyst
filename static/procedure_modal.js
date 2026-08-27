@@ -561,7 +561,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!hostAdapter.procedureModalState[uid].tabs[docId]) {
-        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false };
+        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false };
     }
     return hostAdapter.procedureModalState[uid].tabs[docId];
 }
@@ -574,6 +574,10 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     const perfStarted = performance.now();
     const perfComponents = {};
     if (adapter) hostAdapter = adapter;
+    // Dirty tracking is a Verification-host optimization. Audit Workbook's lean adapter does not
+    // own voucher-navigation saves, so these remain intentional no-ops there.
+    if (typeof hostAdapter.markLineDirty !== 'function') hostAdapter.markLineDirty = () => {};
+    if (typeof hostAdapter.markAllLinesDirty !== 'function') hostAdapter.markAllLinesDirty = () => {};
     if (!procedureModal) return;
     const lineState = hostAdapter.voucherLineState[uid];
     const type = lineState && lineState.transactionType;
@@ -776,6 +780,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
                 }))
             }));
             tabState.physicalBillSaved = savedBills.length > 0;
+            tabState.physicalBillDirty = false;
         }
     });
 
@@ -892,8 +897,9 @@ async function navigateProcedureModalLine(delta) {
     const navBackBtn = document.getElementById('procedureModalBackBtn');
     if (window.LoadingUI) window.LoadingUI.showProgressBar(navBackBtn, { mode: 'indeterminate', message: 'Saving…' });
     try {
+        const physicalBillsSaved = await flushPhysicalBillEntries(uid);
         await hostAdapter.saveLineItems(uid);
-        await flushPhysicalBillEntries(uid);
+        if (!physicalBillsSaved) hostAdapter.markLineDirty(uid, 'physical bill save retry required');
     } finally {
         if (window.LoadingUI) window.LoadingUI.hideProgressBar(navBackBtn);
     }
@@ -965,8 +971,9 @@ async function closeProcedureModal() {
     if (currentProcedureModalUid) {
         if (window.LoadingUI) window.LoadingUI.showProgressBar(procedureModalClose, { mode: 'indeterminate', message: 'Saving…' });
         try {
+            const physicalBillsSaved = await flushPhysicalBillEntries(currentProcedureModalUid);
             await hostAdapter.saveLineItems(currentProcedureModalUid);
-            await flushPhysicalBillEntries(currentProcedureModalUid);
+            if (!physicalBillsSaved) hostAdapter.markLineDirty(currentProcedureModalUid, 'physical bill save retry required');
         } finally {
             if (window.LoadingUI) window.LoadingUI.hideProgressBar(procedureModalClose);
         }
@@ -1047,8 +1054,9 @@ async function performVerifyVoucherChecks(uid, triggerBtn) {
             hostAdapter.showStatus('Mark every voucher-level check before verifying.', 'error');
             return null;
         }
-        await hostAdapter.saveLineItems(uid);
-        await flushPhysicalBillEntries(uid);
+        const physicalBillsSaved = await flushPhysicalBillEntries(uid);
+        await hostAdapter.saveLineItems(uid, { force: true });
+        if (!physicalBillsSaved) hostAdapter.markLineDirty(uid, 'physical bill save retry required');
         const perfSuffix = window.VerificationPerf && window.VerificationPerf.enabled ? '?perf=true' : '';
         const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/verify_voucher_checks${perfSuffix}`, {
             method: 'POST',
@@ -1064,7 +1072,7 @@ async function performVerifyVoucherChecks(uid, triggerBtn) {
         if (window.VerificationPerf) {
             window.VerificationPerf.log('verify_voucher_checks_sequence', perfStarted, {
                 detail_id: String(uid),
-                includes: ['fresh voucher-check read', 'line save', 'physical-bill flush', 'voucher verify']
+                includes: ['fresh voucher-check read', 'physical-bill flush', 'forced current-line save', 'voucher verify']
             });
         }
         return data;
@@ -1296,7 +1304,7 @@ function renderVoucherChecksBar(uid) {
                 // refresh, extended to this bar's own dependents.
                 renderVoucherChecksBar(uid);
                 renderProcedureModalTabs(uid);
-                await hostAdapter.saveAllVoucherLines();
+                hostAdapter.markAllLinesDirty('voucher-level check changed');
             } catch (e) {
                 console.error('Failed to save voucher check:', e);
                 check.state = previousState;
@@ -1352,7 +1360,7 @@ async function toggleAllVoucherChecks(uid) {
         }
         renderVoucherChecksBar(uid);
         renderProcedureModalTabs(uid);
-        await hostAdapter.saveAllVoucherLines();
+        hostAdapter.markAllLinesDirty('voucher-level checks changed');
     } catch (e) {
         console.error('Failed to save all voucher checks:', e);
         toChange.forEach(c => { c.state = previousStates[c.id]; });
@@ -1572,6 +1580,7 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
             const wasEmpty = !(tabState.observation && tabState.observation.trim());
             tabState.observation = this.value;
             tabState.observationDirty = true;
+            hostAdapter.markLineDirty(uid, 'observation edited');
             updateProcedureModalSavedNote(uid);
             refreshObservationButtons();
             // Deleting/emptying an observation should clear the main table's Observations badge
@@ -1596,6 +1605,7 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
             if (!suggestion) return;
             tabState.observation = suggestion;
             tabState.observationDirty = true;
+            hostAdapter.markLineDirty(uid, 'observation suggestion applied');
             if (observationInput) observationInput.value = tabState.observation;
             updateProcedureModalSavedNote(uid);
             refreshObservationButtons();
@@ -1617,6 +1627,7 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
             // table; a further edit (this counts as one), so Copy is needed again afterward.
             tabState.observation = tabState.lastSyncedText || '';
             tabState.observationDirty = true;
+            hostAdapter.markLineDirty(uid, 'observation restored');
             if (observationInput) observationInput.value = tabState.observation;
             updateProcedureModalSavedNote(uid);
             refreshObservationButtons();
@@ -1638,6 +1649,7 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
             // required afterward), and leaves suggestionApplied/the one-shot auto-fill untouched.
             tabState.observation = current.trim() ? `${current}\n${suggestion}` : suggestion;
             tabState.observationDirty = true;
+            hostAdapter.markLineDirty(uid, 'system observation appended');
             if (observationInput) observationInput.value = tabState.observation;
             updateProcedureModalSavedNote(uid);
             refreshObservationButtons();
@@ -1707,6 +1719,7 @@ function renderAccountHeadCard(uid) {
             noMatchInput.addEventListener('input', function() {
                 state.noMatchText = this.value;
                 state.noMatchDirty = true;
+                hostAdapter.markLineDirty(uid, 'account-head finding edited');
             });
         }
     } else {
@@ -2161,6 +2174,7 @@ async function toggleAllProcedureChecks(uid, docId) {
                 checked_at: updated.checked_at
             };
         });
+        hostAdapter.markLineDirty(uid, 'procedure checks changed');
         renderProcedureModalTabs(uid);
     } catch (e) {
         console.error('Failed to save all audit procedure checks:', e);
@@ -2443,6 +2457,8 @@ function copyPhysicalBillFromLines(uid, doc) {
         return item;
     });
     tabState.physicalBills.push({ bill_no: '', bill_date: '', vendor_name: '', items });
+    tabState.physicalBillDirty = true;
+    hostAdapter.markLineDirty(uid, 'physical bill copied from lines');
     renderPhysicalBillDocumentPanel(uid, doc);
 }
 
@@ -2512,6 +2528,8 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                 } else {
                     bill[this.dataset.field] = this.value;
                 }
+                tabState.physicalBillDirty = true;
+                hostAdapter.markLineDirty(uid, 'physical bill edited');
             });
         });
 
@@ -2529,6 +2547,8 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                 if (!item) return;
                 item[this.dataset.field] = cleaned;
                 recomputePhysicalBillItemAmount(item);
+                tabState.physicalBillDirty = true;
+                hostAdapter.markLineDirty(uid, 'physical bill amount edited');
                 updatePhysicalBillTotals(uid, doc.id, billIdx);
             });
         });
@@ -2540,6 +2560,8 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                 const bill = tabState.physicalBills[billIdx];
                 if (!bill) return;
                 bill.items.splice(itemIdx, 1);
+                tabState.physicalBillDirty = true;
+                hostAdapter.markLineDirty(uid, 'physical bill line removed');
                 renderPhysicalBillDocumentPanel(uid, doc);
             });
         });
@@ -2550,6 +2572,8 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                 const bill = tabState.physicalBills[billIdx];
                 if (!bill) return;
                 bill.items.push(makeEmptyPhysicalBillItem());
+                tabState.physicalBillDirty = true;
+                hostAdapter.markLineDirty(uid, 'physical bill line added');
                 renderPhysicalBillDocumentPanel(uid, doc);
             });
         });
@@ -2558,6 +2582,8 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
             btn.addEventListener('click', function() {
                 const billIdx = parseInt(this.dataset.billIdx);
                 tabState.physicalBills.splice(billIdx, 1);
+                tabState.physicalBillDirty = true;
+                hostAdapter.markLineDirty(uid, 'physical bill removed');
                 renderPhysicalBillDocumentPanel(uid, doc);
             });
         });
@@ -2566,6 +2592,8 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
         if (addBillBtn) {
             addBillBtn.addEventListener('click', function() {
                 tabState.physicalBills.push(makeEmptyPhysicalBill());
+                tabState.physicalBillDirty = true;
+                hostAdapter.markLineDirty(uid, 'physical bill added');
                 renderPhysicalBillDocumentPanel(uid, doc);
             });
         }
@@ -2602,6 +2630,8 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                     if (!bill) return;
                     const newItemIdx = bill.items.length;
                     bill.items.push(makeEmptyPhysicalBillItem());
+                    tabState.physicalBillDirty = true;
+                    hostAdapter.markLineDirty(uid, 'physical bill line added');
                     renderPhysicalBillDocumentPanel(uid, doc);
                     const newInput = document.querySelector(
                         `#procedureBillForm input[data-field="item_name"][data-bill-idx="${billIdx}"][data-item-idx="${newItemIdx}"]`
@@ -2630,6 +2660,7 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
 async function savePhysicalBillEntry(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     const bills = tabState.physicalBills || [];
+    let saved = false;
 
     try {
         const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_physical_bill`, {
@@ -2657,10 +2688,13 @@ async function savePhysicalBillEntry(uid, docId) {
             throw new Error(err.detail || 'Failed to save physical bill.');
         }
         tabState.physicalBillSaved = true;
+        tabState.physicalBillDirty = false;
+        saved = true;
     } catch (e) {
         console.error('Failed to auto-save physical bill:', e);
     }
     refreshPhysicalBillMandatoryIndicators(uid, docId);
+    return saved;
 }
 
 // Persists every Physical Bill Document tab of this line — called from the same exit chokepoints as
@@ -2670,13 +2704,17 @@ async function savePhysicalBillEntry(uid, docId) {
 // tab was ever actually opened/viewed this session), so this saves ALL of them, not just the active
 // tab — mirrors flushProcedureObservations()'s across-every-tab convention.
 async function flushPhysicalBillEntries(uid) {
-    if (!hostAdapter) return;
+    if (!hostAdapter) return true;
     const lineState = hostAdapter.procedureModalState[uid];
-    if (!lineState || !lineState.documents) return;
+    if (!lineState || !lineState.documents) return true;
+    let allSaved = true;
     for (const doc of lineState.documents) {
         if (doc.document_type !== 'physical_bill') continue;
-        await savePhysicalBillEntry(uid, doc.id);
+        const tabState = getProcedureTabState(uid, doc.id);
+        if (!tabState.physicalBillDirty) continue;
+        if (!await savePhysicalBillEntry(uid, doc.id)) allSaved = false;
     }
+    return allSaved;
 }
 
 
@@ -2776,6 +2814,7 @@ async function selectProcedureDocument(uid, docId, row, target = null) {
             extract_amount: row.extract_amount
         });
         lineState.assignedDocIds.add(docId);
+        hostAdapter.markLineDirty(uid, 'supporting document linked');
         // Clear the search box/dropdown for this tab now that the row is locked — it stays
         // selected in the table below, no longer meaningful as a search result.
         tabState.searchTerm = '';
@@ -2821,6 +2860,7 @@ async function unassignSupportingDocument(uid, docId, assignmentId, target = nul
         if (!tabState.selections.length) {
             lineState.assignedDocIds.delete(docId);
         }
+        hostAdapter.markLineDirty(uid, 'supporting document unlinked');
         renderProcedureModalTabs(uid);
         renderProcedureModalPanel(uid, docId);
         hostAdapter.showStatus('✅ Evidence unlinked.', 'success');
@@ -3008,6 +3048,7 @@ async function toggleProcedureCheck(uid, docId, roleName, isChecked, target = nu
             checked_by: updated.checked_by,
             checked_at: updated.checked_at
         };
+        hostAdapter.markLineDirty(uid, 'procedure check changed');
         // Completion-dot logic (Phase 3): a no-template tab's dot depends on checklist state, so
         // a successful tick/untick must refresh the tab bar too, not just the panel (which the
         // checkbox itself already visually reflects). Has-template tabs' dots are unaffected by
@@ -3044,6 +3085,7 @@ async function toggleSignatureException(uid, docId, assignmentId, isChecked) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.detail || 'Failed to save signature exception.');
         }
+        hostAdapter.markLineDirty(uid, 'signature exception changed');
     } catch (e) {
         console.error('Failed to save signature exception:', e);
         if (sel) sel.signature_exception = previousValue;
@@ -3095,6 +3137,7 @@ function applyObservationSuggestionIfNeeded(uid, docId) {
         // Local-only text, never persisted yet — mark dirty so the Copy button (and the
         // eventual Prev/Next/Complete/Exit autosave) correctly treat it as not-yet-pushed.
         tabState.observationDirty = true;
+        hostAdapter.markLineDirty(uid, 'automatic observation suggested');
     }
     tabState.suggestionApplied = true;
 }

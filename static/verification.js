@@ -58,6 +58,29 @@ let isNavigating = false;
 // detail_id. Fully separate from currentTransactionType/procedureData above, which remain
 // scoped to the session's single "active" line — no shared state between the two.
 let voucherLineState = {};
+// Monotonic per-line revisions distinguish changed lines from untouched lines that navigation
+// previously re-saved every time.
+let voucherLineDirtyRevisions = {};
+
+function markVoucherLineDirty(detailId, reason = 'line change') {
+    if (detailId == null) return;
+    const key = String(detailId);
+    voucherLineDirtyRevisions[key] = (voucherLineDirtyRevisions[key] || 0) + 1;
+    if (window.VerificationPerf.enabled) {
+        console.info('[verification-perf]', {
+            operation: 'mark_line_dirty', detail_id: key,
+            revision: voucherLineDirtyRevisions[key], reason
+        });
+    }
+}
+
+function markAllVoucherLinesDirty(reason = 'voucher-wide change') {
+    Object.keys(voucherLineState).forEach(uid => markVoucherLineDirty(uid, reason));
+}
+
+function isVoucherLineDirty(detailId) {
+    return (voucherLineDirtyRevisions[String(detailId)] || 0) > 0;
+}
 // Processing/Loading UI, Phase 6: incremented once per renderVoucherHeader() call (once per new
 // voucher painted) — lets a slow-resolving PREVIOUS voucher's completion recognize itself as
 // stale and skip hiding the badge, instead of wrongly hiding the NEW voucher's still-loading one.
@@ -116,6 +139,8 @@ function buildProcedureModalAdapter() {
         showStatus,
         saveLineItems,
         saveAllVoucherLines,
+        markLineDirty: markVoucherLineDirty,
+        markAllLinesDirty: markAllVoucherLinesDirty,
         escapeHtml,
         getVoucherLineAlias,
         getVoucherLineAmount,
@@ -2415,6 +2440,7 @@ document.addEventListener('click', function(e) {
 // globals, applied per line here.
 function seedVoucherLineState(lines) {
     voucherLineState = {};
+    voucherLineDirtyRevisions = {};
     // Phase 4 (Procedures/Observations expand toggle): not persisted — every new voucher load
     // starts collapsed, same reset point as the other per-voucher state below.
     columnsExpanded = false;
@@ -2436,6 +2462,7 @@ function seedVoucherLineState(lines) {
         if (line.procedure_data) procedureData = { ...procedureData, ...line.procedure_data };
         const transactionType = line.transaction_type || procedureData.transaction_type || '';
         voucherLineState[line.detail_id] = { transactionType, procedureData, lineItems: line.line_items || [] };
+        voucherLineDirtyRevisions[String(line.detail_id)] = 0;
         if (line.change_detection_status === 'updated') {
             voucherLineDiffData[line.detail_id] = { old: line.old_row_data, new: line.row_data };
         }
@@ -3765,12 +3792,21 @@ document.addEventListener('DOMContentLoaded', function() {
 // via hostAdapter, etc.) funnels through, so guarding here covers all of them.
 const inFlightLineSaves = new Map(); // detailId -> Promise
 
-async function saveLineItems(detailId = currentDetailId) {
+async function saveLineItems(detailId = currentDetailId, options = {}) {
     if (!detailId) return;
+    if (!options.force && !isVoucherLineDirty(detailId)) {
+        return { ok: true, skipped: true };
+    }
     if (inFlightLineSaves.has(detailId)) {
         return inFlightLineSaves.get(detailId);
     }
-    const savePromise = doSaveLineItems(detailId);
+    const revisionAtStart = voucherLineDirtyRevisions[String(detailId)] || 0;
+    const savePromise = doSaveLineItems(detailId).then(result => {
+        if (result.ok && (voucherLineDirtyRevisions[String(detailId)] || 0) === revisionAtStart) {
+            voucherLineDirtyRevisions[String(detailId)] = 0;
+        }
+        return result;
+    });
     inFlightLineSaves.set(detailId, savePromise);
     try {
         return await savePromise;
@@ -3875,41 +3911,54 @@ async function doSaveLineItems(detailId) {
         }
         window.VerificationPerf.log('save_line_items', perfStarted, {
             detail_id: String(detailId),
-            dirty_state: 'not tracked by current workflow'
+            revision_at_start: voucherLineDirtyRevisions[String(detailId)] || 0
         });
+        return { ok: true, skipped: false };
         // Success – no status bar message
     } catch (e) {
         console.error('Error saving:', e);
+        return { ok: false, skipped: false, error: e };
         // Do not show status bar error – only log
     }
 }
 
 // ---------- SAVE ALL VOUCHER LINES (Phase 4) ----------
-// Saves every line currently loaded in the voucher via the existing save_line_items endpoint, one
-// call per line, instead of a single call for just the active line. Called automatically before
-// Prev/Next navigation, on complete, and on exit (see saveCurrentTransaction(),
+// Saves only dirty lines, sequentially through the existing endpoint. Called automatically before
+// navigation, completion, and exit; unchanged lines issue no request. Sequential execution remains
+// deliberate until a later atomic voucher-save backend exists. Former call sites include
 // completeTransaction(), returnToCashbookFromSession()) so edits on any expanded line aren't lost — there is no
 // manual save button.
 async function saveAllVoucherLines() {
-    const uids = Object.keys(voucherLineState);
+    const allUids = Object.keys(voucherLineState);
+    const uids = allUids.filter(isVoucherLineDirty);
     const perfStarted = performance.now();
     if (window.VerificationPerf.enabled) {
         console.info('[verification-perf]', {
             operation: 'save_all_voucher_lines_inventory',
             voucher_id: currentVoucherId,
-            line_count: uids.length,
+            line_count: allUids.length,
+            dirty_count: uids.length,
+            skipped_count: allUids.length - uids.length,
             detail_ids: uids.map(String),
-            dirty_state: 'not tracked; all listed lines will be saved sequentially'
+            dirty_state: 'only listed detail_ids will be saved sequentially'
         });
     }
+    let savedCount = 0;
+    let failedCount = 0;
     for (const uid of uids) {
-        await saveLineItems(uid);
+        const result = await saveLineItems(uid);
+        if (result && result.ok && !result.skipped) savedCount += 1;
+        if (result && !result.ok) failedCount += 1;
     }
     window.VerificationPerf.log('save_all_voucher_lines', perfStarted, {
         voucher_id: currentVoucherId,
-        line_count: uids.length,
+        dirty_count: uids.length,
+        saved_count: savedCount,
+        failed_count: failedCount,
+        skipped_count: allUids.length - uids.length,
         execution: 'sequential'
     });
+    return { savedCount, failedCount, skippedCount: allUids.length - uids.length };
 }
 
 // ---------- VALIDATE TRANSACTION ----------

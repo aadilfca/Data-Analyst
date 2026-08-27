@@ -49,6 +49,38 @@ Cleared/Query, or transaction behavior changed.
 
 ---
 
+## Verification Save Performance — Phase 2
+
+**Date:** 2026-08-27
+
+### Developed
+
+- Added a monotonically increasing dirty revision per loaded voucher line. New vouchers begin
+  clean; line-specific evidence, procedure, observation, account-head, signature, and Physical
+  Bill changes dirty only their line, while voucher-level check changes dirty every line.
+- `saveAllVoucherLines()` now sends only dirty lines and reports saved, failed, and skipped counts
+  under `?perf=1`. Writes remain sequential pending the later atomic voucher-save backend.
+- A successful response clears a line only when its revision did not change while the request was
+  in flight. Failed saves and newer edits remain dirty for retry.
+- Verify forces the current line through the existing server-side status engine, then navigation
+  recognizes that successful revision as clean instead of submitting it again. Voucher-level
+  changes remain dirty on the other affected lines until safely recomputed.
+- Physical Bills now have their own dirty flag, so opening/closing an unchanged manual Vendor Bill
+  no longer rewrites it. Bills flush before the line status save so Cleared/Query sees current bill
+  data; a failed bill write leaves the line dirty.
+- Cache versions: `procedure_modal.js?v=3→4` in Verification/Audit Workbook and
+  `verification.js?v=16→17` in Verification.
+
+### Verification
+
+- `node --check` passed for both changed JavaScript files.
+- New Playwright suite: 6 passed, covering untouched vouchers, one-line changes, voucher-wide
+  changes, failed saves, edits during an in-flight save, and Verify/navigation deduplication.
+- Focused Verification suites: 18 passed. Full suite: 20 passed, with only the two already-recorded
+  Postgres test-isolation failures unable to reach Supabase from the sandbox.
+
+---
+
 ## Client Data Availability Loading Popup
 
 **Date:** 2026-08-27 | **Files:** `static/databank.html`, `static/databank.js`, `CLAUDE.md`, `CHANGELOG_ARCHIVE.md`.

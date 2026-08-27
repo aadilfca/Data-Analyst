@@ -123,6 +123,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_verification_indexes.py` | Verifies that `init_db()` creates the composite index needed for fast cashbook lookups on `client_data`. |
 | `test_verification_nav_skeleton.py` | Playwright regression tests for Verification's voucher navigation. Forces each `moveToAdjacentVoucher()` failure path (HTTP error, aborted request, empty response) plus the boundary case in headless Chromium, asserting the loading skeleton is always cleared and a working retry action is offered; also covers the Prev/Next processing UI — buttons disabled during a navigation, re-enabled per voucher position afterwards (including after a boundary or an error), and a second overlapping navigation dropped rather than duplicated. Fully hermetic: a local static file server plus stubbed `/api/` routes, so it needs no dev server, database or login. |
 | `test_verification_performance_metrics.py` | Verifies opt-in database metrics count reads/writes, preserve return values and exceptions, and restore request-local context after use. |
+| `test_verification_dirty_saves.py` | Playwright regression tests for Verification's revision-based dirty tracking: untouched/changed/voucher-wide lines, failed saves, edits during an in-flight save, and Verify-to-navigation duplicate prevention. |
 
 ---
 
