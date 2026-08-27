@@ -4114,17 +4114,102 @@ function openSessionPopup() {
 // page through the existing window.onload auto-open path (openSessionPopup fires on load when
 // a type param is present) — no separate in-page open logic, one entry path for both the
 // dashboard's cards (index.html) and these hub tiles. "Coming soon" tiles have no handler.
-const cashVoucherTile = document.getElementById('cashVoucherTile');
-if (cashVoucherTile) {
-    cashVoucherTile.addEventListener('click', function() {
-        window.location.href = '/static/verification.html?type=cash';
+//
+// Because that entry path is a full page reload whose popup can't appear until the slow
+// current-client call resolves (see the clientContextReady await in window.onload below), the
+// tile would otherwise sit there looking idle and stay clickable through the entire wait — and a
+// second click just restarts the reload, making the wait longer. So a clicked tile is locked:
+// LoadingUI's spinner gives visible feedback, and hubTileNavigationInFlight blocks any further
+// click. A .module-card is a <div>, not a <button>, so showSpinner can't set .disabled for us
+// (its isButton test is false for a div) — the flag IS the lock, there is no native one.
+let hubTileNavigationInFlight = false;
+let lockedHubTile = null;
+
+// One wording for both the click and the on-arrival lock, keyed off the tile's own type. The
+// click happens before the reload and the arrival lock after it, so using the same message on
+// both sides makes the reload read as one continuous wait instead of two different ones.
+function hubTileOpeningMessage(tileType) {
+    return tileType === 'bank' ? 'Opening bankbook…' : 'Opening cashbook…';
+}
+
+// Locks one hub tile: spinner in place of its contents (hideSpinner restores them) plus the
+// in-flight flag. Shared by the click path and the on-arrival path below so both behave
+// identically.
+function lockHubTile(tile, message) {
+    if (!tile || hubTileNavigationInFlight) return;
+    hubTileNavigationInFlight = true;
+    lockedHubTile = tile;
+    if (window.LoadingUI) window.LoadingUI.showSpinner(tile, message || 'Opening…');
+}
+
+// Releases whichever tile is locked. Safe to call when nothing is locked, so every release path
+// can call it unconditionally rather than testing first.
+function unlockHubTiles() {
+    if (lockedHubTile && window.LoadingUI) window.LoadingUI.hideSpinner(lockedHubTile);
+    lockedHubTile = null;
+    hubTileNavigationInFlight = false;
+}
+
+// One delegated listener for every live tile, rather than a handler per tile: a tile is live
+// purely by carrying data-verification-type (see the contract comment in verification.html), so a
+// tile added later gets this same spinner + double-click lock with no change here. A "Coming
+// soon" tile has no such attribute, so closest() returns null and the click is ignored — exactly
+// its behaviour before this listener existed.
+if (dashboardContent) {
+    dashboardContent.addEventListener('click', function(event) {
+        const tile = event.target.closest('[data-verification-type]');
+        if (!tile) return;
+        // The double-click lock. A second click while the first navigation is still in flight is
+        // dropped here, before it can restart the page load.
+        if (hubTileNavigationInFlight) return;
+        const tileType = tile.getAttribute('data-verification-type');
+        if (!tileType) return;
+        lockHubTile(tile, hubTileOpeningMessage(tileType));
+        window.location.href = '/static/verification.html?type=' + encodeURIComponent(tileType);
     });
 }
-const bankVoucherTile = document.getElementById('bankVoucherTile');
-if (bankVoucherTile) {
-    bankVoucherTile.addEventListener('click', function() {
-        window.location.href = '/static/verification.html?type=bank';
-    });
+
+// Back/bfcache reset path. Assigning window.location.href gives no failure callback, and on
+// success this page is destroyed — so the one case where a locked tile can actually get stuck is
+// the browser restoring this exact page from the back/forward cache, spinner and flag intact.
+// event.persisted is true only for that restore; an ordinary Back re-parses this script fresh, so
+// the state is already clean there. Nothing should ever require a refresh to un-stick a tile.
+window.addEventListener('pageshow', function(event) {
+    if (event.persisted) unlockHubTiles();
+});
+
+// Stop-loading reset path. Escape IS the browser's "stop loading" gesture, so a user who gives up
+// on a slow load and presses it cancels the navigation while this page stays alive — the one
+// remaining way a locked tile could otherwise sit there permanently, needing a refresh to clear.
+// Deliberately keyed to the real gesture rather than a timeout: a guessed duration would also fire
+// during a load that is simply slow but still perfectly on its way, which is the exact situation
+// this whole feature exists to support. Escape while nothing is locked is a no-op, so this can't
+// interfere with the popup's own Escape handling.
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape' && hubTileNavigationInFlight) unlockHubTiles();
+});
+
+// On-arrival lock. The tile is only half the wait: this page renders its hub visible by default,
+// so on the ?type= load the tiles are live and clickable again from first paint right through the
+// clientContextReady await, which is where the double-click race actually happens. Locking here
+// at parse time — the earliest possible moment, before that await — closes it, and window.onload
+// releases the tile once the popup is actually up.
+//
+// The condition deliberately mirrors window.onload's own popup-open decision exactly rather than
+// just testing for ?type=. setVerificationUrl() writes state and type TOGETHER, so a hard-refresh
+// URL like ?state=session&id=5&type=cash carries a type but takes the restore branch and never
+// opens the popup — a looser check would strand a spinner on the hub permanently there.
+const hubArrivalParams = new URLSearchParams(window.location.search);
+const hubArrivalState = hubArrivalParams.get('state');
+const hubArrivalView = hubArrivalParams.get('view');
+const hubPopupWillOpen =
+    (hubArrivalParams.has('type') || hubArrivalView === 'cashbook' || hubArrivalView === 'bankbook') &&
+    hubArrivalState !== 'session' && hubArrivalState !== 'cashbook';
+if (hubPopupWillOpen) {
+    // currentType already resolves ?view=bankbook → 'bank' and ?type= otherwise, so it's the
+    // single source of truth for which tile is the one being opened — no second derivation here.
+    const arrivingTile = document.querySelector('[data-verification-type="' + currentType + '"]');
+    lockHubTile(arrivingTile, hubTileOpeningMessage(currentType));
 }
 if (popupStartBtn) popupStartBtn.addEventListener('click', openCashbook);
 // Editable search range (confirmed fix): re-run the search with the user's chosen dates once a
@@ -4330,21 +4415,34 @@ window.onload = async function() {
     // correct Up-icon override once the user actually reaches a real view.
     const arrivalParams = new URLSearchParams(window.location.search);
 
-    // Hard-refresh view persistence: ?state=session|cashbook&id=... (written by
-    // setVerificationUrl()) means the user was previously in that view and hard-refreshed - always
-    // re-fetch fresh from the server for that id rather than falling through to the dashboard
-    // default below. Checked ahead of the existing ?type=/?view= entry-link handling, which stays
-    // completely unchanged for ordinary (non-restored) page loads.
-    const stateParam = arrivalParams.get('state');
-    if (stateParam === 'session' || stateParam === 'cashbook') {
-        restoreVerificationViewFromUrl();
-        return;
-    }
+    // try/finally purely so the on-arrival hub tile lock (see lockHubTile() above) is always
+    // released — whether this ends by opening the popup, returning early down the hard-refresh
+    // restore branch, or throwing on the way. Without the finally, a failure in here would leave
+    // the hub's tile spinning and unclickable with no way back short of a refresh, which is the
+    // stuck state this whole phase exists to prevent. unlockHubTiles() is a no-op when nothing is
+    // locked, so the entry paths that never lock a tile are completely unaffected.
+    try {
+        // Hard-refresh view persistence: ?state=session|cashbook&id=... (written by
+        // setVerificationUrl()) means the user was previously in that view and hard-refreshed - always
+        // re-fetch fresh from the server for that id rather than falling through to the dashboard
+        // default below. Checked ahead of the existing ?type=/?view= entry-link handling, which stays
+        // completely unchanged for ordinary (non-restored) page loads.
+        const stateParam = arrivalParams.get('state');
+        if (stateParam === 'session' || stateParam === 'cashbook') {
+            restoreVerificationViewFromUrl();
+            return;
+        }
 
-    const arrivalView = arrivalParams.get('view');
-    const isDeepLinkView = arrivalView === 'cashbook' || arrivalView === 'bankbook';
-    if (arrivalParams.has('type') || isDeepLinkView) {
-        openSessionPopup();
+        const arrivalView = arrivalParams.get('view');
+        const isDeepLinkView = arrivalView === 'cashbook' || arrivalView === 'bankbook';
+        if (arrivalParams.has('type') || isDeepLinkView) {
+            openSessionPopup();
+        }
+    } finally {
+        // openSessionPopup() displays the popup overlay synchronously before its own async
+        // cashbook load, so by the time this runs the popup is genuinely on screen — the tile's
+        // job is done and the modal's own spinner takes over from here.
+        unlockHubTiles();
     }
 };
 

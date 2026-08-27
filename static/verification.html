@@ -466,19 +466,25 @@
                  through the existing window.onload auto-open path in verification.js); every
                  other tile is a display-only "Coming soon" placeholder — no id, no handler.
                  Transaction Report moved down into the Client Data Links section (it's a data
-                 shortcut, not a verification type). -->
+                 shortcut, not a verification type).
+
+                 data-verification-type is the contract for a LIVE tile: it marks the tile as
+                 clickable and names the ?type= it navigates to. One delegated listener in
+                 verification.js picks up every tile carrying it, so a future tile becomes live —
+                 with the same spinner + double-click lock as Cash/Bank — purely by adding this
+                 attribute, no JS change needed. A "Coming soon" tile omits it and stays inert. -->
             <section class="hub-group">
                 <h2 class="hub-group-title">Voucher verification</h2>
                 <div class="module-grid">
                     <!-- Cash vouchers (live) — wired in verification.js to ?type=cash -->
-                    <div class="module-card" id="cashVoucherTile">
+                    <div class="module-card" id="cashVoucherTile" data-verification-type="cash">
                         <div class="module-icon">💰</div>
                         <h3>Cash vouchers</h3>
                         <p>Verify cash payment and receipt vouchers</p>
                         <span class="module-status">Ready</span>
                     </div>
                     <!-- Bank vouchers (live) — wired in verification.js to ?type=bank -->
-                    <div class="module-card" id="bankVoucherTile">
+                    <div class="module-card" id="bankVoucherTile" data-verification-type="bank">
                         <div class="module-icon">🏦</div>
                         <h3>Bank vouchers</h3>
                         <p>Verify bank payment and receipt vouchers</p>
@@ -859,7 +865,7 @@
         <script src="/static/procedure_modal.js?v=2"></script>
         <script src="/static/loading_ui.js"></script>
         <script src="/static/api_utils.js?v=1"></script>
-        <script src="/static/verification.js?v=14"></script>
+        <script src="/static/verification.js?v=15"></script>
     </div>
 </body>
 

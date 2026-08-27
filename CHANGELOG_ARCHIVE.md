@@ -2523,3 +2523,73 @@ read by nothing — dead state predating this work. The new flag is deliberately
 `voucherNavInFlight` to avoid confusion with it.
 
 ---
+
+## Verification Hub Tile Spinner + Click-Lock
+
+**Requirement (2026-08-27, Phase 3 of the Verification nav/UX set):** the hub's Cash vouchers tile
+gave no feedback and stayed clickable while the page reloaded into the cashbook popup, so it could
+be double-clicked — each extra click restarting the reload and lengthening the wait. Deliberately a
+band-aid: visible feedback plus a click-lock. The root cause (the slow `current-client` call on page
+load) stays deferred to its own project.
+
+**Read-time finding that reshaped the phase — there are two silent gaps, not one:**
+
+| Gap | Where | Why it was invisible |
+|---|---|---|
+| A — leaving | click → browser fetches the new page | old DOM stays on screen, tile looks idle |
+| B — arriving | new page parsed, popup not yet open | `#dashboardContent` is visible by default, so the tiles render **live and clickable again** while `window.onload` sits on `await window.clientContextReady` |
+
+Gap B is where the double-click race actually bites, and the brief had only anticipated Gap A. The
+click handler was confirmed to be a plain `window.location.href` assignment (a real full reload,
+matching the earlier investigation), so the two gaps are separated by a genuine document swap.
+
+**Scope widened once, with the user's explicit approval:** from "the Cash tile" to *every* live tile
+on this page, current and future. That turned two hardcoded handlers into one data-driven
+mechanism — `data-verification-type` on the tile (see the Conventions entry in `CLAUDE.md`) plus a
+single delegated listener on `#dashboardContent`. A future tile becomes live, with the same spinner
+and lock, by adding the attribute alone; a "Coming soon" tile omits it and `closest()` returns null,
+leaving it exactly as inert as before.
+
+**Why the lock is a JS flag, not `disabled`:** a `.module-card` is a `<div>`, so `showSpinner`'s
+`isButton` test (`target.disabled !== undefined`) is false and it never sets `disabled` — there is no
+native disabled state to use. `hubTileNavigationInFlight` **is** the lock. This is also why no
+`style.css` change was owed, and the all-18-pages stylesheet bump was avoided.
+
+**The stuck-spinner trap, found by reading rather than by testing:** `setVerificationUrl()` writes
+`state` and `type` **together**, so a hard-refresh URL like `?state=session&id=5&type=cash` carries a
+`type` but takes the restore branch and never opens the popup. A naive "is `?type=` present" check
+for the arrival lock would have stranded a spinner on the hub permanently there. The arrival lock is
+therefore gated on the *identical* condition `window.onload` uses to decide it will open the popup.
+
+**Three release paths, no guessed durations:**
+
+| Path | Covers |
+|---|---|
+| `finally` around the popup-open region in `window.onload` | normal open, the early-return restore branch, and any throw in between |
+| `pageshow` when `event.persisted` | bfcache Back-restore, which brings the page back spinner and flag intact |
+| `keydown` Escape | the user pressing Stop mid-navigation — the one remaining case where the old document survives with a locked tile |
+
+Escape was chosen over a safety timeout (which the plan had explicitly ruled out) because it is the
+browser's actual Stop-loading gesture: a fixed timeout would also fire during a load that is merely
+slow but still perfectly on its way, which is the exact situation this feature exists to support.
+Escape while nothing is locked is a no-op, so it cannot interfere with the popup's own handling.
+
+**Wording is shared between both sides** (`hubTileOpeningMessage()`): the click happens before the
+reload and the arrival lock after it, so using one message across the document swap makes the reload
+read as a single continuous wait instead of two different ones.
+
+**Verified** (Playwright against the running dev server, 17 checks green). Gap A had to be proven
+*synchronously* — three earlier attempts to hold the navigation all silently measured the arriving
+page instead of the old one (a glob route that doesn't match a query string; `time.sleep` inside a
+sync route handler, which blocks Playwright's own driver; and an async hold Chrome had already
+committed past). Since assigning `location.href` never commits synchronously, dispatching the click
+and reading the tile in the **same JS turn** is deterministic and race-free: guard `false → true`,
+spinner in place of the content, repeat clicks swallowed, the bank tile refused, all while
+`location.href` is still the original URL. Gap B was verified end-to-end against a genuinely delayed
+`/api/auth/current-client`: spinning at first paint, clicks swallowed (0 navigations), released the
+moment the popup appears. Also confirmed: the `?state=` restore URL strands no spinner, Escape both
+clears the lock and restores the tile's original content, and "Coming soon" tiles stay inert.
+`pytest` — same 2 pre-existing Postgres-cutover failures already logged in `KNOWN_ISSUES.md`.
+`verification.js?v=14` → `?v=15` (verification.html) in the same commit.
+
+---
