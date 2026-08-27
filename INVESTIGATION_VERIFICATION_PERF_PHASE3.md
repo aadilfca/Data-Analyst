@@ -107,3 +107,143 @@ Net: a warm modal open drops ~3.8 s → ~3.3 s (the removed TB-accounts round tr
 drops ~13 s → ~8 s (templates now overlap the batch call instead of stacking). The residual is
 the single unavoidable `procedure_modal_data` cross-region round trip — further gains there are
 Phase 3e/infrastructure territory, not 3c.
+
+---
+
+## Phase 3d — Verify-sequence deep map + physical_bills duplication (investigation only, no code changes)
+
+Confirms and deepens the 3a preliminary map. Method: full read of `_save_line_items_impl`,
+`_verify_voucher_checks_impl`, `compute_and_persist_cleared_status()`,
+`sync_line_observations_to_voucher()`, `_fetch_session_details_grouped()`,
+`_compute_voucher_nav_result()` / `_build_verification_line()`, `get_voucher_line_physical_bills()`,
+plus the `procedure_modal.js` / `verification.js` call sites. No live Verify click was run —
+that mutates real verification state (status, cleared_status, voucher_check_status, observations)
+for Leather Crop, and this phase is investigation-only.
+
+### Correction to the 3a note above
+
+The 3a line "per-document auth-role N+1 in `audit_rules.py get_required_documents_with_authority()`,
+tracked separately in KNOWN_ISSUES.md" is **partly stale**:
+
+- The **save-path** call — `compute_and_persist_cleared_status()` → `check_approved_by_authority_gate()`
+  → `get_required_documents_with_authority()` — is **already batched** (one `SELECT` for the docs +
+  `get_document_auth_role_authorities_batch()` + one `IN`-based `signature_specimens` query,
+  ~3 round trips total). This was done 2026-08-26 ("batched auth-role IN queries, Phase B").
+- The only remaining per-role loop is `has_matching_active_specimen()` inside the
+  **`if detail:`** block (lines ~732–737) — reached solely by `GET /line_status_reason/{id}`
+  (the "why is this Query?" popover), **not** by the save/Verify path.
+- It is **NOT in KNOWN_ISSUES.md** — the reference there was to `PERFORMANCE_INVESTIGATION.md`'s
+  2026-08-25 table row ("N+1 per-document auth-role fetch … optional fix"), which predates the
+  Phase B batching and now applies only to the detail-mode popover.
+
+**Answer to the brief's yes/no:** the auth-role loop is **not entangled** with the Verify
+sequence and 3d/3e should not touch it. (If anything, `PERFORMANCE_INVESTIGATION.md`'s table
+row should be marked "save-path portion fixed 2026-08-26; detail-mode remainder is low-value".)
+
+### "Verify & Next" full sequence — one press, crossing into the next voucher
+
+Each numbered step is `await`ed before the next. Cross-region DB round trips estimated from the
+code (every `execute_query_pg` / `execute_write_pg` = one ~250 ms Singapore↔Mumbai hop);
+`log_audit` is local SQLite and free.
+
+| # | Step (JS) | Endpoint | Server-side DB round trips |
+|---|---|---|---|
+| 1 | `delete voucherChecksCache[id]` → `ensureVoucherChecksLoaded()` | `GET /voucher_checks` (**forced**, cache deliberately busted) | ~2–3 |
+| 2 | `flushPhysicalBillEntries()` | `POST /save_physical_bill` ×N, sequential `for` loop | 0–N (only dirty bills) |
+| 3 | `saveLineItems(uid,{force:true})` | `POST /save_line_items` | **~28–32** — see breakdown below |
+| 4 | `verify_voucher_checks` | `POST /verify_voucher_checks` | **~10 + 7·M + 2·K** (M = lines in current voucher, K = lines in next voucher) |
+| 5 | `openProcedureModal(nextLine)` *(only if an unverified line remains in the same voucher)* | `GET /procedure_modal_data` (post-3c: parallel, guidance+templates cached) | 1 browser hop (~11 server queries) |
+| 6 | `updateProgressDisplay()` | `GET /session/{id}/voucher_stats` | 1 browser hop (session-wide rollup) |
+| 7 | `hideProcedureModalOnly()` (teardown, when the sequence leaves the voucher) | `updateProceduresCellForLine()` + `updateObservationsCellForLine()` | **3–4 browser hops** — see "duplication" below |
+
+**Step 3 (`save_line_items`) breakdown** — `_save_line_items_impl`:
+`detail` status (1) · `_resolve_sibling_voucher_line_ids` (2, **not memoised in the save path** —
+the Phase 3c ContextVar memo is opt-in and only `get_procedure_modal_data` sets it) ·
+`UPDATE verification_details` (1) · `sync_line_observations_to_voucher(sibling_ids=…)` (~5:
+all_entries, line_row, check_rows, `UPDATE observations`, batched entry `UPDATE`) ·
+`compute_and_persist_cleared_status(sibling_ids=…)` (~18–22):
+ line join (1) · frozen-category `matrix_version` (1) · `get_category_documents` (0–1, TTL cache) ·
+ `linked_rows` (1) · `template_rows` (1) · `get_document_auth_roles_batch` (1) ·
+ **`get_voucher_line_physical_bills(voucher_line_id)`** — the "Material Purchased" category has a
+ `physical_bill` document ("Vendor Bill", id 19), so this fires: internally
+ `_resolve_sibling_voucher_line_ids` **(2, redundant — already resolved in step 3's parent)** +
+ `header_rows` (1) + `_fetch_physical_bill_items` (1) = **4** ·
+ `active_checks` (1) · `ticked_rows` (1) · `sig_rows` (1) · `evaluate_cross_checks_for_line` (~1–2,
+ zero cross-checks configured) · `_write_shortfall_observations` read (~1) ·
+ `_has_pending_account_head_note` (1) · `check_approved_by_authority_gate` (~3, batched) ·
+ final `UPDATE verification_details` (1).
+
+**Step 4 (`verify_voucher_checks`) breakdown** — `_verify_voucher_checks_impl`:
+`session` (1) · `_fetch_session_details_grouped` (1 big query + ~3 `get_template_columns`) ·
+`active_checks` (1) · `status_rows` (1) · 2 batched `UPDATE`s (2) ·
+**`sync_line_observations_to_voucher(row['id'])` in a `for` loop over every line of the current
+voucher — NOT sibling-threaded**, so each iteration re-runs `_resolve_sibling` (2) + the ~5 sync
+ops = **7 per line** · `_compute_voucher_nav_result` → `_build_verification_line(d)` for every line
+of the **next** voucher = **2 per line** (`get_row_data` + a `change_info` query with a correlated
+subquery).
+
+**Totals** for a 1-line current voucher crossing into a 2-line next voucher:
+step 3 ≈ 30, step 4 ≈ 10 + 7 + 4 ≈ 21, plus steps 1/5/6/7 ≈ 1 + 1 + 1 + 4 browser hops.
+≈ **55–60 mostly-sequential cross-region round trips**. At ~250 ms each + browser latency this
+lands squarely on the reported ~21.7 s. A 5-line voucher pushes step 4 alone to ~45 (7·5 + …).
+
+### physical_bills/194144 repeated-call finding — where it comes from
+
+`detail_id 194144` = session **751**, voucher **CPV-0826-442**, category "Material Purchased",
+account `20-15-50-0001`. That category includes the `physical_bill` document "Vendor Bill" (id 19).
+
+Any line in a category that has a `physical_bill` document triggers a `GET /physical_bills/{uid}`
+from **`updateProceduresCellForLine()`** (verification.js) — `needsPhysicalBills` is true, so its
+`Promise.all` includes `fetchPhysicalBillsForLine(uid)`, alongside `fetchAssignedDocumentRecords`
+(`GET /voucher_line_documents/{uid}`) and `fetchProcedureChecksForLine` (`GET /procedure_checks/{uid}`).
+**None of these three is cached.** `updateProceduresCellForLine()` is called from:
+
+1. `applyCategoryToTypeCell()` / Type auto-fill — once per line on session/voucher render
+2. `toggleColumnsExpanded()` — once per line, per toggle
+3. **`hideProcedureModalOnly()` (procedure_modal.js) — after *every* modal close / Verify / Verify & Stay**, for the line being left
+4. voucher-navigation re-renders (`applyVoucherNavRenderData` path)
+
+So opening the modal on that line, verifying, returning, opening again, toggling columns, etc.
+each re-fires the same 3 GETs — 6+ `physical_bills/194144` calls across one working session is
+fully explained, with matching duplicate counts on `voucher_line_documents/194144` and
+`procedure_checks/194144`. All three re-fetch data the `procedure_modal_data` batch endpoint
+(Phase 3c) returned for the same line moments earlier.
+
+**Is the duplication inside the Verify sequence itself, or elsewhere?** — **Both, two distinct
+mechanisms:**
+
+- **Frontend, adjacent to the Verify tail:** the repeated `GET /physical_bills/{uid}` is fired by
+  `updateProceduresCellForLine()`, invoked from `hideProcedureModalOnly()` (the teardown that
+  concludes "Verify & Next"/"Verify & Stay") and from the other render paths above — **not** from
+  inside `performVerifyVoucherChecks()`. It is a consequence of the Verify action, not a step of
+  it, and it also fires many times outside any Verify (initial render, column toggle).
+- **Backend, inside step 3:** `compute_and_persist_cleared_status()` calls
+  `get_voucher_line_physical_bills()` server-side on every `save_line_items` for a physical-bill
+  category, and that call **re-resolves sibling ids** (2 queries) even though `_save_line_items_impl`
+  already resolved them one frame earlier — the save-path equivalent of the redundancy Phase 3c
+  fixed for the modal-open fan-out.
+
+Neither is entangled with the auth-role loop.
+
+### Candidate fixes for Phase 3e (not actioned)
+
+- Thread the already-resolved `sibling_ids` into `get_voucher_line_physical_bills()` (and give the
+  save path the same opt-in ContextVar memo Phase 3c added), removing the redundant re-resolve in
+  step 3 and in the step-4 per-line `sync` loop.
+- Sibling-thread the `sync_line_observations_to_voucher()` calls in `_verify_voucher_checks_impl`'s
+  per-line loop (currently each re-resolves).
+- `updateProceduresCellForLine()` / `updateObservationsCellForLine()`: reuse the
+  `procedure_modal_data` payload already in `procedureModalState[uid]` after a modal open instead
+  of re-fetching `voucher_line_documents` / `procedure_checks` / `physical_bills` per call; or add
+  a short per-line client cache keyed by `uid` + a dirty flag set on save.
+- Drop step 1's forced `voucher_checks` re-fetch, or narrow it (the cache was just written by the
+  same modal's open).
+- On "Verify & Next Line", reuse loaded data for the next line rather than a cold `openProcedureModal`.
+- Batch step 3 + step 4 into one endpoint (they always run back-to-back and share the session).
+
+### Live trace not captured
+
+A full browser waterfall of a real "Verify & Next" was **not** run — clicking Verify writes
+verification state for a real client (Leather Crop), and 3d is investigation-only. The step map
+above is from code plus the DB-call arithmetic. A live before/after belongs in Phase 3f's Render
+(staging) test, or run against a throwaway session with explicit go-ahead.
