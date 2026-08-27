@@ -15,6 +15,81 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Verification Speed Optimization — Phase 3
+
+**Date:** 2026-08-27
+**Full investigation/timing log:** `INVESTIGATION_VERIFICATION_PERF_PHASE3.md` (repo root).
+**Scope so far:** Phase 3a (reconcile + map, no code) and Phase 3c (modal-open fetch fix).
+Phases 3d/3e (Verify sequence) and 3f (Render test + docs) not yet done.
+
+### Phase 3a — reconciliation + call-pattern map (no code changes)
+
+Confirmed the ~7.9s procedure-modal open and ~21.7s Verify sequence are specific instances of
+`PERFORMANCE_INVESTIGATION.md`'s Finding #1 (cross-region round-trip tax, Render Singapore ↔
+Supabase Mumbai) multiplied by Finding #2 (sequential, non-batched round-trips) — no new
+root-cause class. Corrected one stale note: the 2026-08-25 `Promise.all` fix covered page/session
+load, not `openProcedureModal()` or the Verify sequence (both built later, 2026-08-26, still
+sequential). Mapped the exact modal-open call sequence and Verify-sequence steps — see the
+investigation doc. Confirmed the `audit_rules.py get_required_documents_with_authority()`
+auth-role N+1 is reached only from the save/Verify path, never from `get_procedure_modal_data()`'s
+fan-out — so it is not entangled with 3c and stays tracked separately (KNOWN_ISSUES 2026-08-25).
+
+### Phase 3c — modal-open fetch fix
+
+**Backend — per-request memo for `_resolve_sibling_voucher_line_ids()` (`routers/verification.py`):**
+`get_procedure_modal_data()` is a thin sequential fan-out to 5 read sub-functions
+(`get_voucher_line_documents` / `get_procedure_checks` / `get_line_observations` /
+`get_voucher_line_physical_bills` / `get_cross_check_results`), each of which independently
+called `_resolve_sibling_voucher_line_ids()` (2 cross-region queries) for the same id.
+Added `import contextvars` and a module-level `_sibling_ids_request_memo` ContextVar
+(default `None`). `_resolve_sibling_voucher_line_ids()` now checks the memo first and stores its
+result (including `None` for a missing line). `get_procedure_modal_data()` sets a fresh `{}` on
+the ContextVar as its first `try` statement and `reset()`s it in `finally`. Opt-in only — every
+other caller (Verify path, standalone endpoints, Audit Workbook) is byte-for-byte unchanged
+because the memo defaults to `None`. Chosen per-request rather than the `audit_rules.py` TTL
+`cache_get/cache_set`: the `client_data_id → sibling verification_details ids` mapping changes
+whenever a new verification session is created for the cashbook, which cannot happen mid-request,
+so a process-lifetime/TTL cache would risk a stale sibling set.
+
+**Frontend — parallelize `openProcedureModal()` (`static/procedure_modal.js`):**
+Previously awaited 4 things in series: guidance (usually cached), template-columns `Promise.all`,
+`procedure_modal_data`, `fetchLatestTbAccounts`. Steps 3–4 are independent of 1–2 and of each
+other. Now the `procedure_modal_data` fetch is started (in a timed IIFE, own try/catch,
+fail-soft to `null`) **before** the guidance await, and template-columns + modal-data are awaited
+together via `Promise.all`. `modal_data_ms` is still measured truthfully inside the IIFE;
+`template_columns_ms` now covers whichever of the two overlapping fetches finishes last.
+
+**Frontend — `fetchLatestTbAccounts()` cache + lazy load (`static/procedure_modal.js`):**
+Had no cache-hit guard despite its name, so it re-fetched `/api/trial-balance/latest-accounts`
+on every modal open even though only the "Voucher Line" tab's Account-Head search uses it.
+Now cached per client (`latestTbAccountsCacheClientId`) with in-flight dedup
+(`latestTbAccountsInFlight`), removed from `openProcedureModal()`, and warmed lazily
+fire-and-forget from `renderAccountHeadCard()` the first time that tab renders — safe because the
+match-mode markup reads nothing from the cache; only the keystroke dropdown / Suggest / "Use"
+handlers do, all strictly later. Result: 0 cost on the common modal open, at most one fetch per
+client per page session.
+
+**Cache-bust:** `procedure_modal.js?v=4→5` on `verification.html` and `audit_workbook.html`
+(the only two pages that load it).
+
+### Verification
+
+- **Baseline script** (`scratchpad/bench_modal_data.py`, throwaway, read-only): calls
+  `get_procedure_modal_data()` in-process against real Postgres, wrapped in `start_db_metrics()`,
+  for `detail_id 193952`. Baseline **17 DB calls / ~4.2–4.6s wall**; after 3c **11 DB calls /
+  ~2.7–3.1s wall** (−6 calls, ~−36%). A 2nd in-process call still reports 11 (not a stale hit),
+  confirming the ContextVar reset works.
+- `pytest tests/ -q` → 20 passed, 2 failed (the known pre-existing `test_app_smoke` /
+  `test_upload_validation_counts` SQLite-vs-Postgres failures, KNOWN_ISSUES 2026-08-27 — untouched).
+- `python -c "import routers.verification"` clean; `node -c static/procedure_modal.js` clean.
+- **Live browser before/after not captured** — the only verification session on the running dev
+  server is #749 for client 5 ("Leather Crop"), whose Trial Balance was deleted, so its voucher
+  lines have no resolved Category and `openProcedureModal()` deliberately no-ops. Logged in
+  KNOWN_ISSUES; the frontend reorder is a mechanical await change with no behavioural branch
+  touched, and the live check rolls into Phase 3f's Render test.
+
+---
+
 ## Verification Performance Diagnostics — Phase 1
 
 **Date:** 2026-08-27

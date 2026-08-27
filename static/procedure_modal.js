@@ -253,29 +253,57 @@ function getAccountHeadState(uid) {
     }
     return accountHeadCache[uid];
 }
-// Trial Balance leaf accounts for the Account Head search-select — warmed once per modal open
-// (openProcedureModal()) via GET /api/trial-balance/latest-accounts, same source Assign
-// Categories already uses. That endpoint returns both parent and leaf accounts, so is_leaf
-// filtering happens here, client-side; not pre-filtered server-side.
+// Trial Balance leaf accounts for the Account Head search-select — via GET /api/trial-balance/
+// latest-accounts, same source Assign Categories already uses. That endpoint returns both parent
+// and leaf accounts, so is_leaf filtering happens here, client-side; not pre-filtered server-side.
+//
+// Phase 3c: this is now warmed lazily (fire-and-forget from renderAccountHeadCard(), only when
+// the "Voucher Line" tab actually renders in match mode) rather than on every modal open, and it
+// is cached per client for the rest of the page session — the leaf-account list only changes on
+// a Trial Balance re-upload, which can't happen mid-verification. latestTbAccountsCacheClientId
+// guards the cache hit; latestTbAccountsInFlight dedups concurrent callers so a quick
+// tab-switch-and-type can't fire the request twice.
 let latestTbAccountsCache = null;
+let latestTbAccountsCacheClientId = null;
+let latestTbAccountsInFlight = null;
 async function fetchLatestTbAccounts(clientId) {
     if (!clientId) {
         latestTbAccountsCache = [];
+        latestTbAccountsCacheClientId = null;
         return latestTbAccountsCache;
     }
-    try {
-        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/trial-balance/latest-accounts?client_id=${encodeURIComponent(clientId)}`);
-        if (!res.ok) {
-            latestTbAccountsCache = [];
-            return latestTbAccountsCache;
-        }
-        const data = await res.json();
-        latestTbAccountsCache = (data.accounts || []).filter(a => a.is_leaf);
-    } catch (e) {
-        console.error('Failed to load Trial Balance leaf accounts:', e);
-        latestTbAccountsCache = [];
+    if (latestTbAccountsCache !== null && latestTbAccountsCacheClientId === clientId) {
+        return latestTbAccountsCache;
     }
-    return latestTbAccountsCache;
+    if (latestTbAccountsInFlight && latestTbAccountsInFlight.clientId === clientId) {
+        return latestTbAccountsInFlight.promise;
+    }
+    const promise = (async () => {
+        try {
+            const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/trial-balance/latest-accounts?client_id=${encodeURIComponent(clientId)}`);
+            if (!res.ok) {
+                latestTbAccountsCache = [];
+                latestTbAccountsCacheClientId = null;
+                return latestTbAccountsCache;
+            }
+            const data = await res.json();
+            latestTbAccountsCache = (data.accounts || []).filter(a => a.is_leaf);
+            latestTbAccountsCacheClientId = clientId;
+        } catch (e) {
+            console.error('Failed to load Trial Balance leaf accounts:', e);
+            latestTbAccountsCache = [];
+            latestTbAccountsCacheClientId = null;
+        }
+        return latestTbAccountsCache;
+    })();
+    latestTbAccountsInFlight = { clientId, promise };
+    try {
+        return await promise;
+    } finally {
+        if (latestTbAccountsInFlight && latestTbAccountsInFlight.promise === promise) {
+            latestTbAccountsInFlight = null;
+        }
+    }
 }
 // Confirmed fix (Linked Evidence table dynamic columns): each Document's evidence table needs
 // its own template's actual configured columns (name + data_type, sort_order), not a one-size-
@@ -605,6 +633,29 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
         // the rest of the payload, so a cached entry's version is available if a later phase adds
         // a live staleness check - none exists yet, so this phase is a plain session-lifetime
         // cache, not a version-triggered one.
+        // Phase 3c: kick off the batch modal-data fetch immediately. It needs only `uid`, so it
+        // can run in parallel with the (usually cached) guidance fetch above and the
+        // template-column warming below, instead of waiting for both. Its own try/catch +
+        // fail-soft-to-null is kept here so a modal_data failure still degrades gracefully and
+        // never surfaces as an unhandled rejection when an early `return` below abandons it.
+        // modal_data_ms is timed inside the IIFE so it stays truthful even under overlap.
+        const modalDataPromise = (async () => {
+            const modalDataStarted = performance.now();
+            try {
+                const perfSuffix = window.VerificationPerf && window.VerificationPerf.enabled ? '?perf=true' : '';
+                const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_modal_data/${uid}${perfSuffix}`);
+                if (res.ok) {
+                    const body = await res.json();
+                    perfComponents.modal_data_ms = Math.round((performance.now() - modalDataStarted) * 10) / 10;
+                    return body;
+                }
+            } catch (e) {
+                console.error('Failed to load Supporting Documents modal data:', e);
+            }
+            perfComponents.modal_data_ms = Math.round((performance.now() - modalDataStarted) * 10) / 10;
+            return null;
+        })();
+
         let guidance = null;
         try {
             const guidanceStarted = performance.now();
@@ -633,30 +684,27 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // real column list synchronously — mirrors the assignedRecords/procedureChecks/
     // observationEntries pattern below (all awaited before rendering).
     const distinctTemplateIds = [...new Set(documents.filter(d => d.template_id).map(d => d.template_id))];
-    const templateColumnsStarted = performance.now();
-    await Promise.all(distinctTemplateIds.map(fetchTemplateColumns));
-    perfComponents.template_columns_ms = Math.round((performance.now() - templateColumnsStarted) * 10) / 10;
 
     // Batch modal-open endpoint (Fast Modal-Open Data, Phase 1 of 4): one call replaces what
     // used to be 6 separate round trips here (voucher_line_documents/procedure_checks/
     // line_observations/physical_bills/cross_check_results/voucher_checks) - each paid the same
     // Render<->Supabase cross-region latency floor separately. audit_guidance stays a separate
     // call above (it primes auditGuidanceCache, a cache other UI surfaces outside this modal
-    // read from). Fail-soft to {} on the whole call, same convention as the per-call fail-soft
-    // this replaced.
-    let modalData = null;
-    try {
-        const modalDataStarted = performance.now();
-        const perfSuffix = window.VerificationPerf && window.VerificationPerf.enabled ? '?perf=true' : '';
-        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_modal_data/${uid}${perfSuffix}`);
-        perfComponents.modal_data_ms = Math.round((performance.now() - modalDataStarted) * 10) / 10;
-        if (res.ok) {
-            modalData = await res.json();
-        }
-    } catch (e) {
-        console.error('Failed to load Supporting Documents modal data:', e);
-    }
-    modalData = modalData || {};
+    // read from).
+    //
+    // Phase 3c: the template-column warming and the batch modal-data fetch (started before the
+    // guidance await above) are independent, so they run together here instead of one after the
+    // other. template_columns_ms therefore covers whichever of the two finishes last; the true
+    // modal-data duration is captured separately as modal_data_ms inside its own IIFE.
+    const templateColumnsStarted = performance.now();
+    const [, modalDataResolved] = await Promise.all([
+        Promise.all(distinctTemplateIds.map(fetchTemplateColumns)),
+        modalDataPromise
+    ]);
+    perfComponents.template_columns_ms = Math.round((performance.now() - templateColumnsStarted) * 10) / 10;
+
+    // Fail-soft to {} on the whole call, same convention as the per-call fail-soft this replaced.
+    let modalData = modalDataResolved || {};
 
     // Full assignment records (not just IDs) for this line. Drives the tab completion dots AND
     // seeds each tab's selected-lines table, grouped by document_id. Re-fetched fresh on every
@@ -703,11 +751,11 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     ahState.noMatchDirty = false;
     ahState.mode = ahState.noMatchText ? 'nomatch' : 'match';
 
-    // Warm the Trial Balance leaf-account list for the Account Head search-select — fetched fresh
-    // on every open, same fail-soft-to-empty convention as assignedRecords/procedureChecks above.
-    const trialBalanceStarted = performance.now();
-    await fetchLatestTbAccounts(hostAdapter.getClientId());
-    perfComponents.trial_balance_accounts_ms = Math.round((performance.now() - trialBalanceStarted) * 10) / 10;
+    // Phase 3c: the Trial Balance leaf-account list is no longer warmed here. It is used only by
+    // the "Voucher Line" tab's Account Head search-select, which is usually not the tab that
+    // opens, so paying its round trip on every modal open was pure waste. renderAccountHeadCard()
+    // now warms it lazily (fire-and-forget) the first time that tab renders in match mode, and
+    // fetchLatestTbAccounts() caches per client + dedups in-flight calls — see both below.
 
     // The persistent voucher-level checks bar's data — now included in the composite call above,
     // written straight into the same voucherChecksCache ensureVoucherChecksLoaded() and
@@ -1704,6 +1752,14 @@ function renderAccountHeadCard(uid) {
     const bodyEl = document.getElementById('procedureAccountHeadBody');
     if (!bodyEl) return;
     const state = getAccountHeadState(uid);
+
+    // Phase 3c: warm the Trial Balance leaf-account list the first time this card renders (i.e.
+    // the user actually opened the "Voucher Line" tab), fire-and-forget. Safe to not await: the
+    // match-mode markup below reads nothing from latestTbAccountsCache — only
+    // renderAccountHeadSearchDropdown() (on keystroke) and the Suggest/"Use" handlers do, all
+    // strictly later. fetchLatestTbAccounts() caches per client + dedups, so repeat renders and
+    // mode toggles cost nothing.
+    fetchLatestTbAccounts(hostAdapter.getClientId());
 
     if (state.mode === 'nomatch') {
         bodyEl.innerHTML = `

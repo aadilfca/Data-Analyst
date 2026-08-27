@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import json
 import re
 import time
+import contextvars
 from typing import List, Optional, Dict, Any
 import io
 import pandas as pd
@@ -3501,6 +3502,21 @@ def save_voucher_check_status(
 # row must never be treated as a live link.
 # ==============================================
 
+# Phase 3c: opt-in per-request memo for _resolve_sibling_voucher_line_ids(). Defaults to None,
+# so every caller behaves exactly as before unless a request handler explicitly opts in by
+# setting a fresh dict on this ContextVar (today only get_procedure_modal_data() does). That
+# endpoint's thin fan-out calls the 5 read sub-functions in sequence and each independently
+# resolved siblings for the SAME voucher_line_id - 5x the 2-query resolve = ~8 wasted
+# cross-region round trips per modal open. This is deliberately per-request (not the
+# audit_rules.py TTL cache_get/cache_set): the client_data_id -> sibling verification_details
+# ids mapping changes whenever a new verification session is created for the cashbook, so a
+# process-lifetime/TTL cache would risk serving a stale sibling set across that event. Within
+# one modal-open request no session creation can happen, so the mapping is provably stable.
+_sibling_ids_request_memo: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
+    "_sibling_ids_request_memo", default=None
+)
+
+
 def _resolve_sibling_voucher_line_ids(voucher_line_id: int) -> Optional[List[int]]:
     """
     Bug fix (Voucher Supporting-Document Linking follow-up, Phase 3 of 4): start_verification_session()
@@ -3525,14 +3541,26 @@ def _resolve_sibling_voucher_line_ids(voucher_line_id: int) -> Optional[List[int
     affected by this helper - they still target whichever voucher_line_id the caller passes in,
     exactly as before.
     """
+    # Phase 3c: return an already-resolved result for this id if the current request opted in
+    # to memoisation (see _sibling_ids_request_memo above). Both the None (line-not-found) and
+    # the real list are cached, so a bad id isn't re-queried 5x either.
+    memo = _sibling_ids_request_memo.get()
+    if memo is not None and voucher_line_id in memo:
+        return memo[voucher_line_id]
+
     line = execute_query_pg("SELECT client_data_id FROM verification_details WHERE id = %s", (voucher_line_id,))
     if not line:
+        if memo is not None:
+            memo[voucher_line_id] = None
         return None
     siblings = execute_query_pg(
         "SELECT id FROM verification_details WHERE client_data_id = %s",
         (line[0]['client_data_id'],)
     )
-    return [s['id'] for s in siblings]
+    result = [s['id'] for s in siblings]
+    if memo is not None:
+        memo[voucher_line_id] = result
+    return result
 
 
 @router.post("/api/verification/assign_document")
@@ -5400,6 +5428,12 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
     perf_started = time.perf_counter()
     component_ms = {}
 
+    # Phase 3c: opt in to per-request sibling-id memoisation for this handler's fan-out, so the
+    # 5 read sub-functions below share one _resolve_sibling_voucher_line_ids() result per id
+    # instead of each re-running it. reset() in the finally keeps the ContextVar clean for the
+    # next request served on this worker thread.
+    memo_token = _sibling_ids_request_memo.set({})
+
     def measured(name, fn):
         started = time.perf_counter()
         value = fn()
@@ -5440,6 +5474,7 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
             "voucher_checks": voucher_checks,
         }
     finally:
+        _sibling_ids_request_memo.reset(memo_token)
         if perf_token is not None:
             metrics = get_db_metrics()
             print(json.dumps({"perf": "procedure_modal_data", "detail_id": voucher_line_id,
