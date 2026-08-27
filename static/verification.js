@@ -16,6 +16,19 @@
 // ?view= targets a specific screen so it takes priority. Any other/missing ?view= value falls
 // through to the existing ?type= resolution unchanged.
 const urlSearchParamsForType = new URLSearchParams(window.location.search);
+// Opt-in diagnostics expose timings/counts only and remain inert without ?perf=1.
+window.VerificationPerf = {
+    enabled: urlSearchParamsForType.get('perf') === '1',
+    querySuffix() { return this.enabled ? '?perf=true' : ''; },
+    log(operation, startedAt, details = {}) {
+        if (!this.enabled) return;
+        console.info('[verification-perf]', {
+            operation,
+            elapsed_ms: Math.round((performance.now() - startedAt) * 10) / 10,
+            ...details
+        });
+    }
+};
 const viewParam = urlSearchParamsForType.get('view');
 const currentType = (viewParam === 'bankbook') ? 'bank'
     : (viewParam === 'cashbook') ? 'cash'
@@ -3767,6 +3780,7 @@ async function saveLineItems(detailId = currentDetailId) {
 }
 
 async function doSaveLineItems(detailId) {
+    const perfStarted = performance.now();
     if (!voucherLineState[detailId]) {
         voucherLineState[detailId] = { transactionType: '', procedureData: {}, lineItems: [] };
     }
@@ -3816,7 +3830,7 @@ async function doSaveLineItems(detailId) {
             transaction_type: state.transactionType,
             procedure_data: state.procedureData
         };
-        const res = await fetch(`${API_BASE}/api/verification/save_line_items`, {
+        const res = await fetch(`${API_BASE}/api/verification/save_line_items${window.VerificationPerf.querySuffix()}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -3859,6 +3873,10 @@ async function doSaveLineItems(detailId) {
                 applyCategoryToTypeCell(detailId, data.category_name_applied, { frozen: true });
             }
         }
+        window.VerificationPerf.log('save_line_items', perfStarted, {
+            detail_id: String(detailId),
+            dirty_state: 'not tracked by current workflow'
+        });
         // Success – no status bar message
     } catch (e) {
         console.error('Error saving:', e);
@@ -3874,9 +3892,24 @@ async function doSaveLineItems(detailId) {
 // manual save button.
 async function saveAllVoucherLines() {
     const uids = Object.keys(voucherLineState);
+    const perfStarted = performance.now();
+    if (window.VerificationPerf.enabled) {
+        console.info('[verification-perf]', {
+            operation: 'save_all_voucher_lines_inventory',
+            voucher_id: currentVoucherId,
+            line_count: uids.length,
+            detail_ids: uids.map(String),
+            dirty_state: 'not tracked; all listed lines will be saved sequentially'
+        });
+    }
     for (const uid of uids) {
         await saveLineItems(uid);
     }
+    window.VerificationPerf.log('save_all_voucher_lines', perfStarted, {
+        voucher_id: currentVoucherId,
+        line_count: uids.length,
+        execution: 'sequential'
+    });
 }
 
 // ---------- VALIDATE TRANSACTION ----------

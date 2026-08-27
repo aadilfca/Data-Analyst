@@ -15,6 +15,40 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Verification Performance Diagnostics — Phase 1
+
+**Date:** 2026-08-27
+**Scope:** Measurement and dirty-state inventory only; no loading, saving, validation, caching,
+Cleared/Query, or transaction behavior changed.
+
+### Developed
+
+- Replaced always-on temporary `save_line_items` timing with request-local, opt-in database
+  metrics. `?perf=true` now records total calls, reads, writes, and cumulative database time;
+  normal requests produce no performance logs.
+- Added backend component timings for procedure-modal linked documents, procedure checks,
+  observations, Physical Bills, cross-check results, voucher checks, observation synchronization,
+  and the Cleared/Query status engine.
+- Added browser diagnostics enabled by `verification.html?...&perf=1`. Console entries report the
+  complete procedure-window duration, guidance, template-column, Trial Balance, modal-data,
+  per-line save, sequential save-all, and Verify sequence timings.
+- Added a save inventory that explicitly reports every line submitted by the existing navigation
+  flow and records that dirty state is not currently tracked. Diagnostics contain identifiers,
+  counts, operation names, and durations only—not client document contents, amounts, or notes.
+- Coordinated cache versions: `procedure_modal.js?v=2→3` in Verification and Audit Workbook;
+  `verification.js?v=15→16` in Verification.
+
+### Verification
+
+- Python compilation passed for `database.py`, `routers/verification.py`, and the new metrics test.
+- `node --check` passed for `static/verification.js` and `static/procedure_modal.js`.
+- New regression suite: 3 passed.
+- Full suite: 14 passed, 2 failed. The two failures are the already-recorded Postgres-cutover test
+  isolation defects in `test_app_smoke.py` and `test_upload_validation_counts.py`; this run could
+  not reach Supabase from the sandbox, while all Phase 1 and browser-navigation tests passed.
+
+---
+
 ## Client Data Availability Loading Popup
 
 **Date:** 2026-08-27 | **Files:** `static/databank.html`, `static/databank.js`, `CLAUDE.md`, `CHANGELOG_ARCHIVE.md`.

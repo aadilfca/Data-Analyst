@@ -7,12 +7,12 @@
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
 from database import execute_query_pg, execute_write_pg, execute_batch_pg, execute_batch_insert_with_ids_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg
-from database import _reset_db_stats, _get_db_stats  # TEMPORARY INSTRUMENTATION - remove with the rest of this block
+from database import start_db_metrics, get_db_metrics, stop_db_metrics
 from psycopg2.extras import Json
 from datetime import datetime, timezone
 import json
 import re
-import time  # TEMPORARY INSTRUMENTATION - remove if nothing else in this file needs it
+import time
 from typing import List, Optional, Dict, Any
 import io
 import pandas as pd
@@ -1514,7 +1514,8 @@ def get_voucher_nav(
 @router.post("/api/verification/verify_voucher_checks")
 def verify_voucher_checks(
     session_id: int = Body(..., embed=True),
-    current_detail_id: int = Body(..., embed=True, description="detail_id of any line in the currently displayed voucher")
+    current_detail_id: int = Body(..., embed=True, description="detail_id of any line in the currently displayed voucher"),
+    perf: bool = Query(False)
 ):
     """
     Voucher-level Checks simplified to name-only (Phase 2 of 4): the "Verify & Next/Close"
@@ -1531,6 +1532,25 @@ def verify_voucher_checks(
     voucher, mirroring the button-disable condition Phase 3's frontend will also enforce
     client-side.
     """
+    perf_token = start_db_metrics() if perf else None
+    perf_started = time.perf_counter()
+    timings = {} if perf else None
+    try:
+        return _verify_voucher_checks_impl(session_id, current_detail_id, perf_timings=timings)
+    finally:
+        if perf_token is not None:
+            metrics = get_db_metrics()
+            print(json.dumps({"perf": "verify_voucher_checks", "session_id": session_id,
+                              "detail_id": current_detail_id,
+                              "total_ms": round((time.perf_counter() - perf_started) * 1000, 1),
+                              "observation_sync_ms": timings.get("observation_sync_ms", 0),
+                              "db_calls": metrics["calls"], "db_reads": metrics["reads"],
+                              "db_writes": metrics["writes"],
+                              "db_ms": round(metrics["db_time"] * 1000, 1)}))
+            stop_db_metrics(perf_token)
+
+
+def _verify_voucher_checks_impl(session_id: int, current_detail_id: int, perf_timings=None):
     session = execute_query_pg("SELECT id, client_id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'", (session_id,))
     if not session:
         raise HTTPException(404, "Verification session not found or cancelled.")
@@ -1585,8 +1605,11 @@ def verify_voucher_checks(
     # rewriting a shared function (also called per-line elsewhere in this file) with detailed
     # correctness invariants documented in its own docstring - not worth the risk for what's
     # normally just a handful of lines per voucher.
+    sync_started = time.perf_counter()
     for row in voucher_rows:
         sync_line_observations_to_voucher(row['id'])
+    if perf_timings is not None:
+        perf_timings["observation_sync_ms"] = round((time.perf_counter() - sync_started) * 1000, 1)
 
     result = _compute_voucher_nav_result(details, current_detail_id, "next")
     result["verified"] = True
@@ -1598,31 +1621,28 @@ def save_line_items(
     detail_id: int = Body(..., embed=True),
     line_items: List[Dict[str, Any]] = Body(..., embed=True),
     transaction_type: Optional[str] = Body(None, embed=True),
-    procedure_data: Optional[Dict[str, Any]] = Body(None, embed=True)
+    procedure_data: Optional[Dict[str, Any]] = Body(None, embed=True),
+    perf: bool = Query(False)
 ):
-    # TEMPORARY INSTRUMENTATION - remove the reset/start lines here, the
-    # try/finally wrapping the body below (dedent it back), and the log
-    # block in the finally clause, once round-trip counts are captured.
-    _reset_db_stats()
-    _instrumentation_start = time.perf_counter()
+    perf_token = start_db_metrics() if perf else None
+    started = time.perf_counter()
+    timings = {} if perf else None
     try:
-        return _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data)
+        return _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data, timings)
     finally:
-        _db_stats = _get_db_stats()
-        _total_request_ms = (time.perf_counter() - _instrumentation_start) * 1000
-        print(
-            f"[timing] save_line_items detail_id={detail_id} "
-            f"total_calls={_db_stats['calls']} "
-            f"total_db_time={_db_stats['db_time'] * 1000:.1f}ms "
-            f"total_request_time={_total_request_ms:.1f}ms"
-        )
+        if perf_token is not None:
+            metrics = get_db_metrics()
+            print(json.dumps({"perf": "save_line_items", "detail_id": detail_id,
+                              "total_ms": round((time.perf_counter() - started) * 1000, 1),
+                              "observation_sync_ms": timings.get("observation_sync_ms", 0),
+                              "status_engine_ms": timings.get("status_engine_ms", 0),
+                              "db_calls": metrics["calls"], "db_reads": metrics["reads"],
+                              "db_writes": metrics["writes"],
+                              "db_ms": round(metrics["db_time"] * 1000, 1)}))
+            stop_db_metrics(perf_token)
 
 
-# TEMPORARY INSTRUMENTATION - this is save_line_items()'s original body, split
-# out only so the finally block above can wrap it regardless of which path
-# (success or any raise) it exits through. Merge this back into
-# save_line_items() and delete this wrapper split when instrumentation is removed.
-def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data):
+def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data, perf_timings=None):
     detail = execute_query_pg(
         "SELECT id, status FROM verification_details WHERE id = %s",
         (detail_id,)
@@ -1678,12 +1698,18 @@ def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_dat
     # Phase 6: roll any unsynced per-document observation entries into this line's own
     # Observation field. save_line_items() is the single chokepoint every Save/Next/Prev/
     # Validate/Complete/Exit path already calls per line, so this is the correct place to sync.
+    sync_started = time.perf_counter()
     sync_line_observations_to_voucher(detail_id, sibling_ids=sibling_ids)
+    if perf_timings is not None:
+        perf_timings["observation_sync_ms"] = round((time.perf_counter() - sync_started) * 1000, 1)
 
     # Validation Rules Phase 4: recompute Cleared/Query status on every save, same
     # chokepoint as the observation sync directly above. Phase 5: surface the result in the
     # response so the frontend can refresh the line's badge without a second round-trip.
+    status_started = time.perf_counter()
     status_result = compute_and_persist_cleared_status(detail_id, sibling_ids=sibling_ids)
+    if perf_timings is not None:
+        perf_timings["status_engine_ms"] = round((time.perf_counter() - status_started) * 1000, 1)
 
     log_audit("Analyst", "Save Line Items", "Verification", f"Detail {detail_id} line items saved.")
     response = {"message": "Line items and procedure data saved successfully."}
@@ -5342,7 +5368,7 @@ def get_cross_check_results(voucher_line_id: int):
 
 
 @router.get("/api/verification/procedure_modal_data/{voucher_line_id}")
-def get_procedure_modal_data(voucher_line_id: int):
+def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
     """
     Batch modal-open endpoint (Fast Modal-Open Data, Phase 1 of 4): everything the Supporting
     Documents modal (openProcedureModal(), static/procedure_modal.js) fetches on open, EXCEPT
@@ -5370,37 +5396,58 @@ def get_procedure_modal_data(voucher_line_id: int):
     independently client-side). These are long-stable, already-exercised endpoints, so no new
     try/except is added around them here.
     """
-    linked_documents = get_voucher_line_documents(voucher_line_id)
-    procedure_checks = get_procedure_checks(voucher_line_id)
-    observations = get_line_observations(voucher_line_id)
-    physical_bills = get_voucher_line_physical_bills(voucher_line_id)
-    cross_check_results = get_cross_check_results(voucher_line_id)
+    perf_token = start_db_metrics() if perf else None
+    perf_started = time.perf_counter()
+    component_ms = {}
 
-    voucher_row = execute_query_pg(
-        """
-        SELECT vd.transaction_ref, vs.client_id
-        FROM verification_details vd
-        JOIN verification_sessions vs ON vs.id = vd.session_id
-        WHERE vd.id = %s
-        """,
-        (voucher_line_id,)
-    )
-    voucher_checks = []
-    if voucher_row and voucher_row[0]['transaction_ref']:
-        voucher_checks = get_voucher_checks_status(
-            client_id=voucher_row[0]['client_id'],
-            transaction_ref=voucher_row[0]['transaction_ref']
+    def measured(name, fn):
+        started = time.perf_counter()
+        value = fn()
+        if perf:
+            component_ms[name] = round((time.perf_counter() - started) * 1000, 1)
+        return value
+
+    try:
+        linked_documents = measured("linked_documents_ms", lambda: get_voucher_line_documents(voucher_line_id))
+        procedure_checks = measured("procedure_checks_ms", lambda: get_procedure_checks(voucher_line_id))
+        observations = measured("observations_ms", lambda: get_line_observations(voucher_line_id))
+        physical_bills = measured("physical_bills_ms", lambda: get_voucher_line_physical_bills(voucher_line_id))
+        cross_check_results = measured("cross_checks_ms", lambda: get_cross_check_results(voucher_line_id))
+
+        voucher_row = execute_query_pg(
+            """
+            SELECT vd.transaction_ref, vs.client_id
+            FROM verification_details vd
+            JOIN verification_sessions vs ON vs.id = vd.session_id
+            WHERE vd.id = %s
+            """,
+            (voucher_line_id,)
         )
+        voucher_checks = []
+        if voucher_row and voucher_row[0]['transaction_ref']:
+            voucher_checks = measured("voucher_checks_ms", lambda: get_voucher_checks_status(
+                client_id=voucher_row[0]['client_id'],
+                transaction_ref=voucher_row[0]['transaction_ref']
+            ))
 
-    return {
-        "voucher_line_id": voucher_line_id,
-        "linked_documents": linked_documents,
-        "procedure_checks": procedure_checks,
-        "observations": observations,
-        "physical_bills": physical_bills,
-        "cross_check_results": cross_check_results,
-        "voucher_checks": voucher_checks,
-    }
+        return {
+            "voucher_line_id": voucher_line_id,
+            "linked_documents": linked_documents,
+            "procedure_checks": procedure_checks,
+            "observations": observations,
+            "physical_bills": physical_bills,
+            "cross_check_results": cross_check_results,
+            "voucher_checks": voucher_checks,
+        }
+    finally:
+        if perf_token is not None:
+            metrics = get_db_metrics()
+            print(json.dumps({"perf": "procedure_modal_data", "detail_id": voucher_line_id,
+                              "total_ms": round((time.perf_counter() - perf_started) * 1000, 1),
+                              "components": component_ms, "db_calls": metrics["calls"],
+                              "db_reads": metrics["reads"], "db_writes": metrics["writes"],
+                              "db_ms": round(metrics["db_time"] * 1000, 1)}))
+            stop_db_metrics(perf_token)
 
 
 @router.get("/api/verification/line_status_reason/{voucher_line_id}")

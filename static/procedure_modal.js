@@ -571,6 +571,8 @@ function getProcedureTabState(uid, docId) {
 // first document's tab opens. No-ops if the line has no Category assigned yet (nothing to build
 // tabs from) or its Category has no documents.
 async function openProcedureModal(uid, initialDocId = null, adapter = null, triggerEl = null) {
+    const perfStarted = performance.now();
+    const perfComponents = {};
     if (adapter) hostAdapter = adapter;
     if (!procedureModal) return;
     const lineState = hostAdapter.voucherLineState[uid];
@@ -601,7 +603,9 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
         // cache, not a version-triggered one.
         let guidance = null;
         try {
+            const guidanceStarted = performance.now();
             guidance = await hostAdapter.fetchAuditGuidanceData(type, false);
+            perfComponents.guidance_ms = Math.round((performance.now() - guidanceStarted) * 10) / 10;
         } catch (e) {
             console.error('Failed to load Supporting Documents modal data:', e);
             return;
@@ -625,7 +629,9 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // real column list synchronously — mirrors the assignedRecords/procedureChecks/
     // observationEntries pattern below (all awaited before rendering).
     const distinctTemplateIds = [...new Set(documents.filter(d => d.template_id).map(d => d.template_id))];
+    const templateColumnsStarted = performance.now();
     await Promise.all(distinctTemplateIds.map(fetchTemplateColumns));
+    perfComponents.template_columns_ms = Math.round((performance.now() - templateColumnsStarted) * 10) / 10;
 
     // Batch modal-open endpoint (Fast Modal-Open Data, Phase 1 of 4): one call replaces what
     // used to be 6 separate round trips here (voucher_line_documents/procedure_checks/
@@ -636,7 +642,10 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // this replaced.
     let modalData = null;
     try {
-        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_modal_data/${uid}`);
+        const modalDataStarted = performance.now();
+        const perfSuffix = window.VerificationPerf && window.VerificationPerf.enabled ? '?perf=true' : '';
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_modal_data/${uid}${perfSuffix}`);
+        perfComponents.modal_data_ms = Math.round((performance.now() - modalDataStarted) * 10) / 10;
         if (res.ok) {
             modalData = await res.json();
         }
@@ -692,7 +701,9 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
 
     // Warm the Trial Balance leaf-account list for the Account Head search-select — fetched fresh
     // on every open, same fail-soft-to-empty convention as assignedRecords/procedureChecks above.
+    const trialBalanceStarted = performance.now();
     await fetchLatestTbAccounts(hostAdapter.getClientId());
+    perfComponents.trial_balance_accounts_ms = Math.round((performance.now() - trialBalanceStarted) * 10) / 10;
 
     // The persistent voucher-level checks bar's data — now included in the composite call above,
     // written straight into the same voucherChecksCache ensureVoucherChecksLoaded() and
@@ -820,6 +831,14 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     activateProcedureTab(uid, activeDocId);
     updateProcedureModalSavedNote(uid);
     } finally {
+        if (window.VerificationPerf) {
+            const lineState = hostAdapter && hostAdapter.procedureModalState[uid];
+            window.VerificationPerf.log('procedure_modal_open', perfStarted, {
+                detail_id: String(uid),
+                document_count: lineState ? lineState.documents.filter(d => !d.__voucherTab).length : 0,
+                components: perfComponents
+            });
+        }
         if (window.LoadingUI) window.LoadingUI.hideSpinner(spinnerTarget);
     }
 }
@@ -1005,6 +1024,7 @@ function updateVerifyFooterButton(uid) {
 // unread. Disables/re-enables BOTH verify-type buttons around the request, not just the one
 // clicked, so a click on the other button can't double-submit while this one is in flight.
 async function performVerifyVoucherChecks(uid, triggerBtn) {
+    const perfStarted = performance.now();
     const btn = document.getElementById('procedureModalVerifyBtn');
     const verifyOnlyBtn = document.getElementById('procedureModalVerifyOnlyBtn');
     if (btn) btn.disabled = true;
@@ -1029,7 +1049,8 @@ async function performVerifyVoucherChecks(uid, triggerBtn) {
         }
         await hostAdapter.saveLineItems(uid);
         await flushPhysicalBillEntries(uid);
-        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/verify_voucher_checks`, {
+        const perfSuffix = window.VerificationPerf && window.VerificationPerf.enabled ? '?perf=true' : '';
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/verify_voucher_checks${perfSuffix}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: hostAdapter.currentSessionId, current_detail_id: uid })
@@ -1039,7 +1060,14 @@ async function performVerifyVoucherChecks(uid, triggerBtn) {
             hostAdapter.showStatus(err.detail || 'Could not verify voucher-level checks — please try again.', 'error');
             return null;
         }
-        return await res.json();
+        const data = await res.json();
+        if (window.VerificationPerf) {
+            window.VerificationPerf.log('verify_voucher_checks_sequence', perfStarted, {
+                detail_id: String(uid),
+                includes: ['fresh voucher-check read', 'line save', 'physical-bill flush', 'voucher verify']
+            });
+        }
+        return data;
     } catch (e) {
         console.error('Error verifying voucher checks:', e);
         hostAdapter.showStatus('Could not verify voucher-level checks — please try again.', 'error');
