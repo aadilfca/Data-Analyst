@@ -274,13 +274,11 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-26: category-for-account cache, Phase 2 of 4 - `routers/trial_balance.py` invalidates on TB upload and category assignment (smart-fill/force-apply).
 - 2026-08-26: category-for-account cache, Phase 3 of 4 - `routers/verification.py`'s lookup now reads/writes through the per-client cache.
 - 2026-08-26: TB-delete stale category fix - deleting a client's last upload now clears `account_category_assignments` + invalidates the cache.
-- 2026-08-26: Freeze Category on voucher lines, Phase 1 of 3 - `category_id_applied`/`category_name_applied` added to `verification_details` (both DBs).
-- 2026-08-26: Freeze Category on voucher lines, Phase 2 of 3 - `routers/verification.py` freezes/reads `category_id_applied` on first save, all read surfaces prefer it.
-- 2026-08-26: Freeze Category on voucher lines, Phase 3 of 3 (COMPLETE) - `verification.js` skips live lookup for frozen lines, shows lock icon.
+- 2026-08-26: Freeze Category on voucher lines, 3 phases (COMPLETE) - `category_id_applied` schema, backend freeze/read on first save, frontend lock icon.
 - 2026-08-26: Manual dev-phase reset - cleared all 611 `account_category_assignments` rows (all clients) ahead of fresh TB re-upload/reassignment.
-- 2026-08-26: Fast TB upload, Phase A of 2 - batched insert (`execute_batch_pg`), async→sync conversion, progress-poll endpoint added.
-- 2026-08-26: Fast TB upload, Phase B of 2 (COMPLETE) - `trial_balance.js`/`.html` get a progress bar, mirroring `upload.js`'s mechanism.
+- 2026-08-26: Fast TB upload, 2 phases (COMPLETE) - batched insert + progress-poll endpoint (A), `trial_balance.js`/`.html` progress bar (B).
 - 2026-08-26: Assign Categories client-context race fixed - `openAssignCategoriesView()` now awaits `clientContextReady` before its first API call.
+- 2026-08-27: Verification nav skeleton recovery - `moveToAdjacentVoucher()`'s four exits now clear the skeleton, showing error/retry or restoring on boundary; Playwright regression test added.
 
 
 ## Self-maintenance

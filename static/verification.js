@@ -3465,25 +3465,108 @@ function applyVoucherNavRenderData(data) {
     return true;
 }
 
+// Human-readable direction word for the nav messages below ('prev'/'next' are the API's values,
+// not something to show an auditor).
+function voucherNavDirectionLabel(direction) {
+    return direction === 'prev' ? 'previous' : 'next';
+}
+
+// Skeleton recovery, part 1: replaces a stuck loading skeleton with a readable failure state the
+// user can act on. moveToAdjacentVoucher() paints a skeleton into #voucherLinesContainer before
+// fetching, and every one of its non-success exits used to return without clearing it — leaving
+// the voucher table shimmering forever, recoverable only by refreshing the page. Both buttons
+// reuse existing button classes (.btn-voucher-nav/.btn-cashbook) so this needs no style.css
+// change, and therefore no app-wide stylesheet cache-bump.
+// Try again simply re-runs the same navigation: that call repaints the skeleton itself, so the
+// retry gets its own visible feedback without a separate spinner. Reload page is the fallback for
+// a session that's genuinely lost — the page's ?voucher= hard-refresh restore path (kept current
+// by setVerificationUrlVoucher()) brings the auditor back to this same voucher.
+function showVoucherNavError(direction, message) {
+    const container = document.getElementById('voucherLinesContainer');
+    if (!container) return;
+    window.LoadingUI.hideSkeleton(container);
+    // .voucher-nav-error carries no CSS of its own — it exists as a lookup/test hook. The few
+    // inline styles below use the app's established primary/secondary text colours.
+    container.innerHTML = `
+        <div class="voucher-nav-error" style="padding: 28px 20px; text-align: center;">
+            <div style="font-size: 15px; font-weight: 600; color: #1a1a2e; margin-bottom: 6px;">⚠️ ${message}</div>
+            <div style="font-size: 13px; color: #64748b; margin-bottom: 16px;">The voucher you were on is still saved — nothing has been lost.</div>
+            <div style="display: flex; gap: 10px; justify-content: center;">
+                <button type="button" class="btn-voucher-nav" id="voucherNavRetryBtn">↻ Try again</button>
+                <button type="button" class="btn-cashbook" id="voucherNavReloadBtn">Reload page</button>
+            </div>
+        </div>
+    `;
+    // Listeners attached after the innerHTML write — no inline onclick (project convention).
+    container.querySelector('#voucherNavRetryBtn')?.addEventListener('click', function () {
+        moveToAdjacentVoucher(direction);
+    });
+    container.querySelector('#voucherNavReloadBtn')?.addEventListener('click', function () {
+        window.location.reload();
+    });
+}
+
+// Skeleton recovery, part 2: the boundary case, which is NOT a failure — the server correctly
+// reporting there is no voucher in that direction. The auditor is still on a perfectly good
+// voucher, so the skeleton is replaced by re-rendering that same voucher rather than by an error
+// block. Re-rendering (not restoring saved innerHTML) is required: renderVoucherLines() attaches
+// direct per-row listeners, so a raw HTML restore would look right but be dead to clicks.
+// currentVoucherLines is the cache seedVoucherLineState() already keeps for the loaded voucher, so
+// this costs no refetch; voucherDate is safely omitted since each row falls back to its own
+// line.extract_date. If that cache is somehow empty we fall back to the error block rather than
+// render an empty container — a blank table would just be a quieter version of the same dead end.
+async function restoreCurrentVoucherLines(direction, message) {
+    const container = document.getElementById('voucherLinesContainer');
+    if (!container) return;
+    if (!currentVoucherLines || currentVoucherLines.length === 0) {
+        showVoucherNavError(direction, `Could not load the ${voucherNavDirectionLabel(direction)} voucher.`);
+        return;
+    }
+    window.LoadingUI.hideSkeleton(container);
+    await renderVoucherLines(currentVoucherLines);
+    if (message) showStatus(message, 'info');
+}
+
 // Phase B: fetches the whole adjacent voucher (Phase A's /voucher_nav) and renders it via the
 // same pipeline loadNextTransaction() already uses for /next's voucher-shaped response. Returns
-// true on success, false on a boundary (no more vouchers that way) or fetch error — both handled
-// silently, matching this file's existing silent-boundary convention (e.g. the old "last
-// transaction" no-op).
+// true on success, false on a boundary (no more vouchers that way) or fetch error.
+// Skeleton recovery: every exit below now clears the skeleton it painted — a real failure leaves
+// an error block with a retry action, a boundary re-renders the voucher the user is still on plus
+// a toast. Nothing returns while the container is still shimmering, and no path is silent, so
+// callers no longer need to report a false return themselves.
 async function moveToAdjacentVoucher(direction) {
     if (!currentSessionId || !currentDetailId) return false;
+    const label = voucherNavDirectionLabel(direction);
     try {
         window.LoadingUI.showSkeleton(document.getElementById('voucherLinesContainer'), 3);
         const url = `${API_BASE}/api/verification/voucher_nav/${currentSessionId}?current_detail_id=${currentDetailId}&direction=${direction}`;
         const res = await window.ApiUtils.apiFetch(url);
-        if (!res.ok) return false;
+        if (!res.ok) {
+            showVoucherNavError(direction, `Could not load the ${label} voucher (server responded ${res.status}).`);
+            return false;
+        }
         const data = await res.json();
-        if (data.boundary) return false;
-        if (!applyVoucherNavRenderData(data)) return false;
-        await updateProgressDisplay();
+        if (data.boundary) {
+            await restoreCurrentVoucherLines(direction, `Already at the ${direction === 'prev' ? 'first' : 'last'} voucher in this session.`);
+            return false;
+        }
+        if (!applyVoucherNavRenderData(data)) {
+            showVoucherNavError(direction, `The ${label} voucher came back with no lines to display.`);
+            return false;
+        }
+        // Deliberately its own try/catch, not part of the block above: this runs AFTER the new
+        // voucher is already on screen, so letting it fall through to the outer catch would wipe a
+        // correctly rendered voucher and replace it with an error block — a new bug introduced by
+        // the fix. A stale progress count is the lesser problem, and it's logged.
+        try {
+            await updateProgressDisplay();
+        } catch (progressError) {
+            console.error('Voucher rendered but progress display failed to refresh:', progressError);
+        }
         return true;
     } catch (e) {
         console.error('Error navigating to adjacent voucher:', e);
+        showVoucherNavError(direction, `Could not load the ${label} voucher. Check your connection and try again.`);
         return false;
     }
 }
@@ -3535,11 +3618,12 @@ async function goToNextTransaction() {
     if (statusCell && statusCell.dataset.validationStatus === 'passed') {
         await completeTransaction(); // marks verified and calls loadNextTransaction
     } else {
-        // Even if validation failed, we move to next because user confirmed
-        const moved = await moveToAdjacentVoucher('next');
-        if (!moved) {
-            showStatus('Next transaction not found.', 'error');
-        }
+        // Even if validation failed, we move to next because user confirmed.
+        // No failure message here: moveToAdjacentVoucher() now reports every one of its own
+        // outcomes in place (error block with a retry action, or a boundary toast). A second
+        // message from here would double-report, and would wrongly say "not found" over a
+        // boundary — which isn't a failure at all.
+        await moveToAdjacentVoucher('next');
     }
 }
 // Override the mirror icon click – we replace the alert

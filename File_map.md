@@ -118,8 +118,10 @@ This document lists all source files in the project, grouped by directory, with 
 
 | File | Purpose |
 |------|---------|
+| `test_app_smoke.py` | Boots the real app via FastAPI's `TestClient` against a temp SQLite DB and proves routers respond (dashboard page + `/api/clients`). |
 | `test_upload_validation_counts.py` | Verifies `count_new_and_existing_rows` correctly distinguishes new vs. already-imported rows for the same client/template. |
 | `test_verification_indexes.py` | Verifies that `init_db()` creates the composite index needed for fast cashbook lookups on `client_data`. |
+| `test_verification_nav_skeleton.py` | Playwright regression test for the voucher-nav skeleton bug — forces each `moveToAdjacentVoucher()` failure path (HTTP error, aborted request, empty response) plus the boundary case in headless Chromium, and asserts the loading skeleton is always cleared and a working retry action is offered. Fully hermetic: a local static file server plus stubbed `/api/` routes, so it needs no dev server, database or login. |
 
 ---
 

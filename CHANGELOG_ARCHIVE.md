@@ -2347,3 +2347,90 @@ bumped `?v=10` → `?v=11` (verification.html) in the same commit, per the cache
 missed in Phases 1/2 (see the standalone "Cache-Bust Fix" commit immediately before this one).
 
 ---
+
+## Verification Nav Skeleton Recovery
+
+**Requirement (2026-08-27, Phase 1 of a confirmed 5-phase Verification nav/UX set):** fix the
+voucher-navigation skeleton bug — when `moveToAdjacentVoucher()` (static/verification.js) fails or
+hits any of its early-return paths, the voucher table is left as a permanent shimmering skeleton.
+`LoadingUI.hideSkeleton()` exists but was called from nowhere in `verification.js` (confirmed by
+grep: 4 `showSkeleton` calls, 0 `hideSkeleton`), so the skeleton only ever disappeared because a
+*successful* render overwrote `container.innerHTML`. Any non-success left an unrecoverable broken
+state whose only exit was a page refresh. Later phases (Prev/Next processing UI, Cash Voucher tile
+spinner + click-lock, caching cleanup, an A7 note correction) are separate and not part of this one.
+
+**The four leaking exits, and what each became:**
+
+| Old exit | New behaviour |
+|---|---|
+| `if (!res.ok) return false` | error block + Try again |
+| `if (data.boundary) return false` | re-render the current voucher from cache + toast |
+| `if (!applyVoucherNavRenderData(data)) return false` | error block + Try again |
+| `catch (e) { … return false }` | error block + Try again |
+
+The `if (!currentSessionId \|\| !currentDetailId) return false` guard at the top runs *before*
+`showSkeleton()`, so it leaks nothing and was left exactly as-is.
+
+**Boundary is deliberately not treated as a failure** (confirmed with the user during planning). It
+is the server correctly reporting "there is no voucher that way" — the auditor is still sitting on a
+perfectly good voucher, so blanking that table and making them click to get it back would be worse
+UX than the bug being fixed. `restoreCurrentVoucherLines()` re-renders it from the in-memory
+`currentVoucherLines` cache (already maintained by `seedVoucherLineState()`) with no refetch and no
+new global, and announces itself through the existing `showStatus(msg, 'info')` toast rather than
+being silent.
+
+**Why re-render rather than restore saved HTML:** `renderVoucherLines()` attaches roughly six sets of
+direct per-row listeners after its `innerHTML` write (row lock, recycle icon, audit/DFD chips,
+status popover, column toggles, resize handles). Capturing `container.innerHTML` before the skeleton
+and putting it back would look correct but be dead to every click — a subtler broken state than the
+one being fixed. The `voucherDate` argument is safely omitted on the restore path since each row
+already falls back to its own `line.extract_date`. If the cache is somehow empty, it falls through
+to the error block rather than rendering an empty container.
+
+**One structural change beyond the literal brief:** `await updateProgressDisplay()` moved into its
+own inner `try/catch`. As written it sat inside the main `try`, so a failure there — *after* the new
+voucher was already on screen — would have fallen into the outer `catch` and replaced a correctly
+rendered voucher with an error block, introducing a new bug while fixing this one. A stale progress
+count is the lesser problem, and it is logged.
+
+**Also removed:** `goToNextTransaction()`'s `showStatus('Next transaction not found.', 'error')`.
+`moveToAdjacentVoucher()` now reports every one of its own outcomes in place, so that line would
+double-report — and would wrongly say "not found" over a boundary, which is not a failure at all.
+
+**No `style.css` change, deliberately.** The two buttons reuse the existing `.btn-voucher-nav` and
+`.btn-cashbook` classes and the wrapper carries a few inline styles in the app's established
+primary/secondary text colours (`#1a1a2e`/`#64748b`). Adding real CSS for a block this small would
+have owed the project's all-18-pages `style.css?v=N` bump, turning a 3-file change into a 21-file
+one. `.voucher-nav-error` therefore carries no CSS rule of its own — it exists purely as a
+lookup/test hook (noted so a later reader doesn't hunt for missing styles).
+
+**Regression test — `tests/test_verification_nav_skeleton.py` (new, 5 cases).** Deliberately
+hermetic: no dev server, no database, no login. A `ThreadingHTTPServer` on a free port serves the
+project root so `/static/verification.html` and its absolute asset paths resolve exactly as under
+the real app, and `page.route('**/api/**')` stubs every call the page makes — one pattern suffices
+because `API_BASE` is `''` (same-origin). `/api/auth/current-client` returns a valid client so
+`client_context.js` resolves `window.clientContextReady` normally instead of bouncing to login.
+Each test seeds a genuinely rendered voucher through the page's own `applyVoucherNavRenderData()`
+pipeline, then drives `moveToAdjacentVoucher()` directly via `page.evaluate()` (both the top-level
+`let`s and the function declaration are reachable from the same realm in a classic script). Cases:
+HTTP 500, `route.abort()` (the `catch` path), a 200 with no lines, the Try-again button actually
+re-issuing the request and fully recovering, and boundary. The core assertion in every one is **zero
+`.ui-skeleton-row` left in `#voucherLinesContainer`**. Skips cleanly if Playwright or its Chromium
+build is unavailable, so the existing suite never breaks on a machine without browsers.
+
+Worth knowing for future tests against this code: `ApiUtils.apiFetch()` performs a **single
+automatic retry after 1.5s** for a GET that throws or returns 5xx, so each forced failure issues two
+requests and takes ~1.5s — assert on "more requests than before", never on an exact count.
+
+**Verified:** all 5 cases pass against the fix and **all 5 fail against the pre-fix file** with
+exactly the intended complaint (`assert 3 == 0` — "loading skeleton was left behind"), proving the
+test actually catches this bug rather than merely passing. Confirmed by swapping in
+`git show HEAD:static/verification.js`, running, then restoring. Full suite: 7 passed, plus the same
+2 long-standing unrelated failures (`test_app_smoke.py::test_clients_api_responds_on_fresh_db`,
+`test_upload_validation_counts.py::test_counts_existing_and_new_rows`) seen in earlier sessions —
+both now logged in `KNOWN_ISSUES.md`, since they are Postgres-cutover fallout that leaves the
+backend suite half-blind. The rendered error state was screenshotted through the same harness.
+`verification.js?v=12` → `?v=13` (verification.html) in the same commit, per the cache-bust
+convention.
+
+---
