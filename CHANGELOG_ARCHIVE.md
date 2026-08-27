@@ -2625,8 +2625,12 @@ as its first statement — no gap. Every cached GET endpoint in `routers/audit_r
 no change needed on the Audit Rules side. So this phase touched one file, one function.
 
 **Verified:** `pytest tests/ -v` — 11 passed, same 2 pre-existing Postgres-cutover failures already
-logged in `KNOWN_ISSUES.md` (confirmed identical on the stashed, unmodified tree). Live verification
-(second identical `GET /api/verification/category-for-account` issuing no DB queries) to be
-confirmed against Render logs after deploy.
+logged in `KNOWN_ISSUES.md` (confirmed identical on the stashed, unmodified tree). Live-confirmed
+against the deployed Render app (`two-python-app.onrender.com`) by `curl`-timing repeated
+`GET /api/verification/category-for-account` calls: first lookup of a code (cache miss) ~1.0–1.3s,
+every repeat (cache hit) ~0.21–0.26s — i.e. the hit now returns at pure network-RTT with the DB
+skipped, ~0.8–1.0s saved per hit, consistent across several distinct codes. Regression check:
+`client_id=999999` still returns `404 "Client not found or inactive"`, so the existence check still
+runs on a miss.
 
 ---
