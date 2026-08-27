@@ -147,8 +147,15 @@ function renderClients(clients) {
 // The table lives here, in the file that CONSUMES the param, rather than beside NAV_ENTRY_SOURCES in
 // client_context.js: this is a standalone pre-session page that cannot load that file (see the <nav>
 // comment in client_select.html). One copy at the point of use also can't drift the way two would.
+// `extra` (optional) is an extra query fragment appended verbatim after client_id/from — used by
+// the verification entries to carry the Cash/Bank choice (?type=) the user made before being
+// bounced here. verification.html isn't in URL_CLIENT_SCOPED_PAGES, so it ignores client_id/from
+// and reads its client from the (now-populated) session; type= is the fragment that actually
+// matters for it.
 const NEXT_DESTINATIONS = {
     client_settings: { file: 'client_settings.html', from: 'dashboard' },
+    verification_cash: { file: 'verification.html', from: 'dashboard', extra: 'type=cash' },
+    verification_bank: { file: 'verification.html', from: 'dashboard', extra: 'type=bank' },
 };
 
 // Returns a fully-built destination URL for the just-selected client, or null when there is no
@@ -161,7 +168,9 @@ function resolveNextUrl(clientId) {
     const destination = NEXT_DESTINATIONS[next];
     if (!destination) return null;
 
-    return '/static/' + destination.file + '?client_id=' + clientId + '&from=' + destination.from;
+    let url = '/static/' + destination.file + '?client_id=' + clientId + '&from=' + destination.from;
+    if (destination.extra) url += '&' + destination.extra;
+    return url;
 }
 
 async function selectClient(client) {

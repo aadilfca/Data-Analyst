@@ -13,6 +13,14 @@ const API_BASE = '';
 // dependent page already relies on.
 let sessionClientCache = { id: null, name: null, code: null };
 
+// Set true by loadSessionClient() only when BOTH its attempts to reach GET /api/auth/current-client
+// fail (network error / timeout / 5xx) — i.e. a transient reachability problem, NOT a valid
+// "no client selected" response. enforceClientSelection() reads this to tell the two apart:
+// before this flag existed, a failed/slow call on a cold Render instance nulled the cache and was
+// treated as "no client", evicting a user who genuinely had a client selected (confirmed
+// cold-start bug, 2026-08-27).
+let sessionClientLoadFailed = false;
+
 // Ready signal for page scripts. initClientContext() is async (it awaits a real network fetch),
 // so window.onload is NOT a safe barrier for it — on a light page, onload fires long before the
 // fetch resolves, and any page reading getSelectedClientId() at that moment sees null and wrongly
@@ -20,8 +28,9 @@ let sessionClientCache = { id: null, name: null, code: null };
 // client. Created here at parse time (not inside initClientContext()) so it always exists by the
 // time a page script's own onload handler runs, since client_context.js is loaded first everywhere.
 // Resolves once the session/navbar are ready, and never rejects — loadSessionClient() swallows
-// its own network/parse errors and leaves the cache null, so a rejection here would hang every
-// page instead of letting it render its no-client state. Exception: on a 401 (invalid/expired
+// its own network/parse errors and leaves the cache null (setting sessionClientLoadFailed so the
+// guard shows a "reload" prompt rather than evicting), so a rejection here would hang every page
+// instead of letting it render. Exception: on a 401 (invalid/expired
 // session), initClientContext() returns before ever calling resolveClientContextReady() (see
 // its own early-return comment) — this promise is then deliberately left permanently unresolved,
 // since the page is already navigating away to login.html. Resolving it here instead would wake
@@ -33,34 +42,50 @@ window.clientContextReady = new Promise(function (resolve) {
     resolveClientContextReady = resolve;
 });
 
-// Returns true if the session is valid (or a network/parse error occurred - see the catch
-// block, which is deliberately treated as "proceed with no client" rather than "invalid
-// session"), false on a 401. The caller (initClientContext()) must check this and bail out
-// on false - a 401 already schedules a redirect to login.html here, but that alone doesn't
-// stop the caller from rendering navbar/client-control state against a null cache, which
+// Returns true if the session is valid OR a transient network/parse error occurred (the caller
+// must still render *something*), false only on a 401. The caller (initClientContext()) checks
+// this and bails on false - a 401 already schedules a redirect to login.html here, but that alone
+// doesn't stop the caller from rendering navbar/client-control state against a null cache, which
 // used to fire a spurious "please select a client" alert and race a second redirect to
 // index.html against this function's own login.html redirect (confirmed live, 2026-08-22).
+//
+// Retry: a cold Render instance often fails or times out the very first request while it spins
+// up, then serves the next one fine. So a failed attempt (network error OR !res.ok) is retried
+// once after a short delay before giving up. A 401 is never retried - the server did respond, the
+// session is genuinely invalid. On both attempts failing, sessionClientLoadFailed is set so
+// enforceClientSelection() shows a "reload" prompt instead of evicting the user as "no client
+// selected" (the cold-start bug this fixes).
 async function loadSessionClient() {
-    try {
-        const res = await fetch(API_BASE + '/api/auth/current-client');
-        if (res.status === 401) {
-            // No valid session - bounce to login rather than rendering a page the
-            // user isn't allowed to see.
-            window.location.href = '/static/login.html';
-            return false;
+    sessionClientLoadFailed = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            const res = await fetch(API_BASE + '/api/auth/current-client');
+            if (res.status === 401) {
+                // No valid session - bounce to login rather than rendering a page the
+                // user isn't allowed to see. Not retried (see above).
+                window.location.href = '/static/login.html';
+                return false;
+            }
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const data = await res.json();
+            sessionClientCache = {
+                id: data.client_id || null,
+                name: data.client_name || null,
+                code: data.client_code || null,
+            };
+            return true;
+        } catch (error) {
+            console.warn(`⚠️ current-client attempt ${attempt + 1} failed:`, error.message);
+            if (attempt === 0) {
+                // Give a cold instance a moment to finish starting, then try once more.
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                continue;
+            }
+            // Both attempts failed - transient reachability problem, NOT "no client selected".
+            sessionClientLoadFailed = true;
+            sessionClientCache = { id: null, name: null, code: null };
+            return true;
         }
-        if (!res.ok) throw new Error('Failed to load session client');
-        const data = await res.json();
-        sessionClientCache = {
-            id: data.client_id || null,
-            name: data.client_name || null,
-            code: data.client_code || null,
-        };
-        return true;
-    } catch (error) {
-        console.warn('⚠️ Failed to load session client:', error.message);
-        sessionClientCache = { id: null, name: null, code: null };
-        return true;
     }
 }
 
@@ -407,6 +432,25 @@ function getUrlClientName() {
     return urlClientCache.name;
 }
 
+// When enforceClientSelection() evicts a user from a client-scoped page because no client is
+// selected, it sends them to the Client Cards picker with a ?next=<key> stamp so they land back on
+// the page they actually asked for after choosing — the same mechanism getClientSettingsUrl()'s
+// no-client branch already uses, generalised to the eviction path.
+// SECURITY: whitelist lookup, exactly like NAV_ENTRY_SOURCES. This returns a KEY, never a path —
+// client_select.js resolves the key through its own NEXT_DESTINATIONS table. An unrecognised page
+// returns null and the caller falls back to a plain client_select.html (still better than the old
+// index.html, which can't fix a missing client anyway).
+function getEvictionNextKey() {
+    const currentFile = window.location.pathname.split('/').pop() || '';
+    if (currentFile === 'verification.html') {
+        // Cash vs Bank is carried in ?type= on this page (verification.js reads it the same way).
+        const type = new URLSearchParams(window.location.search).get('type');
+        if (type === 'bank') return 'verification_bank';
+        if (type === 'cash') return 'verification_cash';
+    }
+    return null;
+}
+
 // ---------- ENFORCE CLIENT SELECTION ----------
 function enforceClientSelection() {
     if (!isClientSelected()) {
@@ -420,9 +464,23 @@ function enforceClientSelection() {
 
         // Only enforce on non-dashboard, non-firm-level pages
         if (!isDashboardPage() && !isFirmLevelPage()) {
-            // Show a friendly alert and redirect to dashboard
-            alert('⚠️ Please select a client from the Dashboard first.');
-            window.location.href = '/static/index.html';
+            if (sessionClientLoadFailed) {
+                // Couldn't REACH the server to load the selected client — not the same as "no
+                // client selected". Evicting here was the cold-start bug: the client may well be
+                // selected. Tell the user to reload (a reload usually succeeds once the instance
+                // is warm) and do NOT redirect.
+                alert("⚠️ Couldn't reach the server to load your selected client. This can happen "
+                    + "on the first request after a period of inactivity — please reload the page.");
+                return false;
+            }
+            // Genuinely no client selected: send the user to the Client Cards picker (not the
+            // dashboard — the dashboard can't fix a missing client), preserving where they were
+            // headed via a whitelisted ?next= key so they return there after choosing.
+            alert('⚠️ Please select a client from the Client Cards page first.');
+            const nextKey = getEvictionNextKey();
+            window.location.href = nextKey
+                ? '/static/client_select.html?next=' + nextKey
+                : '/static/client_select.html';
             return false;
         }
         return false;

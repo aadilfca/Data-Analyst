@@ -2667,3 +2667,63 @@ The A7 finding text itself was left in `INVESTIGATION_VERIFICATION_UX.md` unchan
 historical record.
 
 ---
+
+**2026-08-27 — Phase 6 of the Verification nav/UX requirement, FINAL. Cold-start client-guard
+eviction bug. `static/client_context.js` + `static/client_select.js` (frontend only, no backend).**
+
+**Symptom.** On a cold Render instance, clicking the hub's Cash Vouchers tile (→
+`verification.html?type=cash`) could throw *"Please select a client from the Dashboard first"* and
+bounce the user to `index.html` even when a client was genuinely selected.
+
+**Root cause (confirmed, not assumed).** `loadSessionClient()` had a single `catch` that handled
+*every* failure of `GET /api/auth/current-client` — network error, timeout, 5xx (all common while a
+cold instance spins up) — identically to a valid "no client selected" response: it nulled
+`sessionClientCache` and returned `true` ("session valid, proceed"). `initClientContext()` then
+rendered, `renderClientControl()` called `enforceClientSelection()`, `isClientSelected()` was
+`false`, so it `alert()`ed and redirected. A real selected client was silently discarded.
+
+**Fix — three parts:**
+
+1. **Retry + transient-failure flag (`loadSessionClient()`).** The fetch now runs in a 2-attempt
+   loop: on the first attempt failing (network error **or** `!res.ok`) it waits ~1500 ms and tries
+   once more (a cold instance is usually serving by then). A `401` is never retried — the server
+   responded, the session is genuinely invalid, redirect to `login.html` as before. If *both*
+   attempts fail, the new module-level `sessionClientLoadFailed` flag is set, the cache is nulled,
+   and it still returns `true` (the caller must render something).
+
+2. **Guard distinguishes the two cases (`enforceClientSelection()`).** On a client-scoped page with
+   no client: if `sessionClientLoadFailed`, it shows *"Couldn't reach the server to load your
+   selected client. This can happen on the first request after a period of inactivity — please
+   reload the page."* and does **not** redirect (the client may well be selected; a reload succeeds
+   once warm). Otherwise — genuinely no client — the message is corrected to *"Please select a
+   client from the Client Cards page first."* (was "from the Dashboard") and the redirect goes to
+   `client_select.html` (was `index.html` — the dashboard can't fix a missing client) with a
+   `?next=` stamp.
+
+3. **Intent preserved via `?next=` (reuses the Client Settings pattern).** New `getEvictionNextKey()`
+   in `client_context.js` — a whitelist lookup, never param concatenation — maps
+   `verification.html?type=cash`/`bank` to the keys `verification_cash`/`verification_bank`.
+   `client_select.js`'s `NEXT_DESTINATIONS` gains those two entries, each with a new optional
+   `extra: 'type=cash'` fragment that `resolveNextUrl()` appends after `client_id`/`from`. After the
+   user picks a client they land on `verification.html?client_id=<id>&from=dashboard&type=cash` with
+   Cash mode active. `verification.html` isn't in `URL_CLIENT_SCOPED_PAGES`, so it ignores
+   `client_id`/`from` and reads its client from the now-populated session — `type=` is the fragment
+   that matters. The existing `client_settings` entry has no `extra`, so its output is byte-identical.
+
+`static/verification.js` needed no change — the Cash/Bank choice is already in the URL, which
+`client_context.js` reads directly.
+
+**Cache-bust:** `client_context.js?v=13→14` (17 pages), `client_select.js?v=2→3` (client_select.html).
+
+**Verification.** Backend `pytest tests/ -q`: 11 passed, 2 failed — both failures
+(`test_clients_api_responds_on_fresh_db`, `test_counts_existing_and_new_rows`) pre-exist on a clean
+`git stash`ed tree; this phase touched no Python. UI paths (happy path, genuine eviction landing on
+`?next=verification_cash`, transient-failure via a blocked `/api/auth/current-client` showing the
+reload prompt with no redirect) verified by the user.
+
+**Residual (out of scope, noted):** on a transient failure the page body still renders its own
+"no client" state (verification.js reads `getSelectedClientId()` → null); the alert directs a reload
+which resolves it. A session expiring mid-flow still routes through `login.html`, which doesn't
+carry `?next=` forward (pre-existing, `KNOWN_ISSUES.md`).
+
+---
