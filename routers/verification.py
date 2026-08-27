@@ -3171,15 +3171,23 @@ def get_category_for_account(
     process-level cache get_audit_guidance() reads through, but keyed per-client via
     category_for_account_cache_key() - unlike guidance, this lookup's data is genuinely
     per-client. Invalidated by routers/trial_balance.py on TB upload and category assignment.
-    """
-    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
-    if not client:
-        raise HTTPException(404, "Client not found or inactive")
 
+    The cache is consulted BEFORE the client-existence check (F3a fix): on this
+    Render<->Supabase deployment every DB call pays a large cross-region latency floor, so
+    running the existence SELECT first meant a cache hit still cost a full round-trip - most
+    of what the cache was built to avoid. A cached entry can only have been written by a
+    prior call that already passed the existence check, and the TTL +
+    invalidate_category_for_account_cache() hooks bound staleness, so skipping the check on a
+    hit is safe. A cache miss still runs the existence check exactly as before.
+    """
     cache_key = category_for_account_cache_key(client_id, account_code)
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
+
+    client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
+    if not client:
+        raise HTTPException(404, "Client not found or inactive")
 
     # Prefer the client's current (latest parsed) Trial Balance's own category_id for this
     # account_code - this is what Assign Categories itself shows/edits, and is the "correct

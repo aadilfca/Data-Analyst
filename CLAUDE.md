@@ -279,7 +279,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-26: Manual dev-phase reset - cleared all 611 `account_category_assignments` rows (all clients) ahead of fresh TB re-upload/reassignment.
 - 2026-08-26: Fast TB upload, 2 phases (COMPLETE) - batched insert + progress-poll endpoint (A), `trial_balance.js`/`.html` progress bar (B).
 - 2026-08-26: Assign Categories client-context race fixed - `openAssignCategoriesView()` now awaits `clientContextReady` before its first API call.
-- 2026-08-27: Verification nav/UX fixes, Phases 1-3 of 6 - skeleton recovery with error/retry, Prev/Next processing UI, hub tile spinner + double-click lock.
+- 2026-08-27: Verification nav/UX fixes, Phases 1-4 of 6 - skeleton recovery, Prev/Next processing UI, hub tile spinner + lock, cache-hit DB round-trip fix (F3a, `routers/verification.py`).
 
 
 ## Self-maintenance

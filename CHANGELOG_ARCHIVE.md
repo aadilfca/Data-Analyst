@@ -2593,3 +2593,40 @@ clears the lock and restores the tile's original content, and "Coming soon" tile
 `verification.js?v=14` → `?v=15` (verification.html) in the same commit.
 
 ---
+
+## Verification Cache-Hit DB Round-Trip Fix (F3a)
+
+**Requirement (2026-08-27, Phase 4 of the Verification nav/UX set):** close the gap found in
+`INVESTIGATION_VERIFICATION_UX.md` finding **F3a** — a cache "hit" for the category/account-type
+lookup still cost a full database round-trip, because the client-existence check ran *before* the
+cache was consulted. On this Render↔Supabase deployment every DB call pays a large cross-region
+latency floor, so a "hit" was recovering almost none of what the cache was built to save.
+
+**Scope was strictly F3a.** The deferred sibling finding F3b — `invalidate_audit_rules_cache()`'s
+blanket `_audit_rules_cache.clear()` also wiping the per-client `category_for_account:*` keys on any
+Audit Rules write — was explicitly left as-is for a later phase. Smarter per-category invalidation
+is not part of this.
+
+**The one change, in `routers/verification.py` `get_category_for_account()`:** the cache lookup
+block (`category_for_account_cache_key()` → `cache_get()` → early return) now runs as the first
+thing in the function body, ahead of the `SELECT id FROM clients WHERE id = %s AND is_active = TRUE`
+existence check. On a cache hit the function returns with zero DB calls. On a cache **miss** the
+existence check still runs exactly as before (so a bad `client_id` on a cold cache still 404s), then
+the unchanged latest-TB / `account_category_assignments` fallback path. Skipping the existence check
+on a hit is safe: a cached entry can only have been written by an earlier call that already passed
+it, and the 10-min TTL plus `invalidate_category_for_account_cache()` hooks (TB upload, category
+assignment — `routers/trial_balance.py`) bound staleness. The docstring's "Read-side cache wiring"
+paragraph was updated to state this.
+
+**Not touched:** `get_audit_guidance()` (same file) was reviewed and already consults `cache_get()`
+as its first statement — no gap. Every cached GET endpoint in `routers/audit_rules.py`
+(`get_documents`/`get_document`/`get_category`/`get_cross_checks`/`get_cross_check`/
+`get_category_cleared_requirements`) was reviewed and already checks the cache before any DB call —
+no change needed on the Audit Rules side. So this phase touched one file, one function.
+
+**Verified:** `pytest tests/ -v` — 11 passed, same 2 pre-existing Postgres-cutover failures already
+logged in `KNOWN_ISSUES.md` (confirmed identical on the stashed, unmodified tree). Live verification
+(second identical `GET /api/verification/category-for-account` issuing no DB queries) to be
+confirmed against Render logs after deploy.
+
+---
