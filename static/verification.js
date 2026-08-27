@@ -1881,8 +1881,9 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
     // These two don't depend on the guidance fetch's result — start them immediately rather than
     // after guidance resolves (per-line fetch batching). Fail-soft to [] internally, so letting
     // them run even when the early "no documents" return below fires is harmless.
-    const assignedPromise = fetchAssignedDocumentRecords(uid);
-    const checksListPromise = fetchProcedureChecksForLine(uid);
+    const cachedModalData = procedureModalState[uid] && procedureModalState[uid].standaloneData;
+    const assignedPromise = cachedModalData ? Promise.resolve(cachedModalData.assignedRecords || []) : fetchAssignedDocumentRecords(uid);
+    const checksListPromise = cachedModalData ? Promise.resolve(cachedModalData.procedureChecks || []) : fetchProcedureChecksForLine(uid);
     let data = null;
     try {
         data = await (guidancePromise || fetchAuditGuidanceData(type));
@@ -1910,7 +1911,7 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
         assignedPromise,
         checksListPromise,
         needsVoucherChecks ? ensureVoucherChecksLoaded(getClientId(), currentVoucherId) : Promise.resolve(null),
-        needsPhysicalBills ? fetchPhysicalBillsForLine(uid) : Promise.resolve([])
+        needsPhysicalBills ? (cachedModalData ? Promise.resolve(cachedModalData.physicalBillEntries || []) : fetchPhysicalBillsForLine(uid)) : Promise.resolve([])
     ]);
     // Re-check the stale guard after these awaits, same reason as above.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
@@ -3913,6 +3914,7 @@ async function doSaveLineItems(detailId) {
             detail_id: String(detailId),
             revision_at_start: voucherLineDirtyRevisions[String(detailId)] || 0
         });
+        if (procedureModalState[detailId]) delete procedureModalState[detailId].standaloneData;
         return { ok: true, skipped: false };
         // Success – no status bar message
     } catch (e) {

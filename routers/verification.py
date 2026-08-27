@@ -519,7 +519,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     physical_bill_required_ids = {did for did, dt in required_doc_types.items() if dt == 'physical_bill'}
     bills_by_doc: Dict[int, list] = {}
     if physical_bill_required_ids:
-        for b in get_voucher_line_physical_bills(voucher_line_id)['bills']:
+        for b in _get_voucher_line_physical_bills(voucher_line_id, sibling_ids=sibling_ids)['bills']:
             bills_by_doc.setdefault(b['document_id'], []).append(b)
 
     def _physical_bill_satisfied(document_id: int) -> bool:
@@ -1607,8 +1607,9 @@ def _verify_voucher_checks_impl(session_id: int, current_detail_id: int, perf_ti
     # correctness invariants documented in its own docstring - not worth the risk for what's
     # normally just a handful of lines per voucher.
     sync_started = time.perf_counter()
+    voucher_sibling_ids = _resolve_sibling_voucher_line_ids(current_detail_id) or [current_detail_id]
     for row in voucher_rows:
-        sync_line_observations_to_voucher(row['id'])
+        sync_line_observations_to_voucher(row['id'], sibling_ids=voucher_sibling_ids)
     if perf_timings is not None:
         perf_timings["observation_sync_ms"] = round((time.perf_counter() - sync_started) * 1000, 1)
 
@@ -4613,8 +4614,7 @@ def save_physical_bill(
     return _fetch_physical_bills_for_document(voucher_line_id, document_id)
 
 
-@router.get("/api/verification/physical_bills/{voucher_line_id}")
-def get_voucher_line_physical_bills(voucher_line_id: int):
+def _get_voucher_line_physical_bills(voucher_line_id: int, sibling_ids: Optional[List[int]] = None):
     """
     Batch fetch every Physical Bill entry recorded for a voucher line, across all documents -
     one call per Supporting Documents modal open, mirroring get_line_observations()/
@@ -4637,7 +4637,7 @@ def get_voucher_line_physical_bills(voucher_line_id: int):
     is_active: false rather than disappearing - matches this module's established
     "already-referenced inactive item stays visible, greyed" convention.
     """
-    sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+    sibling_ids = sibling_ids if sibling_ids is not None else _resolve_sibling_voucher_line_ids(voucher_line_id)
     if sibling_ids is None:
         raise HTTPException(404, "Voucher line not found.")
 
@@ -4670,6 +4670,11 @@ def get_voucher_line_physical_bills(voucher_line_id: int):
     items_by_bill = _fetch_physical_bill_items([r['id'] for r in winning_rows])
     bills = [_shape_physical_bill(r, items_by_bill.get(r['id'], [])) for r in winning_rows]
     return {"voucher_line_id": voucher_line_id, "bills": bills, "count": len(bills)}
+
+
+@router.get("/api/verification/physical_bills/{voucher_line_id}")
+def get_voucher_line_physical_bills(voucher_line_id: int):
+    return _get_voucher_line_physical_bills(voucher_line_id)
 
 
 def _resolve_line_srno(session_id: int, target_voucher_line_id: int, session_details_cache: Dict[int, list]) -> int:

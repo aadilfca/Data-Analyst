@@ -15,6 +15,14 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Phase 3e — Verify-sequence duplicate-read reduction
+
+Implemented safe duplicate-read reductions: sibling IDs are reused for Physical Bill status reads
+and voucher observation synchronization; modal batch data is reused by the Verification badge
+renderer and invalidated after successful line saves; Verify no longer deliberately deletes the
+voucher-check cache. Syntax checks, compilation, and nine focused tests passed. Render validation
+remains Phase 3f; no commit or push has been made.
+
 ## Verification Speed Optimization — Phase 3
 
 **Date:** 2026-08-27

@@ -786,6 +786,12 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     hostAdapter.procedureModalState[uid].assignedDocIds = assignedDocIds;
     hostAdapter.procedureModalState[uid].voucherLineAmount = voucherLineAmount;
     hostAdapter.procedureModalState[uid].crossCheckResults = crossCheckResults;
+    hostAdapter.procedureModalState[uid].standaloneData = {
+        assignedRecords,
+        procedureChecks,
+        physicalBillEntries,
+        guidance
+    };
 
     // Re-sync each tab's selections and checklist from the fresh server data (never just seeded
     // once) so reopening the modal always reflects reality, even if a change happened elsewhere.
@@ -1093,10 +1099,8 @@ async function performVerifyVoucherChecks(uid, triggerBtn) {
         // the page session, and both buttons' disabled state defaults to enabled until
         // updateVerifyFooterButton() has actually run for the voucher currently in view - a gap
         // proven to matter once already (a check added mid-session, e.g. via Audit Rules, would
-        // go undetected by an already-warmed cache). Force a fresh read here, immediately before
-        // the real request, so this guard can never disagree with what verify_voucher_checks()
-        // itself enforces server-side.
-        delete voucherChecksCache[hostAdapter.currentVoucherId];
+        // go undetected by an already-warmed cache). Reuse the modal's fresh cache when present;
+        // ensureVoucherChecksLoaded() still fetches when no cache exists.
         const freshChecks = await ensureVoucherChecksLoaded(hostAdapter.getClientId(), hostAdapter.currentVoucherId);
         if (!isVoucherChecksAllTouched(freshChecks || [])) {
             hostAdapter.showStatus('Mark every voucher-level check before verifying.', 'error');
