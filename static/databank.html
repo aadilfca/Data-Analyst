@@ -681,6 +681,50 @@
             background: #16a34a;
         }
 
+        /* Prominent page-load feedback for the availability/template fetch. */
+        .client-data-loading-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 1200;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(15, 23, 42, 0.28);
+            backdrop-filter: blur(2px);
+        }
+
+        .client-data-loading-card {
+            width: min(420px, 100%);
+            padding: 24px;
+            border: 1px solid #dbeafe;
+            border-radius: 16px;
+            background: #ffffff;
+            box-shadow: 0 18px 45px rgba(15, 23, 42, 0.22);
+        }
+
+        .client-data-loading-heading {
+            margin: 0 0 6px;
+            color: #1a1a2e;
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .client-data-loading-detail {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 16px;
+            color: #64748b;
+            font-size: 13px;
+        }
+
+        .client-data-loading-percent {
+            color: #2563eb;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+
         /* ===== "YOUR DATASETS" TABLE (Redesign Phase 5) =====
            Simplified table (Template / Full Date Range / No of Documents /
            Coverage / Actions — Status replaced by Coverage per the Status
@@ -824,6 +868,17 @@
 
     <!-- Main Content -->
     <div class="main-container">
+        <div id="clientDataLoadingOverlay" class="client-data-loading-overlay"
+            role="status" aria-live="polite" aria-hidden="true">
+            <div class="client-data-loading-card">
+                <h2 class="client-data-loading-heading">Loading Client Data</h2>
+                <div class="client-data-loading-detail">
+                    <span id="clientDataLoadingDetail">Connecting to the data service…</span>
+                    <span id="clientDataLoadingPercent" class="client-data-loading-percent">0%</span>
+                </div>
+                <div id="clientDataLoadingProgress"></div>
+            </div>
+        </div>
         <!-- ===== "YOUR DATASETS" TABLE (Redesign Phase 5) =====
              Simplified table, fed by fetchAvailability() data — reuses
              buildDatasetActionButtons() for Actions, so Preview/Export/Delete
@@ -1109,7 +1164,7 @@
     <script src="/static/loading_ui.js"></script>
     <script src="/static/client_context.js?v=14"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/databank.js?v=5"></script>
+    <script src="/static/databank.js?v=6"></script>
 </body>
 
 </html>

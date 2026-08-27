@@ -15,6 +15,30 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Client Data Availability Loading Popup
+
+**Date:** 2026-08-27 | **Files:** `static/databank.html`, `static/databank.js`, `CLAUDE.md`, `CHANGELOG_ARCHIVE.md`.
+
+**Why:** On entering Client Data, the temporary “Fetching availability data” ribbon disappeared
+before the template table became visible, leaving an apparently idle page during the remaining
+wait. The page needed prominent feedback that stayed until its template list was actually ready.
+
+**Implementation:** Added a centered, page-specific loading card backed by the shared
+`LoadingUI` progress primitive. It starts in indeterminate mode while availability and database-size
+requests run. Once availability arrives, it switches to determinate mode and renders template rows
+one browser frame at a time, updating the exact count and percentage. It reaches 100% only after the
+last row is inserted, remains briefly so completion is visible, then closes. Empty results finalize
+as 100%; failures close the overlay and retain the existing error display. Data Bank JS cache-bust
+advanced from `v=5` to `v=6`. No shared Loading UI or global stylesheet change was required.
+
+**Verification:** `node --check static/databank.js` and `git diff --check` passed. A hermetic
+Playwright test served the real Data Bank page with stubbed endpoints and verified: delayed success
+showed the overlay at 0%, reached 100% with all three template rows present, then closed; an empty
+response reached 100% with zero rows; and a forced 500 closed the overlay while preserving the
+server error message. The test used no live database or credentials.
+
+---
+
 
 ## Verification Card Redesign (early UI build) (6 entries)
 

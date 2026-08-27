@@ -136,6 +136,10 @@ const lastPageBtn = document.getElementById('lastPageBtn');
 const pageInfo = document.getElementById('pageInfo');
 const previewCountInfo = document.getElementById('previewCountInfo');
 const closePreviewBtn = document.getElementById('closePreviewBtn');
+const clientDataLoadingOverlay = document.getElementById('clientDataLoadingOverlay');
+const clientDataLoadingDetail = document.getElementById('clientDataLoadingDetail');
+const clientDataLoadingPercent = document.getElementById('clientDataLoadingPercent');
+const clientDataLoadingProgress = document.getElementById('clientDataLoadingProgress');
 
 // Row revision history popover elements (Phase 3)
 const rowHistoryPopover = document.getElementById('rowHistoryPopover');
@@ -154,6 +158,52 @@ function showStatus(msg, type = 'info') {
     window.statusTimeout = setTimeout(() => {
         statusDiv.style.display = 'none';
     }, 5000);
+}
+
+function showClientDataLoading() {
+    if (!clientDataLoadingOverlay || !clientDataLoadingProgress) return;
+    if (clientDataLoadingOverlay.style.display === 'flex') return;
+    clientDataLoadingOverlay.style.display = 'flex';
+    clientDataLoadingOverlay.setAttribute('aria-hidden', 'false');
+    clientDataLoadingDetail.textContent = 'Connecting to the data service…';
+    clientDataLoadingPercent.textContent = '0%';
+    window.LoadingUI.showProgressBar(clientDataLoadingProgress, {
+        mode: 'indeterminate',
+        message: 'Fetching template availability…'
+    });
+}
+
+function startClientDataRendering(totalTemplates) {
+    if (!clientDataLoadingProgress) return;
+    window.LoadingUI.hideProgressBar(clientDataLoadingProgress);
+    clientDataLoadingDetail.textContent = totalTemplates > 0
+        ? `Preparing ${totalTemplates} template${totalTemplates === 1 ? '' : 's'}…`
+        : 'Finalizing the empty template list…';
+    clientDataLoadingPercent.textContent = '0%';
+    window.LoadingUI.showProgressBar(clientDataLoadingProgress, {
+        mode: 'determinate',
+        message: 'Rendering templates',
+        total: Math.max(totalTemplates, 1)
+    });
+}
+
+function updateClientDataRendering(current, total) {
+    if (!clientDataLoadingProgress) return;
+    const progressTotal = Math.max(total, 1);
+    const progressCurrent = total === 0 ? 1 : current;
+    window.LoadingUI.updateProgressBar(clientDataLoadingProgress, progressCurrent, progressTotal);
+    clientDataLoadingPercent.textContent = `${Math.round((progressCurrent / progressTotal) * 100)}%`;
+    clientDataLoadingDetail.textContent = total === 0
+        ? 'No templates found. Page is ready.'
+        : `${current} of ${total} templates ready`;
+}
+
+async function hideClientDataLoading(showCompletion = false) {
+    if (!clientDataLoadingOverlay || !clientDataLoadingProgress) return;
+    if (showCompletion) await new Promise(resolve => setTimeout(resolve, 250));
+    window.LoadingUI.hideProgressBar(clientDataLoadingProgress);
+    clientDataLoadingOverlay.style.display = 'none';
+    clientDataLoadingOverlay.setAttribute('aria-hidden', 'true');
 }
 
 function formatDateForDisplay(dateStr) {
@@ -644,7 +694,7 @@ async function fetchAvailability() {
         date_end: dateRange.end
     });
 
-    showStatus('⏳ Fetching availability data...', 'loading');
+    showClientDataLoading();
     
     try {
         const [res, dbSizeRes] = await Promise.all([
@@ -685,7 +735,13 @@ async function fetchAvailability() {
         // Coverage Calendar → per-template popover fix: goes through the
         // search-aware helper so a re-fetch (e.g. date range change) re-applies
         // whatever search text is currently active instead of discarding it.
-        renderFilteredYourDatasetsTable();
+        const visibleTemplateCount = yourDatasetsSearchTerm
+            ? data.filter(item => item.template_name.toLowerCase().includes(yourDatasetsSearchTerm)).length
+            : totalTemplates;
+        startClientDataRendering(visibleTemplateCount);
+        await renderFilteredYourDatasetsTable(clientDataLoadingProgress);
+        updateClientDataRendering(visibleTemplateCount, visibleTemplateCount);
+        await hideClientDataLoading(true);
 
         if (totalTemplates === 0) {
             showStatus('ℹ️ No templates found for the selected criteria.', 'info');
@@ -702,6 +758,7 @@ async function fetchAvailability() {
         }
 
     } catch (error) {
+        await hideClientDataLoading();
         console.error('Fetch availability error:', error);
         showStatus('❌ Error: ' + error.message, 'error');
         resetDatasetTables('❌ Error loading data. Please try again.');
@@ -910,16 +967,18 @@ function buildDatasetActionButtons(item) {
 // now the sole datasets table on the page, and (Coverage Calendar →
 // per-template popover fix) also the single unified template list, filtered
 // by renderFilteredYourDatasetsTable() below.
-function renderYourDatasetsTable(data, emptyMessage = 'No templates found for the selected criteria.') {
+async function renderYourDatasetsTable(data, emptyMessage = 'No templates found for the selected criteria.', progressTarget = null) {
     yourDatasetsBody.innerHTML = '';
     if (!data || data.length === 0) {
         yourDatasetsNoData.style.display = 'block';
         yourDatasetsNoData.innerHTML = emptyMessage;
+        if (progressTarget) updateClientDataRendering(0, 0);
         return;
     }
     yourDatasetsNoData.style.display = 'none';
 
-    data.forEach(item => {
+    for (let index = 0; index < data.length; index++) {
+        const item = data[index];
         const tr = document.createElement('tr');
 
         // Template Name
@@ -971,7 +1030,12 @@ function renderYourDatasetsTable(data, emptyMessage = 'No templates found for th
         tr.appendChild(buildDatasetActionButtons(item));
 
         yourDatasetsBody.appendChild(tr);
-    });
+        if (progressTarget) {
+            updateClientDataRendering(index + 1, data.length);
+            // Yield so the browser paints each real template-progress step.
+            await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+    }
 }
 
 // Coverage Calendar → per-template popover fix: filters the full fetched
@@ -981,14 +1045,14 @@ function renderYourDatasetsTable(data, emptyMessage = 'No templates found for th
 // fetchAvailability()'s direct render call, so a re-fetch (e.g. a date range
 // change) re-applies whatever search text is currently active rather than
 // silently discarding it.
-function renderFilteredYourDatasetsTable() {
+async function renderFilteredYourDatasetsTable(progressTarget = null) {
     const filtered = yourDatasetsSearchTerm
         ? availabilityData.filter(item => item.template_name.toLowerCase().includes(yourDatasetsSearchTerm))
         : availabilityData;
     const emptyMessage = (yourDatasetsSearchTerm && availabilityData.length > 0)
         ? 'No templates match your search.'
         : 'No templates found for the selected criteria.';
-    renderYourDatasetsTable(filtered, emptyMessage);
+    await renderYourDatasetsTable(filtered, emptyMessage, progressTarget);
 }
 
 async function deleteTemplateData(templateId, templateName, rowCount) {
@@ -1789,6 +1853,10 @@ window.onClientChange = function(clientId) {
 
 // ---------- INIT ----------
 window.onload = async function() {
+    // Show feedback before session/settings initialization so the user never
+    // lands on an apparently idle Client Data page.
+    showClientDataLoading();
+
     // client_context.js populates the session-backed client cache from an async fetch. window.onload
     // is not a safe barrier for that (see the ready-signal note in client_context.js) -- without this
     // await, getSelectedClientId() below returns null and this page redirects to the dashboard after
@@ -1804,6 +1872,7 @@ window.onload = async function() {
 
     const clientId = getSelectedClientId();
     if (!clientId) {
+        await hideClientDataLoading();
         showStatus('⚠️ Please select a client from the Dashboard first.', 'error');
         resetDatasetTables('⚠️ No client selected. Please go to the Dashboard and select a client.');
         setTimeout(() => {
