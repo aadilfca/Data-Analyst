@@ -1002,7 +1002,7 @@ function findNextUnverifiedLineIndex(fromIdx) {
 // actually leaving, captured before currentProcedureModalUid is cleared below — covers all of
 // them with one change. Fire-and-forget, matching the existing convention at this function's own
 // two other call sites (applyCategoryToTypeCell/toggleColumnsExpanded never await it either).
-function hideProcedureModalOnly() {
+function hideProcedureModalOnly(refreshBadges = true) {
     if (procedureModal) procedureModal.style.display = 'none';
     // Defensive — the browse modal is nested on top of this one, so it should never remain open
     // once the parent closes.
@@ -1010,7 +1010,7 @@ function hideProcedureModalOnly() {
     const uid = currentProcedureModalUid;
     currentProcedureModalUid = null;
     const type = uid && hostAdapter.voucherLineState[uid] && hostAdapter.voucherLineState[uid].transactionType;
-    if (type) {
+    if (type && refreshBadges) {
         hostAdapter.updateProceduresCellForLine(uid, type);
         hostAdapter.updateObservationsCellForLine(uid, type);
     }
@@ -1172,7 +1172,7 @@ async function verifyAndAdvanceVoucher() {
 
     // No unverified line left below this one — leave the voucher, unchanged behaviour.
     // Already saved above — hide only, don't re-save via closeProcedureModal().
-    hideProcedureModalOnly();
+    hideProcedureModalOnly(false);
     if (data.boundary) {
         hostAdapter.showStatus('Voucher verified. No more vouchers in this session.', 'success');
     } else {
@@ -1195,7 +1195,7 @@ async function verifyAndStay() {
     const data = await performVerifyVoucherChecks(uid, verifyOnlyBtn);
     if (!data) return;
     // Already saved above — hide only, don't re-save via closeProcedureModal().
-    hideProcedureModalOnly();
+    hideProcedureModalOnly(false);
     showVerifyToast('Voucher checks verified.');
     await hostAdapter.updateProgressDisplay();
 }
