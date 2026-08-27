@@ -2634,3 +2634,36 @@ skipped, ~0.8–1.0s saved per hit, consistent across several distinct codes. Re
 runs on a miss.
 
 ---
+
+
+## A7 Stale-Note Correction (CLAUDE.md) (1 entry)
+
+**2026-08-27 — Phase 5 of the Verification nav/UX requirement. Documentation only, no code/schema
+touched.** The 2026-08-26 read-only investigation (`INVESTIGATION_VERIFICATION_UX.md`, finding A7)
+flagged three `CLAUDE.md` statements as factually wrong once the follow-up phases shipped. All
+three corrected in place:
+
+1. **Status log, 2026-08-26 "Modal Caching Phase 3"** — dropped the trailing clause
+   "`category-for-account` left uncached". It is now cached on both sides: server-side per client
+   via `category_for_account_cache_key()` (`routers/audit_rules.py`), read in
+   `routers/verification.py`'s `get_category_for_account()`; client-side per account code via
+   `categoryForAccountCache` (`static/verification.js`). The later `2026-08-26: category-for-account
+   cache` Phase 1–3 lines and the `2026-08-27` cache-hit round-trip fix line already carry the true
+   state, so the clause was just deleted rather than rewritten.
+
+2. **`static/api_utils.js` Architecture bullet** — the claim that `ApiUtils` is "Wired into every
+   GET/POST/PUT/DELETE" in `audit_rules.js`/`verification.js` was false: `audit_rules.js` has ~20
+   raw `fetch()` writes, `verification.js` has 5 (`save_line_items`/`validate`/`complete`/
+   `reconcile_range`/`start_session`). Rewritten to state real coverage (databank.js/script.js
+   full; verification.js GETs + most mutations; procedure_modal.js fully) and name the known
+   bypasses.
+
+3. **`static/loading_ui.js` Architecture bullet** — `hideSkeleton` was listed as part of the wired
+   API but has zero call sites anywhere; added a parenthetical noting skeletons rely on the
+   caller's real render overwriting the container, so a failed render can leave one stuck (this is
+   the A1 bug that Phase 1's skeleton-recovery fix addressed on the Verification nav paths).
+
+The A7 finding text itself was left in `INVESTIGATION_VERIFICATION_UX.md` unchanged as the
+historical record.
+
+---
