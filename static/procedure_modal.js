@@ -1084,7 +1084,21 @@ function updateVerifyFooterButton(uid) {
 // callers that don't need the next-voucher payload (e.g. the plain Verify button) simply leave it
 // unread. Disables/re-enables BOTH verify-type buttons around the request, not just the one
 // clicked, so a click on the other button can't double-submit while this one is in flight.
+const inFlightVoucherVerifies = new Map();
+
 async function performVerifyVoucherChecks(uid, triggerBtn) {
+    const key = String(hostAdapter.currentVoucherId || uid);
+    if (inFlightVoucherVerifies.has(key)) return inFlightVoucherVerifies.get(key);
+    const sequence = performVerifyVoucherChecksImpl(uid, triggerBtn);
+    inFlightVoucherVerifies.set(key, sequence);
+    try {
+        return await sequence;
+    } finally {
+        inFlightVoucherVerifies.delete(key);
+    }
+}
+
+async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
     const perfStarted = performance.now();
     const btn = document.getElementById('procedureModalVerifyBtn');
     const verifyOnlyBtn = document.getElementById('procedureModalVerifyOnlyBtn');

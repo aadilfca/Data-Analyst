@@ -15,6 +15,12 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Verify duplicate-action guard
+
+Added a voucher-level in-flight promise guard around `performVerifyVoucherChecks()` so rapid
+duplicate clicks share one save/verify sequence. The guard clears on completion or failure, keeping
+retry behavior intact. Verification asset cache-busting was updated; syntax and focused tests pass.
+
 ## Phase 3e — Verify-sequence duplicate-read reduction
 
 Implemented safe duplicate-read reductions: sibling IDs are reused for Physical Bill status reads

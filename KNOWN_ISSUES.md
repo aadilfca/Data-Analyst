@@ -32,6 +32,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 
 | 2026-08-27 | Verification | Phase 3d finding: `GET /api/verification/physical_bills/{uid}` (also `voucher_line_documents/{uid}` and `procedure_checks/{uid}`) is re-fetched 6+ times per working session for a line whose Category has a `physical_bill` document (seen live on `physical_bills/194144`, session 751, voucher CPV-0826-442, category "Material Purchased"). Source: `updateProceduresCellForLine()` (verification.js) runs on every modal close via `hideProcedureModalOnly()`, plus Type auto-fill, column-toggle, and voucher-nav re-renders — none cached, all re-fetching what `procedure_modal_data` (Phase 3c batch) already returned. Separately, `compute_and_persist_cleared_status()` calls `get_voucher_line_physical_bills()` server-side on every `save_line_items` for such a category, re-resolving sibling ids despite `_save_line_items_impl` already having them. Not inside `performVerifyVoucherChecks()` itself — it's the Verify teardown + save-path. Fix scoped to Phase 3e. | Fix |
 | 2026-08-27 | Verification | Phase 3e fixed the server-side sibling re-resolution and modal teardown refetch when cached modal data is available; live Render confirmation remains pending. | Fix |
+| 2026-08-27 | Verification | Duplicate Verify clicks could start overlapping save/verify sequences; guarded by a voucher-level in-flight promise. | Fix |
 
 ---
 
