@@ -2434,3 +2434,92 @@ backend suite half-blind. The rendered error state was screenshotted through the
 convention.
 
 ---
+
+## Verification Prev/Next Processing UI
+
+**Requirement (2026-08-27, Phase 2 of the same 6-phase Verification nav/UX set whose Phase 1 is
+written up under "Verification Nav Skeleton Recovery" above):** the loading UI covered only the
+last, fastest step of a voucher navigation, leaving roughly three seconds of total silence during
+the save phase, and both Prev/Next buttons stayed clickable throughout so a second click stacked
+another full navigation on top of the first.
+
+**Where the silence actually was** (traced, not assumed): `goToPreviousTransaction()` /
+`goToNextTransaction()` run `saveCurrentTransaction()` → `saveAllVoucherLines()` → **one sequential
+`save_line_items` POST per voucher line**, each preceded by `flushProcedureObservations()` and
+`flushAccountHeadNoMatchNote()`. On Next there is then `validateTransaction()` (another save plus a
+`validate` POST), and on the passed branch `completeTransaction()` (a third save, another validate,
+a `complete` POST). Only the final step — `moveToAdjacentVoucher()`, or `loadNextTransaction()`
+inside `completeTransaction()` — painted anything. Hence: click, ~3s of nothing, a brief skeleton
+flash, new voucher.
+
+**Button state — two independent conditions ANDed, not two competing writes.** Per the user's
+explicit instruction at plan time. `getVoucherNavAllowed()` holds the position half of the rule
+(extracted out of `renderVoucherHeader()` so there is one definition of "there is a voucher that
+way"); `applyVoucherNavButtonState()` sets `disabled = voucherNavInFlight || !allowed`, and
+`renderVoucherHeader()` computes its inline `disabled` attribute from the same two ANDed terms. Had
+these been two writers each setting `disabled` at different moments, whichever finished last would
+win — so a settling fetch could leave a button live that position says must stay dead. ANDing
+removes the race by construction instead of by carefully ordering the writes.
+
+This matters concretely, not theoretically: on the passed branch `completeTransaction()` →
+`loadNextTransaction()` re-renders the header **while the navigation is still running**. Without the
+AND in `renderVoucherHeader()`, that mid-flight render would re-enable both buttons.
+
+**One guarded entry point.** `runGuardedVoucherNav(message, fn)` wraps the entire save → validate →
+fetch → render sequence: it drops the call outright if a navigation is already in flight (the
+stacked-call guard, same reasoning as `saveLineItems()`'s `inFlightLineSaves` map one level down),
+sets the flag, applies the button state, shows the badge, and restores everything in a `finally`.
+Each nav function keeps its existing position early-return *before* the wrapper, so an
+at-the-boundary click still no-ops without flashing the buttons off and on for nothing.
+
+**Re-enable audit** (requested explicitly, since a stuck-disabled button would be the same failure
+family as Phase 1's stuck skeleton): every exit restores the buttons through that one `finally` —
+success (header re-rendered mid-flight, corrected after), boundary (Phase 1 re-renders lines only,
+never the header), the error block (Phase 1 replaces the table only, never the header), a cancelled
+confirm dialog, and any thrown error. The audit found one real hole: Phase 1's **Try again** button
+calls `moveToAdjacentVoucher()` directly, bypassing `goToNextTransaction()`, so a retry would have
+run with both nav buttons live. It now goes through the same wrapper.
+`verifyAndAdvanceVoucher()` (procedure modal) and `navigateToTransaction()` (popover) are untouched
+and unaffected — they render with the flag false.
+
+**Indicator: the existing voucher loading badge**, not a new primitive — the spinner + message pill
+beside the voucher title (`showVoucherLoadingBadge()`), already visually proven by
+`renderVoucherLines()`'s own per-line batch. It is ref-counted and shared, which creates a real
+cross-voucher hazard: on the complete-and-advance path `renderVoucherHeader()` resets the count to 0
+and `renderVoucherLines()` starts the **new** voucher's badge, so a naive hide in the `finally`
+would decrement that one instead of ours. Closed with the file's own existing marker for exactly
+this problem — capture `voucherLoadToken` at show time and skip the hide if it has since moved on,
+mirroring the `myLoadToken` guard in `renderVoucherLines()`. The badge is also lowered around
+`showNavigationConfirm()` and raised again after, so a spinner never claims work is in progress
+while the dialog is actually waiting on the user; the buttons stay disabled throughout.
+
+The table skeleton stays exactly where Phase 1 left it. During the save the table keeps showing real
+data — it is the current voucher's own data and still valid — and is only replaced once a genuinely
+different voucher is being fetched.
+
+**No `style.css` change.** `.btn-voucher-nav:disabled` already styles the greyed state, so the
+project's all-18-pages stylesheet bump is not owed.
+
+**Tests:** 4 cases added to `tests/test_verification_nav_skeleton.py` (9 total), driving the real
+`goToNextTransaction()` rather than `moveToAdjacentVoucher()` directly, over a seeded two-voucher
+session with `cleared_status: 'Cleared'` so `isCurrentVoucherValidated()` skips the confirm dialog.
+The mid-flight assertion needs **no sleeps or delayed responses**: JS is single-threaded and
+`runGuardedVoucherNav()` disables the buttons and shows the badge synchronously before its first
+`await`, so the navigation is kicked off and the button state read in the same `page.evaluate()` —
+deterministic, and exactly the state a user sees the instant their click returns.
+
+**Verified:** 9 passed here (Phase 1's 5 included, no regression); full suite 11 passed plus the 2
+known unrelated Postgres-cutover failures already logged in `KNOWN_ISSUES.md`. Against the
+pre-Phase-2 file the two behavioural cases fail with the right complaint (`assert 2 == 1` — a second
+overlapping navigation issued its own request); the two stuck-disabled cases pass pre-fix by
+construction, since nothing disabled the buttons before this phase — they are forward-looking
+regression guards, stated plainly rather than overclaimed. Mid-save state screenshotted through the
+same harness (both buttons greyed, "Saving your work…" spinner beside the voucher title) by hanging
+`saveCurrentTransaction()` from inside the page so the state held still.
+`verification.js?v=13` → `?v=14` (verification.html) in the same commit.
+
+**Noted, not touched:** `isNavigating` (verification.js) is written by `loadNextTransaction()` and
+read by nothing — dead state predating this work. The new flag is deliberately named
+`voucherNavInFlight` to avoid confusion with it.
+
+---

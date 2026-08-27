@@ -278,7 +278,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-26: Manual dev-phase reset - cleared all 611 `account_category_assignments` rows (all clients) ahead of fresh TB re-upload/reassignment.
 - 2026-08-26: Fast TB upload, 2 phases (COMPLETE) - batched insert + progress-poll endpoint (A), `trial_balance.js`/`.html` progress bar (B).
 - 2026-08-26: Assign Categories client-context race fixed - `openAssignCategoriesView()` now awaits `clientContextReady` before its first API call.
-- 2026-08-27: Verification nav skeleton recovery - `moveToAdjacentVoucher()`'s four exits now clear the skeleton, showing error/retry or restoring on boundary; Playwright regression test added.
+- 2026-08-27: Verification nav/UX fixes, Phases 1-2 of 6 - skeleton recovery with error/retry, Prev/Next processing UI (save-phase badge, disabled buttons, stacked-call guard).
 
 
 ## Self-maintenance

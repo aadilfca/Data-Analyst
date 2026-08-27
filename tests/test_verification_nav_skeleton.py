@@ -54,6 +54,15 @@ SEED_VOUCHER = {
 }
 
 
+# The voucher a successful navigation lands on — second (and last) of the two-voucher session
+# seeded by seed_two_voucher_session(), so afterwards position says Prev is allowed and Next is not.
+NEXT_VOUCHER = {
+    "voucher_id": "CPV-002",
+    "voucher_date": "02/04/2026",
+    "lines": [dict(SEED_VOUCHER["lines"][0], detail_id=9002)],
+}
+
+
 class _QuietHandler(SimpleHTTPRequestHandler):
     """SimpleHTTPRequestHandler without the per-request stderr logging."""
 
@@ -118,6 +127,8 @@ def open_verification_page(browser, base_url):
                 route.abort()
             elif mode["value"] == "boundary":
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"boundary": True}))
+            elif mode["value"] == "success":
+                route.fulfill(status=200, content_type="application/json", body=json.dumps(NEXT_VOUCHER))
             else:  # "no_lines" — a 200 the render step can't use
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"voucher_id": "X", "lines": []}))
             return
@@ -144,6 +155,61 @@ def seed_rendered_voucher(page):
         SEED_VOUCHER,
     )
     page.wait_for_selector("#voucherLinesContainer .voucher-line-row")
+
+
+def seed_two_voucher_session(page):
+    """Seeds a session of two vouchers, positioned on the first one.
+
+    getVoucherPosition() reads sessionTransactions, so the Prev/Next buttons only have a meaningful
+    position rule once it's populated: here that means Prev disallowed (voucher 1 of 2) and Next
+    allowed. cleared_status 'Cleared' makes isCurrentVoucherValidated() true so the navigation
+    doesn't stop at the "not validated" confirm dialog.
+    """
+    page.evaluate("() => { document.getElementById('verificationSessionContent').style.display = 'block'; }")
+    page.evaluate(
+        """(seed) => {
+            sessionTransactions = [
+                { detail_id: 9001, voucher_id: 'CPV-001', cleared_status: 'Cleared', validation_status: 'Passed' },
+                { detail_id: 9002, voucher_id: 'CPV-002', cleared_status: 'Cleared', validation_status: 'Passed' }
+            ];
+            totalTransactions = 2;
+            currentSessionId = 777;
+            currentDetailId = seed.lines[0].detail_id;
+            applyVoucherNavRenderData(seed);
+        }""",
+        SEED_VOUCHER,
+    )
+    page.wait_for_selector("#voucherLinesContainer .voucher-line-row")
+
+
+def nav_button_state(page):
+    return page.evaluate(
+        """() => ({
+            prev: document.getElementById('prevArrow').disabled,
+            next: document.getElementById('nextArrow').disabled,
+            badge: !!document.querySelector('.voucher-loading-badge')
+        })"""
+    )
+
+
+def start_nav_and_snapshot(page):
+    """Kicks off goToNextTransaction() and reads the button state in the SAME evaluate.
+
+    No sleeps or delayed responses needed: JS is single-threaded, and runGuardedVoucherNav()
+    disables the buttons and shows the badge synchronously before the first await is reached. So
+    the snapshot taken immediately after the call is exactly the state a user sees the instant
+    their click returns — which is the guarantee under test.
+    """
+    return page.evaluate(
+        """() => {
+            window.__navPromise = goToNextTransaction();
+            return {
+                prev: document.getElementById('prevArrow').disabled,
+                next: document.getElementById('nextArrow').disabled,
+                badge: (document.querySelector('.voucher-loading-badge') || {}).textContent || ''
+            };
+        }"""
+    )
 
 
 def skeleton_row_count(page):
@@ -205,6 +271,74 @@ def test_retry_button_reissues_the_navigation(browser, static_server):
         assert len(calls) > calls_before_retry, "Try again did not re-issue the navigation request"
         assert page.locator("#voucherLinesContainer .voucher-nav-error").count() == 0
         assert skeleton_row_count(page) == 0
+    finally:
+        page.close()
+
+
+def test_nav_buttons_disable_during_navigation_and_follow_position_after(browser, static_server):
+    """Phase 2: no stacked navigations, and position — not the fetch — decides the final state."""
+    page, mode, calls = open_verification_page(browser, static_server)
+    try:
+        seed_two_voucher_session(page)
+        mode["value"] = "success"
+
+        before = nav_button_state(page)
+        assert before["prev"] is True, "Prev should be disabled on voucher 1 of 2 (position rule)"
+        assert before["next"] is False, "Next should be live on voucher 1 of 2"
+
+        during = start_nav_and_snapshot(page)
+        assert during["prev"] is True
+        assert during["next"] is True, "Next stayed clickable during the save phase — stacked navigations possible"
+        assert "Saving" in during["badge"], "no processing indicator during the save phase"
+
+        page.evaluate("() => window.__navPromise")
+        page.wait_for_selector("#voucherLinesContainer .voucher-line-row")
+
+        after = nav_button_state(page)
+        # Now on voucher 2 of 2: the position rule must win over "the fetch finished".
+        assert after["prev"] is False, "Prev stuck disabled after a completed navigation"
+        assert after["next"] is True, "Next re-enabled on the last voucher — position rule lost to the fetch"
+        assert after["badge"] is False, "processing badge left behind after the navigation finished"
+    finally:
+        page.close()
+
+
+def test_second_navigation_click_is_dropped_while_one_is_running(browser, static_server):
+    """The in-flight guard: a second call during a navigation must not start another one."""
+    page, mode, calls = open_verification_page(browser, static_server)
+    try:
+        seed_two_voucher_session(page)
+        mode["value"] = "success"
+
+        page.evaluate(
+            """() => {
+                window.__navPromise = Promise.all([goToNextTransaction(), goToNextTransaction()]);
+            }"""
+        )
+        page.evaluate("() => window.__navPromise")
+        page.wait_for_selector("#voucherLinesContainer .voucher-line-row")
+
+        assert len(calls) == 1, "a second overlapping navigation issued its own voucher_nav request"
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize("outcome", ["boundary", "http_error"])
+def test_nav_buttons_are_re_enabled_when_navigation_does_not_succeed(browser, static_server, outcome):
+    """Stuck-disabled regression guard: a boundary re-renders only the lines and an error replaces
+    only the table — neither touches the header, so nothing else would restore these buttons."""
+    page, mode, calls = open_verification_page(browser, static_server)
+    try:
+        seed_two_voucher_session(page)
+        mode["value"] = outcome
+
+        page.evaluate("() => goToNextTransaction()")
+
+        state = nav_button_state(page)
+        # Still on voucher 1 of 2, so position says Prev off / Next on.
+        assert state["next"] is False, "Next left stuck disabled after an unsuccessful navigation"
+        assert state["prev"] is True, "Prev wrongly enabled — position says voucher 1 of 2"
+        assert state["badge"] is False, "processing badge left behind"
     finally:
         page.close()
 

@@ -54,6 +54,15 @@ let voucherLoadToken = 0;
 // show/hide this one shared badge without one hiding it out from under the other. Reset to 0 in
 // renderVoucherHeader() — see the voucherLoadToken comment above for why.
 let voucherLoadingBadgeRefCount = 0;
+// Prev/Next processing UI: true for the whole duration of one voucher navigation — from the click,
+// through the save/validate phase (several sequential POSTs, the ~3s the user used to spend staring
+// at an unchanged screen), through the fetch and render. Read by getVoucherNavAllowed()'s callers
+// as ONE of two independent conditions gating the Prev/Next buttons; see
+// applyVoucherNavButtonState() for why it is never a competing "last write wins" state.
+let voucherNavInFlight = false;
+// The voucherLoadToken value current when runGuardedVoucherNav() showed its badge. Compared again
+// before hiding it — see hideVoucherNavBadge() for the cross-voucher hazard this closes.
+let voucherNavBadgeToken = null;
 // Phase C: transient click-to-lock focus aid — the detail_id of the one voucher line currently
 // "locked"/dimmed, or null if none. Purely visual, not persisted; reset whenever a new voucher's
 // lines are rendered (see renderVoucherLines()).
@@ -1469,13 +1478,14 @@ async function loadNextTransaction(detailId = null) {
 function renderVoucherHeader(voucherId, voucherDate, lines) {
     const bar = document.getElementById('voucherHeaderBar');
     if (!bar) return;
-    // Phase B: disabled state is voucher-level (getVoucherPosition()), not line-level — a
-    // multi-line voucher no longer has to be "the last line" for Next to disable correctly.
-    // Position unknown (sessionTransactions not loaded yet) defaults both disabled, same safe
-    // default the previous line-based check already fell into before sessionTransactions loaded.
+    // Prev/Next processing UI: both conditions ANDed, exactly as applyVoucherNavButtonState() does
+    // — a render that happens WHILE a navigation is still running must not re-enable the buttons.
+    // That is not hypothetical: goToNextTransaction()'s passed branch runs completeTransaction() →
+    // loadNextTransaction(), which re-renders this header mid-navigation.
     const pos = getVoucherPosition();
-    const prevDisabled = !(pos.total > 0 && pos.index > 1);
-    const nextDisabled = !(pos.total > 0 && pos.index < pos.total);
+    const allowed = getVoucherNavAllowed(pos);
+    const prevDisabled = voucherNavInFlight || !allowed.prev;
+    const nextDisabled = voucherNavInFlight || !allowed.next;
     // Header format cleanup: subtitle is now "[session date range] · Voucher X of Y" - the old
     // "N line(s) · Amount X" segments duplicated the table body/total row below and were dropped.
     // The date range is the ACTIVE SESSION's own range (currentSessionPeriodStart/End), not the
@@ -3417,6 +3427,75 @@ function getVoucherPosition() {
     return { index: idx >= 0 ? idx + 1 : 0, total };
 }
 
+// Prev/Next processing UI: the POSITION half of the Prev/Next enabled rule, extracted so
+// renderVoucherHeader() and applyVoucherNavButtonState() can't drift apart on what "there is a
+// voucher that way" means. Position unknown (sessionTransactions not loaded yet) disallows both —
+// the same safe default the rule has always had.
+function getVoucherNavAllowed(pos) {
+    const position = pos || getVoucherPosition();
+    return {
+        prev: position.total > 0 && position.index > 1,
+        next: position.total > 0 && position.index < position.total
+    };
+}
+
+// Prev/Next processing UI: the single place the buttons' disabled state is computed. Deliberately
+// two INDEPENDENT conditions ANDed together — a button is clickable only if no navigation is in
+// flight AND position says there's a voucher that way — rather than two writers each setting
+// `disabled` at different moments. With competing writes, whichever finished last would win, so a
+// fetch settling could leave a button enabled that position says must stay dead (or vice versa);
+// ANDing removes that race by construction rather than by ordering the writes carefully.
+function applyVoucherNavButtonState() {
+    const allowed = getVoucherNavAllowed();
+    const prevBtn = document.getElementById('prevArrow');
+    const nextBtn = document.getElementById('nextArrow');
+    if (prevBtn) prevBtn.disabled = voucherNavInFlight || !allowed.prev;
+    if (nextBtn) nextBtn.disabled = voucherNavInFlight || !allowed.next;
+}
+
+// Prev/Next processing UI: the save-phase indicator. Reuses the existing voucher loading badge
+// (spinner + message pill beside the voucher title) rather than a new primitive.
+function showVoucherNavBadge(message) {
+    voucherNavBadgeToken = voucherLoadToken;
+    showVoucherLoadingBadge(message);
+}
+
+// The badge is ref-counted and shared. If a header re-render happened while our navigation was
+// running (completeTransaction() → loadNextTransaction() does exactly this), renderVoucherHeader()
+// already reset the ref count to 0 and renderVoucherLines() started the NEW voucher's own badge —
+// so decrementing now would hide that one instead of ours, which is long gone. voucherLoadToken is
+// the file's existing marker for "a new voucher has been painted since then" (see the myLoadToken
+// guard in renderVoucherLines()), so the same check applies here.
+function hideVoucherNavBadge() {
+    if (voucherNavBadgeToken === null) return;
+    if (voucherNavBadgeToken === voucherLoadToken) hideVoucherLoadingBadge();
+    voucherNavBadgeToken = null;
+}
+
+// Prev/Next processing UI: the one guarded entry point for a whole voucher navigation. Wraps the
+// entire save → validate → fetch → render sequence (not just the fetch) so the buttons are dead and
+// the badge is up for every second the user is waiting, including the several sequential
+// save_line_items POSTs that used to run in complete silence.
+// The in-flight check is also the stacked-call guard: a second click (or a programmatic call from
+// another entry point) while one navigation is running is dropped rather than queued behind it —
+// the same reasoning as saveLineItems()'s inFlightLineSaves map one level down.
+// Every exit route restores the buttons through the finally, including a cancelled confirm dialog,
+// a boundary, Phase 1's error block, and a thrown error — there is no path that leaves them stuck
+// disabled.
+async function runGuardedVoucherNav(message, fn) {
+    if (voucherNavInFlight) return;
+    voucherNavInFlight = true;
+    applyVoucherNavButtonState();
+    showVoucherNavBadge(message);
+    try {
+        return await fn();
+    } finally {
+        hideVoucherNavBadge();
+        voucherNavInFlight = false;
+        applyVoucherNavButtonState();
+    }
+}
+
 // Counts distinct vouchers in the session (not lines/transactions) and how many are fully
 // verified (every one of that voucher's lines is Passed/Verified). Reads sessionTransactions,
 // which validateTransaction() keeps patched with fresh validation_status so this stays accurate
@@ -3498,8 +3577,13 @@ function showVoucherNavError(direction, message) {
         </div>
     `;
     // Listeners attached after the innerHTML write — no inline onclick (project convention).
+    // Routed through runGuardedVoucherNav() like Prev/Next themselves: this button calls
+    // moveToAdjacentVoucher() directly, bypassing goToNextTransaction(), so without the wrapper a
+    // retry would run with both nav buttons live — the one hole left in the stacked-call guard.
     container.querySelector('#voucherNavRetryBtn')?.addEventListener('click', function () {
-        moveToAdjacentVoucher(direction);
+        runGuardedVoucherNav(`Loading the ${voucherNavDirectionLabel(direction)} voucher…`, function () {
+            return moveToAdjacentVoucher(direction);
+        });
     });
     container.querySelector('#voucherNavReloadBtn')?.addEventListener('click', function () {
         window.location.reload();
@@ -3575,20 +3659,29 @@ async function moveToAdjacentVoucher(direction) {
 async function goToPreviousTransaction() {
     const pos = getVoucherPosition();
     if (pos.total > 0 && pos.index <= 1) {
-        // No message – silently ignore (already at the first voucher)
+        // No message – silently ignore (already at the first voucher). Deliberately BEFORE the
+        // guarded wrapper: an at-the-boundary click is a no-op, so it shouldn't flash the buttons
+        // disabled and the badge on for nothing.
         return;
     }
-    // Save current state first (always)
-    await saveCurrentTransaction();
-    // If not validated, ask for confirmation
-    if (!isCurrentVoucherValidated()) {
-        const confirmed = await showNavigationConfirm();
-        if (!confirmed) {
-            // User cancelled – no message
-            return;
+    return runGuardedVoucherNav('Saving your work…', async () => {
+        // Save current state first (always)
+        await saveCurrentTransaction();
+        // If not validated, ask for confirmation
+        if (!isCurrentVoucherValidated()) {
+            // Badge down while the dialog is up: a spinner claiming work is in progress alongside
+            // a question waiting on the user would be misleading. The buttons stay disabled — they
+            // sit behind the modal and nothing should navigate until this is answered.
+            hideVoucherNavBadge();
+            const confirmed = await showNavigationConfirm();
+            if (!confirmed) {
+                // User cancelled – no message. The wrapper's finally re-enables the buttons.
+                return;
+            }
+            showVoucherNavBadge('Saving your work…');
         }
-    }
-    await moveToAdjacentVoucher('prev');
+        await moveToAdjacentVoucher('prev');
+    });
 }
 
 // Go to next voucher – with confirmation if not validated
@@ -3599,32 +3692,37 @@ async function goToNextTransaction() {
     if (pos.total > 0 && pos.index >= pos.total) {
         return;
     }
-    // Save current state
-    await saveCurrentTransaction();
-    // If not validated, ask for confirmation
-    if (!isCurrentVoucherValidated()) {
-        const confirmed = await showNavigationConfirm();
-        if (!confirmed) {
-            // Cancelled — stay on the current voucher, no toast (nothing changed for the user
-            // to be informed about).
-            return;
+    return runGuardedVoucherNav('Saving your work…', async () => {
+        // Save current state
+        await saveCurrentTransaction();
+        // If not validated, ask for confirmation (badge down for the dialog — see the Prev
+        // function above for why).
+        if (!isCurrentVoucherValidated()) {
+            hideVoucherNavBadge();
+            const confirmed = await showNavigationConfirm();
+            if (!confirmed) {
+                // Cancelled — stay on the current voucher, no toast (nothing changed for the user
+                // to be informed about). The wrapper's finally re-enables the buttons.
+                return;
+            }
+            showVoucherNavBadge('Saving your work…');
         }
-    }
-    // Proceed: validate and move (if validation passes, mark verified; if it fails, still allow
-    // navigation since the user already confirmed they want to proceed).
-    await validateTransaction(); // updates the active line's .voucher-line-status color/icon/label
-    // Check if it passed, if yes mark verified.
-    const statusCell = document.querySelector(`.voucher-line-row[data-detail-id="${currentDetailId}"] .voucher-line-status`);
-    if (statusCell && statusCell.dataset.validationStatus === 'passed') {
-        await completeTransaction(); // marks verified and calls loadNextTransaction
-    } else {
-        // Even if validation failed, we move to next because user confirmed.
-        // No failure message here: moveToAdjacentVoucher() now reports every one of its own
-        // outcomes in place (error block with a retry action, or a boundary toast). A second
-        // message from here would double-report, and would wrongly say "not found" over a
-        // boundary — which isn't a failure at all.
-        await moveToAdjacentVoucher('next');
-    }
+        // Proceed: validate and move (if validation passes, mark verified; if it fails, still allow
+        // navigation since the user already confirmed they want to proceed).
+        await validateTransaction(); // updates the active line's .voucher-line-status color/icon/label
+        // Check if it passed, if yes mark verified.
+        const statusCell = document.querySelector(`.voucher-line-row[data-detail-id="${currentDetailId}"] .voucher-line-status`);
+        if (statusCell && statusCell.dataset.validationStatus === 'passed') {
+            await completeTransaction(); // marks verified and calls loadNextTransaction
+        } else {
+            // Even if validation failed, we move to next because user confirmed.
+            // No failure message here: moveToAdjacentVoucher() now reports every one of its own
+            // outcomes in place (error block with a retry action, or a boundary toast). A second
+            // message from here would double-report, and would wrongly say "not found" over a
+            // boundary — which isn't a failure at all.
+            await moveToAdjacentVoucher('next');
+        }
+    });
 }
 // Override the mirror icon click – we replace the alert
 document.addEventListener('DOMContentLoaded', function() {
