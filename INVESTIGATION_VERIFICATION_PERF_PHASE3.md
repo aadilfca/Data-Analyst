@@ -86,3 +86,24 @@ in the live UI check — see CHANGELOG_ARCHIVE.md "Verification Speed Optimizati
 `pytest tests/ -q` → 20 passed, 2 failed. The 2 failures are the known pre-existing
 `test_app_smoke` / `test_upload_validation_counts` SQLite-vs-Postgres ones (KNOWN_ISSUES 2026-08-27),
 unrelated to this change.
+
+### Live UI verification (Playwright, dev server, session #749 / voucher CPV-0826-442 / detail_id 193770)
+
+Ran after the fix (no "before" browser capture — code was already applied; the parallelism is
+proven structurally from resource-timing start/end, and the backend before/after is the
+17→11 number above).
+
+| Check | Result |
+|---|---|
+| Modal opens, rail renders | ✅ `display:flex`, 6 rail items (1 Voucher Line + 5 documents), no console errors |
+| `procedure_modal_data` runs in parallel with `templates/*` (was serial pre-3c) | ✅ `procedure_modal_data` starts @23706 ms, the 4 `templates/*` calls start @23711–23714 ms — all in flight together; the batch call no longer waits for template-columns |
+| Warm-open component breakdown (`?perf=1`) | `guidance_ms: 0` (cached), `modal_data_ms: ~3263`, `template_columns_ms: ~3263` — the two now resolve **together**, total ≈ max not sum |
+| Cold open total | ~7.8–8.9 s (guidance + `max`(templates ~5 s, modal_data ~7.8 s)); pre-3c this was guidance + templates + modal_data + TB-accounts **in series** (~13 s) |
+| `/api/trial-balance/latest-accounts` on modal open | ✅ **0 calls** across 2 opens (was 1 per open pre-3c) |
+| …after clicking the "Voucher Line" tab | ✅ exactly 1 call; account-head search then returns rows (typed "purchase" → 13 matches) |
+| …on a 3rd open + Voucher Line tab again | ✅ still 1 total — per-client cache guard holds, no refetch |
+
+Net: a warm modal open drops ~3.8 s → ~3.3 s (the removed TB-accounts round trip); a cold open
+drops ~13 s → ~8 s (templates now overlap the batch call instead of stacking). The residual is
+the single unavoidable `procedure_modal_data` cross-region round trip — further gains there are
+Phase 3e/infrastructure territory, not 3c.

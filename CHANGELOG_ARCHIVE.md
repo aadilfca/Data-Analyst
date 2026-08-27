@@ -82,11 +82,17 @@ client per page session.
 - `pytest tests/ -q` → 20 passed, 2 failed (the known pre-existing `test_app_smoke` /
   `test_upload_validation_counts` SQLite-vs-Postgres failures, KNOWN_ISSUES 2026-08-27 — untouched).
 - `python -c "import routers.verification"` clean; `node -c static/procedure_modal.js` clean.
-- **Live browser before/after not captured** — the only verification session on the running dev
-  server is #749 for client 5 ("Leather Crop"), whose Trial Balance was deleted, so its voucher
-  lines have no resolved Category and `openProcedureModal()` deliberately no-ops. Logged in
-  KNOWN_ISSUES; the frontend reorder is a mechanical await change with no behavioural branch
-  touched, and the live check rolls into Phase 3f's Render test.
+- **Live UI check (Playwright, dev server, session #749 / voucher CPV-0826-442 / detail_id
+  193770 — a line that resolves to "Material Purchased"):** modal opens and renders (6 rail
+  items, no errors); resource timing confirms `procedure_modal_data` now starts alongside the
+  `templates/*` calls instead of after them (PARALLEL); `?perf=1` shows `template_columns_ms ≈
+  modal_data_ms` on a warm open (they resolve together, total ≈ max not sum); **0**
+  `/api/trial-balance/latest-accounts` calls on modal open (was 1 per open), exactly 1 after
+  the "Voucher Line" tab is opened, and still 1 on a later re-open (per-client cache guard).
+  Warm open ~3.8 s → ~3.3 s; cold open ~13 s → ~8 s. Full table in
+  `INVESTIGATION_VERIFICATION_PERF_PHASE3.md`. (The brief's premise that Leather Crop had no
+  categorised lines was stale — a fresh TB was uploaded 2026-08-26; no test-data change was
+  needed.)
 
 ---
 
