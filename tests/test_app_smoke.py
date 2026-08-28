@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import database
 from database import init_db
@@ -30,7 +31,10 @@ class AppSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_clients_api_responds_on_fresh_db(self):
-        response = self.client.get("/api/clients")
+        # The clients router is Postgres-backed in production. Keep this smoke test
+        # hermetic: the HTTP/router wiring is real, while the external PG read is stubbed.
+        with patch("routers.clients.execute_query_pg", return_value=[]):
+            response = self.client.get("/api/clients")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
 

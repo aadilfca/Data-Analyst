@@ -123,3 +123,39 @@ def test_forced_verify_save_is_not_repeated_by_navigation(dirty_page):
     assert result["afterVerify"] == 1
     assert result["afterNavigation"] == 1
     assert result["navResult"] == {"savedCount": 0, "failedCount": 0, "skippedCount": 3}
+
+
+def test_save_and_verify_uses_one_combined_request(dirty_page):
+    result = dirty_page.evaluate("""async () => {
+        currentSessionId = 42;
+        currentVoucherLines = [{detail_id: 1, cleared_status: 'Query'}];
+        voucherLineState[1].lineItems = [];
+        voucherLineState[1].transactionType = 'Purchases';
+        voucherLineState[1].procedureData = {};
+        const saveResult = await saveAndVerifyVoucher(1);
+        return {saveResult, calls: window.fetchCalls};
+    }""")
+
+    assert result["saveResult"]["ok"]
+    assert len(result["calls"]) == 1
+    assert result["calls"][0]["url"] == "/api/verification/save_and_verify_voucher"
+    assert "save_line_items" not in result["calls"][0]["url"]
+    assert "verify_voucher_checks" not in result["calls"][0]["url"]
+
+
+def test_save_and_verify_failure_is_reported_without_extra_request(dirty_page):
+    result = dirty_page.evaluate("""async () => {
+        currentSessionId = 42;
+        window.fetch = async (url, options) => {
+            window.fetchCalls.push({url, options});
+            return new Response(JSON.stringify({detail: 'verification failed'}), {
+                status: 500,
+                headers: {'Content-Type': 'application/json'}
+            });
+        };
+        const saveResult = await saveAndVerifyVoucher(1);
+        return {saveResult, calls: window.fetchCalls};
+    }""")
+
+    assert not result["saveResult"]["ok"]
+    assert len(result["calls"]) == 1

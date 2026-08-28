@@ -2988,3 +2988,29 @@ which resolves it. A session expiring mid-flow still routes through `login.html`
 carry `?next=` forward (pre-existing, `KNOWN_ISSUES.md`).
 
 ---
+## Verification Bulk Tick Persistence — Phase 4A
+
+**Date:** 2026-08-28 | **Files:** `routers/verification.py`, `static/procedure_modal.js`.
+
+**Why:** Live Network logs showed the two bulk tick controls issuing one request per item: three
+Audit Procedure role saves and eight voucher-level check saves, each paying the same multi-second
+database wait. Optimistic rendering and repeated cache invalidation made the selected ticks appear
+to disappear intermittently while those requests were still completing.
+
+**Backend:** Added `POST /api/verification/save_voucher_checks_batch` and
+`POST /api/verification/procedure_checks_batch`. Each validates the complete submitted list inside
+one `pg_transaction()` context and upserts every item before committing. Any invalid check, line,
+document, or role raises before commit, so the batch rolls back as one unit. Existing individual
+endpoints remain available for single-tick interactions and backwards compatibility.
+
+**Frontend:** The voucher-level Mark All button now submits one batch request containing the changed
+check IDs and target states. The Audit Procedures Mark All button now submits one batch request
+containing the changed line/document/role records. Existing optimistic update, single spinner,
+success refresh, failure revert, cache invalidation, and dirty-line behavior remain intact.
+
+**Verified:** `py_compile` passed; focused verification tests passed (13); the full test suite passed
+(31). The live Network capture showed the prior per-item requests and confirmed the performance
+motivation; user testing of the new batch routes remains the final functional check. The full
+voucher-wide atomic Save + Verify operation remains Phase 4B and is not included here.
+
+---

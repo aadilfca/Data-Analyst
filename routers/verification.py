@@ -3518,6 +3518,37 @@ def save_voucher_check_status(
         "state": state
     }
 
+
+@router.post("/api/verification/save_voucher_checks_batch")
+def save_voucher_checks_batch(
+    client_id: int = Body(..., embed=True),
+    transaction_ref: str = Body(..., embed=True),
+    checks: List[Dict[str, Any]] = Body(..., embed=True),
+):
+    """Atomically upsert several voucher-level check states in one request."""
+    if not isinstance(checks, list):
+        raise HTTPException(400, "checks must be a list.")
+    with pg_transaction():
+        active = execute_query_pg(
+            "SELECT id FROM audit_rule_voucher_checks WHERE is_active = TRUE"
+        )
+        active_ids = {row['id'] for row in active}
+        for check in checks:
+            if check.get('check_id') not in active_ids:
+                raise HTTPException(400, f"Check {check.get('check_id')} is not active.")
+            if check.get('state') not in VOUCHER_CHECK_STATES:
+                raise HTTPException(400, f"Invalid state '{check.get('state')}'.")
+        for check in checks:
+            execute_write_pg(
+                """INSERT INTO voucher_check_status
+                   (client_id, transaction_ref, check_id, state, updated_at)
+                   VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                   ON CONFLICT(client_id, transaction_ref, check_id)
+                   DO UPDATE SET state = excluded.state, updated_at = CURRENT_TIMESTAMP""",
+                (client_id, transaction_ref, check['check_id'], check['state'])
+            )
+    return {"client_id": client_id, "transaction_ref": transaction_ref, "checks": checks}
+
 # ==============================================
 # VOUCHER LINE SUPPORTING DOCUMENTS (new 6-phase requirement, Phase 1 of 6)
 # Data layer for linking a Data Bank row (client_data) to a voucher line as
@@ -3904,6 +3935,40 @@ def set_procedure_check(
         "checked_by": updated['checked_by'],
         "checked_at": updated['checked_at']
     }
+
+
+@router.post("/api/verification/procedure_checks_batch")
+def set_procedure_checks_batch(
+    checks: List[Dict[str, Any]] = Body(..., embed=True),
+):
+    """Atomically upsert several procedure-role ticks in one request."""
+    if not isinstance(checks, list):
+        raise HTTPException(400, "checks must be a list.")
+    with pg_transaction():
+        for check in checks:
+            line = execute_query_pg("SELECT id FROM verification_details WHERE id = %s", (check.get('voucher_line_id'),))
+            if not line:
+                raise HTTPException(404, "Voucher line not found.")
+            doc = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (check.get('document_id'),))
+            if not doc:
+                raise HTTPException(404, "Document not found or inactive.")
+            role = execute_query_pg(
+                "SELECT id FROM audit_rule_document_auth_roles WHERE document_id = %s AND role_name = %s",
+                (check.get('document_id'), check.get('role_name'))
+            )
+            if not role:
+                raise HTTPException(400, "Role is not configured for this document.")
+            execute_write_pg(
+                """INSERT INTO voucher_line_procedure_checks
+                   (voucher_line_id, document_id, role_name, is_checked, checked_by, checked_at)
+                   VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                   ON CONFLICT(voucher_line_id, document_id, role_name)
+                   DO UPDATE SET is_checked = excluded.is_checked,
+                                 checked_by = excluded.checked_by, checked_at = CURRENT_TIMESTAMP""",
+                (check['voucher_line_id'], check['document_id'], check['role_name'],
+                 bool(check.get('is_checked')), check.get('checked_by', 'Analyst'))
+            )
+    return {"checks": checks}
 
 
 # ==============================================

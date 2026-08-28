@@ -1453,22 +1453,13 @@ async function toggleAllVoucherChecks(uid) {
     if (window.LoadingUI && selectAllBtn) window.LoadingUI.showSpinner(selectAllBtn, 'Saving');
 
     try {
-        const responses = await Promise.all(toChange.map(c => window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_voucher_check`, {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_voucher_checks_batch`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                client_id: hostAdapter.getClientId(),
-                transaction_ref: transactionRef,
-                check_id: c.id,
-                state: newState
-            })
-        })));
-        for (const res of responses) {
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.detail || 'Failed to save voucher check.');
-            }
-        }
+            body: JSON.stringify({ client_id: hostAdapter.getClientId(), transaction_ref: transactionRef,
+                checks: toChange.map(c => ({ check_id: c.id, state: newState })) })
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Failed to save voucher checks.');
         renderVoucherChecksBar(uid);
         renderProcedureModalTabs(uid);
         invalidateProcedureModalData(uid);
@@ -2269,31 +2260,13 @@ async function toggleAllProcedureChecks(uid, docId) {
     if (window.LoadingUI && selectAllBtn) window.LoadingUI.showSpinner(selectAllBtn, 'Saving');
 
     try {
-        const responses = await Promise.all(toChange.map(role => window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/procedure_checks`, {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/procedure_checks_batch`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                voucher_line_id: parseInt(uid),
-                document_id: docId,
-                role_name: role,
-                is_checked: newChecked
-            })
-        })));
-        for (const res of responses) {
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.detail || 'Failed to save procedure check.');
-            }
-        }
-        const updatedList = await Promise.all(responses.map(res => res.json()));
-        toChange.forEach((role, i) => {
-            const updated = updatedList[i];
-            tabState.checklist[role] = {
-                is_checked: updated.is_checked,
-                checked_by: updated.checked_by,
-                checked_at: updated.checked_at
-            };
+            body: JSON.stringify({ checks: toChange.map(role => ({ voucher_line_id: parseInt(uid),
+                document_id: docId, role_name: role, is_checked: newChecked })) })
         });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Failed to save procedure checks.');
         hostAdapter.markLineDirty(uid, 'procedure checks changed');
         invalidateProcedureModalData(uid);
         renderProcedureModalTabs(uid);
