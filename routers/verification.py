@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse
-from database import execute_query_pg, execute_write_pg, execute_batch_pg, execute_batch_insert_with_ids_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg
+from database import execute_query_pg, execute_write_pg, execute_batch_pg, execute_batch_insert_with_ids_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg, pg_transaction
 from database import start_db_metrics, get_db_metrics, stop_db_metrics
 from psycopg2.extras import Json
 from datetime import datetime, timezone
@@ -1730,6 +1730,23 @@ def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_dat
         response["category_id_applied"] = status_result["category_id_applied"]
         response["category_name_applied"] = status_result["category_name_applied"]
     return response
+
+
+@router.post("/api/verification/save_and_verify_voucher")
+def save_and_verify_voucher(
+    session_id: int = Body(..., embed=True),
+    current_detail_id: int = Body(..., embed=True),
+    detail_id: int = Body(..., embed=True),
+    line_items: List[Dict[str, Any]] = Body(..., embed=True),
+    transaction_type: Optional[str] = Body(None, embed=True),
+    procedure_data: Optional[Dict[str, Any]] = Body(None, embed=True),
+):
+    """Atomically persist the current line and verify its voucher."""
+    if detail_id != current_detail_id:
+        raise HTTPException(400, "The saved line and verified line must match.")
+    with pg_transaction():
+        _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data)
+        return _verify_voucher_checks_impl(session_id, current_detail_id)
 
 @router.post("/api/verification/validate")
 def validate_transaction(

@@ -1150,20 +1150,28 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
             return null;
         }
         const physicalBillsSaved = await flushPhysicalBillEntries(uid);
-        await hostAdapter.saveLineItems(uid, { force: true });
-        if (!physicalBillsSaved) hostAdapter.markLineDirty(uid, 'physical bill save retry required');
-        const perfSuffix = window.VerificationPerf && window.VerificationPerf.enabled ? '?perf=true' : '';
-        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/verify_voucher_checks${perfSuffix}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: hostAdapter.currentSessionId, current_detail_id: uid })
-        });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            hostAdapter.showStatus(err.detail || 'Could not verify voucher-level checks — please try again.', 'error');
-            return null;
+        await flushProcedureObservations(uid);
+        await flushAccountHeadNoMatchNote(uid);
+        let combinedResult;
+        if (typeof hostAdapter.saveAndVerifyVoucher === 'function') {
+            combinedResult = await hostAdapter.saveAndVerifyVoucher(uid);
+        } else {
+            const saved = await hostAdapter.saveLineItems(uid, { force: true });
+            if (!saved || !saved.ok) {
+                combinedResult = { ok: false, error: {} };
+            } else {
+                const suffix = window.VerificationPerf && window.VerificationPerf.enabled ? '?perf=true' : '';
+                const response = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/verify_voucher_checks${suffix}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: hostAdapter.currentSessionId, current_detail_id: uid })
+                });
+                combinedResult = response.ok ? { ok: true, data: await response.json() } : { ok: false, error: {} };
+            }
         }
-        const data = await res.json();
+        if (!combinedResult.ok) throw new Error(combinedResult.error?.detail || 'Save and verify failed.');
+        if (!physicalBillsSaved) hostAdapter.markLineDirty(uid, 'physical bill save retry required');
+        const data = combinedResult.data;
+        if (!data) return null;
         if (window.VerificationPerf) {
             window.VerificationPerf.log('verify_voucher_checks_sequence', perfStarted, {
                 detail_id: String(uid),

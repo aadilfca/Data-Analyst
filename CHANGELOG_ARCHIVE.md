@@ -66,6 +66,14 @@ Render timing validation remains pending.
 
 ## Background save during procedure-line navigation
 
+## Atomic Save + Verify foundation
+
+Added transaction-aware Postgres helpers and a combined Save + Verify endpoint. The Verification
+modal now sends the current line through that atomic path, while Audit Workbook retains its existing
+fallback. The operation commits only after save, status recomputation, observation synchronization,
+and voucher verification all succeed; focused and full regression checks pass apart from the two
+known Postgres-isolation test failures.
+
 Procedure modal line navigation now opens the destination immediately while the departed line save
 continues in the background. Success and failure alerts are shown, and Verify/Close/session-exit
 saves remain blocking for data safety.

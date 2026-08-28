@@ -1,6 +1,7 @@
 import sqlite3
 import time
 import contextvars
+from contextlib import contextmanager
 import os
 import shutil
 import bcrypt
@@ -3739,6 +3740,36 @@ def _seed_postgres_data(conn):
 # psycopg2-style SQL, same convention _seed_postgres_data() (above) already
 # uses.
 _pg_pool = None
+_pg_transaction = contextvars.ContextVar("_pg_transaction", default=None)
+
+
+class _ExistingConnection:
+    def __init__(self, conn):
+        self.conn = conn
+    def __enter__(self):
+        return self.conn
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+
+@contextmanager
+def pg_transaction():
+    """Borrow one pooled connection and make all PG helpers share its transaction."""
+    existing = _pg_transaction.get()
+    if existing is not None:
+        yield existing
+        return
+    conn = get_pg_pool().getconn()
+    token = _pg_transaction.set(conn)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        _pg_transaction.reset(token)
+        get_pg_pool().putconn(conn)
 
 
 def get_pg_pool():
@@ -3842,7 +3873,8 @@ def execute_query_pg(query, params=None):
     connection to the pool. Uses %s placeholders (psycopg2 native), not
     SQLite's ?.
     """
-    with get_db_pg() as conn:
+    active = _pg_transaction.get()
+    with (get_db_pg() if active is None else _ExistingConnection(active)) as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(query, params or ())
             return [dict(row) for row in cur.fetchall()]
@@ -3857,10 +3889,12 @@ def execute_write_pg(query, params=None):
     row's id should add RETURNING id to its own query (already the pattern
     _seed_postgres_data() above uses) and read it off the first returned row.
     """
-    with get_db_pg() as conn:
+    active = _pg_transaction.get()
+    with (get_db_pg() if active is None else _ExistingConnection(active)) as conn:
         with conn.cursor() as cur:
             cur.execute(query, params or ())
-            conn.commit()
+            if active is None:
+                conn.commit()
             if cur.description:
                 row = cur.fetchone()
                 return row[0] if row else None
@@ -3875,12 +3909,13 @@ def get_raw_conn_pg():
     with release_raw_conn_pg(conn) instead of conn.close() - closing a pooled
     connection directly would just discard it rather than returning it.
     """
-    return get_pg_pool().getconn()
+    return _pg_transaction.get() or get_pg_pool().getconn()
 
 
 def release_raw_conn_pg(conn):
     """Returns a connection borrowed via get_raw_conn_pg() back to the pool."""
-    get_pg_pool().putconn(conn)
+    if conn is not _pg_transaction.get():
+        get_pg_pool().putconn(conn)
 
 
 def close_pg_pool():
@@ -3950,9 +3985,11 @@ def execute_batch_pg(conn, query, params_list, chunk_size=500):
         chunk = params_list[i:i + chunk_size]
         try:
             psycopg2.extras.execute_batch(cur, query, chunk)
-            conn.commit()
+            if _pg_transaction.get() is None:
+                conn.commit()
         except Exception:
-            conn.rollback()
+            if _pg_transaction.get() is None:
+                conn.rollback()
             raise
 
 

@@ -155,6 +155,8 @@ function buildProcedureModalAdapter() {
         getVoucherPosition,
         showStatus,
         saveLineItems,
+        buildLineSavePayload,
+        saveAndVerifyVoucher,
         saveAllVoucherLines,
         markLineDirty: markVoucherLineDirty,
         markAllLinesDirty: markAllVoucherLinesDirty,
@@ -3896,12 +3898,7 @@ async function doSaveLineItems(detailId) {
     await flushAccountHeadNoMatchNote(detailId);
 
     try {
-        const payload = {
-            detail_id: detailId,
-            line_items: state.lineItems || [],
-            transaction_type: state.transactionType,
-            procedure_data: state.procedureData
-        };
+        const payload = buildLineSavePayload(detailId);
         const res = await fetch(`${API_BASE}/api/verification/save_line_items${window.VerificationPerf.querySuffix()}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3996,6 +3993,31 @@ async function saveAllVoucherLines() {
         execution: 'sequential'
     });
     return { savedCount, failedCount, skippedCount: allUids.length - uids.length };
+}
+
+// Shared payload builder for the normal save and the atomic Save + Verify request. Keeping this
+// in one place prevents the faster path from silently omitting any current line fields.
+function buildLineSavePayload(detailId) {
+    const state = voucherLineState[detailId] || {};
+    return {
+        detail_id: detailId,
+        line_items: state.lineItems || [],
+        transaction_type: state.transactionType,
+        procedure_data: state.procedureData || {}
+    };
+}
+
+async function saveAndVerifyVoucher(detailId) {
+    const payload = buildLineSavePayload(detailId);
+    const res = await fetch(`${API_BASE}/api/verification/save_and_verify_voucher${window.VerificationPerf.querySuffix()}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, session_id: currentSessionId, current_detail_id: detailId })
+    });
+    if (!res.ok) return { ok: false, error: await res.json().catch(() => ({})) };
+    const data = await res.json();
+    const line = currentVoucherLines.find(l => String(l.detail_id) === String(detailId));
+    if (line && data.cleared_status) line.cleared_status = data.cleared_status;
+    return { ok: true, data };
 }
 
 // ---------- VALIDATE TRANSACTION ----------
