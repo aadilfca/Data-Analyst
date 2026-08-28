@@ -540,55 +540,53 @@ async function awFetchAuditGuidanceData(type, forceRefresh = false) {
     return data;
 }
 
-// Fail-soft-to-[] fetch helpers, same convention as their verification.js counterparts
-// (fetchAssignedDocumentRecords/fetchProcedureChecksForLine/fetchLineObservationEntries) — used
-// both by the adapter itself and by awRefreshLineProcedures()/awRefreshLineObservations() below.
-async function awFetchAssignedDocumentRecords(uid) {
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/voucher_line_documents/${uid}`);
-        if (!res.ok) return [];
-        const data = await res.json();
-        return data.documents || [];
-    } catch (e) {
-        console.error('Failed to load assignment status:', e);
-        return [];
+// Voucher-level batched supporting-data cache — the direct analog of verification.js's
+// voucherSupportCache / voucherSupportLoading / invalidateVoucherSupportCache(). One
+// GET /api/verification/voucher_support_data/{anchor} (anchor = the voucher group's first
+// line's detail_id) returns { lines: { "<detail_id>": { linked_documents, procedure_checks,
+// observations, physical_bills } } } for every line in that voucher — replacing the four
+// uncached per-line fetches this file used to make on every modal close. The endpoint already
+// resolves sibling-session ids and shapes physical bills identically to the standalone routes
+// (see Phase 2a discovery), so callers read the same arrays they did before.
+//
+// Keyed by anchor detail_id: navigating to a different voucher naturally misses and re-fetches.
+// awInvalidateVoucherSupportCache() MUST run after any successful save (see awSaveLineItems())
+// — otherwise hideProcedureModalOnly()'s post-save badge refresh serves the pre-save copy and
+// the Procedures/Observations badges show stale state until the page is reloaded.
+let awVoucherSupportCache = null;         // { voucher_line_id, transaction_ref, lines: {...} } | null
+let awVoucherSupportLoading = null;       // in-flight Promise<lines-map> | null
+let awVoucherSupportLoadingAnchor = null; // anchor detail_id the in-flight fetch is for
+
+// Returns the { "<detail_id>": {...} } map for the voucher whose first line is anchorUid.
+// Fail-soft to {} so a fetch hiccup never breaks a badge cell. The in-flight guard only reuses
+// a pending promise when it's for the SAME anchor — unlike verification.js (one voucher on
+// screen at a time), this page can refresh lines from different vouchers, so a blind reuse
+// could hand back another voucher's data.
+async function awLoadVoucherSupportData(anchorUid) {
+    if (!anchorUid) return {};
+    if (awVoucherSupportCache && String(awVoucherSupportCache.voucher_line_id) === String(anchorUid)) {
+        return awVoucherSupportCache.lines || {};
     }
+    if (awVoucherSupportLoading && String(awVoucherSupportLoadingAnchor) === String(anchorUid)) {
+        return awVoucherSupportLoading;
+    }
+    awVoucherSupportLoadingAnchor = anchorUid;
+    awVoucherSupportLoading = window.ApiUtils.apiFetch(`${API_BASE}/api/verification/voucher_support_data/${anchorUid}`)
+        .then(async res => {
+            if (!res.ok) return {};
+            const data = await res.json();
+            awVoucherSupportCache = data;
+            return data.lines || {};
+        })
+        .catch(() => ({}))
+        .finally(() => { awVoucherSupportLoading = null; awVoucherSupportLoadingAnchor = null; });
+    return awVoucherSupportLoading;
 }
 
-async function awFetchProcedureChecksForLine(uid) {
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/procedure_checks/${uid}`);
-        if (!res.ok) return [];
-        const data = await res.json();
-        return data.checks || [];
-    } catch (e) {
-        console.error('Failed to load procedure checks:', e);
-        return [];
-    }
-}
-
-async function awFetchPhysicalBillsForLine(uid) {
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/physical_bills/${uid}`);
-        if (!res.ok) return [];
-        const data = await res.json();
-        return data.bills || [];
-    } catch (e) {
-        console.error('Failed to load physical bills:', e);
-        return [];
-    }
-}
-
-async function awFetchLineObservationEntries(uid) {
-    try {
-        const res = await fetch(`${API_BASE}/api/verification/line_observations/${uid}`);
-        if (!res.ok) return [];
-        const data = await res.json();
-        return data.entries || [];
-    } catch (e) {
-        console.error('Failed to load observations:', e);
-        return [];
-    }
+function awInvalidateVoucherSupportCache() {
+    awVoucherSupportCache = null;
+    awVoucherSupportLoading = null;
+    awVoucherSupportLoadingAnchor = null;
 }
 
 // The direct-backend-call replacement for verification.js's saveLineItems() — flushes any dirty
@@ -627,6 +625,12 @@ async function awSaveLineItems(uid) {
                 applyFilterAndRender();
             }
         }
+        // The line (incl. its flushed observation text) is now persisted — drop the voucher-wide
+        // support cache so the post-save badge refresh (hideProcedureModalOnly() →
+        // awRefreshLineProcedures/Observations) re-reads saved state instead of the pre-save copy.
+        // Mirrors invalidateVoucherSupportCache() in verification.js. Single chokepoint — covers
+        // the adapter's saveLineItems / saveAllVoucherLines and the Verify fallback save.
+        awInvalidateVoucherSupportCache();
     } catch (e) {
         console.error('Error saving line (Audit Workbook):', e);
         awShowStatus('Could not save changes for this line — please try again.', 'error');
@@ -669,24 +673,38 @@ async function awRefreshLineProcedures(uid, type) {
         return;
     }
     const needsVoucherChecks = docs.some(doc => doc.transaction_level_approval);
-    const needsPhysicalBills = docs.some(doc => doc.document_type === 'physical_bill');
-    const [assignedRecords, procedureChecks, checks, physicalBills] = await Promise.all([
-        awFetchAssignedDocumentRecords(uid),
-        awFetchProcedureChecksForLine(uid),
+    // One voucher-level batched fetch replaces the former per-line
+    // awFetchAssignedDocumentRecords / awFetchProcedureChecksForLine / awFetchPhysicalBillsForLine —
+    // anchor is the voucher group's first line, result indexed by this line's own detail_id.
+    // Physical bills come back unconditionally (one request regardless), so there's no
+    // needsPhysicalBills gate anymore.
+    const anchorUid = (voucher.lines && voucher.lines[0] && voucher.lines[0].detail_id) || uid;
+    const [supportLines, checks] = await Promise.all([
+        awLoadVoucherSupportData(anchorUid),
         // ensureVoucherChecksLoaded() is a plain global already declared in procedure_modal.js
         // (pure fetch+cache, no hostAdapter dependency of its own) — reused directly by name.
-        needsVoucherChecks ? ensureVoucherChecksLoaded(sessionClientId, voucher.voucher_no) : Promise.resolve(null),
-        needsPhysicalBills ? awFetchPhysicalBillsForLine(uid) : Promise.resolve([])
+        needsVoucherChecks ? ensureVoucherChecksLoaded(sessionClientId, voucher.voucher_no) : Promise.resolve(null)
     ]);
+    const lineSupport = supportLines[String(uid)] || {};
+    const assignedRecords = (lineSupport.linked_documents && lineSupport.linked_documents.documents) || [];
+    const procedureChecks = (lineSupport.procedure_checks && lineSupport.procedure_checks.checks) || [];
+    const physicalBills = (lineSupport.physical_bills && lineSupport.physical_bills.bills) || [];
     const assignedDocIds = new Set(assignedRecords.map(r => r.document_id));
     const voucherLineAmount = parseAwVoucherAmount(line.amount);
     const isDocDone = doc => {
         let base;
         if (doc.document_type === 'physical_bill') {
-            const bill = physicalBills.find(b => b.document_id === doc.id);
-            const fieldsComplete = !!(bill && (bill.bill_no || '').trim() && (bill.bill_date || '').trim()
-                && (bill.vendor_name || '').trim() && bill.amount !== '' && bill.amount != null && !isNaN(parseFloat(bill.amount)));
-            base = fieldsComplete && Math.abs(parseFloat(bill.amount) - voucherLineAmount) <= 0.005;
+            // Multi-Bill/Multi-Line Physical Bill: a Document can have several bills, each with
+            // several items — sum every matching bill's server-computed bill_total (null when a
+            // bill has no items or any item amount isn't numeric), matching verification.js's
+            // updateProceduresCellForLine() exactly. The old single-bill .find()/bill.amount
+            // check always failed here (the shaped bill has no `amount` field) — see KNOWN_ISSUES.
+            const docBills = physicalBills.filter(b => b.document_id === doc.id);
+            const headersComplete = docBills.length > 0 && docBills.every(bill =>
+                (bill.bill_no || '').trim() && (bill.bill_date || '').trim()
+                && (bill.vendor_name || '').trim() && bill.bill_total != null
+            );
+            base = headersComplete && Math.abs(docBills.reduce((sum, bill) => sum + bill.bill_total, 0) - voucherLineAmount) <= 0.005;
         } else if (doc.template_id) {
             base = assignedDocIds.has(doc.id);
         } else {
@@ -710,8 +728,13 @@ async function awRefreshLineProcedures(uid, type) {
 async function awRefreshLineObservations(uid, type) {
     const found = awFindLineByDetailId(uid);
     if (!found) return;
-    const { line } = found;
-    const entries = await awFetchLineObservationEntries(uid);
+    const { voucher, line } = found;
+    // Same voucher-level batched fetch as awRefreshLineProcedures() — the endpoint returns each
+    // line's observation entries alongside its documents/checks/bills, so no separate call.
+    const anchorUid = (voucher.lines && voucher.lines[0] && voucher.lines[0].detail_id) || uid;
+    const supportLines = await awLoadVoucherSupportData(anchorUid);
+    const lineSupport = supportLines[String(uid)] || {};
+    const entries = (lineSupport.observations && lineSupport.observations.entries) || [];
     const nonEmpty = entries.filter(e => (e.observation_text || '').trim());
     line.observations = {
         count: nonEmpty.length,
@@ -755,7 +778,6 @@ function buildAuditWorkbookAdapter(voucherGroup) {
         getVoucherLineAmount: getAwVoucherLineAmount,
         renderGateRowHtml: awRenderGateRowHtml,
         fetchAuditGuidanceData: awFetchAuditGuidanceData,
-        fetchPhysicalBillsForLine: awFetchPhysicalBillsForLine,
         updateProceduresCellForLine: awRefreshLineProcedures,
         updateObservationsCellForLine: awRefreshLineObservations,
         parseVoucherAmount: parseAwVoucherAmount,

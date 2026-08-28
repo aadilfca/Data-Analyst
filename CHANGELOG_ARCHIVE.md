@@ -15,6 +15,70 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Audit Workbook batched voucher-support fetch
+
+Frontend-only (`static/audit_workbook.js` + `?v=6` bump in `static/audit_workbook.html`), no
+backend change. Brings Audit Workbook in line with the Verification-side `voucherSupportCache`
+fix and resolves the 2026-08-28 KNOWN_ISSUES row for the AW physical_bill completion drift.
+
+**Phase 2a (discovery, no code change):** confirmed the existing
+`GET /api/verification/voucher_support_data/{anchor}` endpoint (already used by Verification's
+`loadVoucherSupportData()`) covers all four of Audit Workbook's per-line data needs — linked
+documents, procedure checks, observations, physical bills — with byte-identical field shapes
+(`voucher_line_documents`/`procedure_checks` share the same SQL columns; physical bills go
+through the same `_shape_physical_bill()` helper) and equivalent sibling-session resolution.
+No endpoint param/response tweak needed; `routers/verification.py` stayed off the file list.
+
+**Phase 2b (implementation):**
+
+- **New voucher-level cache** (`awVoucherSupportCache` / `awVoucherSupportLoading` /
+  `awVoucherSupportLoadingAnchor`) + `awLoadVoucherSupportData(anchorUid)` +
+  `awInvalidateVoucherSupportCache()` — the direct analog of verification.js's
+  `voucherSupportCache` / `loadVoucherSupportData()` / `invalidateVoucherSupportCache()`. One
+  `window.ApiUtils.apiFetch('/api/verification/voucher_support_data/{anchor}')` call per voucher
+  group (anchor = `voucher.lines[0].detail_id`), result indexed by each line's own `detail_id`.
+  The in-flight guard only reuses a pending promise when it's for the **same anchor** — unlike
+  verification.js (one voucher on screen at a time), Audit Workbook can refresh lines from
+  different vouchers, so a blind reuse could hand back another voucher's data. Fail-soft to `{}`.
+
+- **`awRefreshLineProcedures()` / `awRefreshLineObservations()`** repointed: replaced the
+  `Promise.all` of `awFetchAssignedDocumentRecords` / `awFetchProcedureChecksForLine` /
+  `awFetchPhysicalBillsForLine` (and, in the observations function, `awFetchLineObservationEntries`)
+  with reads off `supportLines[String(uid)].{linked_documents.documents, procedure_checks.checks,
+  physical_bills.bills, observations.entries}`. The `needsPhysicalBills` gate is gone — the
+  batched fetch returns bills unconditionally (one request regardless). `ensureVoucherChecksLoaded()`
+  still runs in parallel, gated on `needsVoucherChecks`, unchanged.
+
+- **`isDocDone` physical_bill branch** ported verbatim from verification.js's
+  `updateProceduresCellForLine()`: `physicalBills.filter(b => b.document_id === doc.id)`,
+  `docBills.length > 0 && docBills.every(bill => bill_no/bill_date/vendor_name trimmed &&
+  bill.bill_total != null)`, `Math.abs(sum of bill_total - voucherLineAmount) <= 0.005`. The old
+  code used `physicalBills.find(...)` + `bill.amount` — but the shaped bill has no `amount` field
+  (it's `bill_total` + nested `items` since the Multi-Bill/Multi-Line work), so `bill.amount` was
+  always `undefined` and **a physical_bill document never counted toward done/total in the AW
+  Procedures cell**. Pre-existing bug, fixed here as part of the same file's work.
+
+- **Post-save invalidation:** `awSaveLineItems()` calls `awInvalidateVoucherSupportCache()` in
+  its success path (after the `cleared_status` patch). Single chokepoint — covers the adapter's
+  `saveLineItems` / `saveAllVoucherLines` and `performVerifyVoucherChecksImpl()`'s fallback save
+  (AW's adapter has no `saveAndVerifyVoucher`, so the modal always takes that fallback path).
+  Without this, `hideProcedureModalOnly()`'s fire-and-forget badge refresh serves the pre-save
+  copy and badges show stale done/total until the page reloads — the exact bug the
+  Verification-side fix addressed.
+
+- **Dead code removed:** all four `awFetch*` helpers (`awFetchAssignedDocumentRecords`,
+  `awFetchProcedureChecksForLine`, `awFetchPhysicalBillsForLine`, `awFetchLineObservationEntries`)
+  plus the `fetchPhysicalBillsForLine: awFetchPhysicalBillsForLine` entry in
+  `buildAuditWorkbookAdapter()`. Confirmed the only callers were the code replaced above —
+  `procedure_modal.js` never calls these adapter methods (it reads its own `procedure_modal_data`
+  composite batch on modal open).
+
+**Untouched:** `awFindLineByDetailId`, `awFetchAuditGuidanceData`, the gating logic, and
+`applyFilterAndRender()` are all fetch-agnostic — they operate on already-fetched data and
+needed no change. `pytest` → 36 passed (frontend-only change; confirms nothing broke on import).
+
+---
+
 ## voucherSupportCache invalidation after save + dead fetchPhysicalBillsForLine removal
 
 Correctness/staleness fix, no backend changes. Resolves the two 2026-08-28 KNOWN_ISSUES rows for
