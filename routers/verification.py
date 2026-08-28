@@ -11,6 +11,7 @@ from database import start_db_metrics, get_db_metrics, stop_db_metrics
 from psycopg2.extras import Json
 from datetime import datetime, timezone
 import json
+from concurrent.futures import ThreadPoolExecutor
 import re
 import time
 import contextvars
@@ -4700,15 +4701,25 @@ def get_voucher_support_data(voucher_line_id: int):
         "SELECT id FROM verification_details WHERE session_id = %s AND transaction_ref = %s ORDER BY id",
         (anchor[0]['session_id'], anchor[0]['transaction_ref']),
     )
-    lines = {}
-    for row in rows:
+    def load_line(row):
         uid = row['id']
-        lines[str(uid)] = {
-            "linked_documents": get_voucher_line_documents(uid),
-            "procedure_checks": get_procedure_checks(uid),
-            "observations": get_line_observations(uid),
-            "physical_bills": _get_voucher_line_physical_bills(uid),
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            linked, checks, observations, bills = pool.map(
+                lambda fn: fn(uid),
+                (get_voucher_line_documents, get_procedure_checks,
+                 get_line_observations, _get_voucher_line_physical_bills),
+            )
+        return str(uid), {
+            "linked_documents": linked,
+            "procedure_checks": checks,
+            "observations": observations,
+            "physical_bills": bills,
         }
+
+    # Keep line groups sequential to avoid exhausting the shared Postgres pool; each line's
+    # independent read-only sources are the safe concurrency boundary.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        lines = dict(pool.map(load_line, rows))
     return {"voucher_line_id": voucher_line_id, "transaction_ref": anchor[0]['transaction_ref'], "lines": lines}
 
 

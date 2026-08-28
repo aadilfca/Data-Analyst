@@ -24,6 +24,13 @@ resets it on voucher navigation. Existing per-line endpoints remain available as
 Python compilation, JavaScript syntax checks, and nine focused tests passed; Render validation is
 pending.
 
+## Voucher-level backend read concurrency
+
+The voucher-level endpoint now runs its four independent read sources concurrently for each line,
+while processing line groups sequentially to protect the shared Postgres pool. Existing reader
+functions, response shapes, and write behavior are unchanged. Compilation, syntax checks, and
+focused tests passed; Render timing validation is pending.
+
 ## Verify duplicate-action guard
 
 Added a voucher-level in-flight promise guard around `performVerifyVoucherChecks()` so rapid

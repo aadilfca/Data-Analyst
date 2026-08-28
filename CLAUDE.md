@@ -253,6 +253,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-27: Verification Verify actions now share one in-flight request, preventing duplicate saves and verification posts.
 - 2026-08-28: Verify performance diagnostics now return backend component timings and database metrics when `perf=1` is enabled.
 - 2026-08-28: Verification supporting data now loads through one voucher-level cached request for all lines.
+- 2026-08-28: Voucher support batching now runs each line's independent read sources concurrently while keeping line groups sequential.
 - 2026-08-27: Verification speed opt. Phase 3a/3c — parallelized procedure-modal fetches, opt-in per-request sibling-id memo (17→11 DB calls), lazy TB-accounts; see INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
 
 
