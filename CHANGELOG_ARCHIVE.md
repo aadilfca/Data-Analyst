@@ -49,6 +49,12 @@ The Verification grid also reuses voucher-level observation data instead of re-f
 
 ## Verification save progress feedback
 
+## Verification render-load deduplication
+
+Added in-flight and completed caches for procedure-modal data and in-flight deduplication for
+account-category lookups during voucher rendering. Repeated identical requests now share one
+request; Render validation remains pending.
+
 Made the shared retry toast reference-counted for overlapping GET retries and cleared both modal
 Verify progress indicators after every save/verify outcome. This prevents stale `Saving…` visuals
 and premature retry-toast dismissal while preserving the no-retry rule for writes.

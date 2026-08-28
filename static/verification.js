@@ -1752,6 +1752,7 @@ let auditGuidanceCache = {};
 // since neither has written the cache yet. Mirrors ensureVoucherChecksLoaded()'s
 // voucherChecksLoadingPromises (procedure_modal.js) — same race, same fix shape.
 let auditGuidanceLoadingPromises = {};
+let categoryForAccountLoadingPromises = {};
 
 async function fetchAuditGuidanceData(type, forceRefresh = false) {
     if (!forceRefresh && Object.prototype.hasOwnProperty.call(auditGuidanceCache, type)) {
@@ -2216,14 +2217,22 @@ async function autoFillCategoryForLine(uid, accountCode) {
     try {
         if (Object.prototype.hasOwnProperty.call(categoryForAccountCache, accountCode)) {
             categoryName = categoryForAccountCache[accountCode];
+        } else if (categoryForAccountLoadingPromises[accountCode]) {
+            categoryName = await categoryForAccountLoadingPromises[accountCode];
         } else {
             const clientId = getClientId();
             const params = new URLSearchParams({ client_id: clientId, account_code: accountCode });
-            const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/category-for-account?${params}`);
-            if (!res.ok) throw new Error('Failed to look up category for account');
-            const data = await res.json();
-            categoryName = data.matched ? data.category_name : null;
-            categoryForAccountCache[accountCode] = categoryName;
+            const loadPromise = (async () => {
+                const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/category-for-account?${params}`);
+                if (!res.ok) throw new Error('Failed to look up category for account');
+                const data = await res.json();
+                const name = data.matched ? data.category_name : null;
+                categoryForAccountCache[accountCode] = name;
+                return name;
+            })();
+            categoryForAccountLoadingPromises[accountCode] = loadPromise;
+            try { categoryName = await loadPromise; }
+            finally { delete categoryForAccountLoadingPromises[accountCode]; }
         }
     } catch (e) {
         console.error('Category auto-fill lookup failed:', e);

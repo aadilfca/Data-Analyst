@@ -598,6 +598,24 @@ function getProcedureTabState(uid, docId) {
 // assigned Category. initialDocId (optional) pre-selects that document's tab; otherwise the
 // first document's tab opens. No-ops if the line has no Category assigned yet (nothing to build
 // tabs from) or its Category has no documents.
+const procedureModalDataCache = new Map();
+const procedureModalDataLoading = new Map();
+
+function loadProcedureModalData(uid, perfSuffix) {
+    const key = String(uid);
+    if (procedureModalDataCache.has(key)) return Promise.resolve(procedureModalDataCache.get(key));
+    if (procedureModalDataLoading.has(key)) return procedureModalDataLoading.get(key);
+    const promise = window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_modal_data/${uid}${perfSuffix}`)
+        .then(async res => {
+            if (!res.ok) return null;
+            const body = await res.json();
+            procedureModalDataCache.set(key, body);
+            return body;
+        }).catch(() => null).finally(() => procedureModalDataLoading.delete(key));
+    procedureModalDataLoading.set(key, promise);
+    return promise;
+}
+
 async function openProcedureModal(uid, initialDocId = null, adapter = null, triggerEl = null) {
     const perfStarted = performance.now();
     const perfComponents = {};
@@ -643,9 +661,8 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
             const modalDataStarted = performance.now();
             try {
                 const perfSuffix = window.VerificationPerf && window.VerificationPerf.enabled ? '?perf=true' : '';
-                const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_modal_data/${uid}${perfSuffix}`);
-                if (res.ok) {
-                    const body = await res.json();
+                const body = await loadProcedureModalData(uid, perfSuffix);
+                if (body) {
                     perfComponents.modal_data_ms = Math.round((performance.now() - modalDataStarted) * 10) / 10;
                     return body;
                 }
