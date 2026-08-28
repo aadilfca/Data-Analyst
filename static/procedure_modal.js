@@ -815,9 +815,9 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // not deleted, just no longer reachable from this rail).
 
     // Every saved Physical Bill entry for this line, across all documents - re-fetched fresh on
-    // every open (via the composite call above). hostAdapter.fetchPhysicalBillsForLine() is left
-    // in place, still used independently by hostAdapter.updateProceduresCellForLine() outside
-    // this modal.
+    // every open (via the composite procedure_modal_data call above). The out-of-modal
+    // Procedures-badge path no longer needs its own physical-bill fetch either - it reads
+    // hostAdapter.loadVoucherSupportData() instead.
     const physicalBillEntries = (modalData.physical_bills && modalData.physical_bills.bills) || [];
 
     // This line's Cross-check evaluation results (already-computed structure, zero new

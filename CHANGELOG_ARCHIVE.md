@@ -15,6 +15,41 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## voucherSupportCache invalidation after save + dead fetchPhysicalBillsForLine removal
+
+Correctness/staleness fix, no backend changes. Resolves the two 2026-08-28 KNOWN_ISSUES rows for
+`voucherSupportCache` staleness and the dead `fetchPhysicalBillsForLine()`.
+
+**Why:** on Verification, the Procedures/Observations column badges are refreshed by
+`updateProceduresCellForLine()` / `updateObservationsCellForLine()` (`static/verification.js`),
+which read from `loadVoucherSupportData()` — a single voucher-wide cache object
+(`voucherSupportCache`, `.lines` keyed by line, anchored on `currentVoucherLines[0].detail_id`).
+It was populated once per voucher load and cleared only on voucher navigation
+(`seedVoucherLineState()`). After a successful in-modal save/Verify nothing invalidated it, so
+`hideProcedureModalOnly()`'s fire-and-forget badge refresh (in `procedure_modal.js`, every close
+path — ✕, outside-click, Verify, Verify & Next) recomputed the badges from **pre-save** support
+data until the next Prev/Next. Same bug class as the `procedureModalDataCache` staleness fixed
+earlier the same day; the voucher-level cache never got the equivalent treatment.
+
+**Changed (`static/verification.js`):**
+- New `invalidateVoucherSupportCache()` next to `loadVoucherSupportData()` — nulls
+  `voucherSupportCache` + `voucherSupportLoading`, mirroring `invalidateProcedureModalDataForVoucher()`
+  in `procedure_modal.js` and the existing hard reset in `seedVoucherLineState()`.
+- Called on the success path of `doSaveLineItems()` (covers `verifyVoucherChecks()`'s fallback
+  branch and navigation saves via `saveAllVoucherLines()` → `saveLineItems()`, which flush
+  observation text) and after `res.ok` in `saveAndVerifyVoucher()` (the bundle path — covers
+  `closeProcedureModal()` and `verifyVoucherChecks()`'s primary branch).
+- Removed the now-dead `fetchPhysicalBillsForLine()` and its `buildProcedureModalAdapter()` entry
+  — no call site anywhere; the badge path reads `loadVoucherSupportData()`, `procedure_modal.js`
+  reads the `procedure_modal_data` batch, and Audit Workbook has its own `awFetchPhysicalBillsForLine`.
+
+**Changed (`static/procedure_modal.js`):** reworded the stale comment at the `physicalBillEntries`
+assignment that still referenced `hostAdapter.fetchPhysicalBillsForLine()` as "left in place, still
+used".
+
+**Cache-bust:** `verification.js?v=20→21` on `verification.html`; `procedure_modal.js?v=10→11` on
+`verification.html` and `audit_workbook.html`. Full suite: 36 passed.
+
 ## Bundle endpoint HTTP-level test coverage + toggleAllProcedureChecks cleanup
 
 Test-coverage + cleanup phase, no endpoint/gate/behaviour changes.

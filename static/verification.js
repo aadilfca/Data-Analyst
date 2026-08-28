@@ -135,6 +135,21 @@ async function loadVoucherSupportData() {
     return voucherSupportLoading;
 }
 
+// Drop the cached voucher-support payload (procedure ticks + observation rollup for every line in
+// the loaded voucher). save_and_verify_voucher_bundle persists all of currentVoucherLines in one
+// request, and save_line_items persists one line (also flushing its observation text) — but this
+// cache is a single voucher-wide object (.lines keyed by line), so any successful save must clear
+// it, or hideProcedureModalOnly()'s fire-and-forget badge refresh
+// (updateProcedures/ObservationsCellForLine → loadVoucherSupportData) serves the pre-save copy and
+// the Procedures/Observations badges show stale state until the next voucher navigation. Mirrors
+// invalidateProcedureModalDataForVoucher() in procedure_modal.js, which handles the sibling
+// procedure_modal_data cache the same way. Nulling voucherSupportLoading too matches the hard reset
+// in seedVoucherLineState(); a save is never concurrent with a support-data fetch in practice.
+function invalidateVoucherSupportCache() {
+    voucherSupportCache = null;
+    voucherSupportLoading = null;
+}
+
 // ---------- PROCEDURE MODAL ADAPTER (Phase 1b) ----------
 // static/procedure_modal.js (the shared Supporting-Document modal, extracted from this file) no
 // longer reads this file's globals directly — it receives them through this adapter object,
@@ -165,7 +180,6 @@ function buildProcedureModalAdapter() {
         getVoucherLineAmount,
         renderGateRowHtml,
         fetchAuditGuidanceData,
-        fetchPhysicalBillsForLine,
         updateProceduresCellForLine,
         updateObservationsCellForLine,
         parseVoucherAmount,
@@ -1811,22 +1825,6 @@ async function fetchProcedureChecksForLine(uid) {
         return data.checks || [];
     } catch (e) {
         console.error('Failed to load procedure checks for Procedures cell:', e);
-        return [];
-    }
-}
-
-// Fetch of a line's saved Physical Bill entries, across all documents — shared by
-// openProcedureModal() (Phase 7) and updateProceduresCellForLine()'s standalone completion check
-// below (Phase: rail dot + Procedures badge amount-match fix). Same fail-soft-to-[] convention as
-// fetchAssignedDocumentRecords()/fetchProcedureChecksForLine().
-async function fetchPhysicalBillsForLine(uid) {
-    try {
-        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/physical_bills/${uid}`);
-        if (!res.ok) return [];
-        const data = await res.json();
-        return data.bills || [];
-    } catch (e) {
-        console.error('Failed to load physical bills for Procedures cell:', e);
         return [];
     }
 }
@@ -3947,6 +3945,9 @@ async function doSaveLineItems(detailId) {
             revision_at_start: voucherLineDirtyRevisions[String(detailId)] || 0
         });
         if (procedureModalState[detailId]) delete procedureModalState[detailId].standaloneData;
+        // The line (incl. its flushed observation text) is now persisted — drop the voucher-wide
+        // support cache so the Procedures/Observations badge refresh re-reads saved state.
+        invalidateVoucherSupportCache();
         return { ok: true, skipped: false };
         // Success – no status bar message
     } catch (e) {
@@ -4024,6 +4025,11 @@ async function saveAndVerifyVoucher(detailId, verify = true) {
     const data = await res.json();
     const line = currentVoucherLines.find(l => String(l.detail_id) === String(detailId));
     if (line && data.cleared_status) line.cleared_status = data.cleared_status;
+    // The bundle just persisted every line in this voucher (procedure/voucher ticks included) —
+    // drop the voucher-wide support cache, mirroring invalidateProcedureModalDataForVoucher() at
+    // procedure_modal.js's own post-bundle-save call sites, so hideProcedureModalOnly()'s badge
+    // refresh reads saved state rather than the pre-save copy.
+    invalidateVoucherSupportCache();
     return { ok: true, data };
 }
 
