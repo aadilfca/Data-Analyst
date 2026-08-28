@@ -265,6 +265,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-28: Fixed camelCase/snake_case payload key mismatch in save_and_verify_voucher_bundle causing unconditional 400 on Verify; static/procedure_modal.js + verification.js.
 - 2026-08-28: Invalidate procedure modal cache after bundle save and restore skipped invalidation on toggleAllProcedureChecks, fixing stale unticked procedures on reopen; static/procedure_modal.js.
 - 2026-08-28: Added HTTP-level tests for save_and_verify_voucher_bundle (success/400-gate/wrong-key); removed dead network-save path in toggleAllProcedureChecks; procedure_modal.js v9→10.
+- 2026-08-28: Investigated repeated physical_bills/{id} calls (no code change) — Verification batched via voucher_support_data (but uncached on write); Audit Workbook storm intact; backend save path fixed. See KNOWN_ISSUES.md.
 
 
 ## Self-maintenance
