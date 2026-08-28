@@ -1537,7 +1537,17 @@ def verify_voucher_checks(
     perf_started = time.perf_counter()
     timings = {} if perf else None
     try:
-        return _verify_voucher_checks_impl(session_id, current_detail_id, perf_timings=timings)
+        result = _verify_voucher_checks_impl(session_id, current_detail_id, perf_timings=timings)
+        if perf and isinstance(result, dict):
+            metrics = get_db_metrics()
+            result["_perf"] = {
+                "components": timings,
+                "db_calls": metrics["calls"],
+                "db_reads": metrics["reads"],
+                "db_writes": metrics["writes"],
+                "db_ms": round(metrics["db_time"] * 1000, 1),
+            }
+        return result
     finally:
         if perf_token is not None:
             metrics = get_db_metrics()

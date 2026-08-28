@@ -21,6 +21,13 @@ Added a voucher-level in-flight promise guard around `performVerifyVoucherChecks
 duplicate clicks share one save/verify sequence. The guard clears on completion or failure, keeping
 retry behavior intact. Verification asset cache-busting was updated; syntax and focused tests pass.
 
+## Verify backend performance diagnostics
+
+Added an additive `_perf` object to the `verify_voucher_checks` response when `perf=true` is
+requested. It exposes backend component timings and request-local database call/read/write/time
+metrics. The browser's `verification-perf` entry now includes this object, allowing Render timing
+analysis without server-log access. Existing response fields and audit behavior are unchanged.
+
 ## Phase 3e — Verify-sequence duplicate-read reduction
 
 Implemented safe duplicate-read reductions: sibling IDs are reused for Physical Bill status reads

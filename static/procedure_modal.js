@@ -1138,7 +1138,8 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
         if (window.VerificationPerf) {
             window.VerificationPerf.log('verify_voucher_checks_sequence', perfStarted, {
                 detail_id: String(uid),
-                includes: ['fresh voucher-check read', 'physical-bill flush', 'forced current-line save', 'voucher verify']
+                includes: ['fresh voucher-check read', 'physical-bill flush', 'forced current-line save', 'voucher verify'],
+                backend: data && data._perf ? data._perf : null
             });
         }
         return data;

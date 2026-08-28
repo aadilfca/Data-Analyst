@@ -251,6 +251,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-27: Verification dirty tracking now skips unchanged saves, preserves failed/concurrent edits, and avoids duplicate current-line saves after Verify.
 - 2026-08-27: Verification Phase 3e reduced Verify/modal duplicate reads by reusing sibling IDs and modal-loaded data.
 - 2026-08-27: Verification Verify actions now share one in-flight request, preventing duplicate saves and verification posts.
+- 2026-08-28: Verify performance diagnostics now return backend component timings and database metrics when `perf=1` is enabled.
 - 2026-08-27: Verification speed opt. Phase 3a/3c — parallelized procedure-modal fetches, opt-in per-request sibling-id memo (17→11 DB calls), lazy TB-accounts; see INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
 
 
