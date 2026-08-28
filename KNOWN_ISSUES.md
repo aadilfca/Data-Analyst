@@ -42,6 +42,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 | 2026-08-28 | Verification performance | Modal-data duplicate requests and repeated category lookups are now deduplicated in flight; Render confirmation remains pending. | Fix |
 | 2026-08-28 | Verification performance | Verify observation synchronization is now batched across voucher lines; Render confirmation remains pending. | Fix |
 | 2026-08-28 | Verification UI | RESOLVED: cached procedure-modal data could show old audit ticks after a successful save; successful check mutations now invalidate that line's cache. | Fix |
+| 2026-08-28 | Verification UI | Procedure-line navigation now opens the next line before the prior save completes; failures remain dirty and show a retry message. Render confirmation pending. | Fix |
 
 ---
 

@@ -64,6 +64,12 @@ Render timing validation remains pending.
 
 ## Procedure tick cache invalidation
 
+## Background save during procedure-line navigation
+
+Procedure modal line navigation now opens the destination immediately while the departed line save
+continues in the background. Success and failure alerts are shown, and Verify/Close/session-exit
+saves remain blocking for data safety.
+
 Fixed stale procedure-modal data after successful procedure or voucher-level check saves by
 invalidating the affected line's completed modal-data cache. Reopening the procedure window now
 reloads the saved tick state while unchanged opens retain caching. Focused tests pass.

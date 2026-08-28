@@ -970,16 +970,23 @@ async function navigateProcedureModalLine(delta) {
     // cleared_status recomputes and the badge refreshes every time the modal moves between
     // lines — the badge lives in the main table, hidden behind the modal while it's open, so
     // this is the natural point for it to catch up.
-    const navBackBtn = document.getElementById('procedureModalBackBtn');
-    if (window.LoadingUI) window.LoadingUI.showProgressBar(navBackBtn, { mode: 'indeterminate', message: 'Saving…' });
-    try {
+    // Navigation is independent from persistence: begin saving the line being left, then open
+    // the next line immediately. The host's in-flight save guard keeps this background save safe;
+    // dirty state is retained automatically if the request fails.
+    const savePromise = (async () => {
         const physicalBillsSaved = await flushPhysicalBillEntries(uid);
-        await hostAdapter.saveLineItems(uid);
+        const result = await hostAdapter.saveLineItems(uid);
         if (!physicalBillsSaved) hostAdapter.markLineDirty(uid, 'physical bill save retry required');
-    } finally {
-        if (window.LoadingUI) window.LoadingUI.hideProgressBar(navBackBtn);
-    }
+        if (result && result.ok) {
+            hostAdapter.showStatus('✅ Audit procedures saved.', 'success');
+        } else {
+            hostAdapter.showStatus('⚠️ Audit procedures could not be saved. Please retry.', 'error');
+        }
+    })().catch(() => {
+        hostAdapter.showStatus('⚠️ Audit procedures could not be saved. Please retry.', 'error');
+    });
     await openProcedureModal(newUid);
+    await savePromise;
 }
 
 // Finds the next *unverified* line of the currently loaded voucher, searching forward only from
