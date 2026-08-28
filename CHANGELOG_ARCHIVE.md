@@ -62,6 +62,12 @@ voucher-check flags in sets, formats each line in memory, and batch-updates line
 sync bookkeeping. Ordinary per-line save/observation behavior remains unchanged. Focused tests pass;
 Render timing validation remains pending.
 
+## Procedure tick cache invalidation
+
+Fixed stale procedure-modal data after successful procedure or voucher-level check saves by
+invalidating the affected line's completed modal-data cache. Reopening the procedure window now
+reloads the saved tick state while unchanged opens retain caching. Focused tests pass.
+
 Made the shared retry toast reference-counted for overlapping GET retries and cleared both modal
 Verify progress indicators after every save/verify outcome. This prevents stale `Saving…` visuals
 and premature retry-toast dismissal while preserving the no-retry rule for writes.

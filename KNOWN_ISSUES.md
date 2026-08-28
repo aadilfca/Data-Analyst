@@ -41,6 +41,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 | 2026-08-28 | Verification UI | RESOLVED locally: modal save completion could leave a Verify button showing Saving while an unrelated GET retry toast was visible. Progress cleanup and retry tracking are now coordinated. | Fix |
 | 2026-08-28 | Verification performance | Modal-data duplicate requests and repeated category lookups are now deduplicated in flight; Render confirmation remains pending. | Fix |
 | 2026-08-28 | Verification performance | Verify observation synchronization is now batched across voucher lines; Render confirmation remains pending. | Fix |
+| 2026-08-28 | Verification UI | RESOLVED: cached procedure-modal data could show old audit ticks after a successful save; successful check mutations now invalidate that line's cache. | Fix |
 
 ---
 

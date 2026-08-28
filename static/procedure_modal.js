@@ -601,6 +601,11 @@ function getProcedureTabState(uid, docId) {
 const procedureModalDataCache = new Map();
 const procedureModalDataLoading = new Map();
 
+function invalidateProcedureModalData(uid) {
+    const key = String(uid);
+    procedureModalDataCache.delete(key);
+}
+
 function loadProcedureModalData(uid, perfSuffix) {
     const key = String(uid);
     if (procedureModalDataCache.has(key)) return Promise.resolve(procedureModalDataCache.get(key));
@@ -1394,6 +1399,7 @@ function renderVoucherChecksBar(uid) {
                 // refresh, extended to this bar's own dependents.
                 renderVoucherChecksBar(uid);
                 renderProcedureModalTabs(uid);
+                invalidateProcedureModalData(uid);
                 hostAdapter.markAllLinesDirty('voucher-level check changed');
             } catch (e) {
                 console.error('Failed to save voucher check:', e);
@@ -1450,6 +1456,7 @@ async function toggleAllVoucherChecks(uid) {
         }
         renderVoucherChecksBar(uid);
         renderProcedureModalTabs(uid);
+        invalidateProcedureModalData(uid);
         hostAdapter.markAllLinesDirty('voucher-level checks changed');
     } catch (e) {
         console.error('Failed to save all voucher checks:', e);
@@ -2273,6 +2280,7 @@ async function toggleAllProcedureChecks(uid, docId) {
             };
         });
         hostAdapter.markLineDirty(uid, 'procedure checks changed');
+        invalidateProcedureModalData(uid);
         renderProcedureModalTabs(uid);
     } catch (e) {
         console.error('Failed to save all audit procedure checks:', e);
@@ -3147,6 +3155,7 @@ async function toggleProcedureCheck(uid, docId, roleName, isChecked, target = nu
             checked_at: updated.checked_at
         };
         hostAdapter.markLineDirty(uid, 'procedure check changed');
+        invalidateProcedureModalData(uid);
         // Completion-dot logic (Phase 3): a no-template tab's dot depends on checklist state, so
         // a successful tick/untick must refresh the tab bar too, not just the panel (which the
         // checkbox itself already visually reflects). Has-template tabs' dots are unaffected by
