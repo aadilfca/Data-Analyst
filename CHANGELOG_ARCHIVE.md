@@ -33,6 +33,14 @@ focused tests passed; Render timing validation is pending.
 
 ## Verify duplicate-action guard
 
+## Voucher-level true SQL batching
+
+Replaced the threaded per-line fan-out in `routers/verification.py` with set-based queries for
+voucher identities, linked documents, procedure checks, observations, Physical Bill headers, and
+items. Existing sibling-session deduplication, inactive-document visibility, winning-bill rules,
+grouping, ordering, response shape, and opt-in performance metrics are preserved. Render validation
+remains pending.
+
 Added a voucher-level in-flight promise guard around `performVerifyVoucherChecks()` so rapid
 duplicate clicks share one save/verify sequence. The guard clears on completion or failure, keeping
 retry behavior intact. Verification asset cache-busting was updated; syntax and focused tests pass.

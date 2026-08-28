@@ -36,6 +36,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 | 2026-08-28 | Verification | Remaining Verify latency required server-side component and DB metrics; additive `_perf` response diagnostics now expose them under `perf=1`. | Defer |
 | 2026-08-28 | Verification | Per-line supporting-data request storm replaced by voucher-level batching and in-flight cache; Render confirmation pending. | Fix |
 | 2026-08-28 | Verification | Voucher-level endpoint initially performed four reads sequentially per line; independent reads now run concurrently, with sequential line groups for pool safety. | Fix |
+| 2026-08-28 | Verification | RESOLVED in true SQL batching phase: voucher-level support reads now use set-based source queries rather than per-line reader fan-out. Render confirmation remains pending. | Fix |
 
 ---
 

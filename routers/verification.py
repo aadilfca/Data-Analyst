@@ -11,7 +11,6 @@ from database import start_db_metrics, get_db_metrics, stop_db_metrics
 from psycopg2.extras import Json
 from datetime import datetime, timezone
 import json
-from concurrent.futures import ThreadPoolExecutor
 import re
 import time
 import contextvars
@@ -4689,38 +4688,87 @@ def get_voucher_line_physical_bills(voucher_line_id: int):
 
 
 @router.get("/api/verification/voucher_support_data/{voucher_line_id}")
-def get_voucher_support_data(voucher_line_id: int):
-    """Return supporting-document state for every line in the current voucher."""
-    anchor = execute_query_pg(
-        "SELECT session_id, transaction_ref FROM verification_details WHERE id = %s",
-        (voucher_line_id,),
-    )
-    if not anchor:
-        raise HTTPException(404, "Voucher line not found.")
-    rows = execute_query_pg(
-        "SELECT id FROM verification_details WHERE session_id = %s AND transaction_ref = %s ORDER BY id",
-        (anchor[0]['session_id'], anchor[0]['transaction_ref']),
-    )
-    def load_line(row):
-        uid = row['id']
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            linked, checks, observations, bills = pool.map(
-                lambda fn: fn(uid),
-                (get_voucher_line_documents, get_procedure_checks,
-                 get_line_observations, _get_voucher_line_physical_bills),
-            )
-        return str(uid), {
-            "linked_documents": linked,
-            "procedure_checks": checks,
-            "observations": observations,
-            "physical_bills": bills,
-        }
+def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
+    """Fetch one voucher's supporting data with set-based reads (one query per source)."""
+    started = time.perf_counter()
+    perf_token = start_db_metrics() if perf else None
+    try:
+        anchor = execute_query_pg(
+            "SELECT session_id, transaction_ref FROM verification_details WHERE id = %s",
+            (voucher_line_id,),
+        )
+        if not anchor:
+            raise HTTPException(404, "Voucher line not found.")
+        lines_rows = execute_query_pg(
+            "SELECT id FROM verification_details WHERE session_id = %s AND transaction_ref = %s ORDER BY id",
+            (anchor[0]['session_id'], anchor[0]['transaction_ref']),
+        )
+        ids = [r['id'] for r in lines_rows]
+        ph = ",".join("%s" for _ in ids)
+        sibling_rows = execute_query_pg(
+            f"""SELECT id, client_data_id FROM verification_details
+                WHERE id IN ({ph}) OR client_data_id IN
+                (SELECT client_data_id FROM verification_details WHERE id IN ({ph}))""",
+            tuple(ids + ids),
+        ) if ids else []
+        sibling_by_line = {r['id']: r['client_data_id'] for r in sibling_rows}
+        cd_ids = list(dict.fromkeys(sibling_by_line.values()))
+        cph = ",".join("%s" for _ in cd_ids)
 
-    # Keep line groups sequential to avoid exhausting the shared Postgres pool; each line's
-    # independent read-only sources are the safe concurrency boundary.
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        lines = dict(pool.map(load_line, rows))
-    return {"voucher_line_id": voucher_line_id, "transaction_ref": anchor[0]['transaction_ref'], "lines": lines}
+        links = execute_query_pg(f"""SELECT vld.id, vld.voucher_line_id, vld.client_data_id,
+            vld.document_id, vld.linked_by, vld.linked_at, vld.signature_exception,
+            ard.name AS document_name, ard.is_active AS document_is_active, cd.row_data,
+            cd.extract_date, cd.extract_amount, cd.rate_source
+            FROM voucher_line_documents vld JOIN verification_details vd ON vd.id=vld.voucher_line_id
+            JOIN client_data cd ON cd.id=vld.client_data_id LEFT JOIN audit_rule_documents ard ON ard.id=vld.document_id
+            WHERE vd.client_data_id IN ({cph}) AND vld.status='active' ORDER BY vld.linked_at ASC""", tuple(cd_ids)) if cd_ids else []
+        checks = execute_query_pg(f"""SELECT vd.client_data_id, vlpc.document_id, vlpc.role_name,
+            vlpc.is_checked, vlpc.checked_by, vlpc.checked_at, ard.name AS document_name, ard.is_active AS document_is_active
+            FROM voucher_line_procedure_checks vlpc JOIN verification_details vd ON vd.id=vlpc.voucher_line_id
+            LEFT JOIN audit_rule_documents ard ON ard.id=vlpc.document_id WHERE vd.client_data_id IN ({cph})""", tuple(cd_ids)) if cd_ids else []
+        obs = execute_query_pg(f"""SELECT vd.client_data_id, vlo.document_id, vlo.observation_text, vlo.synced,
+            vlo.last_synced_text, vlo.updated_by, vlo.updated_at, ard.name AS document_name, ard.is_active AS document_is_active
+            FROM voucher_line_observations vlo JOIN verification_details vd ON vd.id=vlo.voucher_line_id
+            LEFT JOIN audit_rule_documents ard ON ard.id=vlo.document_id WHERE vd.client_data_id IN ({cph})""", tuple(cd_ids)) if cd_ids else []
+        bills = execute_query_pg(f"""SELECT vd.client_data_id, vpb.id, vpb.voucher_line_id, vpb.document_id,
+            vpb.bill_no, vpb.bill_date, vpb.vendor_name, vpb.sort_order, vpb.created_at, vpb.updated_at,
+            ard.name AS document_name, ard.is_active AS document_is_active
+            FROM voucher_line_physical_bills vpb JOIN verification_details vd ON vd.id=vpb.voucher_line_id
+            LEFT JOIN audit_rule_documents ard ON ard.id=vpb.document_id WHERE vd.client_data_id IN ({cph})
+            ORDER BY vpb.sort_order, vpb.id""", tuple(cd_ids)) if cd_ids else []
+        bill_ids = [r['id'] for r in bills]
+        items = execute_query_pg(f"SELECT id, bill_id, item_name, quantity, rate, amount, source_document_row_id, source_template, sort_order, created_at, updated_at FROM voucher_line_physical_bill_items WHERE bill_id IN ({','.join('%s' for _ in bill_ids)}) ORDER BY bill_id, sort_order, id", tuple(bill_ids)) if bill_ids else []
+
+        latest_check = {}
+        for r in checks:
+            k=(r['client_data_id'],r['document_id'],r['role_name'])
+            if k not in latest_check or _ts_sort_key(r['checked_at']) > _ts_sort_key(latest_check[k]['checked_at']): latest_check[k]=r
+        latest_obs = {}
+        for r in obs:
+            k=(r['client_data_id'],r['document_id'])
+            if k not in latest_obs or _ts_sort_key(r['updated_at']) > _ts_sort_key(latest_obs[k]['updated_at']): latest_obs[k]=r
+        winning={}
+        for r in bills:
+            k=(r['client_data_id'],r['document_id']); candidate=(_ts_sort_key(r['updated_at']),r['voucher_line_id'])
+            if k not in winning or candidate > winning[k]: winning[k]=candidate
+        item_map={}
+        for r in items:
+            item_map.setdefault(r['bill_id'],[]).append({"id":r['id'],"item_name":r['item_name'],"quantity":r['quantity'],"rate":r['rate'],"amount":r['amount'],"source_document_row_id":r['source_document_row_id'],"source_template":r['source_template'],"sort_order":r['sort_order'],"created_at":r['created_at'],"updated_at":r['updated_at']})
+        link_map={}; check_map={}; obs_map={}; bill_map={}
+        for r in links:
+            d=json.loads(r['row_data']) if isinstance(r['row_data'],str) else r['row_data']
+            link_map.setdefault(r['client_data_id'],[]).append({"id":r['id'],"voucher_line_id":r['voucher_line_id'],"client_data_id":r['client_data_id'],"document_id":r['document_id'],"document_name":r['document_name'],"is_active":bool(r['document_is_active']),"linked_by":r['linked_by'],"linked_at":r['linked_at'],"signature_exception":bool(r['signature_exception']),"row_data":d,"extract_date":r['extract_date'],"extract_amount":r['extract_amount'],"rate_source":r['rate_source']})
+        for r in latest_check.values(): check_map.setdefault(r['client_data_id'],[]).append({"document_id":r['document_id'],"role_name":r['role_name'],"is_checked":bool(r['is_checked']),"checked_by":r['checked_by'],"checked_at":r['checked_at'],"document_name":r['document_name'],"is_active":r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])})
+        for r in latest_obs.values(): obs_map.setdefault(r['client_data_id'],[]).append({"document_id":r['document_id'],"observation_text":r['observation_text'] or '',"synced":bool(r['synced']),"last_synced_text":r['last_synced_text'],"updated_by":r['updated_by'],"updated_at":r['updated_at'],"document_name":r['document_name'],"is_active":r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])})
+        for r in bills:
+            if (_ts_sort_key(r['updated_at']),r['voucher_line_id']) == winning[(r['client_data_id'],r['document_id'])]: bill_map.setdefault(r['client_data_id'],[]).append(_shape_physical_bill(r,item_map.get(r['id'],[])))
+        result={str(r['id']):{"linked_documents":{"voucher_line_id":r['id'],"documents":link_map.get(sibling_by_line[r['id']],[]),"count":len(link_map.get(sibling_by_line[r['id']],[]))},"procedure_checks":{"voucher_line_id":r['id'],"checks":check_map.get(sibling_by_line[r['id']],[])},"observations":{"voucher_line_id":r['id'],"entries":obs_map.get(sibling_by_line[r['id']],[])},"physical_bills":{"voucher_line_id":r['id'],"bills":bill_map.get(sibling_by_line[r['id']],[]),"count":len(bill_map.get(sibling_by_line[r['id']],[]))}} for r in lines_rows}
+        response={"voucher_line_id":voucher_line_id,"transaction_ref":anchor[0]['transaction_ref'],"lines":result}
+        if perf:
+            response['_perf']={"total_ms":round((time.perf_counter()-started)*1000,1),**get_db_metrics()}
+        return response
+    finally:
+        if perf_token is not None: stop_db_metrics(perf_token)
 
 
 def _resolve_line_srno(session_id: int, target_voucher_line_id: int, session_details_cache: Dict[int, list]) -> int:
