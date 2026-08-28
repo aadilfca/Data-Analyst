@@ -4012,8 +4012,10 @@ async function saveAndVerifyVoucher(detailId, verify = true) {
         ...buildLineSavePayload(line.detail_id),
         transaction_ref: line.transaction_ref || line.voucher_id
     }));
+    // Fallback shape must match getVoucherTickSaveState()'s own snake_case keys — see the
+    // comment there — since both are spread straight into the JSON body below.
     const tickState = typeof getVoucherTickSaveState === 'function'
-        ? getVoucherTickSaveState() : { procedureChecks: [], voucherChecks: [] };
+        ? getVoucherTickSaveState() : { procedure_checks: [], voucher_checks: [] };
     const res = await fetch(`${API_BASE}/api/verification/save_and_verify_voucher_bundle${window.VerificationPerf.querySuffix()}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lines, ...tickState, verify, session_id: currentSessionId, current_detail_id: detailId })

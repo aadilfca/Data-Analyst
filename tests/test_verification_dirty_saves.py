@@ -138,7 +138,7 @@ def test_save_and_verify_uses_one_combined_request(dirty_page):
 
     assert result["saveResult"]["ok"]
     assert len(result["calls"]) == 1
-    assert result["calls"][0]["url"] == "/api/verification/save_and_verify_voucher"
+    assert result["calls"][0]["url"] == "/api/verification/save_and_verify_voucher_bundle"
     assert "save_line_items" not in result["calls"][0]["url"]
     assert "verify_voucher_checks" not in result["calls"][0]["url"]
 

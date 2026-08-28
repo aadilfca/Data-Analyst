@@ -21,6 +21,8 @@ If this file conflicts with `CLAUDE.md`, stop and ask the user which instruction
 
 ## Required workflow
 
+For every brief, state which available model is appropriate for the task, considering complexity, risk, number of files, and required reasoning depth.
+
 For any proposed code or documentation change:
 
 1. Identify the candidate files, give a one-line reason for each, and wait for the user's confirmation before opening or editing those files.
