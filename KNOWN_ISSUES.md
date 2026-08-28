@@ -38,6 +38,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 | 2026-08-28 | Verification | Voucher-level endpoint initially performed four reads sequentially per line; independent reads now run concurrently, with sequential line groups for pool safety. | Fix |
 | 2026-08-28 | Verification | RESOLVED in true SQL batching phase: voucher-level support reads now use set-based source queries rather than per-line reader fan-out. Render confirmation remains pending. | Fix |
 | 2026-08-28 | Verification | RESOLVED: Physical Bill save failed when Postgres returned a datetime.date for bill_date; validation now accepts date and string values consistently. | Fix |
+| 2026-08-28 | Verification UI | RESOLVED locally: modal save completion could leave a Verify button showing Saving while an unrelated GET retry toast was visible. Progress cleanup and retry tracking are now coordinated. | Fix |
 
 ---
 

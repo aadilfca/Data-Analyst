@@ -22,15 +22,18 @@
     const TOAST_MARKUP = '<div id="apiRetryToast" class="api-retry-toast">Retrying...</div>';
     document.body.insertAdjacentHTML('beforeend', TOAST_MARKUP);
     const retryToast = document.getElementById('apiRetryToast');
+    let activeRetries = 0;
 
     function showRetryToast() {
         if (!retryToast) return;
+        activeRetries += 1;
         retryToast.classList.add('show');
     }
 
     function hideRetryToast() {
         if (!retryToast) return;
-        retryToast.classList.remove('show');
+        activeRetries = Math.max(0, activeRetries - 1);
+        if (!activeRetries) retryToast.classList.remove('show');
     }
 
     const RETRY_DELAY_MS = 1500;

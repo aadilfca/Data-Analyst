@@ -47,6 +47,12 @@ Normalized Physical Bill `bill_date` validation so Postgres `datetime.date` valu
 string values follow the same non-blank rule. Added a regression test for the Render traceback.
 The Verification grid also reuses voucher-level observation data instead of re-fetching each line.
 
+## Verification save progress feedback
+
+Made the shared retry toast reference-counted for overlapping GET retries and cleared both modal
+Verify progress indicators after every save/verify outcome. This prevents stale `Saving…` visuals
+and premature retry-toast dismissal while preserving the no-retry rule for writes.
+
 Added a voucher-level in-flight promise guard around `performVerifyVoucherChecks()` so rapid
 duplicate clicks share one save/verify sequence. The guard clears on completion or failure, keeping
 retry behavior intact. Verification asset cache-busting was updated; syntax and focused tests pass.

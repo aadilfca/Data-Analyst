@@ -1149,6 +1149,12 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
         return null;
     } finally {
         if (window.LoadingUI) window.LoadingUI.hideProgressBar(progressTarget);
+        // Both footer actions are disabled together, so clear either button's visual progress
+        // state even when the other button was the one clicked.
+        if (window.LoadingUI) {
+            window.LoadingUI.hideProgressBar(btn);
+            window.LoadingUI.hideProgressBar(verifyOnlyBtn);
+        }
         // Restores each button to its real gate-driven state (isVoucherChecksAllTouched()) rather
         // than blindly re-enabling — updateVerifyFooterButton() is the single source of truth for
         // both buttons' disabled state, called by every caller of this helper right after.
