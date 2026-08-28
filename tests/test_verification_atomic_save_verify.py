@@ -94,6 +94,11 @@ def test_atomic_save_and_verify_rejects_mismatched_detail_ids_before_transaction
 
 def test_voucher_bundle_saves_all_lines_then_verifies_once(monkeypatch):
     calls = _patch_atomic_dependencies(monkeypatch, verify_result={"verified": True})
+    monkeypatch.setattr(verification, "execute_query_pg", lambda query, params=None: (
+        [{"client_id": 1}] if "FROM verification_sessions" in query
+        else ([{"id": detail_id, "status": "Pending"} for detail_id in (params[0] if params else [])]
+              if "SELECT id, status" in query else [])
+    ))
 
     result = verification.save_and_verify_voucher_bundle(
         session_id=10,
@@ -210,6 +215,11 @@ def test_bundle_endpoint_400_when_voucher_checks_use_wrong_key(bundle_http_clien
 
 def test_voucher_bundle_accepts_modal_state(monkeypatch):
     calls = _patch_atomic_dependencies(monkeypatch, verify_result={"verified": True})
+    monkeypatch.setattr(verification, "execute_query_pg", lambda query, params=None: (
+        [{"client_id": 1}] if "FROM verification_sessions" in query
+        else ([{"id": detail_id, "status": "Pending"} for detail_id in (params[0] if params else [])]
+              if "SELECT id, status" in query else [])
+    ))
     monkeypatch.setattr(verification, "execute_write_pg", lambda *args, **kwargs: None)
     monkeypatch.setattr(verification, "_resolve_sibling_voucher_line_ids", lambda detail_id: [detail_id])
     monkeypatch.setattr(verification, "sync_line_observations_to_voucher", lambda *args, **kwargs: None)

@@ -1775,8 +1775,37 @@ def save_and_verify_voucher_bundle(
         raise HTTPException(400, "At least one voucher line is required.")
     if str(current_detail_id) not in {str(line.get('detail_id')) for line in lines}:
         raise HTTPException(400, "The current detail must be included in lines.")
+    line_statuses = {
+        row['id']: row['status']
+        for row in execute_query_pg(
+            "SELECT id, status FROM verification_details WHERE id = ANY(%s)",
+            ([line.get('detail_id') for line in lines],)
+        )
+    }
+    if line_statuses.get(current_detail_id) != 'Pending':
+        raise HTTPException(400, "The current voucher line is already verified or skipped.")
+    eligible_line_ids = {
+        line_id for line_id, status in line_statuses.items() if status == 'Pending'
+    }
+    if verify:
+        session = execute_query_pg(
+            "SELECT client_id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'",
+            (session_id,)
+        )
+        if not session:
+            raise HTTPException(404, "Verification session not found or cancelled.")
+        active_checks = execute_query_pg(
+            "SELECT id, name FROM audit_rule_voucher_checks WHERE is_active = TRUE ORDER BY sort_order"
+        )
+        submitted_states = {str(c.get('check_id')): c.get('state') for c in voucher_checks}
+        untouched = [c for c in active_checks if submitted_states.get(str(c['id']), 'untouched') == 'untouched']
+        if untouched:
+            names = ", ".join(c['name'] for c in untouched)
+            raise HTTPException(400, f"Cannot verify: {len(untouched)} check(s) still not marked ({names}).")
     with pg_transaction():
         for line in lines:
+            if line.get('detail_id') not in eligible_line_ids:
+                continue
             _save_line_items_impl(
                 line['detail_id'], line.get('line_items', []),
                 line.get('transaction_type'), line.get('procedure_data')
