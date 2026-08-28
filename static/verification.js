@@ -117,6 +117,23 @@ let procedureModalState = {};
 // voucherLineState in seedVoucherLineState() — lets openProcedureModal() look up a line's own
 // amount for the mismatch badge without a second fetch.
 let currentVoucherLines = [];
+let voucherSupportCache = null;
+let voucherSupportLoading = null;
+
+async function loadVoucherSupportData() {
+    const anchor = currentVoucherLines[0] && currentVoucherLines[0].detail_id;
+    if (!anchor) return {};
+    if (voucherSupportCache && String(voucherSupportCache.voucher_line_id) === String(anchor)) return voucherSupportCache.lines || {};
+    if (voucherSupportLoading) return voucherSupportLoading;
+    voucherSupportLoading = window.ApiUtils.apiFetch(`${API_BASE}/api/verification/voucher_support_data/${anchor}`)
+        .then(async res => {
+            if (!res.ok) return {};
+            const data = await res.json();
+            voucherSupportCache = data;
+            return data.lines || {};
+        }).catch(() => ({})).finally(() => { voucherSupportLoading = null; });
+    return voucherSupportLoading;
+}
 
 // ---------- PROCEDURE MODAL ADAPTER (Phase 1b) ----------
 // static/procedure_modal.js (the shared Supporting-Document modal, extracted from this file) no
@@ -1882,8 +1899,9 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
     // after guidance resolves (per-line fetch batching). Fail-soft to [] internally, so letting
     // them run even when the early "no documents" return below fires is harmless.
     const cachedModalData = procedureModalState[uid] && procedureModalState[uid].standaloneData;
-    const assignedPromise = cachedModalData ? Promise.resolve(cachedModalData.assignedRecords || []) : fetchAssignedDocumentRecords(uid);
-    const checksListPromise = cachedModalData ? Promise.resolve(cachedModalData.procedureChecks || []) : fetchProcedureChecksForLine(uid);
+    const voucherDataPromise = loadVoucherSupportData();
+    const assignedPromise = voucherDataPromise.then(all => all[String(uid)]?.linked_documents?.documents || (cachedModalData?.assignedRecords || []));
+    const checksListPromise = voucherDataPromise.then(all => all[String(uid)]?.procedure_checks?.checks || (cachedModalData?.procedureChecks || []));
     let data = null;
     try {
         data = await (guidancePromise || fetchAuditGuidanceData(type));
@@ -1911,7 +1929,7 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
         assignedPromise,
         checksListPromise,
         needsVoucherChecks ? ensureVoucherChecksLoaded(getClientId(), currentVoucherId) : Promise.resolve(null),
-        needsPhysicalBills ? (cachedModalData ? Promise.resolve(cachedModalData.physicalBillEntries || []) : fetchPhysicalBillsForLine(uid)) : Promise.resolve([])
+        needsPhysicalBills ? voucherDataPromise.then(all => all[String(uid)]?.physical_bills?.bills || (cachedModalData?.physicalBillEntries || [])) : Promise.resolve([])
     ]);
     // Re-check the stale guard after these awaits, same reason as above.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
@@ -2454,6 +2472,8 @@ function seedVoucherLineState(lines) {
     // loaded voucher, same as voucherLineState/voucherLineDiffData above — reset here so a new
     // voucher never shows a stale tab set from a previously viewed line.
     procedureModalState = {};
+    voucherSupportCache = null;
+    voucherSupportLoading = null;
     // Phase 4: keeps the full lines array (row_data included) so openProcedureModal() can look up
     // a line's own amount (via the existing getVoucherLineAmount()/parseVoucherAmount() helpers)
     // for the selected-lines table's mismatch badge, without a second fetch.

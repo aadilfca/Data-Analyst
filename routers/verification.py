@@ -4687,6 +4687,31 @@ def get_voucher_line_physical_bills(voucher_line_id: int):
     return _get_voucher_line_physical_bills(voucher_line_id)
 
 
+@router.get("/api/verification/voucher_support_data/{voucher_line_id}")
+def get_voucher_support_data(voucher_line_id: int):
+    """Return supporting-document state for every line in the current voucher."""
+    anchor = execute_query_pg(
+        "SELECT session_id, transaction_ref FROM verification_details WHERE id = %s",
+        (voucher_line_id,),
+    )
+    if not anchor:
+        raise HTTPException(404, "Voucher line not found.")
+    rows = execute_query_pg(
+        "SELECT id FROM verification_details WHERE session_id = %s AND transaction_ref = %s ORDER BY id",
+        (anchor[0]['session_id'], anchor[0]['transaction_ref']),
+    )
+    lines = {}
+    for row in rows:
+        uid = row['id']
+        lines[str(uid)] = {
+            "linked_documents": get_voucher_line_documents(uid),
+            "procedure_checks": get_procedure_checks(uid),
+            "observations": get_line_observations(uid),
+            "physical_bills": _get_voucher_line_physical_bills(uid),
+        }
+    return {"voucher_line_id": voucher_line_id, "transaction_ref": anchor[0]['transaction_ref'], "lines": lines}
+
+
 def _resolve_line_srno(session_id: int, target_voucher_line_id: int, session_details_cache: Dict[int, list]) -> int:
     """
     Voucher Supporting-Document Linking follow-up, Phase 2 of 4: backend equivalent of Phase 1's

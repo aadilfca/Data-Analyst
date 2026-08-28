@@ -34,6 +34,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 | 2026-08-27 | Verification | Phase 3e fixed the server-side sibling re-resolution and modal teardown refetch when cached modal data is available; live Render confirmation remains pending. | Fix |
 | 2026-08-27 | Verification | Duplicate Verify clicks could start overlapping save/verify sequences; guarded by a voucher-level in-flight promise. | Fix |
 | 2026-08-28 | Verification | Remaining Verify latency required server-side component and DB metrics; additive `_perf` response diagnostics now expose them under `perf=1`. | Defer |
+| 2026-08-28 | Verification | Per-line supporting-data request storm replaced by voucher-level batching and in-flight cache; Render confirmation pending. | Fix |
 
 ---
 

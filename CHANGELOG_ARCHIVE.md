@@ -15,6 +15,15 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Voucher-level supporting-data batching
+
+Added `GET /api/verification/voucher_support_data/{voucher_line_id}`, returning supporting
+documents, observations, procedure checks, and Physical Bills for every line in the current
+voucher. Verification now shares one in-flight, voucher-scoped cache across badge renders and
+resets it on voucher navigation. Existing per-line endpoints remain available as fallbacks.
+Python compilation, JavaScript syntax checks, and nine focused tests passed; Render validation is
+pending.
+
 ## Verify duplicate-action guard
 
 Added a voucher-level in-flight promise guard around `performVerifyVoucherChecks()` so rapid
