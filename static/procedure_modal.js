@@ -268,7 +268,12 @@ function getVoucherTickSaveState() {
             accountHeadNotes.push({ voucher_line_id: parseInt(uid), observation_text: accountHead.noMatchText || '' });
         }
     });
-    return { observations, accountHeadNotes, physicalBills, procedureChecks, voucherChecks: (voucherChecksCache[transactionRef] || []).map(check => ({
+    // Keys here must match the snake_case Body(embed=True) param names on
+    // save_and_verify_voucher_bundle exactly — FastAPI binds embedded Body params by exact JSON
+    // key, so a camelCase key here silently falls through to that param's None default instead
+    // of erroring, which is what caused the endpoint's unconditional 400 on verify (root-caused
+    // 2026-08-28: voucher_checks always arrived empty, so every active check read as untouched).
+    return { observations, account_head_notes: accountHeadNotes, physical_bills: physicalBills, procedure_checks: procedureChecks, voucher_checks: (voucherChecksCache[transactionRef] || []).map(check => ({
         check_id: check.id, state: check.state
     })) };
 }
@@ -651,6 +656,17 @@ const procedureModalDataLoading = new Map();
 function invalidateProcedureModalData(uid) {
     const key = String(uid);
     procedureModalDataCache.delete(key);
+}
+
+// Drop the cached procedure-modal payload for EVERY line in the voucher the host currently has
+// loaded. save_and_verify_voucher_bundle persists all of currentVoucherLines in one request, so
+// reopening any of them must re-fetch rather than serve the pre-save cache (the "ticks show
+// unticked on reopen" bug — openProcedureModal() rebuilds tabState.checklist from this payload
+// verbatim). No-ops safely on an empty/absent line list.
+function invalidateProcedureModalDataForVoucher() {
+    ((hostAdapter && hostAdapter.currentVoucherLines) || []).forEach(line => {
+        invalidateProcedureModalData(line.detail_id);
+    });
 }
 
 function loadProcedureModalData(uid, perfSuffix) {
@@ -1104,6 +1120,9 @@ async function closeProcedureModal() {
             const physicalBillsSaved = await flushPhysicalBillEntries(currentProcedureModalUid);
             const result = await hostAdapter.saveAndVerifyVoucher(currentProcedureModalUid, false);
             if (!result || !result.ok) throw new Error('Grouped save failed.');
+            // The bundle just persisted every line in this voucher — drop each line's cached
+            // modal payload so a later reopen re-fetches the saved ticks, not the pre-save copy.
+            invalidateProcedureModalDataForVoucher();
             if (!physicalBillsSaved) hostAdapter.markLineDirty(currentProcedureModalUid, 'physical bill save retry required');
         } finally {
             if (window.LoadingUI) window.LoadingUI.hideProgressBar(procedureModalClose);
@@ -1214,6 +1233,10 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
             }
         }
         if (!combinedResult.ok) throw new Error(combinedResult.error?.detail || 'Save and verify failed.');
+        // Both branches above persist this voucher's lines (the bundle saves all of
+        // currentVoucherLines; the fallback saves the current line) — invalidate every line's
+        // cached modal payload so reopening any of them shows the saved ticks, not stale cache.
+        invalidateProcedureModalDataForVoucher();
         const data = combinedResult.data;
         if (!data) return null;
         if (window.VerificationPerf) {
@@ -1226,7 +1249,7 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
         return data;
     } catch (e) {
         console.error('Error verifying voucher checks:', e);
-        hostAdapter.showStatus('Could not verify voucher-level checks — please try again.', 'error');
+        hostAdapter.showStatus(e && e.message ? e.message : 'Could not verify voucher-level checks.', 'error');
         return null;
     } finally {
         if (window.LoadingUI) window.LoadingUI.hideProgressBar(progressTarget);
@@ -2305,6 +2328,10 @@ async function toggleAllProcedureChecks(uid, docId) {
     renderProcedureModalPanel(uid, docId);
     renderProcedureModalTabs(uid);
     hostAdapter.markLineDirty(uid, 'procedure checks changed');
+    // Local-first: the in-memory checklist has now diverged from this line's cached modal
+    // payload, so that cache entry is stale — drop it (restores the invalidation the early
+    // return below skipped). A later reopen re-fetches once the background per-line save runs.
+    invalidateProcedureModalData(uid);
     return;
 
     // Same re-query-after-render + single-spinner-for-the-whole-batch reasoning as

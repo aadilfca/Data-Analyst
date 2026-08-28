@@ -262,6 +262,8 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-28: Verification modal uses atomic Save + Verify and batch tick paths with transaction-aware Postgres helpers; Render confirmation pending.
 - 2026-08-28: Procedure window now saves local procedure/check/modal state through grouped actions; upper X uses save-only mode; Render confirmation pending.
 - 2026-08-27: Verification speed opt. Phase 3a/3c — parallelized procedure-modal fetches, opt-in per-request sibling-id memo (17→11 DB calls), lazy TB-accounts; see INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
+- 2026-08-28: Fixed camelCase/snake_case payload key mismatch in save_and_verify_voucher_bundle causing unconditional 400 on Verify; static/procedure_modal.js + verification.js.
+- 2026-08-28: Invalidate procedure modal cache after bundle save and restore skipped invalidation on toggleAllProcedureChecks, fixing stale unticked procedures on reopen; static/procedure_modal.js.
 
 
 ## Self-maintenance

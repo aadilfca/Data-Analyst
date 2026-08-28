@@ -15,6 +15,34 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Procedure modal cache invalidation after bundle save
+
+`procedureModalDataCache` (`static/procedure_modal.js`, keyed per voucher-line uid) feeds
+`openProcedureModal()`, which rebuilds `tabState.checklist` from that payload verbatim on every
+open — so a stale entry silently un-ticked procedures that were correctly saved in the DB, on
+reopening a line after a save.
+
+Two call sites were leaving the cache stale, same root cause (missing/skipped
+`invalidateProcedureModalData()` call):
+
+1. The `save_and_verify_voucher_bundle` path (`hostAdapter.saveAndVerifyVoucher()`) never
+   invalidated. The bundle persists **every** line in `currentVoucherLines`, so all those uids
+   go stale, not just the open one. Fixed with a new helper
+   `invalidateProcedureModalDataForVoucher()` (loops `hostAdapter.currentVoucherLines`, the same
+   array `verification.js`'s `saveAndVerifyVoucher()` builds its `lines` payload from), called
+   after the success check in `performVerifyVoucherChecksImpl()` (covers the bundle branch and
+   the legacy `saveLineItems + verify_voucher_checks` fallback) and in `closeProcedureModal()`
+   after the grouped-save success check.
+2. `toggleAllProcedureChecks()` — the local-first refactor added an early `return;` that jumped
+   over its own `invalidateProcedureModalData(uid)` call. Restored by adding the call immediately
+   before the early return (the in-memory checklist has diverged from the cache, so the entry is
+   definitively stale; a later reopen re-fetches once the background per-line save has run). The
+   now-dead post-`return` copy at the old line was left as-is (other post-`return` dead code in
+   this file is a separate cleanup).
+
+No backend / DB-write / gate-logic changes. Cache-bust `procedure_modal.js?v=8→9` on
+`verification.html` and `audit_workbook.html`. 33 backend tests pass (frontend-only change).
+
 ## Procedure-window local-first grouped save
 
 The procedure window now keeps procedure ticks, voucher-level checks, observations, Physical Bills,
