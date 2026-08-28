@@ -2304,10 +2304,9 @@ function renderProcedureModalPanel(uid, docId) {
 }
 
 // Bulk-toggles every configured role's tick for one document's Audit Procedures checklist. Not a
-// per-role toggleProcedureCheck() loop (that function individually re-renders the whole panel on
-// failure, which would race against the other in-flight calls) — instead applies the optimistic
-// update once, batches the saves, and re-renders once on success or failure, same shape as
-// toggleAllVoucherChecks() above.
+// per-role toggleProcedureCheck() loop — instead applies the optimistic update once in memory,
+// re-renders, and marks the line dirty so the background per-line save persists it. Same
+// local-first shape as toggleAllVoucherChecks() above.
 async function toggleAllProcedureChecks(uid, docId) {
     const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
@@ -2319,52 +2318,20 @@ async function toggleAllProcedureChecks(uid, docId) {
     const toChange = roles.filter(r => !!(tabState.checklist[r] && tabState.checklist[r].is_checked) !== newChecked);
     if (!toChange.length) return;
 
-    const previousStates = {};
+    // Local-first: apply the optimistic tick change in memory only. There is no network save
+    // here anymore (the per-line save runs in the background off markLineDirty), so there is
+    // nothing to roll back and no previous-state capture is needed.
     toChange.forEach(role => {
-        previousStates[role] = tabState.checklist[role] ? { ...tabState.checklist[role] } : null;
         if (!tabState.checklist[role]) tabState.checklist[role] = {};
         tabState.checklist[role].is_checked = newChecked;
     });
     renderProcedureModalPanel(uid, docId);
     renderProcedureModalTabs(uid);
     hostAdapter.markLineDirty(uid, 'procedure checks changed');
-    // Local-first: the in-memory checklist has now diverged from this line's cached modal
-    // payload, so that cache entry is stale — drop it (restores the invalidation the early
-    // return below skipped). A later reopen re-fetches once the background per-line save runs.
+    // The in-memory checklist has now diverged from this line's cached modal payload, so that
+    // cache entry is stale — drop it. A later reopen re-fetches once the background per-line
+    // save has run.
     invalidateProcedureModalData(uid);
-    return;
-
-    // Same re-query-after-render + single-spinner-for-the-whole-batch reasoning as
-    // toggleAllVoucherChecks() above.
-    const selectAllBtn = document.getElementById('procedureChecklistSelectAllBtn');
-    if (window.LoadingUI && selectAllBtn) window.LoadingUI.showSpinner(selectAllBtn, 'Saving');
-
-    try {
-        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/procedure_checks_batch`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ checks: toChange.map(role => ({ voucher_line_id: parseInt(uid),
-                document_id: docId, role_name: role, is_checked: newChecked })) })
-        });
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Failed to save procedure checks.');
-        hostAdapter.markLineDirty(uid, 'procedure checks changed');
-        invalidateProcedureModalData(uid);
-        renderProcedureModalTabs(uid);
-    } catch (e) {
-        console.error('Failed to save all audit procedure checks:', e);
-        toChange.forEach(role => {
-            if (previousStates[role]) {
-                tabState.checklist[role] = previousStates[role];
-            } else {
-                delete tabState.checklist[role];
-            }
-        });
-        hostAdapter.showStatus('Failed to update all procedures — please try again.', 'error');
-        renderProcedureModalPanel(uid, docId);
-        renderProcedureModalTabs(uid);
-    } finally {
-        if (window.LoadingUI && selectAllBtn) window.LoadingUI.hideSpinner(selectAllBtn);
-    }
 }
 
 // ---------- PHYSICAL BILL ENTRY (evidence type; Multi-Bill/Multi-Line, Phase 3 of 6) ----------

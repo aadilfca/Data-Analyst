@@ -15,6 +15,36 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Bundle endpoint HTTP-level test coverage + toggleAllProcedureChecks cleanup
+
+Test-coverage + cleanup phase, no endpoint/gate/behaviour changes.
+
+**Why:** the camelCase/snake_case `voucher_checks` payload bug (see "Procedure modal cache
+invalidation after bundle save" and the 2026-08-28 Status entry for the fix) shipped because the
+only tests for `save_and_verify_voucher_bundle` called it as a plain Python function — that cannot
+catch a mismatch between the frontend JSON keys and the endpoint's `Body(embed=True)` param names,
+since FastAPI silently binds an unknown key to the param's `None` default.
+
+**Added (`tests/test_verification_atomic_save_verify.py`):** an HTTP-level section that posts real
+JSON through FastAPI's `TestClient` (temp-DB fixture `bundle_http_client`, same isolation pattern
+as `tests/test_app_smoke.py`; all `routers.verification` PG helpers stubbed per-test via
+`_stub_bundle_pg()`):
+- `test_bundle_endpoint_success_with_snake_case_voucher_checks` — `voucher_checks:
+  [{check_id, state}]` → `200`, `{"verified": true}`, verify step reached.
+- `test_bundle_endpoint_400_when_voucher_checks_missing` — no `voucher_checks`, active check
+  exists → `400` "Cannot verify", verify never reached.
+- `test_bundle_endpoint_400_when_voucher_checks_use_wrong_key` — `checkId` instead of `check_id`
+  → still `400`; pins the exact regression at the HTTP layer.
+
+**Cleanup (`static/procedure_modal.js`, `toggleAllProcedureChecks()`):** the local-first refactor
+left the entire old network-save path (Select-All spinner + `apiFetchMutate` POST to
+`/api/verification/procedure_checks_batch` + catch/rollback + `finally`) unreachable after an early
+`return;`. Removed that block, the `return;`, and the now-orphaned `previousStates` capture (its
+only reader was the deleted `catch`). Function keeps the in-memory tick mutation + re-render +
+`markLineDirty` + `invalidateProcedureModalData(uid)`, stays `async`. Header comment updated to
+describe the local-first flow. Cache-bust `procedure_modal.js?v=9→10` on `verification.html` and
+`audit_workbook.html`. Full suite: 36 passed.
+
 ## Procedure modal cache invalidation after bundle save
 
 `procedureModalDataCache` (`static/procedure_modal.js`, keyed per voucher-line uid) feeds

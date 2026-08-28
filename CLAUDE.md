@@ -264,6 +264,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-27: Verification speed opt. Phase 3a/3c — parallelized procedure-modal fetches, opt-in per-request sibling-id memo (17→11 DB calls), lazy TB-accounts; see INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
 - 2026-08-28: Fixed camelCase/snake_case payload key mismatch in save_and_verify_voucher_bundle causing unconditional 400 on Verify; static/procedure_modal.js + verification.js.
 - 2026-08-28: Invalidate procedure modal cache after bundle save and restore skipped invalidation on toggleAllProcedureChecks, fixing stale unticked procedures on reopen; static/procedure_modal.js.
+- 2026-08-28: Added HTTP-level tests for save_and_verify_voucher_bundle (success/400-gate/wrong-key); removed dead network-save path in toggleAllProcedureChecks; procedure_modal.js v9→10.
 
 
 ## Self-maintenance

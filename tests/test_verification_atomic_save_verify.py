@@ -1,7 +1,10 @@
+import os
+import tempfile
 from contextlib import contextmanager
 
 import pytest
 
+import database
 import routers.verification as verification
 
 
@@ -103,6 +106,106 @@ def test_voucher_bundle_saves_all_lines_then_verifies_once(monkeypatch):
 
     assert result == {"verified": True}
     assert calls == ["begin", "verify", "commit"]
+
+
+# --- HTTP-level coverage -----------------------------------------------------------------------
+# The tests above call save_and_verify_voucher_bundle() as a plain Python function, which cannot
+# catch a JSON-key mismatch between the frontend payload and the endpoint's Body(embed=True)
+# params — exactly the gap that let the camelCase/snake_case `voucher_checks` bug ship (root-caused
+# 2026-08-28: voucher_checks always arrived empty, so every active check read as untouched and the
+# verify gate 400'd unconditionally). These push a real JSON body through the FastAPI HTTP layer.
+
+BUNDLE_URL = "/api/verification/save_and_verify_voucher_bundle"
+
+
+@pytest.fixture()
+def bundle_http_client(monkeypatch):
+    """TestClient over a throwaway temp DB (never the real test.db) — same isolation pattern as
+    tests/test_app_smoke.py. All Postgres access in routers.verification is stubbed per-test."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        monkeypatch.setattr(database, "DB_NAME", os.path.join(tmpdir, "test.db"))
+        database.init_db()
+        from fastapi.testclient import TestClient
+        import main
+        yield TestClient(main.app)
+
+
+def _stub_bundle_pg(monkeypatch, active_checks):
+    """Stub the PG helpers the bundle endpoint touches. Returns the `reached` list, which gets a
+    'verify' entry only if the endpoint runs past the voucher-check gate into the verify call."""
+    reached = []
+
+    def execute_query_pg(query, params=None):
+        if "FROM verification_details" in query:
+            return [{"id": 7, "status": "Pending"}]
+        if "FROM verification_sessions" in query:
+            return [{"client_id": 1}]
+        if "FROM audit_rule_voucher_checks" in query:
+            return active_checks
+        return []
+
+    @contextmanager
+    def transaction():
+        yield object()
+
+    monkeypatch.setattr(verification, "execute_query_pg", execute_query_pg)
+    monkeypatch.setattr(verification, "execute_write_pg", lambda *a, **k: None)
+    monkeypatch.setattr(verification, "pg_transaction", transaction)
+    monkeypatch.setattr(verification, "_save_line_items_impl", lambda *a, **k: {"cleared_status": "Cleared"})
+    monkeypatch.setattr(verification, "save_voucher_checks_batch", lambda *a, **k: None)
+
+    def verify_impl(*a, **k):
+        reached.append("verify")
+        return {"verified": True}
+
+    monkeypatch.setattr(verification, "_verify_voucher_checks_impl", verify_impl)
+    return reached
+
+
+def _bundle_body(**overrides):
+    body = {
+        "session_id": 10,
+        "current_detail_id": 7,
+        "lines": [{"detail_id": 7, "line_items": [], "procedure_data": {},
+                   "transaction_type": "Purchases", "transaction_ref": "CPV-1"}],
+    }
+    body.update(overrides)
+    return body
+
+
+def test_bundle_endpoint_success_with_snake_case_voucher_checks(bundle_http_client, monkeypatch):
+    reached = _stub_bundle_pg(monkeypatch, active_checks=[{"id": 1, "name": "Check A"}])
+
+    response = bundle_http_client.post(BUNDLE_URL, json=_bundle_body(
+        voucher_checks=[{"check_id": 1, "state": "pass"}]))
+
+    assert response.status_code == 200
+    assert response.json() == {"verified": True}
+    assert reached == ["verify"]
+
+
+def test_bundle_endpoint_400_when_voucher_checks_missing(bundle_http_client, monkeypatch):
+    reached = _stub_bundle_pg(monkeypatch, active_checks=[{"id": 1, "name": "Check A"}])
+
+    response = bundle_http_client.post(BUNDLE_URL, json=_bundle_body())
+
+    assert response.status_code == 400
+    assert "Cannot verify" in response.json()["detail"]
+    assert reached == []
+
+
+def test_bundle_endpoint_400_when_voucher_checks_use_wrong_key(bundle_http_client, monkeypatch):
+    # camelCase `checkId` instead of `check_id` — the endpoint reads c.get('check_id'), so the
+    # submitted state never matches an active check and the check reads as untouched. This is the
+    # exact regression the frontend fix addressed; pin it at the HTTP layer.
+    reached = _stub_bundle_pg(monkeypatch, active_checks=[{"id": 1, "name": "Check A"}])
+
+    response = bundle_http_client.post(BUNDLE_URL, json=_bundle_body(
+        voucher_checks=[{"checkId": 1, "state": "pass"}]))
+
+    assert response.status_code == 400
+    assert "Cannot verify" in response.json()["detail"]
+    assert reached == []
 
 
 def test_voucher_bundle_accepts_modal_state(monkeypatch):
