@@ -2009,6 +2009,12 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
 // used only for the Observations column's count/tooltip. Fails soft to [] so a fetch hiccup never
 // breaks the cell itself.
 async function fetchLineObservationEntries(uid) {
+    // Voucher rendering already loads all line observations through the single voucher-level
+    // support request. Reuse that result here; otherwise every line pays another cross-region
+    // request even though the data is already present in voucherSupportCache.
+    const voucherData = await loadVoucherSupportData();
+    const cached = voucherData[String(uid)]?.observations?.entries;
+    if (Array.isArray(cached)) return cached;
     try {
         const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/line_observations/${uid}`);
         if (!res.ok) return [];

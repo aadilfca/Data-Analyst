@@ -41,6 +41,12 @@ items. Existing sibling-session deduplication, inactive-document visibility, win
 grouping, ordering, response shape, and opt-in performance metrics are preserved. Render validation
 remains pending.
 
+## Verification save date normalization
+
+Normalized Physical Bill `bill_date` validation so Postgres `datetime.date` values and legacy
+string values follow the same non-blank rule. Added a regression test for the Render traceback.
+The Verification grid also reuses voucher-level observation data instead of re-fetching each line.
+
 Added a voucher-level in-flight promise guard around `performVerifyVoucherChecks()` so rapid
 duplicate clicks share one save/verify sequence. The guard clears on completion or failure, keeping
 retry behavior intact. Verification asset cache-busting was updated; syntax and focused tests pass.

@@ -1,10 +1,23 @@
 from pathlib import Path
 
 import pytest
+from datetime import date
 from playwright.sync_api import sync_playwright
+
+from routers.verification import _evaluate_physical_bill_completion
 
 
 VERIFICATION_JS = Path(__file__).resolve().parents[1] / "static" / "verification.js"
+
+
+def test_physical_bill_completion_accepts_postgres_date_value():
+    bill = {
+        "bill_no": "VB-1",
+        "bill_date": date(2026, 8, 28),
+        "vendor_name": "Vendor",
+        "items": [100],
+    }
+    assert _evaluate_physical_bill_completion([bill], 100) is True
 
 
 @pytest.fixture()

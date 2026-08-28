@@ -5020,7 +5020,10 @@ def _evaluate_physical_bill_completion(bills: List[dict], voucher_amount: Option
     for bill in bills:
         if not (bill.get('bill_no') or '').strip():
             return False
-        if not (bill.get('bill_date') or '').strip():
+        bill_date = bill.get('bill_date')
+        # Postgres returns DATE columns as datetime.date, while older/imported values may be
+        # strings. Normalize both forms before applying the existing non-blank rule.
+        if bill_date is None or not str(bill_date).strip():
             return False
         if not (bill.get('vendor_name') or '').strip():
             return False
