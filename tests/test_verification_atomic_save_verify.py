@@ -87,3 +87,34 @@ def test_atomic_save_and_verify_rejects_mismatched_detail_ids_before_transaction
 
     assert error.value.status_code == 400
     assert calls == []
+
+
+def test_voucher_bundle_saves_all_lines_then_verifies_once(monkeypatch):
+    calls = _patch_atomic_dependencies(monkeypatch, verify_result={"verified": True})
+
+    result = verification.save_and_verify_voucher_bundle(
+        session_id=10,
+        current_detail_id=7,
+        lines=[
+            {"detail_id": 7, "line_items": [], "procedure_data": {}},
+            {"detail_id": 8, "line_items": [], "procedure_data": {}},
+        ],
+    )
+
+    assert result == {"verified": True}
+    assert calls == ["begin", "verify", "commit"]
+
+
+def test_voucher_bundle_accepts_modal_state(monkeypatch):
+    calls = _patch_atomic_dependencies(monkeypatch, verify_result={"verified": True})
+    monkeypatch.setattr(verification, "execute_write_pg", lambda *args, **kwargs: None)
+    monkeypatch.setattr(verification, "_resolve_sibling_voucher_line_ids", lambda detail_id: [detail_id])
+    monkeypatch.setattr(verification, "sync_line_observations_to_voucher", lambda *args, **kwargs: None)
+    result = verification.save_and_verify_voucher_bundle(
+        session_id=10, current_detail_id=7,
+        lines=[{"detail_id": 7, "line_items": [], "procedure_data": {}}],
+        observations=[{"voucher_line_id": 7, "document_id": 3, "observation_text": "note"}],
+        physical_bills=[]
+    )
+    assert result == {"verified": True}
+    assert calls == ["begin", "verify", "commit"]

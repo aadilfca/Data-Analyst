@@ -1748,6 +1748,86 @@ def save_and_verify_voucher(
         _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data)
         return _verify_voucher_checks_impl(session_id, current_detail_id)
 
+
+@router.post("/api/verification/save_and_verify_voucher_bundle")
+def save_and_verify_voucher_bundle(
+    session_id: int = Body(..., embed=True),
+    current_detail_id: int = Body(..., embed=True),
+    lines: List[Dict[str, Any]] = Body(..., embed=True),
+    observations: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
+    physical_bills: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
+    procedure_checks: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
+    voucher_checks: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
+):
+    """Atomically save all supplied voucher lines and tick state, then verify once.
+
+    Observations and Physical Bills are intentionally not accepted until their pending modal
+    state can be serialized without losing fields; that is the next 4B sub-phase.
+    """
+    procedure_checks = procedure_checks if isinstance(procedure_checks, list) else []
+    voucher_checks = voucher_checks if isinstance(voucher_checks, list) else []
+    observations = observations if isinstance(observations, list) else []
+    physical_bills = physical_bills if isinstance(physical_bills, list) else []
+    if not lines:
+        raise HTTPException(400, "At least one voucher line is required.")
+    if str(current_detail_id) not in {str(line.get('detail_id')) for line in lines}:
+        raise HTTPException(400, "The current detail must be included in lines.")
+    with pg_transaction():
+        for line in lines:
+            _save_line_items_impl(
+                line['detail_id'], line.get('line_items', []),
+                line.get('transaction_type'), line.get('procedure_data')
+            )
+        for entry in observations:
+            execute_write_pg(
+                """INSERT INTO voucher_line_observations
+                   (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
+                   VALUES (%s, %s, %s, FALSE, %s, CURRENT_TIMESTAMP)
+                   ON CONFLICT(voucher_line_id, document_id) DO UPDATE SET
+                   observation_text = excluded.observation_text, synced = FALSE,
+                   updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""",
+                (entry['voucher_line_id'], entry['document_id'], entry.get('observation_text', ''), 'Analyst')
+            )
+        for entry in physical_bills:
+            line_id = entry['voucher_line_id']; document_id = entry['document_id']
+            if not execute_query_pg("SELECT id FROM verification_details WHERE id = %s", (line_id,)):
+                raise HTTPException(404, "Voucher line not found.")
+            execute_write_pg("DELETE FROM voucher_line_physical_bill_items WHERE bill_id IN (SELECT id FROM voucher_line_physical_bills WHERE voucher_line_id = %s AND document_id = %s)", (line_id, document_id))
+            execute_write_pg("DELETE FROM voucher_line_physical_bills WHERE voucher_line_id = %s AND document_id = %s", (line_id, document_id))
+            for sort_order, bill in enumerate(entry.get('bills') or []):
+                if not any([bill.get('bill_no'), bill.get('bill_date'), bill.get('vendor_name'), bill.get('items')]):
+                    continue
+                bill_id = execute_write_pg("""INSERT INTO voucher_line_physical_bills
+                    (voucher_line_id, document_id, bill_no, bill_date, vendor_name, sort_order, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP) RETURNING id""",
+                    (line_id, document_id, (bill.get('bill_no') or '').strip() or None,
+                     bill.get('bill_date') or None, (bill.get('vendor_name') or '').strip() or None, sort_order))
+                for item_order, item in enumerate(bill.get('items') or []):
+                    qty = item.get('quantity'); rate = item.get('rate')
+                    qty = None if qty in (None, '') else float(qty); rate = None if rate in (None, '') else float(rate)
+                    amount = round(qty * rate, get_rate_precision()) if qty is not None and rate is not None else None
+                    execute_write_pg("""INSERT INTO voucher_line_physical_bill_items
+                        (bill_id, item_name, quantity, rate, amount, sort_order, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
+                        (bill_id, (item.get('item_name') or '').strip() or None, qty, rate, amount, item_order))
+        if observations:
+            for line in lines:
+                sibling_ids = _resolve_sibling_voucher_line_ids(line['detail_id'])
+                sync_line_observations_to_voucher(line['detail_id'], sibling_ids=sibling_ids)
+        if procedure_checks:
+            set_procedure_checks_batch(procedure_checks)
+        if voucher_checks:
+            session = execute_query_pg(
+                "SELECT client_id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'",
+                (session_id,)
+            )
+            if not session:
+                raise HTTPException(404, "Verification session not found or cancelled.")
+            save_voucher_checks_batch(session[0]['client_id'],
+                                      next(line.get('transaction_ref') for line in lines if str(line.get('detail_id')) == str(current_detail_id)),
+                                      voucher_checks)
+        return _verify_voucher_checks_impl(session_id, current_detail_id)
+
 @router.post("/api/verification/validate")
 def validate_transaction(
     detail_id: int = Body(..., embed=True),

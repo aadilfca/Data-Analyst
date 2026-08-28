@@ -225,6 +225,48 @@ const ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1;
 // `dirty` field anymore. Fetched once per voucher in openProcedureModal(), reused across lines of
 // that same voucher within one modal session.
 let voucherChecksCache = {};
+
+// Supplies the currently cached tick state to Verification's voucher-level atomic save.
+// Modal observations and Physical Bills are deliberately excluded until 4B-2 serializes their
+// pending editor state as part of the same transaction.
+function getVoucherTickSaveState() {
+    const procedureChecks = [];
+    Object.entries(hostAdapter?.procedureModalState || {}).forEach(([uid, line]) => {
+        Object.entries(line.tabs || {}).forEach(([docId, tab]) => {
+            Object.entries(tab.checklist || {}).forEach(([roleName, check]) => {
+                procedureChecks.push({ voucher_line_id: parseInt(uid), document_id: parseInt(docId),
+                    role_name: roleName, is_checked: !!check.is_checked });
+            });
+        });
+    });
+    const transactionRef = hostAdapter?.currentVoucherId;
+    const observations = [];
+    const physicalBills = [];
+    Object.entries(hostAdapter?.procedureModalState || {}).forEach(([uid, line]) => {
+        Object.entries(line.tabs || {}).forEach(([docId, tab]) => {
+            if (tab.observationDirty) observations.push({
+                voucher_line_id: parseInt(uid), document_id: parseInt(docId),
+                observation_text: tab.observation || ''
+            });
+            if (tab.physicalBillDirty) physicalBills.push({
+                voucher_line_id: parseInt(uid), document_id: parseInt(docId),
+                bills: (tab.physicalBills || []).map(bill => ({
+                    bill_no: (bill.bill_no || '').trim(), bill_date: bill.bill_date || null,
+                    vendor_name: (bill.vendor_name || '').trim(),
+                    items: (bill.items || []).map(item => ({
+                        item_name: (item.item_name || '').trim(),
+                        quantity: item.quantity === '' ? null : item.quantity,
+                        rate: item.rate === '' ? null : item.rate,
+                        source_document_row_id: null, source_template: null
+                    }))
+                }))
+            });
+        });
+    });
+    return { observations, physicalBills, procedureChecks, voucherChecks: (voucherChecksCache[transactionRef] || []).map(check => ({
+        check_id: check.id, state: check.state
+    })) };
+}
 // Confirmed fix (2026-07-30): keyed by transaction_ref, holds the in-flight fetch Promise while
 // one is outstanding for that voucher — see ensureVoucherChecksLoaded() below for why this exists.
 let voucherChecksLoadingPromises = {};
