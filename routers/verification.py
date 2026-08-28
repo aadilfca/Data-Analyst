@@ -1755,6 +1755,7 @@ def save_and_verify_voucher_bundle(
     current_detail_id: int = Body(..., embed=True),
     lines: List[Dict[str, Any]] = Body(..., embed=True),
     observations: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
+    account_head_notes: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     physical_bills: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     procedure_checks: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     voucher_checks: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
@@ -1767,6 +1768,7 @@ def save_and_verify_voucher_bundle(
     procedure_checks = procedure_checks if isinstance(procedure_checks, list) else []
     voucher_checks = voucher_checks if isinstance(voucher_checks, list) else []
     observations = observations if isinstance(observations, list) else []
+    account_head_notes = account_head_notes if isinstance(account_head_notes, list) else []
     physical_bills = physical_bills if isinstance(physical_bills, list) else []
     if not lines:
         raise HTTPException(400, "At least one voucher line is required.")
@@ -1787,6 +1789,17 @@ def save_and_verify_voucher_bundle(
                    observation_text = excluded.observation_text, synced = FALSE,
                    updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""",
                 (entry['voucher_line_id'], entry['document_id'], entry.get('observation_text', ''), 'Analyst')
+            )
+        for entry in account_head_notes:
+            execute_write_pg(
+                """INSERT INTO voucher_line_observations
+                   (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
+                   VALUES (%s, %s, %s, FALSE, %s, CURRENT_TIMESTAMP)
+                   ON CONFLICT(voucher_line_id, document_id) DO UPDATE SET
+                   observation_text = excluded.observation_text, synced = FALSE,
+                   updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""",
+                (entry['voucher_line_id'], ACCOUNT_HEAD_OBSERVATION_DOC_ID,
+                 entry.get('observation_text', ''), 'Analyst')
             )
         for entry in physical_bills:
             line_id = entry['voucher_line_id']; document_id = entry['document_id']
@@ -1810,7 +1823,7 @@ def save_and_verify_voucher_bundle(
                         (bill_id, item_name, quantity, rate, amount, sort_order, updated_at)
                         VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
                         (bill_id, (item.get('item_name') or '').strip() or None, qty, rate, amount, item_order))
-        if observations:
+        if observations or account_head_notes:
             for line in lines:
                 sibling_ids = _resolve_sibling_voucher_line_ids(line['detail_id'])
                 sync_line_observations_to_voucher(line['detail_id'], sibling_ids=sibling_ids)

@@ -114,6 +114,7 @@ def test_voucher_bundle_accepts_modal_state(monkeypatch):
         session_id=10, current_detail_id=7,
         lines=[{"detail_id": 7, "line_items": [], "procedure_data": {}}],
         observations=[{"voucher_line_id": 7, "document_id": 3, "observation_text": "note"}],
+        account_head_notes=[{"voucher_line_id": 7, "observation_text": "head note"}],
         physical_bills=[]
     )
     assert result == {"verified": True}

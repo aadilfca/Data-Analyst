@@ -241,6 +241,7 @@ function getVoucherTickSaveState() {
     });
     const transactionRef = hostAdapter?.currentVoucherId;
     const observations = [];
+    const accountHeadNotes = [];
     const physicalBills = [];
     Object.entries(hostAdapter?.procedureModalState || {}).forEach(([uid, line]) => {
         Object.entries(line.tabs || {}).forEach(([docId, tab]) => {
@@ -262,8 +263,12 @@ function getVoucherTickSaveState() {
                 }))
             });
         });
+        const accountHead = accountHeadCache[uid];
+        if (accountHead && accountHead.mode === 'nomatch' && accountHead.noMatchDirty) {
+            accountHeadNotes.push({ voucher_line_id: parseInt(uid), observation_text: accountHead.noMatchText || '' });
+        }
     });
-    return { observations, physicalBills, procedureChecks, voucherChecks: (voucherChecksCache[transactionRef] || []).map(check => ({
+    return { observations, accountHeadNotes, physicalBills, procedureChecks, voucherChecks: (voucherChecksCache[transactionRef] || []).map(check => ({
         check_id: check.id, state: check.state
     })) };
 }
@@ -1191,9 +1196,6 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
             hostAdapter.showStatus('Mark every voucher-level check before verifying.', 'error');
             return null;
         }
-        const physicalBillsSaved = await flushPhysicalBillEntries(uid);
-        await flushProcedureObservations(uid);
-        await flushAccountHeadNoMatchNote(uid);
         let combinedResult;
         if (typeof hostAdapter.saveAndVerifyVoucher === 'function') {
             combinedResult = await hostAdapter.saveAndVerifyVoucher(uid);
@@ -1211,13 +1213,12 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
             }
         }
         if (!combinedResult.ok) throw new Error(combinedResult.error?.detail || 'Save and verify failed.');
-        if (!physicalBillsSaved) hostAdapter.markLineDirty(uid, 'physical bill save retry required');
         const data = combinedResult.data;
         if (!data) return null;
         if (window.VerificationPerf) {
             window.VerificationPerf.log('verify_voucher_checks_sequence', perfStarted, {
                 detail_id: String(uid),
-                includes: ['fresh voucher-check read', 'physical-bill flush', 'forced current-line save', 'voucher verify'],
+                includes: ['fresh voucher-check read', 'atomic voucher-line/modal save', 'voucher verify'],
                 backend: data && data._perf ? data._perf : null
             });
         }
