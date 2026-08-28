@@ -1754,6 +1754,7 @@ def save_and_verify_voucher_bundle(
     session_id: int = Body(..., embed=True),
     current_detail_id: int = Body(..., embed=True),
     lines: List[Dict[str, Any]] = Body(..., embed=True),
+    verify: bool = Body(True, embed=True),
     observations: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     account_head_notes: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     physical_bills: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
@@ -1839,7 +1840,7 @@ def save_and_verify_voucher_bundle(
             save_voucher_checks_batch(session[0]['client_id'],
                                       next(line.get('transaction_ref') for line in lines if str(line.get('detail_id')) == str(current_detail_id)),
                                       voucher_checks)
-        return _verify_voucher_checks_impl(session_id, current_detail_id)
+        return _verify_voucher_checks_impl(session_id, current_detail_id) if verify else {"saved": True}
 
 @router.post("/api/verification/validate")
 def validate_transaction(

@@ -15,6 +15,16 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Procedure-window local-first grouped save
+
+The procedure window now keeps procedure ticks, voucher-level checks, observations, Physical Bills,
+and Account Head notes in browser state while the auditor works. The `Verify` and `Verify & Next`
+actions use the existing atomic bundle request, while the upper close control uses the same
+transaction in save-only mode and does not verify the voucher. The window only closes or advances
+after a successful grouped response; failed saves retain the current work for retry. Individual
+procedure/check POSTs were removed from the local editing path. Python compilation, JavaScript
+syntax checks, and 15 focused tests passed; Render HAR confirmation remains pending.
+
 ## Voucher-level supporting-data batching
 
 Added `GET /api/verification/voucher_support_data/{voucher_line_id}`, returning supporting

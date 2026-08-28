@@ -4007,7 +4007,7 @@ function buildLineSavePayload(detailId) {
     };
 }
 
-async function saveAndVerifyVoucher(detailId) {
+async function saveAndVerifyVoucher(detailId, verify = true) {
     const lines = currentVoucherLines.map(line => ({
         ...buildLineSavePayload(line.detail_id),
         transaction_ref: line.transaction_ref || line.voucher_id
@@ -4016,7 +4016,7 @@ async function saveAndVerifyVoucher(detailId) {
         ? getVoucherTickSaveState() : { procedureChecks: [], voucherChecks: [] };
     const res = await fetch(`${API_BASE}/api/verification/save_and_verify_voucher_bundle${window.VerificationPerf.querySuffix()}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lines, ...tickState, session_id: currentSessionId, current_detail_id: detailId })
+        body: JSON.stringify({ lines, ...tickState, verify, session_id: currentSessionId, current_detail_id: detailId })
     });
     if (!res.ok) return { ok: false, error: await res.json().catch(() => ({})) };
     const data = await res.json();

@@ -260,6 +260,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-28: Procedure and voucher-level check saves now invalidate affected modal-data cache entries.
 - 2026-08-28: Procedure line navigation opens immediately while its prior save continues safely in the background; Render confirmation pending.
 - 2026-08-28: Verification modal uses atomic Save + Verify and batch tick paths with transaction-aware Postgres helpers; Render confirmation pending.
+- 2026-08-28: Procedure window now saves local procedure/check/modal state through grouped actions; upper X uses save-only mode; Render confirmation pending.
 - 2026-08-27: Verification speed opt. Phase 3a/3c — parallelized procedure-modal fetches, opt-in per-request sibling-id memo (17→11 DB calls), lazy TB-accounts; see INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
 
 

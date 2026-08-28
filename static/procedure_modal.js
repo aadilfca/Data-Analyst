@@ -1102,7 +1102,8 @@ async function closeProcedureModal() {
         if (window.LoadingUI) window.LoadingUI.showProgressBar(procedureModalClose, { mode: 'indeterminate', message: 'Saving…' });
         try {
             const physicalBillsSaved = await flushPhysicalBillEntries(currentProcedureModalUid);
-            await hostAdapter.saveLineItems(currentProcedureModalUid);
+            const result = await hostAdapter.saveAndVerifyVoucher(currentProcedureModalUid, false);
+            if (!result || !result.ok) throw new Error('Grouped save failed.');
             if (!physicalBillsSaved) hostAdapter.markLineDirty(currentProcedureModalUid, 'physical bill save retry required');
         } finally {
             if (window.LoadingUI) window.LoadingUI.hideProgressBar(procedureModalClose);
@@ -1436,6 +1437,10 @@ function renderVoucherChecksBar(uid) {
             if (!check || check.state === newState) return;
             const previousState = check.state;
             check.state = newState;
+            hostAdapter.markAllLinesDirty('voucher-level check changed');
+            renderVoucherChecksBar(uid);
+            renderProcedureModalTabs(uid);
+            return;
             try {
                 const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_voucher_check`, {
                     method: 'POST',
@@ -1487,6 +1492,9 @@ async function toggleAllVoucherChecks(uid) {
     const previousStates = {};
     toChange.forEach(c => { previousStates[c.id] = c.state; c.state = newState; });
     renderVoucherChecksBar(uid);
+    hostAdapter.markAllLinesDirty('voucher-level checks changed');
+    renderProcedureModalTabs(uid);
+    return;
 
     // Re-queried after the render above (not the click's own captured element) since that render
     // just replaced the select-all button's DOM node - a spinner on the old reference would be
@@ -2296,6 +2304,8 @@ async function toggleAllProcedureChecks(uid, docId) {
     });
     renderProcedureModalPanel(uid, docId);
     renderProcedureModalTabs(uid);
+    hostAdapter.markLineDirty(uid, 'procedure checks changed');
+    return;
 
     // Same re-query-after-render + single-spinner-for-the-whole-batch reasoning as
     // toggleAllVoucherChecks() above.
@@ -3163,6 +3173,9 @@ async function toggleProcedureCheck(uid, docId, roleName, isChecked, target = nu
     const previousState = tabState.checklist[roleName] ? { ...tabState.checklist[roleName] } : null;
     if (!tabState.checklist[roleName]) tabState.checklist[roleName] = {};
     tabState.checklist[roleName].is_checked = isChecked;
+    hostAdapter.markLineDirty(uid, 'procedure check changed');
+    renderProcedureModalTabs(uid);
+    return;
 
     try {
         const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/procedure_checks`, {
