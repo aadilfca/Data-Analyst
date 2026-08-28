@@ -1618,8 +1618,7 @@ def _verify_voucher_checks_impl(session_id: int, current_detail_id: int, perf_ti
     # normally just a handful of lines per voucher.
     sync_started = time.perf_counter()
     voucher_sibling_ids = _resolve_sibling_voucher_line_ids(current_detail_id) or [current_detail_id]
-    for row in voucher_rows:
-        sync_line_observations_to_voucher(row['id'], sibling_ids=voucher_sibling_ids)
+    sync_voucher_observations_to_voucher([row['id'] for row in voucher_rows], voucher_sibling_ids)
     if perf_timings is not None:
         perf_timings["observation_sync_ms"] = round((time.perf_counter() - sync_started) * 1000, 1)
 
@@ -4064,6 +4063,71 @@ def sync_line_observations_to_voucher(voucher_line_id: int, sibling_ids: Optiona
     except Exception as exc:
         # Deliberately swallow - observation roll-up must never block a line save.
         print(f"⚠️ sync_line_observations_to_voucher failed for line {voucher_line_id}: {exc}")
+
+
+def sync_voucher_observations_to_voucher(voucher_line_ids: List[int], sibling_ids: List[int]) -> None:
+    """Rebuild every line in one voucher using set-based observation reads and writes."""
+    if not voucher_line_ids:
+        return
+    try:
+        line_ph = ",".join("%s" for _ in voucher_line_ids)
+        sibling_ph = ",".join("%s" for _ in sibling_ids)
+        rows = execute_query_pg(
+            f"""SELECT vd.id AS line_id, vd.client_data_id, vlo.id, vlo.document_id,
+                       vlo.observation_text, vlo.updated_at, ard.name AS document_name
+                FROM verification_details vd
+                LEFT JOIN verification_details sibling ON sibling.client_data_id=vd.client_data_id
+                LEFT JOIN voucher_line_observations vlo ON vlo.voucher_line_id=sibling.id
+                LEFT JOIN audit_rule_documents ard ON ard.id=vlo.document_id
+                WHERE vd.id IN ({line_ph})""",
+            tuple(voucher_line_ids),
+        )
+        check_rows = execute_query_pg(
+            """SELECT vcs.client_id, vcs.transaction_ref, arvc.name
+               FROM voucher_check_status vcs JOIN audit_rule_voucher_checks arvc ON arvc.id=vcs.check_id
+               WHERE arvc.is_active=TRUE AND vcs.flagged_in_observations=TRUE"""
+        )
+        checks = {}
+        for r in check_rows:
+            checks.setdefault((r['client_id'], r['transaction_ref']), []).append(f"{r['name']} marked not done")
+        line_meta = execute_query_pg(
+            f"""SELECT vd.id, vd.transaction_ref, vs.client_id
+                FROM verification_details vd JOIN verification_sessions vs ON vs.id=vd.session_id
+                WHERE vd.id IN ({line_ph})""",
+            tuple(voucher_line_ids),
+        )
+        meta = {r['id']: r for r in line_meta}
+        latest = {}
+        synced_ids = []
+        for r in rows:
+            if r['id'] is None:
+                continue
+            synced_ids.append(r['id'])
+            key = (r['line_id'], r['document_id'])
+            if key not in latest or _ts_sort_key(r['updated_at']) > _ts_sort_key(latest[key]['updated_at']):
+                latest[key] = r
+        updates = []
+        for line_id in voucher_line_ids:
+            blocks = list(checks.get((meta[line_id]['client_id'], meta[line_id]['transaction_ref']), [])) if line_id in meta else []
+            for (owner, _), entry in sorted(latest.items(), key=lambda item: (item[0][0], item[0][1])):
+                if owner != line_id or not (entry['observation_text'] or '').strip():
+                    continue
+                if entry['document_id'] == ACCOUNT_HEAD_OBSERVATION_DOC_ID:
+                    blocks.append(f"[Account Head Recommendation]: New account head recommended: {entry['observation_text'].strip()} — no match in Trial Balance")
+                elif entry['document_id'] <= CROSS_CHECK_SHORTFALL_DOC_ID_BASE:
+                    blocks.append(f"[Cross-check Shortfall]: {entry['observation_text'].strip()}")
+                else:
+                    blocks.append(f"[{entry['document_name']}]: {entry['observation_text'].strip()}")
+            updates.append(("\n".join(blocks) if blocks else None, line_id))
+        conn = get_raw_conn_pg()
+        try:
+            execute_batch_pg(conn, "UPDATE verification_details SET observations=%s WHERE id=%s", updates)
+            if synced_ids:
+                execute_batch_pg(conn, "UPDATE voucher_line_observations SET synced=TRUE, last_synced_text=observation_text WHERE id=%s", [(i,) for i in synced_ids])
+        finally:
+            release_raw_conn_pg(conn)
+    except Exception as exc:
+        print(f"⚠️ sync_voucher_observations_to_voucher failed: {exc}")
 
 
 @router.get("/api/verification/line_observations/{voucher_line_id}")

@@ -55,6 +55,13 @@ Added in-flight and completed caches for procedure-modal data and in-flight dedu
 account-category lookups during voucher rendering. Repeated identical requests now share one
 request; Render validation remains pending.
 
+## Voucher-level Verify observation synchronization
+
+Added a Verify-only voucher-level observation rebuild that reads all sibling observations and
+voucher-check flags in sets, formats each line in memory, and batch-updates line observations and
+sync bookkeeping. Ordinary per-line save/observation behavior remains unchanged. Focused tests pass;
+Render timing validation remains pending.
+
 Made the shared retry toast reference-counted for overlapping GET retries and cleared both modal
 Verify progress indicators after every save/verify outcome. This prevents stale `Saving…` visuals
 and premature retry-toast dismissal while preserving the no-retry rule for writes.

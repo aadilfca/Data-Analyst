@@ -258,6 +258,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-28: Verification grid reuses voucher support observations; Physical Bill date validation now handles Postgres date values.
 - 2026-08-28: Verification modal clears both Verify progress states; shared GET retry toast now tracks overlapping retries.
 - 2026-08-28: Verification modal-data and account-category lookups now deduplicate in flight; Render confirmation pending.
+- 2026-08-28: Verify observation synchronization now uses voucher-level set reads and batch writes; Render confirmation pending.
 - 2026-08-27: Verification speed opt. Phase 3a/3c — parallelized procedure-modal fetches, opt-in per-request sibling-id memo (17→11 DB calls), lazy TB-accounts; see INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
 
 
