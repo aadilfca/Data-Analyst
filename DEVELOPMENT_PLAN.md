@@ -144,4 +144,30 @@ This is necessary for safe session-level caching, but it does not block independ
 The Audit Rules lock was user-tested on Render. Stable template column metadata is now cached
 process-wide for 10 minutes and explicitly invalidated when master columns or template mappings
 change. Verification reuses this cache for document grouping and field resolution; voucher-specific
-evidence and the Save-before-Verify sequence remain uncached and unchanged.
+ evidence and the Save-before-Verify sequence remain uncached and unchanged.
+
+### Current decision: Audit Rules bundle before broad modal-query consolidation
+
+The remaining `procedure_modal_data` work is intentionally reordered. Its data groups have
+different freshness, historical-resolution, shaping, and business rules, so broad SQL consolidation
+could introduce subtle errors. The live linked-document query plan also showed database execution
+around 0.12 ms; most observed delay is connection and remote round-trip latency.
+
+The next phase is a versioned Audit Rules bundle for Verification:
+
+- Prepare one stable bundle containing Categories, Documents, Cross-check configuration, authority
+  roles, document requirements, templates, and mappings.
+- Cache the bundle by version and invalidate it after Audit Rules/template changes.
+- Capture the active bundle version when a verification session starts.
+- Reuse the bundle in Verification and the procedure modal.
+- Keep linked documents, procedure ticks, observations, physical bills, and calculated results fresh.
+- Re-measure `procedure_modal_data` before optimizing any fresh-data query.
+
+Current measurements: `procedure_modal_data` is approximately 2.9-3.1 seconds locally, with 12-13
+database calls. Cross-check configuration caching reduced the repeat cross-check stage from about
+961 ms to about 719 ms. The broad parallel-query experiment was reverted after it increased latency
+through connection-pool contention. The targeted linked-document index was added to both schema
+paths, but its user-visible effect was not material in the small test case.
+
+The template/cache/diagnostics phase was pushed in commit `fd2a56d`. Later local changes remain
+uncommitted until user testing and confirmation. Do not commit or push automatically.

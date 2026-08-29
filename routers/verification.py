@@ -5396,6 +5396,11 @@ def _get_category_cross_check_configs(category_id: int) -> List[dict]:
     documents[] order is audit_rule_cross_check_documents.sort_order - that ordering IS the
     chain, and the whole engine's direction logic depends on it.
     """
+    cache_key = f"cross_check_configs:{category_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     rule_rows = execute_query_pg(
         """
         SELECT c.id, c.name, c.compare_field, c.comparison_type, c.compare_to_voucher_line
@@ -5434,6 +5439,7 @@ def _get_category_cross_check_configs(category_id: int) -> List[dict]:
                 for d in doc_rows
             ],
         })
+    cache_set(cache_key, configs)
     return configs
 
 

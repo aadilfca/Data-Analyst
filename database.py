@@ -2245,6 +2245,7 @@ def init_db():
         # install, or it was just rebuilt into that shape) - creating the partial index any earlier
         # would fail with "no such column: status" against a not-yet-migrated old-shape table.
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_documents_line ON voucher_line_documents (voucher_line_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_line_documents_active_line ON voucher_line_documents (voucher_line_id) WHERE status = 'active'")
         create_index_with_retry(conn, "CREATE UNIQUE INDEX IF NOT EXISTS idx_voucher_line_documents_active_client_data ON voucher_line_documents (client_data_id) WHERE status = 'active'")
 
         # Schema upgrade (Validation Rules, Phase 1 of 7): signature_exception flags a confirmed
@@ -3221,6 +3222,7 @@ def init_db_postgres(conn):
         )
     ''', "voucher_line_documents")
     run("CREATE INDEX IF NOT EXISTS idx_voucher_line_documents_line ON voucher_line_documents (voucher_line_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_line_documents_active_line ON voucher_line_documents (voucher_line_id) WHERE status = 'active'")
     run('''
         CREATE UNIQUE INDEX IF NOT EXISTS idx_voucher_line_documents_active_client_data
         ON voucher_line_documents (client_data_id) WHERE status = 'active'
