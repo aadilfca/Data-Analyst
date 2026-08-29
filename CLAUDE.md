@@ -188,6 +188,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 - 2026-08-29: Fresh Vouchers entry now defaults to today-only discovery; restored views and manually persisted ranges remain unchanged.
 - 2026-08-29: Save/Verify opt-in diagnostics now expose component timings for measured bottleneck isolation; normal behavior is unchanged.
 - 2026-08-29: Verify and Verify & Next now show busy cursor/modal feedback through completion; save-before-verify behavior remains unchanged.
+- 2026-08-29: Roadmap reconciled through commit 2d13ba0; Save/Verify work split into separate logical-verification and persistence mini-phases.
 
 **Full detail for every entry below lives in `CHANGELOG_ARCHIVE.md`**, under the matching heading —
 these lines are pointers, not the record. Multi-phase requirements get one line each, not one per

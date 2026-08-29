@@ -35,6 +35,12 @@ The tray controller now redirects the background `run.bat`/Uvicorn stdout and st
 
 The shared Verify/Verify & Next sequence now sets the page cursor to `wait` and marks the procedure modal `aria-busy="true"` for the full operation. Existing button progress indicators and duplicate-click protection remain in place; all busy state is restored in `finally` after save, logical verification, cache updates, and navigation complete. The script cache-buster was incremented to `v=12`. Verified with Node syntax checks for both verification scripts and `git diff --check`.
 
+## Roadmap correction and Save/Verify optimization tracks
+
+**Date:** 2026-08-29 | **Files:** `DEVELOPMENT_PLAN.md`, `CHANGELOG_ARCHIVE.md`, `CLAUDE.md`.
+
+The roadmap was reconciled with delivered work through commit `2d13ba0`: diagnostics, procedure-check batching, and Verify progress feedback are implemented, tested locally and on Render, and pushed. Save/Verify remains approximately 16–20 seconds, so the next work is split into separate logical-verification and persistence/save mini-phases. The first targets logical verification while preserving atomic save-before-verify behavior.
+
 ## Verification startup payload reduction and Save/Verify diagnostics
 
 **Date:** 2026-08-29 | **Files:** `routers/verification.py`, `database.py`.

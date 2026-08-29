@@ -42,8 +42,8 @@ An opt-in diagnostic wrapper was added to `routers/verification.py` to expose to
 - `database.py` and `routers/verification.py` compile successfully.
 - The local server starts on port 5000 and the root endpoint returned HTTP 200.
 - The existing verification index test passed.
-- The diagnostic response has not yet been captured from a real Save/Verify action after the startup repair.
-- No commit or push has been authorized for this development.
+- Browser/server logs confirmed Save/Verify remains approximately 16–20 seconds locally and on Render; detailed component timings were not captured because the deployed request lost `perf=true` during navigation.
+- Diagnostics, procedure-check batching, and Verify progress feedback were implemented, tested, committed, and pushed through commit `2d13ba0`.
 
 ## Active tracks
 
@@ -85,10 +85,10 @@ The multi-second browser timings are therefore mainly caused by large result tra
 | Phase | Scope | Status | Next action |
 |---|---|---|---|
 | Baseline review | HAR and prior-chat review | Completed | Continue with measured diagnostics |
-| Grouped Save/Verify diagnostics | `routers/verification.py`, with existing database metrics | Implemented locally | Capture `_perf` from a real request |
+| Grouped Save/Verify diagnostics | `routers/verification.py`, with existing database metrics | Implemented and pushed | Use component evidence during optimization |
 | Login/Client Cards investigation | Read-only request timing | Identified | Measure as a separate track |
 | Database query-plan investigation | Read-only Postgres `EXPLAIN ANALYZE` | Completed | Reduce Verification result payloads |
-| Verification bottleneck optimization | To be selected from measurements | Pending | Do not start until diagnostic evidence exists |
+| Verification bottleneck optimization | Save/Verify logical and persistence tracks | Active | Optimize one internal stage at a time |
 
 ### Latest cashbook date optimization result
 
@@ -122,3 +122,19 @@ The tray controller now redirects background server output to `%TEMP%\audit_app_
 ### Verify action progress feedback
 
 The Verify and Verify & Next actions now retain the existing button progress indicator and additionally show a wait cursor and modal busy state until the complete save/verify/navigation sequence settles. The save-before-verify order and backend transaction boundary are unchanged.
+
+### Next mini-phase: Save/Verify logical-stage optimization
+
+The next mini-phase will focus on the backend logical verification stage while preserving the one-click user actions, save-before-verify ordering, transaction boundary, and cache-update timing. Persistence/save optimization will remain a separate follow-up mini-phase.
+
+### Planned foundation: controlled configuration lock and session cache
+
+Before targeted procedure-window optimization, add a deliberately simple safety foundation:
+
+- Administrators may open and view Audit Rules and related configuration while verification sessions are active.
+- Saving configuration changes that could affect verification is blocked while relevant active verification sessions exist.
+- The backend, not only the frontend, enforces this restriction.
+- Stable Audit Rules, document requirements, roles, and template metadata may then be cached for the verification session.
+- Voucher-specific linked evidence, observations, physical bills, and procedure ticks remain fresh data.
+
+This is necessary for safe session-level caching, but it does not block independent Save/Verify persistence optimization. The planned order is: review affected code, implement the backend lock, add narrowly scoped stable-data caching, measure first and repeat procedure-window opens, then optimize remaining voucher-specific calls.
