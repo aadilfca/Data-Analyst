@@ -112,3 +112,9 @@ Fresh Vouchers/Bankbook entry now requests only the local calendar day. This ski
 | Phase | Scope | Status | Next action |
 |---|---|---|---|
 | Fresh Vouchers date default | `static/verification.js`, `static/verification.html` | Implemented locally | Test today-only load and manual range expansion |
+
+### Save/Verify component diagnostics
+
+The attached HAR confirmed approximately 7 seconds for procedure-modal data and 16.2–16.6 seconds for Save/Verify, but did not include server-console database metrics. The existing opt-in Save/Verify diagnostics now also report line-save, observation-sync, status-engine, procedure-check, voucher-check, verification, and database timings. Next action: repeat one Save/Verify with `perf=1` and capture the server console line.
+
+The tray controller now redirects background server output to `%TEMP%\audit_app_server.log`, so diagnostics can be collected without a visible terminal.

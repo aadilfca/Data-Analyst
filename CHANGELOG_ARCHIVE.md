@@ -21,6 +21,14 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 Fresh entry into the Vouchers/Bankbook popup now initializes both date fields to the local current date and sends that exact one-day range to the cashbooks endpoint. This avoids the latest-date lookup and month-wide result transfer during the common path. Existing persisted date ranges and URL-restored session/cashbook views remain unchanged. The static script cache-buster was incremented to `v=22`.
 
+## Save/Verify component diagnostics
+
+**Date:** 2026-08-29 | **Files:** `routers/verification.py`.
+
+The supplied HAR showed approximately 6.96 seconds for `procedure_modal_data` and 16.16–16.57 seconds for `save_and_verify_voucher_bundle`, but contained no server-console `_perf` database breakdown. The existing opt-in bundle diagnostics were extended with component timings for line saves, observation sync, status calculation, procedure checks, voucher checks, and final verification. The normal endpoint behavior and response remain unchanged unless `?perf=true` is supplied. Verified with `python -m py_compile routers/verification.py` and `git diff --check`.
+
+The tray controller now redirects the background `run.bat`/Uvicorn stdout and stderr to `%TEMP%\audit_app_server.log`, while retaining the existing tray lifecycle log separately. This makes opt-in performance output retrievable without opening a console.
+
 ## Verification startup payload reduction and Save/Verify diagnostics
 
 **Date:** 2026-08-29 | **Files:** `routers/verification.py`, `database.py`.

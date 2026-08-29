@@ -1788,6 +1788,7 @@ def _bundle_perf_diagnostics(fn):
             metrics = get_db_metrics()
             print(json.dumps({"perf": "save_and_verify_voucher_bundle",
                               "total_ms": round((time.perf_counter() - started) * 1000, 1),
+                              "components": result.get("_perf_components", {}) if isinstance(result, dict) else {},
                               "db_calls": metrics["calls"], "db_reads": metrics["reads"],
                               "db_writes": metrics["writes"],
                               "db_ms": round(metrics["db_time"] * 1000, 1)}))
@@ -1823,6 +1824,7 @@ def save_and_verify_voucher_bundle(
         raise HTTPException(400, "At least one voucher line is required.")
     if str(current_detail_id) not in {str(line.get('detail_id')) for line in lines}:
         raise HTTPException(400, "The current detail must be included in lines.")
+    timings = {} if perf else None
     line_statuses = {
         row['id']: row['status']
         for row in execute_query_pg(
@@ -1851,13 +1853,23 @@ def save_and_verify_voucher_bundle(
             names = ", ".join(c['name'] for c in untouched)
             raise HTTPException(400, f"Cannot verify: {len(untouched)} check(s) still not marked ({names}).")
     with pg_transaction():
+        save_started = time.perf_counter()
+        save_components = {"observation_sync_ms": 0.0, "status_engine_ms": 0.0}
         for line in lines:
             if line.get('detail_id') not in eligible_line_ids:
                 continue
+            line_timings = {} if perf else None
             _save_line_items_impl(
                 line['detail_id'], line.get('line_items', []),
-                line.get('transaction_type'), line.get('procedure_data')
+                line.get('transaction_type'), line.get('procedure_data'), line_timings
             )
+            if perf:
+                for key in save_components:
+                    save_components[key] += line_timings.get(key, 0)
+        if perf:
+            timings["line_saves_ms"] = round((time.perf_counter() - save_started) * 1000, 1)
+            timings.update({key: round(value, 1) for key, value in save_components.items()})
+        procedure_started = time.perf_counter()
         for entry in observations:
             execute_write_pg(
                 """INSERT INTO voucher_line_observations
@@ -1907,6 +1919,9 @@ def save_and_verify_voucher_bundle(
                 sync_line_observations_to_voucher(line['detail_id'], sibling_ids=sibling_ids)
         if procedure_checks:
             set_procedure_checks_batch(procedure_checks)
+        if perf:
+            timings["procedure_checks_ms"] = round((time.perf_counter() - procedure_started) * 1000, 1)
+        voucher_started = time.perf_counter()
         if voucher_checks:
             session = execute_query_pg(
                 "SELECT client_id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'",
@@ -1917,7 +1932,14 @@ def save_and_verify_voucher_bundle(
             save_voucher_checks_batch(session[0]['client_id'],
                                       next(line.get('transaction_ref') for line in lines if str(line.get('detail_id')) == str(current_detail_id)),
                                       voucher_checks)
-        return _verify_voucher_checks_impl(session_id, current_detail_id) if verify else {"saved": True}
+        if perf:
+            timings["voucher_checks_ms"] = round((time.perf_counter() - voucher_started) * 1000, 1)
+        verify_started = time.perf_counter()
+        result = _verify_voucher_checks_impl(session_id, current_detail_id, timings) if verify else {"saved": True}
+        if perf:
+            timings["verify_ms"] = round((time.perf_counter() - verify_started) * 1000, 1)
+            result["_perf_components"] = timings
+        return result
 
 @router.post("/api/verification/validate")
 def validate_transaction(

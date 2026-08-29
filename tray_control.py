@@ -19,12 +19,14 @@ SERVER_URL = "http://127.0.0.1:5000"
 START_COMMAND = os.path.join(PROJECT_DIR, "run.bat")
 PORT = "5000"
 PROCESS = None  # holds the running server process (the whole tree's root)
+SERVER_LOG_HANDLE = None
 
 # Log file kept OUTSIDE the project folder on purpose — if it lived
 # inside PROJECT_DIR, writing to it could itself trigger uvicorn's
 # --reload file-watcher and cause the exact kind of PID-shifting
 # behaviour we saw in testing.
 LOG_PATH = os.path.join(os.environ.get("TEMP", PROJECT_DIR), "tray_debug.log")
+SERVER_OUTPUT_PATH = os.path.join(os.environ.get("TEMP", PROJECT_DIR), "audit_app_server.log")
 
 
 def log(message):
@@ -57,14 +59,21 @@ def get_pid_on_port(port):
 
 
 def start_server(icon=None, item=None):
-    global PROCESS
+    global PROCESS, SERVER_LOG_HANDLE
     if is_server_running():
         log("Start requested but server already running — ignored.")
         return
     # cwd=PROJECT_DIR ensures run.bat is found and runs as if launched
     # from inside the project folder (needed for venv activation).
-    PROCESS = subprocess.Popen(START_COMMAND, shell=True, cwd=PROJECT_DIR)
-    log(f"Start command issued. Tracked root PID: {PROCESS.pid}")
+    # Keep the background server's stdout/stderr so Uvicorn and the opt-in performance
+    # diagnostics remain available when the tray has no visible console window.
+    SERVER_LOG_HANDLE = open(SERVER_OUTPUT_PATH, "a", encoding="utf-8", buffering=1)
+    SERVER_LOG_HANDLE.write(f"\n--- Server start: {time.ctime()} ---\n")
+    PROCESS = subprocess.Popen(
+        START_COMMAND, shell=True, cwd=PROJECT_DIR,
+        stdout=SERVER_LOG_HANDLE, stderr=subprocess.STDOUT
+    )
+    log(f"Start command issued. Tracked root PID: {PROCESS.pid}; server output: {SERVER_OUTPUT_PATH}")
     time.sleep(2)  # give the server a moment to bind the port
     update_icon()
 
