@@ -24,6 +24,7 @@ from rapidfuzz import fuzz, utils as fuzz_utils
 # Reused for voucher/line grouping in get_next_transaction (Phase 1) — same document-key
 # logic already used by import's compare_transactions, applied at query time.
 from routers.import_export import get_document_group_id
+from routers.templates import get_cached_template_columns
 # Create Vendor Bill from GRN (Phase 1): reused as-is rather than duplicated, since this
 # feature must build a client_data row that behaves identically to a real import - same
 # rationale as the cross-router imports below.
@@ -867,16 +868,7 @@ def parse_row_data(raw_value: Any) -> Optional[Dict[str, Any]]:
 
 def get_template_columns(template_id: int) -> list:
     """Fetch a template's active columns ordered by sort_order (lowest first), for document_group_id computation."""
-    return execute_query_pg(
-        """
-        SELECT m.id AS column_id, m.column_name, m.data_type, p.sort_order
-        FROM template_column_mappings p
-        JOIN master_columns m ON p.column_id = m.id
-        WHERE p.template_id = %s AND m.is_active = TRUE
-        ORDER BY p.sort_order ASC
-        """,
-        (template_id,)
-    )
+    return get_cached_template_columns(template_id)
 
 def get_document_field_value(client_data_id: int, field_name: str) -> Optional[Any]:
     """

@@ -656,6 +656,7 @@ const procedureModalDataLoading = new Map();
 function invalidateProcedureModalData(uid) {
     const key = String(uid);
     procedureModalDataCache.delete(key);
+    console.debug('[procedure-cache] invalidated', { uid: key, reason: 'line-data-changed' });
 }
 
 // Drop the cached procedure-modal payload for EVERY line in the voucher the host currently has
@@ -671,8 +672,15 @@ function invalidateProcedureModalDataForVoucher() {
 
 function loadProcedureModalData(uid, perfSuffix) {
     const key = String(uid);
-    if (procedureModalDataCache.has(key)) return Promise.resolve(procedureModalDataCache.get(key));
-    if (procedureModalDataLoading.has(key)) return procedureModalDataLoading.get(key);
+    if (procedureModalDataCache.has(key)) {
+        console.debug('[procedure-cache] hit', { uid: key });
+        return Promise.resolve(procedureModalDataCache.get(key));
+    }
+    if (procedureModalDataLoading.has(key)) {
+        console.debug('[procedure-cache] in-flight reuse', { uid: key });
+        return procedureModalDataLoading.get(key);
+    }
+    console.debug('[procedure-cache] miss/request', { uid: key });
     const promise = window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_modal_data/${uid}${perfSuffix}`)
         .then(async res => {
             if (!res.ok) return null;

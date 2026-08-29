@@ -123,8 +123,15 @@ let voucherSupportLoading = null;
 async function loadVoucherSupportData() {
     const anchor = currentVoucherLines[0] && currentVoucherLines[0].detail_id;
     if (!anchor) return {};
-    if (voucherSupportCache && String(voucherSupportCache.voucher_line_id) === String(anchor)) return voucherSupportCache.lines || {};
-    if (voucherSupportLoading) return voucherSupportLoading;
+    if (voucherSupportCache && String(voucherSupportCache.voucher_line_id) === String(anchor)) {
+        console.debug('[voucher-support-cache] hit', { anchor: String(anchor) });
+        return voucherSupportCache.lines || {};
+    }
+    if (voucherSupportLoading) {
+        console.debug('[voucher-support-cache] in-flight reuse', { anchor: String(anchor) });
+        return voucherSupportLoading;
+    }
+    console.debug('[voucher-support-cache] miss/request', { anchor: String(anchor) });
     voucherSupportLoading = window.ApiUtils.apiFetch(`${API_BASE}/api/verification/voucher_support_data/${anchor}`)
         .then(async res => {
             if (!res.ok) return {};
@@ -148,6 +155,7 @@ async function loadVoucherSupportData() {
 function invalidateVoucherSupportCache() {
     voucherSupportCache = null;
     voucherSupportLoading = null;
+    console.debug('[voucher-support-cache] invalidated', { reason: 'saved-data-changed' });
 }
 
 // ---------- PROCEDURE MODAL ADAPTER (Phase 1b) ----------
@@ -2489,6 +2497,7 @@ function seedVoucherLineState(lines) {
     procedureModalState = {};
     voucherSupportCache = null;
     voucherSupportLoading = null;
+    console.debug('[voucher-support-cache] invalidated', { reason: 'voucher-changed' });
     // Phase 4: keeps the full lines array (row_data included) so openProcedureModal() can look up
     // a line's own amount (via the existing getVoucherLineAmount()/parseVoucherAmount() helpers)
     // for the selected-lines table's mismatch badge, without a second fetch.

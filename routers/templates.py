@@ -4,8 +4,63 @@ from psycopg2.extras import Json
 import json
 from typing import List, Optional
 from pydantic import BaseModel
+import threading
+import time
 
 router = APIRouter()
+
+# Stable template metadata is shared by upload, Audit Rules, and Verification.  A short
+# process-level TTL avoids repeated remote mapping queries while explicit invalidation keeps
+# edits visible immediately in this single-instance deployment.
+TEMPLATE_CACHE_TTL_SECONDS = 600
+_template_columns_cache = {}
+_template_response_cache = {}
+_template_cache_lock = threading.Lock()
+
+def get_cached_template_columns(template_id: int) -> list:
+    with _template_cache_lock:
+        entry = _template_columns_cache.get(template_id)
+        if entry and time.monotonic() <= entry[0]:
+            return entry[1]
+        _template_columns_cache.pop(template_id, None)
+    columns = execute_query_pg(
+        """
+        SELECT m.id AS column_id, m.column_name, m.data_type, p.sort_order
+        FROM template_column_mappings p
+        JOIN master_columns m ON p.column_id = m.id
+        WHERE p.template_id = %s AND m.is_active = TRUE
+        ORDER BY p.sort_order ASC
+        """,
+        (template_id,)
+    )
+    with _template_cache_lock:
+        _template_columns_cache[template_id] = (time.monotonic() + TEMPLATE_CACHE_TTL_SECONDS, columns)
+    return columns
+
+def invalidate_template_cache(template_id: int | None = None):
+    with _template_cache_lock:
+        if template_id is None:
+            _template_response_cache.clear()
+        else:
+            for key in list(_template_response_cache):
+                if key == f"template:{template_id}" or key == f"upload-columns:{template_id}":
+                    _template_response_cache.pop(key, None)
+        if template_id is None:
+            _template_columns_cache.clear()
+        else:
+            _template_columns_cache.pop(template_id, None)
+
+def _get_cached_template_response(key: str):
+    with _template_cache_lock:
+        entry = _template_response_cache.get(key)
+        if entry and time.monotonic() <= entry[0]:
+            return entry[1]
+        _template_response_cache.pop(key, None)
+    return None
+
+def _set_cached_template_response(key: str, value):
+    with _template_cache_lock:
+        _template_response_cache[key] = (time.monotonic() + TEMPLATE_CACHE_TTL_SECONDS, value)
 
 # ---------- MASTER COLUMNS ----------
 class ColumnCreate(BaseModel):
@@ -46,6 +101,7 @@ def create_column(column: ColumnCreate):
         (column.column_name, column.data_type, column.category, column.notes)
     )
     log_audit("Admin", "Create", "Columns", f"Added column: {column.column_name}")
+    invalidate_template_cache()
     return {"message": f"Column '{column.column_name}' created successfully", "column_id": col_id}
 
 @router.put("/api/columns/{column_id}")
@@ -58,6 +114,7 @@ def update_column(column_id: int, column: ColumnUpdate):
         (column.column_name, column.data_type, column.category, column.is_active, column.notes, column_id)
     )
     log_audit("Admin", "Update", "Columns", f"Updated column: {column.column_name}")
+    invalidate_template_cache()
     return {"message": f"Column '{column.column_name}' updated successfully"}
 
 @router.delete("/api/columns/{column_id}")
@@ -67,6 +124,7 @@ def delete_column(column_id: int):
         raise HTTPException(404, "Column not found")
     execute_write_pg("UPDATE master_columns SET is_active = FALSE WHERE id = %s", (column_id,))
     log_audit("Admin", "Delete", "Columns", f"Deleted column: {existing[0]['column_name']}")
+    invalidate_template_cache()
     return {"message": "Column deleted successfully"}
 
 @router.get("/api/columns/categories")
@@ -175,6 +233,14 @@ def get_templates(
     of 13, backend support only this phase) -- omitted (every current caller: templates.js's
     cache, upload.js's dropdown, audit_rules.js's template select) returns the full list with
     no X-Total-Count header, unchanged from before this phase."""
+    cache_key = f"templates:list:{limit}:{offset}"
+    cached = _get_cached_template_response(cache_key)
+    if cached is not None:
+        if limit is not None:
+            response.headers["X-Total-Count"] = str(cached[1])
+            return cached[0]
+        return cached
+
     base_query = "SELECT id, template_name, created_by, created_date, is_active, rate_source, has_subtotals_by_default FROM templates WHERE is_active = TRUE"
     if limit is not None:
         total = execute_query_pg("SELECT COUNT(*) as cnt FROM templates WHERE is_active = TRUE")[0]["cnt"]
@@ -194,10 +260,18 @@ def get_templates(
             (t['id'],)
         )
         t['columns'] = mappings
+    if limit is not None:
+        _set_cached_template_response(cache_key, (templates, total))
+    else:
+        _set_cached_template_response(cache_key, templates)
     return templates
 
 @router.get("/api/templates/{template_id}")
 def get_template(template_id: int):
+    cache_key = f"template:{template_id}"
+    cached = _get_cached_template_response(cache_key)
+    if cached is not None:
+        return cached
     result = execute_query_pg(
         "SELECT id, template_name, has_subtotals_by_default FROM templates WHERE id = %s AND is_active = TRUE",
         (template_id,)
@@ -216,6 +290,7 @@ def get_template(template_id: int):
         (template_id,)
     )
     template['columns'] = mappings
+    _set_cached_template_response(cache_key, template)
     return template
 
 @router.post("/api/templates")
@@ -239,6 +314,7 @@ def create_template(template: TemplateCreate):
         )
 
     log_audit(template.created_by, "Create", "Templates", f"Created template: {template.template_name}")
+    invalidate_template_cache(template_id)
     return {"message": f"Template '{template.template_name}' created successfully", "template_id": template_id}
 
 @router.put("/api/templates/{template_id}")
@@ -263,6 +339,7 @@ def update_template(template_id: int, template: TemplateUpdate):
         )
 
     log_audit("Admin", "Update", "Templates", f"Updated template: {template.template_name}")
+    invalidate_template_cache(template_id)
     return {"message": f"Template '{template.template_name}' updated successfully"}
 
 @router.delete("/api/templates/{template_id}")
@@ -291,6 +368,7 @@ def delete_template(template_id: int):
     execute_write_pg("UPDATE templates SET is_active = FALSE WHERE id = %s", (template_id,))
     execute_write_pg("DELETE FROM template_column_mappings WHERE template_id = %s", (template_id,))
     log_audit("Admin", "Delete", "Templates", f"Soft-deleted template: {existing[0]['template_name']}")
+    invalidate_template_cache(template_id)
     return {"message": "Template deleted successfully (soft-delete)"}
 
 # ---------- NEW ENDPOINTS FOR UPLOAD & PREVIEW ----------
@@ -300,6 +378,10 @@ def delete_template(template_id: int):
 @router.get("/api/templates/{template_id}/upload-columns")
 def get_template_upload_columns(template_id: int):
     """Return the columns of a template with sort_order (for upload preview)."""
+    cache_key = f"upload-columns:{template_id}"
+    cached = _get_cached_template_response(cache_key)
+    if cached is not None:
+        return cached
     result = execute_query_pg("SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,))
     if not result:
         raise HTTPException(404, "Template not found")
@@ -313,7 +395,9 @@ def get_template_upload_columns(template_id: int):
         """,
         (template_id,)
     )
-    return {"template_id": template_id, "columns": mappings, "total_columns": len(mappings)}
+    result = {"template_id": template_id, "columns": mappings, "total_columns": len(mappings)}
+    _set_cached_template_response(cache_key, result)
+    return result
 
 @router.post("/api/templates/{template_id}/reorder")
 def reorder_template_columns(template_id: int, column_ids: List[int] = Body(...)):
@@ -327,6 +411,7 @@ def reorder_template_columns(template_id: int, column_ids: List[int] = Body(...)
             (idx, template_id, col_id)
         )
     log_audit("Admin", "Reorder", "Templates", f"Reordered columns for template ID {template_id}")
+    invalidate_template_cache(template_id)
     return {"message": "Order updated successfully"}
 
 @router.delete("/api/templates/{template_id}/columns/{column_id}")
@@ -347,6 +432,7 @@ def remove_template_column(template_id: int, column_id: int):
     if deleted_id is None:
         raise HTTPException(404, "Column mapping not found")
     log_audit("Admin", "RemoveColumn", "Templates", f"Removed column {column_id} from template {template_id}")
+    invalidate_template_cache(template_id)
     return {"message": "Column removed from template"}
 @router.get("/api/templates/by-name/{template_name}")
 def get_template_by_name(template_name: str):

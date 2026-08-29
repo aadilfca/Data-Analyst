@@ -138,3 +138,10 @@ Before targeted procedure-window optimization, add a deliberately simple safety 
 - Voucher-specific linked evidence, observations, physical bills, and procedure ticks remain fresh data.
 
 This is necessary for safe session-level caching, but it does not block independent Save/Verify persistence optimization. The planned order is: review affected code, implement the backend lock, add narrowly scoped stable-data caching, measure first and repeat procedure-window opens, then optimize remaining voucher-specific calls.
+
+### Stable template metadata cache
+
+The Audit Rules lock was user-tested on Render. Stable template column metadata is now cached
+process-wide for 10 minutes and explicitly invalidated when master columns or template mappings
+change. Verification reuses this cache for document grouping and field resolution; voucher-specific
+evidence and the Save-before-Verify sequence remain uncached and unchanged.

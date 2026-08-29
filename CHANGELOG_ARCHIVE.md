@@ -3212,4 +3212,24 @@ success refresh, failure revert, cache invalidation, and dirty-line behavior rem
 motivation; user testing of the new batch routes remains the final functional check. The full
 voucher-wide atomic Save + Verify operation remains Phase 4B and is not included here.
 
+## Stable Template Metadata Cache
+
+**Date:** 2026-08-29 | **Files:** `routers/templates.py`, `routers/verification.py`.
+
+Stable template column metadata now uses a process-level 10-minute TTL cache. Verification reuses
+the shared cache for document grouping and field resolution, while master-column and template
+mapping writes explicitly invalidate it. Voucher-specific data and the atomic Save -> Verify flow
+were not changed.
+
+**Verification:** `py_compile` passed; 34 tests passed. Two existing atomic Save/Verify tests still
+fail because the current response includes diagnostic `_perf_components`; no cache-related test
+failed.
+
+### API response cache follow-up
+
+The initial cache only covered Verification's internal mapping helper. It was extended so the
+procedure modal's `/api/templates`, `/api/templates/{id}`, and `/api/templates/{id}/upload-columns`
+requests also reuse stable responses for 10 minutes. Existing template and master-column writes
+clear the affected entries immediately.
+
 ---
