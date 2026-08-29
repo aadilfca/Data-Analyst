@@ -4138,19 +4138,33 @@ def set_procedure_checks_batch(
     if not isinstance(checks, list):
         raise HTTPException(400, "checks must be a list.")
     with pg_transaction():
+        # Validate the complete batch with set-based reads. The previous loop performed up to
+        # three remote round trips per check, which is expensive when Save/Verify submits many
+        # document-role ticks over the remote database connection.
+        line_ids = {check.get('voucher_line_id') for check in checks}
+        document_ids = {check.get('document_id') for check in checks}
+        line_rows = execute_query_pg(
+            "SELECT id FROM verification_details WHERE id = ANY(%s)",
+            (list(line_ids),)
+        ) if line_ids else []
+        if len({row['id'] for row in line_rows}) != len(line_ids):
+            raise HTTPException(404, "Voucher line not found.")
+        document_rows = execute_query_pg(
+            "SELECT id FROM audit_rule_documents WHERE id = ANY(%s) AND is_active = TRUE",
+            (list(document_ids),)
+        ) if document_ids else []
+        if len({row['id'] for row in document_rows}) != len(document_ids):
+            raise HTTPException(404, "Document not found or inactive.")
+        role_pairs = {(check.get('document_id'), check.get('role_name')) for check in checks}
+        role_clauses = ["(document_id = %s AND role_name = %s)"] * len(role_pairs)
+        role_params = [value for pair in role_pairs for value in pair]
+        role_rows = execute_query_pg(
+            f"SELECT document_id, role_name FROM audit_rule_document_auth_roles WHERE {' OR '.join(role_clauses)}",
+            role_params
+        ) if role_pairs else []
+        if not role_pairs.issubset({(row['document_id'], row['role_name']) for row in role_rows}):
+            raise HTTPException(400, "Role is not configured for this document.")
         for check in checks:
-            line = execute_query_pg("SELECT id FROM verification_details WHERE id = %s", (check.get('voucher_line_id'),))
-            if not line:
-                raise HTTPException(404, "Voucher line not found.")
-            doc = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (check.get('document_id'),))
-            if not doc:
-                raise HTTPException(404, "Document not found or inactive.")
-            role = execute_query_pg(
-                "SELECT id FROM audit_rule_document_auth_roles WHERE document_id = %s AND role_name = %s",
-                (check.get('document_id'), check.get('role_name'))
-            )
-            if not role:
-                raise HTTPException(400, "Role is not configured for this document.")
             execute_write_pg(
                 """INSERT INTO voucher_line_procedure_checks
                    (voucher_line_id, document_id, role_name, is_checked, checked_by, checked_at)
