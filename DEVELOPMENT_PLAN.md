@@ -104,3 +104,11 @@ The `latest_cashbook_date` endpoint was changed to fetch distinct dates first an
 - New evidence creates a separate investigation or branch rather than silently expanding an implementation phase.
 - Keep incident fixes, investigations, optimizations, and features separately scoped.
 - Do not commit or deploy until the user tests the completed phase and confirms the result.
+
+### Fresh Vouchers date default
+
+Fresh Vouchers/Bankbook entry now requests only the local calendar day. This skips the latest-date lookup and month-wide discovery query for the common case. Existing restored views and persisted ranges remain unchanged; users can manually widen the range when needed.
+
+| Phase | Scope | Status | Next action |
+|---|---|---|---|
+| Fresh Vouchers date default | `static/verification.js`, `static/verification.html` | Implemented locally | Test today-only load and manual range expansion |

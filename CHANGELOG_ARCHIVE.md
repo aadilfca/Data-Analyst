@@ -15,6 +15,12 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Fresh Vouchers date default
+
+**Date:** 2026-08-29 | **Files:** `static/verification.js`, `static/verification.html`.
+
+Fresh entry into the Vouchers/Bankbook popup now initializes both date fields to the local current date and sends that exact one-day range to the cashbooks endpoint. This avoids the latest-date lookup and month-wide result transfer during the common path. Existing persisted date ranges and URL-restored session/cashbook views remain unchanged. The static script cache-buster was incremented to `v=22`.
+
 ## Verification startup payload reduction and Save/Verify diagnostics
 
 **Date:** 2026-08-29 | **Files:** `routers/verification.py`, `database.py`.

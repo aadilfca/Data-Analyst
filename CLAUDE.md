@@ -185,6 +185,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Status log
 
 - 2026-08-29: Verification startup payload reduction and opt-in grouped Save/Verify diagnostics completed; local timing improved for latest cashbook lookup.
+- 2026-08-29: Fresh Vouchers entry now defaults to today-only discovery; restored views and manually persisted ranges remain unchanged.
 
 **Full detail for every entry below lives in `CHANGELOG_ARCHIVE.md`**, under the matching heading —
 these lines are pointers, not the record. Multi-phase requirements get one line each, not one per

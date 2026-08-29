@@ -4250,7 +4250,8 @@ function openSessionPopup() {
     // openSessionPopup(), and it only ever fires from window.onload), so there is no in-memory
     // range left to fall back on - use the persisted range as an explicit override (same mechanism
     // handlePopupPeriodChange()/returnToCashbookFromSession() already use) when one exists, falling back to
-    // loadCashbooks()'s own today's-auto-detect only when genuinely empty (first-ever load).
+    // A fresh Vouchers entry starts with today's date only, so the common case avoids the
+    // latest-date lookup and a full-month query. Users can widen the range manually.
     // Confirmed fix: same reasoning applies to the cashbook selection itself (previously missed) -
     // read the persisted pick and pass it through as loadCashbooks()'s overrideCashbook so its
     // existing "reapply if still valid" logic picks it back up.
@@ -4259,7 +4260,8 @@ function openSessionPopup() {
     if (persisted) {
         loadCashbooks(persisted.start, persisted.end, persistedCashbook);
     } else {
-        loadCashbooks(undefined, undefined, persistedCashbook);
+        const today = formatDateInput(new Date());
+        loadCashbooks(today, today, persistedCashbook);
     }
 }
 
