@@ -16,6 +16,7 @@ import time
 import contextvars
 from typing import List, Optional, Dict, Any
 import io
+from functools import wraps
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
@@ -1071,9 +1072,12 @@ def get_latest_cashbook_date(
     elif category_group == 'bank':
         client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Bank Payment', 'Bank Receipt')}
 
-    rows = execute_query_pg(
+    # Fetch the small date list first, then retrieve JSON only for one date at a time.
+    # The previous query transferred every client_data.row_data value to Python before
+    # discovering the newest matching cashbook row.
+    date_rows = execute_query_pg(
         """
-        SELECT row_data, extract_date
+        SELECT DISTINCT extract_date
         FROM client_data
         WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
         ORDER BY extract_date DESC
@@ -1081,15 +1085,26 @@ def get_latest_cashbook_date(
         (client_id,)
     )
 
-    for row in rows:
-        try:
-            row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
-            if not isinstance(row_data, dict):
+    for date_row in date_rows:
+        candidate_date = date_row['extract_date']
+        rows = execute_query_pg(
+            """
+            SELECT row_data
+            FROM client_data
+            WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
+              AND extract_date = %s
+            """,
+            (client_id, candidate_date)
+        )
+        for row in rows:
+            try:
+                row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
+                if not isinstance(row_data, dict):
+                    continue
+                if extract_cashbook_name(row_data, client_prefixes):
+                    return {"latest_date": candidate_date}
+            except Exception:
                 continue
-            if extract_cashbook_name(row_data, client_prefixes):
-                return {"latest_date": row['extract_date']}
-        except Exception:
-            continue
 
     return {"latest_date": None}
 
@@ -1749,7 +1764,39 @@ def save_and_verify_voucher(
         return _verify_voucher_checks_impl(session_id, current_detail_id)
 
 
+def _bundle_perf_diagnostics(fn):
+    """Add opt-in total/database timings without changing the save transaction."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        if not kwargs.get("perf", False):
+            return fn(*args, **kwargs)
+        token = start_db_metrics()
+        started = time.perf_counter()
+        try:
+            result = fn(*args, **kwargs)
+            metrics = get_db_metrics()
+            if isinstance(result, dict):
+                result["_perf"] = {
+                    "total_ms": round((time.perf_counter() - started) * 1000, 1),
+                    "db_calls": metrics["calls"],
+                    "db_reads": metrics["reads"],
+                    "db_writes": metrics["writes"],
+                    "db_ms": round(metrics["db_time"] * 1000, 1),
+                }
+            return result
+        finally:
+            metrics = get_db_metrics()
+            print(json.dumps({"perf": "save_and_verify_voucher_bundle",
+                              "total_ms": round((time.perf_counter() - started) * 1000, 1),
+                              "db_calls": metrics["calls"], "db_reads": metrics["reads"],
+                              "db_writes": metrics["writes"],
+                              "db_ms": round(metrics["db_time"] * 1000, 1)}))
+            stop_db_metrics(token)
+    return wrapped
+
+
 @router.post("/api/verification/save_and_verify_voucher_bundle")
+@_bundle_perf_diagnostics
 def save_and_verify_voucher_bundle(
     session_id: int = Body(..., embed=True),
     current_detail_id: int = Body(..., embed=True),
@@ -1760,6 +1807,7 @@ def save_and_verify_voucher_bundle(
     physical_bills: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     procedure_checks: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     voucher_checks: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
+    perf: bool = Query(False),
 ):
     """Atomically save all supplied voucher lines and tick state, then verify once.
 

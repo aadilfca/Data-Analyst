@@ -6,6 +6,8 @@ This document lists all source files in the project, grouped by directory, with 
 
 ## Root Directory
 
+`DEVELOPMENT_PLAN.md` — active roadmap for evidence, phase decisions, discoveries, implementation scope, and next actions.
+
 | File | Purpose |
 |------|---------|
 | `CLAUDE.md` | Project-level context for Claude Code: stack, architecture map, conventions, workflow rules, and a one-line-per-phase status log. Read automatically every session. |

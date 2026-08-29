@@ -184,6 +184,8 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 
 ## Status log
 
+- 2026-08-29: Verification startup payload reduction and opt-in grouped Save/Verify diagnostics completed; local timing improved for latest cashbook lookup.
+
 **Full detail for every entry below lives in `CHANGELOG_ARCHIVE.md`**, under the matching heading —
 these lines are pointers, not the record. Multi-phase requirements get one line each, not one per
 phase — roll a finished requirement up into its single line as soon as it completes, don't wait for
@@ -268,6 +270,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-28: Investigated repeated physical_bills/{id} calls (no code change) — Verification batched via voucher_support_data (but uncached on write); Audit Workbook storm intact; backend save path fixed. See KNOWN_ISSUES.md.
 - 2026-08-28: Invalidate voucherSupportCache after save/Verify so Procedures/Observations badges refresh from saved state; removed dead fetchPhysicalBillsForLine + adapter entry; verification.js/procedure_modal.js.
 - 2026-08-28: Audit Workbook badge refresh uses one cached voucher_support_data batch (invalidated on save) not 4 per-line fetches; fixed physical_bill completion drift, removed dead helpers; audit_workbook.js.
+- 2026-08-29: Investigated verification_details.status — confirmed legacy/superseded by cleared_status, permanently 'Pending', no live dependency; Codex's bundle gate is inert not buggy. Logged KNOWN_ISSUES (Defer).
 
 
 ## Self-maintenance

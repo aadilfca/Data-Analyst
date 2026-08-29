@@ -3,6 +3,7 @@ import time
 import contextvars
 from contextlib import contextmanager
 import os
+import sys
 import shutil
 import bcrypt
 from datetime import datetime
@@ -16,6 +17,9 @@ load_dotenv()
 
 DB_NAME = "test.db"
 # Print absolute path for verification
+# Windows may use cp1252 for console output; startup diagnostics contain Unicode icons.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 print(f"📁 Database path: {os.path.abspath(DB_NAME)}")
 
 

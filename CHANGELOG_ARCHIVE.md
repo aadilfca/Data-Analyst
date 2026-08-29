@@ -15,6 +15,12 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Verification startup payload reduction and Save/Verify diagnostics
+
+**Date:** 2026-08-29 | **Files:** `routers/verification.py`, `database.py`.
+
+`latest_cashbook_date` now retrieves distinct dates first and fetches JSON only for candidate dates in descending order. Local timing for client 5/cash improved from approximately 8.34 seconds to 2.08 seconds while returning the same date. The grouped Save/Verify endpoint now exposes opt-in total/database diagnostics under `_perf`, and Windows UTF-8 console handling prevents Unicode startup failures.
+
 ## Audit Workbook batched voucher-support fetch
 
 Frontend-only (`static/audit_workbook.js` + `?v=6` bump in `static/audit_workbook.html`), no
