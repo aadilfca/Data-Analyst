@@ -1201,6 +1201,10 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
     if (btn) btn.disabled = true;
     if (verifyOnlyBtn) verifyOnlyBtn.disabled = true;
     const progressTarget = triggerBtn || btn;
+    const previousBodyCursor = document.body ? document.body.style.cursor : '';
+    const previousModalBusy = procedureModal ? procedureModal.getAttribute('aria-busy') : null;
+    if (document.body) document.body.style.cursor = 'wait';
+    if (procedureModal) procedureModal.setAttribute('aria-busy', 'true');
     if (window.LoadingUI) window.LoadingUI.showProgressBar(progressTarget, { mode: 'indeterminate', message: 'Saving…' });
     try {
         // Defensive re-check (fixes verify_voucher_checks 400s reaching the server for a
@@ -1258,6 +1262,11 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
         if (window.LoadingUI) {
             window.LoadingUI.hideProgressBar(btn);
             window.LoadingUI.hideProgressBar(verifyOnlyBtn);
+        }
+        if (document.body) document.body.style.cursor = previousBodyCursor;
+        if (procedureModal) {
+            if (previousModalBusy === null) procedureModal.removeAttribute('aria-busy');
+            else procedureModal.setAttribute('aria-busy', previousModalBusy);
         }
         // Restores each button to its real gate-driven state (isVoucherChecksAllTouched()) rather
         // than blindly re-enabling — updateVerifyFooterButton() is the single source of truth for

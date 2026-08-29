@@ -29,6 +29,12 @@ The supplied HAR showed approximately 6.96 seconds for `procedure_modal_data` an
 
 The tray controller now redirects the background `run.bat`/Uvicorn stdout and stderr to `%TEMP%\audit_app_server.log`, while retaining the existing tray lifecycle log separately. This makes opt-in performance output retrievable without opening a console.
 
+## Verify action progress feedback
+
+**Date:** 2026-08-29 | **Files:** `static/procedure_modal.js`, `static/verification.html`.
+
+The shared Verify/Verify & Next sequence now sets the page cursor to `wait` and marks the procedure modal `aria-busy="true"` for the full operation. Existing button progress indicators and duplicate-click protection remain in place; all busy state is restored in `finally` after save, logical verification, cache updates, and navigation complete. The script cache-buster was incremented to `v=12`. Verified with Node syntax checks for both verification scripts and `git diff --check`.
+
 ## Verification startup payload reduction and Save/Verify diagnostics
 
 **Date:** 2026-08-29 | **Files:** `routers/verification.py`, `database.py`.
