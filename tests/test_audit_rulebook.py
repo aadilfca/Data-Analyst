@@ -11,7 +11,9 @@ from routers.audit_rules import (
     cache_set,
     get_audit_rules_config_version,
     invalidate_audit_rules_cache,
+    invalidate_category_for_account_cache,
     load_client_account_category_index,
+    load_client_verification_rulebook,
 )
 from routers.audit_rules import compile_verification_rulebook
 from routers.verification import _build_working_paper_gates
@@ -98,7 +100,9 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             if "FROM template_column_mappings" in sql:
                 return [{"template_id": 5, "column_id": 20, "sort_order": 0}]
             if "FROM account_category_assignments" in sql:
-                return [{"account_code": "6000", "category_id": 1}]
+                return [{"account_code": "6000", "category_id": 1, "category_name": "Fuel"}]
+            if "FROM trial_balance_uploads" in sql:
+                return []
             if "FROM signature_specimens" in sql:
                 return [{"document_id": 10, "role_name": "Approved by", "expected_signatory_name": "A. Manager", "authority": "Manager"}]
             self.fail(f"Unhandled query: {sql}")
@@ -124,6 +128,8 @@ class AuditRulebookCompilerTests(unittest.TestCase):
                 return [{"category_id": 1, "document_id": 10, "is_required": True, "sort_order": 0}]
             if "FROM templates" in sql or "FROM template_column_mappings" in sql or "FROM signature_specimens" in sql:
                 return []
+            if "FROM trial_balance_uploads" in sql:
+                return []
             if "FROM account_category_assignments" in sql:
                 return [{"account_code": "7000", "category_id": 88}]
             if "FROM audit_rule_document_auth_roles" in sql or "FROM audit_rule_document_fields" in sql or "FROM audit_rule_cross_checks" in sql or "FROM audit_rule_cross_check_documents" in sql or "FROM audit_rule_category_cross_checks" in sql or "FROM audit_rule_voucher_checks" in sql:
@@ -136,6 +142,19 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         codes = {warning["code"] for warning in warnings}
         self.assertIn("inactive_template", codes)
         self.assertIn("inactive_account_category", codes)
+
+    def test_versioned_rulebook_loader_caches_and_invalidates_client_data(self):
+        calls = []
+
+        with patch("routers.audit_rules.compile_verification_rulebook", side_effect=lambda client_id: calls.append(client_id) or {"client_id": client_id}):
+            first = load_client_verification_rulebook(7)
+            second = load_client_verification_rulebook(7)
+            self.assertIs(first, second)
+            self.assertEqual(calls, [7])
+
+            invalidate_category_for_account_cache(7)
+            load_client_verification_rulebook(7)
+            self.assertEqual(calls, [7, 7])
 
 
 if __name__ == "__main__":

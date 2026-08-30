@@ -262,6 +262,20 @@ warnings. Show related account codes, ordered cross-checks, incomplete configura
 impact in one coherent view. Retain current entity CRUD views and endpoints as advanced/reference
 compatibility surfaces until the new workflow is proven.
 
+#### Phase 7 status — roadmap reconciliation
+
+The Category-first Audit Rules administration experience is already implemented locally in the
+current Audit Rules code. Categories have a primary rail/list/detail workflow with account
+classification context, attached Documents, Cross-checks, Cleared-requirement summaries, and
+validation warnings. Existing standalone entity CRUD views and endpoints remain available as
+reference/compatibility surfaces. This entry reconciles the roadmap and introduces no new behavior.
+
+Deferred follow-up: the Procedure Modal's Audit Procedures tablet may not visually refresh its
+count/ring/color immediately after closing in every browser path. This remains a separate UI fix.
+
+Next phase boundary: do not begin Phase 8 controlled data-model cleanup until the existing Phase 7
+workflow has been formally user-tested and confirmed.
+
 #### Phase 8 — Controlled data-model cleanup
 
 Only after the Rulebook and administration workflow are proven, clarify or retire legacy status
@@ -517,10 +531,34 @@ staging, commit, or push.
 
 #### Safety Phase B — status recomputation after meaningful changes
 
-Review and correct the save ordering so procedure/evidence/observation/physical-bill/voucher-check
+**In progress.** The atomic voucher-bundle save now persists procedure and voucher-check changes
+before recomputing affected line statuses, and returns the refreshed current-line status. Remaining
+work is to confirm the full Pending/Cleared/Query transition matrix, including all modal save paths,
+and add targeted regression coverage.
+
+The complete requirement remains to ensure procedure/evidence/observation/physical-bill/voucher-check
 changes are persisted before Cleared/Query is recalculated. Ensure untouched lines remain Pending,
 touched failing lines become Query, and passing touched lines become Cleared. Return and refresh
 updated statuses consistently across the table, status explanation, and Procedure Modal.
+
+### Safety Phase B UI follow-up — Procedures statistics refresh
+
+The Procedure Modal close/save path now invalidates the support cache and explicitly refreshes the
+Procedures cell for every line in the current voucher. This updates the count, ring, and color
+immediately after closing instead of requiring a full page refresh. Local browser verification
+remains required.
+
+The modal's Audit Procedures section now also derives a pending/completed visual state from its
+required roles: any unchecked role uses the neutral grey treatment, while all checked roles retain
+the completed green treatment.
+
+The Verification and Audit Workbook HTML cache-busting versions were incremented so browsers load
+the updated Procedure Modal and Verification scripts instead of retaining stale cached JavaScript.
+
+Deferred post-performance phase: Cross-check Field-to-Compare configuration. When selected
+Documents have no eligible fields configured, the editor correctly shows no eligible fields. A
+separate approved phase will later cover field setup, dropdown population, validation, and
+persistence.
 
 The existing Rulebook redesign phases resume only after Safety Phases A and B are user-tested and
 confirmed. These safety phases take precedence over the previously proposed Phase 7 administration
@@ -702,3 +740,46 @@ requested yet.
 Aadil opened Bank vouchers successfully. The procedure window remained unavailable because the
 related bank account codes had not yet been assigned Categories, which is the expected existing
 business rule. Phase 3 behavior was confirmed good and working.
+
+## Approved architecture addition — compiled, versioned Rulebook
+
+The speed strategy will use a shared compiled Rulebook rather than making Verification repeatedly
+join Trial Balance assignments to Audit Rules during every voucher-line load.
+
+### Ownership and safety
+
+- Trial Balance remains the source of truth for account-code-to-Category assignments.
+- Audit Rules remains the source of truth for Category procedures, evidence requirements,
+  authority roles, cross-checks, and status criteria.
+- A shared read-optimized Rulebook layer combines both sources by client and Rulebook version.
+- Verification fetches the compiled Rulebook once per session and resolves Categories locally.
+- A session keeps the Rulebook version captured when it starts, so later Rulebook edits cannot
+  silently change an active session's results.
+- Assignment or Audit Rules mutations invalidate the affected client's compiled Rulebook; the next
+  request rebuilds it from current source data.
+- The cache is lazy/versioned rather than startup-only, preventing stale copies across workers,
+  restarts, and multiple users.
+
+### Planned implementation phases
+
+1. Build and test the compiled client Rulebook loader and version key.
+2. Add one-session Rulebook retrieval and preserve existing category-freeze behavior.
+3. Resolve voucher-line Categories and procedures from the session Rulebook in memory.
+4. Evaluate procedure ticks and Cleared/Query/Pending criteria from the same Rulebook batch.
+5. Measure Network requests, response size, first-voucher display time, and procedure-window time
+   before and after each step.
+6. Only after Verification is stable, apply the same shared Rulebook/cache approach to the Audit
+   Workbook and future Cash/Bank/module cards.
+
+This architecture addition is now the boundary for the remaining speed work. It replaces the
+earlier idea of changing Audit Rules into the owner of Trial Balance data: ownership stays separate,
+while Verification receives one prepared, versioned packet.
+
+### First implementation pendency completed
+
+The backend now provides a version-aware client Rulebook loader. It reuses the compiled stable
+configuration by client and Audit Rules configuration version, clears client Rulebooks after
+client-specific category-assignment changes, and clears all Rulebooks after global configuration or
+template/mapping changes. The compiler uses the shared Trial Balance-first account/category
+resolver. Verification and frontend consumers remain unchanged. The next phase is one-session
+Rulebook retrieval in Verification.

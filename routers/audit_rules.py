@@ -45,6 +45,7 @@ AUDIT_RULES_CACHE_TTL_SECONDS = 600  # 10 min safety net
 
 _audit_rules_config_version = 1
 _audit_rules_cache: Dict[str, tuple] = {}  # key -> (expires_at, config_version, value)
+_verification_rulebook_cache: Dict[str, tuple] = {}  # key -> (expires_at, config_version, value)
 _audit_rules_cache_lock = threading.Lock()
 
 def get_audit_rules_config_version() -> int:
@@ -79,6 +80,7 @@ def invalidate_audit_rules_cache():
         global _audit_rules_config_version
         _audit_rules_config_version += 1
         _audit_rules_cache.clear()
+        _verification_rulebook_cache.clear()
 
 def category_for_account_cache_key(client_id: int, account_code: str) -> str:
     """Key shape for the client-scoped category-for-account cache (Modal Caching Phase 3 extension)."""
@@ -98,15 +100,18 @@ def invalidate_category_for_account_cache(client_id: int):
         keys_to_delete = [k for k in _audit_rules_cache if k.startswith(prefix)]
         for k in keys_to_delete:
             del _audit_rules_cache[k]
+        rulebook_prefix = f"client_rulebook:{client_id}:"
+        rulebook_keys = [k for k in _verification_rulebook_cache if k.startswith(rulebook_prefix)]
+        for k in rulebook_keys:
+            del _verification_rulebook_cache[k]
 
 
 def compile_verification_rulebook(client_id: int) -> dict:
     """Compile active Audit Rules into a Verification-facing, read-only rulebook.
 
-    This is intentionally uncached and not wired into Verification yet.  The compiler keeps
-    global rules separate from client-specific account assignments and signature specimens so a
-    later phase can give each data set its own invalidation/version ownership.  Voucher evidence
-    and calculated results are deliberately outside this stable configuration read model.
+    Voucher evidence and calculated results are deliberately outside this stable configuration
+    read model. The returned object is a fresh compilation; use
+    ``load_client_verification_rulebook`` for the version-aware cached loader.
     """
     warnings: List[dict] = []
 
@@ -156,11 +161,6 @@ def compile_verification_rulebook(client_id: int) -> dict:
     mappings = execute_query_pg(
         "SELECT template_id, column_id, sort_order FROM template_column_mappings "
         "ORDER BY template_id, sort_order"
-    )
-    assignments = execute_query_pg(
-        "SELECT account_code, category_id FROM account_category_assignments "
-        "WHERE client_id = %s ORDER BY account_code",
-        (client_id,)
     )
     specimens = execute_query_pg(
         "SELECT document_id, role_name, expected_signatory_name, authority "
@@ -268,16 +268,13 @@ def compile_verification_rulebook(client_id: int) -> dict:
         })
 
     category_name_by_id = {row["id"]: row["name"] for row in categories}
-    account_index = {
-        row["account_code"]: {"category_id": row.get("category_id"), "category_name": category_name_by_id.get(row.get("category_id"))}
-        for row in assignments
-    }
+    account_index = load_client_account_category_index(client_id)
     for account_code, value in account_index.items():
         if value["category_id"] is not None and value["category_id"] not in category_by_id:
             warnings.append({"code": "inactive_account_category", "account_code": account_code, "category_id": value["category_id"]})
 
     return {
-        "global_version": None,
+        "global_version": get_audit_rules_config_version(),
         "client_id": client_id,
         "account_category_index": account_index,
         "categories": category_profiles,
@@ -285,6 +282,29 @@ def compile_verification_rulebook(client_id: int) -> dict:
         "templates": [{"id": row["id"], "name": row.get("name"), "mapping_column_ids": [m["column_id"] for m in mappings_by_template.get(row["id"], [])]} for row in templates],
         "warnings": warnings
     }
+
+
+def load_client_verification_rulebook(client_id: int) -> dict:
+    """Return one versioned, client-specific compiled Rulebook from the process cache."""
+    version = get_audit_rules_config_version()
+    key = f"client_rulebook:{client_id}:{version}"
+    with _audit_rules_cache_lock:
+        entry = _verification_rulebook_cache.get(key)
+        if entry is not None:
+            expires_at, cached_version, value = entry
+            if time.monotonic() <= expires_at and cached_version == version:
+                return value
+            _verification_rulebook_cache.pop(key, None)
+
+    rulebook = compile_verification_rulebook(client_id)
+    rulebook["global_version"] = version
+    with _audit_rules_cache_lock:
+        _verification_rulebook_cache[key] = (
+            time.monotonic() + AUDIT_RULES_CACHE_TTL_SECONDS,
+            version,
+            rulebook,
+        )
+    return rulebook
 
 
 def load_client_account_category_index(client_id: int, account_codes: Optional[List[str]] = None) -> Dict[str, dict]:
@@ -339,7 +359,7 @@ def load_client_account_category_index(client_id: int, account_codes: Optional[L
     for row in assignment_rows:
         code = str(row["account_code"])
         if requested is None or code in result:
-            result[code] = {"category_id": row["category_id"], "category_name": row["category_name"]}
+            result[code] = {"category_id": row.get("category_id"), "category_name": row.get("category_name")}
     return result
 
 # ---------- DATA MODELS ----------

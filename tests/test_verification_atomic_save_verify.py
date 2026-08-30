@@ -142,6 +142,8 @@ def _stub_bundle_pg(monkeypatch, active_checks):
 
     def execute_query_pg(query, params=None):
         if "FROM verification_details" in query:
+            if "client_data_id" in query:
+                return [{"id": 7, "client_data_id": 100}]
             return [{"id": 7, "status": "Pending"}]
         if "FROM verification_sessions" in query:
             return [{"client_id": 1}]
@@ -157,6 +159,9 @@ def _stub_bundle_pg(monkeypatch, active_checks):
     monkeypatch.setattr(verification, "execute_write_pg", lambda *a, **k: None)
     monkeypatch.setattr(verification, "pg_transaction", transaction)
     monkeypatch.setattr(verification, "_save_line_items_impl", lambda *a, **k: {"cleared_status": "Cleared"})
+    monkeypatch.setattr(verification, "compute_and_persist_cleared_status",
+                        lambda *a, **k: {"cleared_status": "Cleared",
+                                         "matrix_version_applied": 1})
     monkeypatch.setattr(verification, "save_voucher_checks_batch", lambda *a, **k: None)
 
     def verify_impl(*a, **k):
@@ -185,7 +190,12 @@ def test_bundle_endpoint_success_with_snake_case_voucher_checks(bundle_http_clie
         voucher_checks=[{"check_id": 1, "state": "pass"}]))
 
     assert response.status_code == 200
-    assert response.json() == {"verified": True}
+    assert response.json() == {
+        "verified": True,
+        "cleared_status": "Cleared",
+        "matrix_version_applied": 1,
+        "line_statuses": {"7": "Cleared"},
+    }
     assert reached == ["verify"]
 
 

@@ -15,6 +15,24 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Compiled client Rulebook loader and version key
+
+**Date:** 2026-08-30 | **Files:** `routers/audit_rules.py`, `tests/test_audit_rulebook.py`.
+
+The first implementation pendency of the approved compiled Rulebook architecture is complete.
+The existing compiler now uses the shared Trial Balance-first account/category resolver instead of
+reading persistent assignments alone, and its output carries the active Audit Rules configuration
+version. Added a client-scoped, process-local cached loader keyed by client and configuration
+version. Global Audit Rules/template invalidation clears all Rulebooks; client assignment
+invalidation clears only that client's Rulebooks. No frontend or Verification consumer behavior was
+changed in this phase.
+
+**Verified:** focused Rulebook tests — 7 passed; `git diff --check` passed. Manual testing confirmed
+existing and newly assigned categories resolve correctly. The next phase is one-session Rulebook
+retrieval in Verification.
+
+---
+
 ## Fresh Vouchers date default
 
 **Date:** 2026-08-29 | **Files:** `static/verification.js`, `static/verification.html`.
@@ -3231,5 +3249,36 @@ The initial cache only covered Verification's internal mapping helper. It was ex
 procedure modal's `/api/templates`, `/api/templates/{id}`, and `/api/templates/{id}/upload-columns`
 requests also reuse stable responses for 10 minutes. Existing template and master-column writes
 clear the affected entries immediately.
+
+## Roadmap reconciliation — Category-first Audit Rules administration
+
+**Date:** 2026-08-30 | **Files:** `DEVELOPMENT_PLAN.md`, `CHANGELOG_ARCHIVE.md`.
+
+Review confirmed that the Category-first Audit Rules workflow already exists in the current local
+implementation, including category rail/list/detail flow, account classification context, attached
+Documents and Cross-checks, Cleared-requirements summary, and validation warnings. Existing entity
+CRUD surfaces remain available. The Procedure Modal tablet refresh issue is deferred as a separate
+UI fix, and Phase 8 remains gated on formal Phase 7 user confirmation.
+
+## Deferred functional phase — Cross-check Field to Compare
+
+**Date:** 2026-08-30 | **Files:** `DEVELOPMENT_PLAN.md`, `CHANGELOG_ARCHIVE.md`, `KNOWN_ISSUES.md`.
+
+The Cross-check editor shows no eligible comparison fields when selected Documents have no eligible
+fields configured. Field configuration and the Field-to-Compare workflow are deferred until current
+speed/performance work is complete; a separate phase will cover setup, population, validation, and
+persistence.
+
+## Safety Phase B — status recomputation ordering
+
+**Date:** 2026-08-30 | **Files:** `routers/verification.py`.
+
+The atomic `save_and_verify_voucher_bundle` flow now recomputes affected line `cleared_status`
+values after procedure and voucher-check writes are persisted, rather than calculating status before
+those writes. The refreshed current-line status is returned to the Verification client so a
+deselected required tick can immediately change a stale Cleared result to Query.
+
+This phase remains in progress pending targeted Pending/Cleared/Query regression tests and manual
+verification of every Procedure Modal save path.
 
 ---

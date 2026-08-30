@@ -4548,6 +4548,19 @@ body {
 .procedure-segment-procedures > .procedure-segment-body {
     background: #fbfdfc;
 }
+/* Pending procedures are intentionally neutral: one unchecked required role means the whole
+   Audit Procedures section is not complete, matching the table's grey 0/n badge. */
+.procedure-segment-procedures.pending {
+    border-color: #d7dce2;
+}
+.procedure-segment-procedures.pending > .procedure-segment-header {
+    background: #eef0f2;
+    color: #586172;
+    border-left-color: #9aa4b2;
+}
+.procedure-segment-procedures.pending > .procedure-segment-body {
+    background: #fafbfc;
+}
 .procedure-segment-observation {
     border: 1px solid #e8d3ae;
 }

@@ -2465,6 +2465,29 @@ def get_audited_cashbook(session_id: int):
         },
         "transactions": transactions
     }
+@router.get("/api/verification/session/{session_id}/index")
+def get_verification_session_index(session_id: int):
+    """Return compact session identity/status rows for future lightweight loading."""
+    session = execute_query_pg(
+        """SELECT id, client_id, cashbook_name, period_start, period_end, total_transactions,
+                  verified_count, status, created_by, created_at
+           FROM verification_sessions
+           WHERE id = %s AND status != 'Cancelled'""", (session_id,)
+    )
+    if not session:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+    rows = execute_query_pg(
+        """SELECT vd.id AS detail_id, vd.client_data_id, vd.transaction_ref AS voucher_id,
+                  vd.validation_status, vd.status AS verification_status,
+                  vd.cleared_status, vd.matrix_version_applied,
+                  cd.extract_amount, cd.extract_date
+           FROM verification_details vd JOIN client_data cd ON cd.id = vd.client_data_id
+           WHERE vd.session_id = %s AND vd.range_status = 'active' ORDER BY vd.id""", (session_id,)
+    )
+    s = session[0]
+    return {"session": s, "transactions": rows}
+
+
 @router.get("/api/verification/session/{session_id}/progress")
 def get_session_progress(session_id: int):
     """

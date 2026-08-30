@@ -1137,6 +1137,15 @@ async function closeProcedureModal() {
             // The bundle just persisted every line in this voucher — drop each line's cached
             // modal payload so a later reopen re-fetches the saved ticks, not the pre-save copy.
             invalidateProcedureModalDataForVoucher();
+            // The Procedures cells are rendered asynchronously and are not rebuilt when the
+            // modal closes. Refresh every line because the grouped save includes voucher-wide
+            // procedure state; this makes the count/ring/color reflect the just-saved checks.
+            const refreshedLines = (hostAdapter.currentVoucherLines || []).map(line => {
+                const lineState = hostAdapter.voucherLineState[line.detail_id];
+                const type = lineState && lineState.transactionType;
+                return type ? hostAdapter.updateProceduresCellForLine(line.detail_id, type) : null;
+            }).filter(Boolean);
+            await Promise.all(refreshedLines);
             if (!physicalBillsSaved) hostAdapter.markLineDirty(currentProcedureModalUid, 'physical bill save retry required');
         } finally {
             if (window.LoadingUI) window.LoadingUI.hideProgressBar(procedureModalClose);
@@ -2262,7 +2271,7 @@ function renderProcedureModalPanel(uid, docId) {
     // (same roles.length>0 && every(...) rule isProcedureDocumentComplete() already uses).
     const allRolesChecked = hasRoles && doc.auth_roles.every(r => tabState.checklist[r] && tabState.checklist[r].is_checked);
     const proceduresSegmentHtml = hasRoles ? `
-        <div class="procedure-segment procedure-segment-procedures">
+        <div class="procedure-segment procedure-segment-procedures ${allRolesChecked ? 'complete' : 'pending'}">
             <h4 class="procedure-segment-header procedure-segment-header-with-toggle">
                 <span>✅ Audit Procedures</span>
                 <button type="button" id="procedureChecklistSelectAllBtn"

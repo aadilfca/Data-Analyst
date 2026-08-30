@@ -38,6 +38,10 @@ def get_cached_template_columns(template_id: int) -> list:
     return columns
 
 def invalidate_template_cache(template_id: int | None = None):
+    # Keep the stable-template cache and the compiled Audit Rules version in sync.  The local
+    # import avoids making the router import graph circular during application startup.
+    from routers.audit_rules import invalidate_audit_rules_cache
+
     with _template_cache_lock:
         if template_id is None:
             _template_response_cache.clear()
@@ -49,6 +53,7 @@ def invalidate_template_cache(template_id: int | None = None):
             _template_columns_cache.clear()
         else:
             _template_columns_cache.pop(template_id, None)
+    invalidate_audit_rules_cache()
 
 def _get_cached_template_response(key: str):
     with _template_cache_lock:
