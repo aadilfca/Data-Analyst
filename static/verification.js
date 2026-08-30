@@ -1436,7 +1436,8 @@ async function activateSessionView(sessionId, targetVoucherId = null) {
     startVerificationPresence(sessionId);
     // Header voucher-wise stats (Phase 2 of 3): kick off the session-load fetch in parallel with
     // the render path below — not awaited, so it never blocks getting the first voucher on screen.
-    refreshVoucherStats();
+    // Stats are refreshed by updateProgressDisplay() after the first transaction render.
+    // Calling refreshVoucherStats() here as well duplicated the request during activation.
     // Explicitly hide the dashboard/module-selection view here too (not just cashbookContent) -
     // matches activateCashbookView()'s own hide of dashboardContent. Previously this only ever ran
     // as the tail of startSessionFromCashbook(), which is always reached after
@@ -4087,6 +4088,16 @@ async function saveAndVerifyVoucher(detailId, verify = true) {
     });
     if (!res.ok) return { ok: false, error: await res.json().catch(() => ({})) };
     const data = await res.json();
+    const statusById = data.line_statuses || {};
+    Object.entries(statusById).forEach(([id, status]) => {
+        const line = currentVoucherLines.find(l => String(l.detail_id) === String(id));
+        if (line) {
+            line.cleared_status = status;
+            updateClearedStatusBadgeForLine(id, status);
+        }
+        const cachedTransaction = sessionTransactions.find(t => String(t.detail_id) === String(id));
+        if (cachedTransaction) cachedTransaction.cleared_status = status;
+    });
     const line = currentVoucherLines.find(l => String(l.detail_id) === String(detailId));
     if (line && data.cleared_status) line.cleared_status = data.cleared_status;
     // The bundle just persisted every line in this voucher (procedure/voucher ticks included) —
