@@ -791,3 +791,11 @@ Verification now exposes a session-scoped Rulebook endpoint. It returns the prep
 matching captured version, preserves legacy sessions with no captured version, and rejects a
 session whose captured version no longer matches the active configuration. Frontend consumers are
 still unchanged. The next phase is local voucher-line Category and procedure resolution.
+
+### Local Rulebook Category and procedure resolution completed
+
+Verification now resolves account Categories and stable procedure guidance from the session Rulebook
+in memory. The existing guidance shape is preserved for the Procedure Modal, including role-name
+compatibility. Fresh support data and atomic Save → Verify behavior remain unchanged. A schema alias
+also corrected the compiler's template-name query for the live Postgres schema. The next phase is
+evaluating procedure ticks and Cleared/Query/Pending criteria from the same Rulebook batch.

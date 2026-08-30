@@ -156,7 +156,7 @@ def compile_verification_rulebook(client_id: int) -> dict:
         "WHERE is_active = TRUE ORDER BY sort_order, id"
     )
     templates = execute_query_pg(
-        "SELECT id, name FROM templates WHERE is_active = TRUE ORDER BY id"
+        "SELECT id, template_name AS name FROM templates WHERE is_active = TRUE ORDER BY id"
     )
     mappings = execute_query_pg(
         "SELECT template_id, column_id, sort_order FROM template_column_mappings "

@@ -36,6 +36,7 @@ const currentType = (viewParam === 'bankbook') ? 'bank'
 
 let currentSessionId = null;
 let currentDetailId = null;
+let sessionRulebook = null;
 let verificationPresenceHeartbeat = null;
 
 function startVerificationPresence(sessionId) {
@@ -1433,6 +1434,13 @@ async function startSessionFromCashbook() {
 // startSessionFromCashbook() (a freshly-started session) omits this, so its behavior is unchanged.
 async function activateSessionView(sessionId, targetVoucherId = null) {
     currentSessionId = sessionId;
+    sessionRulebook = null;
+    const rulebookResponse = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/session/${sessionId}/rulebook`);
+    if (!rulebookResponse.ok) {
+        const error = await rulebookResponse.json().catch(() => ({}));
+        throw new Error(error.detail || 'Unable to load the Verification Rulebook');
+    }
+    sessionRulebook = (await rulebookResponse.json()).rulebook || null;
     startVerificationPresence(sessionId);
     // Header voucher-wise stats (Phase 2 of 3): kick off the session-load fetch in parallel with
     // the render path below — not awaited, so it never blocks getting the first voucher on screen.
@@ -1829,6 +1837,25 @@ async function fetchAuditGuidanceData(type, forceRefresh = false) {
         return auditGuidanceLoadingPromises[type];
     }
     const loadPromise = (async () => {
+        if (sessionRulebook) {
+            const profile = (sessionRulebook.categories || []).find(category => category.name === type);
+            if (profile) {
+                const guidance = {
+                    category_id: profile.category_id,
+                    category_name: profile.name,
+                    kb_overview: profile.kb_overview,
+                    matrix_version: profile.matrix_version,
+                    documents: (profile.documents || []).map(document => ({
+                        ...document,
+                        id: document.document_id,
+                        auth_roles: (document.authority_roles || []).map(role => role.role_name || role)
+                    })),
+                    cross_checks: profile.cross_checks || []
+                };
+                auditGuidanceCache[type] = guidance;
+                return guidance;
+            }
+        }
         const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
         if (res.status === 404) {
             auditGuidanceCache[type] = null;
@@ -2266,7 +2293,11 @@ async function autoFillCategoryForLine(uid, accountCode) {
 
     let categoryName = null;
     try {
-        if (Object.prototype.hasOwnProperty.call(categoryForAccountCache, accountCode)) {
+        const rulebookCategory = sessionRulebook?.account_category_index?.[accountCode];
+        if (rulebookCategory) {
+            categoryName = rulebookCategory.category_name || null;
+            categoryForAccountCache[accountCode] = categoryName;
+        } else if (Object.prototype.hasOwnProperty.call(categoryForAccountCache, accountCode)) {
             categoryName = categoryForAccountCache[accountCode];
         } else if (categoryForAccountLoadingPromises[accountCode]) {
             categoryName = await categoryForAccountLoadingPromises[accountCode];

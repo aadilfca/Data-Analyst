@@ -3297,3 +3297,20 @@ This phase remains in progress pending targeted Pending/Cleared/Query regression
 verification of every Procedure Modal save path.
 
 ---
+
+## Local Verification Category and procedure resolution from Rulebook
+
+**Date:** 2026-08-30 | **Files:** `routers/audit_rules.py`, `static/verification.js`.
+
+Verification now loads account Categories and stable category guidance from the session Rulebook in
+memory, avoiding repeated category-for-account and audit-guidance requests. The Rulebook profile is
+normalized to the existing Procedure Modal contract, including converting authority-role objects to
+role-name strings. Fresh linked evidence, procedure ticks, observations, Physical Bills, and status
+results remain unchanged. A live-schema compatibility fix aliases `templates.template_name` to the
+compiler's existing `name` field.
+
+**Verified:** manual session start, Procedure Modal open, atomic Save → Verify, cache invalidation,
+and voucher navigation succeeded. Focused Rulebook tests — 9 passed; JavaScript syntax checks and
+`git diff --check` passed.
+
+---
