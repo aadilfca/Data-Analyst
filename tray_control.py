@@ -16,7 +16,11 @@ import pystray
 # --- Settings: adjust if your setup differs ---
 PROJECT_DIR = r"D:\Excel Auto\2. Python App"
 SERVER_URL = "http://127.0.0.1:5000"
-START_COMMAND = os.path.join(PROJECT_DIR, "run.bat")
+PYTHON_EXE = os.path.join(PROJECT_DIR, "venv", "Scripts", "python.exe")
+START_COMMAND = [
+    PYTHON_EXE, "-m", "uvicorn", "main:app",
+    "--reload", "--host", "0.0.0.0", "--port", "5000",
+]
 PORT = "5000"
 PROCESS = None  # holds the running server process (the whole tree's root)
 SERVER_LOG_HANDLE = None
@@ -63,14 +67,15 @@ def start_server(icon=None, item=None):
     if is_server_running():
         log("Start requested but server already running — ignored.")
         return
-    # cwd=PROJECT_DIR ensures run.bat is found and runs as if launched
-    # from inside the project folder (needed for venv activation).
+    # Launch Uvicorn directly from the project venv so the tray server uses
+    # the same project environment and .env as the application code.
     # Keep the background server's stdout/stderr so Uvicorn and the opt-in performance
     # diagnostics remain available when the tray has no visible console window.
     SERVER_LOG_HANDLE = open(SERVER_OUTPUT_PATH, "a", encoding="utf-8", buffering=1)
     SERVER_LOG_HANDLE.write(f"\n--- Server start: {time.ctime()} ---\n")
     PROCESS = subprocess.Popen(
-        START_COMMAND, shell=True, cwd=PROJECT_DIR,
+        START_COMMAND, shell=False, cwd=PROJECT_DIR,
+        creationflags=subprocess.CREATE_NO_WINDOW,
         stdout=SERVER_LOG_HANDLE, stderr=subprocess.STDOUT
     )
     log(f"Start command issued. Tracked root PID: {PROCESS.pid}; server output: {SERVER_OUTPUT_PATH}")

@@ -3342,3 +3342,17 @@ nested pooled-connection pressure. Test fixtures now isolate this dependency wit
 assertion failures remain documented and unrelated.
 
 ---
+
+## Tray launcher uses the project environment directly
+
+**Date:** 2026-08-30 | **Files:** `tray_control.py`.
+
+The tray controller now starts Uvicorn directly through `venv\\Scripts\\python.exe` with the project
+folder as its working directory instead of delegating to `run.bat`. This prevents stale server
+processes from masking the current local `.env` and preserves hidden tray execution plus background
+server logging.
+
+**Verified:** after local process cleanup, login succeeded and the Verification flow completed through
+session start, presence, procedure/support loading, atomic Save → Verify, and voucher navigation.
+
+---

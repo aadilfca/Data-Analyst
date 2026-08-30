@@ -815,3 +815,11 @@ took 3.1–5.7 seconds and warm cached reads about 0.5 seconds. The fresh Proced
 was approximately 2.6 KB but took 8.9–20.6 seconds across repeated reads, confirming that fresh
 modal data—not Rulebook delivery—is the remaining dominant bottleneck. The next phase investigates
 the `procedure_modal_data` call graph without caching live evidence or results.
+
+### Local tray launcher reliability completed
+
+The tray controller now launches Uvicorn directly through the project virtual environment with the
+project folder as its working directory. This prevents an older `run.bat` process from being treated
+as the active server and ensures local startup reads the current `.env`. Manual verification confirmed
+successful login, session start, presence, procedure/support loading, Save → Verify, and navigation.
+The next phase is to inspect the remaining `procedure_modal_data` bottleneck.
