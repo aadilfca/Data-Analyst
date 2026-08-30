@@ -429,6 +429,9 @@ function buildValidatePanelBody(data) {
     if (!gates.length) {
         return '<p class="lsr-reason">No gate breakdown available for this line.</p>';
     }
+    if (data.working_paper_gates?.length && hostAdapter.renderWorkingPaperGatesHtml) {
+        return hostAdapter.renderWorkingPaperGatesHtml(data, true);
+    }
     const visible = gates.filter(g => g.status !== 'not_applicable');
     const naGates = gates.filter(g => g.status === 'not_applicable');
 
@@ -883,7 +886,10 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
         assignedRecords,
         procedureChecks,
         physicalBillEntries,
-        guidance
+        guidance,
+        // Stable category profile from the shared Rulebook-compatible guidance cache. Fresh
+        // voucher data above remains separate and is still reloaded on every modal open.
+        rulebookProfile: guidance
     };
 
     // Re-sync each tab's selections and checklist from the fresh server data (never just seeded

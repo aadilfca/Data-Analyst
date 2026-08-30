@@ -1437,6 +1437,17 @@ document.addEventListener('click', function (e) {
 // When a page has registered a dynamic override via setUpOverride() (e.g. Verification's in-page
 // view switching), run that instead of navigating to the static getUpTarget() URL.
 document.addEventListener('click', function (e) {
+    const homeIcon = e.target.closest('.nav-home-icon');
+    if (homeIcon && typeof window.leaveVerificationSafely === 'function') {
+        e.preventDefault();
+        window.leaveVerificationSafely(function() {
+            window.location.href = homeIcon.href;
+        });
+        return;
+    }
+});
+
+document.addEventListener('click', function (e) {
     const upArrow = e.target.closest('.nav-up-arrow');
     if (!upArrow) return;
     if (typeof window._appNav.upOverride === 'function') {

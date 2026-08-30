@@ -36,6 +36,46 @@ const currentType = (viewParam === 'bankbook') ? 'bank'
 
 let currentSessionId = null;
 let currentDetailId = null;
+let verificationPresenceHeartbeat = null;
+
+function startVerificationPresence(sessionId) {
+    const body = JSON.stringify({ session_id: sessionId });
+    fetch(`${API_BASE}/api/verification/presence/enter`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    if (verificationPresenceHeartbeat) clearInterval(verificationPresenceHeartbeat);
+    verificationPresenceHeartbeat = setInterval(() => {
+        fetch(`${API_BASE}/api/verification/presence/heartbeat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    }, 30000);
+}
+
+function stopVerificationPresence() {
+    if (!currentSessionId) return;
+    const body = JSON.stringify({ session_id: currentSessionId });
+    if (verificationPresenceHeartbeat) clearInterval(verificationPresenceHeartbeat);
+    verificationPresenceHeartbeat = null;
+    if (navigator.sendBeacon) {
+        navigator.sendBeacon(`${API_BASE}/api/verification/presence/leave`, new Blob([body], { type: 'application/json' }));
+    } else {
+        fetch(`${API_BASE}/api/verification/presence/leave`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true });
+    }
+}
+
+// Shared by every navigation exit from an active Verification session. The unfinished business
+// session stays resumable; only the active-presence lease is released after the user confirms.
+async function leaveVerificationSafely(continueNavigation) {
+    if (!currentSessionId) {
+        await continueNavigation();
+        return true;
+    }
+    const confirmed = window.confirm(
+        'You are in an active Verification session. Leave the session safely before continuing?'
+    );
+    if (!confirmed) return false;
+    await saveAllVoucherLines();
+    stopVerificationPresence();
+    await continueNavigation();
+    return true;
+}
+window.leaveVerificationSafely = leaveVerificationSafely;
 // Header format cleanup: the active session's own date range (YYYY-MM-DD, same format the
 // header displays directly, no reformatting needed) - distinct from any individual voucher's own
 // date. Set from GET audited_cashbook's session.period_start/period_end wherever that's fetched
@@ -187,6 +227,7 @@ function buildProcedureModalAdapter() {
         getVoucherLineAlias,
         getVoucherLineAmount,
         renderGateRowHtml,
+        renderWorkingPaperGatesHtml,
         fetchAuditGuidanceData,
         updateProceduresCellForLine,
         updateObservationsCellForLine,
@@ -1392,6 +1433,7 @@ async function startSessionFromCashbook() {
 // startSessionFromCashbook() (a freshly-started session) omits this, so its behavior is unchanged.
 async function activateSessionView(sessionId, targetVoucherId = null) {
     currentSessionId = sessionId;
+    startVerificationPresence(sessionId);
     // Header voucher-wise stats (Phase 2 of 3): kick off the session-load fetch in parallel with
     // the render path below — not awaited, so it never blocks getting the first voucher on screen.
     refreshVoucherStats();
@@ -2397,6 +2439,17 @@ function renderGateRowHtml(g, showDetail = true) {
     `;
 }
 
+function renderWorkingPaperGatesHtml(data, showDetail = true) {
+    const groups = data.working_paper_gates || [];
+    return groups.map(group => `
+        <div class="lsr-working-gate ${group.status}">
+            ${renderGateRowHtml(group, false)}
+            ${showDetail && group.detail ? `<div class="lsr-gate-detail">${escapeHtml(group.detail)}</div>` : ''}
+            ${showDetail && group.checks && group.checks.length ? `<div class="lsr-working-gate-details">${group.checks.map(check => renderGateRowHtml(check, true)).join('')}</div>` : ''}
+        </div>
+    `).join('');
+}
+
 // One row per gate. Failing gates are already ordered first by the endpoint — this only renders.
 // Confirmed requirement: the status popover shows ONLY the gate name + ✅/❌ badge — the greyed
 // explanatory detail lines are hidden entirely (showDetail=false). The `detail` field stays in the
@@ -2409,7 +2462,9 @@ function buildLineStatusReasonBody(data) {
     if (!gates.length) {
         return '<p class="lsr-reason">No gate breakdown available for this line.</p>';
     }
-    return gates.map(g => renderGateRowHtml(g, false)).join('');
+    return data.working_paper_gates?.length
+        ? renderWorkingPaperGatesHtml(data, false)
+        : gates.map(g => renderGateRowHtml(g, false)).join('');
 }
 
 async function showLineStatusReasonPopover(cell, uid) {
@@ -4137,13 +4192,14 @@ async function returnToCashbookFromSession() {
     // defensive fallback (picker/range genuinely missing - shouldn't occur, since a session
     // can't be started without a valid range) falls through to the existing auto-detect
     // behavior by omitting the override args.
-    const preservedRange = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : null;
-    saveAllVoucherLines(); // Phase 4: saves every line, not just the active one
-    if (preservedRange && preservedRange.start && preservedRange.end) {
-        await restoreCashbookView(selectedCashbook, preservedRange.start, preservedRange.end);
-    } else {
-        await restoreCashbookView(selectedCashbook);
-    }
+    await leaveVerificationSafely(async function() {
+        const preservedRange = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : null;
+        if (preservedRange && preservedRange.start && preservedRange.end) {
+            await restoreCashbookView(selectedCashbook, preservedRange.start, preservedRange.end);
+        } else {
+            await restoreCashbookView(selectedCashbook);
+        }
+    });
 }
 
 // ---------- RESUME AN ACTIVE SESSION FROM PLACE 2 (no re-fetch) ----------

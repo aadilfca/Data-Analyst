@@ -549,7 +549,20 @@ def init_db():
                 status TEXT DEFAULT 'In Progress',
                 total_transactions INTEGER DEFAULT 0,
                 verified_count INTEGER DEFAULT 0,
+                rulebook_version INTEGER,
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+            )
+        ''')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS verification_presence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                verification_session_id INTEGER NOT NULL,
+                session_token TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                last_heartbeat TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ended_at TIMESTAMP,
+                UNIQUE(verification_session_id, session_token)
             )
         ''')
 
@@ -568,6 +581,17 @@ def init_db():
                 print("✅ Added session_type column to verification_sessions (backfilled existing rows as 'cash')")
         except Exception as e:
             print("⚠️ Could not add session_type to verification_sessions:", e)
+
+        # Rulebook snapshot version (Audit Rules redesign Phase 3): nullable so historical
+        # sessions remain compatible and can continue using the existing live-read behavior.
+        try:
+            cur = conn.execute("PRAGMA table_info(verification_sessions)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'rulebook_version' not in columns:
+                conn.execute("ALTER TABLE verification_sessions ADD COLUMN rulebook_version INTEGER")
+                print("✅ Added rulebook_version column to verification_sessions")
+        except Exception as e:
+            print("⚠️ Could not add rulebook_version to verification_sessions:", e)
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS verification_details (
@@ -2891,10 +2915,25 @@ def init_db_postgres(conn):
             status TEXT DEFAULT 'In Progress',
             total_transactions INTEGER DEFAULT 0,
             verified_count INTEGER DEFAULT 0,
-            session_type TEXT NOT NULL DEFAULT 'cash'
+            session_type TEXT NOT NULL DEFAULT 'cash',
+            rulebook_version INTEGER
         )
     ''', "verification_sessions")
+    run("ALTER TABLE verification_sessions ADD COLUMN IF NOT EXISTS rulebook_version INTEGER", "verification_sessions")
     run("CREATE INDEX IF NOT EXISTS idx_verification_sessions_client ON verification_sessions (client_id)")
+
+    run('''
+        CREATE TABLE IF NOT EXISTS verification_presence (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            verification_session_id INTEGER NOT NULL REFERENCES verification_sessions(id) ON DELETE CASCADE,
+            session_token TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT now(),
+            ended_at TIMESTAMPTZ,
+            UNIQUE(verification_session_id, session_token)
+        )
+    ''', "verification_presence")
+    run("CREATE INDEX IF NOT EXISTS idx_verification_presence_live ON verification_presence (last_heartbeat, ended_at)")
 
     # ---------- 13. verification_details ----------
     run('''

@@ -10,21 +10,22 @@ import time
 import threading
 from fastapi import APIRouter, HTTPException, Body, Query, Response, Depends
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Any, Optional, List, Dict
 from database import execute_query_pg, execute_write_pg, log_audit
 
 router = APIRouter()
 
 def ensure_no_active_verification_sessions():
-    """Prevent global Audit Rules changes while any verification session is in progress."""
+    """Prevent changes while any authenticated user is actively inside Verification."""
     active = execute_query_pg(
-        "SELECT 1 FROM verification_sessions WHERE status = 'In Progress' LIMIT 1"
+        "SELECT 1 FROM verification_presence "
+        "WHERE ended_at IS NULL AND last_heartbeat > CURRENT_TIMESTAMP - INTERVAL '90 seconds' LIMIT 1"
     )
     if active:
         raise HTTPException(
             409,
-            "Audit Rules cannot be changed while a verification session is active. "
-            "Complete or cancel active verification sessions first."
+            "Audit Rules cannot be changed while a user is actively inside Verification. "
+            "Leave Verification first, then retry."
         )
 
 # ==============================================
@@ -42,8 +43,14 @@ def ensure_no_active_verification_sessions():
 # how sub-phase 2 keys its own cache entries.
 AUDIT_RULES_CACHE_TTL_SECONDS = 600  # 10 min safety net
 
-_audit_rules_cache: Dict[str, tuple] = {}  # key -> (expires_at, value)
+_audit_rules_config_version = 1
+_audit_rules_cache: Dict[str, tuple] = {}  # key -> (expires_at, config_version, value)
 _audit_rules_cache_lock = threading.Lock()
+
+def get_audit_rules_config_version() -> int:
+    """Return the current process-local version for stable Audit Rules configuration."""
+    with _audit_rules_cache_lock:
+        return _audit_rules_config_version
 
 def cache_get(key: str):
     """Return the cached value for key, or None if absent/expired."""
@@ -51,8 +58,8 @@ def cache_get(key: str):
         entry = _audit_rules_cache.get(key)
         if entry is None:
             return None
-        expires_at, value = entry
-        if time.monotonic() > expires_at:
+        expires_at, config_version, value = entry
+        if time.monotonic() > expires_at or config_version != _audit_rules_config_version:
             del _audit_rules_cache[key]
             return None
         return value
@@ -60,7 +67,7 @@ def cache_get(key: str):
 def cache_set(key: str, value, ttl: float = AUDIT_RULES_CACHE_TTL_SECONDS):
     """Store value under key with the given TTL (seconds)."""
     with _audit_rules_cache_lock:
-        _audit_rules_cache[key] = (time.monotonic() + ttl, value)
+        _audit_rules_cache[key] = (time.monotonic() + ttl, _audit_rules_config_version, value)
 
 def invalidate_audit_rules_cache():
     """
@@ -69,6 +76,8 @@ def invalidate_audit_rules_cache():
     see the section comment above for why a full clear, not a scoped one, is correct here.
     """
     with _audit_rules_cache_lock:
+        global _audit_rules_config_version
+        _audit_rules_config_version += 1
         _audit_rules_cache.clear()
 
 def category_for_account_cache_key(client_id: int, account_code: str) -> str:
@@ -89,6 +98,249 @@ def invalidate_category_for_account_cache(client_id: int):
         keys_to_delete = [k for k in _audit_rules_cache if k.startswith(prefix)]
         for k in keys_to_delete:
             del _audit_rules_cache[k]
+
+
+def compile_verification_rulebook(client_id: int) -> dict:
+    """Compile active Audit Rules into a Verification-facing, read-only rulebook.
+
+    This is intentionally uncached and not wired into Verification yet.  The compiler keeps
+    global rules separate from client-specific account assignments and signature specimens so a
+    later phase can give each data set its own invalidation/version ownership.  Voucher evidence
+    and calculated results are deliberately outside this stable configuration read model.
+    """
+    warnings: List[dict] = []
+
+    categories = execute_query_pg(
+        "SELECT id, name, kb_overview, evidence_type, matrix_version "
+        "FROM audit_rule_categories WHERE is_active = TRUE ORDER BY id"
+    )
+    documents = execute_query_pg(
+        "SELECT id, name, kb_note, template_id, risk_rating, transaction_level_approval, "
+        "document_type FROM audit_rule_documents WHERE is_active = TRUE ORDER BY id"
+    )
+    document_ids = [row["id"] for row in documents]
+    category_ids = [row["id"] for row in categories]
+
+    roles = execute_query_pg(
+        "SELECT document_id, role_name, required_authority, sort_order "
+        "FROM audit_rule_document_auth_roles ORDER BY document_id, sort_order"
+    )
+    fields = execute_query_pg(
+        "SELECT document_id, field_name, sort_order, master_column_id "
+        "FROM audit_rule_document_fields ORDER BY document_id, sort_order"
+    )
+    requirements = execute_query_pg(
+        "SELECT category_id, document_id, is_required, sort_order "
+        "FROM audit_rule_category_documents ORDER BY category_id, sort_order"
+    )
+    cross_checks = execute_query_pg(
+        "SELECT id, name, compare_field, comparison_type, compare_to_voucher_line "
+        "FROM audit_rule_cross_checks WHERE is_active = TRUE ORDER BY id"
+    )
+    cross_check_ids = [row["id"] for row in cross_checks]
+    cross_check_documents = execute_query_pg(
+        "SELECT cross_check_id, document_id, sort_order "
+        "FROM audit_rule_cross_check_documents ORDER BY cross_check_id, sort_order"
+    )
+    category_cross_checks = execute_query_pg(
+        "SELECT category_id, cross_check_id, sort_order "
+        "FROM audit_rule_category_cross_checks ORDER BY category_id, sort_order"
+    )
+    voucher_checks = execute_query_pg(
+        "SELECT id, name, authority, sort_order FROM audit_rule_voucher_checks "
+        "WHERE is_active = TRUE ORDER BY sort_order, id"
+    )
+    templates = execute_query_pg(
+        "SELECT id, name FROM templates WHERE is_active = TRUE ORDER BY id"
+    )
+    mappings = execute_query_pg(
+        "SELECT template_id, column_id, sort_order FROM template_column_mappings "
+        "ORDER BY template_id, sort_order"
+    )
+    assignments = execute_query_pg(
+        "SELECT account_code, category_id FROM account_category_assignments "
+        "WHERE client_id = %s ORDER BY account_code",
+        (client_id,)
+    )
+    specimens = execute_query_pg(
+        "SELECT document_id, role_name, expected_signatory_name, authority "
+        "FROM signature_specimens WHERE client_id = %s AND is_active = TRUE "
+        "ORDER BY document_id, role_name, id",
+        (client_id,)
+    )
+
+    document_by_id = {row["id"]: row for row in documents}
+    category_by_id = {row["id"]: row for row in categories}
+    roles_by_document: Dict[int, List[dict]] = {doc_id: [] for doc_id in document_ids}
+    fields_by_document: Dict[int, List[dict]] = {doc_id: [] for doc_id in document_ids}
+    required_by_category: Dict[int, List[dict]] = {category_id: [] for category_id in category_ids}
+    cross_docs_by_id: Dict[int, List[int]] = {check_id: [] for check_id in cross_check_ids}
+    checks_by_category: Dict[int, List[int]] = {category_id: [] for category_id in category_ids}
+    specimens_by_key: Dict[tuple, List[dict]] = {}
+
+    for row in roles:
+        if row["document_id"] in roles_by_document:
+            roles_by_document[row["document_id"]].append({
+                "role_name": row["role_name"],
+                "required_authority": row.get("required_authority")
+            })
+    for row in fields:
+        if row["document_id"] in fields_by_document:
+            fields_by_document[row["document_id"]].append({
+                "field_name": row["field_name"],
+                "master_column_id": row.get("master_column_id")
+            })
+    for row in requirements:
+        if row["category_id"] in required_by_category:
+            required_by_category[row["category_id"]].append(row)
+            if row["document_id"] not in document_by_id:
+                warnings.append({"code": "inactive_document_requirement", "category_id": row["category_id"], "document_id": row["document_id"]})
+    for row in cross_check_documents:
+        if row["cross_check_id"] in cross_docs_by_id:
+            cross_docs_by_id[row["cross_check_id"]].append(row["document_id"])
+            if row["document_id"] not in document_by_id:
+                warnings.append({"code": "inactive_cross_check_document", "cross_check_id": row["cross_check_id"], "document_id": row["document_id"]})
+    for row in category_cross_checks:
+        if row["category_id"] in checks_by_category and row["cross_check_id"] in cross_check_ids:
+            checks_by_category[row["category_id"]].append(row["cross_check_id"])
+    for row in specimens:
+        specimens_by_key.setdefault((row["document_id"], row["role_name"]), []).append({
+            "expected_signatory_name": row["expected_signatory_name"],
+            "authority": row.get("authority")
+        })
+
+    template_ids = {row["id"] for row in templates}
+    mappings_by_template: Dict[int, List[dict]] = {}
+    for row in mappings:
+        mappings_by_template.setdefault(row["template_id"], []).append({
+            "column_id": row["column_id"], "sort_order": row["sort_order"]
+        })
+
+    def build_document(document_id: int, required: bool) -> dict:
+        row = document_by_id[document_id]
+        template_id = row.get("template_id")
+        if template_id is not None and template_id not in template_ids:
+            warnings.append({"code": "inactive_template", "document_id": document_id, "template_id": template_id})
+        signature_requirements = []
+        for role in roles_by_document.get(document_id, []):
+            if role.get("required_authority"):
+                signature_requirements.append({
+                    "role_name": role["role_name"],
+                    "required_authority": role["required_authority"],
+                    "specimens": specimens_by_key.get((document_id, role["role_name"]), [])
+                })
+        return {
+            "document_id": document_id, "name": row["name"], "kb_note": row.get("kb_note"),
+            "document_type": row.get("document_type") or "linked_template", "template_id": template_id,
+            "required": bool(required), "transaction_level_approval": bool(row.get("transaction_level_approval")),
+            "risk_rating": row.get("risk_rating"),
+            "fields": fields_by_document.get(document_id, []),
+            "authority_roles": roles_by_document.get(document_id, []),
+            "signature_requirements": signature_requirements,
+            "template_mapping_column_ids": [m["column_id"] for m in mappings_by_template.get(template_id, [])]
+        }
+
+    cross_check_by_id = {row["id"]: row for row in cross_checks}
+    category_profiles = []
+    for category in categories:
+        category_id = category["id"]
+        profile_documents = []
+        for requirement in required_by_category[category_id]:
+            if requirement["document_id"] in document_by_id:
+                profile_documents.append(build_document(requirement["document_id"], requirement["is_required"]))
+        profile_cross_checks = []
+        for check_id in checks_by_category[category_id]:
+            check = cross_check_by_id[check_id]
+            doc_ids = cross_docs_by_id.get(check_id, [])
+            profile_cross_checks.append({
+                "cross_check_id": check_id, "name": check["name"], "compare_field": check["compare_field"],
+                "comparison_type": check["comparison_type"],
+                "compare_to_voucher_line": bool(check.get("compare_to_voucher_line")),
+                "document_ids": doc_ids
+            })
+            if not all(doc_id in document_by_id for doc_id in doc_ids):
+                warnings.append({"code": "cross_check_has_inactive_document", "category_id": category_id, "cross_check_id": check_id})
+        category_profiles.append({
+            "category_id": category_id, "name": category["name"], "kb_overview": category.get("kb_overview"),
+            "matrix_version": category.get("matrix_version", 1), "evidence_type": category.get("evidence_type"),
+            "documents": profile_documents, "cross_checks": profile_cross_checks,
+            "working_paper_gates": {"approval": {}, "supporting_documents": {}, "account_head_classification": {}, "observation": {}}
+        })
+
+    category_name_by_id = {row["id"]: row["name"] for row in categories}
+    account_index = {
+        row["account_code"]: {"category_id": row.get("category_id"), "category_name": category_name_by_id.get(row.get("category_id"))}
+        for row in assignments
+    }
+    for account_code, value in account_index.items():
+        if value["category_id"] is not None and value["category_id"] not in category_by_id:
+            warnings.append({"code": "inactive_account_category", "account_code": account_code, "category_id": value["category_id"]})
+
+    return {
+        "global_version": None,
+        "client_id": client_id,
+        "account_category_index": account_index,
+        "categories": category_profiles,
+        "voucher_checks": [dict(row) for row in voucher_checks],
+        "templates": [{"id": row["id"], "name": row.get("name"), "mapping_column_ids": [m["column_id"] for m in mappings_by_template.get(row["id"], [])]} for row in templates],
+        "warnings": warnings
+    }
+
+
+def load_client_account_category_index(client_id: int, account_codes: Optional[List[str]] = None) -> Dict[str, dict]:
+    """Load category resolution data once, preserving Trial Balance-first precedence.
+
+    The latest parsed Trial Balance is authoritative for codes it contains with an active
+    Category; the persistent assignment table is the fallback for codes absent from that upload.
+    The returned mapping includes every requested code when ``account_codes`` is supplied.
+    """
+    requested = {str(code) for code in account_codes} if account_codes is not None else None
+    result = {code: {"category_id": None, "category_name": None} for code in (requested or set())}
+    code_filter = ""
+    params: List[Any] = [client_id]
+    if requested:
+        placeholders = ",".join("%s" for _ in requested)
+        code_filter = f" AND a.account_code IN ({placeholders})"
+
+    upload_rows = execute_query_pg(
+        "SELECT id FROM trial_balance_uploads WHERE client_id = %s AND status = 'parsed' "
+        "ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC LIMIT 1",
+        (client_id,)
+    )
+    if upload_rows:
+        tb_params = [upload_rows[0]["id"]] + list(requested or [])
+        tb_filter = code_filter.replace("a.account_code", "a.account_code") if requested else ""
+        rows = execute_query_pg(
+            "SELECT a.account_code, a.category_id, c.name AS category_name "
+            "FROM trial_balance_accounts a "
+            "JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = TRUE "
+            "WHERE a.upload_id = %s" + tb_filter,
+            tuple(tb_params)
+        )
+        for row in rows:
+            result[str(row["account_code"])] = {"category_id": row["category_id"], "category_name": row["category_name"]}
+
+    remaining = [code for code, value in result.items() if value["category_id"] is None]
+    if requested is None:
+        assignment_filter = ""
+        assignment_params = [client_id]
+    else:
+        if not remaining:
+            return result
+        assignment_filter = " AND aca.account_code IN (" + ",".join("%s" for _ in remaining) + ")"
+        assignment_params = [client_id] + remaining
+    assignment_rows = execute_query_pg(
+        "SELECT aca.account_code, aca.category_id, arc.name AS category_name "
+        "FROM account_category_assignments aca "
+        "LEFT JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = TRUE "
+        "WHERE aca.client_id = %s" + assignment_filter,
+        tuple(assignment_params)
+    )
+    for row in assignment_rows:
+        code = str(row["account_code"])
+        if requested is None or code in result:
+            result[code] = {"category_id": row["category_id"], "category_name": row["category_name"]}
+    return result
 
 # ---------- DATA MODELS ----------
 class DocumentCreate(BaseModel):
@@ -1340,6 +1592,7 @@ def create_voucher_check(voucher_check: VoucherCheckCreate):
     )
 
     log_audit("Admin", "Create", "AuditRules", f"Created voucher check: {voucher_check.name}")
+    invalidate_audit_rules_cache()
     return {"message": f"Voucher check '{voucher_check.name}' created successfully", "voucher_check_id": voucher_check_id}
 
 @router.put("/api/audit-rules/voucher-checks/{voucher_check_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1354,6 +1607,7 @@ def update_voucher_check(voucher_check_id: int, voucher_check: VoucherCheckUpdat
     )
 
     log_audit("Admin", "Update", "AuditRules", f"Updated voucher check ID {voucher_check_id}")
+    invalidate_audit_rules_cache()
     return {"message": "Voucher check updated successfully"}
 
 @router.delete("/api/audit-rules/voucher-checks/{voucher_check_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1366,6 +1620,7 @@ def delete_voucher_check(voucher_check_id: int):
         raise HTTPException(404, "Active voucher check not found")
     execute_write_pg("UPDATE audit_rule_voucher_checks SET is_active = FALSE WHERE id = %s", (voucher_check_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted voucher check: {existing[0]['name']} (ID: {voucher_check_id})")
+    invalidate_audit_rules_cache()
     return {"message": "Voucher check deleted (soft-delete) successfully"}
 
 @router.post("/api/audit-rules/voucher-checks/{voucher_check_id}/restore", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1378,6 +1633,7 @@ def restore_voucher_check(voucher_check_id: int):
         raise HTTPException(404, "Inactive voucher check not found")
     execute_write_pg("UPDATE audit_rule_voucher_checks SET is_active = TRUE WHERE id = %s", (voucher_check_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored voucher check: {existing[0]['name']} (ID: {voucher_check_id})")
+    invalidate_audit_rules_cache()
     return {"message": "Voucher check restored successfully"}
 
 @router.post("/api/audit-rules/voucher-checks/reorder", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1389,6 +1645,7 @@ def reorder_voucher_checks(check_ids: List[int] = Body(...)):
             (idx, check_id)
         )
     log_audit("Admin", "Reorder", "AuditRules", "Reordered voucher checks")
+    invalidate_audit_rules_cache()
     return {"message": "Order updated successfully"}
 
 
@@ -1528,7 +1785,7 @@ def get_signature_specimen(specimen_id: int):
         raise HTTPException(404, "Signature specimen not found")
     return row_to_signature_specimen(rows[0])
 
-@router.post("/api/audit-rules/signature-specimens")
+@router.post("/api/audit-rules/signature-specimens", dependencies=[Depends(ensure_no_active_verification_sessions)])
 def create_signature_specimen(specimen: SignatureSpecimenCreate):
     validate_client_id(specimen.client_id)
     validate_signature_specimen_payload(specimen.document_id, specimen.role_name)
@@ -1543,9 +1800,10 @@ def create_signature_specimen(specimen: SignatureSpecimenCreate):
         "Admin", "Create", "AuditRules",
         f"Created signature specimen for client {specimen.client_id}, document {specimen.document_id}, role '{specimen.role_name}'"
     )
+    invalidate_audit_rules_cache()
     return {"message": "Signature specimen created successfully", "specimen_id": specimen_id}
 
-@router.put("/api/audit-rules/signature-specimens/{specimen_id}")
+@router.put("/api/audit-rules/signature-specimens/{specimen_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
 def update_signature_specimen(specimen_id: int, specimen: SignatureSpecimenUpdate):
     existing = execute_query_pg("SELECT id FROM signature_specimens WHERE id = %s", (specimen_id,))
     if not existing:
@@ -1562,9 +1820,10 @@ def update_signature_specimen(specimen_id: int, specimen: SignatureSpecimenUpdat
     )
 
     log_audit("Admin", "Update", "AuditRules", f"Updated signature specimen ID {specimen_id}")
+    invalidate_audit_rules_cache()
     return {"message": "Signature specimen updated successfully"}
 
-@router.delete("/api/audit-rules/signature-specimens/{specimen_id}")
+@router.delete("/api/audit-rules/signature-specimens/{specimen_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
 def delete_signature_specimen(specimen_id: int):
     """
     Soft-delete a signature specimen (set is_active = FALSE). This is the normal "Delete" action -
@@ -1579,9 +1838,10 @@ def delete_signature_specimen(specimen_id: int):
         raise HTTPException(404, "Active signature specimen not found")
     execute_write_pg("UPDATE signature_specimens SET is_active = FALSE WHERE id = %s", (specimen_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
+    invalidate_audit_rules_cache()
     return {"message": "Signature specimen deleted (soft-delete) successfully"}
 
-@router.post("/api/audit-rules/signature-specimens/{specimen_id}/restore")
+@router.post("/api/audit-rules/signature-specimens/{specimen_id}/restore", dependencies=[Depends(ensure_no_active_verification_sessions)])
 def restore_signature_specimen(specimen_id: int):
     """
     Restore a soft-deleted signature specimen.
@@ -1594,9 +1854,10 @@ def restore_signature_specimen(specimen_id: int):
         raise HTTPException(404, "Inactive signature specimen not found")
     execute_write_pg("UPDATE signature_specimens SET is_active = TRUE WHERE id = %s", (specimen_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
+    invalidate_audit_rules_cache()
     return {"message": "Signature specimen restored successfully"}
 
-@router.delete("/api/audit-rules/signature-specimens/{specimen_id}/hard-delete")
+@router.delete("/api/audit-rules/signature-specimens/{specimen_id}/hard-delete", dependencies=[Depends(ensure_no_active_verification_sessions)])
 def hard_delete_signature_specimen(specimen_id: int):
     """
     Permanent hard delete - deliberately a separate, low-visibility endpoint (not the normal
@@ -1609,6 +1870,7 @@ def hard_delete_signature_specimen(specimen_id: int):
         raise HTTPException(404, "Signature specimen not found")
     execute_write_pg("DELETE FROM signature_specimens WHERE id = %s", (specimen_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Hard-deleted (permanent) signature specimen ID {specimen_id} ({existing[0]['expected_signatory_name']})")
+    invalidate_audit_rules_cache()
     return {"message": "Signature specimen permanently deleted"}
 
 

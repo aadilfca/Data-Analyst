@@ -32,6 +32,7 @@ For any proposed code or documentation change:
 5. Verify the change in proportion to its risk and report any checks that could not be run.
 6. End the phase with the two-column `Change Required` / `Developed As` summary required by `CLAUDE.md`.
 7. Wait for the user to test and confirm the phase. Only after that confirmation may Codex stage, commit, or push changes, using the approved commit message.
+8. At completion, provide 4–5 or more concise single-line points describing what to test and how; identify backend-only work that Aadil may skip or suggest a practical test, and clearly state whether commit/push is required, waiting for Aadil's local-server test and explicit approval before either action.
 
 Read-only discussion, investigation, diagnosis, and review do not authorize implementation. When the user asks only for analysis, do not change files.
 
@@ -50,6 +51,10 @@ Before maintaining these files, apply all word-count, drift, scope, and self-che
 ## Engineering discipline
 
 - Prefer small, reversible changes that match the approved brief.
+- Use the existing project `venv` for tests and development utilities whenever possible. If an
+  additional Python package or utility is needed, explain why and obtain Aadil's approval before
+  downloading or installing it. Do not change production dependencies without explicit approval,
+  and report any approved installation and its use.
 - Never add temporary production code, inline event handlers, speculative features, or unrelated cleanup.
 - Preserve user changes and unrelated work already present in the worktree.
 - Use existing shared utilities, adapters, API conventions, and UI patterns where applicable.

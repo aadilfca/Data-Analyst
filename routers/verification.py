@@ -4,7 +4,7 @@
 # Verification Workflow, Audited Cashbook & Export
 # ==============================================
 
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from fastapi.responses import StreamingResponse
 from database import execute_query_pg, execute_write_pg, execute_batch_pg, execute_batch_insert_with_ids_pg, log_audit, log_data_audit_pg, get_raw_conn_pg, release_raw_conn_pg, get_client_voucher_prefixes_pg, pg_transaction
 from database import start_db_metrics, get_db_metrics, stop_db_metrics
@@ -39,7 +39,8 @@ from routers.import_export import (
 # through the same process-level cache audit_rules.py's own GET endpoints use — guidance
 # content is keyed by Category name/id, not client_id, since Categories aren't client-scoped
 # (see cache_get()/cache_set()'s own docstring in audit_rules.py for why).
-from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key, get_audit_rules_config_version, load_client_account_category_index
+from routers.auth import get_current_user
 # "Why is this line Query?" gate breakdown only (see compute_and_persist_cleared_status()'s
 # detail mode) — the pass/fail answer itself still comes from check_approved_by_authority_gate()
 # above, so the explanation can never disagree with the real gate.
@@ -776,6 +777,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         # in their original evaluation order within each band.
         rank = {"fail": 0, "not_applicable": 1, "pass": 2}
         result["gates"] = sorted(gates, key=lambda g: rank.get(g['status'], 3))
+        result["working_paper_gates"] = _build_working_paper_gates(result["gates"])
         result["reason"] = None
     return result
 
@@ -1100,6 +1102,45 @@ def get_latest_cashbook_date(
 
     return {"latest_date": None}
 
+@router.post("/api/verification/presence/enter")
+def enter_verification_presence(session_id: int = Body(..., embed=True), user_session=Depends(get_current_user)):
+    """Acquire or refresh this authenticated user's active Verification presence."""
+    exists = execute_query_pg(
+        "SELECT id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'", (session_id,)
+    )
+    if not exists:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+    execute_write_pg(
+        """INSERT INTO verification_presence
+           (verification_session_id, session_token, user_id, last_heartbeat, ended_at)
+           VALUES (%s, %s, %s, CURRENT_TIMESTAMP, NULL)
+           ON CONFLICT (verification_session_id, session_token)
+           DO UPDATE SET last_heartbeat = CURRENT_TIMESTAMP, ended_at = NULL""",
+        (session_id, user_session["token"], user_session["user_id"])
+    )
+    return {"active": True, "session_id": session_id}
+
+
+@router.post("/api/verification/presence/heartbeat")
+def heartbeat_verification_presence(session_id: int = Body(..., embed=True), user_session=Depends(get_current_user)):
+    updated = execute_write_pg(
+        "UPDATE verification_presence SET last_heartbeat = CURRENT_TIMESTAMP, ended_at = NULL "
+        "WHERE verification_session_id = %s AND session_token = %s",
+        (session_id, user_session["token"])
+    )
+    return {"active": bool(updated), "session_id": session_id}
+
+
+@router.post("/api/verification/presence/leave")
+def leave_verification_presence(session_id: int = Body(..., embed=True), user_session=Depends(get_current_user)):
+    execute_write_pg(
+        "UPDATE verification_presence SET ended_at = CURRENT_TIMESTAMP "
+        "WHERE verification_session_id = %s AND session_token = %s",
+        (session_id, user_session["token"])
+    )
+    return {"active": False, "session_id": session_id}
+
+
 @router.post("/api/verification/start_session")
 def start_verification_session(
     client_id: int = Query(..., description="Client ID"),
@@ -1220,13 +1261,14 @@ def start_verification_session(
         raise HTTPException(400, f"No transactions found for cashbook '{cashbook_name}' in the given period.")
     
         # Insert session header
+    rulebook_version = get_audit_rules_config_version()
     session_id = execute_write_pg(
         """
-        INSERT INTO verification_sessions (client_id, cashbook_name, period_start, period_end, created_by, status, total_transactions, session_type)
-        VALUES (%s, %s, %s, %s, %s, 'In Progress', %s, %s)
+        INSERT INTO verification_sessions (client_id, cashbook_name, period_start, period_end, created_by, status, total_transactions, session_type, rulebook_version)
+        VALUES (%s, %s, %s, %s, %s, 'In Progress', %s, %s, %s)
         RETURNING id
         """,
-        (client_id, cashbook_name, period_start, period_end, created_by, len(transactions_to_verify), session_type)
+        (client_id, cashbook_name, period_start, period_end, created_by, len(transactions_to_verify), session_type, rulebook_version)
     )
 
     # Prepare parameters for all details in one batch
@@ -2489,51 +2531,27 @@ def _audit_workbook_resolve_categories(client_id: int, account_codes: set) -> Di
 
     Returns {account_code: category_id or None} - every requested code is present in the result.
     """
-    resolved: Dict[str, Optional[int]] = {code: None for code in account_codes}
-    if not account_codes:
-        return resolved
+    return {
+        code: value["category_id"]
+        for code, value in load_client_account_category_index(client_id, list(account_codes)).items()
+    }
 
-    codes = list(account_codes)
-    placeholders = ",".join("%s" for _ in codes)
 
-    upload_rows = execute_query_pg(
-        """
-        SELECT id FROM trial_balance_uploads
-        WHERE client_id = %s AND status = 'parsed'
-        ORDER BY (period_end IS NULL), period_end DESC, uploaded_at DESC
-        LIMIT 1
-        """,
-        (client_id,)
-    )
-    if upload_rows:
-        tb_rows = execute_query_pg(
-            f"""
-            SELECT a.account_code, a.category_id
-            FROM trial_balance_accounts a
-            JOIN audit_rule_categories c ON c.id = a.category_id AND c.is_active = TRUE
-            WHERE a.upload_id = %s AND a.account_code IN ({placeholders})
-            """,
-            tuple([upload_rows[0]['id']] + codes)
-        )
-        for r in tb_rows:
-            resolved[r['account_code']] = r['category_id']
-
-    remaining = [code for code, cat_id in resolved.items() if cat_id is None]
-    if remaining:
-        rem_ph = ",".join("%s" for _ in remaining)
-        assignment_rows = execute_query_pg(
-            f"""
-            SELECT aca.account_code, aca.category_id
-            FROM account_category_assignments aca
-            JOIN audit_rule_categories arc ON arc.id = aca.category_id AND arc.is_active = TRUE
-            WHERE aca.client_id = %s AND aca.account_code IN ({rem_ph})
-            """,
-            tuple([client_id] + remaining)
-        )
-        for r in assignment_rows:
-            resolved[r['account_code']] = r['category_id']
-
-    return resolved
+def _build_working_paper_gates(gates: List[dict]) -> List[dict]:
+    """Group detailed status checks into the four auditor-facing workpaper gates."""
+    groups = [
+        ("approval", "Approval", {"voucher_checks", "approval_authority"}),
+        ("supporting_documents", "Supporting Documents", {"documents", "signature", "cross_checks"}),
+        ("account_head_classification", "Account-head Classification", {"account_head"}),
+    ]
+    result = []
+    for key, label, detail_keys in groups:
+        checks = [gate for gate in gates if gate["key"] in detail_keys]
+        statuses = {gate["status"] for gate in checks}
+        status = "fail" if "fail" in statuses else ("not_applicable" if checks and statuses == {"not_applicable"} else "pass")
+        result.append({"key": key, "label": label, "status": status, "checks": checks})
+    result.append({"key": "observation", "label": "Observation", "status": "pass", "checks": [], "detail": "Observation text is recorded separately and does not create a new blocking rule."})
+    return result
 
 
 def _audit_workbook_resolve_account_names(client_id: int, account_codes: set) -> Dict[str, Optional[str]]:
