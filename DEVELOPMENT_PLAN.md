@@ -781,5 +781,13 @@ The backend now provides a version-aware client Rulebook loader. It reuses the c
 configuration by client and Audit Rules configuration version, clears client Rulebooks after
 client-specific category-assignment changes, and clears all Rulebooks after global configuration or
 template/mapping changes. The compiler uses the shared Trial Balance-first account/category
-resolver. Verification and frontend consumers remain unchanged. The next phase is one-session
-Rulebook retrieval in Verification.
+resolver. Verification and frontend consumers remain unchanged. The one-session Rulebook
+retrieval phase is now complete; the next phase resolves voucher-line Categories and procedures
+from the session Rulebook in memory.
+
+### One-session Rulebook retrieval completed
+
+Verification now exposes a session-scoped Rulebook endpoint. It returns the prepared packet for a
+matching captured version, preserves legacy sessions with no captured version, and rejects a
+session whose captured version no longer matches the active configuration. Frontend consumers are
+still unchanged. The next phase is local voucher-line Category and procedure resolution.

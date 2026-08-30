@@ -16,7 +16,7 @@ from routers.audit_rules import (
     load_client_verification_rulebook,
 )
 from routers.audit_rules import compile_verification_rulebook
-from routers.verification import _build_working_paper_gates
+from routers.verification import _build_working_paper_gates, get_verification_session_rulebook
 
 
 class AuditRulebookCompilerTests(unittest.TestCase):
@@ -155,6 +155,25 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             invalidate_category_for_account_cache(7)
             load_client_verification_rulebook(7)
             self.assertEqual(calls, [7, 7])
+
+    def test_session_rulebook_returns_packet_for_matching_version(self):
+        version = get_audit_rules_config_version()
+        with patch("routers.verification.execute_query_pg", return_value=[{"client_id": 7, "rulebook_version": version}]), \
+             patch("routers.verification.load_client_verification_rulebook", return_value={"global_version": version, "client_id": 7}) as loader:
+            result = get_verification_session_rulebook(12)
+
+        self.assertEqual(result["session_id"], 12)
+        self.assertEqual(result["rulebook"]["client_id"], 7)
+        loader.assert_called_once_with(7)
+
+    def test_session_rulebook_rejects_version_mismatch(self):
+        with patch("routers.verification.execute_query_pg", return_value=[{"client_id": 7, "rulebook_version": get_audit_rules_config_version() - 1}]), \
+             patch("routers.verification.load_client_verification_rulebook") as loader:
+            with self.assertRaises(Exception) as raised:
+                get_verification_session_rulebook(12)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        loader.assert_not_called()
 
 
 if __name__ == "__main__":

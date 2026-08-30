@@ -33,6 +33,21 @@ retrieval in Verification.
 
 ---
 
+## One-session Verification Rulebook retrieval
+
+**Date:** 2026-08-30 | **Files:** `routers/verification.py`, `tests/test_audit_rulebook.py`.
+
+Verification now has a session-scoped Rulebook read endpoint. It returns the prepared client packet
+when the session's captured configuration version matches the active version, preserves legacy
+sessions with a null version by using the current packet, and rejects mismatches with HTTP 409
+rather than silently applying changed stable rules. Voucher evidence and calculated results remain
+outside the response, and no frontend consumer was changed.
+
+**Verified:** focused Rulebook tests — 9 passed; `git diff --check` passed. Manual testing confirmed
+new and existing Verification sessions remain usable and category behavior is unchanged.
+
+---
+
 ## Fresh Vouchers date default
 
 **Date:** 2026-08-29 | **Files:** `static/verification.js`, `static/verification.html`.

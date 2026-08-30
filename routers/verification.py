@@ -40,7 +40,7 @@ from routers.import_export import (
 # through the same process-level cache audit_rules.py's own GET endpoints use — guidance
 # content is keyed by Category name/id, not client_id, since Categories aren't client-scoped
 # (see cache_get()/cache_set()'s own docstring in audit_rules.py for why).
-from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key, get_audit_rules_config_version, load_client_account_category_index
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key, get_audit_rules_config_version, load_client_account_category_index, load_client_verification_rulebook
 from routers.auth import get_current_user
 # "Why is this line Query?" gate breakdown only (see compute_and_persist_cleared_status()'s
 # detail mode) — the pass/fail answer itself still comes from check_approved_by_authority_gate()
@@ -2486,6 +2486,35 @@ def get_verification_session_index(session_id: int):
     )
     s = session[0]
     return {"session": s, "transactions": rows}
+
+
+@router.get("/api/verification/session/{session_id}/rulebook")
+def get_verification_session_rulebook(session_id: int):
+    """Return the stable Rulebook captured by a Verification session.
+
+    Legacy sessions without a captured version remain readable using the current Rulebook. A
+    version mismatch is rejected so a session never silently evaluates changed stable rules.
+    Voucher evidence and calculated results are deliberately not included here.
+    """
+    sessions = execute_query_pg(
+        "SELECT client_id, rulebook_version FROM verification_sessions "
+        "WHERE id = %s AND status != 'Cancelled'",
+        (session_id,)
+    )
+    if not sessions:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+
+    session_version = sessions[0].get("rulebook_version")
+    current_version = get_audit_rules_config_version()
+    if session_version is not None and session_version != current_version:
+        raise HTTPException(
+            409,
+            "This Verification session uses an older Rulebook version. "
+            "Restart the session before continuing."
+        )
+
+    rulebook = load_client_verification_rulebook(sessions[0]["client_id"])
+    return {"session_id": session_id, "rulebook": rulebook}
 
 
 @router.get("/api/verification/session/{session_id}/progress")

@@ -185,6 +185,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Status log
 
 - 2026-08-30: Compiled client Rulebook loader now uses versioned caching and Trial Balance-first account/category resolution.
+- 2026-08-30: Verification now retrieves a version-checked Rulebook packet per session; legacy sessions remain compatible.
 
 - 2026-08-29: Verification startup payload reduction and opt-in grouped Save/Verify diagnostics completed; local timing improved for latest cashbook lookup.
 - 2026-08-29: Fresh Vouchers entry now defaults to today-only discovery; restored views and manually persisted ranges remain unchanged.
