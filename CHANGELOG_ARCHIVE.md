@@ -3298,6 +3298,18 @@ verification of every Procedure Modal save path.
 
 ---
 
+## Rulebook performance baseline
+
+**Date:** 2026-08-30 | **Files:** `DEVELOPMENT_PLAN.md`, `CHANGELOG_ARCHIVE.md`.
+
+Read-only local measurements recorded the session Rulebook at approximately 15.5 KB, with cold
+reads of 3.1–5.7 seconds and warm cached reads around 0.5 seconds. Fresh
+`procedure_modal_data` responses were approximately 2.6 KB but took 8.9–20.6 seconds across
+repeated reads. This confirms the remaining bottleneck is fresh modal data delivery rather than the
+compiled Rulebook. No application behavior was changed.
+
+---
+
 ## Local Verification Category and procedure resolution from Rulebook
 
 **Date:** 2026-08-30 | **Files:** `routers/audit_rules.py`, `static/verification.js`.

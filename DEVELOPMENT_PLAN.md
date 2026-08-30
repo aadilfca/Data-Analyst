@@ -807,3 +807,11 @@ status evaluation and voucher verification. Live procedure ticks, evidence, obse
 Bills, cross-check results, and calculated outcomes remain fresh. Rulebook loading occurs before the
 atomic Save → Verify transaction to avoid nested pooled-connection pressure. The next phase is
 performance measurement and review of any remaining stable-rule reads.
+
+### Rulebook performance baseline
+
+Live local measurements show the session Rulebook response at approximately 15.5 KB: cold reads
+took 3.1–5.7 seconds and warm cached reads about 0.5 seconds. The fresh Procedure Modal response
+was approximately 2.6 KB but took 8.9–20.6 seconds across repeated reads, confirming that fresh
+modal data—not Rulebook delivery—is the remaining dominant bottleneck. The next phase investigates
+the `procedure_modal_data` call graph without caching live evidence or results.
