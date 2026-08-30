@@ -799,3 +799,11 @@ in memory. The existing guidance shape is preserved for the Procedure Modal, inc
 compatibility. Fresh support data and atomic Save → Verify behavior remain unchanged. A schema alias
 also corrected the compiler's template-name query for the live Postgres schema. The next phase is
 evaluating procedure ticks and Cleared/Query/Pending criteria from the same Rulebook batch.
+
+### Rulebook-backed procedure and status evaluation completed
+
+Stable required-document and voucher-check definitions now come from the session Rulebook during
+status evaluation and voucher verification. Live procedure ticks, evidence, observations, Physical
+Bills, cross-check results, and calculated outcomes remain fresh. Rulebook loading occurs before the
+atomic Save → Verify transaction to avoid nested pooled-connection pressure. The next phase is
+performance measurement and review of any remaining stable-rule reads.

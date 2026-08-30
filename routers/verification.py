@@ -274,7 +274,8 @@ def _clear_status_gate(key: str, label: str, ok: bool, detail: str = "", not_app
 
 def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = False,
                                        persist: bool = True,
-                                       sibling_ids: Optional[List[int]] = None) -> Optional[dict]:
+                                       sibling_ids: Optional[List[int]] = None,
+                                       rulebook: Optional[dict] = None) -> Optional[dict]:
     """
     Validation Rules Phase 4: compute this line's Cleared/Query status. Automated
     cross-document validation engine Phase 7 added a 5th (cross-document evaluation) and 6th
@@ -312,7 +313,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     gates: List[dict] = []
     line = execute_query_pg(
         """
-        SELECT vd.id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id,
+        SELECT vd.id, vd.session_id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id,
                vd.category_id_applied, vd.category_name_applied
         FROM verification_details vd
         JOIN client_data cd ON cd.id = vd.client_data_id
@@ -328,6 +329,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         return None
     row = line[0]
     client_id = row['client_id']
+    session_rulebook = rulebook or load_client_verification_rulebook_for_session(row['session_id'])
     transaction_ref = row['transaction_ref']
     row_data = row['row_data']
     if isinstance(row_data, str):
@@ -434,7 +436,12 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # excluded from selection contexts, Phase 5 of 5: it has already been removed from every
     # selection surface - Audit Rules pickers, Verification's Supporting Documents tab list -
     # so requiring it here would be an unfulfillable requirement, not a real gate).
-    required_docs = get_category_documents(category_id)
+    category_profile = next((c for c in (session_rulebook or {}).get('categories', [])
+                             if c.get('category_id') == category_id), None)
+    required_docs = [
+        {**doc, "document_id": doc.get("document_id", doc.get("id")), "is_active": True}
+        for doc in (category_profile or {}).get("documents", [])
+    ]
     required_doc_ids = {d['document_id'] for d in required_docs if d['is_active']}
     # Physical Bill evidence type, Phase 6 of 8: per-document type, keyed off the Document's own
     # document_type - NOT the Category's evidence_type. This intercepts a physical_bill Document
@@ -610,7 +617,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     if transaction_ref:
         # `name` is selected purely for detail mode's plain-English gate text - the gate logic
         # itself still only ever compares ids, exactly as before.
-        active_checks = execute_query_pg("SELECT id, name FROM audit_rule_voucher_checks WHERE is_active = TRUE")
+        active_checks = (session_rulebook or {}).get("voucher_checks", [])
         active_check_ids = {c['id'] for c in active_checks}
         ticked_rows = execute_query_pg(
             "SELECT check_id FROM voucher_check_status WHERE client_id = %s AND transaction_ref = %s AND state = 'done'",
@@ -1613,11 +1620,12 @@ def verify_voucher_checks(
             stop_db_metrics(perf_token)
 
 
-def _verify_voucher_checks_impl(session_id: int, current_detail_id: int, perf_timings=None):
+def _verify_voucher_checks_impl(session_id: int, current_detail_id: int, perf_timings=None, rulebook=None):
     session = execute_query_pg("SELECT id, client_id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'", (session_id,))
     if not session:
         raise HTTPException(404, "Verification session not found or cancelled.")
     client_id = session[0]['client_id']
+    session_rulebook = rulebook or load_verification_rulebook_for_session(session_id)
 
     details = _fetch_session_details_grouped(session_id)
     current = next((d for d in details if d['id'] == current_detail_id), None)
@@ -1627,9 +1635,7 @@ def _verify_voucher_checks_impl(session_id: int, current_detail_id: int, perf_ti
     transaction_ref = current['transaction_ref']
     voucher_rows = [d for d in details if d['_doc_group_id'] == current['_doc_group_id']]
 
-    active_checks = execute_query_pg(
-        "SELECT id, name FROM audit_rule_voucher_checks WHERE is_active = TRUE ORDER BY sort_order"
-    )
+    active_checks = (session_rulebook or {}).get("voucher_checks", [])
     status_rows = execute_query_pg(
         "SELECT check_id, state FROM voucher_check_status WHERE client_id = %s AND transaction_ref = %s",
         (client_id, transaction_ref)
@@ -1705,7 +1711,7 @@ def save_line_items(
             stop_db_metrics(perf_token)
 
 
-def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data, perf_timings=None):
+def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data, perf_timings=None, rulebook=None):
     detail = execute_query_pg(
         "SELECT id, status FROM verification_details WHERE id = %s",
         (detail_id,)
@@ -1770,7 +1776,7 @@ def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_dat
     # chokepoint as the observation sync directly above. Phase 5: surface the result in the
     # response so the frontend can refresh the line's badge without a second round-trip.
     status_started = time.perf_counter()
-    status_result = compute_and_persist_cleared_status(detail_id, sibling_ids=sibling_ids)
+    status_result = compute_and_persist_cleared_status(detail_id, sibling_ids=sibling_ids, rulebook=rulebook)
     if perf_timings is not None:
         perf_timings["status_engine_ms"] = round((time.perf_counter() - status_started) * 1000, 1)
 
@@ -1881,14 +1887,15 @@ def save_and_verify_voucher_bundle(
         )
         if not session:
             raise HTTPException(404, "Verification session not found or cancelled.")
-        active_checks = execute_query_pg(
-            "SELECT id, name FROM audit_rule_voucher_checks WHERE is_active = TRUE ORDER BY sort_order"
-        )
+        session_rulebook = load_verification_rulebook_for_session(session_id)
+        active_checks = (session_rulebook or {}).get("voucher_checks", [])
         submitted_states = {str(c.get('check_id')): c.get('state') for c in voucher_checks}
         untouched = [c for c in active_checks if submitted_states.get(str(c['id']), 'untouched') == 'untouched']
         if untouched:
             names = ", ".join(c['name'] for c in untouched)
             raise HTTPException(400, f"Cannot verify: {len(untouched)} check(s) still not marked ({names}).")
+    else:
+        session_rulebook = None
     with pg_transaction():
         save_started = time.perf_counter()
         save_components = {"observation_sync_ms": 0.0, "status_engine_ms": 0.0}
@@ -1898,7 +1905,7 @@ def save_and_verify_voucher_bundle(
             line_timings = {} if perf else None
             _save_line_items_impl(
                 line['detail_id'], line.get('line_items', []),
-                line.get('transaction_type'), line.get('procedure_data'), line_timings
+                line.get('transaction_type'), line.get('procedure_data'), line_timings, session_rulebook
             )
             if perf:
                 for key in save_components:
@@ -1982,7 +1989,7 @@ def save_and_verify_voucher_bundle(
                 continue
             sibling_ids = _resolve_sibling_voucher_line_ids(line['detail_id'])
             status_result = compute_and_persist_cleared_status(
-                line['detail_id'], sibling_ids=sibling_ids
+                line['detail_id'], sibling_ids=sibling_ids, rulebook=session_rulebook
             )
             if status_result:
                 status_results[line['detail_id']] = status_result
@@ -1991,7 +1998,7 @@ def save_and_verify_voucher_bundle(
                 (time.perf_counter() - status_started) * 1000, 1
             )
         verify_started = time.perf_counter()
-        result = _verify_voucher_checks_impl(session_id, current_detail_id, timings) if verify else {"saved": True}
+        result = _verify_voucher_checks_impl(session_id, current_detail_id, timings, session_rulebook) if verify else {"saved": True}
         current_status = status_results.get(current_detail_id)
         result["line_statuses"] = {
             str(detail_id): value["cleared_status"]
@@ -2496,6 +2503,12 @@ def get_verification_session_rulebook(session_id: int):
     version mismatch is rejected so a session never silently evaluates changed stable rules.
     Voucher evidence and calculated results are deliberately not included here.
     """
+    rulebook = load_verification_rulebook_for_session(session_id)
+    return {"session_id": session_id, "rulebook": rulebook}
+
+
+def load_verification_rulebook_for_session(session_id: int) -> dict:
+    """Load a session's stable Rulebook while enforcing its captured version."""
     sessions = execute_query_pg(
         "SELECT client_id, rulebook_version FROM verification_sessions "
         "WHERE id = %s AND status != 'Cancelled'",
@@ -2513,8 +2526,7 @@ def get_verification_session_rulebook(session_id: int):
             "Restart the session before continuing."
         )
 
-    rulebook = load_client_verification_rulebook(sessions[0]["client_id"])
-    return {"session_id": session_id, "rulebook": rulebook}
+    return load_client_verification_rulebook(sessions[0]["client_id"])
 
 
 @router.get("/api/verification/session/{session_id}/progress")

@@ -38,6 +38,8 @@ def _patch_atomic_dependencies(monkeypatch, save_result=None, verify_result=None
         return verify_result
 
     monkeypatch.setattr(verification, "_verify_voucher_checks_impl", verify)
+    monkeypatch.setattr(verification, "load_verification_rulebook_for_session",
+                        lambda session_id: {"voucher_checks": []})
     return calls
 
 
@@ -156,6 +158,8 @@ def _stub_bundle_pg(monkeypatch, active_checks):
         yield object()
 
     monkeypatch.setattr(verification, "execute_query_pg", execute_query_pg)
+    monkeypatch.setattr(verification, "load_verification_rulebook_for_session",
+                        lambda session_id: {"voucher_checks": active_checks})
     monkeypatch.setattr(verification, "execute_write_pg", lambda *a, **k: None)
     monkeypatch.setattr(verification, "pg_transaction", transaction)
     monkeypatch.setattr(verification, "_save_line_items_impl", lambda *a, **k: {"cleared_status": "Cleared"})

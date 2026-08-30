@@ -3314,3 +3314,19 @@ and voucher navigation succeeded. Focused Rulebook tests — 9 passed; JavaScrip
 `git diff --check` passed.
 
 ---
+
+## Rulebook-backed procedure and status evaluation
+
+**Date:** 2026-08-30 | **Files:** `routers/verification.py`, `tests/test_verification_atomic_save_verify.py`.
+
+Stable required-document and voucher-check definitions now come from the session Rulebook during
+Cleared/Query evaluation and voucher verification. Procedure ticks, linked evidence, observations,
+Physical Bills, cross-check results, and calculated outcomes remain live. The Rulebook is loaded
+before the atomic Save → Verify transaction and passed through its save/status/verify calls, avoiding
+nested pooled-connection pressure. Test fixtures now isolate this dependency with a prepared packet.
+
+**Verified:** manual restored-session Save → Verify and modal navigation succeeded; Rulebook tests —
+9 passed; Python compilation and `git diff --check` passed. The two legacy Save/Verify response-shape
+assertion failures remain documented and unrelated.
+
+---
