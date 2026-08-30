@@ -1106,19 +1106,21 @@ def get_latest_cashbook_date(
 @router.post("/api/verification/presence/enter")
 def enter_verification_presence(session_id: int = Body(..., embed=True), user_session=Depends(get_current_user)):
     """Acquire or refresh this authenticated user's active Verification presence."""
-    exists = execute_query_pg(
-        "SELECT id FROM verification_sessions WHERE id = %s AND status != 'Cancelled'", (session_id,)
-    )
-    if not exists:
-        raise HTTPException(404, "Verification session not found or cancelled.")
-    execute_write_pg(
+    # Validate and acquire/refresh in one database round trip. The INSERT ... SELECT keeps the
+    # previous 404 behavior: no row is written when the session is missing or cancelled.
+    entered = execute_write_pg(
         """INSERT INTO verification_presence
            (verification_session_id, session_token, user_id, last_heartbeat, ended_at)
-           VALUES (%s, %s, %s, CURRENT_TIMESTAMP, NULL)
+           SELECT vs.id, %s, %s, CURRENT_TIMESTAMP, NULL
+           FROM verification_sessions vs
+           WHERE vs.id = %s AND vs.status != 'Cancelled'
            ON CONFLICT (verification_session_id, session_token)
-           DO UPDATE SET last_heartbeat = CURRENT_TIMESTAMP, ended_at = NULL""",
-        (session_id, user_session["token"], user_session["user_id"])
+           DO UPDATE SET last_heartbeat = CURRENT_TIMESTAMP, ended_at = NULL
+           RETURNING verification_session_id""",
+        (user_session["token"], user_session["user_id"], session_id)
     )
+    if not entered:
+        raise HTTPException(404, "Verification session not found or cancelled.")
     return {"active": True, "session_id": session_id}
 
 
