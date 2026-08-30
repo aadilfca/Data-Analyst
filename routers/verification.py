@@ -14,6 +14,7 @@ import json
 import re
 import time
 import contextvars
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Dict, Any
 import io
 from functools import wraps
@@ -1968,8 +1969,35 @@ def save_and_verify_voucher_bundle(
                                       voucher_checks)
         if perf:
             timings["voucher_checks_ms"] = round((time.perf_counter() - voucher_started) * 1000, 1)
+
+        # Procedure and voucher ticks are written after _save_line_items_impl(). Recompute only
+        # after all supplied support data is persisted; otherwise deselecting a required tick can
+        # leave a previously Cleared line visibly Cleared until a later save.
+        status_results = {}
+        status_started = time.perf_counter()
+        for line in lines:
+            if line.get('detail_id') not in eligible_line_ids:
+                continue
+            sibling_ids = _resolve_sibling_voucher_line_ids(line['detail_id'])
+            status_result = compute_and_persist_cleared_status(
+                line['detail_id'], sibling_ids=sibling_ids
+            )
+            if status_result:
+                status_results[line['detail_id']] = status_result
+        if perf:
+            timings["post_support_status_engine_ms"] = round(
+                (time.perf_counter() - status_started) * 1000, 1
+            )
         verify_started = time.perf_counter()
         result = _verify_voucher_checks_impl(session_id, current_detail_id, timings) if verify else {"saved": True}
+        current_status = status_results.get(current_detail_id)
+        result["line_statuses"] = {
+            str(detail_id): value["cleared_status"]
+            for detail_id, value in status_results.items()
+        }
+        if current_status:
+            result["cleared_status"] = current_status["cleared_status"]
+            result["matrix_version_applied"] = current_status["matrix_version_applied"]
         if perf:
             timings["verify_ms"] = round((time.perf_counter() - verify_started) * 1000, 1)
             result["_perf_components"] = timings
@@ -5913,11 +5941,30 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
         return value
 
     try:
-        linked_documents = measured("linked_documents_ms", lambda: get_voucher_line_documents(voucher_line_id))
-        procedure_checks = measured("procedure_checks_ms", lambda: get_procedure_checks(voucher_line_id))
-        observations = measured("observations_ms", lambda: get_line_observations(voucher_line_id))
-        physical_bills = measured("physical_bills_ms", lambda: get_voucher_line_physical_bills(voucher_line_id))
-        cross_check_results = measured("cross_checks_ms", lambda: get_cross_check_results(voucher_line_id))
+        # These five reads are independent and each uses its own pooled database connection.
+        # Running them together removes the accumulated network round-trip wait while keeping
+        # the existing helper functions and response shape unchanged. The pool-safe worker cap
+        # deliberately matches this endpoint's fixed five-way fan-out.
+        fanout = {
+            "linked_documents_ms": lambda: get_voucher_line_documents(voucher_line_id),
+            "procedure_checks_ms": lambda: get_procedure_checks(voucher_line_id),
+            "observations_ms": lambda: get_line_observations(voucher_line_id),
+            "physical_bills_ms": lambda: get_voucher_line_physical_bills(voucher_line_id),
+            "cross_checks_ms": lambda: get_cross_check_results(voucher_line_id),
+        }
+        with ThreadPoolExecutor(max_workers=5, thread_name_prefix="procedure-support") as executor:
+            futures = {name: executor.submit(fn) for name, fn in fanout.items()}
+            values = {}
+            for name, future in futures.items():
+                started = time.perf_counter()
+                values[name] = future.result()
+                if perf:
+                    component_ms[name] = round((time.perf_counter() - started) * 1000, 1)
+        linked_documents = values["linked_documents_ms"]
+        procedure_checks = values["procedure_checks_ms"]
+        observations = values["observations_ms"]
+        physical_bills = values["physical_bills_ms"]
+        cross_check_results = values["cross_checks_ms"]
 
         voucher_row = execute_query_pg(
             """
