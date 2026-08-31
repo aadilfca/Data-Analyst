@@ -99,6 +99,28 @@ timings and small response sizes do not justify a query or frontend rewrite. Log
 consistent with bcrypt plus database/connection wait, but cannot be separated further without
 server-side timings. No application-code change is recommended in this phase.
 
+### Verification discovery payload review
+
+Direct local measurements showed that `latest_cashbook_date` returns only 28 bytes but can take
+approximately 1.37–8.40 seconds, with the cold call being the outlier. The normal fresh popup now
+uses today's date directly and therefore does not call this endpoint; it remains relevant to
+date-auto-detection paths such as cashbook restoration. `cashbooks` returned 62 bytes and took
+approximately 1.60–2.96 seconds. `preview_cashbook` returned 50 rows of approximately 21.7 KB
+from a 130-row result and took approximately 2.30–9.60 seconds.
+
+`audited_cashbook` returned approximately 92 KB for 130 transaction lines and took approximately
+0.77–1.15 seconds in direct calls. The lightweight session index returned approximately 31.4 KB
+for the same 130 lines and took approximately 0.51–0.53 seconds, but the current restore path
+intentionally uses `audited_cashbook` because it needs full row data. In Playwright, the historical
+Cashbook popup reached its options in approximately 2.63 seconds, the 50-row preview became visible
+in approximately 2.63 seconds, and restoring the first voucher took approximately 3.72–8.45
+seconds across runs. The first-voucher waterfall awaits audited data, the session Rulebook, and
+`/next`; their browser request timings were approximately 0.98–2.47s, 0.22–4.40s, and 1.78–1.87s.
+
+The payload sizes are not by themselves a safe reason to change response contracts. The next
+targeted phase is the first-voucher startup waterfall: measure whether independent requests can be
+started earlier without changing Rulebook safety, session state, or first-voucher correctness.
+
 ### Fresh Procedure Modal timing review
 
 The approved direct and browser measurements used fresh test sessions and an existing assigned
@@ -123,6 +145,7 @@ wait from Python/response assembly time.
 | Baseline review | HAR and prior-chat review | Completed | Continue with measured diagnostics |
 | Grouped Save/Verify diagnostics | `routers/verification.py`, with existing database metrics | Implemented and pushed | Use component evidence during optimization |
 | Login/Client Cards investigation | Authenticated request timing | Completed; login, session guard, Client Cards, and role restriction measured | Defer optimization unless server-side timing isolates a safe material improvement |
+| Verification discovery payload review | `routers/verification.py`, `static/verification.js`, discovery tests | Completed; direct and browser payload/timing baseline recorded | Review the first-voucher startup waterfall |
 | Database query-plan investigation | Read-only Postgres `EXPLAIN ANALYZE` | Completed | Reduce Verification result payloads |
 | Verification bottleneck optimization | Procedure-modal diagnostics and duplicate sibling-read removal | User-tested and pushed | Continue with the next measured bottleneck |
 | Rulebook template metadata wiring | `routers/audit_rules.py`, Verification adapter, Procedure Modal | User-tested and pushed | Continue with measured fresh-data optimization |
@@ -138,8 +161,9 @@ wait from Python/response assembly time.
 | Pendency | Objective | Status |
 |---|---|---|
 | Authenticated Login/Client Cards baseline | Separate login cost from stable post-login request behavior | Completed; no code change recommended |
-| This phase — Fresh Procedure Modal timing review | Separate server, database, and browser/cache timing before changing the modal loader | Completed; no code change recommended |
-| Verification discovery payload review | Re-measure large response/JSON-processing cost after the completed optimizations | Pending; act only if still materially slow |
+| Fresh Procedure Modal timing review | Separate server, database, and browser/cache timing before changing the modal loader | Completed; no code change recommended |
+| This phase — Verification discovery payload review | Separate discovery response cost from the first-voucher request waterfall | Completed; no payload contract rewrite recommended |
+| First-voucher startup waterfall review | Start independent work earlier only if Rulebook/session safety and correctness remain unchanged | Pending; next targeted phase |
 | Audit Workbook Rulebook reuse | Extend the compiled Rulebook approach after Verification remains stable | Later planned phase |
 | Login optimization | Separate bcrypt time from database/connection wait before changing code | Deferred |
 

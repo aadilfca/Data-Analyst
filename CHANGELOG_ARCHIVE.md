@@ -15,6 +15,30 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Verification discovery payload review
+
+**Date:** 2026-08-31 | **Files:** `routers/verification.py`, `database.py`,
+`static/verification.js`, `tests/test_verification_indexes.py`,
+`tests/test_verification_performance_metrics.py`, `DEVELOPMENT_PLAN.md`, `KNOWN_ISSUES.md`.
+
+Direct local measurements showed that `latest_cashbook_date` returns 28 bytes but can take
+approximately 1.37–8.40 seconds, with the cold call as the outlier. The normal fresh popup now uses
+today's date directly and therefore does not call this endpoint. `cashbooks` returned 62 bytes in
+approximately 1.60–2.96 seconds. `preview_cashbook` returned 50 rows of approximately 21.7 KB from
+a 130-row result in approximately 2.30–9.60 seconds.
+
+`audited_cashbook` returned approximately 92 KB for 130 transaction lines in approximately
+0.77–1.15 seconds direct. The lightweight session index returned approximately 31.4 KB in
+approximately 0.51–0.53 seconds, but the restore path correctly uses the full audited response
+because it needs row data. Playwright measured approximately 2.63 seconds to show the historical
+Cashbook popup options, approximately 2.63 seconds to show its 50-row preview, and approximately
+3.72–8.45 seconds to show the first voucher. The first-voucher flow awaits audited data, the
+session Rulebook, and `/next` in sequence.
+
+The payloads and existing response contracts remain reasonable; no application code was changed.
+The next targeted phase is measuring whether the first-voucher startup waterfall can be shortened
+by starting independent requests earlier without changing Rulebook safety or session correctness.
+
 ## Fresh Procedure Modal timing review
 
 **Date:** 2026-08-31 | **Files:** `routers/verification.py`, `static/verification.js`,
