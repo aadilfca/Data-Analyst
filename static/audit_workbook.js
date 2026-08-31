@@ -597,7 +597,7 @@ function awInvalidateVoucherSupportCache() {
 // success, patches this line's status + its voucher group's rollup status in allVouchers and
 // re-renders — the Status-column half of "row/pill refreshes after save".
 async function awSaveLineItems(uid) {
-    if (!uid) return;
+    if (!uid) return { ok: false, error: { detail: 'Missing line identifier.' } };
     await flushProcedureObservations(uid);
     await flushAccountHeadNoMatchNote(uid);
     try {
@@ -631,9 +631,11 @@ async function awSaveLineItems(uid) {
         // Mirrors invalidateVoucherSupportCache() in verification.js. Single chokepoint — covers
         // the adapter's saveLineItems / saveAllVoucherLines and the Verify fallback save.
         awInvalidateVoucherSupportCache();
+        return { ok: true, data };
     } catch (e) {
         console.error('Error saving line (Audit Workbook):', e);
         awShowStatus('Could not save changes for this line — please try again.', 'error');
+        return { ok: false, error: { detail: e.message || 'Failed to save line.' } };
     }
 }
 

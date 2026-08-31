@@ -1432,16 +1432,28 @@ async function startSessionFromCashbook() {
 // drift apart.
 // targetVoucherId (optional): when set, restore directly to that voucher instead of the default
 // earliest-Pending jump — used by restoreSessionView()'s hard-refresh restore (see below).
-// startSessionFromCashbook() (a freshly-started session) omits this, so its behavior is unchanged.
-async function activateSessionView(sessionId, targetVoucherId = null) {
-    currentSessionId = sessionId;
-    sessionRulebook = null;
+// rulebookPromise (optional): restoreSessionView() starts this read beside its audited-cashbook
+// existence/data read, so hard-refresh restore does not serialize two independent reads. Fresh
+// session start omits it and activateSessionView() creates the read here.
+async function loadSessionRulebook(sessionId) {
     const rulebookResponse = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/session/${sessionId}/rulebook`);
     if (!rulebookResponse.ok) {
         const error = await rulebookResponse.json().catch(() => ({}));
         throw new Error(error.detail || 'Unable to load the Verification Rulebook');
     }
-    sessionRulebook = (await rulebookResponse.json()).rulebook || null;
+    return (await rulebookResponse.json()).rulebook || null;
+}
+
+// startSessionFromCashbook() (a freshly-started session) omits rulebookPromise, so its
+// behavior remains the same apart from overlapping the independent audited-cashbook read with
+// the mandatory Rulebook read.
+async function activateSessionView(sessionId, targetVoucherId = null, rulebookPromise = null) {
+    currentSessionId = sessionId;
+    sessionRulebook = null;
+    // Both reads are independent. Start the transaction-list request immediately, but still
+    // await and validate the Rulebook before any voucher/category/procedure data is rendered.
+    const sessionTransactionsPromise = loadTransactionList(false);
+    sessionRulebook = await (rulebookPromise || loadSessionRulebook(sessionId));
     startVerificationPresence(sessionId);
     // Header voucher-wise stats (Phase 2 of 3): kick off the session-load fetch in parallel with
     // the render path below — not awaited, so it never blocks getting the first voucher on screen.
@@ -1467,8 +1479,9 @@ async function activateSessionView(sessionId, targetVoucherId = null) {
     // fresh entry (startSessionFromCashbook()) and a hard-refresh restore (restoreSessionView()),
     // the latter a no-op via pushInPageNavEntry()'s own dedup.
     if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, 'Verification Session');
-    // Load transaction list (without showing popover) to get indices and total
-    await loadTransactionList(false);
+    // Load transaction list (without showing popover) to get indices and total. The request was
+    // started above beside the Rulebook read; awaiting it here preserves the existing render order.
+    await sessionTransactionsPromise;
     // Restore to the specific voucher the auditor was on (targetVoucherId), reusing
     // navigateToTransaction()'s existing synchronous render from the just-loaded
     // sessionTransactions — falls back to the default earliest-Pending jump if no target was
@@ -1500,8 +1513,13 @@ async function restoreSessionView(sessionId) {
         return;
     }
     try {
+        // The Rulebook and audited-cashbook reads are independent. Keep the Rulebook promise
+        // alive and pass it into activateSessionView() so it is fetched exactly once and still
+        // must validate before the first voucher is rendered.
+        const rulebookPromise = loadSessionRulebook(sessionId);
         const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/audited_cashbook/${sessionId}`);
         if (!res.ok) {
+            await rulebookPromise.catch(() => null);
             showDashboardWithMessage('This verification session is no longer available.');
             return;
         }
@@ -1519,7 +1537,7 @@ async function restoreSessionView(sessionId) {
         // Voucher hard-refresh restore: a `voucher` param means the auditor was on a specific
         // voucher (not necessarily the session's earliest-Pending one) when they refreshed.
         const targetVoucherId = new URLSearchParams(window.location.search).get('voucher');
-        await activateSessionView(sessionId, targetVoucherId);
+        await activateSessionView(sessionId, targetVoucherId, rulebookPromise);
     } catch (e) {
         console.error('Error restoring verification session:', e);
         showDashboardWithMessage('Could not restore this verification session.');

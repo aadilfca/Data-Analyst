@@ -15,6 +15,55 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Audit Workbook Procedure Modal adapter compatibility
+
+**Date:** 2026-08-31 | **Files:** `static/procedure_modal.js`, `static/audit_workbook.js`,
+`DEVELOPMENT_PLAN.md`, `CHANGELOG_ARCHIVE.md`, `KNOWN_ISSUES.md`.
+
+Audit Workbook's adapter supplied ordinary line saving but not Verification's optional grouped
+`saveAndVerifyVoucher()` method. The shared modal close handler called that method unconditionally,
+so its `×` button raised `hostAdapter.saveAndVerifyVoucher is not a function` and left the modal
+open. Audit Workbook's `awSaveLineItems()` also returned no result after a successful save, so the
+shared Verify fallback treated the save as failed and did not call `verify_voucher_checks`.
+
+The shared close path now calls the grouped method when available and otherwise falls back to the
+host's ordinary line save. `awSaveLineItems()` now returns the shared `{ok, data/error}` contract;
+its database payload, status patch, cache invalidation, and table refresh are unchanged.
+
+Browser regression testing confirmed that `×` closes after saving, `✅ Verify` calls
+`save_line_items` and `verify_voucher_checks` with HTTP 200 and closes, and `✅ Verify & Next Line`
+calls both endpoints with HTTP 200 and begins the next-line transition. No page errors were
+observed. Both changed JavaScript files passed `node --check`; the focused dirty-save suite passed
+9 tests. Aadil manually confirmed the target behavior; this phase is ready for Git commit/push.
+
+## First-voucher startup-waterfall review
+
+**Date:** 2026-08-31 | **Files:** `static/verification.js`, `DEVELOPMENT_PLAN.md`,
+`CHANGELOG_ARCHIVE.md`, `KNOWN_ISSUES.md`.
+
+The control trace showed fresh activation awaiting the session Rulebook, the full
+`audited_cashbook` transaction list, and `/next` in sequence. Hard-refresh restore also serialized
+the Rulebook and audited-cashbook reads. The payload size was not the main constraint; local
+request latency varied substantially, consistent with Supabase/connection wait.
+
+The approved local experiment starts the independent Rulebook and audited-cashbook reads together
+on fresh activation. Restore starts the same two reads together and reuses the single Rulebook
+promise. Rulebook HTTP/status validation remains mandatory before voucher/category/procedure
+rendering, and `/next` still waits for the transaction list so the existing session navigation
+state and response contracts remain unchanged. No duplicate Rulebook or audited-cashbook request
+was observed.
+
+Control restore-to-first-rows measured approximately 6.16 seconds; the changed trace measured
+approximately 4.65 seconds. Fresh activation remained variable: the changed trace overlapped
+approximately 0.72 seconds of Rulebook/audited work before a roughly 2.38-second `/next` request.
+Because these are single local samples, this supports the safer sequencing change but does not
+claim a fixed end-to-end improvement. Further parallelism is deferred because `/next` is now the
+dominant remaining read and extra concurrent pool work could worsen free-tier Supabase latency.
+
+`node --check static/verification.js` passed, and `tests/test_verification_performance_metrics.py`
+passed 5 tests. Browser verification returned HTTP 200 and rendered the first voucher on both fresh
+start and hard-refresh restore. The change remains uncommitted pending Aadil's manual test.
+
 ## Verification discovery payload review
 
 **Date:** 2026-08-31 | **Files:** `routers/verification.py`, `database.py`,

@@ -121,6 +121,54 @@ The payload sizes are not by themselves a safe reason to change response contrac
 targeted phase is the first-voucher startup waterfall: measure whether independent requests can be
 started earlier without changing Rulebook safety, session state, or first-voucher correctness.
 
+### Audit Workbook Procedure Modal adapter compatibility
+
+The Audit Workbook host exposed the normal line-save adapter but did not expose Verification's
+optional grouped `saveAndVerifyVoucher()` method. The shared modal close handler called that
+method unconditionally, so the `×` button threw a JavaScript error and left the modal open. The
+shared Verify fallback also expected a structured save result, while `awSaveLineItems()` returned
+nothing after a successful save; consequently it stopped before calling `verify_voucher_checks`.
+
+The fix is limited to the adapter contract: modal close now uses the grouped method when the host
+provides it and otherwise uses the host's ordinary line save. Audit Workbook now returns the
+shared `{ok, data/error}` result while retaining its existing save payload and table refresh.
+Verification's grouped save path is unchanged.
+
+Browser regression testing against Audit Workbook session data confirmed that `×` closes after
+`save_line_items` succeeds; `✅ Verify` calls both `save_line_items` and `verify_voucher_checks`
+with HTTP 200 and closes; and `✅ Verify & Next Line` calls both endpoints with HTTP 200 and begins
+the next-line transition. No page errors were observed. `node --check` passed for both changed
+JavaScript files, and the focused dirty-save suite passed 9 tests. This phase is locally
+implemented and user-tested; ready for Git staging/commit/push.
+
+### First-voucher startup-waterfall review
+
+The control trace confirmed that fresh session activation awaited the session Rulebook, the full
+audited-cashbook transaction list, and `/next` in sequence. Hard-refresh restore also serialized
+the Rulebook and audited-cashbook reads before reaching `/next`. The first-voucher path therefore
+contains avoidable waiting, but the measurements also show variable Supabase/connection latency;
+the payload size is not the main constraint.
+
+The approved experiment changed only `static/verification.js`: fresh activation now starts the
+independent Rulebook and audited-cashbook reads together, while restore starts those same reads
+together and passes the single Rulebook promise into activation. The Rulebook is still awaited and
+validated before category, procedure, or voucher rendering, and `/next` remains after the
+transaction list so navigation state and the existing response contracts are unchanged. No
+duplicate Rulebook or audited-cashbook request was observed.
+
+The control browser trace measured approximately 6.16 seconds to restore the first rows; the
+parallel-read trace measured approximately 4.65 seconds. Fresh activation remained variable: the
+control trace had approximately 0.24s Rulebook + 1.01s audited + 2.16s `/next` after session
+creation, while the changed trace had approximately 0.72s overlapping Rulebook/audited + 2.38s
+`/next`. These are single local samples, so the result supports the sequencing change but does
+not prove a fixed end-to-end improvement. The remaining dominant read is `/next`; increasing
+parallelism further would add pool contention and is not justified without a new measurement.
+
+`node --check static/verification.js` passed and the focused performance test suite passed 5
+tests. Browser verification confirmed HTTP 200 responses, one request per startup resource,
+correct first-voucher rendering, and successful hard-refresh restore. This phase is locally
+implemented and user-tested; ready for Git staging/commit/push.
+
 ### Fresh Procedure Modal timing review
 
 The approved direct and browser measurements used fresh test sessions and an existing assigned
@@ -146,6 +194,9 @@ wait from Python/response assembly time.
 | Grouped Save/Verify diagnostics | `routers/verification.py`, with existing database metrics | Implemented and pushed | Use component evidence during optimization |
 | Login/Client Cards investigation | Authenticated request timing | Completed; login, session guard, Client Cards, and role restriction measured | Defer optimization unless server-side timing isolates a safe material improvement |
 | Verification discovery payload review | `routers/verification.py`, `static/verification.js`, discovery tests | Completed; direct and browser payload/timing baseline recorded | Review the first-voucher startup waterfall |
+| First-voucher startup-waterfall review | `static/verification.js`, browser request-order/timing trace | User-tested; Rulebook and audited reads overlap safely, `/next` remains protected by existing ordering | Keep under observation; no further parallelism planned |
+| Audit Workbook Procedure Modal adapter compatibility | `static/procedure_modal.js`, `static/audit_workbook.js` | User-tested; close and both Verify actions use the correct host save contract | Continue with the next measured Audit Workbook task |
+| Audit Workbook support-data reuse | `static/audit_workbook.js`, `static/procedure_modal.js`, performance tests | Pending; remove the known per-line support-data request storm while preserving modal behavior | Define exact file scope and measure current request count first |
 | Database query-plan investigation | Read-only Postgres `EXPLAIN ANALYZE` | Completed | Reduce Verification result payloads |
 | Verification bottleneck optimization | Procedure-modal diagnostics and duplicate sibling-read removal | User-tested and pushed | Continue with the next measured bottleneck |
 | Rulebook template metadata wiring | `routers/audit_rules.py`, Verification adapter, Procedure Modal | User-tested and pushed | Continue with measured fresh-data optimization |
@@ -162,8 +213,10 @@ wait from Python/response assembly time.
 |---|---|---|
 | Authenticated Login/Client Cards baseline | Separate login cost from stable post-login request behavior | Completed; no code change recommended |
 | Fresh Procedure Modal timing review | Separate server, database, and browser/cache timing before changing the modal loader | Completed; no code change recommended |
-| This phase — Verification discovery payload review | Separate discovery response cost from the first-voucher request waterfall | Completed; no payload contract rewrite recommended |
-| First-voucher startup waterfall review | Start independent work earlier only if Rulebook/session safety and correctness remain unchanged | Pending; next targeted phase |
+| Verification discovery payload review | Separate discovery response cost from the first-voucher request waterfall | Completed; no payload contract rewrite recommended |
+| First-voucher startup waterfall review | Start independent work earlier only if Rulebook/session safety and correctness remain unchanged | User-tested; no further parallelism planned |
+| Audit Workbook Procedure Modal adapter compatibility | Keep the shared modal compatible with both grouped-save and line-save hosts | User-tested; ready for Git commit/push |
+| This phase — Audit Workbook support-data reuse | Remove repeated per-line support-data reads without changing modal results | Pending; next phase after this commit |
 | Audit Workbook Rulebook reuse | Extend the compiled Rulebook approach after Verification remains stable | Later planned phase |
 | Login optimization | Separate bcrypt time from database/connection wait before changing code | Deferred |
 

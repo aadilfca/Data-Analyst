@@ -1154,8 +1154,15 @@ async function closeProcedureModal() {
         if (window.LoadingUI) window.LoadingUI.showProgressBar(procedureModalClose, { mode: 'indeterminate', message: 'Saving…' });
         try {
             const physicalBillsSaved = await flushPhysicalBillEntries(currentProcedureModalUid);
-            const result = await hostAdapter.saveAndVerifyVoucher(currentProcedureModalUid, false);
-            if (!result || !result.ok) throw new Error('Grouped save failed.');
+            // Verification supplies the grouped save path. Audit Workbook deliberately has a
+            // lean adapter, so close must use its ordinary line save instead of calling a method
+            // that host does not provide. Both paths return the same {ok, data/error} contract.
+            const result = typeof hostAdapter.saveAndVerifyVoucher === 'function'
+                ? await hostAdapter.saveAndVerifyVoucher(currentProcedureModalUid, false)
+                : await hostAdapter.saveLineItems(currentProcedureModalUid, { force: true });
+            if (!result || !result.ok) {
+                throw new Error(result?.error?.detail || result?.error?.message || 'Save failed.');
+            }
             // The bundle just persisted every line in this voucher — drop each line's cached
             // modal payload so a later reopen re-fetches the saved ticks, not the pre-save copy.
             invalidateProcedureModalDataForVoucher();
