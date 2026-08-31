@@ -5130,7 +5130,12 @@ def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
     perf_token = start_db_metrics() if perf else None
     try:
         anchor = execute_query_pg(
-            "SELECT session_id, transaction_ref FROM verification_details WHERE id = %s",
+            """
+            SELECT vd.session_id, vd.transaction_ref, vs.client_id
+            FROM verification_details vd
+            JOIN verification_sessions vs ON vs.id = vd.session_id
+            WHERE vd.id = %s
+            """,
             (voucher_line_id,),
         )
         if not anchor:
@@ -5199,7 +5204,8 @@ def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
         for r in bills:
             if (_ts_sort_key(r['updated_at']),r['voucher_line_id']) == winning[(r['client_data_id'],r['document_id'])]: bill_map.setdefault(r['client_data_id'],[]).append(_shape_physical_bill(r,item_map.get(r['id'],[])))
         result={str(r['id']):{"linked_documents":{"voucher_line_id":r['id'],"documents":link_map.get(sibling_by_line[r['id']],[]),"count":len(link_map.get(sibling_by_line[r['id']],[]))},"procedure_checks":{"voucher_line_id":r['id'],"checks":check_map.get(sibling_by_line[r['id']],[])},"observations":{"voucher_line_id":r['id'],"entries":obs_map.get(sibling_by_line[r['id']],[])},"physical_bills":{"voucher_line_id":r['id'],"bills":bill_map.get(sibling_by_line[r['id']],[]),"count":len(bill_map.get(sibling_by_line[r['id']],[]))}} for r in lines_rows}
-        response={"voucher_line_id":voucher_line_id,"transaction_ref":anchor[0]['transaction_ref'],"lines":result}
+        response={"voucher_line_id":voucher_line_id,"transaction_ref":anchor[0]['transaction_ref'],
+                  "client_id":anchor[0].get('client_id'),"lines":result}
         if perf:
             response['_perf']={"total_ms":round((time.perf_counter()-started)*1000,1),**get_db_metrics()}
         return response
@@ -5989,21 +5995,31 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
         for document in linked_documents.get("documents", []):
             linked_by_document.setdefault(document["document_id"], []).append(document["client_data_id"])
 
-        voucher_row = execute_query_pg(
-            """
-            SELECT vd.transaction_ref, vs.client_id
-            FROM verification_details vd
-            JOIN verification_sessions vs ON vs.id = vd.session_id
-            WHERE vd.id = %s
-            """,
-            (voucher_line_id,)
-        )
+        # get_voucher_support_data() already resolves transaction_ref and client_id from the
+        # same voucher-line/session join. Reuse that metadata instead of paying for a second
+        # identical lookup; the fallback keeps compatibility with older test doubles or any
+        # alternate caller that returns only the historical support payload fields.
+        client_id = support_data.get("client_id")
+        transaction_ref = support_data.get("transaction_ref")
+        if client_id is None or not transaction_ref:
+            voucher_row = execute_query_pg(
+                """
+                SELECT vd.transaction_ref, vs.client_id
+                FROM verification_details vd
+                JOIN verification_sessions vs ON vs.id = vd.session_id
+                WHERE vd.id = %s
+                """,
+                (voucher_line_id,)
+            )
+            if voucher_row:
+                transaction_ref = voucher_row[0]['transaction_ref']
+                client_id = voucher_row[0]['client_id']
         voucher_checks = []
-        if voucher_row and voucher_row[0]['transaction_ref']:
+        if client_id is not None and transaction_ref:
             voucher_checks_started = time.perf_counter()
             voucher_checks = get_voucher_checks_status(
-                client_id=voucher_row[0]['client_id'],
-                transaction_ref=voucher_row[0]['transaction_ref']
+                client_id=client_id,
+                transaction_ref=transaction_ref
             )
             if perf:
                 component_ms["voucher_checks_ms"] = round((time.perf_counter() - voucher_checks_started) * 1000, 1)

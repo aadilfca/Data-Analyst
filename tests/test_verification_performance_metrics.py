@@ -62,6 +62,8 @@ def test_procedure_modal_uses_shared_support_loader_for_cross_checks(monkeypatch
     def fake_support_loader(voucher_line_id):
         support_loader_calls.append(voucher_line_id)
         return {
+            "transaction_ref": "T-1",
+            "client_id": 1,
             "lines": {
                 str(voucher_line_id): {
                     "linked_documents": {
@@ -77,11 +79,10 @@ def test_procedure_modal_uses_shared_support_loader_for_cross_checks(monkeypatch
         }
 
     monkeypatch.setattr(verification, "get_voucher_support_data", fake_support_loader)
-    monkeypatch.setattr(
-        verification,
-        "execute_query_pg",
-        lambda query, params=(): [{"transaction_ref": "T-1", "client_id": 1}],
-    )
+    def fail_query(*args, **kwargs):
+        raise AssertionError("procedure modal should reuse support-loader metadata")
+
+    monkeypatch.setattr(verification, "execute_query_pg", fail_query)
     monkeypatch.setattr(verification, "get_voucher_checks_status", lambda **kwargs: [])
     monkeypatch.setattr(
         verification,

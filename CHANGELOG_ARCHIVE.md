@@ -15,6 +15,27 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Procedure Modal duplicate metadata lookup
+
+**Date:** 2026-08-31 | **Files:** `routers/verification.py`,
+`tests/test_verification_performance_metrics.py`.
+
+The shared `get_voucher_support_data()` loader already resolved the voucher's session and
+transaction metadata, but `get_procedure_modal_data()` issued a second identical lookup solely to
+obtain the client ID for Voucher-level Checks. The support response now carries that already-known
+client ID, and the modal endpoint reuses it. A safe fallback retains compatibility with older test
+doubles or alternate callers that provide only the historical support fields. Existing payload
+sections and fresh-data behavior remain unchanged.
+
+Before the change, a live modal request measured 3.55 seconds with 6 outer database reads. After
+the change, three live requests measured 5.20, 3.86, and 3.21 seconds with 5, 4, and 4 outer
+reads respectively; remote database variability remains substantial, but the targeted duplicate
+lookup is removed. The response remained approximately 2.3 KB and HTTP 200.
+
+Focused and full regression checks passed: 47 tests passed with four existing warnings, Python
+compilation passed, and the new test asserts that the modal reuses support-loader metadata without
+another query. The user manually confirmed the modal flow before commit/push.
+
 ## Audit Rules optional Sortable.js resilience
 
 **Date:** 2026-08-31 | **Files:** `static/audit_rules.js`.
