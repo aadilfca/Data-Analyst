@@ -15,6 +15,25 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Fresh Procedure Modal timing review
+
+**Date:** 2026-08-31 | **Files:** `routers/verification.py`, `static/verification.js`,
+`static/procedure_modal.js`, `tests/test_verification_performance_metrics.py`,
+`DEVELOPMENT_PLAN.md`, `KNOWN_ISSUES.md`.
+
+The approved direct and browser measurements used fresh test sessions and an existing assigned
+Category. The server returned HTTP 200 with an approximately 2.3 KB response. Fresh requests took
+approximately 2.27–2.47 seconds, made four reads, and reported approximately 0.84–0.95 seconds of
+database time. The named stages were approximately 1.43–1.59 seconds for shared support data,
+0.41–0.46 seconds for voucher checks, and 0.40–0.49 seconds for cross-check evaluation.
+
+The browser-visible first-open time was approximately 2.55 seconds, with one
+`procedure_modal_data?perf=true` request. Reopening without saving took approximately 62 ms and
+made no API request, confirming the client cache and in-flight reuse. Closing intentionally saves
+and invalidates the cache and was therefore not used as the warm-cache test. The one-request design
+and small response are sound; no additional fan-out, cache, or query rewrite is justified without
+more specific server-side evidence. No application code was changed.
+
 ## Login and Client Cards performance investigation
 
 **Date:** 2026-08-31 | **Files:** `routers/auth.py`, `routers/clients.py`,

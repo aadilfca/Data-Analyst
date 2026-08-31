@@ -99,6 +99,23 @@ timings and small response sizes do not justify a query or frontend rewrite. Log
 consistent with bcrypt plus database/connection wait, but cannot be separated further without
 server-side timings. No application-code change is recommended in this phase.
 
+### Fresh Procedure Modal timing review
+
+The approved direct and browser measurements used fresh test sessions and an existing assigned
+Category. The server returned HTTP 200 with a response of approximately 2.3 KB. Across fresh
+requests, total server time was approximately 2.27–2.47 seconds, with four reads and approximately
+0.84–0.95 seconds of measured database time. The named stages were approximately 1.43–1.59 seconds
+for shared support data, 0.41–0.46 seconds for voucher checks, and 0.40–0.49 seconds for
+cross-check evaluation.
+
+The browser-visible first-open time was approximately 2.55 seconds, with one
+`procedure_modal_data?perf=true` request. Reopening the same modal without saving took approximately
+62 ms and made no API request, confirming that the client cache and in-flight reuse are effective.
+Closing the modal intentionally saves and invalidates the cache, so that path was not treated as a
+warm-cache measurement. The current one-request design and small response are sound; no additional
+fan-out, cache, or query rewrite is justified without more specific evidence separating connection
+wait from Python/response assembly time.
+
 ## Phase status
 
 | Phase | Scope | Status | Next action |
@@ -120,8 +137,8 @@ server-side timings. No application-code change is recommended in this phase.
 
 | Pendency | Objective | Status |
 |---|---|---|
-| This phase — authenticated Login/Client Cards baseline | Separate login cost from stable post-login request behavior | Completed; no code change recommended |
-| Fresh Procedure Modal timing review | Capture server-side component timings and change only a proven bottleneck | Pending; next performance evidence item |
+| Authenticated Login/Client Cards baseline | Separate login cost from stable post-login request behavior | Completed; no code change recommended |
+| This phase — Fresh Procedure Modal timing review | Separate server, database, and browser/cache timing before changing the modal loader | Completed; no code change recommended |
 | Verification discovery payload review | Re-measure large response/JSON-processing cost after the completed optimizations | Pending; act only if still materially slow |
 | Audit Workbook Rulebook reuse | Extend the compiled Rulebook approach after Verification remains stable | Later planned phase |
 | Login optimization | Separate bcrypt time from database/connection wait before changing code | Deferred |
