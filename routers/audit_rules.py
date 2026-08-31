@@ -10,8 +10,15 @@ import time
 import threading
 from fastapi import APIRouter, HTTPException, Body, Query, Response, Depends
 from pydantic import BaseModel
+import database
 from typing import Any, Optional, List, Dict
-from database import execute_query_pg, execute_write_pg, log_audit
+from database import (
+    execute_query_pg,
+    execute_write_pg,
+    log_audit,
+    bump_persisted_audit_rules_config_version,
+    get_persisted_audit_rules_config_version,
+)
 
 router = APIRouter()
 
@@ -44,13 +51,21 @@ def ensure_no_active_verification_sessions():
 AUDIT_RULES_CACHE_TTL_SECONDS = 600  # 10 min safety net
 
 _audit_rules_config_version = 1
+_audit_rules_config_version_source = None
 _audit_rules_cache: Dict[str, tuple] = {}  # key -> (expires_at, config_version, value)
 _verification_rulebook_cache: Dict[str, tuple] = {}  # key -> (expires_at, config_version, value)
 _audit_rules_cache_lock = threading.Lock()
 
 def get_audit_rules_config_version() -> int:
-    """Return the current process-local version for stable Audit Rules configuration."""
+    """Return the durable version for stable Audit Rules configuration."""
+    global _audit_rules_config_version, _audit_rules_config_version_source
     with _audit_rules_cache_lock:
+        source = "postgres" if database.is_postgres_schema_ready() else "sqlite"
+        if _audit_rules_config_version_source != source:
+            persisted = get_persisted_audit_rules_config_version()
+            if persisted is not None:
+                _audit_rules_config_version = persisted
+            _audit_rules_config_version_source = source
         return _audit_rules_config_version
 
 def cache_get(key: str):
@@ -77,8 +92,15 @@ def invalidate_audit_rules_cache():
     see the section comment above for why a full clear, not a scoped one, is correct here.
     """
     with _audit_rules_cache_lock:
-        global _audit_rules_config_version
-        _audit_rules_config_version += 1
+        global _audit_rules_config_version, _audit_rules_config_version_source
+        persisted = bump_persisted_audit_rules_config_version()
+        if persisted is None:
+            _audit_rules_config_version += 1
+        else:
+            _audit_rules_config_version = int(persisted)
+        _audit_rules_config_version_source = (
+            "postgres" if database.is_postgres_schema_ready() else "sqlite"
+        )
         _audit_rules_cache.clear()
         _verification_rulebook_cache.clear()
 

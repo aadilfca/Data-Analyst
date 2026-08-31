@@ -2525,6 +2525,45 @@ def get_verification_session_rulebook(session_id: int):
     return {"session_id": session_id, "rulebook": rulebook}
 
 
+@router.post("/api/verification/session/{session_id}/rulebook/rebase")
+def rebase_verification_session_rulebook(session_id: int, user_session=Depends(get_current_user)):
+    """Explicitly move a resumable session to the current Rulebook version.
+
+    This changes only the session's stable-rule reference. Verification details, evidence,
+    observations, and saved conclusions remain untouched so recovery cannot discard work.
+    """
+    sessions = execute_query_pg(
+        "SELECT client_id, rulebook_version FROM verification_sessions "
+        "WHERE id = %s AND status != 'Cancelled'",
+        (session_id,)
+    )
+    if not sessions:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+
+    current_version = get_audit_rules_config_version()
+    if sessions[0].get("rulebook_version") == current_version:
+        return {
+            "session_id": session_id,
+            "rulebook_version": current_version,
+            "recovered": False,
+            "message": "Verification session already uses the current Rulebook.",
+        }
+
+    updated = execute_write_pg(
+        "UPDATE verification_sessions SET rulebook_version = %s "
+        "WHERE id = %s AND status != 'Cancelled' RETURNING id",
+        (current_version, session_id)
+    )
+    if updated is None:
+        raise HTTPException(404, "Verification session not found or cancelled.")
+    return {
+        "session_id": session_id,
+        "rulebook_version": current_version,
+        "recovered": True,
+        "message": "Verification session is ready to resume with the current Rulebook.",
+    }
+
+
 def load_verification_rulebook_for_session(session_id: int) -> dict:
     """Load a session's stable Rulebook while enforcing its captured version."""
     sessions = execute_query_pg(
@@ -2540,8 +2579,18 @@ def load_verification_rulebook_for_session(session_id: int) -> dict:
     if session_version is not None and session_version != current_version:
         raise HTTPException(
             409,
-            "This Verification session uses an older Rulebook version. "
-            "Restart the session before continuing."
+            {
+                "code": "RULEBOOK_VERSION_MISMATCH",
+                "message": "This Verification session uses an older Rulebook version.",
+                "session_id": session_id,
+                "session_version": session_version,
+                "current_version": current_version,
+                "recovery": {
+                    "method": "POST",
+                    "path": f"/api/verification/session/{session_id}/rulebook/rebase",
+                    "preserves_work": True,
+                },
+            }
         )
 
     return load_client_verification_rulebook(sessions[0]["client_id"])

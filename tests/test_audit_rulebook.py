@@ -3,6 +3,7 @@ from unittest.mock import patch
 import os
 import sqlite3
 import tempfile
+import importlib
 
 import database
 from database import init_db
@@ -16,12 +17,22 @@ from routers.audit_rules import (
     load_client_verification_rulebook,
 )
 from routers.audit_rules import compile_verification_rulebook
-from routers.verification import _build_working_paper_gates, get_verification_session_rulebook
+from routers.verification import (
+    _build_working_paper_gates,
+    get_verification_session_rulebook,
+    rebase_verification_session_rulebook,
+)
 
 
 class AuditRulebookCompilerTests(unittest.TestCase):
     def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        database.DB_NAME = os.path.join(self.tmpdir.name, "test.db")
+        init_db()
         invalidate_audit_rules_cache()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
 
     def test_invalidation_increments_version_and_expires_cached_value(self):
         starting_version = get_audit_rules_config_version()
@@ -34,16 +45,48 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertIsNone(cache_get("rulebook:test"))
 
     def test_session_schema_has_nullable_rulebook_version(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            database.DB_NAME = os.path.join(tmpdir, "test.db")
-            init_db()
-            conn = sqlite3.connect(database.DB_NAME)
-            try:
-                columns = {row[1]: row[3] for row in conn.execute("PRAGMA table_info(verification_sessions)")}
-            finally:
-                conn.close()
-            self.assertIn("rulebook_version", columns)
-            self.assertEqual(columns["rulebook_version"], 0)
+        conn = sqlite3.connect(database.DB_NAME)
+        try:
+            columns = {row[1]: row[3] for row in conn.execute("PRAGMA table_info(verification_sessions)")}
+        finally:
+            conn.close()
+        self.assertIn("rulebook_version", columns)
+        self.assertEqual(columns["rulebook_version"], 0)
+
+    def test_rulebook_config_version_survives_router_reload(self):
+        first_version = get_audit_rules_config_version()
+        invalidate_audit_rules_cache()
+        expected_version = first_version + 1
+
+        import routers.audit_rules as audit_rules_module
+        reloaded = importlib.reload(audit_rules_module)
+
+        self.assertEqual(reloaded.get_audit_rules_config_version(), expected_version)
+
+    def test_session_rulebook_mismatch_includes_explicit_recovery(self):
+        with patch(
+            "routers.verification.execute_query_pg",
+            return_value=[{"client_id": 7, "rulebook_version": 1}],
+        ), patch("routers.verification.get_audit_rules_config_version", return_value=2):
+            with self.assertRaises(Exception) as raised:
+                get_verification_session_rulebook(12)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.detail["code"], "RULEBOOK_VERSION_MISMATCH")
+        self.assertTrue(raised.exception.detail["recovery"]["preserves_work"])
+
+    def test_explicit_session_rebase_preserves_work_contract(self):
+        with patch(
+            "routers.verification.execute_query_pg",
+            return_value=[{"client_id": 7, "rulebook_version": 1}],
+        ), patch("routers.verification.get_audit_rules_config_version", return_value=2), patch(
+            "routers.verification.execute_write_pg", return_value=12
+        ) as write:
+            result = rebase_verification_session_rulebook(12, {"user_id": 4})
+
+        self.assertTrue(result["recovered"])
+        self.assertEqual(result["rulebook_version"], 2)
+        self.assertIn("rulebook_version = %s", write.call_args.args[0])
 
     def test_account_index_prefers_trial_balance_and_uses_assignment_fallback(self):
         def query(sql, params=()):

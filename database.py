@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DB_NAME = "test.db"
+_POSTGRES_SCHEMA_READY = False
 # Print absolute path for verification
 # Windows may use cp1252 for console output; startup diagnostics contain Unicode icons.
 if hasattr(sys.stdout, "reconfigure"):
@@ -1005,6 +1006,19 @@ def init_db():
                     (key, val, desc)
                 )
         print("✅ Seeded app settings")
+
+        # Durable version for stable Audit Rules/Rulebook configuration. The singleton row
+        # survives process restarts, unlike the in-memory cache version maintained by the router.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rules_config_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                config_version INTEGER NOT NULL DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute(
+            "INSERT OR IGNORE INTO audit_rules_config_state (id, config_version) VALUES (1, 1)"
+        )
 
         # --- Schema upgrades for existing databases ---
         # Add client_id column to uploaded_files if missing
@@ -2995,6 +3009,21 @@ def init_db_postgres(conn):
         )
     ''', "app_settings")
 
+    # Durable singleton version for stable Audit Rules/Rulebook configuration. It is kept
+    # separate from app_settings so setup backup/restore cannot roll back safety state.
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rules_config_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            config_version INTEGER NOT NULL DEFAULT 1,
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "audit_rules_config_state")
+    run('''
+        INSERT INTO audit_rules_config_state (id, config_version)
+        VALUES (1, 1)
+        ON CONFLICT (id) DO NOTHING
+    ''')
+
     # ---------- 16. data_audit_log ----------
     # changed_at (not created_at): fixes get_data_audit_history()'s pre-existing
     # "no such column" bug - see the module-level comment above.
@@ -3422,6 +3451,8 @@ def init_db_postgres(conn):
 
     conn.commit()
     print("[postgres] schema initialization complete")
+    global _POSTGRES_SCHEMA_READY
+    _POSTGRES_SCHEMA_READY = True
 
 
 def _seed_postgres_data(conn):
@@ -3944,6 +3975,51 @@ def execute_write_pg(query, params=None):
                 row = cur.fetchone()
                 return row[0] if row else None
             return None
+
+
+def is_postgres_schema_ready() -> bool:
+    """Return whether startup completed the Postgres schema initialization."""
+    return _POSTGRES_SCHEMA_READY
+
+
+def get_persisted_audit_rules_config_version() -> int | None:
+    """Read the durable Rulebook configuration version from the active database."""
+    if _POSTGRES_SCHEMA_READY:
+        rows = execute_query_pg(
+            "SELECT config_version FROM audit_rules_config_state WHERE id = 1"
+        )
+    else:
+        try:
+            rows = execute_query(
+                "SELECT config_version FROM audit_rules_config_state WHERE id = 1"
+            )
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                return None
+            raise
+    return int(rows[0]["config_version"]) if rows else None
+
+
+def bump_persisted_audit_rules_config_version() -> int | None:
+    """Atomically advance and return the durable Rulebook configuration version."""
+    if _POSTGRES_SCHEMA_READY:
+        return execute_write_pg(
+            "UPDATE audit_rules_config_state "
+            "SET config_version = config_version + 1, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = 1 RETURNING config_version"
+        )
+
+    try:
+        execute_write(
+            "UPDATE audit_rules_config_state "
+            "SET config_version = config_version + 1, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = 1"
+        )
+        return get_persisted_audit_rules_config_version()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return None
+        raise
 
 
 def get_raw_conn_pg():

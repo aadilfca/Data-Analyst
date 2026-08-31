@@ -1438,10 +1438,53 @@ async function startSessionFromCashbook() {
 async function loadSessionRulebook(sessionId) {
     const rulebookResponse = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/session/${sessionId}/rulebook`);
     if (!rulebookResponse.ok) {
-        const error = await rulebookResponse.json().catch(() => ({}));
-        throw new Error(error.detail || 'Unable to load the Verification Rulebook');
+        const payload = await rulebookResponse.json().catch(() => ({}));
+        const detail = payload.detail !== undefined
+            ? payload.detail
+            : (payload.error && payload.error.http_detail);
+        if (rulebookResponse.status === 409 && detail && typeof detail === 'object' &&
+            detail.code === 'RULEBOOK_VERSION_MISMATCH') {
+            const error = new Error(detail.message || 'This Verification session uses an older Rulebook version.');
+            error.code = detail.code;
+            error.recovery = detail.recovery || null;
+            throw error;
+        }
+        const message = typeof detail === 'string'
+            ? detail
+            : (payload.error && payload.error.user_message) || 'Unable to load the Verification Rulebook';
+        throw new Error(message);
     }
     return (await rulebookResponse.json()).rulebook || null;
+}
+
+// A Rulebook mismatch is safe to recover only through an explicit user action. The backend
+// changes the session version only; all existing verification work remains in place.
+async function loadSessionRulebookWithRecovery(sessionId) {
+    try {
+        return await loadSessionRulebook(sessionId);
+    } catch (error) {
+        if (error.code !== 'RULEBOOK_VERSION_MISMATCH' || !error.recovery) throw error;
+        const confirmed = window.confirm(
+            'This Verification session uses an older Rulebook. Update the session to the current '
+            + 'Rulebook to resume? Your saved verification work will be preserved.'
+        );
+        if (!confirmed) {
+            error.recoveryDeclined = true;
+            throw error;
+        }
+        const recoveryResponse = await window.ApiUtils.apiFetchMutate(error.recovery.path, {
+            method: error.recovery.method || 'POST'
+        });
+        const recoveryPayload = await recoveryResponse.json().catch(() => ({}));
+        if (!recoveryResponse.ok) {
+            const detail = recoveryPayload.detail ||
+                (recoveryPayload.error && recoveryPayload.error.http_detail) ||
+                (recoveryPayload.error && recoveryPayload.error.user_message) ||
+                'Unable to recover this Verification session.';
+            throw new Error(typeof detail === 'string' ? detail : 'Unable to recover this Verification session.');
+        }
+        return await loadSessionRulebook(sessionId);
+    }
 }
 
 // startSessionFromCashbook() (a freshly-started session) omits rulebookPromise, so its
@@ -1453,7 +1496,7 @@ async function activateSessionView(sessionId, targetVoucherId = null, rulebookPr
     // Both reads are independent. Start the transaction-list request immediately, but still
     // await and validate the Rulebook before any voucher/category/procedure data is rendered.
     const sessionTransactionsPromise = loadTransactionList(false);
-    sessionRulebook = await (rulebookPromise || loadSessionRulebook(sessionId));
+    sessionRulebook = await (rulebookPromise || loadSessionRulebookWithRecovery(sessionId));
     startVerificationPresence(sessionId);
     // Header voucher-wise stats (Phase 2 of 3): kick off the session-load fetch in parallel with
     // the render path below — not awaited, so it never blocks getting the first voucher on screen.
@@ -1516,7 +1559,7 @@ async function restoreSessionView(sessionId) {
         // The Rulebook and audited-cashbook reads are independent. Keep the Rulebook promise
         // alive and pass it into activateSessionView() so it is fetched exactly once and still
         // must validate before the first voucher is rendered.
-        const rulebookPromise = loadSessionRulebook(sessionId);
+        const rulebookPromise = loadSessionRulebookWithRecovery(sessionId);
         const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/audited_cashbook/${sessionId}`);
         if (!res.ok) {
             await rulebookPromise.catch(() => null);
@@ -1540,7 +1583,11 @@ async function restoreSessionView(sessionId) {
         await activateSessionView(sessionId, targetVoucherId, rulebookPromise);
     } catch (e) {
         console.error('Error restoring verification session:', e);
-        showDashboardWithMessage('Could not restore this verification session.');
+        if (e.code === 'RULEBOOK_VERSION_MISMATCH' && e.recoveryDeclined) {
+            showDashboardWithMessage('The session was left unchanged because Rulebook recovery was declined.');
+        } else {
+            showDashboardWithMessage('Could not restore this verification session.');
+        }
     }
 }
 

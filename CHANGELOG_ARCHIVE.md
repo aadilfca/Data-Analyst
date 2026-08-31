@@ -15,6 +15,72 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Code Health Review — Rulebook and shared-modal reconciliation
+
+**Date:** 2026-08-31 | **Scope:** `routers/audit_rules.py`, `routers/verification.py`,
+`routers/templates.py`, `database.py`, `static/procedure_modal.js`, `static/verification.js`,
+`static/audit_workbook.js`, `KNOWN_ISSUES.md`, `DEVELOPMENT_PLAN.md`.
+
+Claude's six reported findings were independently compared with the current source and commit
+history. Finding 1 is superseded rather than current: `a09258a` used the overly broad
+`verification_sessions.status = 'In Progress'` guard, but `d7a7c6f` replaced it with the current
+`verification_presence` lease query requiring an unended heartbeat within 90 seconds. Therefore
+old In Progress sessions do not currently create the reported permanent Audit Rules lock. The
+missing terminal session lifecycle remains a separate design pendency for cleanup and reporting.
+
+Finding 2 is confirmed and high risk. `_audit_rules_config_version` is process-local and starts at 1
+after a restart, while existing sessions retain their captured version. Template/master-column
+invalidation also increments the same version. `load_verification_rulebook_for_session()` rejects
+any mismatch with HTTP 409 and is used by session activation, line saves, grouped Save/Verify,
+voucher-check verification, and status-reason reads. A controlled restart-safe compatibility or
+recovery design is required before treating the Rulebook lock as complete.
+
+Finding 3 is confirmed as a shared-host contract regression. The voucher-level check controls in
+`procedure_modal.js` currently issue immediate individual/batch writes for both hosts, while the
+Verification close/grouped path also submits the state. The Audit Workbook requirement for direct
+persistence and Verification's local-first/grouped requirement must be separated explicitly; the
+current behavior can perform duplicate idempotent writes and undermines the intended network-saving
+design.
+
+Finding 4 is confirmed as a display-only Rulebook adapter defect. Verification maps Rulebook
+documents and roles but passes cross-checks through without converting `document_ids` to document
+names or exposing document-level `cross_check_fields`. Audit Workbook's
+`awRulebookCategoryToGuidance()` already contains the proven normalization pattern. No status gate
+or audit conclusion is changed, but the Verification guidance popover can omit the visible chain.
+
+Findings 5 and 6 are valid deferred hardening items. The sibling-ID memo is held in a ContextVar and
+is not automatically available in ThreadPoolExecutor workers, so concurrent modal helpers can repeat
+the resolution. Audit Workbook's observation and no-match-note flushes occur before its `try`, so a
+flush failure can bypass the adapter's `{ok, data/error}` contract. Neither changes current audit
+conclusions; both should be addressed only after the correctness fixes.
+
+Additional unique pendencies recorded in the plan are explicit terminal Verification-session
+lifecycle design, targeted regression tests for version drift/restart recovery and host-specific
+voucher-check behavior, and reconciliation of stale historical Markdown status lines. The full
+current test suite passes 49 tests with four non-blocking warnings; earlier Postgres-cutover failure
+notes are stale and should not be treated as active failures.
+
+The final stabilization order is: Rulebook recovery, shared-modal host gating, Verification guidance
+normalization, Safety Phase A/B acceptance, targeted regression coverage, deferred hardening only if
+still justified, documentation/Git closeout, then real product development. Further Supabase/free-tier
+performance tuning remains deferred because the measured variability is infrastructure/connection
+wait dominated and no safe additional rewrite is proven.
+
+## Audit Workbook Physical Bill completion validation
+
+**Date:** 2026-08-31 | **Files:** `static/audit_workbook.js`, `static/verification.js`,
+`DEVELOPMENT_PLAN.md`, `CHANGELOG_ARCHIVE.md`, `KNOWN_ISSUES.md`.
+
+The stale Physical Bill finding was validated against the current implementation. Audit Workbook's
+`awRefreshLineProcedures()` already uses the correct multi-bill rule: matching-bill filtering,
+complete bill headers, server-computed `bill_total`, and the established 0.005 voucher-amount
+tolerance. This matches Verification's implementation, so no code change was required.
+
+Live Playwright validation against session 878 found 82 lines across six Physical Bill categories.
+Existing bills were returned with nested items and `bill_total`; Procedures counts reflected the
+current data, and no page errors occurred. The finding is closed as a validation/documentation
+phase.
+
 ## Audit Workbook voucher-check persistence regression
 
 **Date:** 2026-08-31 | **Files:** `static/procedure_modal.js`, `DEVELOPMENT_PLAN.md`,
@@ -3683,6 +3749,53 @@ server logging.
 
 **Verified:** after local process cleanup, login succeeded and the Verification flow completed through
 session start, presence, procedure/support loading, atomic Save → Verify, and voucher navigation.
+
+---
+
+## Current stabilization roadmap - Phase 0 documentation reconciliation
+
+**Date:** 2026-08-31 | **Files:** `DEVELOPMENT_PLAN.md`, `CHANGELOG_ARCHIVE.md`.
+
+The latest Code Health Review was reconciled against current `HEAD` and the existing Markdown
+records. The old permanent Audit Rules lock finding is not current because the guard now uses an
+expiring, ended-aware `verification_presence` lease. The separate absence of explicit terminal
+Completed/Cancelled session states remains a design feature.
+
+The true stabilization order is now recorded in `DEVELOPMENT_PLAN.md`: first make Rulebook versions
+restart-safe and provide controlled recovery for resumable sessions; then separate Verification's
+local-first voucher-check persistence from Audit Workbook's direct persistence; then normalize
+Verification Rulebook guidance. Safety acceptance, regression coverage, deferred hardening,
+documentation/Git closeout, and Cross-check Field-to-Compare follow in separate phases.
+
+This phase changed documentation only. `KNOWN_ISSUES.md` already contained the six reviewed
+findings and required no additional entry. `CLAUDE.md` was not changed because its Status log is
+already beyond the documented drift threshold and the maintenance rule requires compression before
+adding another entry.
+
+**Verification:** Markdown diff review and `git diff --check` are required before closeout; no
+application tests are required because no code or test behavior changed.
+
+---
+
+## Phase 1 - durable Rulebook version and explicit session recovery
+
+**Date:** 2026-08-31 | **Files:** `database.py`, `routers/audit_rules.py`, `routers/verification.py`,
+`static/verification.js`, `tests/test_audit_rulebook.py`.
+
+The Rulebook configuration version is now durable in both SQLite and Postgres through a dedicated
+singleton state record. Audit Rules invalidation advances that stored version and synchronizes the
+existing process caches, so a server restart no longer resets the version and falsely invalidates
+resumable sessions.
+
+Version mismatch protection remains in place for real configuration changes. The Verification API now
+returns structured recovery information and provides an authenticated explicit rebase action. Rebase
+updates only the session's captured Rulebook version; verification details, evidence, observations,
+and saved conclusions remain intact. The Verification frontend asks for confirmation before rebasing
+and retries the Rulebook load only after the user accepts.
+
+**Verified:** focused Rulebook/Save-Verify tests passed (23 tests), the full suite passed (52 tests),
+Python and JavaScript syntax checks passed, and Aadil manually confirmed the recovery behavior. Four
+existing non-blocking warnings remain. No Git action was performed until this approved closeout.
 
 ---
 

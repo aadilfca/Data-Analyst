@@ -15,6 +15,91 @@ Each phase follows this sequence:
 
 Performance work follows: measure → identify the bottleneck → change one area → retest.
 
+After each development, disclose only unresolved pendencies in a four-column table: `Phase No`,
+`Phase/Pendency`, `Objective`, and `Status`. Do not repeat completed phases or the full roadmap in
+each response. The next active item must be labelled **This phase**; completed work remains in the
+phase-status and decision-history sections.
+
+## Current stabilization roadmap
+
+### Phase 0 - documentation and scope reconciliation
+
+**Date:** 2026-08-31
+
+This phase reconciles the latest Code Health Review with the current `HEAD`, records the true
+remaining risks, and establishes the safe order for stabilization. It is documentation-only; no
+application code or test behavior is changed here.
+
+#### Phase 0 outcome
+
+- The reported permanent Audit Rules lock is not a current defect. The active guard uses an
+  expiring, ended-aware `verification_presence` lease. An explicit terminal session lifecycle is
+  still a separate design feature.
+- Rulebook version recovery is the highest-priority defect. The process-local version resets on
+  restart, while resumable sessions retain their captured version; stable-rule invalidation can
+  also create an unrecoverable HTTP 409 mismatch.
+- Shared voucher-check persistence requires an explicit host contract. Verification must remain
+  local-first and persist through grouped Save and Verify; Audit Workbook must retain direct saves.
+- Verification guidance must normalize Rulebook cross-check document IDs and document-level fields
+  before rendering the document chain.
+- The ThreadPool/ContextVar memo issue and Audit Workbook error-boundary issue remain deferred.
+- Cross-check Field-to-Compare remains a later product phase, after stabilization and Git closeout.
+
+#### Approved stabilization sequence
+
+| Phase | Objective | Exit condition |
+|---|---|---|
+| **Phase 0 - This phase** | Reconcile Markdown records and establish scope | Plan, changelog, and known-issue records agree; no code changed |
+| Phase 1 | Persist Rulebook versions and provide safe session recovery | Restart and version-drift tests pass; saved work is not lost or silently rebased |
+| Phase 2 | Make voucher-check persistence host-specific | Verification has one grouped persistence path; Audit Workbook direct persistence still works |
+| Phase 3 | Normalize Verification Rulebook guidance | Cross-check chains and document comparison fields render correctly |
+| Phase 4 | Complete Safety A/B acceptance | Presence, leave, expiry, resume, and Pending/Query/Cleared transitions pass |
+| Phase 5 | Add focused regression coverage and repair Postgres-cutover test assumptions | Required regression suite is trustworthy and passing, or exceptions are documented |
+| Phase 6 | Apply deferred performance and adapter hardening | Only measured, separately approved improvements are implemented |
+| Phase 7 | Reconcile documentation and complete Git closeout | Manual testing is confirmed, then one approved commit/push is made |
+| Phase 8 | Begin deferred product work | Cross-check Field-to-Compare is separately scoped and approved |
+
+#### Current pending phases
+
+| Phase No | Phase/Pendency | Objective | Status |
+|---|---|---|---|
+| 2 | **This phase - host-specific voucher-check persistence** | Preserve Verification local-first behavior and Audit Workbook direct saves | Next phase; high priority |
+| 3 | Verification guidance normalization | Restore Rulebook cross-check chains and document-level comparison fields | Pending |
+| 4A/4B | Safety acceptance and status matrix | Prove presence handling and Pending/Query/Cleared transitions across save paths | Pending |
+| 5 | Regression coverage | Cover restart recovery, host persistence, guidance, and status transitions; repair obsolete SQLite assumptions | Pending |
+| 5A | Verification session lifecycle | Decide whether to add explicit Completed/Cancelled states | Design feature; pending decision |
+| 6 | Deferred hardening | Address ThreadPool/ContextVar memo reuse and Audit Workbook error boundaries | Deferred |
+| 7 | Documentation and Git closeout | Reconcile final records and complete the approved Git closeout | Pending |
+| 8 | Cross-check Field-to-Compare | Add field setup, selection, validation, and persistence | Deferred product phase |
+
+### Next approved phase boundary
+
+Phase 0 is complete. Phase 1 is now complete after automated and manual verification. The next phase
+is Phase 2: host-specific voucher-check persistence. Its candidate files and implementation approach
+must be confirmed and explicitly approved before code changes begin.
+
+### Phase 1 status - Rulebook persistence and session recovery
+
+Implemented in `database.py`, `routers/audit_rules.py`, `routers/verification.py`, and
+`static/verification.js`, with focused coverage in `tests/test_audit_rulebook.py`.
+
+- Added a durable singleton Rulebook configuration state to both SQLite and Postgres.
+- Replaced the process-only version source with persisted version loading and atomic invalidation.
+- Kept Rulebook mismatch protection so configuration changes cannot silently alter an active session.
+- Added an authenticated, explicit session rebase endpoint that changes only the Rulebook version and
+  preserves verification details, evidence, observations, and saved conclusions.
+- Added a confirmation-and-retry flow in Verification for restart/configuration recovery.
+
+Verification completed:
+
+- Focused Rulebook and Save/Verify tests: 23 passed.
+- Full test suite: 52 passed with four existing non-blocking warnings.
+- Python compilation, JavaScript syntax validation, and scoped `git diff --check` passed.
+- Aadil manually confirmed the Phase 1 behavior.
+
+Phase 1 is complete and ready for the approved Git closeout. The next implementation phase is Phase 2:
+host-specific voucher-check persistence.
+
 ## Current development: Verification and application performance
 
 ### Objective
@@ -188,6 +273,71 @@ returned HTTP 200, Verify returned HTTP 200, and Verify & Next returned HTTP 200
 occurred. `node --check` passed. Aadil manually confirmed the target Audit Workbook flow is
 performing well; this fix is user-tested and ready for Git staging/commit/push.
 
+### Audit Workbook Physical Bill completion validation
+
+The previously recorded Physical Bill concern was rechecked against the current Audit Workbook
+implementation. `awRefreshLineProcedures()` already follows the established Verification rule:
+it filters all matching bills, requires complete bill headers and a non-null server-computed
+`bill_total`, then compares the summed total with the voucher-line amount using the existing 0.005
+tolerance. No code change was required.
+
+Live Playwright validation against Audit Workbook session 878 found 82 lines belonging to six
+Physical Bill categories. Existing bills were returned with their nested items and `bill_total`,
+and the visible Procedures counts reflected the current data. No page errors occurred. This phase
+is complete as a validation/documentation closure; the stale finding is resolved in the issue log.
+
+### Code Health Review — Rulebook and shared-modal reconciliation
+
+Claude's 2026-08-31 review was checked against the current `HEAD` (`ca425d5`) and relevant commit
+history. Finding 1 is not current: `a09258a` did temporarily guard on `verification_sessions.status`,
+but `d7a7c6f` replaced that path with an expiring `verification_presence` lease. The current guard
+queries only non-expired, non-ended presence rows, so old In Progress sessions do not permanently
+lock Audit Rules. The absence of an explicit terminal session lifecycle remains a separate design
+pendency for cleanup and reporting, not the reported permanent-lock defect.
+
+Findings 2, 3, and 4 are confirmed and require separate fixes. The Rulebook version is process-local
+and resets on restart, while sessions retain their captured value; template invalidation also bumps
+the same version, so a restart or stable-rule edit can make a resumable session return HTTP 409 with
+no safe recovery path. The shared modal's voucher-level check handlers currently perform immediate
+network writes for both hosts, while the Verification host also resubmits the state in its grouped
+close path; host-specific persistence must be made explicit. Verification's Rulebook guidance
+adapter also needs to normalize cross-check document IDs and per-document fields before the shared
+popover renders its chain.
+
+Findings 5 and 6 are valid deferred quality items. The sibling-ID memo is not propagated into
+ThreadPoolExecutor workers, so modal helpers can repeat the resolution; and Audit Workbook's two
+pre-try observation flushes can bypass its `{ok, data/error}` adapter contract. Neither finding
+changes current audit conclusions. Additional unique pendencies are to add regression coverage for
+version drift/restart recovery and host-specific voucher-check persistence, reconcile stale historical
+status wording in the Markdown logs, and decide the terminal Verification-session lifecycle.
+
+### Final stabilization plan before real feature development
+
+1. **Rulebook/session recovery fix — highest priority.** Define a durable configuration-version
+   source or a restart-safe session compatibility rule, then provide a controlled recovery path for
+   an older session. Preserve the safety requirement that changed stable rules never silently alter a
+   session. Cover fresh sessions, resumed sessions, template edits, Audit Rules edits, and a process
+   restart with backend tests and one browser regression.
+2. **Shared-modal persistence contract fix.** Make voucher-check persistence host-aware: Verification
+   should use its approved local-first/grouped Save → Verify path without duplicate immediate writes;
+   Audit Workbook should retain the direct save path it needs. Preserve optimistic UI, rollback,
+   cache invalidation, Verify, Verify & Next, and both hosts' response contracts. Add focused tests
+   for one toggle, bulk toggle, modal close, Verify, and Verify & Next on both hosts.
+3. **Verification guidance normalization fix.** Reuse the proven Audit Workbook conversion rules in
+   Verification so Rulebook cross-check chains render document names and document-level comparison
+   fields without changing status gates or the public guidance response shape.
+4. **Safety acceptance and status matrix.** Complete Safety Phase A checks for presence blocking,
+   explicit leave, lease expiry, and resume. Complete Safety Phase B checks for untouched Pending,
+   failing touched Query, passing touched Cleared, all modal save paths, and immediate badge/status
+   refresh. Add or update targeted regression tests before calling stabilization complete.
+5. **Deferred performance/adapter hardening.** After correctness is locked, separately consider
+   replacing the ThreadPoolExecutor/context-local memo dependency with explicit sibling IDs or copied
+   context, and move Audit Workbook observation flushes inside its adapter error boundary. Do not
+   widen this into another query rewrite without new measurements.
+6. **Closeout.** Reconcile stale plan/issue wording, run the full suite and syntax checks, obtain
+   manual confirmation, then make one approved commit/push. Mark the performance track deferred due
+   to variable Supabase/free-tier connection latency and begin the next real product requirement.
+
 ### First-voucher startup-waterfall review
 
 The control trace confirmed that fresh session activation awaited the session Rulebook, the full
@@ -246,6 +396,7 @@ wait from Python/response assembly time.
 | Audit Workbook support-data reuse | `static/audit_workbook.js`, `static/procedure_modal.js`, performance tests | Completed; existing voucher-level cache validated, no new code required | Continue with Rulebook reuse |
 | Audit Workbook Rulebook reuse | `static/audit_workbook.js`, existing session Rulebook endpoint, Rulebook/session performance trace | User-tested; one lazy session Rulebook replaces repeated guidance reads | Continue with the next measured Audit Workbook task |
 | Audit Workbook voucher-check persistence regression | `static/procedure_modal.js` | User-tested; restored individual and batch voucher-check persistence, Verify and Verify & Next work | Lock with Git commit/push |
+| Audit Workbook Physical Bill completion validation | `static/audit_workbook.js`, `static/verification.js` | Completed; current `bill_total`/multi-bill implementation validated live, no code change required | Continue with the next measured task |
 | Database query-plan investigation | Read-only Postgres `EXPLAIN ANALYZE` | Completed | Reduce Verification result payloads |
 | Verification bottleneck optimization | Procedure-modal diagnostics and duplicate sibling-read removal | User-tested and pushed | Continue with the next measured bottleneck |
 | Rulebook template metadata wiring | `routers/audit_rules.py`, Verification adapter, Procedure Modal | User-tested and pushed | Continue with measured fresh-data optimization |
@@ -256,20 +407,39 @@ wait from Python/response assembly time.
 | Cross-check configuration read batching | `routers/verification.py`, performance tests | User-tested and pushed | Continue with the next measured bottleneck |
 | Grouped Save/Verify sibling resolution reuse | `routers/verification.py`, atomic Save/Verify tests | User-tested and pushed | Continue with the next measured bottleneck |
 
-### Current pendency register — 2026-08-31
+### Archived development register — 2026-08-31
 
-| Pendency | Objective | Status |
-|---|---|---|
-| Authenticated Login/Client Cards baseline | Separate login cost from stable post-login request behavior | Completed; no code change recommended |
-| Fresh Procedure Modal timing review | Separate server, database, and browser/cache timing before changing the modal loader | Completed; no code change recommended |
-| Verification discovery payload review | Separate discovery response cost from the first-voucher request waterfall | Completed; no payload contract rewrite recommended |
-| First-voucher startup waterfall review | Start independent work earlier only if Rulebook/session safety and correctness remain unchanged | User-tested; no further parallelism planned |
-| Audit Workbook Procedure Modal adapter compatibility | Keep the shared modal compatible with both grouped-save and line-save hosts | User-tested; ready for Git commit/push |
-| Audit Workbook support-data reuse | Remove repeated per-line support-data reads without changing modal results | Completed; existing cache validated and no code change required |
-| Audit Workbook Rulebook reuse | Reuse the compiled session Rulebook without changing Audit Workbook results or modal behavior | User-tested; no modal result change observed |
-| **This phase — Audit Workbook voucher-check persistence regression** | Persist individual/batch check ticks so Verify and Verify & Next satisfy the backend guard | User-tested; ready for Git commit/push |
-| Next phase | Review the next measured Audit Workbook or Verification bottleneck after this lock | Starts after Git lock |
-| Login optimization | Separate bcrypt time from database/connection wait before changing code | Deferred |
+| Phase No | Phase/Pendency | Objective | Status |
+|---|---|---|---|
+| Perf | Authenticated Login/Client Cards baseline | Separate login cost from stable post-login request behavior | Completed; no code change recommended |
+| Perf | Fresh Procedure Modal timing review | Separate server, database, and browser/cache timing before changing the modal loader | Completed; no code change recommended |
+| Perf | Verification discovery payload review | Separate discovery response cost from the first-voucher request waterfall | Completed; no payload contract rewrite recommended |
+| Perf | First-voucher startup waterfall review | Start independent work earlier only if Rulebook/session safety and correctness remain unchanged | User-tested; no further parallelism planned |
+| AW | Audit Workbook Procedure Modal adapter compatibility | Keep the shared modal compatible with both grouped-save and line-save hosts | User-tested; ready for Git commit/push |
+| AW | Audit Workbook support-data reuse | Remove repeated per-line support-data reads without changing modal results | Completed; existing cache validated and no code change required |
+| AW | Audit Workbook Rulebook reuse | Reuse the compiled session Rulebook without changing Audit Workbook results or modal behavior | User-tested; no modal result change observed |
+| AW | **This phase - Audit Workbook voucher-check persistence regression** | Persist individual/batch check ticks so Verify and Verify & Next satisfy the backend guard | User-tested; ready for Git commit/push |
+| AW | Audit Workbook Physical Bill completion validation | Validate Physical Bill Procedures counts against current multi-bill server data | Completed; no code change required |
+| AW | **This phase - Physical Bill validation closure** | Close the stale Physical Bill finding without changing working code | Completed by live validation and documentation |
+| Next | Next phase | Review the next measured Audit Workbook or Verification bottleneck | Ready to begin |
+| Perf | Login optimization | Separate bcrypt time from database/connection wait before changing code | Deferred |
+
+### Archived stabilization register — 2026-08-31
+
+| Phase No | Phase/Pendency | Objective | Status |
+|---|---|---|---|
+| 0 | **This phase - report reconciliation and closeout plan** | Reconcile Claude's findings with current `HEAD`, record true risks, and establish the final order before real development | Completed; findings 1-6 reviewed |
+| 1 | Rulebook/session recovery | Prevent restart or stable-rule edits from permanently blocking resumable sessions; preserve captured-rule safety | Fix; highest priority |
+| 2 | Shared-modal voucher-check persistence | Host-gate Verification's local-first grouped path while retaining Audit Workbook persistence | Fix; high priority |
+| 3 | Verification guidance normalization | Restore Rulebook cross-check chain names and document comparison fields in the guidance popover | Fix; small focused phase |
+| 4A | Safety Phase A acceptance | Test active-presence blocking, explicit leave, lease expiry, and session resume | Required acceptance |
+| 4B | Safety Phase B status matrix | Prove Pending/Query/Cleared transitions and fresh badge/status refresh across every save path | Required stabilization |
+| 5A | Verification session lifecycle | Decide and implement explicit Completed/Cancelled handling for cleanup and reporting | Design pendency; not the reported lock defect |
+| 5 | Regression coverage | Add tests for Rulebook drift/restart recovery, host-specific voucher checks, and guidance normalization | Required with fixes |
+| 6 | Deferred modal hardening | Replace ThreadPoolExecutor/context-local memo reliance and move AW flushes inside the adapter error boundary | Defer until correctness is locked |
+| 8 | Cross-check Field-to-Compare configuration | Add eligible-field setup, dropdown, validation, and persistence workflow | Deferred product feature |
+| 7 | Performance track closeout | Stop further speculative Supabase/query tuning; retain measured limits and begin real product work | Defer; not a blocker |
+| 7 | Documentation and Git closeout | Reconcile stale status wording, run final checks, obtain user confirmation, then make one approved commit/push | Required housekeeping |
 
 ### Latest cashbook date optimization result
 
