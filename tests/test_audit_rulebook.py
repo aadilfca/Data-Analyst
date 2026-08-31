@@ -98,7 +98,7 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             if "FROM templates" in sql:
                 return [{"id": 5, "name": "Invoices"}]
             if "FROM template_column_mappings" in sql:
-                return [{"template_id": 5, "column_id": 20, "sort_order": 0}]
+                return [{"template_id": 5, "column_id": 20, "column_name": "Amount", "data_type": "number", "sort_order": 0}]
             if "FROM account_category_assignments" in sql:
                 return [{"account_code": "6000", "category_id": 1, "category_name": "Fuel"}]
             if "FROM trial_balance_uploads" in sql:
@@ -116,6 +116,12 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertTrue(document["required"])
         self.assertEqual(document["signature_requirements"][0]["specimens"][0]["expected_signatory_name"], "A. Manager")
         self.assertEqual(rulebook["categories"][0]["cross_checks"][0]["document_ids"], [10])
+        self.assertEqual(rulebook["templates"][0]["columns"], [{
+            "column_id": 20,
+            "column_name": "Amount",
+            "data_type": "number",
+            "sort_order": 0,
+        }])
         self.assertEqual(rulebook["warnings"], [])
 
     def test_warns_for_inactive_template_and_assignment_category(self):

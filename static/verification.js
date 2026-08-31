@@ -240,6 +240,7 @@ function buildProcedureModalAdapter() {
         get VOUCHER_LINE_DESCRIPTION_ALIASES() { return VOUCHER_LINE_DESCRIPTION_ALIASES; },
         get currentVoucherId() { return currentVoucherId; },
         get currentSessionId() { return currentSessionId; },
+        get sessionRulebook() { return sessionRulebook; },
         get currentVoucherLines() { return currentVoucherLines; },
         get voucherLineState() { return voucherLineState; },
         get procedureModalState() { return procedureModalState; }

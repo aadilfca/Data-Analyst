@@ -365,6 +365,7 @@ async function fetchLatestTbAccounts(clientId) {
 // blocks the modal from opening; buildSelectedLinesTable() falls back to deriving columns from
 // the selections themselves when this returns empty.
 let templateColumnsCache = {};
+let templateMetadataRulebookVersion = null;
 
 // GRN-to-Vendor-Bill copy: a sibling cache keyed the same way as templateColumnsCache, populated
 // by the same fetchTemplateColumns() call (no extra network round trip) — lets
@@ -373,8 +374,29 @@ let templateColumnsCache = {};
 let templateNameCache = {};
 
 async function fetchTemplateColumns(templateId) {
+    const rulebook = hostAdapter && hostAdapter.sessionRulebook;
+    const rulebookVersion = rulebook && rulebook.global_version != null
+        ? String(rulebook.global_version)
+        : null;
+    if (rulebookVersion !== null && templateMetadataRulebookVersion !== rulebookVersion) {
+        templateColumnsCache = {};
+        templateNameCache = {};
+        templateMetadataRulebookVersion = rulebookVersion;
+    }
     if (Object.prototype.hasOwnProperty.call(templateColumnsCache, templateId)) {
         return templateColumnsCache[templateId];
+    }
+    const rulebookTemplate = rulebook && (rulebook.templates || []).find(template =>
+        String(template.id) === String(templateId)
+    );
+    if (rulebookTemplate && Array.isArray(rulebookTemplate.columns)) {
+        const columns = rulebookTemplate.columns.map(column => ({
+            column_name: column.column_name,
+            data_type: column.data_type
+        }));
+        templateColumnsCache[templateId] = columns;
+        templateNameCache[templateId] = rulebookTemplate.name || '';
+        return columns;
     }
     try {
         const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/templates/${templateId}`);

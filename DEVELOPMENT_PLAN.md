@@ -88,7 +88,8 @@ The multi-second browser timings are therefore mainly caused by large result tra
 | Grouped Save/Verify diagnostics | `routers/verification.py`, with existing database metrics | Implemented and pushed | Use component evidence during optimization |
 | Login/Client Cards investigation | Read-only request timing | Identified | Measure as a separate track |
 | Database query-plan investigation | Read-only Postgres `EXPLAIN ANALYZE` | Completed | Reduce Verification result payloads |
-| Verification bottleneck optimization | Procedure-modal diagnostics and duplicate sibling-read removal | Implemented locally | Manual-test modal open and Save/Verify before commit/push |
+| Verification bottleneck optimization | Procedure-modal diagnostics and duplicate sibling-read removal | User-tested and pushed | Continue with the next measured bottleneck |
+| Rulebook template metadata wiring | `routers/audit_rules.py`, Verification adapter, Procedure Modal | User-tested and ready to push | Investigate Save/Verify persistence timing |
 
 ### Latest cashbook date optimization result
 
@@ -175,6 +176,16 @@ safe fix resolves siblings once in the parent request and seeds each worker's re
 The same live request then returned HTTP 200 in 4.32 seconds with 13 reads and 12.3 seconds of
 cumulative database time. The response remained 1,616 bytes, confirming that the improvement is in
 database round trips rather than payload reduction. Focused regression tests now pass (15 total).
+
+The session Rulebook now also carries ordered active template-column metadata. Verification exposes
+the loaded packet through its Procedure Modal adapter, and the modal uses that metadata before its
+legacy `/api/templates/{id}` fallback. A local browser check opened the modal successfully with zero
+template-detail requests. The cache is reset when the Rulebook version changes, so a new session
+cannot reuse column metadata from a different stable configuration.
+
+The user HAR confirmed the current assets (`procedure_modal.js?v=15`, `verification.js?v=26`), 20 API
+requests with HTTP 200, and no `/api/templates/{id}` calls. Procedure Modal time was approximately
+3.7 seconds; Save/Verify remains approximately 10.6 seconds and is the next measured bottleneck.
 
 The template/cache/diagnostics phase was pushed in commit `fd2a56d`. Later local changes remain
 uncommitted until user testing and confirmation. Do not commit or push automatically.

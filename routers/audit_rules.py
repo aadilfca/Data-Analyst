@@ -159,8 +159,11 @@ def compile_verification_rulebook(client_id: int) -> dict:
         "SELECT id, template_name AS name FROM templates WHERE is_active = TRUE ORDER BY id"
     )
     mappings = execute_query_pg(
-        "SELECT template_id, column_id, sort_order FROM template_column_mappings "
-        "ORDER BY template_id, sort_order"
+        "SELECT p.template_id, p.column_id, m.column_name, m.data_type, p.sort_order "
+        "FROM template_column_mappings p "
+        "JOIN master_columns m ON p.column_id = m.id "
+        "WHERE m.is_active = TRUE "
+        "ORDER BY p.template_id, p.sort_order"
     )
     specimens = execute_query_pg(
         "SELECT document_id, role_name, expected_signatory_name, authority "
@@ -213,7 +216,8 @@ def compile_verification_rulebook(client_id: int) -> dict:
     mappings_by_template: Dict[int, List[dict]] = {}
     for row in mappings:
         mappings_by_template.setdefault(row["template_id"], []).append({
-            "column_id": row["column_id"], "sort_order": row["sort_order"]
+            "column_id": row["column_id"], "column_name": row.get("column_name"),
+            "data_type": row.get("data_type"), "sort_order": row["sort_order"]
         })
 
     def build_document(document_id: int, required: bool) -> dict:
@@ -279,7 +283,20 @@ def compile_verification_rulebook(client_id: int) -> dict:
         "account_category_index": account_index,
         "categories": category_profiles,
         "voucher_checks": [dict(row) for row in voucher_checks],
-        "templates": [{"id": row["id"], "name": row.get("name"), "mapping_column_ids": [m["column_id"] for m in mappings_by_template.get(row["id"], [])]} for row in templates],
+        "templates": [{
+            "id": row["id"],
+            "name": row.get("name"),
+            "mapping_column_ids": [m["column_id"] for m in mappings_by_template.get(row["id"], [])],
+            "columns": [
+                {
+                    "column_id": m["column_id"],
+                    "column_name": m.get("column_name"),
+                    "data_type": m.get("data_type"),
+                    "sort_order": m["sort_order"],
+                }
+                for m in mappings_by_template.get(row["id"], [])
+            ],
+        } for row in templates],
         "warnings": warnings
     }
 

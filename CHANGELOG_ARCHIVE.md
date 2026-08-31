@@ -48,6 +48,33 @@ new and existing Verification sessions remain usable and category behavior is un
 
 ---
 
+## Rulebook-backed Procedure Modal template metadata
+
+**Date:** 2026-08-31 | **Files:** `routers/audit_rules.py`, `tests/test_audit_rulebook.py`,
+`static/procedure_modal.js`, `static/verification.js`, `static/verification.html`.
+
+The compiled client Rulebook now includes each active template's ordered mapped columns with
+`column_id`, `column_name`, `data_type`, and `sort_order`. This completes the stable metadata needed
+by the Procedure Modal's evidence tables; Trial Balance account/category data and Audit Rules remain
+the two authoritative source models.
+
+Verification now exposes its session Rulebook through the existing modal adapter. The shared modal
+first reads version-aware template metadata from that packet and only falls back to
+`GET /api/templates/{id}` when running on a host without a Rulebook or against a legacy packet that
+lacks complete column metadata. The cache is reset on a Rulebook-version change. Script cache-busters
+were advanced to `procedure_modal.js?v=15` and `verification.js?v=26`.
+
+No live evidence, procedure ticks, observations, Physical Bills, cross-check results, or calculated
+status data were cached or changed. A browser check against local session 847 opened the modal with
+zero template-detail requests. Focused tests passed: 15; JavaScript syntax checks and `git diff --check`
+passed. The subsequent user HAR loaded `procedure_modal.js?v=15` and `verification.js?v=26`, showed
+20 API requests all returning HTTP 200, and confirmed zero `/api/templates/{id}` calls. Procedure
+Modal time was approximately 3.7 seconds; Save/Verify remained approximately 10.6 seconds and is
+the next measured bottleneck. Full regression verification passed: 47 tests. This phase is
+user-tested and ready for Git commit/push.
+
+---
+
 ## Procedure-modal duplicate sibling-read consolidation
 
 **Date:** 2026-08-31 | **Files:** `routers/verification.py`, `tests/test_verification_performance_metrics.py`.
