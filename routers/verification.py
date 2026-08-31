@@ -1710,7 +1710,8 @@ def save_line_items(
 
 
 def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data,
-                          perf_timings=None, rulebook=None, compute_status=True):
+                          perf_timings=None, rulebook=None, compute_status=True,
+                          sibling_ids=None):
     detail = execute_query_pg(
         "SELECT id, status FROM verification_details WHERE id = %s",
         (detail_id,)
@@ -1723,7 +1724,9 @@ def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_dat
     # Resolved once here and threaded through both calls below (and everything they in turn
     # call) instead of each re-deriving the same answer independently - see
     # _resolve_sibling_voucher_line_ids()'s own docstring for what this list represents.
-    sibling_ids = _resolve_sibling_voucher_line_ids(detail_id) or [detail_id]
+    sibling_ids = sibling_ids if sibling_ids is not None else (
+        _resolve_sibling_voucher_line_ids(detail_id) or [detail_id]
+    )
 
     if not isinstance(line_items, list):
         raise HTTPException(400, "line_items must be a list.")
@@ -1904,14 +1907,23 @@ def save_and_verify_voucher_bundle(
     with pg_transaction():
         save_started = time.perf_counter()
         save_components = {"observation_sync_ms": 0.0, "status_engine_ms": 0.0}
+        sibling_ids_by_line = {}
         for line in lines:
-            if line.get('detail_id') not in eligible_line_ids:
+            line_id = line.get('detail_id')
+            if line_id in eligible_line_ids:
+                sibling_ids_by_line[line_id] = (
+                    _resolve_sibling_voucher_line_ids(line_id) or [line_id]
+                )
+        for line in lines:
+            line_id = line.get('detail_id')
+            if line_id not in eligible_line_ids:
                 continue
             line_timings = {} if perf else None
             _save_line_items_impl(
-                line['detail_id'], line.get('line_items', []),
+                line_id, line.get('line_items', []),
                 line.get('transaction_type'), line.get('procedure_data'), line_timings,
-                session_rulebook, compute_status=False
+                session_rulebook, compute_status=False,
+                sibling_ids=sibling_ids_by_line[line_id]
             )
             if perf:
                 for key in save_components:
@@ -1991,14 +2003,14 @@ def save_and_verify_voucher_bundle(
         status_results = {}
         status_started = time.perf_counter()
         for line in lines:
-            if line.get('detail_id') not in eligible_line_ids:
+            line_id = line.get('detail_id')
+            if line_id not in eligible_line_ids:
                 continue
-            sibling_ids = _resolve_sibling_voucher_line_ids(line['detail_id'])
             status_result = compute_and_persist_cleared_status(
-                line['detail_id'], sibling_ids=sibling_ids, rulebook=session_rulebook
+                line_id, sibling_ids=sibling_ids_by_line[line_id], rulebook=session_rulebook
             )
             if status_result:
-                status_results[line['detail_id']] = status_result
+                status_results[line_id] = status_result
         if perf:
             timings["post_support_status_engine_ms"] = round(
                 (time.perf_counter() - status_started) * 1000, 1

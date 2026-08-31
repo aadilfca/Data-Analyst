@@ -117,6 +117,64 @@ def test_voucher_bundle_saves_all_lines_then_verifies_once(monkeypatch):
     assert calls == ["begin", "save_without_status", "save_without_status", "verify", "commit"]
 
 
+def test_voucher_bundle_reuses_sibling_resolution_for_save_and_status(monkeypatch):
+    resolved = []
+    save_siblings = []
+    status_siblings = []
+
+    @contextmanager
+    def transaction():
+        yield object()
+
+    def execute_query_pg(query, params=None):
+        if "SELECT id, status" in query:
+            return [{"id": 7, "status": "Pending"}, {"id": 8, "status": "Pending"}]
+        if "FROM verification_sessions" in query:
+            return [{"client_id": 1}]
+        return []
+
+    monkeypatch.setattr(verification, "pg_transaction", transaction)
+    monkeypatch.setattr(verification, "execute_query_pg", execute_query_pg)
+    monkeypatch.setattr(verification, "load_verification_rulebook_for_session",
+                        lambda session_id: {"voucher_checks": []})
+    monkeypatch.setattr(
+        verification,
+        "_resolve_sibling_voucher_line_ids",
+        lambda detail_id: resolved.append(detail_id) or [detail_id, detail_id + 100],
+    )
+    monkeypatch.setattr(
+        verification,
+        "_save_line_items_impl",
+        lambda detail_id, *args, **kwargs: save_siblings.append(
+            (detail_id, kwargs["sibling_ids"])
+        ),
+    )
+    monkeypatch.setattr(
+        verification,
+        "compute_and_persist_cleared_status",
+        lambda detail_id, **kwargs: status_siblings.append(
+            (detail_id, kwargs["sibling_ids"])
+        ) or {"cleared_status": "Cleared", "matrix_version_applied": 1},
+    )
+    monkeypatch.setattr(verification, "_verify_voucher_checks_impl",
+                        lambda *args, **kwargs: {"verified": True})
+
+    result = verification.save_and_verify_voucher_bundle(
+        session_id=10,
+        current_detail_id=7,
+        lines=[
+            {"detail_id": 7, "line_items": [], "procedure_data": {}},
+            {"detail_id": 8, "line_items": [], "procedure_data": {}},
+        ],
+    )
+
+    expected = [(7, [7, 107]), (8, [8, 108])]
+    assert result["verified"] is True
+    assert resolved == [7, 8]
+    assert save_siblings == expected
+    assert status_siblings == expected
+
+
 # --- HTTP-level coverage -----------------------------------------------------------------------
 # The tests above call save_and_verify_voucher_bundle() as a plain Python function, which cannot
 # catch a JSON-key mismatch between the frontend payload and the endpoint's Body(embed=True)

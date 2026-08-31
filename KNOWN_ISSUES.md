@@ -56,6 +56,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 
 | 2026-08-31 | Verification performance | RESOLVED: `procedure_modal_data` repeated the voucher-line/session lookup already performed by the shared support loader; the endpoint now reuses its client and transaction metadata. | Fix |
 | 2026-08-31 | Verification performance | RESOLVED: a cold Procedure Modal Cross-check configuration load queried the document chain once per active Cross-check; the loader now fetches all chains in one batched read. | Fix |
+| 2026-08-31 | Verification performance | RESOLVED locally: grouped Save/Verify resolved each eligible line's sibling IDs again during final status calculation; one transaction-scoped resolution is now reused by both save and status stages. | Fix |
 
 | 2026-08-30 | Audit Rules | Cross-check Field-to-Compare shows no eligible fields when selected Documents have no eligible fields configured. Field configuration and dropdown workflow are deferred until performance-focused work is complete. | Defer |
 

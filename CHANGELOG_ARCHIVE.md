@@ -15,6 +15,23 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Grouped Save/Verify sibling resolution reuse
+
+**Date:** 2026-08-31 | **Files:** `routers/verification.py`,
+`tests/test_verification_atomic_save_verify.py`, `DEVELOPMENT_PLAN.md`,
+`KNOWN_ISSUES.md`.
+
+The grouped Save/Verify endpoint previously resolved each eligible line's sibling IDs while
+saving and then resolved them again during the final Cleared/Query status recomputation. It now
+resolves each eligible line once inside the existing transaction and threads the same list through
+both stages. Atomic rollback, post-support status computation, and the response contract are
+unchanged; no live voucher data is cached.
+
+Focused tests pass 11 tests, including a regression assertion that saving and status calculation
+receive the same resolved list. The full suite passes 49 tests with four existing warnings, Python
+compilation passes. The user manually confirmed session start, grouped Save/Verify, cache
+invalidation, and line navigation. This phase is ready for Git staging/commit.
+
 ## Cross-check configuration read batching
 
 **Date:** 2026-08-31 | **Files:** `routers/verification.py`,

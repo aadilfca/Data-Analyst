@@ -95,6 +95,7 @@ The multi-second browser timings are therefore mainly caused by large result tra
 | Audit Rules optional Sortable.js resilience | `static/audit_rules.js` | User-tested and pushed | Continue with the next measured Rulebook/Verification task |
 | Procedure Modal duplicate metadata lookup | `routers/verification.py`, performance tests | User-tested and pushed | Continue with the next measured fresh-data task |
 | Cross-check configuration read batching | `routers/verification.py`, performance tests | User-tested and ready for Git lock | Commit and push; continue with the next measured bottleneck |
+| Grouped Save/Verify sibling resolution reuse | `routers/verification.py`, atomic Save/Verify tests | User-tested and ready for Git lock | Commit and push; continue with the next measured bottleneck |
 
 ### Latest cashbook date optimization result
 
@@ -224,6 +225,18 @@ compilation passes. A live read-only modal request returned HTTP 200 with four d
 current test Category has no active Cross-check chain, so populated-chain live timing remains a
 manual follow-up. The user manually confirmed the Procedure Modal, Save/Verify, cache invalidation,
 and navigation flow; this phase is ready for Git lock.
+
+### Grouped Save/Verify sibling resolution reuse
+
+The grouped Save/Verify endpoint now resolves each eligible line's sibling IDs once inside the
+existing transaction and reuses that list for both line saving and final Cleared/Query status
+calculation. This removes the duplicate sibling-resolution read while preserving atomic rollback,
+fresh status computation after all support data is saved, and the existing response contract.
+
+Focused Grouped Save/Verify tests pass 11 tests, including a regression assertion that the same
+sibling list reaches both stages. The full suite passes 49 tests with four existing warnings, and
+Python compilation passes. The user manually confirmed session start, grouped Save/Verify,
+cache invalidation, and line navigation; this phase is ready for Git lock.
 
 ## Planned redesign: Audit Rules Rulebook
 
