@@ -141,6 +141,53 @@ the next-line transition. No page errors were observed. `node --check` passed fo
 JavaScript files, and the focused dirty-save suite passed 9 tests. This phase is locally
 implemented and user-tested; ready for Git staging/commit/push.
 
+### Audit Workbook support-data reuse review
+
+The existing Audit Workbook implementation already uses the voucher-level
+`voucher_support_data/{anchor}` cache introduced in the earlier batched-fetch phase. A fresh
+Playwright trace confirmed 0 support-data requests during initial table load and 0 on the first
+Procedure Modal open. Closing the modal made exactly 1 voucher-level request to refresh saved
+badge state; the same request was reused for both Procedures and Observations refreshes. A
+different voucher made 1 request for its new anchor. There was no four-request-per-line fan-out.
+
+Repeated closes of the same voucher each made 1 request because successful saves intentionally
+invalidate the cache before refreshing badges; this is a correctness decision, not a storm. The
+trace returned no page errors (the analyst-only `/api/users` 403 is expected) and no code change
+was needed. The earlier `f0def6f` implementation is therefore validated locally and this phase is
+complete.
+
+### Audit Workbook Rulebook reuse
+
+Audit Workbook now lazily loads the compiled, session-scoped Rulebook from
+`GET /api/verification/session/{session_id}/rulebook` on the first Procedure guidance request.
+The in-flight promise and the resulting Rulebook are reused for every Category on the page, while
+the existing guidance response shape is preserved at the adapter boundary. The backend endpoint's
+version check remains authoritative, so an older session cannot silently fall back to changed live
+rules. The table itself still loads without this request when no Procedure modal is opened.
+
+Playwright measured 0 Rulebook and 0 legacy `audit_guidance` requests during initial table load; the
+first Procedure Modal caused exactly 1 Rulebook request, and the next two Procedure opens caused no
+additional guidance requests. The Rulebook returned HTTP 200, was approximately 2.7 KB encoded in
+one local sample, and compiled guidance matched the legacy endpoint for the tested Category on
+category id, overview, matrix version, document identity, document type, approval flag, and roles.
+No page errors or 5xx responses occurred. `node --check` passed, and the focused performance and
+dirty-save suites passed 5 and 9 tests respectively. No backend change was required. This phase is
+implemented locally and user-tested together with the voucher-check persistence fix below; ready for
+Git staging/commit/push.
+
+### Audit Workbook voucher-check persistence regression
+
+The first Rulebook-reuse regression trace exposed two unconditional `return` statements in the
+shared voucher-level check handlers. They updated the Audit Workbook's check bar optimistically but
+prevented both the individual `save_voucher_check` and batch `save_voucher_checks_batch` requests
+from being sent. Verify correctly rejected the still-untouched server state with HTTP 400.
+
+Removing only those unreachable returns restored the existing persistence and rollback paths. The
+exact session 877 scenario was re-run: individual check save returned HTTP 200, batch completion
+returned HTTP 200, Verify returned HTTP 200, and Verify & Next returned HTTP 200. No page errors
+occurred. `node --check` passed. Aadil manually confirmed the target Audit Workbook flow is
+performing well; this fix is user-tested and ready for Git staging/commit/push.
+
 ### First-voucher startup-waterfall review
 
 The control trace confirmed that fresh session activation awaited the session Rulebook, the full
@@ -196,7 +243,9 @@ wait from Python/response assembly time.
 | Verification discovery payload review | `routers/verification.py`, `static/verification.js`, discovery tests | Completed; direct and browser payload/timing baseline recorded | Review the first-voucher startup waterfall |
 | First-voucher startup-waterfall review | `static/verification.js`, browser request-order/timing trace | User-tested; Rulebook and audited reads overlap safely, `/next` remains protected by existing ordering | Keep under observation; no further parallelism planned |
 | Audit Workbook Procedure Modal adapter compatibility | `static/procedure_modal.js`, `static/audit_workbook.js` | User-tested; close and both Verify actions use the correct host save contract | Continue with the next measured Audit Workbook task |
-| Audit Workbook support-data reuse | `static/audit_workbook.js`, `static/procedure_modal.js`, performance tests | Pending; remove the known per-line support-data request storm while preserving modal behavior | Define exact file scope and measure current request count first |
+| Audit Workbook support-data reuse | `static/audit_workbook.js`, `static/procedure_modal.js`, performance tests | Completed; existing voucher-level cache validated, no new code required | Continue with Rulebook reuse |
+| Audit Workbook Rulebook reuse | `static/audit_workbook.js`, existing session Rulebook endpoint, Rulebook/session performance trace | User-tested; one lazy session Rulebook replaces repeated guidance reads | Continue with the next measured Audit Workbook task |
+| Audit Workbook voucher-check persistence regression | `static/procedure_modal.js` | User-tested; restored individual and batch voucher-check persistence, Verify and Verify & Next work | Lock with Git commit/push |
 | Database query-plan investigation | Read-only Postgres `EXPLAIN ANALYZE` | Completed | Reduce Verification result payloads |
 | Verification bottleneck optimization | Procedure-modal diagnostics and duplicate sibling-read removal | User-tested and pushed | Continue with the next measured bottleneck |
 | Rulebook template metadata wiring | `routers/audit_rules.py`, Verification adapter, Procedure Modal | User-tested and pushed | Continue with measured fresh-data optimization |
@@ -216,8 +265,10 @@ wait from Python/response assembly time.
 | Verification discovery payload review | Separate discovery response cost from the first-voucher request waterfall | Completed; no payload contract rewrite recommended |
 | First-voucher startup waterfall review | Start independent work earlier only if Rulebook/session safety and correctness remain unchanged | User-tested; no further parallelism planned |
 | Audit Workbook Procedure Modal adapter compatibility | Keep the shared modal compatible with both grouped-save and line-save hosts | User-tested; ready for Git commit/push |
-| This phase — Audit Workbook support-data reuse | Remove repeated per-line support-data reads without changing modal results | Pending; next phase after this commit |
-| Audit Workbook Rulebook reuse | Extend the compiled Rulebook approach after Verification remains stable | Later planned phase |
+| Audit Workbook support-data reuse | Remove repeated per-line support-data reads without changing modal results | Completed; existing cache validated and no code change required |
+| Audit Workbook Rulebook reuse | Reuse the compiled session Rulebook without changing Audit Workbook results or modal behavior | User-tested; no modal result change observed |
+| **This phase — Audit Workbook voucher-check persistence regression** | Persist individual/batch check ticks so Verify and Verify & Next satisfy the backend guard | User-tested; ready for Git commit/push |
+| Next phase | Review the next measured Audit Workbook or Verification bottleneck after this lock | Starts after Git lock |
 | Login optimization | Separate bcrypt time from database/connection wait before changing code | Deferred |
 
 ### Latest cashbook date optimization result

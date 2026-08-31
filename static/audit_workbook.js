@@ -91,6 +91,11 @@ let awVoucherLineState = {};
 // hostAdapter.procedureModalState[uid] = {...}. Persistent across modal opens within this page's
 // lifetime, reset only alongside a fresh session fetch (matches awVoucherLineState's own lifetime).
 let awProcedureModalState = {};
+// The Audit Workbook uses the same session-scoped compiled Rulebook as Verification. It is
+// loaded lazily on the first guidance request, then reused for every Category on this page.
+// The backend endpoint enforces the session's captured Rulebook version.
+let awSessionRulebook = null;
+let awSessionRulebookPromise = null;
 
 // ---------- DOM REFS ----------
 const awSubtitleEl = document.getElementById('awSubtitle');
@@ -345,6 +350,11 @@ async function fetchAuditWorkbook(sessionId, targetVoucherNo) {
         // fresh from this fetch — awVoucherLineState/awProcedureModalState mirror this response's
         // own lifetime (a fresh session fetch replaces both, same as allVouchers).
         sessionClientId = data.client_id || null;
+        // A fresh session fetch starts a fresh guidance/Rulebook lifetime. This also keeps a
+        // future in-place refresh from carrying a prior session's compiled rules forward.
+        awSessionRulebook = null;
+        awSessionRulebookPromise = null;
+        awAuditGuidanceCache = {};
         awVoucherLineState = {};
         allVouchers.forEach(v => {
             (v.lines || []).forEach(line => {
@@ -523,19 +533,78 @@ function awRenderGateRowHtml(g) {
 }
 
 // Category guidance cache, same shape/contract as verification.js's auditGuidanceCache —
-// forceRefresh (used by openProcedureModal() on every real open) bypasses it.
+// forceRefresh (reserved by the shared adapter contract) bypasses the category cache, while the
+// session Rulebook itself remains one request per Audit Workbook session.
 let awAuditGuidanceCache = {};
+
+async function awLoadSessionRulebook() {
+    if (awSessionRulebook) return awSessionRulebook;
+    if (awSessionRulebookPromise) return awSessionRulebookPromise;
+    if (!currentSessionId) throw new Error('Audit Workbook session is not available.');
+
+    const sessionIdAtStart = currentSessionId;
+    awSessionRulebookPromise = window.ApiUtils.apiFetch(
+        `${API_BASE}/api/verification/session/${sessionIdAtStart}/rulebook`
+    ).then(async res => {
+        if (!res.ok) {
+            let detail = 'Unable to load the session Rulebook.';
+            try {
+                const error = await res.json();
+                detail = error.detail || detail;
+            } catch (_) {
+                // Keep the stable user-facing error when the response is not JSON.
+            }
+            throw new Error(detail);
+        }
+        const payload = await res.json();
+        const rulebook = payload && payload.rulebook;
+        if (!rulebook || !Array.isArray(rulebook.categories)) {
+            throw new Error('The session Rulebook response is invalid.');
+        }
+        if (currentSessionId === sessionIdAtStart) awSessionRulebook = rulebook;
+        return rulebook;
+    }).finally(() => {
+        awSessionRulebookPromise = null;
+    });
+    return awSessionRulebookPromise;
+}
+
+// The compiled Rulebook deliberately uses a richer, normalized shape than the historical
+// audit_guidance endpoint. Convert only at this adapter boundary so procedure_modal.js and the
+// existing Audit Workbook badge logic continue to receive their established contract.
+function awRulebookCategoryToGuidance(profile) {
+    const documents = (profile.documents || []).map(document => ({
+        ...document,
+        id: document.document_id,
+        auth_roles: (document.authority_roles || []).map(role => role.role_name || role),
+        cross_check_fields: (document.fields || []).map(field => field.field_name || field)
+    }));
+    const documentNameById = {};
+    documents.forEach(document => { documentNameById[document.id] = document.name; });
+    return {
+        transaction_type: profile.name,
+        category_id: profile.category_id,
+        category_name: profile.name,
+        kb_overview: profile.kb_overview,
+        matrix_version: profile.matrix_version,
+        documents,
+        cross_checks: (profile.cross_checks || []).map(check => ({
+            id: check.cross_check_id,
+            name: check.name,
+            compare_field: check.compare_field,
+            comparison_type: check.comparison_type,
+            documents: (check.document_ids || []).map(id => documentNameById[id]).filter(Boolean)
+        }))
+    };
+}
+
 async function awFetchAuditGuidanceData(type, forceRefresh = false) {
     if (!forceRefresh && Object.prototype.hasOwnProperty.call(awAuditGuidanceCache, type)) {
         return awAuditGuidanceCache[type];
     }
-    const res = await fetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
-    if (res.status === 404) {
-        awAuditGuidanceCache[type] = null;
-        return null;
-    }
-    if (!res.ok) throw new Error('Failed to fetch audit guidance');
-    const data = await res.json();
+    const rulebook = await awLoadSessionRulebook();
+    const profile = rulebook.categories.find(category => category.name === type);
+    const data = profile ? awRulebookCategoryToGuidance(profile) : null;
     awAuditGuidanceCache[type] = data;
     return data;
 }
@@ -900,6 +969,9 @@ window.onload = function () {
         currentSessionId = null;
         allVouchers = [];
         sessionClientId = null;
+        awSessionRulebook = null;
+        awSessionRulebookPromise = null;
+        awAuditGuidanceCache = {};
         awVoucherLineState = {};
         awProcedureModalState = {};
         if (awVerificationBtn) awVerificationBtn.disabled = true;

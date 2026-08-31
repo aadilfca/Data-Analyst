@@ -1524,7 +1524,6 @@ function renderVoucherChecksBar(uid) {
             hostAdapter.markAllLinesDirty('voucher-level check changed');
             renderVoucherChecksBar(uid);
             renderProcedureModalTabs(uid);
-            return;
             try {
                 const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_voucher_check`, {
                     method: 'POST',
@@ -1578,7 +1577,6 @@ async function toggleAllVoucherChecks(uid) {
     renderVoucherChecksBar(uid);
     hostAdapter.markAllLinesDirty('voucher-level checks changed');
     renderProcedureModalTabs(uid);
-    return;
 
     // Re-queried after the render above (not the click's own captured element) since that render
     // just replaced the select-all button's DOM node - a spinner on the old reference would be

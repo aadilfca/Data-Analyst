@@ -15,6 +15,60 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Audit Workbook voucher-check persistence regression
+
+**Date:** 2026-08-31 | **Files:** `static/procedure_modal.js`, `DEVELOPMENT_PLAN.md`,
+`CHANGELOG_ARCHIVE.md`, `KNOWN_ISSUES.md`.
+
+The Audit Workbook Procedure Modal's voucher-level check handlers contained unreachable returns
+immediately before the existing individual and batch save requests. The UI therefore changed check
+states locally but never persisted them. Verify and Verify & Next then reached the backend with
+server-side checks still `untouched`, producing the expected HTTP 400 response.
+
+Only those two returns were removed. The existing optimistic update, API persistence, failure
+rollback, button gating, and Verify flow were preserved. Automated browser regression against
+session 877 confirmed: individual check save HTTP 200, batch check save HTTP 200, Verify HTTP 200,
+and Verify & Next HTTP 200, with no page errors. `node --check` passed. Aadil then manually
+confirmed the target Audit Workbook flow is performing well. This phase is ready for Git staging,
+commit, and push.
+
+## Audit Workbook Rulebook reuse
+
+**Date:** 2026-08-31 | **Files:** `static/audit_workbook.js`, `DEVELOPMENT_PLAN.md`,
+`CHANGELOG_ARCHIVE.md`, `KNOWN_ISSUES.md`.
+
+Audit Workbook now lazily loads the compiled, session-scoped Rulebook on the first Procedure
+guidance request and reuses it for every Category on the page. The adapter converts the compiled
+category profile to the existing guidance shape, so `procedure_modal.js` and the Audit Workbook
+badge logic remain unchanged. The session endpoint's existing version-safety check remains the
+source of truth; no legacy live-guidance fallback is used after a Rulebook response is required.
+
+Playwright measured 0 Rulebook and 0 legacy `audit_guidance` requests during initial table load. The
+first Procedure Modal made exactly 1 Rulebook request; the next two opens made no additional
+guidance requests. The endpoint returned HTTP 200 and approximately 2.7 KB encoded in one local
+sample. Compiled and legacy guidance matched for the tested Category's id, overview, matrix version,
+document identity/type, approval flag, and roles. No page errors or 5xx responses occurred.
+`node --check` passed; focused performance and dirty-save suites passed 5 and 9 tests. No backend
+code change was needed. Manual user testing is still pending before Git staging.
+
+## Audit Workbook support-data reuse review
+
+**Date:** 2026-08-31 | **Files:** `static/audit_workbook.js`, `static/procedure_modal.js`,
+`DEVELOPMENT_PLAN.md`, `CHANGELOG_ARCHIVE.md`, `KNOWN_ISSUES.md`.
+
+This was a validation phase for the existing `f0def6f` Audit Workbook batched-fetch implementation,
+not a new rewrite. Playwright measured 0 `voucher_support_data` requests during initial Audit
+Workbook table load and 0 on the first Procedure Modal open. Closing the modal made exactly 1
+voucher-level request for the voucher's first-line anchor; the same result was shared by Procedures
+and Observations refresh. A different voucher made 1 request for its new anchor. No four-request-
+per-line fan-out was observed.
+
+Repeated same-voucher closes each made 1 request because a successful save intentionally invalidates
+the cache before refreshing badges. This preserves fresh saved state and is not the former request
+storm. The browser trace had no page errors; the analyst-only `/api/users` 403 is expected. No code
+change was needed. The batched cache is validated locally, and the next planned phase is measuring
+whether Audit Workbook can reuse the compiled session Rulebook instead of repeated guidance reads.
+
 ## Audit Workbook Procedure Modal adapter compatibility
 
 **Date:** 2026-08-31 | **Files:** `static/procedure_modal.js`, `static/audit_workbook.js`,
