@@ -92,6 +92,7 @@ The multi-second browser timings are therefore mainly caused by large result tra
 | Rulebook template metadata wiring | `routers/audit_rules.py`, Verification adapter, Procedure Modal | User-tested and pushed | Continue with measured fresh-data optimization |
 | Shared set-based Procedure Modal loader | `routers/verification.py`, performance and Save/Verify tests | Implemented locally; automated tests passed; browser timing reviewed | User-test modal open and compare `?perf=true` timing |
 | Grouped Save/Verify final status computation | `routers/verification.py`, Save/Verify tests | Implemented locally; automated and browser functional checks passed; 8.35s measured | User-test Verify/Save timing before any Git action |
+| Audit Rules optional Sortable.js resilience | `static/audit_rules.js` | User-tested and pushed | Continue with the next measured Rulebook/Verification task |
 
 ### Latest cashbook date optimization result
 

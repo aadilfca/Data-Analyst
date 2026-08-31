@@ -52,6 +52,8 @@ Every finding from a review session is recorded here — never fixed silently, n
 
 ---
 
+| 2026-08-31 | Audit Rules | RESOLVED: an unavailable optional Sortable.js CDN caused `loadVoucherChecks()` to reject before Categories and Assign Categories could request their data. Initialization is now warning-only when the enhancement is unavailable. | Fix |
+
 | 2026-08-30 | Audit Rules | Cross-check Field-to-Compare shows no eligible fields when selected Documents have no eligible fields configured. Field configuration and dropdown workflow are deferred until performance-focused work is complete. | Defer |
 
 ---

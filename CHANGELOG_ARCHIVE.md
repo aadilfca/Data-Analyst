@@ -15,6 +15,21 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Audit Rules optional Sortable.js resilience
+
+**Date:** 2026-08-31 | **Files:** `static/audit_rules.js`.
+
+The Audit Rules Categories loader was indirectly blocked when the optional Sortable.js CDN was
+unavailable: Categories waited for Voucher-level Checks, whose initialization called `new Sortable`
+without checking that the library existed. The guarded initializer now keeps drag-to-reorder when
+Sortable.js is available, while treating a missing or malformed library as a warning-only loss of
+that enhancement. Categories and Assign Categories therefore continue loading independently.
+
+`node --check static/audit_rules.js` passed. A Playwright run with the CDN deliberately blocked
+rendered all 16 Categories and all 1,008 Trial Balance account rows; a second run with an in-memory
+Sortable stub confirmed the normal initialization path and 16 Categories. No data-changing action
+was performed. The user then manually confirmed the normal local-browser flow before commit/push.
+
 ## Grouped Save/Verify final status computation
 
 **Date:** 2026-08-31 | **Files:** `routers/verification.py`,

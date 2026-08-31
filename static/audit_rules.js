@@ -3150,6 +3150,7 @@ let editingVoucherCheckId = null;
 // Sortable.js instance, created once (see initVoucherCheckSortable()) and toggled via
 // .option('disabled', ...) rather than destroyed/recreated on every render.
 let arVoucherCheckSortable = null;
+let arVoucherCheckSortableWarningShown = false;
 // Rule-count badge (Phase 3 of 3, FINAL): every check fetched by the most recent
 // loadVoucherChecks() call, regardless of that widget's own "Show inactive" toggle -- read by
 // renderCategoryList() (filtered to is_active there) since voucher-level checks are global
@@ -3245,7 +3246,19 @@ function renderVoucherCheckList(checks, includeInactive) {
 // exactly what Sortable is designed to tolerate.
 function initVoucherCheckSortable() {
     if (arVoucherCheckSortable) return;
-    arVoucherCheckSortable = new Sortable(arVoucherCheckListBody, {
+    // Sortable.js is an optional CDN enhancement. Its absence must not reject
+    // loadVoucherChecks(), because Categories and Assign Categories deliberately chain
+    // that loader before their own data requests.
+    if (typeof Sortable === 'undefined') {
+        if (!arVoucherCheckSortableWarningShown) {
+            console.warn('Sortable.js unavailable; drag-to-reorder is disabled.');
+            arVoucherCheckSortableWarningShown = true;
+        }
+        return;
+    }
+
+    try {
+        arVoucherCheckSortable = new Sortable(arVoucherCheckListBody, {
         handle: '.ar-drag-handle',
         animation: 150,
         ghostClass: 'sortable-ghost',
@@ -3268,7 +3281,12 @@ function initVoucherCheckSortable() {
                 await loadVoucherChecks();
             }
         }
-    });
+        });
+    } catch (error) {
+        // A malformed/partially-loaded optional library is treated like a missing one.
+        // The entity list itself remains usable; only drag-to-reorder is unavailable.
+        console.warn('Sortable.js could not be initialized; drag-to-reorder is disabled.', error);
+    }
 }
 
 // ---------- CHIP EDITOR (Authorisation Roles) ----------
