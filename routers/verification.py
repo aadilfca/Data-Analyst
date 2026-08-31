@@ -13,8 +13,6 @@ from datetime import datetime, timezone
 import json
 import re
 import time
-import contextvars
-from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Dict, Any
 import io
 from functools import wraps
@@ -1711,7 +1709,8 @@ def save_line_items(
             stop_db_metrics(perf_token)
 
 
-def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data, perf_timings=None, rulebook=None):
+def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_data,
+                          perf_timings=None, rulebook=None, compute_status=True):
     detail = execute_query_pg(
         "SELECT id, status FROM verification_details WHERE id = %s",
         (detail_id,)
@@ -1772,13 +1771,19 @@ def _save_line_items_impl(detail_id, line_items, transaction_type, procedure_dat
     if perf_timings is not None:
         perf_timings["observation_sync_ms"] = round((time.perf_counter() - sync_started) * 1000, 1)
 
-    # Validation Rules Phase 4: recompute Cleared/Query status on every save, same
-    # chokepoint as the observation sync directly above. Phase 5: surface the result in the
-    # response so the frontend can refresh the line's badge without a second round-trip.
-    status_started = time.perf_counter()
-    status_result = compute_and_persist_cleared_status(detail_id, sibling_ids=sibling_ids, rulebook=rulebook)
-    if perf_timings is not None:
-        perf_timings["status_engine_ms"] = round((time.perf_counter() - status_started) * 1000, 1)
+    # Validation Rules Phase 4: recompute Cleared/Query status on every standalone save, same
+    # chokepoint as the observation sync directly above. The grouped Save/Verify endpoint passes
+    # compute_status=False because it deliberately recomputes once after ALL supplied procedure,
+    # voucher-check, observation, and Physical Bill state has been persisted below; calculating
+    # here first would be both incomplete and duplicated work in the same transaction.
+    status_result = None
+    if compute_status:
+        status_started = time.perf_counter()
+        status_result = compute_and_persist_cleared_status(
+            detail_id, sibling_ids=sibling_ids, rulebook=rulebook
+        )
+        if perf_timings is not None:
+            perf_timings["status_engine_ms"] = round((time.perf_counter() - status_started) * 1000, 1)
 
     log_audit("Analyst", "Save Line Items", "Verification", f"Detail {detail_id} line items saved.")
     response = {"message": "Line items and procedure data saved successfully."}
@@ -1905,7 +1910,8 @@ def save_and_verify_voucher_bundle(
             line_timings = {} if perf else None
             _save_line_items_impl(
                 line['detail_id'], line.get('line_items', []),
-                line.get('transaction_type'), line.get('procedure_data'), line_timings, session_rulebook
+                line.get('transaction_type'), line.get('procedure_data'), line_timings,
+                session_rulebook, compute_status=False
             )
             if perf:
                 for key in save_components:
@@ -3857,21 +3863,6 @@ def save_voucher_checks_batch(
 # row must never be treated as a live link.
 # ==============================================
 
-# Phase 3c: opt-in per-request memo for _resolve_sibling_voucher_line_ids(). Defaults to None,
-# so every caller behaves exactly as before unless a request handler explicitly opts in by
-# setting a fresh dict on this ContextVar (today only get_procedure_modal_data() does). That
-# endpoint's thin fan-out calls the 5 read sub-functions in sequence and each independently
-# resolved siblings for the SAME voucher_line_id - 5x the 2-query resolve = ~8 wasted
-# cross-region round trips per modal open. This is deliberately per-request (not the
-# audit_rules.py TTL cache_get/cache_set): the client_data_id -> sibling verification_details
-# ids mapping changes whenever a new verification session is created for the cashbook, so a
-# process-lifetime/TTL cache would risk serving a stale sibling set across that event. Within
-# one modal-open request no session creation can happen, so the mapping is provably stable.
-_sibling_ids_request_memo: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
-    "_sibling_ids_request_memo", default=None
-)
-
-
 def _resolve_sibling_voucher_line_ids(voucher_line_id: int) -> Optional[List[int]]:
     """
     Bug fix (Voucher Supporting-Document Linking follow-up, Phase 3 of 4): start_verification_session()
@@ -3896,26 +3887,14 @@ def _resolve_sibling_voucher_line_ids(voucher_line_id: int) -> Optional[List[int
     affected by this helper - they still target whichever voucher_line_id the caller passes in,
     exactly as before.
     """
-    # Phase 3c: return an already-resolved result for this id if the current request opted in
-    # to memoisation (see _sibling_ids_request_memo above). Both the None (line-not-found) and
-    # the real list are cached, so a bad id isn't re-queried 5x either.
-    memo = _sibling_ids_request_memo.get()
-    if memo is not None and voucher_line_id in memo:
-        return memo[voucher_line_id]
-
     line = execute_query_pg("SELECT client_data_id FROM verification_details WHERE id = %s", (voucher_line_id,))
     if not line:
-        if memo is not None:
-            memo[voucher_line_id] = None
         return None
     siblings = execute_query_pg(
         "SELECT id FROM verification_details WHERE client_data_id = %s",
         (line[0]['client_data_id'],)
     )
-    result = [s['id'] for s in siblings]
-    if memo is not None:
-        memo[voucher_line_id] = result
-    return result
+    return [s['id'] for s in siblings]
 
 
 @router.post("/api/verification/assign_document")
@@ -5813,7 +5792,8 @@ def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, Lis
 
 def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[int] = None,
                                     sibling_ids: Optional[List[int]] = None,
-                                    voucher_amount: Optional[float] = None) -> dict:
+                                    voucher_amount: Optional[float] = None,
+                                    linked_by_document: Optional[Dict[int, List[int]]] = None) -> dict:
     """
     Chain-aware cross-document evaluation for one voucher line (Phase 6 of 10).
 
@@ -5916,7 +5896,8 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
         category_name = name_rows[0]['name']
 
     configs = _get_category_cross_check_configs(category_id)
-    linked_by_document = _get_linked_evidence_by_document(voucher_line_id, sibling_ids=sibling_ids)
+    if linked_by_document is None:
+        linked_by_document = _get_linked_evidence_by_document(voucher_line_id, sibling_ids=sibling_ids)
 
     results = [
         _evaluate_single_cross_check(cfg, linked_by_document, voucher_amount)
@@ -5984,74 +5965,29 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
     via one small join, the same pattern compute_and_persist_cleared_status() already uses -
     one less thing for client and server to agree on.
 
-    Known tradeoff: an exception inside any one of the 5 wrapped calls now 500s the whole
-    composite instead of failing just that one piece (today each of the 6 calls fails
-    independently client-side). These are long-stable, already-exercised endpoints, so no new
-    try/except is added around them here.
+    The shared support loader returns the same current-line shapes as the five former reads.
+    Cross-check evaluation reuses its linked-document result, while preserving the existing
+    field-resolution rules for each evidence row.
     """
     perf_token = start_db_metrics() if perf else None
     perf_started = time.perf_counter()
     component_ms = {}
-    worker_db_metrics = {"calls": 0, "reads": 0, "writes": 0, "db_time": 0.0}
-
-    # Phase 3c: keep a request-local memo for the parent thread. Worker threads receive their
-    # own seeded copy below because ContextVars do not implicitly propagate into executor
-    # workers. Resolving once here avoids repeating the same two remote reads in every fan-out
-    # helper while preserving the existing sibling-aware, live-data behavior.
-    memo_token = _sibling_ids_request_memo.set({})
-
-    def measured(name, fn):
-        started = time.perf_counter()
-        value = fn()
-        if perf:
-            component_ms[name] = round((time.perf_counter() - started) * 1000, 1)
-        return value
-
-    def run_worker(fn):
-        """Run one modal read with an independent metrics context."""
-        worker_token = start_db_metrics() if perf else None
-        worker_memo_token = _sibling_ids_request_memo.set({voucher_line_id: sibling_ids})
-        started = time.perf_counter()
-        try:
-            value = fn()
-            return value, round((time.perf_counter() - started) * 1000, 1), get_db_metrics()
-        finally:
-            _sibling_ids_request_memo.reset(worker_memo_token)
-            if worker_token is not None:
-                stop_db_metrics(worker_token)
-
     try:
-        # Resolve the sibling set once before submitting workers. The result is seeded into each
-        # worker's own ContextVar by run_worker(), since ContextVars are thread-local and are not
-        # copied automatically by ThreadPoolExecutor.
-        sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+        support_started = time.perf_counter()
+        support_data = get_voucher_support_data(voucher_line_id)
+        current_support = (support_data.get("lines") or {}).get(str(voucher_line_id))
+        if current_support is None:
+            raise HTTPException(404, "Voucher line not found.")
+        linked_documents = current_support["linked_documents"]
+        procedure_checks = current_support["procedure_checks"]
+        observations = current_support["observations"]
+        physical_bills = current_support["physical_bills"]
+        if perf:
+            component_ms["support_data_ms"] = round((time.perf_counter() - support_started) * 1000, 1)
 
-        # These five reads are independent and each uses its own pooled database connection.
-        # Running them together removes the accumulated network round-trip wait while keeping
-        # the existing helper functions and response shape unchanged. The pool-safe worker cap
-        # deliberately matches this endpoint's fixed five-way fan-out.
-        fanout = {
-            "linked_documents_ms": lambda: get_voucher_line_documents(voucher_line_id),
-            "procedure_checks_ms": lambda: get_procedure_checks(voucher_line_id),
-            "observations_ms": lambda: get_line_observations(voucher_line_id),
-            "physical_bills_ms": lambda: get_voucher_line_physical_bills(voucher_line_id),
-            "cross_checks_ms": lambda: get_cross_check_results(voucher_line_id),
-        }
-        with ThreadPoolExecutor(max_workers=5, thread_name_prefix="procedure-support") as executor:
-            futures = {name: executor.submit(run_worker, fn) for name, fn in fanout.items()}
-            values = {}
-            for name, future in futures.items():
-                value, elapsed_ms, metrics = future.result()
-                values[name] = value
-                if perf:
-                    component_ms[name] = elapsed_ms
-                    for key in worker_db_metrics:
-                        worker_db_metrics[key] += metrics[key]
-        linked_documents = values["linked_documents_ms"]
-        procedure_checks = values["procedure_checks_ms"]
-        observations = values["observations_ms"]
-        physical_bills = values["physical_bills_ms"]
-        cross_check_results = values["cross_checks_ms"]
+        linked_by_document = {}
+        for document in linked_documents.get("documents", []):
+            linked_by_document.setdefault(document["document_id"], []).append(document["client_data_id"])
 
         voucher_row = execute_query_pg(
             """
@@ -6064,10 +6000,21 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
         )
         voucher_checks = []
         if voucher_row and voucher_row[0]['transaction_ref']:
-            voucher_checks = measured("voucher_checks_ms", lambda: get_voucher_checks_status(
+            voucher_checks_started = time.perf_counter()
+            voucher_checks = get_voucher_checks_status(
                 client_id=voucher_row[0]['client_id'],
                 transaction_ref=voucher_row[0]['transaction_ref']
-            ))
+            )
+            if perf:
+                component_ms["voucher_checks_ms"] = round((time.perf_counter() - voucher_checks_started) * 1000, 1)
+
+        cross_checks_started = time.perf_counter()
+        cross_check_results = evaluate_cross_checks_for_line(
+            voucher_line_id,
+            linked_by_document=linked_by_document,
+        )
+        if perf:
+            component_ms["cross_checks_ms"] = round((time.perf_counter() - cross_checks_started) * 1000, 1)
 
         response = {
             "voucher_line_id": voucher_line_id,
@@ -6080,8 +6027,6 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
         }
         if perf:
             metrics = get_db_metrics()
-            for key in worker_db_metrics:
-                metrics[key] += worker_db_metrics[key]
             response["_perf"] = {
                 "components": component_ms,
                 "db_calls": metrics["calls"],
@@ -6091,11 +6036,8 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
             }
         return response
     finally:
-        _sibling_ids_request_memo.reset(memo_token)
         if perf_token is not None:
             metrics = get_db_metrics()
-            for key in worker_db_metrics:
-                metrics[key] += worker_db_metrics[key]
             print(json.dumps({"perf": "procedure_modal_data", "detail_id": voucher_line_id,
                               "total_ms": round((time.perf_counter() - perf_started) * 1000, 1),
                               "components": component_ms, "db_calls": metrics["calls"],

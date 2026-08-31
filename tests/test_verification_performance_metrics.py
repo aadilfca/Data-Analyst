@@ -54,39 +54,51 @@ class PerformanceMetricsTests(unittest.TestCase):
         self.assertEqual(get_db_metrics()["calls"], 0)
 
 
-def test_procedure_modal_seeds_sibling_ids_into_each_worker(monkeypatch):
-    """The five modal reads reuse one sibling-id resolution across executor threads."""
-    resolver_calls = []
+def test_procedure_modal_uses_shared_support_loader_for_cross_checks(monkeypatch):
+    """The modal reuses one set-based support payload instead of repeating helper reads."""
+    support_loader_calls = []
+    cross_check_args = []
 
-    def fake_resolver(voucher_line_id):
-        memo = verification._sibling_ids_request_memo.get()
-        if memo is not None and voucher_line_id in memo:
-            return memo[voucher_line_id]
-        resolver_calls.append(voucher_line_id)
-        return [voucher_line_id, voucher_line_id + 1]
+    def fake_support_loader(voucher_line_id):
+        support_loader_calls.append(voucher_line_id)
+        return {
+            "lines": {
+                str(voucher_line_id): {
+                    "linked_documents": {
+                        "voucher_line_id": voucher_line_id,
+                        "documents": [{"document_id": 3, "client_data_id": 100}],
+                        "count": 1,
+                    },
+                    "procedure_checks": {"voucher_line_id": voucher_line_id, "checks": []},
+                    "observations": {"voucher_line_id": voucher_line_id, "entries": []},
+                    "physical_bills": {"voucher_line_id": voucher_line_id, "bills": [], "count": 0},
+                }
+            }
+        }
 
-    def support_result(voucher_line_id):
-        fake_resolver(voucher_line_id)
-        return {}
-
-    monkeypatch.setattr(verification, "_resolve_sibling_voucher_line_ids", fake_resolver)
-    monkeypatch.setattr(verification, "get_voucher_line_documents", support_result)
-    monkeypatch.setattr(verification, "get_procedure_checks", support_result)
-    monkeypatch.setattr(verification, "get_line_observations", support_result)
-    monkeypatch.setattr(verification, "get_voucher_line_physical_bills", support_result)
-    monkeypatch.setattr(verification, "get_cross_check_results", support_result)
+    monkeypatch.setattr(verification, "get_voucher_support_data", fake_support_loader)
     monkeypatch.setattr(
         verification,
         "execute_query_pg",
         lambda query, params=(): [{"transaction_ref": "T-1", "client_id": 1}],
     )
     monkeypatch.setattr(verification, "get_voucher_checks_status", lambda **kwargs: [])
+    monkeypatch.setattr(
+        verification,
+        "evaluate_cross_checks_for_line",
+        lambda *args, **kwargs: cross_check_args.append(kwargs) or {"results": []},
+    )
 
     response = verification.get_procedure_modal_data(10, perf=True)
 
     assert response["voucher_line_id"] == 10
+    assert response["linked_documents"]["count"] == 1
+    assert response["procedure_checks"]["checks"] == []
+    # The test replaces execute_query_pg with a stub, so the instrumentation wrapper is not
+    # involved; the production request still counts every real database helper call.
     assert response["_perf"]["db_calls"] == 0
-    assert resolver_calls == [10]
+    assert support_loader_calls == [10]
+    assert cross_check_args == [{"linked_by_document": {3: [100]}}]
 
 if __name__ == "__main__":
     unittest.main()

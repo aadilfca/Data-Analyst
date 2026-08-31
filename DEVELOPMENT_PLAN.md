@@ -89,7 +89,9 @@ The multi-second browser timings are therefore mainly caused by large result tra
 | Login/Client Cards investigation | Read-only request timing | Identified | Measure as a separate track |
 | Database query-plan investigation | Read-only Postgres `EXPLAIN ANALYZE` | Completed | Reduce Verification result payloads |
 | Verification bottleneck optimization | Procedure-modal diagnostics and duplicate sibling-read removal | User-tested and pushed | Continue with the next measured bottleneck |
-| Rulebook template metadata wiring | `routers/audit_rules.py`, Verification adapter, Procedure Modal | User-tested and ready to push | Investigate Save/Verify persistence timing |
+| Rulebook template metadata wiring | `routers/audit_rules.py`, Verification adapter, Procedure Modal | User-tested and pushed | Continue with measured fresh-data optimization |
+| Shared set-based Procedure Modal loader | `routers/verification.py`, performance and Save/Verify tests | Implemented locally; automated tests passed; browser timing reviewed | User-test modal open and compare `?perf=true` timing |
+| Grouped Save/Verify final status computation | `routers/verification.py`, Save/Verify tests | Implemented locally; automated and browser functional checks passed; 8.35s measured | User-test Verify/Save timing before any Git action |
 
 ### Latest cashbook date optimization result
 
@@ -126,7 +128,11 @@ The Verify and Verify & Next actions now retain the existing button progress ind
 
 ### Next mini-phase: Save/Verify logical-stage optimization
 
-The next mini-phase will focus on the backend logical verification stage while preserving the one-click user actions, save-before-verify ordering, transaction boundary, and cache-update timing. Persistence/save optimization will remain a separate follow-up mini-phase.
+The next mini-phase focuses on the backend logical verification stage while preserving the one-click
+user actions, save-before-verify ordering, transaction boundary, and cache-update timing. The first
+local optimization now skips the intermediate status calculation inside grouped line saves and
+keeps the one final status computation after all supplied state is persisted. Persistence/write
+optimization remains a separate follow-up mini-phase.
 
 ### Planned foundation: controlled configuration lock and session cache
 
@@ -187,8 +193,20 @@ The user HAR confirmed the current assets (`procedure_modal.js?v=15`, `verificat
 requests with HTTP 200, and no `/api/templates/{id}` calls. Procedure Modal time was approximately
 3.7 seconds; Save/Verify remains approximately 10.6 seconds and is the next measured bottleneck.
 
-The template/cache/diagnostics phase was pushed in commit `fd2a56d`. Later local changes remain
+The template/cache/diagnostics phase was pushed in commit `f00d8dc`. Later local changes remain
 uncommitted until user testing and confirmation. Do not commit or push automatically.
+
+### Shared set-based Procedure Modal loader
+
+The Procedure Modal endpoint now reuses the existing set-based voucher-support loader for linked
+documents, procedure ticks, observations, and Physical Bills instead of invoking five helper reads
+through a thread fan-out. Cross-check evaluation reuses the linked-document IDs already fetched;
+its evidence-field resolution rules remain unchanged. The response contract and standalone helper
+endpoints remain compatible, and no voucher-specific data is cached.
+
+Focused Verification tests passed (14); the full suite passed (47) with four existing warnings.
+Python compilation passed. Manual timing comparison and user confirmation remain pending before
+any Git staging or commit.
 
 ## Planned redesign: Audit Rules Rulebook
 

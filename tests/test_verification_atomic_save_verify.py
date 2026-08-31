@@ -27,6 +27,8 @@ def _patch_atomic_dependencies(monkeypatch, save_result=None, verify_result=None
     def save(*args, **kwargs):
         if save_error:
             raise save_error
+        if kwargs.get("compute_status") is False:
+            calls.append("save_without_status")
         return save_result
 
     monkeypatch.setattr(verification, "_save_line_items_impl", save)
@@ -112,7 +114,7 @@ def test_voucher_bundle_saves_all_lines_then_verifies_once(monkeypatch):
     )
 
     assert result["verified"] is True
-    assert calls == ["begin", "verify", "commit"]
+    assert calls == ["begin", "save_without_status", "save_without_status", "verify", "commit"]
 
 
 # --- HTTP-level coverage -----------------------------------------------------------------------
@@ -245,7 +247,7 @@ def test_voucher_bundle_accepts_modal_state(monkeypatch):
         physical_bills=[]
     )
     assert result["verified"] is True
-    assert calls == ["begin", "verify", "commit"]
+    assert calls == ["begin", "save_without_status", "verify", "commit"]
 
 
 def test_status_engine_uses_session_rulebook_loader_when_not_preloaded(monkeypatch):

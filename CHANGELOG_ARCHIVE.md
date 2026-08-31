@@ -15,6 +15,48 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Grouped Save/Verify final status computation
+
+**Date:** 2026-08-31 | **Files:** `routers/verification.py`,
+`tests/test_verification_atomic_save_verify.py`.
+
+The grouped Save/Verify path now skips the intermediate Cleared/Query calculation performed by
+each individual line save. It computes status once, after all submitted procedure checks,
+voucher checks, observations, and Physical Bills have been persisted inside the same transaction.
+Standalone line saves and the older single-line Save/Verify endpoint retain their existing status
+calculation behavior.
+
+Focused tests passed (14), the full suite passed (47) with four existing warnings, and Python
+compilation passed. The post-change live browser run completed Verify/Save successfully with HTTP
+200 in approximately 8.35 seconds; the server measured 7.93 seconds, 76 database calls, 61 reads,
+15 writes, and 7.51 seconds of database time. This improved the earlier 12.45-second /
+142-call comparison while preserving the response and atomic workflow. User confirmation remains
+required before this optimization is accepted or committed.
+
+---
+
+## Shared set-based Procedure Modal loader
+
+**Date:** 2026-08-31 | **Files:** `routers/verification.py`,
+`tests/test_verification_performance_metrics.py`, `tests/test_verification_atomic_save_verify.py`,
+`DEVELOPMENT_PLAN.md`.
+
+The Procedure Modal endpoint now consumes the existing set-based voucher-support loader, which
+resolves the voucher's current and historical sibling lines once and fetches linked documents,
+procedure ticks, observations, and Physical Bills in batched queries. The five standalone helper
+endpoints remain available for other consumers. The existing response shape is rebuilt from the
+shared payload, so the frontend contract and fresh-data behavior are unchanged.
+
+Cross-check evaluation now accepts the already-fetched linked-document map, avoiding a repeated
+linked-document read while preserving the existing template-aware field resolution and comparison
+rules. The previous thread fan-out and its ContextVar metrics aggregation were removed from this
+endpoint; no additional parallel connections or indexes were introduced.
+
+Focused tests passed (14), the full suite passed (47) with four existing warnings, and Python
+compilation passed. Manual Procedure Modal timing comparison and user testing remain pending.
+
+---
+
 ## Compiled client Rulebook loader and version key
 
 **Date:** 2026-08-30 | **Files:** `routers/audit_rules.py`, `tests/test_audit_rulebook.py`.
