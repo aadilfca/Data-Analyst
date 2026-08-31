@@ -15,6 +15,26 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Cross-check configuration read batching
+
+**Date:** 2026-08-31 | **Files:** `routers/verification.py`,
+`tests/test_verification_performance_metrics.py`, `DEVELOPMENT_PLAN.md`,
+`KNOWN_ISSUES.md`.
+
+On a Cross-check configuration cache miss, `_get_category_cross_check_configs()` previously ran
+one document-chain query for every active Cross-check attached to a Category. The loader now gets
+all configured document chains in one set-based query and groups them back by Cross-check while
+preserving the existing chain order, cache key, response shape, and evaluation behavior. No live
+voucher evidence is cached and no standalone endpoint was changed.
+
+The focused performance tests pass 5 tests, including a two-rule fixture that proves the document
+chains use one query. The full suite passes 48 tests with four existing warnings, Python
+compilation passes, and a live read-only `procedure_modal_data?perf=true` request returned HTTP
+200. The current test Category has no active Cross-check chain, so live populated-chain timing is
+not claimed; the targeted query reduction is covered by the regression test. The user manually
+confirmed the Procedure Modal, Save/Verify, cache invalidation, and navigation flow. This phase is
+ready for Git staging/commit.
+
 ## Procedure Modal duplicate metadata lookup
 
 **Date:** 2026-08-31 | **Files:** `routers/verification.py`,

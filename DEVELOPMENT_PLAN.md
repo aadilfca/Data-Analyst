@@ -94,6 +94,7 @@ The multi-second browser timings are therefore mainly caused by large result tra
 | Grouped Save/Verify final status computation | `routers/verification.py`, Save/Verify tests | Implemented locally; automated and browser functional checks passed; 8.35s measured | User-test Verify/Save timing before any Git action |
 | Audit Rules optional Sortable.js resilience | `static/audit_rules.js` | User-tested and pushed | Continue with the next measured Rulebook/Verification task |
 | Procedure Modal duplicate metadata lookup | `routers/verification.py`, performance tests | User-tested and pushed | Continue with the next measured fresh-data task |
+| Cross-check configuration read batching | `routers/verification.py`, performance tests | User-tested and ready for Git lock | Commit and push; continue with the next measured bottleneck |
 
 ### Latest cashbook date optimization result
 
@@ -209,6 +210,20 @@ endpoints remain compatible, and no voucher-specific data is cached.
 Focused Verification tests passed (14); the full suite passed (47) with four existing warnings.
 Python compilation passed. Manual timing comparison and user confirmation remain pending before
 any Git staging or commit.
+
+### Cross-check configuration read batching
+
+On a Cross-check configuration cache miss, `_get_category_cross_check_configs()` previously ran
+one document-chain query for every active Cross-check attached to a Category. It now performs one
+batched document-chain query for all those Cross-check IDs, grouping the rows back in the existing
+`sort_order` and response shape. Cache behavior, chain ordering, and evaluation rules are unchanged.
+
+The focused performance file now passes 5 tests, including a two-rule fixture that asserts exactly
+one document-chain query. The full suite passes 48 tests with four existing warnings, and Python
+compilation passes. A live read-only modal request returned HTTP 200 with four database reads; the
+current test Category has no active Cross-check chain, so populated-chain live timing remains a
+manual follow-up. The user manually confirmed the Procedure Modal, Save/Verify, cache invalidation,
+and navigation flow; this phase is ready for Git lock.
 
 ## Planned redesign: Audit Rules Rulebook
 

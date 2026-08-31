@@ -101,5 +101,41 @@ def test_procedure_modal_uses_shared_support_loader_for_cross_checks(monkeypatch
     assert support_loader_calls == [10]
     assert cross_check_args == [{"linked_by_document": {3: [100]}}]
 
+
+def test_cross_check_config_loader_batches_document_chains(monkeypatch):
+    """A cold Cross-check config load uses one rule read and one document-chain read."""
+    queries = []
+
+    def fake_query(query, params=()):
+        queries.append((query, params))
+        if "FROM audit_rule_category_cross_checks" in query:
+            return [
+                {"id": 30, "name": "Invoice to order", "compare_field": "Amount",
+                 "comparison_type": "Exact", "compare_to_voucher_line": False},
+                {"id": 31, "name": "Receipt to invoice", "compare_field": "Amount",
+                 "comparison_type": "Exact", "compare_to_voucher_line": True},
+            ]
+        if "FROM audit_rule_cross_check_documents" in query:
+            return [
+                {"cross_check_id": 30, "document_id": 10, "sort_order": 0,
+                 "document_name": "Invoice"},
+                {"cross_check_id": 31, "document_id": 11, "sort_order": 0,
+                 "document_name": "Receipt"},
+            ]
+        raise AssertionError(f"Unexpected query: {query}")
+
+    monkeypatch.setattr(verification, "cache_get", lambda key: None)
+    monkeypatch.setattr(verification, "cache_set", lambda key, value: None)
+    monkeypatch.setattr(verification, "execute_query_pg", fake_query)
+
+    configs = verification._get_category_cross_check_configs(7)
+
+    assert len(queries) == 2
+    assert len([query for query, _ in queries
+                if "FROM audit_rule_cross_check_documents" in query]) == 1
+    assert queries[1][1] == (30, 31)
+    assert [doc["document_id"] for doc in configs[0]["documents"]] == [10]
+    assert [doc["document_id"] for doc in configs[1]["documents"]] == [11]
+
 if __name__ == "__main__":
     unittest.main()

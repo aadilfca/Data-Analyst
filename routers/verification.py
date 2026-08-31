@@ -5491,7 +5491,9 @@ def _get_category_cross_check_configs(category_id: int) -> List[dict]:
     rather than reshaping another router's already-live helper for one caller.
 
     documents[] order is audit_rule_cross_check_documents.sort_order - that ordering IS the
-    chain, and the whole engine's direction logic depends on it.
+    chain, and the whole engine's direction logic depends on it. The rule rows and all document
+    chains are fetched in two set-based reads on a cache miss; do not reintroduce one document
+    query per Cross-check here.
     """
     cache_key = f"cross_check_configs:{category_id}"
     cached = cache_get(cache_key)
@@ -5509,18 +5511,26 @@ def _get_category_cross_check_configs(category_id: int) -> List[dict]:
         (category_id,)
     )
 
-    configs = []
-    for r in rule_rows:
+    cross_check_ids = [r['id'] for r in rule_rows]
+    documents_by_cross_check = {cross_check_id: [] for cross_check_id in cross_check_ids}
+    if cross_check_ids:
+        placeholders = ",".join("%s" for _ in cross_check_ids)
         doc_rows = execute_query_pg(
-            """
-            SELECT ccd.document_id, ccd.sort_order, d.name AS document_name
+            f"""
+            SELECT ccd.cross_check_id, ccd.document_id, ccd.sort_order, d.name AS document_name
             FROM audit_rule_cross_check_documents ccd
             JOIN audit_rule_documents d ON d.id = ccd.document_id
-            WHERE ccd.cross_check_id = %s
-            ORDER BY ccd.sort_order
+            WHERE ccd.cross_check_id IN ({placeholders})
+            ORDER BY ccd.cross_check_id, ccd.sort_order
             """,
-            (r['id'],)
+            tuple(cross_check_ids)
         )
+        for d in doc_rows:
+            documents_by_cross_check[d['cross_check_id']].append(d)
+
+    configs = []
+    for r in rule_rows:
+        doc_rows = documents_by_cross_check[r['id']]
         configs.append({
             "id": r['id'],
             "name": r['name'],
