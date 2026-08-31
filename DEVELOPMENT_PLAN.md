@@ -88,7 +88,7 @@ The multi-second browser timings are therefore mainly caused by large result tra
 | Grouped Save/Verify diagnostics | `routers/verification.py`, with existing database metrics | Implemented and pushed | Use component evidence during optimization |
 | Login/Client Cards investigation | Read-only request timing | Identified | Measure as a separate track |
 | Database query-plan investigation | Read-only Postgres `EXPLAIN ANALYZE` | Completed | Reduce Verification result payloads |
-| Verification bottleneck optimization | Save/Verify logical and persistence tracks | Active | Optimize one internal stage at a time |
+| Verification bottleneck optimization | Procedure-modal diagnostics and duplicate sibling-read removal | Implemented locally | Manual-test modal open and Save/Verify before commit/push |
 
 ### Latest cashbook date optimization result
 
@@ -168,6 +168,13 @@ database calls. Cross-check configuration caching reduced the repeat cross-check
 961 ms to about 719 ms. The broad parallel-query experiment was reverted after it increased latency
 through connection-pool contention. The targeted linked-document index was added to both schema
 paths, but its user-visible effect was not material in the small test case.
+
+The next controlled measurement found that the five parallel modal helpers independently repeated
+the same sibling-line lookup: 21 reads and 44.1 seconds of cumulative database time. The smallest
+safe fix resolves siblings once in the parent request and seeds each worker's request-local memo.
+The same live request then returned HTTP 200 in 4.32 seconds with 13 reads and 12.3 seconds of
+cumulative database time. The response remained 1,616 bytes, confirming that the improvement is in
+database round trips rather than payload reduction. Focused regression tests now pass (15 total).
 
 The template/cache/diagnostics phase was pushed in commit `fd2a56d`. Later local changes remain
 uncommitted until user testing and confirmation. Do not commit or push automatically.

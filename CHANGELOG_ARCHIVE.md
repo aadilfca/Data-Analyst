@@ -48,6 +48,26 @@ new and existing Verification sessions remain usable and category behavior is un
 
 ---
 
+## Procedure-modal duplicate sibling-read consolidation
+
+**Date:** 2026-08-31 | **Files:** `routers/verification.py`, `tests/test_verification_performance_metrics.py`.
+
+The opt-in procedure-modal diagnostics were corrected to include database calls made inside the
+five `ThreadPoolExecutor` workers; the earlier parent-only counter understated work. A controlled
+live request then showed 21 reads and 44.1 seconds of cumulative database time across the parallel
+workers, while the response itself was small and successful. Source tracing identified repeated
+resolution of the same cross-session sibling verification-detail IDs in each helper.
+
+The smallest safe consolidation resolves those sibling IDs once in the parent request and seeds
+each worker's request-local memo. Existing helper response shapes, live evidence/tick/observation/
+Physical Bill reads, cross-check behavior, and all writes remain unchanged. The same live request
+then returned HTTP 200 in 4.32 seconds, with 13 reads and 12.3 seconds of cumulative database time;
+the response was 1,616 bytes. Added a regression test proving all five workers reuse the one
+resolution. Focused tests passed: 15 total; compilation and `git diff --check` passed. Manual user
+testing and Git commit/push remain pending.
+
+---
+
 ## Fresh Vouchers date default
 
 **Date:** 2026-08-29 | **Files:** `static/verification.js`, `static/verification.html`.

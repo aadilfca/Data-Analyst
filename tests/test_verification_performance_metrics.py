@@ -1,5 +1,6 @@
 import unittest
 
+from routers import verification
 from database import (
     _instrument_db_call,
     get_db_metrics,
@@ -52,6 +53,40 @@ class PerformanceMetricsTests(unittest.TestCase):
 
         self.assertEqual(get_db_metrics()["calls"], 0)
 
+
+def test_procedure_modal_seeds_sibling_ids_into_each_worker(monkeypatch):
+    """The five modal reads reuse one sibling-id resolution across executor threads."""
+    resolver_calls = []
+
+    def fake_resolver(voucher_line_id):
+        memo = verification._sibling_ids_request_memo.get()
+        if memo is not None and voucher_line_id in memo:
+            return memo[voucher_line_id]
+        resolver_calls.append(voucher_line_id)
+        return [voucher_line_id, voucher_line_id + 1]
+
+    def support_result(voucher_line_id):
+        fake_resolver(voucher_line_id)
+        return {}
+
+    monkeypatch.setattr(verification, "_resolve_sibling_voucher_line_ids", fake_resolver)
+    monkeypatch.setattr(verification, "get_voucher_line_documents", support_result)
+    monkeypatch.setattr(verification, "get_procedure_checks", support_result)
+    monkeypatch.setattr(verification, "get_line_observations", support_result)
+    monkeypatch.setattr(verification, "get_voucher_line_physical_bills", support_result)
+    monkeypatch.setattr(verification, "get_cross_check_results", support_result)
+    monkeypatch.setattr(
+        verification,
+        "execute_query_pg",
+        lambda query, params=(): [{"transaction_ref": "T-1", "client_id": 1}],
+    )
+    monkeypatch.setattr(verification, "get_voucher_checks_status", lambda **kwargs: [])
+
+    response = verification.get_procedure_modal_data(10, perf=True)
+
+    assert response["voucher_line_id"] == 10
+    assert response["_perf"]["db_calls"] == 0
+    assert resolver_calls == [10]
 
 if __name__ == "__main__":
     unittest.main()

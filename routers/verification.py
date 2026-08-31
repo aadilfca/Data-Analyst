@@ -5992,11 +5992,12 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
     perf_token = start_db_metrics() if perf else None
     perf_started = time.perf_counter()
     component_ms = {}
+    worker_db_metrics = {"calls": 0, "reads": 0, "writes": 0, "db_time": 0.0}
 
-    # Phase 3c: opt in to per-request sibling-id memoisation for this handler's fan-out, so the
-    # 5 read sub-functions below share one _resolve_sibling_voucher_line_ids() result per id
-    # instead of each re-running it. reset() in the finally keeps the ContextVar clean for the
-    # next request served on this worker thread.
+    # Phase 3c: keep a request-local memo for the parent thread. Worker threads receive their
+    # own seeded copy below because ContextVars do not implicitly propagate into executor
+    # workers. Resolving once here avoids repeating the same two remote reads in every fan-out
+    # helper while preserving the existing sibling-aware, live-data behavior.
     memo_token = _sibling_ids_request_memo.set({})
 
     def measured(name, fn):
@@ -6006,7 +6007,25 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
             component_ms[name] = round((time.perf_counter() - started) * 1000, 1)
         return value
 
+    def run_worker(fn):
+        """Run one modal read with an independent metrics context."""
+        worker_token = start_db_metrics() if perf else None
+        worker_memo_token = _sibling_ids_request_memo.set({voucher_line_id: sibling_ids})
+        started = time.perf_counter()
+        try:
+            value = fn()
+            return value, round((time.perf_counter() - started) * 1000, 1), get_db_metrics()
+        finally:
+            _sibling_ids_request_memo.reset(worker_memo_token)
+            if worker_token is not None:
+                stop_db_metrics(worker_token)
+
     try:
+        # Resolve the sibling set once before submitting workers. The result is seeded into each
+        # worker's own ContextVar by run_worker(), since ContextVars are thread-local and are not
+        # copied automatically by ThreadPoolExecutor.
+        sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+
         # These five reads are independent and each uses its own pooled database connection.
         # Running them together removes the accumulated network round-trip wait while keeping
         # the existing helper functions and response shape unchanged. The pool-safe worker cap
@@ -6019,13 +6038,15 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
             "cross_checks_ms": lambda: get_cross_check_results(voucher_line_id),
         }
         with ThreadPoolExecutor(max_workers=5, thread_name_prefix="procedure-support") as executor:
-            futures = {name: executor.submit(fn) for name, fn in fanout.items()}
+            futures = {name: executor.submit(run_worker, fn) for name, fn in fanout.items()}
             values = {}
             for name, future in futures.items():
-                started = time.perf_counter()
-                values[name] = future.result()
+                value, elapsed_ms, metrics = future.result()
+                values[name] = value
                 if perf:
-                    component_ms[name] = round((time.perf_counter() - started) * 1000, 1)
+                    component_ms[name] = elapsed_ms
+                    for key in worker_db_metrics:
+                        worker_db_metrics[key] += metrics[key]
         linked_documents = values["linked_documents_ms"]
         procedure_checks = values["procedure_checks_ms"]
         observations = values["observations_ms"]
@@ -6059,6 +6080,8 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
         }
         if perf:
             metrics = get_db_metrics()
+            for key in worker_db_metrics:
+                metrics[key] += worker_db_metrics[key]
             response["_perf"] = {
                 "components": component_ms,
                 "db_calls": metrics["calls"],
@@ -6071,6 +6094,8 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
         _sibling_ids_request_memo.reset(memo_token)
         if perf_token is not None:
             metrics = get_db_metrics()
+            for key in worker_db_metrics:
+                metrics[key] += worker_db_metrics[key]
             print(json.dumps({"perf": "procedure_modal_data", "detail_id": voucher_line_id,
                               "total_ms": round((time.perf_counter() - perf_started) * 1000, 1),
                               "components": component_ms, "db_calls": metrics["calls"],
