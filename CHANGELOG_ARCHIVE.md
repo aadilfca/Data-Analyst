@@ -15,6 +15,27 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Login and Client Cards performance investigation
+
+**Date:** 2026-08-31 | **Files:** `routers/auth.py`, `routers/clients.py`,
+`static/login.js`, `static/client_select.js`, `DEVELOPMENT_PLAN.md`,
+`KNOWN_ISSUES.md`.
+
+This was a measurement-only investigation using the temporary analyst account against the local
+server. Login returned HTTP 200 with a 55-byte response in three fresh runs measuring approximately
+3.16, 3.61, and 1.18 seconds. Authenticated current-client returned HTTP 200 with 95 bytes in
+approximately 0.23–0.24 seconds, and paginated Client Cards returned HTTP 200 with 366 bytes in
+approximately 0.43–0.44 seconds across three runs. The analyst-only `/api/users` request correctly
+returned HTTP 403.
+
+The Client Cards endpoint's two pagination reads and the page's separate session guard are expected;
+no duplicate Client Cards request was found. Code review shows login uses one user lookup, local
+bcrypt verification, and two writes, while authenticated current-client uses the session/user join
+and, when selected, one client-summary lookup. Stable post-login timings and small responses do not
+justify a query or frontend rewrite. Login variability may include bcrypt and database/connection
+wait, but cannot be separated without server-side timings. No application code was changed, and no
+optimization is recommended from this baseline alone.
+
 ## Grouped Save/Verify sibling resolution reuse
 
 **Date:** 2026-08-31 | **Files:** `routers/verification.py`,

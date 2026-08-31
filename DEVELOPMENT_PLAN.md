@@ -65,10 +65,11 @@ Expected grouped request:
 
 ### Track B — Login and Client Cards performance
 
-1. Measure `/api/auth/current-client` and `/api/clients` separately.
-2. Check for duplicate calls and connection-pool waiting.
-3. Compare local results with an office/network run only after the local baseline is recorded.
-4. Keep any resulting optimization separate from Verification changes.
+1. Completed: measure `/api/auth/current-client` and `/api/clients` separately with authentication.
+2. Completed: check duplicate calls, response sizes, and expected authorization paths.
+3. Completed: record the local baseline; no office/network comparison is needed unless the issue
+   returns in another environment.
+4. Deferred: change login or Client Cards only if server-side timing proves a safe material gain.
 
 ### Database investigation result
 
@@ -80,22 +81,50 @@ Read-only PostgreSQL `EXPLAIN ANALYZE` checks confirmed that SQL execution itsel
 
 The multi-second browser timings are therefore mainly caused by large result transfer/Python JSON processing for Verification discovery endpoints and repeated remote database round trips for template mappings. Query-plan checks required escalated network access because the configured Supabase database is remote.
 
+### Login and Client Cards investigation result
+
+The authenticated baseline used the temporary analyst account against the local server. Login
+returned HTTP 200 with a 55-byte response in three fresh runs measuring approximately 3.16, 3.61,
+and 1.18 seconds. Authenticated `GET /api/auth/current-client` returned HTTP 200 with 95 bytes in
+approximately 0.23–0.24 seconds, and paginated `GET /api/clients?limit=20&offset=0` returned HTTP
+200 with 366 bytes in approximately 0.43–0.44 seconds across three runs. The analyst-only
+`GET /api/users` correctly returned HTTP 403, confirming the expected role restriction.
+
+The endpoint intentionally performs two reads when pagination is requested: one count and one page
+query. Code review found no duplicate Client Cards request in `client_select.js`; its separate
+`GET /api/auth/current-client` session guard is expected. The login path is one user lookup, local
+bcrypt verification, and two session/user writes; a valid authenticated current-client path is one
+session/user join plus one client-summary lookup when a client is selected. The stable post-login
+timings and small response sizes do not justify a query or frontend rewrite. Login variability is
+consistent with bcrypt plus database/connection wait, but cannot be separated further without
+server-side timings. No application-code change is recommended in this phase.
+
 ## Phase status
 
 | Phase | Scope | Status | Next action |
 |---|---|---|---|
 | Baseline review | HAR and prior-chat review | Completed | Continue with measured diagnostics |
 | Grouped Save/Verify diagnostics | `routers/verification.py`, with existing database metrics | Implemented and pushed | Use component evidence during optimization |
-| Login/Client Cards investigation | Read-only request timing | Identified | Measure as a separate track |
+| Login/Client Cards investigation | Authenticated request timing | Completed; login, session guard, Client Cards, and role restriction measured | Defer optimization unless server-side timing isolates a safe material improvement |
 | Database query-plan investigation | Read-only Postgres `EXPLAIN ANALYZE` | Completed | Reduce Verification result payloads |
 | Verification bottleneck optimization | Procedure-modal diagnostics and duplicate sibling-read removal | User-tested and pushed | Continue with the next measured bottleneck |
 | Rulebook template metadata wiring | `routers/audit_rules.py`, Verification adapter, Procedure Modal | User-tested and pushed | Continue with measured fresh-data optimization |
-| Shared set-based Procedure Modal loader | `routers/verification.py`, performance and Save/Verify tests | Implemented locally; automated tests passed; browser timing reviewed | User-test modal open and compare `?perf=true` timing |
-| Grouped Save/Verify final status computation | `routers/verification.py`, Save/Verify tests | Implemented locally; automated and browser functional checks passed; 8.35s measured | User-test Verify/Save timing before any Git action |
+| Shared set-based Procedure Modal loader | `routers/verification.py`, performance and Save/Verify tests | Implemented, tested, and pushed | Review only if fresh modal timing remains material |
+| Grouped Save/Verify final status computation | `routers/verification.py`, Save/Verify tests | Implemented, tested, and pushed | Review only if Save/Verify timing remains material |
 | Audit Rules optional Sortable.js resilience | `static/audit_rules.js` | User-tested and pushed | Continue with the next measured Rulebook/Verification task |
 | Procedure Modal duplicate metadata lookup | `routers/verification.py`, performance tests | User-tested and pushed | Continue with the next measured fresh-data task |
-| Cross-check configuration read batching | `routers/verification.py`, performance tests | User-tested and ready for Git lock | Commit and push; continue with the next measured bottleneck |
-| Grouped Save/Verify sibling resolution reuse | `routers/verification.py`, atomic Save/Verify tests | User-tested and ready for Git lock | Commit and push; continue with the next measured bottleneck |
+| Cross-check configuration read batching | `routers/verification.py`, performance tests | User-tested and pushed | Continue with the next measured bottleneck |
+| Grouped Save/Verify sibling resolution reuse | `routers/verification.py`, atomic Save/Verify tests | User-tested and pushed | Continue with the next measured bottleneck |
+
+### Current pendency register — 2026-08-31
+
+| Pendency | Objective | Status |
+|---|---|---|
+| This phase — authenticated Login/Client Cards baseline | Separate login cost from stable post-login request behavior | Completed; no code change recommended |
+| Fresh Procedure Modal timing review | Capture server-side component timings and change only a proven bottleneck | Pending; next performance evidence item |
+| Verification discovery payload review | Re-measure large response/JSON-processing cost after the completed optimizations | Pending; act only if still materially slow |
+| Audit Workbook Rulebook reuse | Extend the compiled Rulebook approach after Verification remains stable | Later planned phase |
+| Login optimization | Separate bcrypt time from database/connection wait before changing code | Deferred |
 
 ### Latest cashbook date optimization result
 

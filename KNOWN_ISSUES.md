@@ -59,6 +59,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 | 2026-08-31 | Verification performance | RESOLVED locally: grouped Save/Verify resolved each eligible line's sibling IDs again during final status calculation; one transaction-scoped resolution is now reused by both save and status stages. | Fix |
 
 | 2026-08-30 | Audit Rules | Cross-check Field-to-Compare shows no eligible fields when selected Documents have no eligible fields configured. Field configuration and dropdown workflow are deferred until performance-focused work is complete. | Defer |
+| 2026-08-31 | Login / Client Cards performance | Authenticated local baseline shows stable post-login calls (current-client ~0.23–0.24s; Client Cards ~0.43–0.44s, both small HTTP 200 responses) but variable login time (~1.18–3.61s). No safe optimization is proven without server-side timing separating bcrypt from database/connection wait. | Defer |
 
 ---
 
