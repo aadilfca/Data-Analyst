@@ -284,6 +284,8 @@ drift, not a regression — it collapses once that project finishes.
 
  - 2026-08-30: Tray server launch now uses the project virtual environment directly, preventing stale run.bat processes from masking updated local configuration.
 
+- 2026-08-31: Fixed the standalone Verification line-save Rulebook loader name mismatch; focused backend tests and the latest manual network trace are clean.
+
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

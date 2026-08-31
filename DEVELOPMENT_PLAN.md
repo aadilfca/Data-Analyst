@@ -823,3 +823,10 @@ project folder as its working directory. This prevents an older `run.bat` proces
 as the active server and ensures local startup reads the current `.env`. Manual verification confirmed
 successful login, session start, presence, procedure/support loading, Save → Verify, and navigation.
 The next phase is to inspect the remaining `procedure_modal_data` bottleneck.
+
+### Standalone line-save Rulebook error closed
+
+The standalone `save_line_items` path had a stale function name for session Rulebook loading,
+causing status recomputation to raise a `NameError` and return HTTP 500. The reference was corrected,
+and the focused regression suite now passes. A fresh manual network trace recorded 42 successful API
+requests, including line saves and Save → Verify. Performance optimization remains a separate phase.

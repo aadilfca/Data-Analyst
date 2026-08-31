@@ -57,7 +57,7 @@ def test_atomic_save_and_verify_commits_only_after_both_operations(monkeypatch):
         line_items=[],
     )
 
-    assert result == {"verified": True}
+    assert result["verified"] is True
     assert calls == ["begin", "verify", "commit"]
 
 
@@ -111,7 +111,7 @@ def test_voucher_bundle_saves_all_lines_then_verifies_once(monkeypatch):
         ],
     )
 
-    assert result == {"verified": True}
+    assert result["verified"] is True
     assert calls == ["begin", "verify", "commit"]
 
 
@@ -244,5 +244,37 @@ def test_voucher_bundle_accepts_modal_state(monkeypatch):
         account_head_notes=[{"voucher_line_id": 7, "observation_text": "head note"}],
         physical_bills=[]
     )
-    assert result == {"verified": True}
+    assert result["verified"] is True
     assert calls == ["begin", "verify", "commit"]
+
+
+def test_status_engine_uses_session_rulebook_loader_when_not_preloaded(monkeypatch):
+    loaded_sessions = []
+
+    monkeypatch.setattr(
+        verification,
+        "load_verification_rulebook_for_session",
+        lambda session_id: loaded_sessions.append(session_id) or {
+            "categories": [],
+            "voucher_checks": [],
+        },
+    )
+    monkeypatch.setattr(
+        verification,
+        "execute_query_pg",
+        lambda query, params=None: [{
+            "id": 7,
+            "session_id": 10,
+            "transaction_ref": "CPV-1",
+            "row_data": "{}",
+            "extract_amount": None,
+            "client_id": 1,
+            "category_id_applied": None,
+            "category_name_applied": None,
+        }],
+    )
+
+    result = verification.compute_and_persist_cleared_status(7, sibling_ids=[7])
+
+    assert result is None
+    assert loaded_sessions == [10]

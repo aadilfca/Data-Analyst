@@ -329,7 +329,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         return None
     row = line[0]
     client_id = row['client_id']
-    session_rulebook = rulebook or load_client_verification_rulebook_for_session(row['session_id'])
+    session_rulebook = rulebook or load_verification_rulebook_for_session(row['session_id'])
     transaction_ref = row['transaction_ref']
     row_data = row['row_data']
     if isinstance(row_data, str):
@@ -6048,7 +6048,7 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
                 transaction_ref=voucher_row[0]['transaction_ref']
             ))
 
-        return {
+        response = {
             "voucher_line_id": voucher_line_id,
             "linked_documents": linked_documents,
             "procedure_checks": procedure_checks,
@@ -6057,6 +6057,16 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
             "cross_check_results": cross_check_results,
             "voucher_checks": voucher_checks,
         }
+        if perf:
+            metrics = get_db_metrics()
+            response["_perf"] = {
+                "components": component_ms,
+                "db_calls": metrics["calls"],
+                "db_reads": metrics["reads"],
+                "db_writes": metrics["writes"],
+                "db_ms": round(metrics["db_time"] * 1000, 1),
+            }
+        return response
     finally:
         _sibling_ids_request_memo.reset(memo_token)
         if perf_token is not None:

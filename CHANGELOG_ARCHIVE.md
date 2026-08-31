@@ -3356,3 +3356,19 @@ server logging.
 session start, presence, procedure/support loading, atomic Save → Verify, and voucher navigation.
 
 ---
+
+## Fixed standalone line-save Rulebook loader error
+
+**Date:** 2026-08-31 | **Files:** `routers/verification.py`, `tests/test_verification_atomic_save_verify.py`.
+
+The standalone `save_line_items` status-recomputation path referenced a nonexistent
+`load_client_verification_rulebook_for_session` function, causing HTTP 500 responses after line
+saves. It now calls the existing `load_verification_rulebook_for_session` helper. A regression test
+covers the no-preloaded-Rulebook status path, and response assertions were made tolerant of the
+existing diagnostic metadata.
+
+**Verified:** focused Verification tests passed (`15 passed`), Python compilation passed, and a fresh
+manual WebInspector trace recorded 42 API requests with no non-200 responses. The slow
+`procedure_modal_data` and Save → Verify timings remain tracked separately for performance work.
+
+---
