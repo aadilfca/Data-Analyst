@@ -4,6 +4,9 @@ import os
 import sqlite3
 import tempfile
 import importlib
+from pathlib import Path
+
+from playwright.sync_api import sync_playwright
 
 import database
 from database import init_db
@@ -12,10 +15,12 @@ from routers.audit_rules import (
     cache_get,
     cache_set,
     get_audit_rules_config_version,
+    get_document_cross_check_fields,
     invalidate_audit_rules_cache,
     invalidate_category_for_account_cache,
     load_client_account_category_index,
     load_client_verification_rulebook,
+    row_to_document_list,
 )
 from routers.audit_rules import compile_verification_rulebook
 from routers.verification import (
@@ -23,6 +28,9 @@ from routers.verification import (
     get_verification_session_rulebook,
     rebase_verification_session_rulebook,
 )
+
+
+VERIFICATION_JS = Path(__file__).resolve().parents[1] / "static" / "verification.js"
 
 
 class AuditRulebookCompilerTests(unittest.TestCase):
@@ -147,8 +155,11 @@ class AuditRulebookCompilerTests(unittest.TestCase):
                 return [{"id": 10, "name": "Invoice", "kb_note": "Keep invoice", "template_id": 5, "risk_rating": "High", "transaction_level_approval": True, "document_type": "linked_template"}]
             if "FROM audit_rule_document_auth_roles" in sql:
                 return [{"document_id": 10, "role_name": "Approved by", "required_authority": "Manager", "sort_order": 0}]
-            if "FROM audit_rule_document_fields" in sql:
-                return [{"document_id": 10, "field_name": "Amount", "sort_order": 0, "master_column_id": 20}]
+            if "SELECT id, column_name FROM master_columns" in sql:
+                return [
+                    {"id": 20, "column_name": "Amount"},
+                    {"id": 21, "column_name": "Vendor"},
+                ]
             if "FROM audit_rule_category_documents" in sql:
                 return [{"category_id": 1, "document_id": 10, "is_required": True, "sort_order": 0}]
             if "FROM audit_rule_cross_checks" in sql:
@@ -178,6 +189,10 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertEqual(rulebook["account_category_index"]["6000"]["category_name"], "Fuel")
         document = rulebook["categories"][0]["documents"][0]
         self.assertTrue(document["required"])
+        self.assertEqual(document["fields"], [
+            {"field_name": "Amount", "master_column_id": 20},
+            {"field_name": "Vendor", "master_column_id": 21},
+        ])
         self.assertEqual(document["signature_requirements"][0]["specimens"][0]["expected_signatory_name"], "A. Manager")
         self.assertEqual(rulebook["categories"][0]["cross_checks"][0]["document_ids"], [10])
         self.assertEqual(rulebook["templates"][0]["columns"], [{
@@ -187,6 +202,71 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             "sort_order": 0,
         }])
         self.assertEqual(rulebook["warnings"], [])
+
+    def test_document_cross_check_fields_mirror_active_columns(self):
+        def query(sql, params=()):
+            if "SELECT document_type FROM audit_rule_documents" in sql:
+                return [{"document_type": "linked_template"}]
+            if "SELECT id, column_name FROM master_columns" in sql:
+                return [
+                    {"id": 20, "column_name": "Amount"},
+                    {"id": 21, "column_name": "Vendor"},
+                ]
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch("routers.audit_rules.execute_query_pg", side_effect=query):
+            self.assertEqual(
+                get_document_cross_check_fields(10),
+                ["Amount", "Vendor"],
+            )
+
+        self.assertEqual(
+            row_to_document_list(
+                {"id": 11, "name": "Physical Bill", "is_active": True, "document_type": "physical_bill"},
+                ["Amount", "Vendor"],
+            )["cross_check_fields"],
+            [],
+        )
+
+    def test_session_guidance_normalizer_maps_cross_check_ids_to_names(self):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            try:
+                page.set_content("<html><body></body></html>")
+                page.add_script_tag(content="""
+                    var API_BASE = '';
+                    async function flushProcedureObservations() {}
+                    async function flushAccountHeadNoMatchNote() {}
+                """)
+                page.add_script_tag(path=str(VERIFICATION_JS))
+                result = page.evaluate("""() => normalizeSessionRulebookGuidance({
+                    category_id: 1,
+                    name: 'Fuel',
+                    kb_overview: 'Fuel controls',
+                    matrix_version: 3,
+                    documents: [{
+                        document_id: 10,
+                        name: 'Invoice',
+                        template_id: 5,
+                        document_type: 'linked_template',
+                        authority_roles: [{role_name: 'Approved by'}]
+                    }],
+                    cross_checks: [{
+                        id: 30,
+                        compare_field: 'Amount',
+                        comparison_type: 'Exact',
+                        document_ids: [10, 99]
+                    }]
+                })""")
+                self.assertEqual(result["documents"][0]["id"], 10)
+                self.assertEqual(result["documents"][0]["auth_roles"], ["Approved by"])
+                self.assertEqual(result["cross_checks"][0]["document_ids"], [10, 99])
+                self.assertEqual(result["cross_checks"][0]["documents"], ["Invoice", "Document 99"])
+                self.assertEqual(result["cross_checks"][0]["compare_field"], "Amount")
+                self.assertEqual(result["cross_checks"][0]["comparison_type"], "Exact")
+            finally:
+                browser.close()
 
     def test_warns_for_inactive_template_and_assignment_category(self):
         def query(sql, params=()):
@@ -202,7 +282,7 @@ class AuditRulebookCompilerTests(unittest.TestCase):
                 return []
             if "FROM account_category_assignments" in sql:
                 return [{"account_code": "7000", "category_id": 88}]
-            if "FROM audit_rule_document_auth_roles" in sql or "FROM audit_rule_document_fields" in sql or "FROM audit_rule_cross_checks" in sql or "FROM audit_rule_cross_check_documents" in sql or "FROM audit_rule_category_cross_checks" in sql or "FROM audit_rule_voucher_checks" in sql:
+            if "FROM audit_rule_document_auth_roles" in sql or "FROM audit_rule_document_fields" in sql or "FROM master_columns" in sql or "FROM audit_rule_cross_checks" in sql or "FROM audit_rule_cross_check_documents" in sql or "FROM audit_rule_category_cross_checks" in sql or "FROM audit_rule_voucher_checks" in sql:
                 return []
             self.fail(f"Unhandled query: {sql}")
 
@@ -244,6 +324,63 @@ class AuditRulebookCompilerTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 409)
         loader.assert_not_called()
+
+
+class CrossCheckPerDocumentFieldSchemaTests(unittest.TestCase):
+    """Phase 1 of 4: per-Document compare_field column on the cross-check junction table."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        database.DB_NAME = os.path.join(self.tmpdir.name, "test.db")
+        init_db()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_junction_table_has_compare_field_column(self):
+        conn = database.get_db()
+        try:
+            cols = [row[1] for row in conn.execute(
+                "PRAGMA table_info(audit_rule_cross_check_documents)"
+            ).fetchall()]
+        finally:
+            conn.close()
+        self.assertIn("compare_field", cols)
+
+    def test_backfill_populates_null_rows_from_parent_shared_field(self):
+        conn = database.get_db()
+        try:
+            conn.execute(
+                "INSERT INTO audit_rule_documents (name) VALUES ('Purchase Order')"
+            )
+            doc_id = conn.execute("SELECT id FROM audit_rule_documents").fetchone()[0]
+            conn.execute(
+                "INSERT INTO audit_rule_cross_checks (name, compare_field, comparison_type) "
+                "VALUES ('Qty chain', 'Quantity', 'All equal')"
+            )
+            cc_id = conn.execute("SELECT id FROM audit_rule_cross_checks").fetchone()[0]
+            # Junction row inserted the pre-Phase-1 way: no compare_field supplied -> NULL.
+            conn.execute(
+                "INSERT INTO audit_rule_cross_check_documents (cross_check_id, document_id, sort_order) "
+                "VALUES (?, ?, 0)",
+                (cc_id, doc_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Re-running init_db() must backfill the NULL junction row from the parent's shared field.
+        init_db()
+
+        conn = database.get_db()
+        try:
+            value = conn.execute(
+                "SELECT compare_field FROM audit_rule_cross_check_documents WHERE cross_check_id = ?",
+                (cc_id,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(value, "Quantity")
 
 
 if __name__ == "__main__":

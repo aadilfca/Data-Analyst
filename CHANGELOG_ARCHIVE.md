@@ -15,6 +15,53 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Cross-check per-document field names
+
+**Date:** 2026-09-01 | **Files:** `database.py`, `tests/test_audit_rulebook.py`.
+
+Confirmed 4-phase requirement. Cross-checks currently force one shared `compare_field` name
+across every Document in the chain. Quantity fields are now named differently per stage
+("Quantity" for PO / Purchase Demand vs "Quantity Received" for Store Receiving / Vendor Bill),
+so a Cross-check must support a different field name per Document, matched by chain
+position / comparison intent rather than by identical name.
+
+**Phase 1 of 4 — schema only (this entry).** Added a nullable `compare_field TEXT` column to the
+`audit_rule_cross_check_documents` junction table (both SQLite `init_db()` and Postgres
+`init_db_postgres()`), plus an idempotent backfill that copies each parent Cross-check's shared
+`audit_rule_cross_checks.compare_field` onto its junction rows where the new column is still NULL.
+A NULL junction value therefore means "fall back to the parent's shared field", and every existing
+Cross-check is backfilled on the next startup so nothing breaks or needs re-saving. SQLite upgrade
+uses the established PRAGMA-gated `ALTER TABLE ADD COLUMN` + `UPDATE ... WHERE compare_field IS NULL`
+pattern (runs every startup, cheap no-op once populated); Postgres uses
+`ADD COLUMN IF NOT EXISTS` + an `UPDATE ... FROM` backfill. New-DB CREATE TABLE statements carry the
+column directly. Two tests added (`CrossCheckPerDocumentFieldSchemaTests`): column presence, and
+backfill of a NULL junction row from the parent's shared field after a re-run of `init_db()`.
+
+Locked assumptions: eligible-fields sourcing (global active-Master-Columns mirror) unchanged and
+out of scope; `comparison_type` logic unaffected; `compare_to_voucher_line` stays a single anchor
+field; UI (Phase 3) shows one field-picker per Document row, not a matrix.
+
+Later phases: 2 — backend validation/save/response reads/writes per-document names;
+3 — per-document field-picker in the Cross-check editor; 4 — validation engine
+(`routers/verification.py`) compares using each document's own field name.
+
+## Cross-check-eligible field mirror
+
+**Date:** 2026-09-01 | **Files:** `routers/audit_rules.py`, `static/audit_rules.html`,
+`static/audit_rules.js`, `tests/test_audit_rulebook.py`, `DEVELOPMENT_PLAN.md`.
+
+The Audit Rules Documents field was changed from a template-scoped, manually persisted list to a
+read-only mirror of the active Master Columns registry. Every non-Physical-Bill Document now
+receives all active client-data fields, including fields added later, without editing each
+Document. The Cross-check document picker receives the same field data in its list response, so
+the Field to Compare selector can calculate the common field set correctly. Physical Bills retain
+their fixed evidence-field behavior and remain outside the Data Bank field mirror.
+
+The legacy `audit_rule_document_fields` rows remain for compatibility but no longer control field
+display, Cross-check validation, or compiled Verification Rulebooks. Focused Audit Rulebook tests
+passed 15 tests; JavaScript syntax, Python compilation, and scoped diff checks also passed. Manual
+browser testing remains required before Git staging, commit, or push.
+
 ## Prominent Rulebook change alert
 
 **Date:** 2026-09-01 | **Files:** `database.py`, `routers/audit_rules.py`,
@@ -36,8 +83,58 @@ automatic recovery was added.
 
 Focused Rulebook, alert, and dirty-save tests passed 25 tests. Aadil manually confirmed that Audit
 Rules changes are not silently applied while a session is in progress and that the prominent alert
-identifies the changed factory setting. The approved Git closeout is now complete; Phase 2 is the
-next active implementation stage.
+identifies the changed factory setting. The approved Git closeout is now complete; Phase 3 is the
+next active implementation stage after the Phase 2 persistence closeout.
+
+## Phase 2 closeout - host-specific voucher-check persistence
+
+**Date:** 2026-09-01 | **Files:** `routers/verification.py`, `static/procedure_modal.js`,
+`static/verification.js`, `static/audit_workbook.js`, `tests/test_verification_dirty_saves.py`,
+`DEVELOPMENT_PLAN.md`.
+
+Phase 2 was closed against the implementation already included in commit `a94759b`. Verification
+keeps voucher-check changes local until its grouped Save -> Verify or save-only bundle request,
+while Audit Workbook retains direct individual and batch persistence through the shared modal host
+adapter. Optimistic state, rollback on failure, cache invalidation, Verify, and Verify & Next are
+preserved.
+
+The focused dirty-save suite passed 12 tests, and JavaScript syntax checks passed for all three
+affected frontend files. Aadil manually confirmed the Audit Workbook check persistence and Verify
+flows. Phase 3, Verification guidance normalization, is now the active stage.
+
+## Phase 3 - Verification guidance normalization
+
+**Date:** 2026-09-01 | **Files:** `static/verification.js`, `tests/test_audit_rulebook.py`,
+`DEVELOPMENT_PLAN.md`.
+
+The session Rulebook stores cross-check document references as stable `document_ids`, while the
+Verification guidance renderer expects display-ready document names. A new adapter-boundary
+normalizer now maps those IDs through the Rulebook's document metadata, preserves comparison
+field/type and original metadata, and shows a safe `Document <id>` placeholder for an unknown
+reference. The legacy live guidance endpoint, public response shape, and status/gate logic remain
+unchanged.
+
+The focused Rulebook and dirty-save suites passed 26 tests; JavaScript syntax validation, Python
+compilation, and scoped diff checks passed. Manual browser validation remains required before Phase
+3 Git closeout.
+
+## Phase 3A - Edit Template close/save regression
+
+**Date:** 2026-09-01 | **Files:** `static/templates.html`, `static/templates.js`, `tests/test_templates.py`,
+`File_Map.md`, `DEVELOPMENT_PLAN.md`.
+
+The Edit Template modal no longer closes from a backdrop click or the Escape key. Dynamically
+rendered column Select/Remove controls and the search clear control are explicitly non-submit
+buttons, preventing an accidental form submission when a column is selected. Column changes now
+remain in the modal draft until the user clicks Save Template; the existing explicit Cancel and
+top-right close controls remain available.
+
+A disposable-template Playwright regression confirmed that selecting `Quantity` makes no PUT request,
+backdrop clicks and Escape leave the modal open, the close icon closes it, reopening with the persisted
+column payload shows the column, and explicit Save Template makes exactly one PUT request. The focused
+Rulebook, dirty-save, and template
+suites passed 27 tests. JavaScript syntax validation, Python compilation, and scoped diff checks
+passed. Manual browser validation remains required before Git closeout.
 
 ## Code Health Review — Rulebook and shared-modal reconciliation
 

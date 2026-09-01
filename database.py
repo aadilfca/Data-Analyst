@@ -1697,6 +1697,35 @@ def init_db():
             )
         ''')
 
+        # Schema upgrade (Cross-check per-document field names, Phase 1 of 4): each Document
+        # in a Cross-check chain can now name its compared field differently (e.g. "Quantity"
+        # on a Purchase Order vs "Quantity Received" on Store Receiving) - the fields are
+        # matched by chain position/comparison intent, not by identical name. Nullable, no
+        # default; a NULL row means "fall back to the parent Cross-check's shared compare_field".
+        # Existing rows are backfilled with that shared value so no existing Cross-check breaks
+        # or needs re-saving. Same idempotent PRAGMA-gated pattern as the columns above.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_cross_check_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'compare_field' not in columns:
+                conn.execute("ALTER TABLE audit_rule_cross_check_documents ADD COLUMN compare_field TEXT")
+                print("✅ Added compare_field column to audit_rule_cross_check_documents")
+        except Exception as e:
+            print("⚠️ Could not add compare_field to audit_rule_cross_check_documents:", e)
+        # Backfill any still-NULL junction rows from the parent Cross-check's shared field.
+        # Runs on every startup - a cheap no-op once every row is populated.
+        try:
+            conn.execute('''
+                UPDATE audit_rule_cross_check_documents
+                SET compare_field = (
+                    SELECT compare_field FROM audit_rule_cross_checks c
+                    WHERE c.id = audit_rule_cross_check_documents.cross_check_id
+                )
+                WHERE compare_field IS NULL
+            ''')
+        except Exception as e:
+            print("⚠️ Could not backfill compare_field on audit_rule_cross_check_documents:", e)
+
         # Categories: name, one KB overview note, and (via junction tables below) the
         # Documents it uses and the Cross-checks it applies. This is the entity a voucher
         # will eventually reference (Phase 9).
@@ -3159,11 +3188,23 @@ def init_db_postgres(conn):
             cross_check_id INTEGER NOT NULL REFERENCES audit_rule_cross_checks(id) ON DELETE CASCADE,
             document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
             sort_order INTEGER NOT NULL DEFAULT 0,
+            compare_field TEXT,
             UNIQUE(cross_check_id, document_id)
         )
     ''', "audit_rule_cross_check_documents")
     run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_documents_crosscheck ON audit_rule_cross_check_documents (cross_check_id)")
     run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_documents_document ON audit_rule_cross_check_documents (document_id)")
+    # Cross-check per-document field names (Phase 1 of 4): per-Document compared field,
+    # matched by chain position not identical name. NULL means "use the parent Cross-check's
+    # shared compare_field". Added for existing databases, then backfilled from that shared
+    # value so no existing Cross-check breaks.
+    run("ALTER TABLE audit_rule_cross_check_documents ADD COLUMN IF NOT EXISTS compare_field TEXT")
+    run('''
+        UPDATE audit_rule_cross_check_documents ccd
+        SET compare_field = c.compare_field
+        FROM audit_rule_cross_checks c
+        WHERE c.id = ccd.cross_check_id AND ccd.compare_field IS NULL
+    ''')
 
     # ---------- 24. audit_rule_categories ----------
     run('''
