@@ -819,11 +819,11 @@ const arCrossCheckDetailEmpty = document.getElementById('arCrossCheckDetailEmpty
 const arCrossCheckDetailForm = document.getElementById('arCrossCheckDetailForm');
 const arCrossCheckEditingIdInput = document.getElementById('arCrossCheckEditingId');
 const arCrossCheckNameInput = document.getElementById('arCrossCheckNameInput');
-const arCrossCheckDocsList = document.getElementById('arCrossCheckDocsList');
-const arAddDocumentSelect = document.getElementById('arAddDocumentSelect');
-const arAddDocumentBtn = document.getElementById('arAddDocumentBtn');
-const arCompareFieldSelect = document.getElementById('arCompareFieldSelect');
-const arCompareFieldStaleWarning = document.getElementById('arCompareFieldStaleWarning');
+const arMatrixAddColumnSelect = document.getElementById('arMatrixAddColumnSelect');
+const arMatrixAddColumnBtn = document.getElementById('arMatrixAddColumnBtn');
+const arMatrixTable = document.getElementById('arMatrixTable');
+const arMatrixAddRowBtn = document.getElementById('arMatrixAddRowBtn');
+const arMatrixWarnings = document.getElementById('arMatrixWarnings');
 const arComparisonTypeSelect = document.getElementById('arComparisonTypeSelect');
 const arCompareToVoucherLineCheckbox = document.getElementById('arCompareToVoucherLineCheckbox');
 const arCompareToVoucherLineHint = document.getElementById('arCompareToVoucherLineHint');
@@ -837,17 +837,19 @@ const arCrossCheckRestoreBtn = document.getElementById('arCrossCheckRestoreBtn')
 // ---------- STATE ----------
 // null while creating a new Cross-check; set to its id while editing an existing one.
 let editingCrossCheckId = null;
-// Ordered array of Document ids currently attached to the cross-check being edited —
-// drives both the "Documents" list UI and the Compare Field dropdown's eligible options.
-let crossCheckDocIds = [];
-// Per-Document field overrides for the cross-check being edited: { docId: fieldName }.
-// Only holds EXPLICIT picks — a docId with no entry means "use the default field"
-// (sent as NULL, per the per-document compare_field contract in routers/audit_rules.py).
-// Keyed by docId so entries survive reorder; keys are pruned when a doc is removed.
-let crossCheckDocFields = {};
-// Cache of all active Documents ({id, name, cross_check_fields}), used to resolve names
-// for crossCheckDocIds, populate the "add document" picker, and compute field
-// eligibility. Refreshed each time the Cross-checks view is opened (switchEntityType()).
+// Cross-Check Matrix Redesign, Phase 4 of 5 — the matrix editor's in-memory state. UI-only this
+// phase: nothing here is saved to or loaded from the matrix endpoints yet (Phase 5).
+//   columns: ordered [{ documentId, name }] — documents are the matrix's column axis.
+//   rows: [{ id, cells: { <documentId>: <columnName|null> } }] — field rows have no label and are
+//         purely positional; id is a local sequence value, never a backend id this phase.
+let matrixState = { columns: [], rows: [] };
+let matrixRowSeq = 0;
+// Session cache: documentId -> [columnName, ...] from that document's linked template. Populated
+// by fetchMatrixColumnsForDoc(); reused so adding several rows against the same document doesn't
+// re-fetch. Never invalidated in-session (page reload only).
+let matrixColumnsByDoc = {};
+// Cache of all active Documents ({id, name, ...}), used to resolve column names and populate the
+// "Add document" picker. Refreshed each time the Cross-checks view is opened (switchEntityType()).
 let allDocuments = [];
 
 // ---------- STATUS MESSAGES ----------
@@ -958,295 +960,307 @@ function appendCrossCheckRows(crossChecks) {
     });
 }
 
-// ---------- ORDERED DOCUMENTS LIST (add / remove / reorder) ----------
-function renderCrossCheckDocsList() {
-    arCrossCheckDocsList.innerHTML = '';
+// ---------- COMPARISON MATRIX (Cross-Check Matrix Redesign, Phase 4 of 5) ----------
+// Documents are columns, field rows have no label (positional), each cell picks a column name
+// from that document's linked template. In-memory / mock state only this phase — renderMatrix()
+// draws matrixState; nothing here talks to the matrix endpoints yet (Phase 5).
 
-    if (crossCheckDocIds.length === 0) {
-        const empty = document.createElement('span');
-        empty.className = 'ar-chip-empty';
-        empty.textContent = 'No documents added.';
-        arCrossCheckDocsList.appendChild(empty);
-    } else {
-        crossCheckDocIds.forEach((docId, index) => {
-            const doc = getDocumentById(docId);
-            const row = document.createElement('div');
-            row.className = 'ar-ordered-doc-row';
+// documentId -> Promise, while that document's column list is being fetched. Guards the fetch
+// chokepoint so repeated renders (add column, add row, …) before the first fetch resolves reuse
+// the one in-flight request rather than each spawning a duplicate.
+let matrixColumnsInFlight = {};
 
-            const nameSpan = document.createElement('span');
-            nameSpan.textContent = doc ? doc.name : ('Document #' + docId);
-            row.appendChild(nameSpan);
-
-            // Per-Document field-picker, scoped to this Document's OWN eligible fields
-            // (not an intersection across the chain) — mirrors the per-Document check in
-            // validate_cross_check_payload() (routers/audit_rules.py). Blank = fall back
-            // to the default field dropdown below.
-            const sharedField = arCompareFieldSelect.value;
-            const ownFields = eligibleFieldsForDoc(docId);
-            const savedOverride = crossCheckDocFields[docId];
-
-            const fieldSelect = document.createElement('select');
-            fieldSelect.className = 'ar-doc-field-select';
-            // Inline sizing only (no stylesheet change this phase) — keep the picker
-            // compact so the row still fits name + picker + reorder controls.
-            fieldSelect.style.margin = '0 8px';
-            fieldSelect.style.maxWidth = '45%';
-            fieldSelect.style.fontSize = '12px';
-
-            const defaultOpt = document.createElement('option');
-            defaultOpt.value = '';
-            defaultOpt.textContent = '(use default: ' + (sharedField || '—') + ')';
-            fieldSelect.appendChild(defaultOpt);
-
-            ownFields.forEach(f => {
-                const opt = document.createElement('option');
-                opt.value = f;
-                opt.textContent = f;
-                fieldSelect.appendChild(opt);
-            });
-
-            let warningText = '';
-            if (savedOverride && ownFields.includes(savedOverride)) {
-                fieldSelect.value = savedOverride;
-            } else if (savedOverride) {
-                // Saved override no longer eligible on this Document (its eligible fields
-                // changed since save) — keep it visible as its own selected option + warn.
-                const staleOpt = document.createElement('option');
-                staleOpt.value = savedOverride;
-                staleOpt.textContent = '⚠️ ' + savedOverride + ' (not eligible on this document)';
-                staleOpt.selected = true;
-                fieldSelect.appendChild(staleOpt);
-                warningText = '⚠️ "' + savedOverride + '" is not a cross-check-eligible field on '
-                    + (doc ? doc.name : ('Document #' + docId)) + ' — pick another field or add it on the Document.';
-            } else {
-                fieldSelect.value = '';
-                // Blank row: the default field it would fall back to must itself be
-                // eligible here, or the server will reject the save.
-                if (sharedField && !ownFields.includes(sharedField)) {
-                    warningText = '⚠️ Default field "' + sharedField + '" is not eligible on '
-                        + (doc ? doc.name : ('Document #' + docId)) + ' — pick a field for this document.';
-                }
+// documentId -> [columnName, ...] for that document's linked template. Resolves the document's
+// template_id (GET /api/audit-rules/documents/{id}), then the template's columns
+// (GET /api/templates/{template_id}/columns, Phase 2). Cached in matrixColumnsByDoc; a document
+// with no linked template caches [].
+function fetchMatrixColumnsForDoc(documentId) {
+    if (Object.prototype.hasOwnProperty.call(matrixColumnsByDoc, documentId)) {
+        return Promise.resolve(matrixColumnsByDoc[documentId]);
+    }
+    if (matrixColumnsInFlight[documentId]) {
+        return matrixColumnsInFlight[documentId];
+    }
+    const promise = (async () => {
+        try {
+            const docRes = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + documentId);
+            if (!docRes.ok) throw new Error('document lookup failed');
+            const doc = await docRes.json();
+            if (!doc.template_id) {
+                matrixColumnsByDoc[documentId] = [];
+                return [];
             }
+            const colRes = await window.ApiUtils.apiFetch(API_BASE + '/api/templates/' + doc.template_id + '/columns');
+            if (!colRes.ok) throw new Error('template columns lookup failed');
+            const cols = await colRes.json();
+            matrixColumnsByDoc[documentId] = cols.map(c => c.column_name);
+        } catch (error) {
+            console.error('Failed to load matrix columns for document ' + documentId + ':', error);
+            matrixColumnsByDoc[documentId] = [];
+        } finally {
+            delete matrixColumnsInFlight[documentId];
+        }
+        return matrixColumnsByDoc[documentId];
+    })();
+    matrixColumnsInFlight[documentId] = promise;
+    return promise;
+}
 
-            fieldSelect.addEventListener('change', () => {
-                if (fieldSelect.value) {
-                    crossCheckDocFields[docId] = fieldSelect.value;
-                } else {
-                    delete crossCheckDocFields[docId];
-                }
-                renderCrossCheckDocsList();
-                updateCompareToVoucherLineHint();
-            });
-            row.appendChild(fieldSelect);
+// Kick off a fetch for any column whose list isn't cached yet, re-rendering once each resolves.
+// fetchMatrixColumnsForDoc() dedupes, so calling this on every render is cheap.
+function ensureMatrixColumnsLoaded() {
+    matrixState.columns.forEach(col => {
+        if (!Object.prototype.hasOwnProperty.call(matrixColumnsByDoc, col.documentId)) {
+            fetchMatrixColumnsForDoc(col.documentId).then(renderMatrix);
+        }
+    });
+}
 
-            const controls = document.createElement('span');
+function countRowSelections(row) {
+    return matrixState.columns.reduce(
+        (n, col) => n + (row.cells[col.documentId] ? 1 : 0), 0
+    );
+}
 
-            const upBtn = document.createElement('button');
-            upBtn.type = 'button';
-            upBtn.className = 'ar-move-btn';
-            upBtn.textContent = '▲';
-            upBtn.title = 'Move up';
-            upBtn.disabled = (index === 0);
-            upBtn.addEventListener('click', () => moveDocUp(index));
-            controls.appendChild(upBtn);
+function renderMatrix() {
+    renderMatrixAddColumnPicker();
+    arMatrixTable.innerHTML = '';
+    arMatrixWarnings.innerHTML = '';
 
-            const downBtn = document.createElement('button');
-            downBtn.type = 'button';
-            downBtn.className = 'ar-move-btn';
-            downBtn.textContent = '▼';
-            downBtn.title = 'Move down';
-            downBtn.disabled = (index === crossCheckDocIds.length - 1);
-            downBtn.addEventListener('click', () => moveDocDown(index));
-            controls.appendChild(downBtn);
+    if (matrixState.columns.length === 0) {
+        const tr = arMatrixTable.insertRow();
+        const td = tr.insertCell();
+        td.className = 'ar-matrix-empty';
+        td.textContent = 'Add a document to start the matrix.';
+        arMatrixAddRowBtn.disabled = true;
+        return;
+    }
+    arMatrixAddRowBtn.disabled = false;
 
-            const removeBtn = document.createElement('button');
-            removeBtn.type = 'button';
-            removeBtn.className = 'ar-remove-doc-btn';
-            removeBtn.textContent = '✕';
-            removeBtn.title = 'Remove';
-            removeBtn.addEventListener('click', () => removeDocumentFromCrossCheck(docId));
-            controls.appendChild(removeBtn);
+    // Header: corner + one cell per document column (name + remove-column button).
+    const thead = arMatrixTable.createTHead();
+    const headRow = thead.insertRow();
+    const corner = document.createElement('th');
+    corner.className = 'ar-matrix-corner';
+    headRow.appendChild(corner);
+    matrixState.columns.forEach(col => {
+        const th = document.createElement('th');
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = col.name;
+        th.appendChild(nameSpan);
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'ar-remove-doc-btn';
+        removeBtn.textContent = '✕';
+        removeBtn.title = 'Remove this document column';
+        removeBtn.addEventListener('click', () => removeMatrixColumn(col.documentId));
+        th.appendChild(removeBtn);
+        headRow.appendChild(th);
+    });
+    headRow.appendChild(document.createElement('th')); // spacer above the remove-row buttons
 
-            row.appendChild(controls);
-            arCrossCheckDocsList.appendChild(row);
-
-            if (warningText) {
-                const warn = document.createElement('div');
-                warn.className = 'ar-field-warning';
-                warn.textContent = warningText;
-                arCrossCheckDocsList.appendChild(warn);
-            }
-        });
+    const tbody = arMatrixTable.createTBody();
+    if (matrixState.rows.length === 0) {
+        const tr = tbody.insertRow();
+        const td = tr.insertCell();
+        td.colSpan = matrixState.columns.length + 2;
+        td.className = 'ar-matrix-empty';
+        td.textContent = 'No field rows yet — click "+ Add field row".';
     }
 
-    // Rebuild the "add document" picker to exclude documents already in the list.
-    arAddDocumentSelect.innerHTML = '';
-    const available = allDocuments.filter(d => !crossCheckDocIds.includes(d.id));
+    matrixState.rows.forEach((row, index) => {
+        const tr = tbody.insertRow();
+
+        // Lead cell: 1-based position + reorder controls (no row label, by design).
+        const lead = tr.insertCell();
+        lead.className = 'ar-matrix-row-ord';
+        const ord = document.createElement('span');
+        ord.textContent = String(index + 1);
+        lead.appendChild(ord);
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button';
+        upBtn.className = 'ar-move-btn';
+        upBtn.textContent = '▲';
+        upBtn.title = 'Move row up';
+        upBtn.disabled = (index === 0);
+        upBtn.addEventListener('click', () => moveMatrixRow(row.id, -1));
+        lead.appendChild(upBtn);
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button';
+        downBtn.className = 'ar-move-btn';
+        downBtn.textContent = '▼';
+        downBtn.title = 'Move row down';
+        downBtn.disabled = (index === matrixState.rows.length - 1);
+        downBtn.addEventListener('click', () => moveMatrixRow(row.id, 1));
+        lead.appendChild(downBtn);
+
+        // One cell per document column: a dropdown of that document's template columns.
+        matrixState.columns.forEach(col => {
+            const td = tr.insertCell();
+            const select = document.createElement('select');
+            select.className = 'ar-matrix-cell-select';
+
+            const naOpt = document.createElement('option');
+            naOpt.value = '';
+            naOpt.textContent = '— not applicable —';
+            select.appendChild(naOpt);
+
+            const cached = matrixColumnsByDoc[col.documentId];
+            if (cached === undefined) {
+                const loadingOpt = document.createElement('option');
+                loadingOpt.textContent = 'Loading…';
+                loadingOpt.disabled = true;
+                select.appendChild(loadingOpt);
+                select.disabled = true;
+            } else if (cached.length === 0) {
+                const noneOpt = document.createElement('option');
+                noneOpt.textContent = '(document has no linked template)';
+                noneOpt.disabled = true;
+                select.appendChild(noneOpt);
+            } else {
+                cached.forEach(colName => {
+                    const opt = document.createElement('option');
+                    opt.value = colName;
+                    opt.textContent = colName;
+                    select.appendChild(opt);
+                });
+            }
+
+            const current = row.cells[col.documentId];
+            if (current && cached && !cached.includes(current)) {
+                // A stored value no longer on the template — keep it visible + flagged.
+                const staleOpt = document.createElement('option');
+                staleOpt.value = current;
+                staleOpt.textContent = '⚠️ ' + current + ' (not on this template)';
+                select.appendChild(staleOpt);
+            }
+            select.value = current || '';
+            if (!current) td.classList.add('ar-matrix-cell-na');
+
+            select.addEventListener('change', () => {
+                if (select.value) {
+                    row.cells[col.documentId] = select.value;
+                } else {
+                    delete row.cells[col.documentId];
+                }
+                renderMatrix();
+            });
+            td.appendChild(select);
+        });
+
+        // Trailing cell: remove this row.
+        const removeCell = tr.insertCell();
+        const removeRowBtn = document.createElement('button');
+        removeRowBtn.type = 'button';
+        removeRowBtn.className = 'ar-remove-doc-btn';
+        removeRowBtn.textContent = '✕';
+        removeRowBtn.title = 'Remove this field row';
+        removeRowBtn.addEventListener('click', () => removeMatrixRow(row.id));
+        removeCell.appendChild(removeRowBtn);
+
+        // Non-blocking warning: a row that compares fewer than 2 documents validates nothing.
+        if (countRowSelections(row) < 2) {
+            const warn = document.createElement('div');
+            warn.className = 'ar-field-warning';
+            warn.textContent = 'Row ' + (index + 1) + ' compares fewer than 2 documents — it won’t validate anything.';
+            arMatrixWarnings.appendChild(warn);
+        }
+    });
+
+    ensureMatrixColumnsLoaded();
+}
+
+// Rebuild the "Add document" picker to exclude documents already used as columns.
+function renderMatrixAddColumnPicker() {
+    arMatrixAddColumnSelect.innerHTML = '';
+    const usedIds = matrixState.columns.map(c => c.documentId);
+    const available = allDocuments.filter(d => !usedIds.includes(d.id));
     if (available.length === 0) {
         const opt = document.createElement('option');
         opt.value = '';
         opt.disabled = true;
         opt.selected = true;
         opt.textContent = allDocuments.length === 0 ? 'No documents exist yet' : 'All documents added';
-        arAddDocumentSelect.appendChild(opt);
-        arAddDocumentBtn.disabled = true;
+        arMatrixAddColumnSelect.appendChild(opt);
+        arMatrixAddColumnBtn.disabled = true;
     } else {
         available.forEach(d => {
             const opt = document.createElement('option');
             opt.value = d.id;
             opt.textContent = d.name;
-            arAddDocumentSelect.appendChild(opt);
+            arMatrixAddColumnSelect.appendChild(opt);
         });
-        arAddDocumentBtn.disabled = false;
+        arMatrixAddColumnBtn.disabled = false;
     }
 }
 
-function addDocumentToCrossCheck() {
-    const value = arAddDocumentSelect.value;
+function addMatrixColumn() {
+    const value = arMatrixAddColumnSelect.value;
     if (!value) return;
-    crossCheckDocIds.push(parseInt(value, 10));
-    renderCompareFieldDropdown();
-    renderCrossCheckDocsList();
-    updateCompareToVoucherLineHint();
+    const documentId = parseInt(value, 10);
+    const doc = getDocumentById(documentId);
+    matrixState.columns.push({ documentId: documentId, name: doc ? doc.name : ('Document #' + documentId) });
+    fetchMatrixColumnsForDoc(documentId).then(renderMatrix);
+    renderMatrix();
 }
 
-function removeDocumentFromCrossCheck(docId) {
-    crossCheckDocIds = crossCheckDocIds.filter(id => id !== docId);
-    delete crossCheckDocFields[docId];
-    renderCompareFieldDropdown();
-    renderCrossCheckDocsList();
-    updateCompareToVoucherLineHint();
+function removeMatrixColumn(documentId) {
+    matrixState.columns = matrixState.columns.filter(c => c.documentId !== documentId);
+    matrixState.rows.forEach(row => { delete row.cells[documentId]; });
+    renderMatrix();
 }
 
-function moveDocUp(index) {
-    if (index <= 0) return;
-    [crossCheckDocIds[index - 1], crossCheckDocIds[index]] = [crossCheckDocIds[index], crossCheckDocIds[index - 1]];
-    renderCompareFieldDropdown();
-    renderCrossCheckDocsList();
-    updateCompareToVoucherLineHint();
+function addMatrixRow() {
+    matrixRowSeq += 1;
+    matrixState.rows.push({ id: matrixRowSeq, cells: {} });
+    renderMatrix();
 }
 
-function moveDocDown(index) {
-    if (index >= crossCheckDocIds.length - 1) return;
-    [crossCheckDocIds[index + 1], crossCheckDocIds[index]] = [crossCheckDocIds[index], crossCheckDocIds[index + 1]];
-    renderCompareFieldDropdown();
-    renderCrossCheckDocsList();
-    updateCompareToVoucherLineHint();
+function removeMatrixRow(rowId) {
+    matrixState.rows = matrixState.rows.filter(r => r.id !== rowId);
+    renderMatrix();
 }
 
-// ---------- COMPARE FIELD DROPDOWN (dynamic, driven by crossCheckDocIds) ----------
-// The DEFAULT field dropdown offers the UNION of every selected document's own
-// cross_check_fields — it's only the fallback for rows left blank, and per-document
-// eligibility is enforced per-row (eligibleFieldsForDoc) and server-side in
-// validate_cross_check_payload() (routers/audit_rules.py).
-function computeEligibleFields() {
-    if (crossCheckDocIds.length === 0) return [];
-    const seen = [];
-    for (const docId of crossCheckDocIds) {
-        eligibleFieldsForDoc(docId).forEach(f => { if (!seen.includes(f)) seen.push(f); });
-    }
-    return seen;
+function moveMatrixRow(rowId, direction) {
+    const i = matrixState.rows.findIndex(r => r.id === rowId);
+    const j = i + direction;
+    if (i < 0 || j < 0 || j >= matrixState.rows.length) return;
+    [matrixState.rows[i], matrixState.rows[j]] = [matrixState.rows[j], matrixState.rows[i]];
+    renderMatrix();
 }
 
-// One Document's own cross-check-eligible fields — no intersection. Mirrors the
-// per-Document check in validate_cross_check_payload() (routers/audit_rules.py).
-function eligibleFieldsForDoc(docId) {
-    return (getDocumentById(docId) || {}).cross_check_fields || [];
+// Seed the matrix's column axis from a Cross-check's existing documents (names already on screen
+// — this is not a matrix "load", which is Phase 5). Rows always start empty this phase.
+function seedMatrixFromCrossCheck(cc) {
+    matrixState = {
+        columns: (cc.documents || []).map(d => ({
+            documentId: d.document_id,
+            name: d.name || ('Document #' + d.document_id)
+        })),
+        rows: []
+    };
+    matrixRowSeq = 0;
+    renderMatrix();
 }
 
-function hideCompareFieldStaleWarning() {
-    arCompareFieldStaleWarning.style.display = 'none';
-    arCompareFieldStaleWarning.textContent = '';
+function resetMatrix() {
+    matrixState = { columns: [], rows: [] };
+    matrixRowSeq = 0;
+    renderMatrix();
 }
 
-function showCompareFieldStaleWarning(value) {
-    arCompareFieldStaleWarning.textContent =
-        '⚠️ "' + value + '" is not a cross-check-eligible field on any selected document — pick a different default, or add it on a Document.';
-    arCompareFieldStaleWarning.style.display = 'block';
-}
-
-// preserveValue: the value to try to keep selected across a rebuild (e.g. a document
-// add/remove, or the saved compare_field when a Cross-check is first opened). Defaults to
-// the select's own current value, so in-session add/remove-document calls need no change.
-// A preserveValue that isn't in the eligible set is never silently dropped — it's kept
-// visible as a real (selected) option so an existing saved value is never hidden, per the
-// confirmed requirement, with a persistent warning (not the auto-dismissing status toast).
-function renderCompareFieldDropdown(preserveValue) {
-    const eligibleFields = computeEligibleFields();
-    const previousValue = (preserveValue !== undefined) ? preserveValue : arCompareFieldSelect.value;
-
-    arCompareFieldSelect.innerHTML = '';
-
-    if (eligibleFields.length === 0 && !previousValue) {
-        const opt = document.createElement('option');
-        opt.value = '';
-        opt.disabled = true;
-        opt.selected = true;
-        opt.textContent = (crossCheckDocIds.length === 0)
-            ? 'Add a document first'
-            : 'No eligible fields — add them on the Document';
-        arCompareFieldSelect.appendChild(opt);
-        hideCompareFieldStaleWarning();
-        return;
-    }
-
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.disabled = true;
-    placeholder.textContent = 'Select a field';
-    arCompareFieldSelect.appendChild(placeholder);
-
-    eligibleFields.forEach(field => {
-        const opt = document.createElement('option');
-        opt.value = field;
-        opt.textContent = field;
-        arCompareFieldSelect.appendChild(opt);
-    });
-
-    if (eligibleFields.includes(previousValue)) {
-        arCompareFieldSelect.value = previousValue;
-        hideCompareFieldStaleWarning();
-    } else if (previousValue) {
-        // Saved/previously-chosen value doesn't match any current option — keep it visible
-        // (as its own selected option) rather than blanking the dropdown, and show a
-        // persistent warning explaining why.
-        const staleOpt = document.createElement('option');
-        staleOpt.value = previousValue;
-        staleOpt.textContent = '⚠️ ' + previousValue + ' (not on every selected document)';
-        staleOpt.selected = true;
-        arCompareFieldSelect.appendChild(staleOpt);
-        showCompareFieldStaleWarning(previousValue);
-    } else {
-        placeholder.selected = true;
-        hideCompareFieldStaleWarning();
-    }
-}
 
 // ---------- COMPARE TO VOUCHER LINE (Phase 5 of 10) ----------
-// The anchor document is never picked in this UI - it's always the last document in
-// crossCheckDocIds (the chain's own order), resolved live at evaluation time (Phase 6). This
-// just surfaces today's anchor + field as a live-updating explanatory hint so the admin can
-// see what "compare to voucher line" will actually mean once ticked, without configuring it.
+// The anchor document is never picked here - it's resolved live at evaluation time (Phase 6).
+// Just a static explanatory hint shown while the box is ticked.
 function updateCompareToVoucherLineHint() {
     if (!arCompareToVoucherLineCheckbox.checked) {
         arCompareToVoucherLineHint.style.display = 'none';
         return;
     }
-
-    if (crossCheckDocIds.length === 0) {
-        arCompareToVoucherLineHint.textContent = 'Add at least one document above to set an anchor.';
-        arCompareToVoucherLineHint.style.display = 'block';
-        return;
-    }
-
-    const anchorDocId = crossCheckDocIds[crossCheckDocIds.length - 1];
-    const anchorDoc = getDocumentById(anchorDocId);
-    const anchorName = anchorDoc ? anchorDoc.name : ('Document #' + anchorDocId);
-    // The anchor's effective field = its own per-row override, else the default field.
-    const field = crossCheckDocFields[anchorDocId] || arCompareFieldSelect.value || '(field not yet selected)';
     arCompareToVoucherLineHint.textContent =
-        'ℹ️ Will compare "' + anchorName + '"\'s ' + field + ' vs. this voucher line\'s amount. ' +
-        '(Anchor = last document above; resolved live, not fixed here.)';
+        'ℹ️ Also compares the anchor document against this voucher line’s own amount. ' +
+        'The anchor is resolved live at evaluation time, not configured here.';
     arCompareToVoucherLineHint.style.display = 'block';
 }
 
@@ -1260,17 +1274,9 @@ async function selectCrossCheck(id) {
         editingCrossCheckId = cc.id;
         arCrossCheckEditingIdInput.value = cc.id;
         arCrossCheckNameInput.value = cc.name;
-        crossCheckDocIds = (cc.documents || []).map(d => d.document_id);
-        // Per-row overrides: the raw per-Document compare_field (NOT effective_compare_field,
-        // which already folds in the shared fallback). Absent/blank => "use default".
-        crossCheckDocFields = {};
-        (cc.documents || []).forEach(d => {
-            if (d.compare_field) crossCheckDocFields[d.document_id] = d.compare_field;
-        });
-        // Default dropdown first — renderCrossCheckDocsList() reads its value for each
-        // row's "(use default: …)" label.
-        renderCompareFieldDropdown(cc.compare_field);
-        renderCrossCheckDocsList();
+        // Seed the matrix's column axis from this Cross-check's documents (names only — the
+        // matrix itself isn't loaded/saved until Phase 5). Rows start empty.
+        seedMatrixFromCrossCheck(cc);
         arComparisonTypeSelect.value = cc.comparison_type;
         arCompareToVoucherLineCheckbox.checked = !!cc.compare_to_voucher_line;
         updateCompareToVoucherLineHint();
@@ -1278,13 +1284,10 @@ async function selectCrossCheck(id) {
         arCrossCheckUsedByRow.style.display = 'block';
         arCrossCheckUsedByCount.textContent = cc.used_by_categories_count;
 
-        if (cc.is_active) {
-            arCrossCheckDeleteBtn.style.display = 'inline-block';
-            arCrossCheckRestoreBtn.style.display = 'none';
-        } else {
-            arCrossCheckDeleteBtn.style.display = 'none';
-            arCrossCheckRestoreBtn.style.display = 'inline-block';
-        }
+        // Save/Delete/Restore stay hidden while the matrix is a preview (Phase 4). Phase 5
+        // restores the is_active-driven Delete/Restore split below.
+        arCrossCheckDeleteBtn.style.display = 'none';
+        arCrossCheckRestoreBtn.style.display = 'none';
 
         arCrossCheckDetailEmpty.style.display = 'none';
         arCrossCheckDetailForm.style.display = 'block';
@@ -1302,10 +1305,7 @@ function startNewCrossCheck() {
     editingCrossCheckId = null;
     arCrossCheckEditingIdInput.value = '';
     arCrossCheckNameInput.value = '';
-    crossCheckDocIds = [];
-    crossCheckDocFields = {};
-    renderCompareFieldDropdown('');
-    renderCrossCheckDocsList();
+    resetMatrix();
     arComparisonTypeSelect.value = '';
     arCompareToVoucherLineCheckbox.checked = false;
     updateCompareToVoucherLineHint();
@@ -1322,69 +1322,14 @@ function startNewCrossCheck() {
 }
 
 // ---------- SAVE ----------
-async function saveCrossCheck(triggerBtn) {
-    const name = arCrossCheckNameInput.value.trim();
-    const compareField = arCompareFieldSelect.value;
-    const comparisonType = arComparisonTypeSelect.value;
-
-    if (!name) {
-        showCrossCheckDetailStatus('❌ Name is required.', 'error');
-        return;
-    }
-    if (!compareField) {
-        showCrossCheckDetailStatus('❌ A default field to compare is required.', 'error');
-        return;
-    }
-    if (!comparisonType) {
-        showCrossCheckDetailStatus('❌ A comparison type is required.', 'error');
-        return;
-    }
-
-    const payload = {
-        name: name,
-        compare_field: compareField,
-        comparison_type: comparisonType,
-        document_ids: crossCheckDocIds,
-        // Per-Document field overrides — only rows with an explicit pick; a doc omitted
-        // here is stored NULL server-side and falls back to compare_field above.
-        document_fields: Object.fromEntries(
-            crossCheckDocIds
-                .filter(id => crossCheckDocFields[id])
-                .map(id => [id, crossCheckDocFields[id]])
-        ),
-        compare_to_voucher_line: arCompareToVoucherLineCheckbox.checked
-    };
-
-    try {
-        window.LoadingUI.showSpinner(triggerBtn, 'Saving');
-
-        let url = API_BASE + '/api/audit-rules/cross-checks';
-        let method = 'POST';
-        if (editingCrossCheckId) {
-            url += '/' + editingCrossCheckId;
-            method = 'PUT';
-        }
-
-        const res = await fetch(url, {
-            method: method,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save cross-check');
-
-        showCrossCheckDetailStatus('✅ ' + result.message, 'success');
-
-        // POST doesn't echo back the full row, so re-fetch the list, then re-select
-        // to refresh the detail panel's is_active/used_by state from the server.
-        const savedId = editingCrossCheckId || result.cross_check_id;
-        await loadCrossChecks();
-        await selectCrossCheck(savedId);
-    } catch (error) {
-        showCrossCheckDetailStatus('❌ Error: ' + error.message, 'error');
-    } finally {
-        window.LoadingUI.hideSpinner(triggerBtn);
-    }
+// STOPGAP (Cross-Check Matrix Redesign, Phase 4 of 5): the old flat-model save (shared
+// compare_field + ordered document_ids + per-document overrides) is gone along with the UI that
+// fed it, and the Save button is hidden this phase. Phase 5 rebuilds this to POST/PUT the matrix
+// (name + comparison_type + compare_to_voucher_line on the cross-check, then the field-row / cell
+// endpoints from Phase 2). Until then it's an explicit no-op rather than dead code touching
+// removed state.
+async function saveCrossCheck() {
+    showCrossCheckDetailStatus('Saving the matrix is wired up in the next phase.', 'error');
 }
 
 // ---------- DELETE / RESTORE ----------
@@ -1431,18 +1376,16 @@ arCrossCheckAddNewBtn.addEventListener('click', startNewCrossCheck);
 arCrossCheckShowInactiveCheckbox.addEventListener('change', loadCrossChecks);
 arCrossCheckLoadMoreBtn.addEventListener('click', loadMoreCrossChecks);
 
-arAddDocumentBtn.addEventListener('click', addDocumentToCrossCheck);
-arCompareFieldSelect.addEventListener('change', () => {
-    // Re-render the docs list so each blank row's "(use default: …)" label and any
-    // "default not eligible here" warning track the new default field.
-    renderCrossCheckDocsList();
-    updateCompareToVoucherLineHint();
-});
+arMatrixAddColumnBtn.addEventListener('click', addMatrixColumn);
+arMatrixAddRowBtn.addEventListener('click', addMatrixRow);
 arCompareToVoucherLineCheckbox.addEventListener('change', updateCompareToVoucherLineHint);
 
+// Save/Delete/Restore are hidden this phase (matrix is a preview) — see saveCrossCheck()'s
+// stopgap note. Listeners stay wired so Phase 5 only has to reveal the buttons.
 arCrossCheckSaveBtn.addEventListener('click', () => saveCrossCheck(arCrossCheckSaveBtn));
 arCrossCheckDeleteBtn.addEventListener('click', deleteCrossCheck);
 arCrossCheckRestoreBtn.addEventListener('click', restoreCrossCheck);
+arCrossCheckSaveBtn.style.display = 'none';
 
 // ==============================================
 // 🗂️ AUDIT RULES — CATEGORIES SHELL LOGIC (Phase 7 of 9, final entity view)

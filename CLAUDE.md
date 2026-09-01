@@ -297,6 +297,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-01: Cross-check matrix redesign Phase 1 of 5 (schema, additive) — new audit_rule_cross_check_fields + audit_rule_cross_check_cells tables in SQLite + Postgres; database.py (schema tests held pending an in-flight test-file change).
 - 2026-09-01: Cross-check matrix redesign Phase 2 of 5 — field-row/cell CRUD, GET matrix, GET /api/templates/{id}/columns; legacy compare_field drop deferred; routers/audit_rules.py, routers/templates.py, tests.
 - 2026-09-01: Cross-check matrix redesign Phase 3 of 5 — removed the Cross-check-eligible Fields section from the Documents detail pane (UI-only); static/audit_rules.html/.js, static/style.css.
+- 2026-09-01: Cross-check matrix redesign Phase 4 of 5 — matrix UI (doc columns, positional field rows, per-cell template-column dropdown + caching, N/A, <2-doc warning) replaces the old Cross-check doc editor; mock state, Save hidden pending Phase 5; static/audit_rules.html/.js, style.css.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

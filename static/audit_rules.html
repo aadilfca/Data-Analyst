@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Audit Rules - Internal Audit App</title>
-    <link rel="stylesheet" href="/static/style.css?v=11">
+    <link rel="stylesheet" href="/static/style.css?v=12">
 </head>
 
 <body data-nav-module="Audit Rules" data-nav-parent="index.html">
@@ -265,35 +265,25 @@
                         <input type="text" id="arCrossCheckNameInput" required>
                     </div>
 
-                    <!-- Ordered documents in this cross-check. Each row carries its own inline
-                         field-picker (built in renderCrossCheckDocsList()) scoped to that
-                         Document's own cross-check-eligible fields; a row left blank falls back
-                         to the "Default field to compare" dropdown below (NULL = use shared
-                         field, per the per-document compare_field contract). The default
-                         dropdown must be rebuilt (renderCompareFieldDropdown()) whenever this
-                         list changes. -->
-                    <div class="ar-field">
-                        <label>Documents (in comparison order)</label>
-                        <div id="arCrossCheckDocsList" class="ar-ordered-doc-list"></div>
+                    <!-- Comparison matrix (Cross-Check Matrix Redesign, Phase 4 of 5): documents
+                         are columns, field rows have no label (positional), each cell picks a
+                         column name from that document's linked template. Built by renderMatrix()
+                         in audit_rules.js. UI-only this phase — the matrix runs on in-memory mock
+                         state; Save/load to the matrix endpoints is Phase 5, and Save/Delete/
+                         Restore below are hidden until then. -->
+                    <div class="ar-field" id="arMatrixField">
+                        <label>Comparison matrix</label>
+                        <div id="arMatrixPreviewBanner" class="ar-field-warning">
+                            Preview — matrix edits are not saved yet (wired up in the next phase).</div>
                         <div class="ar-add-doc-row">
-                            <select id="arAddDocumentSelect"></select>
-                            <button type="button" id="arAddDocumentBtn" class="ar-btn-chip-add">Add</button>
+                            <select id="arMatrixAddColumnSelect"></select>
+                            <button type="button" id="arMatrixAddColumnBtn" class="ar-btn-chip-add">Add document</button>
                         </div>
-                    </div>
-
-                    <div class="ar-field">
-                        <label for="arCompareFieldSelect">Default field to compare</label>
-                        <select id="arCompareFieldSelect">
-                            <option value="" disabled selected>Add a document first</option>
-                        </select>
-                        <!-- Fallback field for any Document row above left blank; its options are
-                             the union of every selected Document's cross-check-eligible fields.
-                             Persistent (not auto-dismissing, unlike arCrossCheckDetailStatus)
-                             warning shown when the saved default no longer matches any current
-                             option — e.g. a document's eligible fields changed since this
-                             Cross-check was last saved. See renderCompareFieldDropdown() in
-                             audit_rules.js. -->
-                        <div id="arCompareFieldStaleWarning" class="ar-field-warning" style="display:none;"></div>
+                        <div id="arMatrixTableWrap" class="ar-matrix-wrap">
+                            <table id="arMatrixTable" class="ar-matrix-table"></table>
+                        </div>
+                        <button type="button" id="arMatrixAddRowBtn" class="ar-btn-chip-add">+ Add field row</button>
+                        <div id="arMatrixWarnings"></div>
                     </div>
 
                     <div class="ar-field">
@@ -310,10 +300,9 @@
                     </div>
 
                     <!-- Automated cross-document validation engine, Phase 5 of 10: also compare
-                         the anchor document (last document above) against the voucher line's own
-                         amount. The anchor is never picked here - it's resolved live at
-                         evaluation time (Phase 6), so this control is just the on/off flag plus
-                         an explanatory hint naming today's anchor for clarity. -->
+                         the anchor document against the voucher line's own amount. The anchor is
+                         resolved live at evaluation time (Phase 6), never picked here — this is
+                         just the on/off flag plus a static explanatory hint. -->
                     <div class="ar-field">
                         <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
                             <input type="checkbox" id="arCompareToVoucherLineCheckbox">
@@ -525,7 +514,7 @@
     <script src="/static/loading_ui.js"></script>
     <script src="/static/client_context.js?v=14"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/audit_rules.js?v=9"></script>
+    <script src="/static/audit_rules.js?v=10"></script>
 </body>
 
 </html>

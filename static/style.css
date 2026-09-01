@@ -6225,6 +6225,55 @@ body {
     flex: 1;
 }
 
+/* ---------- Cross-check comparison matrix (Cross-Check Matrix Redesign, Phase 4 of 5) ----------
+   Documents as columns, positional field rows, per-cell column-name dropdown. Reuses
+   .ar-move-btn / .ar-remove-doc-btn / .ar-add-doc-row / .ar-btn-chip-add / .ar-field-warning. */
+.ar-matrix-wrap {
+    overflow-x: auto;   /* wide tables scroll inside their own container, never the page body */
+    margin: 8px 0;
+}
+.ar-matrix-table {
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.ar-matrix-table th,
+.ar-matrix-table td {
+    border: 1px solid #e2e8f0;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: middle;
+}
+.ar-matrix-table thead th,
+.ar-matrix-table .ar-matrix-row-ord {
+    background: #f8fafc;   /* matches .ar-ordered-doc-row */
+    color: #1a1a2e;
+}
+.ar-matrix-table thead th {
+    white-space: nowrap;
+}
+.ar-matrix-row-ord {
+    text-align: center;
+    color: #64748b;
+    white-space: nowrap;
+}
+.ar-matrix-cell-select {
+    width: 100%;
+    min-width: 120px;
+    font-size: 12px;
+}
+/* JS-stamped on a <td> whose cell is "not applicable" (null) — a class, not a :has() selector. */
+.ar-matrix-cell-na {
+    background: #f8fafc;
+}
+.ar-matrix-cell-na .ar-matrix-cell-select {
+    color: #94a3b8;
+    font-style: italic;
+}
+.ar-matrix-empty {
+    color: #94a3b8;
+    font-style: italic;
+}
+
 /* ---------- Assign Categories (Section 2, Phase 5 of 5, FINAL) ----------
    Full-page Trial Balance account-assignment view, opened from the Categories list
    header. No generic table/badge classes exist elsewhere in this file to build on

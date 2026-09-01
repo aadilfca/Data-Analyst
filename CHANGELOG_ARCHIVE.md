@@ -133,9 +133,54 @@ per-document `compare_field` picker keeps working unchanged** (it reads the list
 reads it), and the follow-on cleanup should expect it near-empty.
 
 Verification: 83 tests pass (no backend change); `node --check` clean; no orphaned references to
-the removed ids. Live browser check of the Documents pane was blocked — the dev server on :5000
-is Postgres-backed and the seeded `admin`/`admin123` login returns 401 there — so pane rendering
-needs a manual click-through.
+the removed ids.
+
+### Phase 4 of 5 — matrix UI in the Cross-Check tab
+
+**Date:** 2026-09-01 | **Files:** `static/audit_rules.html`, `static/audit_rules.js`,
+`static/style.css`. **UI-only, mock state — no save/load (Phase 5).**
+
+The Cross-Check detail form's old document editor (ordered `#arCrossCheckDocsList` + per-doc
+field pickers + `#arCompareFieldSelect` "Default field to compare" + stale warning) is replaced by
+the **matrix**: documents as columns, positional label-less field rows, a per-cell dropdown of
+column names from that document's linked template. Name / Comparison Type / "compare to voucher
+line" / "Used by N" stay. **Confirmed with Aadil:** matrix runs on in-memory mock state this
+phase; Save / Delete / Restore are hidden with a "preview — not saved yet" banner.
+
+`static/audit_rules.js` — new: `matrixState {columns:[{documentId,name}], rows:[{id,cells:{}}]}`,
+`matrixRowSeq`, caches `matrixColumnsByDoc` (documentId → column names) + `matrixColumnsInFlight`
+(in-flight promise dedupe — repeated renders reuse one request). `fetchMatrixColumnsForDoc()`
+resolves documentId → `GET /api/audit-rules/documents/{id}` template_id →
+`GET /api/templates/{template_id}/columns` (Phase 2), `[]` if no template / on error.
+`renderMatrix()` draws the table (header = doc name + remove-column ✕; per row = ordinal + ▲▼
+reorder + one dropdown per column with a "— not applicable —" option + remove-row ✕); a row with
+<2 non-null cells appends a non-blocking `.ar-field-warning`. Handlers `addMatrixColumn` /
+`removeMatrixColumn` / `addMatrixRow` / `removeMatrixRow` / `moveMatrixRow` /
+`seedMatrixFromCrossCheck` (column axis from `cc.documents` on select — names only, not a load) /
+`resetMatrix` (on +Add New).
+
+Removed: `crossCheckDocIds`, `crossCheckDocFields`, `renderCrossCheckDocsList`,
+`addDocumentToCrossCheck`, `removeDocumentFromCrossCheck`, `moveDocUp/Down`,
+`renderCompareFieldDropdown`, `computeEligibleFields`, `eligibleFieldsForDoc`,
+`show/hideCompareFieldStaleWarning` + their DOM refs/listeners. `updateCompareToVoucherLineHint()`
+reduced to a static hint. **`saveCrossCheck()` is an explicit stopgap** (early return +
+"wired up in the next phase" status) — Phase 5 rebuilds it to POST/PUT the matrix via the Phase-2
+field-row/cell endpoints; `deleteCrossCheck`/`restoreCrossCheck` kept intact, buttons hidden.
+
+`static/style.css` — `.ar-matrix-wrap` (`overflow-x:auto`), `.ar-matrix-table` + th/td borders,
+`.ar-matrix-cell-select`, `.ar-matrix-row-ord`, `.ar-matrix-cell-na` (JS-stamped tint on a null
+cell — a class, not `:has()`), `.ar-matrix-empty`. `audit_rules.js?v=9→10`; `style.css?v=11→12`
+across all 18 pages (new visible component).
+
+Verification: 83 tests pass; `node --check` clean. Playwright against the dev server confirmed:
+matrix renders with a cross-check's documents as columns, Save/Delete/Restore hidden + banner
+shown, add/remove column, add/remove/reorder rows, `— not applicable —` greys the cell,
+`.ar-matrix-cell-na` on every unset cell, the <2-doc warning recounts, and the document-lookup
+request fires once per document (in-flight dedupe). The real column-name dropdown + `/columns`
+fetch caching could **not** be exercised there — the persistent :5000 dev server predates the
+Phase-2 deploy, so `GET /api/templates/{id}/columns` 404s and every cell falls to the "no linked
+template" state; the local code has the endpoint (route registered, 83 tests) and the 404 path
+degrades gracefully.
 
 ## Cross-check per-document field names
 
