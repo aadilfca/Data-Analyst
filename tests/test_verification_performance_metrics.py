@@ -118,9 +118,9 @@ def test_cross_check_config_loader_batches_document_chains(monkeypatch):
         if "FROM audit_rule_cross_check_documents" in query:
             return [
                 {"cross_check_id": 30, "document_id": 10, "sort_order": 0,
-                 "document_name": "Invoice"},
+                 "document_name": "Invoice", "compare_field": None},
                 {"cross_check_id": 31, "document_id": 11, "sort_order": 0,
-                 "document_name": "Receipt"},
+                 "document_name": "Receipt", "compare_field": None},
             ]
         raise AssertionError(f"Unexpected query: {query}")
 

@@ -936,6 +936,13 @@ class CrossCheckCreate(BaseModel):
     compare_field: str
     comparison_type: str
     document_ids: List[int] = []
+    # Cross-check per-document field names (Phase 2 of 4): optional per-Document override of
+    # compare_field, keyed by document_id. A document_id absent from this map (or mapped to
+    # None / "") stores NULL on its junction row, which means "fall back to the shared
+    # compare_field above" (Phase 1's backfill contract). An older client that sends only
+    # document_ids keeps today's behaviour: every junction row NULL -> every Document uses
+    # the shared field.
+    document_fields: Dict[int, Optional[str]] = {}
     # Phase 5 of 10: marks this Cross-check as also comparing its anchor document (the last
     # document in document_ids, resolved live at evaluation time - Phase 6's job, not
     # configured here) against the voucher line's own amount. Config-only this phase; nothing
@@ -947,13 +954,22 @@ class CrossCheckUpdate(BaseModel):
     compare_field: str
     comparison_type: str
     document_ids: List[int] = []
+    document_fields: Dict[int, Optional[str]] = {}
     compare_to_voucher_line: bool = False
 
 # ---------- HELPERS ----------
-def get_cross_check_documents(cross_check_id: int) -> List[dict]:
+def normalize_compare_field(value: Optional[str]) -> Optional[str]:
+    """Trim a compare_field override; treat blank as "not set" (NULL / use the shared field)."""
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
+def get_cross_check_documents(cross_check_id: int, shared_compare_field: Optional[str] = None) -> List[dict]:
     rows = execute_query_pg(
         """
-        SELECT d.id as document_id, d.name
+        SELECT d.id as document_id, d.name, ccd.compare_field
         FROM audit_rule_cross_check_documents ccd
         JOIN audit_rule_documents d ON ccd.document_id = d.id
         WHERE ccd.cross_check_id = %s
@@ -961,7 +977,18 @@ def get_cross_check_documents(cross_check_id: int) -> List[dict]:
         """,
         (cross_check_id,)
     )
-    return [{"document_id": r["document_id"], "name": r["name"]} for r in rows]
+    result = []
+    for r in rows:
+        own_field = normalize_compare_field(r.get("compare_field"))
+        result.append({
+            "document_id": r["document_id"],
+            "name": r["name"],
+            # own_field is this Document's per-row override (NULL -> None); effective_compare_field
+            # resolves the fallback so the frontend (Phase 3) never has to re-derive it.
+            "compare_field": own_field,
+            "effective_compare_field": own_field or shared_compare_field,
+        })
+    return result
 
 def get_cross_check_used_by_count(cross_check_id: int) -> int:
     rows = execute_query_pg(
@@ -979,7 +1006,7 @@ def row_to_cross_check(row: dict) -> dict:
         "comparison_type": row["comparison_type"],
         "compare_to_voucher_line": bool(row.get("compare_to_voucher_line") or 0),
         "is_active": bool(row["is_active"]),
-        "documents": get_cross_check_documents(cross_check_id),
+        "documents": get_cross_check_documents(cross_check_id, row["compare_field"]),
         "used_by_categories_count": get_cross_check_used_by_count(cross_check_id)
     }
 
@@ -993,22 +1020,39 @@ def row_to_cross_check_list(row: dict) -> dict:
     """
     return {"id": row["id"], "name": row["name"], "is_active": bool(row["is_active"])}
 
-def save_cross_check_documents(cross_check_id: int, document_ids: List[int]):
-    """Replace a Cross-check's ordered document list (delete-then-reinsert)."""
+def save_cross_check_documents(cross_check_id: int, document_ids: List[int],
+                               document_fields: Optional[Dict[int, Optional[str]]] = None):
+    """Replace a Cross-check's ordered document list (delete-then-reinsert).
+
+    document_fields maps a document_id to its own compare_field override; a document absent
+    from the map (or mapped to blank/None) stores NULL, i.e. "use the Cross-check's shared
+    compare_field" (Phase 1's backfill contract).
+    """
+    field_map = document_fields or {}
     execute_write_pg("DELETE FROM audit_rule_cross_check_documents WHERE cross_check_id = %s", (cross_check_id,))
     for idx, document_id in enumerate(document_ids):
+        own_field = normalize_compare_field(field_map.get(document_id))
         execute_write_pg(
-            "INSERT INTO audit_rule_cross_check_documents (cross_check_id, document_id, sort_order) VALUES (%s, %s, %s)",
-            (cross_check_id, document_id, idx)
+            "INSERT INTO audit_rule_cross_check_documents (cross_check_id, document_id, sort_order, compare_field) "
+            "VALUES (%s, %s, %s, %s)",
+            (cross_check_id, document_id, idx, own_field)
         )
 
-def validate_cross_check_payload(compare_field: str, comparison_type: str, document_ids: List[int], compare_to_voucher_line: bool = False):
+def validate_cross_check_payload(compare_field: str, comparison_type: str, document_ids: List[int],
+                                 compare_to_voucher_line: bool = False,
+                                 document_fields: Optional[Dict[int, Optional[str]]] = None):
     """
-    Raises HTTPException(400) if comparison_type isn't one of the fixed set, or if
-    compare_field isn't a cross-check-eligible field on every selected Document, or if
+    Raises HTTPException(400) if comparison_type isn't one of the fixed set, or if a
+    Document's effective compared field isn't cross-check-eligible on that Document, or if
     compare_to_voucher_line is set with no Document to act as the anchor (Phase 5 of 10 -
     the anchor is the last document in document_ids, resolved live at evaluation time, never
     picked here).
+
+    Cross-check per-document field names (Phase 2 of 4): each Document's *effective* field is
+    its own override from document_fields if set, otherwise the shared compare_field. There is
+    no longer a single-name check across every Document - fields are matched by chain position
+    / comparison intent, not by identical name.
+
     SQLite foreign keys aren't enforced on this app's connections (see get_db()), so
     Document existence is also checked here rather than left to the database.
     """
@@ -1018,6 +1062,7 @@ def validate_cross_check_payload(compare_field: str, comparison_type: str, docum
     if compare_to_voucher_line and not document_ids:
         raise HTTPException(400, "compare_to_voucher_line requires at least one Document (used as the anchor)")
 
+    field_map = document_fields or {}
     for document_id in document_ids:
         doc_rows = execute_query_pg(
             "SELECT name, document_type FROM audit_rule_documents WHERE id = %s",
@@ -1025,11 +1070,12 @@ def validate_cross_check_payload(compare_field: str, comparison_type: str, docum
         )
         if not doc_rows:
             raise HTTPException(400, f"Document ID {document_id} not found")
+        effective_field = normalize_compare_field(field_map.get(document_id)) or compare_field
         doc_fields = get_document_cross_check_fields(document_id, doc_rows[0].get("document_type"))
-        if compare_field not in doc_fields:
+        if effective_field not in doc_fields:
             raise HTTPException(
                 400,
-                f"Field '{compare_field}' is not a cross-check-eligible field on Document '{doc_rows[0]['name']}' (ID {document_id})"
+                f"Field '{effective_field}' is not a cross-check-eligible field on Document '{doc_rows[0]['name']}' (ID {document_id})"
             )
 
 # ---------- ENDPOINTS ----------
@@ -1077,14 +1123,14 @@ def get_cross_check(cross_check_id: int):
 def create_cross_check(cross_check: CrossCheckCreate):
     validate_cross_check_payload(
         cross_check.compare_field, cross_check.comparison_type, cross_check.document_ids,
-        cross_check.compare_to_voucher_line
+        cross_check.compare_to_voucher_line, cross_check.document_fields
     )
 
     cross_check_id = execute_write_pg(
         "INSERT INTO audit_rule_cross_checks (name, compare_field, comparison_type, compare_to_voucher_line) VALUES (%s, %s, %s, %s) RETURNING id",
         (cross_check.name, cross_check.compare_field, cross_check.comparison_type, cross_check.compare_to_voucher_line)
     )
-    save_cross_check_documents(cross_check_id, cross_check.document_ids)
+    save_cross_check_documents(cross_check_id, cross_check.document_ids, cross_check.document_fields)
 
     log_audit("Admin", "Create", "AuditRules", f"Created Cross-check: {cross_check.name}")
     invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
@@ -1099,14 +1145,14 @@ def update_cross_check(cross_check_id: int, cross_check: CrossCheckUpdate):
 
     validate_cross_check_payload(
         cross_check.compare_field, cross_check.comparison_type, cross_check.document_ids,
-        cross_check.compare_to_voucher_line
+        cross_check.compare_to_voucher_line, cross_check.document_fields
     )
 
     execute_write_pg(
         "UPDATE audit_rule_cross_checks SET name = %s, compare_field = %s, comparison_type = %s, compare_to_voucher_line = %s WHERE id = %s",
         (cross_check.name, cross_check.compare_field, cross_check.comparison_type, cross_check.compare_to_voucher_line, cross_check_id)
     )
-    save_cross_check_documents(cross_check_id, cross_check.document_ids)
+    save_cross_check_documents(cross_check_id, cross_check.document_ids, cross_check.document_fields)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated Cross-check ID {cross_check_id}")
     invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,

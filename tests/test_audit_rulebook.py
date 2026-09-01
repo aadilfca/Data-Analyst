@@ -383,5 +383,81 @@ class CrossCheckPerDocumentFieldSchemaTests(unittest.TestCase):
         self.assertEqual(value, "Quantity")
 
 
+class CrossCheckPerDocumentFieldBackendTests(unittest.TestCase):
+    """Phase 2 of 4: validation / save / response logic for per-Document compare_field."""
+
+    def _doc_row(self, sql, params):
+        # Every validate_cross_check_payload() DB read in these tests is the document lookup.
+        return [{"name": f"Doc {params[0]}", "document_type": "linked_template"}]
+
+    def test_validate_accepts_per_document_field_override(self):
+        from routers import audit_rules
+
+        fields_by_doc = {10: ["Quantity"], 11: ["Quantity Received"]}
+        with patch.object(audit_rules, "execute_query_pg", side_effect=self._doc_row), \
+             patch.object(audit_rules, "get_document_cross_check_fields",
+                          side_effect=lambda doc_id, dtype=None: fields_by_doc[doc_id]):
+            # Shared field "Quantity" is invalid on Doc 11, but its own override rescues it.
+            audit_rules.validate_cross_check_payload(
+                "Quantity", "All equal", [10, 11], False, {11: "Quantity Received"}
+            )
+
+    def test_validate_rejects_when_effective_field_not_eligible(self):
+        from routers import audit_rules
+
+        fields_by_doc = {10: ["Quantity"], 11: ["Quantity Received"]}
+        with patch.object(audit_rules, "execute_query_pg", side_effect=self._doc_row), \
+             patch.object(audit_rules, "get_document_cross_check_fields",
+                          side_effect=lambda doc_id, dtype=None: fields_by_doc[doc_id]):
+            with self.assertRaises(Exception) as raised:
+                # No override for Doc 11 -> falls back to shared "Quantity", not eligible there.
+                audit_rules.validate_cross_check_payload("Quantity", "All equal", [10, 11], False, {})
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("Quantity", raised.exception.detail)
+
+    def test_validate_blank_override_falls_back_to_shared_field(self):
+        from routers import audit_rules
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=self._doc_row), \
+             patch.object(audit_rules, "get_document_cross_check_fields",
+                          side_effect=lambda doc_id, dtype=None: ["Amount"]):
+            # "  " normalises to None -> shared "Amount" is used and is eligible.
+            audit_rules.validate_cross_check_payload("Amount", "All equal", [10], False, {10: "  "})
+
+    def test_save_persists_per_document_compare_field_with_null_fallback(self):
+        from routers import audit_rules
+
+        writes = []
+        with patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append((sql, params))):
+            audit_rules.save_cross_check_documents(30, [10, 11], {11: "Quantity Received"})
+
+        inserts = [params for sql, params in writes if "INSERT INTO audit_rule_cross_check_documents" in sql]
+        self.assertEqual(inserts, [
+            (30, 10, 0, None),
+            (30, 11, 1, "Quantity Received"),
+        ])
+
+    def test_row_to_cross_check_exposes_effective_field(self):
+        from routers import audit_rules
+
+        junction = [
+            {"document_id": 10, "name": "Purchase Order", "compare_field": None},
+            {"document_id": 11, "name": "Store Receiving", "compare_field": "Quantity Received"},
+        ]
+        with patch.object(audit_rules, "execute_query_pg", side_effect=lambda sql, params=None: junction), \
+             patch.object(audit_rules, "get_cross_check_used_by_count", return_value=0):
+            result = audit_rules.row_to_cross_check({
+                "id": 30, "name": "Qty chain", "compare_field": "Quantity",
+                "comparison_type": "All equal", "compare_to_voucher_line": 0, "is_active": True,
+            })
+
+        docs = {d["document_id"]: d for d in result["documents"]}
+        self.assertIsNone(docs[10]["compare_field"])
+        self.assertEqual(docs[10]["effective_compare_field"], "Quantity")
+        self.assertEqual(docs[11]["compare_field"], "Quantity Received")
+        self.assertEqual(docs[11]["effective_compare_field"], "Quantity Received")
+
+
 if __name__ == "__main__":
     unittest.main()

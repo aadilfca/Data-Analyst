@@ -288,6 +288,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-31: Fixed the standalone Verification line-save Rulebook loader name mismatch; focused backend tests and the latest manual network trace are clean.
 - 2026-08-31: Added a required concise pendencies/objectives table to every development handoff.
 - 2026-09-01: Cross-check per-document field names Phase 1 of 4 (schema) — nullable compare_field on audit_rule_cross_check_documents junction, backfilled from the shared value on startup; database.py, tests.
+- 2026-09-01: Cross-check per-document field names Phase 2 of 4 (backend) — per-Document compare_field validate/save/response in routers/audit_rules.py; NULL falls back to the shared field; tests.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

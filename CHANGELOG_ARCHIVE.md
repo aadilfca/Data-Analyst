@@ -41,8 +41,27 @@ Locked assumptions: eligible-fields sourcing (global active-Master-Columns mirro
 out of scope; `comparison_type` logic unaffected; `compare_to_voucher_line` stays a single anchor
 field; UI (Phase 3) shows one field-picker per Document row, not a matrix.
 
-Later phases: 2 — backend validation/save/response reads/writes per-document names;
-3 — per-document field-picker in the Cross-check editor; 4 — validation engine
+**Phase 2 of 4 — backend validation / save / response (`routers/audit_rules.py`,
+`tests/test_audit_rulebook.py`, `tests/test_verification_performance_metrics.py`).** Both
+Cross-check request models (`CrossCheckCreate` / `CrossCheckUpdate`) gain
+`document_fields: Dict[int, Optional[str]] = {}` — an optional `document_id -> own compare_field`
+map. `normalize_compare_field()` (new helper) trims a value and treats blank as `None`.
+`save_cross_check_documents()` now writes the junction `compare_field` column per row from that
+map (absent / blank -> NULL). `validate_cross_check_payload()` no longer does a single-name
+intersection across every Document: per Document it resolves the *effective* field
+(`own override or shared compare_field`) and checks that against that Document's own
+`get_document_cross_check_fields()`; the 400 message names the effective field.
+`get_cross_check_documents()` takes the shared field as a second arg and each returned document
+dict now carries `compare_field` (own, nullable) and `effective_compare_field` (own or shared);
+`row_to_cross_check()` passes `row["compare_field"]` through. Top-level `compare_field` on
+`audit_rule_cross_checks` untouched (still the fallback). Backward compatible: a client sending
+only `document_ids` writes all-NULL junction rows -> every Document uses the shared field, exactly
+as before. Five unit tests added (patched pg helpers, existing pattern in the file).
+
+Deferred to Phase 4 (validation engine): `compile_verification_rulebook()` and
+`get_category_guidance_cross_checks()` still emit only the shared `compare_field`.
+
+Later phases: 3 — per-document field-picker in the Cross-check editor; 4 — validation engine
 (`routers/verification.py`) compares using each document's own field name.
 
 ## Cross-check-eligible field mirror
