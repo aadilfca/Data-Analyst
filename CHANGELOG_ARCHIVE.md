@@ -15,6 +15,50 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Cross-Check Matrix Redesign
+
+**Requirement:** Rebuild the Audit Rules Cross-Check feature as a document × field matrix —
+Documents are columns, user-added field rows have no stored label (row ID + order only), and each
+cell holds a column name picked from that Document's linked template (empty cell = not applicable).
+Also removes the duplicate cross-check-eligible fields section from the Documents tab. Old
+cross-check data is discarded/rebuilt, not migrated. 5 phases: (1) DB storage, (2) backend CRUD +
+template column-list lookup, (3) remove Documents-tab fields section, (4) build matrix UI,
+(5) wire UI to backend.
+
+### Phase 1 of 5 — DB storage
+
+**Date:** 2026-09-01 | **Files:** `database.py` (committed). Schema test class
+`CrossCheckMatrixSchemaTests` written and passing but **held out of this commit** — it shares
+`tests/test_audit_rulebook.py` with an in-flight Phase 4 of the earlier per-document-field
+requirement; it lands with a later commit. Backup:
+`scratchpad/test_audit_rulebook_with_matrix.py`.
+
+Additive schema change — two new tables in both `init_db()` (SQLite) and `init_db_postgres()`:
+
+- `audit_rule_cross_check_fields` — the row axis. `id`, `cross_check_id` (FK → `audit_rule_cross_checks`,
+  `ON DELETE CASCADE`), `sort_order`. No label column; a row is identified by its id, order by
+  `sort_order`.
+- `audit_rule_cross_check_cells` — one row per (field row × Document) cell. `id`,
+  `field_id` (FK → `audit_rule_cross_check_fields`, CASCADE), `document_id` (FK →
+  `audit_rule_documents`, CASCADE), `column_name TEXT` nullable (`NULL`/missing cell = not
+  applicable), `UNIQUE(field_id, document_id)`. `column_name` is free text, not FK'd — validity
+  against the Document's linked template is a Phase 2 backend concern, matching how the existing
+  `compare_field` columns are already free text.
+
+Indexes: `idx_audit_rule_cross_check_fields_crosscheck`, `idx_audit_rule_cross_check_cells_field`.
+
+The document column axis reuses the existing `audit_rule_cross_check_documents` junction unchanged.
+
+**Deliberately deferred to Phase 2:** the old `compare_field` columns on `audit_rule_cross_checks`
+and `audit_rule_cross_check_documents` are left in place this phase so `routers/audit_rules.py`
+(untouched here) and the current tests keep working. No data migration/purge code — old rows are
+discarded as a separate cleanup later. Confirmed with Aadil: additive, keep old columns.
+
+`CrossCheckMatrixSchemaTests` covers table shapes, `column_name` NULL, the
+`UNIQUE(field_id, document_id)` constraint, and cell CASCADE on field-row delete (the CASCADE
+test enables `PRAGMA foreign_keys = ON` locally since the app never does). Full suite with it
+applied: 73 passed.
+
 ## Cross-check per-document field names
 
 **Date:** 2026-09-01 | **Files:** `database.py`, `tests/test_audit_rulebook.py`.

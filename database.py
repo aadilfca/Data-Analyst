@@ -1726,6 +1726,39 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not backfill compare_field on audit_rule_cross_check_documents:", e)
 
+        # Cross-Check Matrix Redesign, Phase 1 of 5 (schema only, additive): a Cross-check is
+        # becoming a document x field matrix - the Documents above are the columns, and these
+        # two tables add the rows and the per-cell field selections.
+        #   audit_rule_cross_check_fields - one row per field row in the matrix. Rows carry no
+        #     label; they are identified by id, and sort_order is the display order.
+        #   audit_rule_cross_check_cells - one row per (field row x Document) cell. column_name
+        #     is the template column name chosen for that Document in that row; NULL (or a
+        #     missing cell) means "not applicable for this Document in this row". Not FK'd to a
+        #     column table - validity against the Document's linked template is enforced in the
+        #     backend, same as the existing free-text compare_field columns.
+        # The old compare_field columns on audit_rule_cross_checks / audit_rule_cross_check_documents
+        # are deliberately left in place this phase so the current backend/tests keep working;
+        # they are removed in Phase 2 once the new CRUD replaces the code that reads them.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_cross_check_fields (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cross_check_id INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (cross_check_id) REFERENCES audit_rule_cross_checks(id) ON DELETE CASCADE
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_cross_check_cells (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                field_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                column_name TEXT,
+                FOREIGN KEY (field_id) REFERENCES audit_rule_cross_check_fields(id) ON DELETE CASCADE,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+                UNIQUE(field_id, document_id)
+            )
+        ''')
+
         # Categories: name, one KB overview note, and (via junction tables below) the
         # Documents it uses and the Cross-checks it applies. This is the entity a voucher
         # will eventually reference (Phase 9).
@@ -1974,6 +2007,8 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_document_auth_roles_document ON audit_rule_document_auth_roles (document_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_documents_crosscheck ON audit_rule_cross_check_documents (cross_check_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_documents_document ON audit_rule_cross_check_documents (document_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_fields_crosscheck ON audit_rule_cross_check_fields (cross_check_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_cells_field ON audit_rule_cross_check_cells (field_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_documents_category ON audit_rule_category_documents (category_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_documents_document ON audit_rule_category_documents (document_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_category ON audit_rule_category_cross_checks (category_id)")
@@ -3205,6 +3240,33 @@ def init_db_postgres(conn):
         FROM audit_rule_cross_checks c
         WHERE c.id = ccd.cross_check_id AND ccd.compare_field IS NULL
     ''')
+
+    # ---------- 23b. audit_rule_cross_check_fields ----------
+    # Cross-Check Matrix Redesign, Phase 1 of 5 (additive). The row axis of the document x field
+    # matrix: one row per field row, no label (identified by id; sort_order = display order).
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_cross_check_fields (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            cross_check_id INTEGER NOT NULL REFERENCES audit_rule_cross_checks(id) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+    ''', "audit_rule_cross_check_fields")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_fields_crosscheck ON audit_rule_cross_check_fields (cross_check_id)")
+
+    # ---------- 23c. audit_rule_cross_check_cells ----------
+    # One row per (field row x Document) cell. column_name is the template column chosen for that
+    # Document in that row; NULL (or a missing cell) = "not applicable". Free text, not FK'd -
+    # validity against the Document's linked template is enforced in the backend.
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_cross_check_cells (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            field_id INTEGER NOT NULL REFERENCES audit_rule_cross_check_fields(id) ON DELETE CASCADE,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+            column_name TEXT,
+            UNIQUE(field_id, document_id)
+        )
+    ''', "audit_rule_cross_check_cells")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_cells_field ON audit_rule_cross_check_cells (field_id)")
 
     # ---------- 24. audit_rule_categories ----------
     run('''
