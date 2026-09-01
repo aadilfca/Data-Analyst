@@ -1018,6 +1018,11 @@ let editingCrossCheckId = null;
 // Ordered array of Document ids currently attached to the cross-check being edited —
 // drives both the "Documents" list UI and the Compare Field dropdown's eligible options.
 let crossCheckDocIds = [];
+// Per-Document field overrides for the cross-check being edited: { docId: fieldName }.
+// Only holds EXPLICIT picks — a docId with no entry means "use the default field"
+// (sent as NULL, per the per-document compare_field contract in routers/audit_rules.py).
+// Keyed by docId so entries survive reorder; keys are pruned when a doc is removed.
+let crossCheckDocFields = {};
 // Cache of all active Documents ({id, name, cross_check_fields}), used to resolve names
 // for crossCheckDocIds, populate the "add document" picker, and compute field
 // eligibility. Refreshed each time the Cross-checks view is opened (switchEntityType()).
@@ -1150,6 +1155,68 @@ function renderCrossCheckDocsList() {
             nameSpan.textContent = doc ? doc.name : ('Document #' + docId);
             row.appendChild(nameSpan);
 
+            // Per-Document field-picker, scoped to this Document's OWN eligible fields
+            // (not an intersection across the chain) — mirrors the per-Document check in
+            // validate_cross_check_payload() (routers/audit_rules.py). Blank = fall back
+            // to the default field dropdown below.
+            const sharedField = arCompareFieldSelect.value;
+            const ownFields = eligibleFieldsForDoc(docId);
+            const savedOverride = crossCheckDocFields[docId];
+
+            const fieldSelect = document.createElement('select');
+            fieldSelect.className = 'ar-doc-field-select';
+            // Inline sizing only (no stylesheet change this phase) — keep the picker
+            // compact so the row still fits name + picker + reorder controls.
+            fieldSelect.style.margin = '0 8px';
+            fieldSelect.style.maxWidth = '45%';
+            fieldSelect.style.fontSize = '12px';
+
+            const defaultOpt = document.createElement('option');
+            defaultOpt.value = '';
+            defaultOpt.textContent = '(use default: ' + (sharedField || '—') + ')';
+            fieldSelect.appendChild(defaultOpt);
+
+            ownFields.forEach(f => {
+                const opt = document.createElement('option');
+                opt.value = f;
+                opt.textContent = f;
+                fieldSelect.appendChild(opt);
+            });
+
+            let warningText = '';
+            if (savedOverride && ownFields.includes(savedOverride)) {
+                fieldSelect.value = savedOverride;
+            } else if (savedOverride) {
+                // Saved override no longer eligible on this Document (its eligible fields
+                // changed since save) — keep it visible as its own selected option + warn.
+                const staleOpt = document.createElement('option');
+                staleOpt.value = savedOverride;
+                staleOpt.textContent = '⚠️ ' + savedOverride + ' (not eligible on this document)';
+                staleOpt.selected = true;
+                fieldSelect.appendChild(staleOpt);
+                warningText = '⚠️ "' + savedOverride + '" is not a cross-check-eligible field on '
+                    + (doc ? doc.name : ('Document #' + docId)) + ' — pick another field or add it on the Document.';
+            } else {
+                fieldSelect.value = '';
+                // Blank row: the default field it would fall back to must itself be
+                // eligible here, or the server will reject the save.
+                if (sharedField && !ownFields.includes(sharedField)) {
+                    warningText = '⚠️ Default field "' + sharedField + '" is not eligible on '
+                        + (doc ? doc.name : ('Document #' + docId)) + ' — pick a field for this document.';
+                }
+            }
+
+            fieldSelect.addEventListener('change', () => {
+                if (fieldSelect.value) {
+                    crossCheckDocFields[docId] = fieldSelect.value;
+                } else {
+                    delete crossCheckDocFields[docId];
+                }
+                renderCrossCheckDocsList();
+                updateCompareToVoucherLineHint();
+            });
+            row.appendChild(fieldSelect);
+
             const controls = document.createElement('span');
 
             const upBtn = document.createElement('button');
@@ -1180,6 +1247,13 @@ function renderCrossCheckDocsList() {
 
             row.appendChild(controls);
             arCrossCheckDocsList.appendChild(row);
+
+            if (warningText) {
+                const warn = document.createElement('div');
+                warn.className = 'ar-field-warning';
+                warn.textContent = warningText;
+                arCrossCheckDocsList.appendChild(warn);
+            }
         });
     }
 
@@ -1209,47 +1283,53 @@ function addDocumentToCrossCheck() {
     const value = arAddDocumentSelect.value;
     if (!value) return;
     crossCheckDocIds.push(parseInt(value, 10));
-    renderCrossCheckDocsList();
     renderCompareFieldDropdown();
+    renderCrossCheckDocsList();
     updateCompareToVoucherLineHint();
 }
 
 function removeDocumentFromCrossCheck(docId) {
     crossCheckDocIds = crossCheckDocIds.filter(id => id !== docId);
-    renderCrossCheckDocsList();
+    delete crossCheckDocFields[docId];
     renderCompareFieldDropdown();
+    renderCrossCheckDocsList();
     updateCompareToVoucherLineHint();
 }
 
 function moveDocUp(index) {
     if (index <= 0) return;
     [crossCheckDocIds[index - 1], crossCheckDocIds[index]] = [crossCheckDocIds[index], crossCheckDocIds[index - 1]];
-    renderCrossCheckDocsList();
     renderCompareFieldDropdown();
+    renderCrossCheckDocsList();
     updateCompareToVoucherLineHint();
 }
 
 function moveDocDown(index) {
     if (index >= crossCheckDocIds.length - 1) return;
     [crossCheckDocIds[index + 1], crossCheckDocIds[index]] = [crossCheckDocIds[index], crossCheckDocIds[index + 1]];
-    renderCrossCheckDocsList();
     renderCompareFieldDropdown();
+    renderCrossCheckDocsList();
     updateCompareToVoucherLineHint();
 }
 
 // ---------- COMPARE FIELD DROPDOWN (dynamic, driven by crossCheckDocIds) ----------
-// Eligible fields are the intersection of every selected document's own
-// cross_check_fields — mirrors validate_cross_check_payload()'s server-side rule
-// (routers/audit_rules.py) so the picker never offers a field the server would reject.
+// The DEFAULT field dropdown offers the UNION of every selected document's own
+// cross_check_fields — it's only the fallback for rows left blank, and per-document
+// eligibility is enforced per-row (eligibleFieldsForDoc) and server-side in
+// validate_cross_check_payload() (routers/audit_rules.py).
 function computeEligibleFields() {
     if (crossCheckDocIds.length === 0) return [];
-    let eligible = null;
+    const seen = [];
     for (const docId of crossCheckDocIds) {
-        const doc = getDocumentById(docId);
-        const fields = doc ? (doc.cross_check_fields || []) : [];
-        eligible = (eligible === null) ? fields.slice() : eligible.filter(f => fields.includes(f));
+        eligibleFieldsForDoc(docId).forEach(f => { if (!seen.includes(f)) seen.push(f); });
     }
-    return eligible || [];
+    return seen;
+}
+
+// One Document's own cross-check-eligible fields — no intersection. Mirrors the
+// per-Document check in validate_cross_check_payload() (routers/audit_rules.py).
+function eligibleFieldsForDoc(docId) {
+    return (getDocumentById(docId) || {}).cross_check_fields || [];
 }
 
 function hideCompareFieldStaleWarning() {
@@ -1259,7 +1339,7 @@ function hideCompareFieldStaleWarning() {
 
 function showCompareFieldStaleWarning(value) {
     arCompareFieldStaleWarning.textContent =
-        '⚠️ "' + value + '" is not available on every selected document — pick a different field, or add/remove documents until it matches.';
+        '⚠️ "' + value + '" is not a cross-check-eligible field on any selected document — pick a different default, or add it on a Document.';
     arCompareFieldStaleWarning.style.display = 'block';
 }
 
@@ -1280,14 +1360,9 @@ function renderCompareFieldDropdown(preserveValue) {
         opt.value = '';
         opt.disabled = true;
         opt.selected = true;
-        const noneHaveAnyFields = crossCheckDocIds.every(
-            docId => ((getDocumentById(docId) || {}).cross_check_fields || []).length === 0
-        );
         opt.textContent = (crossCheckDocIds.length === 0)
             ? 'Add a document first'
-            : noneHaveAnyFields
-                ? 'No eligible fields — add them on the Document'
-                : 'No field is common to all selected documents';
+            : 'No eligible fields — add them on the Document';
         arCompareFieldSelect.appendChild(opt);
         hideCompareFieldStaleWarning();
         return;
@@ -1345,7 +1420,8 @@ function updateCompareToVoucherLineHint() {
     const anchorDocId = crossCheckDocIds[crossCheckDocIds.length - 1];
     const anchorDoc = getDocumentById(anchorDocId);
     const anchorName = anchorDoc ? anchorDoc.name : ('Document #' + anchorDocId);
-    const field = arCompareFieldSelect.value || '(field not yet selected)';
+    // The anchor's effective field = its own per-row override, else the default field.
+    const field = crossCheckDocFields[anchorDocId] || arCompareFieldSelect.value || '(field not yet selected)';
     arCompareToVoucherLineHint.textContent =
         'ℹ️ Will compare "' + anchorName + '"\'s ' + field + ' vs. this voucher line\'s amount. ' +
         '(Anchor = last document above; resolved live, not fixed here.)';
@@ -1363,8 +1439,16 @@ async function selectCrossCheck(id) {
         arCrossCheckEditingIdInput.value = cc.id;
         arCrossCheckNameInput.value = cc.name;
         crossCheckDocIds = (cc.documents || []).map(d => d.document_id);
-        renderCrossCheckDocsList();
+        // Per-row overrides: the raw per-Document compare_field (NOT effective_compare_field,
+        // which already folds in the shared fallback). Absent/blank => "use default".
+        crossCheckDocFields = {};
+        (cc.documents || []).forEach(d => {
+            if (d.compare_field) crossCheckDocFields[d.document_id] = d.compare_field;
+        });
+        // Default dropdown first — renderCrossCheckDocsList() reads its value for each
+        // row's "(use default: …)" label.
         renderCompareFieldDropdown(cc.compare_field);
+        renderCrossCheckDocsList();
         arComparisonTypeSelect.value = cc.comparison_type;
         arCompareToVoucherLineCheckbox.checked = !!cc.compare_to_voucher_line;
         updateCompareToVoucherLineHint();
@@ -1397,8 +1481,9 @@ function startNewCrossCheck() {
     arCrossCheckEditingIdInput.value = '';
     arCrossCheckNameInput.value = '';
     crossCheckDocIds = [];
-    renderCrossCheckDocsList();
+    crossCheckDocFields = {};
     renderCompareFieldDropdown('');
+    renderCrossCheckDocsList();
     arComparisonTypeSelect.value = '';
     arCompareToVoucherLineCheckbox.checked = false;
     updateCompareToVoucherLineHint();
@@ -1425,7 +1510,7 @@ async function saveCrossCheck(triggerBtn) {
         return;
     }
     if (!compareField) {
-        showCrossCheckDetailStatus('❌ A field to compare is required.', 'error');
+        showCrossCheckDetailStatus('❌ A default field to compare is required.', 'error');
         return;
     }
     if (!comparisonType) {
@@ -1438,6 +1523,13 @@ async function saveCrossCheck(triggerBtn) {
         compare_field: compareField,
         comparison_type: comparisonType,
         document_ids: crossCheckDocIds,
+        // Per-Document field overrides — only rows with an explicit pick; a doc omitted
+        // here is stored NULL server-side and falls back to compare_field above.
+        document_fields: Object.fromEntries(
+            crossCheckDocIds
+                .filter(id => crossCheckDocFields[id])
+                .map(id => [id, crossCheckDocFields[id]])
+        ),
         compare_to_voucher_line: arCompareToVoucherLineCheckbox.checked
     };
 
@@ -1518,7 +1610,12 @@ arCrossCheckShowInactiveCheckbox.addEventListener('change', loadCrossChecks);
 arCrossCheckLoadMoreBtn.addEventListener('click', loadMoreCrossChecks);
 
 arAddDocumentBtn.addEventListener('click', addDocumentToCrossCheck);
-arCompareFieldSelect.addEventListener('change', updateCompareToVoucherLineHint);
+arCompareFieldSelect.addEventListener('change', () => {
+    // Re-render the docs list so each blank row's "(use default: …)" label and any
+    // "default not eligible here" warning track the new default field.
+    renderCrossCheckDocsList();
+    updateCompareToVoucherLineHint();
+});
 arCompareToVoucherLineCheckbox.addEventListener('change', updateCompareToVoucherLineHint);
 
 arCrossCheckSaveBtn.addEventListener('click', () => saveCrossCheck(arCrossCheckSaveBtn));

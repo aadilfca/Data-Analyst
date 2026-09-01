@@ -58,11 +58,35 @@ dict now carries `compare_field` (own, nullable) and `effective_compare_field` (
 only `document_ids` writes all-NULL junction rows -> every Document uses the shared field, exactly
 as before. Five unit tests added (patched pg helpers, existing pattern in the file).
 
+**Phase 3 of 4 — per-Document field-picker UI (`static/audit_rules.html`,
+`static/audit_rules.js`; frontend only, no backend touched).** The Cross-check editor's
+Documents list (`renderCrossCheckDocsList()`) now renders an inline `<select>` per row,
+scoped to that Document's own eligible fields (new `eligibleFieldsForDoc(docId)` =
+`getDocumentById(docId).cross_check_fields`, no intersection — mirrors Phase 2's
+per-Document server check). New page state `crossCheckDocFields = {docId: field}` holds
+explicit overrides only (keyed by docId so it survives reorder; pruned on remove; reset in
+`startNewCrossCheck()`; hydrated in `selectCrossCheck()` from each `cc.documents[].compare_field`
+— the raw override, not `effective_compare_field`). A blank row's first option reads
+`(use default: <field>)` and is omitted from the save payload so the backend stores NULL.
+The old shared `#arCompareFieldSelect` is relabelled "Default field to compare" and its
+options are now the **union** of all selected Documents' eligible fields
+(`computeEligibleFields()` changed from intersection); still required on save as the
+fallback. Amber `.ar-field-warning` now renders per-row: when a saved override is no longer
+eligible on that Document (stale value kept visible as a `⚠️` option), or when a blank
+row's fallback default isn't eligible there. Save payload adds
+`document_fields: {docId: field}` for explicit picks only, per Phase 2's contract.
+`updateCompareToVoucherLineHint()` now shows the anchor's *effective* field
+(`crossCheckDocFields[anchorId] || shared`). Default-dropdown render reordered before the
+docs-list render so `(use default: …)` labels are correct on first open; the shared
+dropdown's `change` re-renders the docs list. Inline `<select>` sizing only (margin/maxWidth/
+fontSize set in JS) — no `style.css` change, no stylesheet `?v=` bump; `audit_rules.js?v=7 -> ?v=8`.
+Full backend suite (66) still green; `node --check` passes.
+
 Deferred to Phase 4 (validation engine): `compile_verification_rulebook()` and
 `get_category_guidance_cross_checks()` still emit only the shared `compare_field`.
 
-Later phases: 3 — per-document field-picker in the Cross-check editor; 4 — validation engine
-(`routers/verification.py`) compares using each document's own field name.
+Later phase: 4 — validation engine (`routers/verification.py`) compares using each
+document's own field name.
 
 ## Cross-check-eligible field mirror
 

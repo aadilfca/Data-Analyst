@@ -277,9 +277,13 @@
                         <input type="text" id="arCrossCheckNameInput" required>
                     </div>
 
-                    <!-- Ordered documents in this cross-check. The Compare Field dropdown below
-                         is restricted to fields shared by every document in this list, so it must
-                         be rebuilt (renderCompareFieldDropdown()) whenever this list changes. -->
+                    <!-- Ordered documents in this cross-check. Each row carries its own inline
+                         field-picker (built in renderCrossCheckDocsList()) scoped to that
+                         Document's own cross-check-eligible fields; a row left blank falls back
+                         to the "Default field to compare" dropdown below (NULL = use shared
+                         field, per the per-document compare_field contract). The default
+                         dropdown must be rebuilt (renderCompareFieldDropdown()) whenever this
+                         list changes. -->
                     <div class="ar-field">
                         <label>Documents (in comparison order)</label>
                         <div id="arCrossCheckDocsList" class="ar-ordered-doc-list"></div>
@@ -290,13 +294,15 @@
                     </div>
 
                     <div class="ar-field">
-                        <label for="arCompareFieldSelect">Field to Compare</label>
+                        <label for="arCompareFieldSelect">Default field to compare</label>
                         <select id="arCompareFieldSelect">
                             <option value="" disabled selected>Add a document first</option>
                         </select>
-                        <!-- Persistent (not auto-dismissing, unlike arCrossCheckDetailStatus) warning
-                             shown when a saved compare_field no longer matches any current option —
-                             e.g. a document's cross-check-eligible fields changed since this
+                        <!-- Fallback field for any Document row above left blank; its options are
+                             the union of every selected Document's cross-check-eligible fields.
+                             Persistent (not auto-dismissing, unlike arCrossCheckDetailStatus)
+                             warning shown when the saved default no longer matches any current
+                             option — e.g. a document's eligible fields changed since this
                              Cross-check was last saved. See renderCompareFieldDropdown() in
                              audit_rules.js. -->
                         <div id="arCompareFieldStaleWarning" class="ar-field-warning" style="display:none;"></div>
@@ -531,7 +537,7 @@
     <script src="/static/loading_ui.js"></script>
     <script src="/static/client_context.js?v=14"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/audit_rules.js?v=7"></script>
+    <script src="/static/audit_rules.js?v=8"></script>
 </body>
 
 </html>
