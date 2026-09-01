@@ -46,7 +46,7 @@ Do not duplicate application history, architecture descriptions, conventions, or
 - Record code-health findings in `KNOWN_ISSUES.md`, not in the Status log.
 - Update `AGENTS.md` only when a Codex-specific instruction or the relationship between Codex and the authoritative project documents changes.
 
-Before maintaining these files, apply all word-count, drift, scope, and self-check rules in `CLAUDE.md`. If required maintenance would touch a file outside the confirmed list, stop and obtain approval rather than silently expanding scope.
+Before maintaining these files, apply all word-count, drift, scope, and self-check rules in `CLAUDE.md`. Keep every `.md` file brief — write the shortest version that is still complete and unambiguous, rewrite an existing line in place rather than appending, and never copy history or findings that belong in `CHANGELOG_ARCHIVE.md` / `KNOWN_ISSUES.md`. These files load into context every session, so token cost is a real constraint. If required maintenance would touch a file outside the confirmed list, stop and obtain approval rather than silently expanding scope.
 
 ## Engineering discipline
 
