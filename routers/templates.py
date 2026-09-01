@@ -298,6 +298,22 @@ def get_template(template_id: int):
     _set_cached_template_response(cache_key, template)
     return template
 
+@router.get("/api/templates/{template_id}/columns")
+def get_template_columns(template_id: int):
+    """Ordered column list for a template: [{column_id, column_name, data_type, sort_order}].
+
+    Thin wrapper over get_cached_template_columns() (the shared, TTL-cached column source) so
+    callers that only need the column list - e.g. the Audit Rules Cross-check matrix editor
+    resolving a Document's linked-template columns for its per-cell dropdown - don't pull the
+    whole template payload or re-query template_column_mappings themselves.
+    """
+    exists = execute_query_pg(
+        "SELECT id FROM templates WHERE id = %s AND is_active = TRUE", (template_id,)
+    )
+    if not exists:
+        raise HTTPException(404, "Template not found")
+    return get_cached_template_columns(template_id)
+
 @router.post("/api/templates")
 def create_template(template: TemplateCreate):
     existing = execute_query_pg("SELECT id FROM templates WHERE template_name = %s", (template.template_name,))

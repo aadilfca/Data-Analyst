@@ -295,6 +295,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-01: Cross-check per-document field names Phase 3 of 4 (UI) — per-Document inline field-picker in the Cross-check editor; shared dropdown demoted to default/fallback; static/audit_rules.html/.js.
 - 2026-09-01: Doc compression — Architecture bullets rewritten as one-liners, Status log trimmed, cross-agent "keep every .md brief" rule added; CLAUDE.md, AGENTS.md.
 - 2026-09-01: Cross-check matrix redesign Phase 1 of 5 (schema, additive) — new audit_rule_cross_check_fields + audit_rule_cross_check_cells tables in SQLite + Postgres; database.py (schema tests held pending an in-flight test-file change).
+- 2026-09-01: Cross-check matrix redesign Phase 2 of 5 — field-row/cell CRUD, GET matrix, GET /api/templates/{id}/columns; legacy compare_field drop deferred; routers/audit_rules.py, routers/templates.py, tests.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

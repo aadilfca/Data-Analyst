@@ -459,5 +459,313 @@ class CrossCheckPerDocumentFieldBackendTests(unittest.TestCase):
         self.assertEqual(docs[11]["effective_compare_field"], "Quantity Received")
 
 
+class CrossCheckMatrixSchemaTests(unittest.TestCase):
+    """Cross-Check Matrix Redesign, Phase 1 of 5: the field-row + cell tables for the
+    document x field matrix (additive schema change, old compare_field columns untouched)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        database.DB_NAME = os.path.join(self.tmpdir.name, "test.db")
+        init_db()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _columns(self, table):
+        conn = database.get_db()
+        try:
+            return [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        finally:
+            conn.close()
+
+    def test_field_row_table_shape(self):
+        self.assertEqual(
+            set(self._columns("audit_rule_cross_check_fields")),
+            {"id", "cross_check_id", "sort_order"},
+        )
+
+    def test_cell_table_shape(self):
+        self.assertEqual(
+            set(self._columns("audit_rule_cross_check_cells")),
+            {"id", "field_id", "document_id", "column_name"},
+        )
+
+    def _seed_field(self, conn):
+        conn.execute(
+            "INSERT INTO audit_rule_cross_checks (name, compare_field, comparison_type) "
+            "VALUES ('CC', 'X', 'All equal')"
+        )
+        cc_id = conn.execute("SELECT id FROM audit_rule_cross_checks").fetchone()[0]
+        conn.execute("INSERT INTO audit_rule_documents (name) VALUES ('Doc A')")
+        doc_id = conn.execute("SELECT id FROM audit_rule_documents").fetchone()[0]
+        conn.execute(
+            "INSERT INTO audit_rule_cross_check_fields (cross_check_id, sort_order) VALUES (?, 0)",
+            (cc_id,),
+        )
+        field_id = conn.execute("SELECT id FROM audit_rule_cross_check_fields").fetchone()[0]
+        return field_id, doc_id
+
+    def test_cell_column_name_accepts_null(self):
+        conn = database.get_db()
+        try:
+            field_id, doc_id = self._seed_field(conn)
+            conn.execute(
+                "INSERT INTO audit_rule_cross_check_cells (field_id, document_id, column_name) "
+                "VALUES (?, ?, NULL)",
+                (field_id, doc_id),
+            )
+            conn.commit()
+            value = conn.execute(
+                "SELECT column_name FROM audit_rule_cross_check_cells WHERE field_id = ?",
+                (field_id,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertIsNone(value)
+
+    def test_cell_unique_on_field_and_document(self):
+        conn = database.get_db()
+        try:
+            field_id, doc_id = self._seed_field(conn)
+            conn.execute(
+                "INSERT INTO audit_rule_cross_check_cells (field_id, document_id, column_name) "
+                "VALUES (?, ?, 'Amount')",
+                (field_id, doc_id),
+            )
+            conn.commit()
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO audit_rule_cross_check_cells (field_id, document_id, column_name) "
+                    "VALUES (?, ?, 'Total')",
+                    (field_id, doc_id),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
+    def test_cells_cascade_when_field_row_deleted(self):
+        conn = database.get_db()
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")  # app never enables this; needed here to assert CASCADE
+            field_id, doc_id = self._seed_field(conn)
+            conn.execute(
+                "INSERT INTO audit_rule_cross_check_cells (field_id, document_id, column_name) "
+                "VALUES (?, ?, 'Amount')",
+                (field_id, doc_id),
+            )
+            conn.execute("DELETE FROM audit_rule_cross_check_fields WHERE id = ?", (field_id,))
+            conn.commit()
+            remaining = conn.execute(
+                "SELECT COUNT(*) FROM audit_rule_cross_check_cells WHERE field_id = ?",
+                (field_id,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(remaining, 0)
+
+
+class CrossCheckMatrixEndpointTests(unittest.TestCase):
+    """Cross-Check Matrix Redesign, Phase 2 of 5: field-row / cell CRUD + matrix read.
+    Mock-style like the rest of this file - execute_query_pg/execute_write_pg are Postgres-only."""
+
+    def test_add_field_computes_next_sort_order(self):
+        from routers import audit_rules
+
+        writes = []
+
+        def query(sql, params=()):
+            if "FROM audit_rule_cross_checks WHERE id" in sql:
+                return [{"name": "CC"}]
+            if "MAX(sort_order)" in sql:
+                return [{"max_order": 2}]
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=query), \
+             patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append((sql, params)) or 7), \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            result = audit_rules.add_cross_check_field(30)
+
+        self.assertEqual(result, {"field_id": 7})
+        insert = next(p for s, p in writes if "INSERT INTO audit_rule_cross_check_fields" in s)
+        self.assertEqual(insert, (30, 3))
+
+    def test_add_field_404_for_missing_cross_check(self):
+        from routers import audit_rules
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=lambda sql, params=(): []):
+            with self.assertRaises(Exception) as raised:
+                audit_rules.add_cross_check_field(999)
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_delete_field_removes_cells_first(self):
+        from routers import audit_rules
+
+        writes = []
+        with patch.object(audit_rules, "execute_query_pg",
+                          side_effect=lambda sql, params=(): [{"cross_check_id": 30}]), \
+             patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append(sql)), \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            audit_rules.delete_cross_check_field(5)
+
+        self.assertTrue(writes[0].startswith("DELETE FROM audit_rule_cross_check_cells"))
+        self.assertTrue(writes[1].startswith("DELETE FROM audit_rule_cross_check_fields"))
+
+    def test_reorder_rejects_mismatched_id_set(self):
+        from routers import audit_rules
+
+        def query(sql, params=()):
+            if "FROM audit_rule_cross_checks WHERE id" in sql:
+                return [{"name": "CC"}]
+            if "FROM audit_rule_cross_check_fields WHERE cross_check_id" in sql:
+                return [{"id": 1}, {"id": 2}]
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=query):
+            with self.assertRaises(Exception) as raised:
+                audit_rules.reorder_cross_check_fields(30, audit_rules.CrossCheckFieldOrder(field_ids=[1, 3]))
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_reorder_writes_sort_order_by_index(self):
+        from routers import audit_rules
+
+        writes = []
+
+        def query(sql, params=()):
+            if "FROM audit_rule_cross_checks WHERE id" in sql:
+                return [{"name": "CC"}]
+            if "FROM audit_rule_cross_check_fields WHERE cross_check_id" in sql:
+                return [{"id": 1}, {"id": 2}, {"id": 3}]
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=query), \
+             patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append(params)), \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            audit_rules.reorder_cross_check_fields(30, audit_rules.CrossCheckFieldOrder(field_ids=[3, 1, 2]))
+
+        self.assertEqual(writes, [(0, 3), (1, 1), (2, 2)])
+
+    def test_set_cell_rejects_column_not_on_template(self):
+        from routers import audit_rules
+
+        def query(sql, params=()):
+            if "FROM audit_rule_cross_check_fields WHERE id" in sql:
+                return [{"cross_check_id": 30}]
+            if "FROM audit_rule_cross_check_documents WHERE cross_check_id" in sql:
+                return [{"exists": 1}]
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=query), \
+             patch.object(audit_rules, "get_document_template_columns",
+                          return_value=[{"column_name": "Amount"}, {"column_name": "Vendor"}]):
+            with self.assertRaises(Exception) as raised:
+                audit_rules.set_cross_check_cell(5, 10, audit_rules.CrossCheckCellUpdate(column_name="Quantity"))
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_set_cell_rejects_document_not_a_column(self):
+        from routers import audit_rules
+
+        def query(sql, params=()):
+            if "FROM audit_rule_cross_check_fields WHERE id" in sql:
+                return [{"cross_check_id": 30}]
+            if "FROM audit_rule_cross_check_documents WHERE cross_check_id" in sql:
+                return []
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=query):
+            with self.assertRaises(Exception) as raised:
+                audit_rules.set_cross_check_cell(5, 99, audit_rules.CrossCheckCellUpdate(column_name="Amount"))
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_set_cell_upserts_valid_column(self):
+        from routers import audit_rules
+
+        writes = []
+
+        def query(sql, params=()):
+            if "FROM audit_rule_cross_check_fields WHERE id" in sql:
+                return [{"cross_check_id": 30}]
+            if "FROM audit_rule_cross_check_documents WHERE cross_check_id" in sql:
+                return [{"exists": 1}]
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=query), \
+             patch.object(audit_rules, "get_document_template_columns",
+                          return_value=[{"column_name": "Amount"}]), \
+             patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append((sql, params))), \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            audit_rules.set_cross_check_cell(5, 10, audit_rules.CrossCheckCellUpdate(column_name="  Amount  "))
+
+        sql, params = writes[0]
+        self.assertIn("ON CONFLICT (field_id, document_id) DO UPDATE", sql)
+        self.assertEqual(params, (5, 10, "Amount"))
+
+    def test_set_cell_clear_deletes_row(self):
+        from routers import audit_rules
+
+        writes = []
+
+        def query(sql, params=()):
+            if "FROM audit_rule_cross_check_fields WHERE id" in sql:
+                return [{"cross_check_id": 30}]
+            if "FROM audit_rule_cross_check_documents WHERE cross_check_id" in sql:
+                return [{"exists": 1}]
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=query), \
+             patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append((sql, params))), \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            audit_rules.set_cross_check_cell(5, 10, audit_rules.CrossCheckCellUpdate(column_name=None))
+
+        sql, params = writes[0]
+        self.assertTrue(sql.startswith("DELETE FROM audit_rule_cross_check_cells"))
+        self.assertEqual(params, (5, 10))
+
+    def test_matrix_shape(self):
+        from routers import audit_rules
+
+        def query(sql, params=()):
+            if "SELECT id FROM audit_rule_cross_checks WHERE id" in sql:
+                return [{"id": 30}]
+            if "FROM audit_rule_cross_check_documents ccd" in sql:
+                return [{"document_id": 10, "name": "Invoice", "template_id": 5, "sort_order": 0}]
+            if "FROM audit_rule_cross_check_fields" in sql:
+                return [{"id": 1, "sort_order": 0}, {"id": 2, "sort_order": 1}]
+            if "FROM audit_rule_cross_check_cells" in sql:
+                return [{"field_id": 1, "document_id": 10, "column_name": "Amount"}]
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=query):
+            matrix = audit_rules.get_cross_check_matrix(30)
+
+        self.assertEqual(matrix["documents"][0]["template_id"], 5)
+        self.assertEqual(matrix["fields"][0]["cells"], {"10": "Amount"})
+        self.assertEqual(matrix["fields"][1]["cells"], {})
+
+    def test_matrix_404(self):
+        from routers import audit_rules
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=lambda sql, params=(): []):
+            with self.assertRaises(Exception) as raised:
+                audit_rules.get_cross_check_matrix(999)
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_get_document_template_columns_no_template(self):
+        from routers import audit_rules
+
+        with patch.object(audit_rules, "execute_query_pg",
+                          side_effect=lambda sql, params=(): [{"template_id": None}]):
+            self.assertEqual(audit_rules.get_document_template_columns(10), [])
+
+
 if __name__ == "__main__":
     unittest.main()

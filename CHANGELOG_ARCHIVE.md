@@ -56,10 +56,60 @@ discarded as a separate cleanup later. Confirmed with Aadil: additive, keep old 
 
 `CrossCheckMatrixSchemaTests` covers table shapes, `column_name` NULL, the
 `UNIQUE(field_id, document_id)` constraint, and cell CASCADE on field-row delete (the CASCADE
-test enables `PRAGMA foreign_keys = ON` locally since the app never does). Full suite with it
-applied: 73 passed.
+test enables `PRAGMA foreign_keys = ON` locally since the app never does).
+
+### Phase 2 of 5 — matrix CRUD + column lookup
+
+**Date:** 2026-09-01 | **Files:** `routers/audit_rules.py`, `routers/templates.py`,
+`tests/test_audit_rulebook.py` (the held-back schema tests land here too).
+
+**Scope change from the brief, confirmed with Aadil:** the brief assumed the old `compare_field`
+columns get dropped this phase. They don't — they're still consumed by the flat Cross-check CRUD,
+`compile_verification_rulebook()`, the `verification.py` cross-check evaluation engine, guidance
+emission, the frontend editor, and tests, and no phase in the 5-phase plan rewires the engine to
+the matrix. The column drop is deferred to a later phase (after the matrix UI lands and a phase
+migrates the engine). This phase is purely additive.
+
+Also: the superseded in-flight "per-document field names Phase 4" WIP
+(`routers/audit_rules.py` + `verification.py` + two test files) was **discarded** (`git restore`)
+— the matrix generalises that concept, so finishing the old approach is wasted work.
+
+New endpoints (all in `routers/audit_rules.py` unless noted; mutations gated by
+`ensure_no_active_verification_sessions` + `invalidate_audit_rules_cache`, cross-checks are
+global so no `client_id`):
+
+- `GET /api/audit-rules/cross-checks/{id}/matrix` — one call returns ordered document columns
+  (`document_id`, `name`, `template_id`, `sort_order`) + ordered field rows, each row's `cells`
+  as `{ "<document_id>": "<column_name|null>" }`. Read-through the `cache_get`/`cache_set` layer,
+  key `cross_checks:matrix:{id}`.
+- `POST /api/audit-rules/cross-checks/{id}/fields` — append a label-less field row
+  (`sort_order` = current max + 1). Returns `{field_id}`.
+- `DELETE /api/audit-rules/cross-check-fields/{field_id}` — deletes the row; clears its cells
+  explicitly first (FKs aren't enforced on this app's connections; Postgres would cascade anyway).
+- `PUT /api/audit-rules/cross-checks/{id}/field-order` — body `{field_ids: [...]}`, must be an
+  exact permutation of the cross-check's current field-row ids (400 otherwise); rewrites
+  `sort_order` = list index.
+- `PUT /api/audit-rules/cross-check-fields/{field_id}/cells/{document_id}` — body
+  `{column_name}`. 404 unknown field row; 400 if the document isn't a column of that cross-check;
+  400 if a non-empty `column_name` isn't a real column on the document's linked template. Non-empty
+  → `INSERT ... ON CONFLICT (field_id, document_id) DO UPDATE`; empty/None → `DELETE` the cell
+  (= not applicable).
+- `GET /api/templates/{template_id}/columns` (`routers/templates.py`) — thin wrapper over the
+  existing `get_cached_template_columns()` (shared TTL-cached column source); returns
+  `[{column_id, column_name, data_type, sort_order}]`, 404 on inactive/missing template. The
+  reusable "column-list by template" the matrix UI (Phase 4) calls per distinct `template_id`.
+
+Helpers: `get_document_template_columns(document_id)` (resolves `template_id`, reuses
+`get_cached_template_columns` via a local import to keep the router import graph acyclic),
+`validate_cross_check_cell()`, `get_cross_check_matrix()`. Models: `CrossCheckFieldOrder`,
+`CrossCheckCellUpdate`. Full suite: 83 passed.
 
 ## Cross-check per-document field names
+
+**Superseded 2026-09-01 by the Cross-Check Matrix Redesign (above).** Phases 1–3 shipped
+(commits `ffe8b12`, `e87d586`, `a52a615`); Phase 4 (engine/guidance wiring) was in progress,
+never committed, and discarded — the matrix generalises per-document field names, so the flat
+`compare_field` model is on its way out entirely.
 
 **Date:** 2026-09-01 | **Files:** `database.py`, `tests/test_audit_rulebook.py`.
 

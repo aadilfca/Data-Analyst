@@ -1189,6 +1189,240 @@ def restore_cross_check(cross_check_id: int):
 
 
 # ==============================================
+# CROSS-CHECK MATRIX (document x field)
+# ==============================================
+# Cross-Check Matrix Redesign, Phase 2 of 5. A Cross-check is becoming a matrix: the Documents
+# (audit_rule_cross_check_documents) are the columns, audit_rule_cross_check_fields are the rows
+# (no label - id + sort_order only), and audit_rule_cross_check_cells hold, per (row x Document),
+# the name of a column picked from that Document's linked template. A missing cell / NULL
+# column_name means "not applicable for this Document in this row".
+#
+# This phase is purely additive - the old flat Cross-check CRUD above (shared compare_field +
+# ordered document list) and the verification.py evaluation engine that consumes it are left
+# untouched. The old compare_field columns are dropped in a later phase, once a phase migrates
+# the engine to read this matrix.
+
+# ---------- DATA MODELS ----------
+class CrossCheckFieldOrder(BaseModel):
+    field_ids: List[int]
+
+class CrossCheckCellUpdate(BaseModel):
+    # None / "" clears the cell (deletes the row) = "not applicable". A non-empty string must be
+    # a real column name on the Document's linked template (validated server-side).
+    column_name: Optional[str] = None
+
+# ---------- HELPERS ----------
+def get_document_template_columns(document_id: int) -> List[dict]:
+    """Return the linked-template column list for a Document (empty if it has no template).
+
+    Reuses templates.py's own cached column-source (get_cached_template_columns) rather than
+    re-querying template_column_mappings here - imported locally to keep the router import graph
+    acyclic at startup (templates.py already imports audit_rules.py the same way).
+    """
+    from routers.templates import get_cached_template_columns
+
+    rows = execute_query_pg(
+        "SELECT template_id FROM audit_rule_documents WHERE id = %s", (document_id,)
+    )
+    if not rows:
+        return []
+    template_id = rows[0].get("template_id")
+    if template_id is None:
+        return []
+    return get_cached_template_columns(template_id)
+
+
+def get_cross_check_matrix(cross_check_id: int) -> dict:
+    """Assemble the full matrix for a Cross-check: ordered document columns + ordered field rows,
+    each row carrying its per-Document cell selections. Raises HTTPException(404) if the
+    Cross-check does not exist."""
+    cc = execute_query_pg(
+        "SELECT id FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,)
+    )
+    if not cc:
+        raise HTTPException(404, "Cross-check not found")
+
+    documents = execute_query_pg(
+        """
+        SELECT ccd.document_id, d.name, d.template_id, ccd.sort_order
+        FROM audit_rule_cross_check_documents ccd
+        JOIN audit_rule_documents d ON d.id = ccd.document_id
+        WHERE ccd.cross_check_id = %s
+        ORDER BY ccd.sort_order, ccd.document_id
+        """,
+        (cross_check_id,),
+    )
+    field_rows = execute_query_pg(
+        "SELECT id, sort_order FROM audit_rule_cross_check_fields "
+        "WHERE cross_check_id = %s ORDER BY sort_order, id",
+        (cross_check_id,),
+    )
+    field_ids = [r["id"] for r in field_rows]
+    cells_by_field: Dict[int, Dict[str, Optional[str]]] = {fid: {} for fid in field_ids}
+    if field_ids:
+        placeholders = ",".join("%s" for _ in field_ids)
+        cell_rows = execute_query_pg(
+            f"SELECT field_id, document_id, column_name FROM audit_rule_cross_check_cells "
+            f"WHERE field_id IN ({placeholders})",
+            tuple(field_ids),
+        )
+        for c in cell_rows:
+            cells_by_field.setdefault(c["field_id"], {})[str(c["document_id"])] = c["column_name"]
+
+    return {
+        "cross_check_id": cross_check_id,
+        "documents": [
+            {
+                "document_id": d["document_id"],
+                "name": d["name"],
+                "template_id": d.get("template_id"),
+                "sort_order": d["sort_order"],
+            }
+            for d in documents
+        ],
+        "fields": [
+            {"id": r["id"], "sort_order": r["sort_order"], "cells": cells_by_field.get(r["id"], {})}
+            for r in field_rows
+        ],
+    }
+
+
+def validate_cross_check_cell(field_id: int, document_id: int, column_name: Optional[str]):
+    """Raises HTTPException if the field row is unknown, the Document isn't a column of the field
+    row's parent Cross-check, or (for a non-empty column_name) the name isn't a real column on
+    that Document's linked template."""
+    field_rows = execute_query_pg(
+        "SELECT cross_check_id FROM audit_rule_cross_check_fields WHERE id = %s", (field_id,)
+    )
+    if not field_rows:
+        raise HTTPException(404, f"Cross-check field row {field_id} not found")
+    cross_check_id = field_rows[0]["cross_check_id"]
+
+    doc_col = execute_query_pg(
+        "SELECT 1 FROM audit_rule_cross_check_documents WHERE cross_check_id = %s AND document_id = %s",
+        (cross_check_id, document_id),
+    )
+    if not doc_col:
+        raise HTTPException(
+            400, f"Document {document_id} is not a column of Cross-check {cross_check_id}"
+        )
+
+    normalized = normalize_compare_field(column_name)
+    if normalized is None:
+        return
+    columns = get_document_template_columns(document_id)
+    if not columns:
+        raise HTTPException(
+            400, f"Document {document_id} has no linked template, so it has no columns to pick"
+        )
+    valid_names = {c["column_name"] for c in columns}
+    if normalized not in valid_names:
+        raise HTTPException(
+            400, f"Column '{normalized}' is not on Document {document_id}'s linked template"
+        )
+
+# ---------- ENDPOINTS ----------
+
+@router.get("/api/audit-rules/cross-checks/{cross_check_id}/matrix")
+def get_cross_check_matrix_endpoint(cross_check_id: int):
+    cache_key = f"cross_checks:matrix:{cross_check_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    result = get_cross_check_matrix(cross_check_id)
+    cache_set(cache_key, result)
+    return result
+
+@router.post("/api/audit-rules/cross-checks/{cross_check_id}/fields",
+             dependencies=[Depends(ensure_no_active_verification_sessions)])
+def add_cross_check_field(cross_check_id: int):
+    """Append a new (label-less) field row to a Cross-check's matrix."""
+    existing = execute_query_pg("SELECT name FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
+    if not existing:
+        raise HTTPException(404, "Cross-check not found")
+    max_row = execute_query_pg(
+        "SELECT MAX(sort_order) AS max_order FROM audit_rule_cross_check_fields WHERE cross_check_id = %s",
+        (cross_check_id,),
+    )
+    next_order = (max_row[0]["max_order"] + 1) if max_row and max_row[0]["max_order"] is not None else 0
+    field_id = execute_write_pg(
+        "INSERT INTO audit_rule_cross_check_fields (cross_check_id, sort_order) VALUES (%s, %s) RETURNING id",
+        (cross_check_id, next_order),
+    )
+    log_audit("Admin", "Update", "AuditRules", f"Added Cross-check field row (Cross-check ID {cross_check_id})")
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
+                                  "entity_name": existing[0]["name"], "action": "Updated"})
+    return {"field_id": field_id}
+
+@router.delete("/api/audit-rules/cross-check-fields/{field_id}",
+               dependencies=[Depends(ensure_no_active_verification_sessions)])
+def delete_cross_check_field(field_id: int):
+    """Delete a field row and its cells."""
+    rows = execute_query_pg("SELECT cross_check_id FROM audit_rule_cross_check_fields WHERE id = %s", (field_id,))
+    if not rows:
+        raise HTTPException(404, "Cross-check field row not found")
+    cross_check_id = rows[0]["cross_check_id"]
+    # FKs aren't enforced on this app's connections (see get_db()), so clear cells explicitly.
+    # Postgres would cascade anyway; the explicit delete keeps both backends identical.
+    execute_write_pg("DELETE FROM audit_rule_cross_check_cells WHERE field_id = %s", (field_id,))
+    execute_write_pg("DELETE FROM audit_rule_cross_check_fields WHERE id = %s", (field_id,))
+    log_audit("Admin", "Update", "AuditRules", f"Deleted Cross-check field row {field_id} (Cross-check ID {cross_check_id})")
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
+                                  "entity_name": None, "action": "Updated"})
+    return {"message": "Cross-check field row deleted"}
+
+@router.put("/api/audit-rules/cross-checks/{cross_check_id}/field-order",
+            dependencies=[Depends(ensure_no_active_verification_sessions)])
+def reorder_cross_check_fields(cross_check_id: int, order: CrossCheckFieldOrder):
+    """Rewrite the display order of a Cross-check's field rows. field_ids must be exactly this
+    Cross-check's current set of field-row ids (any permutation)."""
+    existing = execute_query_pg("SELECT name FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
+    if not existing:
+        raise HTTPException(404, "Cross-check not found")
+    current = execute_query_pg(
+        "SELECT id FROM audit_rule_cross_check_fields WHERE cross_check_id = %s", (cross_check_id,)
+    )
+    current_ids = {r["id"] for r in current}
+    if set(order.field_ids) != current_ids or len(order.field_ids) != len(current_ids):
+        raise HTTPException(400, "field_ids must be exactly this Cross-check's current field-row ids")
+    for idx, field_id in enumerate(order.field_ids):
+        execute_write_pg(
+            "UPDATE audit_rule_cross_check_fields SET sort_order = %s WHERE id = %s",
+            (idx, field_id),
+        )
+    log_audit("Admin", "Update", "AuditRules", f"Reordered Cross-check field rows (Cross-check ID {cross_check_id})")
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
+                                  "entity_name": existing[0]["name"], "action": "Updated"})
+    return {"message": "Cross-check field rows reordered"}
+
+@router.put("/api/audit-rules/cross-check-fields/{field_id}/cells/{document_id}",
+            dependencies=[Depends(ensure_no_active_verification_sessions)])
+def set_cross_check_cell(field_id: int, document_id: int, cell: CrossCheckCellUpdate):
+    """Set or clear one matrix cell. A non-empty column_name must exist on the Document's linked
+    template; an empty/None column_name clears the cell (= not applicable)."""
+    validate_cross_check_cell(field_id, document_id, cell.column_name)
+    normalized = normalize_compare_field(cell.column_name)
+    if normalized is None:
+        execute_write_pg(
+            "DELETE FROM audit_rule_cross_check_cells WHERE field_id = %s AND document_id = %s",
+            (field_id, document_id),
+        )
+        message = "Cross-check cell cleared"
+    else:
+        execute_write_pg(
+            "INSERT INTO audit_rule_cross_check_cells (field_id, document_id, column_name) "
+            "VALUES (%s, %s, %s) "
+            "ON CONFLICT (field_id, document_id) DO UPDATE SET column_name = EXCLUDED.column_name",
+            (field_id, document_id, normalized),
+        )
+        message = "Cross-check cell set"
+    log_audit("Admin", "Update", "AuditRules", f"Set Cross-check cell (field {field_id}, document {document_id})")
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": None,
+                                  "entity_name": None, "action": "Updated"})
+    return {"message": message}
+
+
+# ==============================================
 # CATEGORIES
 # ==============================================
 # Phase 4 of 9: the third and final reusable entity type. A Category assembles a list
