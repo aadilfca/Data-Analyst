@@ -265,16 +265,16 @@
                         <input type="text" id="arCrossCheckNameInput" required>
                     </div>
 
-                    <!-- Comparison matrix (Cross-Check Matrix Redesign, Phase 4 of 5): documents
+                    <!-- Comparison matrix (Cross-Check Matrix Redesign, Phase 5 of 5): documents
                          are columns, field rows have no label (positional), each cell picks a
                          column name from that document's linked template. Built by renderMatrix()
-                         in audit_rules.js. UI-only this phase — the matrix runs on in-memory mock
-                         state; Save/load to the matrix endpoints is Phase 5, and Save/Delete/
-                         Restore below are hidden until then. -->
+                         in audit_rules.js. Every edit persists immediately via the matrix
+                         endpoints; a brand-new Cross-check must be saved first (name + comparison
+                         type) before the matrix is editable — hence arMatrixNeedsSaveHint. -->
                     <div class="ar-field" id="arMatrixField">
                         <label>Comparison matrix</label>
-                        <div id="arMatrixPreviewBanner" class="ar-field-warning">
-                            Preview — matrix edits are not saved yet (wired up in the next phase).</div>
+                        <div id="arMatrixNeedsSaveHint" class="ar-field-warning" style="display:none;">
+                            Save this cross-check (name + comparison type) before building its matrix.</div>
                         <div class="ar-add-doc-row">
                             <select id="arMatrixAddColumnSelect"></select>
                             <button type="button" id="arMatrixAddColumnBtn" class="ar-btn-chip-add">Add document</button>
@@ -514,7 +514,7 @@
     <script src="/static/loading_ui.js"></script>
     <script src="/static/client_context.js?v=14"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/audit_rules.js?v=10"></script>
+    <script src="/static/audit_rules.js?v=11"></script>
 </body>
 
 </html>

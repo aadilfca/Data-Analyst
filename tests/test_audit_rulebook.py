@@ -767,5 +767,94 @@ class CrossCheckMatrixEndpointTests(unittest.TestCase):
             self.assertEqual(audit_rules.get_document_template_columns(10), [])
 
 
+class CrossCheckMatrixColumnAxisAndMetaTests(unittest.TestCase):
+    """Cross-Check Matrix Redesign, Phase 5 of 5: the /documents (column axis) and /meta endpoints."""
+
+    def test_set_documents_replaces_junction_and_cleans_orphan_cells(self):
+        from routers import audit_rules
+
+        writes = []
+        with patch.object(audit_rules, "execute_query_pg",
+                          side_effect=lambda sql, params=(): [{"name": "CC"}] if "audit_rule_cross_checks" in sql else [{"id": params[0]}]), \
+             patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append((sql, params))), \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            audit_rules.set_cross_check_documents(30, audit_rules.CrossCheckDocuments(document_ids=[10, 11]))
+
+        self.assertTrue(writes[0][0].startswith("DELETE FROM audit_rule_cross_check_documents"))
+        inserts = [p for s, p in writes if "INSERT INTO audit_rule_cross_check_documents" in s]
+        self.assertEqual(inserts, [(30, 10, 0), (30, 11, 1)])
+        cleanup = [s for s, p in writes if "DELETE FROM audit_rule_cross_check_cells" in s]
+        self.assertEqual(len(cleanup), 1)
+        self.assertIn("NOT IN", cleanup[0])
+
+    def test_set_documents_empty_clears_all_cells(self):
+        from routers import audit_rules
+
+        writes = []
+        with patch.object(audit_rules, "execute_query_pg",
+                          side_effect=lambda sql, params=(): [{"name": "CC"}]), \
+             patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append((sql, params))), \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            audit_rules.set_cross_check_documents(30, audit_rules.CrossCheckDocuments(document_ids=[]))
+
+        cleanup = [s for s, p in writes if "DELETE FROM audit_rule_cross_check_cells" in s]
+        self.assertEqual(len(cleanup), 1)
+        self.assertNotIn("NOT IN", cleanup[0])
+
+    def test_set_documents_404_and_400(self):
+        from routers import audit_rules
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=lambda sql, params=(): []):
+            with self.assertRaises(Exception) as raised:
+                audit_rules.set_cross_check_documents(999, audit_rules.CrossCheckDocuments(document_ids=[]))
+        self.assertEqual(raised.exception.status_code, 404)
+
+        def q(sql, params=()):
+            if "FROM audit_rule_cross_checks" in sql:
+                return [{"name": "CC"}]
+            return []  # document lookup misses
+        with patch.object(audit_rules, "execute_query_pg", side_effect=q):
+            with self.assertRaises(Exception) as raised:
+                audit_rules.set_cross_check_documents(30, audit_rules.CrossCheckDocuments(document_ids=[77]))
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_meta_updates_scalars_without_touching_compare_field(self):
+        from routers import audit_rules
+
+        writes = []
+        with patch.object(audit_rules, "execute_query_pg",
+                          side_effect=lambda sql, params=(): [{"id": 30}]), \
+             patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append((sql, params))), \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            audit_rules.update_cross_check_meta(30, audit_rules.CrossCheckMeta(
+                name="Renamed", comparison_type="All equal", compare_to_voucher_line=True))
+
+        sql, params = writes[0]
+        self.assertIn("UPDATE audit_rule_cross_checks SET name", sql)
+        self.assertNotIn("compare_field", sql)
+        self.assertEqual(params, ("Renamed", "All equal", True, 30))
+
+    def test_meta_404_and_bad_comparison_type(self):
+        from routers import audit_rules
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=lambda sql, params=(): []):
+            with self.assertRaises(Exception) as raised:
+                audit_rules.update_cross_check_meta(999, audit_rules.CrossCheckMeta(
+                    name="x", comparison_type="All equal"))
+        self.assertEqual(raised.exception.status_code, 404)
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=lambda sql, params=(): [{"id": 30}]):
+            with self.assertRaises(Exception) as raised:
+                audit_rules.update_cross_check_meta(30, audit_rules.CrossCheckMeta(
+                    name="x", comparison_type="Nonsense"))
+        self.assertEqual(raised.exception.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

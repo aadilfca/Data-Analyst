@@ -182,6 +182,61 @@ Phase-2 deploy, so `GET /api/templates/{id}/columns` 404s and every cell falls t
 template" state; the local code has the endpoint (route registered, 83 tests) and the 404 path
 degrades gracefully.
 
+### Phase 5 of 5 — wire the matrix UI to the backend (COMPLETE)
+
+**Date:** 2026-09-01 | **Files:** `routers/audit_rules.py`, `static/audit_rules.js`,
+`static/audit_rules.html`, `tests/test_audit_rulebook.py`.
+
+The matrix now loads from and saves to real endpoints; every edit persists immediately.
+Save/Delete/Restore restored, preview banner and stopgap `saveCrossCheck()` gone.
+
+**Confirmed with Aadil:** all-immediate persistence; create-first for a new cross-check (matrix
+disabled with `#arMatrixNeedsSaveHint` until Name + Comparison Type are saved); two lean new
+backend endpoints (the brief assumed JS-only, but the old flat CRUD can't set the column axis or
+save Name/Type without the deferred `compare_field` model).
+
+**Backend** — `routers/audit_rules.py`:
+- `PUT /api/audit-rules/cross-checks/{id}/documents` (`CrossCheckDocuments {document_ids}`) —
+  `save_cross_check_column_axis()` replaces the `audit_rule_cross_check_documents` junction
+  (`compare_field` NULL) and deletes any `audit_rule_cross_check_cells` row left pointing at a
+  dropped document. 404 missing cc, 400 unknown document id.
+- `PUT /api/audit-rules/cross-checks/{id}/meta` (`CrossCheckMeta {name, comparison_type,
+  compare_to_voucher_line}`) — scalar `UPDATE` only, leaves `compare_field` untouched. 404, 400
+  on a bad `comparison_type`.
+- Create still uses `POST /api/audit-rules/cross-checks`; the frontend sends
+  `compare_field: "(matrix)"` + `document_ids: []` so the deferred flat-model validation passes.
+
+**Frontend** — `static/audit_rules.js`:
+- `selectCrossCheck` fetches `GET .../{id}/matrix`; `loadMatrixFromServer()` populates
+  `matrixState` (row `id` is now the backend `field_id`; `matrixRowSeq` removed).
+- `renderMatrix()` early-returns a disabled state when `!editingCrossCheckId`.
+- Optimistic `matrixPersist(doRequest, undo)` wrapper: `addMatrixColumn`/`removeMatrixColumn` →
+  `PUT .../documents`; `addMatrixRow` → `POST .../fields`; `removeMatrixRow` →
+  `DELETE .../cross-check-fields/{id}`; `moveMatrixRow` → `PUT .../field-order`; cell `<select>`
+  change → `PUT .../cross-check-fields/{id}/cells/{documentId}` with `{column_name: value||null}`.
+  Any failure rolls the local change back and shows the error.
+- `saveCrossCheck(triggerBtn)`: new → POST (filler) → `selectCrossCheck(newId)`; existing →
+  `PUT .../meta` + `loadCrossChecks()`.
+
+`static/audit_rules.html`: `#arMatrixPreviewBanner` → `#arMatrixNeedsSaveHint`;
+`audit_rules.js?v=10 → ?v=11`.
+
+**Verification:** `node --check` clean; 88 pytest pass (5 new endpoint tests). Full Playwright
+end-to-end against a **local** server instance (booted on :5057 with `PYTHONIOENCODING=utf-8` since
+the persistent :5000 server predates Phase 2): new-cc gate → Save creates + enables the matrix →
+add 2 columns / 2 rows / set a real template-column cell → **reload + reselect shows columns,
+rows and the cell value all persisted**; reorder rows persists (`field-order`); remove a column
+persists and its orphaned cell is cleaned; Save renames via `/meta` and the list relabels;
+Delete/Restore work. No console or page errors. (Earlier "failures" during the pass were test
+timing — checking server state before a cold-Postgres PUT committed; adding `expect_response`
+waits resolved them.)
+
+**Requirement COMPLETE.** Remaining deferred work (own future phases): drop the
+`audit_rule_cross_checks.compare_field` / junction `compare_field` columns once the
+`verification.py` cross-check evaluation engine + rulebook compiler + guidance are migrated to
+read the matrix; retire the now-unused Document `cross_check_fields` storage +
+`audit_rule_document_fields` table.
+
 ## Cross-check per-document field names
 
 **Superseded 2026-09-01 by the Cross-Check Matrix Redesign (above).** Phases 1–3 shipped

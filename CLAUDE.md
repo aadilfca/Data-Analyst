@@ -290,14 +290,9 @@ drift, not a regression — it collapses once that project finishes.
 
 - 2026-08-31: Fixed the standalone Verification line-save Rulebook loader name mismatch; focused backend tests and the latest manual network trace are clean.
 - 2026-08-31: Added a required concise pendencies/objectives table to every development handoff.
-- 2026-09-01: Cross-check per-document field names Phase 1 of 4 (schema) — nullable compare_field on audit_rule_cross_check_documents junction, backfilled from the shared value on startup; database.py, tests.
-- 2026-09-01: Cross-check per-document field names Phase 2 of 4 (backend) — per-Document compare_field validate/save/response in routers/audit_rules.py; NULL falls back to the shared field; tests.
-- 2026-09-01: Cross-check per-document field names Phase 3 of 4 (UI) — per-Document inline field-picker in the Cross-check editor; shared dropdown demoted to default/fallback; static/audit_rules.html/.js.
+- 2026-09-01: Cross-check per-document field names — Phases 1–3 shipped, Phase 4 discarded (superseded by the matrix redesign below); database.py, routers/audit_rules.py, static/audit_rules.*.
 - 2026-09-01: Doc compression — Architecture bullets rewritten as one-liners, Status log trimmed, cross-agent "keep every .md brief" rule added; CLAUDE.md, AGENTS.md.
-- 2026-09-01: Cross-check matrix redesign Phase 1 of 5 (schema, additive) — new audit_rule_cross_check_fields + audit_rule_cross_check_cells tables in SQLite + Postgres; database.py (schema tests held pending an in-flight test-file change).
-- 2026-09-01: Cross-check matrix redesign Phase 2 of 5 — field-row/cell CRUD, GET matrix, GET /api/templates/{id}/columns; legacy compare_field drop deferred; routers/audit_rules.py, routers/templates.py, tests.
-- 2026-09-01: Cross-check matrix redesign Phase 3 of 5 — removed the Cross-check-eligible Fields section from the Documents detail pane (UI-only); static/audit_rules.html/.js, static/style.css.
-- 2026-09-01: Cross-check matrix redesign Phase 4 of 5 — matrix UI (doc columns, positional field rows, per-cell template-column dropdown + caching, N/A, <2-doc warning) replaces the old Cross-check doc editor; mock state, Save hidden pending Phase 5; static/audit_rules.html/.js, style.css.
+- 2026-09-01: Cross-check matrix redesign, 5 phases (COMPLETE) — cross-checks rebuilt as a document×field matrix: fields/cells schema, matrix CRUD + /documents + /meta + template-column endpoints, Documents-tab fields section removed, UI wired to live save/load; compare_field drop + engine migration deferred. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

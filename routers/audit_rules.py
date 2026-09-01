@@ -1422,6 +1422,91 @@ def set_cross_check_cell(field_id: int, document_id: int, cell: CrossCheckCellUp
     return {"message": message}
 
 
+# ---------- COLUMN AXIS + META (Cross-Check Matrix Redesign, Phase 5 of 5) ----------
+# The matrix UI persists each edit immediately. The row/cell endpoints above already cover the
+# field axis; these two cover what the old flat CRUD (create/update_cross_check) can't do
+# cleanly for a matrix cross-check:
+#   /documents - set the column axis (audit_rule_cross_check_documents) on its own, without the
+#                old model's required compare_field / per-document overrides.
+#   /meta      - save just Name / Comparison Type / voucher-line flag, leaving compare_field
+#                (a deferred-drop column) untouched.
+# create_cross_check() is still used to make a new matrix cross-check - the frontend sends a
+# filler compare_field with document_ids=[] (validation loop skipped), then builds the matrix
+# via these + the row/cell endpoints.
+
+class CrossCheckDocuments(BaseModel):
+    document_ids: List[int]
+
+class CrossCheckMeta(BaseModel):
+    name: str
+    comparison_type: str
+    compare_to_voucher_line: bool = False
+
+def save_cross_check_column_axis(cross_check_id: int, document_ids: List[int]):
+    """Replace a Cross-check's document columns (delete-then-reinsert), then drop any matrix cell
+    left pointing at a document that's no longer a column. Distinct from save_cross_check_documents()
+    which also writes the old model's compare_field / document_fields - this one is matrix-only."""
+    execute_write_pg("DELETE FROM audit_rule_cross_check_documents WHERE cross_check_id = %s", (cross_check_id,))
+    for idx, document_id in enumerate(document_ids):
+        execute_write_pg(
+            "INSERT INTO audit_rule_cross_check_documents (cross_check_id, document_id, sort_order, compare_field) "
+            "VALUES (%s, %s, %s, NULL)",
+            (cross_check_id, document_id, idx),
+        )
+    # Orphan-cell cleanup: a cell keys off (field_id, document_id); if the document is gone from
+    # the column axis its cells are dead. FKs aren't enforced on this app's SQLite connections.
+    if document_ids:
+        placeholders = ",".join("%s" for _ in document_ids)
+        execute_write_pg(
+            f"DELETE FROM audit_rule_cross_check_cells WHERE field_id IN "
+            f"(SELECT id FROM audit_rule_cross_check_fields WHERE cross_check_id = %s) "
+            f"AND document_id NOT IN ({placeholders})",
+            (cross_check_id, *document_ids),
+        )
+    else:
+        execute_write_pg(
+            "DELETE FROM audit_rule_cross_check_cells WHERE field_id IN "
+            "(SELECT id FROM audit_rule_cross_check_fields WHERE cross_check_id = %s)",
+            (cross_check_id,),
+        )
+
+@router.put("/api/audit-rules/cross-checks/{cross_check_id}/documents",
+            dependencies=[Depends(ensure_no_active_verification_sessions)])
+def set_cross_check_documents(cross_check_id: int, payload: CrossCheckDocuments):
+    """Replace a Cross-check's document columns (the matrix's column axis)."""
+    existing = execute_query_pg("SELECT name FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
+    if not existing:
+        raise HTTPException(404, "Cross-check not found")
+    for document_id in payload.document_ids:
+        doc = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s", (document_id,))
+        if not doc:
+            raise HTTPException(400, f"Document ID {document_id} not found")
+    save_cross_check_column_axis(cross_check_id, payload.document_ids)
+    log_audit("Admin", "Update", "AuditRules", f"Set Cross-check document columns (Cross-check ID {cross_check_id})")
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
+                                  "entity_name": existing[0]["name"], "action": "Updated"})
+    return {"message": "Cross-check document columns updated"}
+
+@router.put("/api/audit-rules/cross-checks/{cross_check_id}/meta",
+            dependencies=[Depends(ensure_no_active_verification_sessions)])
+def update_cross_check_meta(cross_check_id: int, meta: CrossCheckMeta):
+    """Save a Cross-check's Name / Comparison Type / voucher-line flag only. Leaves compare_field
+    and the document/field axes untouched (those persist through their own endpoints)."""
+    existing = execute_query_pg("SELECT id FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
+    if not existing:
+        raise HTTPException(404, "Cross-check not found")
+    if meta.comparison_type not in COMPARISON_TYPES:
+        raise HTTPException(400, f"Invalid comparison type '{meta.comparison_type}'. Must be one of: {', '.join(COMPARISON_TYPES)}")
+    execute_write_pg(
+        "UPDATE audit_rule_cross_checks SET name = %s, comparison_type = %s, compare_to_voucher_line = %s WHERE id = %s",
+        (meta.name, meta.comparison_type, meta.compare_to_voucher_line, cross_check_id),
+    )
+    log_audit("Admin", "Update", "AuditRules", f"Updated Cross-check meta (ID {cross_check_id})")
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
+                                  "entity_name": meta.name, "action": "Updated"})
+    return {"message": "Cross-check updated successfully"}
+
+
 # ==============================================
 # CATEGORIES
 # ==============================================

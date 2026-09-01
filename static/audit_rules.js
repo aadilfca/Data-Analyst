@@ -824,6 +824,7 @@ const arMatrixAddColumnBtn = document.getElementById('arMatrixAddColumnBtn');
 const arMatrixTable = document.getElementById('arMatrixTable');
 const arMatrixAddRowBtn = document.getElementById('arMatrixAddRowBtn');
 const arMatrixWarnings = document.getElementById('arMatrixWarnings');
+const arMatrixNeedsSaveHint = document.getElementById('arMatrixNeedsSaveHint');
 const arComparisonTypeSelect = document.getElementById('arComparisonTypeSelect');
 const arCompareToVoucherLineCheckbox = document.getElementById('arCompareToVoucherLineCheckbox');
 const arCompareToVoucherLineHint = document.getElementById('arCompareToVoucherLineHint');
@@ -837,13 +838,12 @@ const arCrossCheckRestoreBtn = document.getElementById('arCrossCheckRestoreBtn')
 // ---------- STATE ----------
 // null while creating a new Cross-check; set to its id while editing an existing one.
 let editingCrossCheckId = null;
-// Cross-Check Matrix Redesign, Phase 4 of 5 — the matrix editor's in-memory state. UI-only this
-// phase: nothing here is saved to or loaded from the matrix endpoints yet (Phase 5).
-//   columns: ordered [{ documentId, name }] — documents are the matrix's column axis.
-//   rows: [{ id, cells: { <documentId>: <columnName|null> } }] — field rows have no label and are
-//         purely positional; id is a local sequence value, never a backend id this phase.
+// Cross-Check Matrix Redesign — the matrix editor's state, loaded from and saved to the backend
+// (Phase 5). Each edit persists immediately through its own endpoint.
+//   columns: ordered [{ documentId, name }] — the audit_rule_cross_check_documents axis.
+//   rows: [{ id, cells: { <documentId>: <columnName> } }] — id IS the backend field_id (from
+//         GET .../matrix or POST .../fields); cells omit not-applicable (null) entries.
 let matrixState = { columns: [], rows: [] };
-let matrixRowSeq = 0;
 // Session cache: documentId -> [columnName, ...] from that document's linked template. Populated
 // by fetchMatrixColumnsForDoc(); reused so adding several rows against the same document doesn't
 // re-fetch. Never invalidated in-session (page reload only).
@@ -1023,9 +1023,21 @@ function countRowSelections(row) {
 }
 
 function renderMatrix() {
-    renderMatrixAddColumnPicker();
     arMatrixTable.innerHTML = '';
     arMatrixWarnings.innerHTML = '';
+
+    // A brand-new Cross-check has no id yet, so its matrix rows/columns/cells have nothing to
+    // persist against. Gate the whole editor until Name + Comparison Type are saved (which
+    // creates the row) — see saveCrossCheck().
+    if (!editingCrossCheckId) {
+        arMatrixNeedsSaveHint.style.display = 'block';
+        arMatrixAddColumnSelect.innerHTML = '';
+        arMatrixAddColumnBtn.disabled = true;
+        arMatrixAddRowBtn.disabled = true;
+        return;
+    }
+    arMatrixNeedsSaveHint.style.display = 'none';
+    renderMatrixAddColumnPicker();
 
     if (matrixState.columns.length === 0) {
         const tr = arMatrixTable.insertRow();
@@ -1138,12 +1150,8 @@ function renderMatrix() {
             if (!current) td.classList.add('ar-matrix-cell-na');
 
             select.addEventListener('change', () => {
-                if (select.value) {
-                    row.cells[col.documentId] = select.value;
-                } else {
-                    delete row.cells[col.documentId];
-                }
-                renderMatrix();
+                persistMatrixCell(row.id, col.documentId, select.value,
+                    reverted => { select.value = (reverted === undefined ? '' : reverted); });
             });
             td.appendChild(select);
         });
@@ -1194,58 +1202,143 @@ function renderMatrixAddColumnPicker() {
     }
 }
 
-function addMatrixColumn() {
+// Every matrix mutation persists immediately. Helper: run the write, keep the optimistic local
+// change on success, roll it back (via a caller-supplied undo) + surface the error on failure.
+async function matrixPersist(doRequest, undo) {
+    try {
+        const res = await doRequest();
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(result.detail || result.message || 'Request failed');
+        return result;
+    } catch (error) {
+        if (undo) undo();
+        renderMatrix();
+        showCrossCheckDetailStatus('❌ ' + error.message, 'error');
+        return null;
+    }
+}
+
+function matrixDocumentIds() {
+    return matrixState.columns.map(c => c.documentId);
+}
+
+async function addMatrixColumn() {
     const value = arMatrixAddColumnSelect.value;
-    if (!value) return;
+    if (!value || !editingCrossCheckId) return;
     const documentId = parseInt(value, 10);
     const doc = getDocumentById(documentId);
     matrixState.columns.push({ documentId: documentId, name: doc ? doc.name : ('Document #' + documentId) });
     fetchMatrixColumnsForDoc(documentId).then(renderMatrix);
     renderMatrix();
+    await matrixPersist(
+        () => fetch(API_BASE + '/api/audit-rules/cross-checks/' + editingCrossCheckId + '/documents', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ document_ids: matrixDocumentIds() })
+        }),
+        () => { matrixState.columns = matrixState.columns.filter(c => c.documentId !== documentId); }
+    );
 }
 
-function removeMatrixColumn(documentId) {
+async function removeMatrixColumn(documentId) {
+    if (!editingCrossCheckId) return;
+    const prevColumns = matrixState.columns.slice();
+    const removedCells = matrixState.rows.map(row => row.cells[documentId]);
     matrixState.columns = matrixState.columns.filter(c => c.documentId !== documentId);
     matrixState.rows.forEach(row => { delete row.cells[documentId]; });
     renderMatrix();
+    await matrixPersist(
+        () => fetch(API_BASE + '/api/audit-rules/cross-checks/' + editingCrossCheckId + '/documents', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ document_ids: matrixDocumentIds() })
+        }),
+        () => {
+            matrixState.columns = prevColumns;
+            matrixState.rows.forEach((row, i) => { if (removedCells[i]) row.cells[documentId] = removedCells[i]; });
+        }
+    );
 }
 
-function addMatrixRow() {
-    matrixRowSeq += 1;
-    matrixState.rows.push({ id: matrixRowSeq, cells: {} });
+async function addMatrixRow() {
+    if (!editingCrossCheckId) return;
+    const result = await matrixPersist(
+        () => fetch(API_BASE + '/api/audit-rules/cross-checks/' + editingCrossCheckId + '/fields', { method: 'POST' })
+    );
+    if (result && result.field_id != null) {
+        matrixState.rows.push({ id: result.field_id, cells: {} });
+        renderMatrix();
+    }
+}
+
+async function removeMatrixRow(fieldId) {
+    if (!editingCrossCheckId) return;
+    const idx = matrixState.rows.findIndex(r => r.id === fieldId);
+    if (idx < 0) return;
+    const removed = matrixState.rows[idx];
+    matrixState.rows.splice(idx, 1);
     renderMatrix();
+    await matrixPersist(
+        () => fetch(API_BASE + '/api/audit-rules/cross-check-fields/' + fieldId, { method: 'DELETE' }),
+        () => { matrixState.rows.splice(idx, 0, removed); }
+    );
 }
 
-function removeMatrixRow(rowId) {
-    matrixState.rows = matrixState.rows.filter(r => r.id !== rowId);
-    renderMatrix();
-}
-
-function moveMatrixRow(rowId, direction) {
-    const i = matrixState.rows.findIndex(r => r.id === rowId);
+async function moveMatrixRow(fieldId, direction) {
+    if (!editingCrossCheckId) return;
+    const i = matrixState.rows.findIndex(r => r.id === fieldId);
     const j = i + direction;
     if (i < 0 || j < 0 || j >= matrixState.rows.length) return;
+    const prevOrder = matrixState.rows.slice();
     [matrixState.rows[i], matrixState.rows[j]] = [matrixState.rows[j], matrixState.rows[i]];
     renderMatrix();
+    await matrixPersist(
+        () => fetch(API_BASE + '/api/audit-rules/cross-checks/' + editingCrossCheckId + '/field-order', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ field_ids: matrixState.rows.map(r => r.id) })
+        }),
+        () => { matrixState.rows = prevOrder; }
+    );
 }
 
-// Seed the matrix's column axis from a Cross-check's existing documents (names already on screen
-// — this is not a matrix "load", which is Phase 5). Rows always start empty this phase.
-function seedMatrixFromCrossCheck(cc) {
+// Persist one cell (called from the <select> change handler). value '' clears it (not applicable).
+async function persistMatrixCell(fieldId, documentId, value, revert) {
+    const row = matrixState.rows.find(r => r.id === fieldId);
+    if (!row) return;
+    const prev = row.cells[documentId];
+    if (value) { row.cells[documentId] = value; } else { delete row.cells[documentId]; }
+    renderMatrix();
+    await matrixPersist(
+        () => fetch(API_BASE + '/api/audit-rules/cross-check-fields/' + fieldId + '/cells/' + documentId, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ column_name: value || null })
+        }),
+        () => {
+            if (prev === undefined) { delete row.cells[documentId]; } else { row.cells[documentId] = prev; }
+            if (revert) revert(prev);
+        }
+    );
+}
+
+// Load the full matrix for a Cross-check into matrixState (columns + field rows + cells).
+function loadMatrixFromServer(matrix) {
     matrixState = {
-        columns: (cc.documents || []).map(d => ({
+        columns: (matrix.documents || []).map(d => ({
             documentId: d.document_id,
             name: d.name || ('Document #' + d.document_id)
         })),
-        rows: []
+        rows: (matrix.fields || []).map(f => {
+            const cells = {};
+            Object.entries(f.cells || {}).forEach(([docId, colName]) => {
+                if (colName) cells[parseInt(docId, 10)] = colName;
+            });
+            return { id: f.id, cells: cells };
+        })
     };
-    matrixRowSeq = 0;
+    matrixState.columns.forEach(c => fetchMatrixColumnsForDoc(c.documentId).then(renderMatrix));
     renderMatrix();
 }
 
 function resetMatrix() {
     matrixState = { columns: [], rows: [] };
-    matrixRowSeq = 0;
     renderMatrix();
 }
 
@@ -1274,20 +1367,27 @@ async function selectCrossCheck(id) {
         editingCrossCheckId = cc.id;
         arCrossCheckEditingIdInput.value = cc.id;
         arCrossCheckNameInput.value = cc.name;
-        // Seed the matrix's column axis from this Cross-check's documents (names only — the
-        // matrix itself isn't loaded/saved until Phase 5). Rows start empty.
-        seedMatrixFromCrossCheck(cc);
         arComparisonTypeSelect.value = cc.comparison_type;
         arCompareToVoucherLineCheckbox.checked = !!cc.compare_to_voucher_line;
         updateCompareToVoucherLineHint();
 
+        // Load the full matrix (columns + field rows + cells) from the backend.
+        const matrixRes = await window.ApiUtils.apiFetch(
+            API_BASE + '/api/audit-rules/cross-checks/' + id + '/matrix');
+        if (!matrixRes.ok) throw new Error('Failed to load matrix');
+        loadMatrixFromServer(await matrixRes.json());
+
         arCrossCheckUsedByRow.style.display = 'block';
         arCrossCheckUsedByCount.textContent = cc.used_by_categories_count;
 
-        // Save/Delete/Restore stay hidden while the matrix is a preview (Phase 4). Phase 5
-        // restores the is_active-driven Delete/Restore split below.
-        arCrossCheckDeleteBtn.style.display = 'none';
-        arCrossCheckRestoreBtn.style.display = 'none';
+        arCrossCheckSaveBtn.style.display = 'inline-block';
+        if (cc.is_active) {
+            arCrossCheckDeleteBtn.style.display = 'inline-block';
+            arCrossCheckRestoreBtn.style.display = 'none';
+        } else {
+            arCrossCheckDeleteBtn.style.display = 'none';
+            arCrossCheckRestoreBtn.style.display = 'inline-block';
+        }
 
         arCrossCheckDetailEmpty.style.display = 'none';
         arCrossCheckDetailForm.style.display = 'block';
@@ -1305,12 +1405,13 @@ function startNewCrossCheck() {
     editingCrossCheckId = null;
     arCrossCheckEditingIdInput.value = '';
     arCrossCheckNameInput.value = '';
-    resetMatrix();
+    resetMatrix();  // renders the matrix in its disabled "save this cross-check first" state
     arComparisonTypeSelect.value = '';
     arCompareToVoucherLineCheckbox.checked = false;
     updateCompareToVoucherLineHint();
 
     arCrossCheckUsedByRow.style.display = 'none';
+    arCrossCheckSaveBtn.style.display = 'inline-block';
     arCrossCheckDeleteBtn.style.display = 'none';
     arCrossCheckRestoreBtn.style.display = 'none';
 
@@ -1322,14 +1423,63 @@ function startNewCrossCheck() {
 }
 
 // ---------- SAVE ----------
-// STOPGAP (Cross-Check Matrix Redesign, Phase 4 of 5): the old flat-model save (shared
-// compare_field + ordered document_ids + per-document overrides) is gone along with the UI that
-// fed it, and the Save button is hidden this phase. Phase 5 rebuilds this to POST/PUT the matrix
-// (name + comparison_type + compare_to_voucher_line on the cross-check, then the field-row / cell
-// endpoints from Phase 2). Until then it's an explicit no-op rather than dead code touching
-// removed state.
-async function saveCrossCheck() {
-    showCrossCheckDetailStatus('Saving the matrix is wired up in the next phase.', 'error');
+// Cross-Check Matrix Redesign, Phase 5 of 5. The matrix (columns / rows / cells) persists itself
+// immediately through its own endpoints. Save here only handles the scalar fields:
+//   - new Cross-check: POST creates the row (a filler compare_field is sent so the deferred
+//     flat-model validation passes with document_ids=[]), then selectCrossCheck() reopens it
+//     with an editable, empty matrix.
+//   - existing: PUT .../meta updates name / comparison type / voucher-line flag only.
+async function saveCrossCheck(triggerBtn) {
+    const name = arCrossCheckNameInput.value.trim();
+    const comparisonType = arComparisonTypeSelect.value;
+    if (!name) {
+        showCrossCheckDetailStatus('❌ Name is required.', 'error');
+        return;
+    }
+    if (!comparisonType) {
+        showCrossCheckDetailStatus('❌ A comparison type is required.', 'error');
+        return;
+    }
+
+    try {
+        window.LoadingUI.showSpinner(triggerBtn, 'Saving');
+        let res, result;
+        if (editingCrossCheckId) {
+            res = await fetch(API_BASE + '/api/audit-rules/cross-checks/' + editingCrossCheckId + '/meta', {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    comparison_type: comparisonType,
+                    compare_to_voucher_line: arCompareToVoucherLineCheckbox.checked
+                })
+            });
+            result = await res.json();
+            if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save cross-check');
+            showCrossCheckDetailStatus('✅ ' + result.message, 'success');
+            await loadCrossChecks();
+        } else {
+            res = await fetch(API_BASE + '/api/audit-rules/cross-checks', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    comparison_type: comparisonType,
+                    compare_to_voucher_line: arCompareToVoucherLineCheckbox.checked,
+                    compare_field: '(matrix)',  // filler: deferred flat model still requires it
+                    document_ids: [],
+                    document_fields: {}
+                })
+            });
+            result = await res.json();
+            if (!res.ok) throw new Error(result.detail || result.message || 'Failed to create cross-check');
+            showCrossCheckDetailStatus('✅ ' + result.message, 'success');
+            await loadCrossChecks();
+            await selectCrossCheck(result.cross_check_id);
+        }
+    } catch (error) {
+        showCrossCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(triggerBtn);
+    }
 }
 
 // ---------- DELETE / RESTORE ----------
@@ -1380,12 +1530,9 @@ arMatrixAddColumnBtn.addEventListener('click', addMatrixColumn);
 arMatrixAddRowBtn.addEventListener('click', addMatrixRow);
 arCompareToVoucherLineCheckbox.addEventListener('change', updateCompareToVoucherLineHint);
 
-// Save/Delete/Restore are hidden this phase (matrix is a preview) — see saveCrossCheck()'s
-// stopgap note. Listeners stay wired so Phase 5 only has to reveal the buttons.
 arCrossCheckSaveBtn.addEventListener('click', () => saveCrossCheck(arCrossCheckSaveBtn));
 arCrossCheckDeleteBtn.addEventListener('click', deleteCrossCheck);
 arCrossCheckRestoreBtn.addEventListener('click', restoreCrossCheck);
-arCrossCheckSaveBtn.style.display = 'none';
 
 // ==============================================
 // 🗂️ AUDIT RULES — CATEGORIES SHELL LOGIC (Phase 7 of 9, final entity view)
