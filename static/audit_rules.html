@@ -157,8 +157,8 @@
 
                     <!-- Physical Bill evidence type (Phase 4 of 8): how this Document's evidence
                          is satisfied. Placed directly after Name because it governs what the rest
-                         of this form shows — a Physical Bill hides Template and Cross-check-eligible
-                         Fields entirely (see updateDocumentTypeVisibility() in audit_rules.js).
+                         of this form shows — a Physical Bill hides the Template field entirely
+                         (see updateDocumentTypeVisibility() in audit_rules.js).
                          Forced choice, no pre-selection: the placeholder is disabled+selected so a
                          new Document can't be saved until a type is picked. -->
                     <div class="ar-field">
@@ -204,7 +204,7 @@
 
                     <!-- Authorisation section: Authorisation Roles immediately followed by
                          Signature Specimens (the people-list for those roles), grouped together
-                         and visually separated from Identity/Setup above and Cross-Checks below
+                         and visually separated from Identity/Setup above
                          (confirmed fix — pure reorder + labelling, no field/logic changes). -->
                     <div class="ar-detail-section-title">Authorisation</div>
 
@@ -231,21 +231,9 @@
                         <div id="arDocSignatureSpecimensContainer"></div>
                     </div>
 
-                    <!-- Cross-Checks section: moved to its own labelled group after Authorisation
-                         so it reads as distinct from the Authorisation cluster above (confirmed
-                         fix — pure reorder + labelling, no field/logic changes). -->
-                    <!-- Hidden alongside its only field for a Physical Bill (Phase 4 of 8), so the
-                         form doesn't show an empty section header. -->
-                    <div class="ar-detail-section-title" id="arDocCrossChecksSectionTitle">Cross-Checks</div>
-
-                    <!-- Cross-check-eligible Fields mirrors the active Master Columns registry.
-                         It is read-only here so every existing and future client-data field is
-                         available to every non-Physical-Bill Document automatically. -->
-                    <div class="ar-field" id="arDocFieldsField">
-                        <label>Cross-check-eligible Fields (automatic mirror)</label>
-                        <div class="ar-chip-list" id="arFieldsChipList"></div>
-                        <small class="ar-field-help">All active Master Columns are included automatically. New columns appear after the data is refreshed.</small>
-                    </div>
+                    <!-- The old "Cross-check-eligible Fields" mirror was removed (Cross-Check Matrix
+                         Redesign, Phase 3 of 5): a cross-check's column choices are now made in the
+                         Cross-Check tab, sourced per-document from its linked template. -->
 
                     <div class="ar-field" id="arUsedByRow" style="display:none;">
                         <span class="ar-used-by-label">Used by <span id="arUsedByCount">0</span> categories</span>
@@ -537,7 +525,7 @@
     <script src="/static/loading_ui.js"></script>
     <script src="/static/client_context.js?v=14"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/audit_rules.js?v=8"></script>
+    <script src="/static/audit_rules.js?v=9"></script>
 </body>
 
 </html>

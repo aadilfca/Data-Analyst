@@ -18,10 +18,8 @@ let editingId = null;
 // for the destructive-switch confirm in saveDocument(). null while creating a new Document.
 let savedDocumentType = null;
 
-// Authorisation roles remain editable. Cross-check fields are a read-only mirror of the active
-// Master Columns registry and are sent as a compatibility snapshot on save.
+// Authorisation roles remain editable on the Documents detail form.
 let rolesState = [];
-let fieldsState = [];
 
 // Required Authority (new, confirmed requirement): role_name -> required authority text,
 // only ever relevant for an "Approved by"-type role (see isApprovalRole()). Additive
@@ -53,16 +51,13 @@ const arNameInput = document.getElementById('arNameInput');
 const arKbNoteInput = document.getElementById('arKbNoteInput');
 const arTemplateSelect = document.getElementById('arTemplateSelect');
 const arRiskRatingSelect = document.getElementById('arRiskRatingSelect');
-// Physical Bill evidence type (Phase 4 of 8): the type picker plus the three blocks it hides.
+// Physical Bill evidence type (Phase 4 of 8): the type picker plus the blocks it hides.
 const arDocumentTypeSelect = document.getElementById('arDocumentTypeSelect');
 const arDocumentTypeHint = document.getElementById('arDocumentTypeHint');
 const arDocTemplateField = document.getElementById('arDocTemplateField');
-const arDocFieldsField = document.getElementById('arDocFieldsField');
-const arDocCrossChecksSectionTitle = document.getElementById('arDocCrossChecksSectionTitle');
 const arRolesChipList = document.getElementById('arRolesChipList');
 const arRolesInput = document.getElementById('arRolesInput');
 const arRolesAddBtn = document.getElementById('arRolesAddBtn');
-const arFieldsChipList = document.getElementById('arFieldsChipList');
 const arDocSignatureSpecimensHint = document.getElementById('arDocSignatureSpecimensHint');
 const arDocSignatureSpecimensContainer = document.getElementById('arDocSignatureSpecimensContainer');
 const arUsedByRow = document.getElementById('arUsedByRow');
@@ -168,10 +163,8 @@ function appendDocumentRows(documents) {
     });
 }
 
-// ---------- CHIP EDITORS (Authorisation Roles / Cross-check-eligible Fields) ----------
-// Same add/remove/render shape as client_settings.js's addPrefix/removePrefix/
-// renderPrefixList, adapted to two independent flat arrays (no cross-list dedup
-// validation needed — roles and fields are unrelated concepts here).
+// ---------- CHIP EDITORS (Authorisation Roles) ----------
+// Same add/remove/render shape as client_settings.js's addPrefix/removePrefix/renderPrefixList.
 function renderChipList(container, items, onRemove) {
     container.innerHTML = '';
     if (items.length === 0) {
@@ -219,70 +212,6 @@ function renderRoleChips() {
     renderChipList(arRolesChipList, rolesState, removeRole);
 }
 
-// Cross-check-eligible Fields (ID-based Cross-check-eligible Fields, Phase 2 of 4): unlike
-// the plain renderChipList() above, each chip is checked against the Document's *current*
-// template's real columns (arTemplateColumnsCache) and rendered flagged if it doesn't
-// match — this mirrors, client-side, the same case-insensitive/trimmed matching
-// routers/audit_rules.py's resolve_field_name_to_master_column_id() does on save, so a
-// flagged chip here is exactly one that would save with a NULL master_column_id.
-/* Legacy template-scoped chip renderer retained only inside this comment for source history.
-function renderFieldChips() {
-    arFieldsChipList.innerHTML = '';
-    if (fieldsState.length === 0) {
-        const empty = document.createElement('span');
-        empty.className = 'ar-chip-empty';
-        empty.textContent = 'None added.';
-        arFieldsChipList.appendChild(empty);
-        return;
-    }
-
-    fieldsState.forEach(item => {
-        const isResolved = true;
-
-        const chip = document.createElement('span');
-        chip.className = 'ar-chip' + (isResolved ? '' : ' ar-chip-warning');
-        if (!isResolved) {
-            chip.title = 'Doesn\'t match the linked template\'s columns — remove and re-add.';
-        }
-
-        const label = document.createElement('span');
-        label.textContent = (isResolved ? '' : '⚠ ') + item;
-        chip.appendChild(label);
-
-        const removeBtn = document.createElement('button');
-        removeBtn.type = 'button';
-        removeBtn.className = 'ar-chip-remove';
-        removeBtn.style.display = 'none';
-        removeBtn.textContent = '✕';
-        removeBtn.title = 'Remove';
-        chip.appendChild(removeBtn);
-
-        arFieldsChipList.appendChild(chip);
-    });
-}
-
-}
-*/
-
-function renderFieldChips() {
-    arFieldsChipList.innerHTML = '';
-    if (fieldsState.length === 0) {
-        const empty = document.createElement('span');
-        empty.className = 'ar-chip-empty';
-        empty.textContent = 'No active Master Columns.';
-        arFieldsChipList.appendChild(empty);
-        return;
-    }
-    fieldsState.forEach(item => {
-        const chip = document.createElement('span');
-        chip.className = 'ar-chip';
-        const label = document.createElement('span');
-        label.textContent = item;
-        chip.appendChild(label);
-        arFieldsChipList.appendChild(chip);
-    });
-}
-
 function addRole() {
     const value = arRolesInput.value.trim();
     if (!value) return;
@@ -320,105 +249,15 @@ async function loadTemplatesForDocuments() {
     }
 }
 
-// ---------- CROSS-CHECK-ELIGIBLE FIELDS DROPDOWN (ID-based Cross-check-eligible Fields,
-// Phase 2 of 4) ----------
-// Fetches and caches a template's master columns (id + column_name), mirroring
-// verification.js's fetchTemplateColumns() for its Linked Evidence table, but keeps
-// `id` (the master_column_id) in the cached shape since it's directly relevant to this
-// feature's naming, even though the actual save payload is still by column_name text —
-// see saveDocument(), unchanged this phase.
-/* Legacy template-scoped field picker removed: cross-check fields now mirror Master Columns.
-let arTemplateColumnsCache = {};
-async function fetchArTemplateColumns(templateId) {
-    if (!templateId) return [];
-    if (Object.prototype.hasOwnProperty.call(arTemplateColumnsCache, templateId)) {
-        return arTemplateColumnsCache[templateId];
-    }
-    try {
-        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/templates/' + templateId);
-        if (!res.ok) { arTemplateColumnsCache[templateId] = []; return []; }
-        const data = await res.json();
-        const columns = (data.columns || []).map(c => ({ id: c.id, column_name: c.column_name }));
-        arTemplateColumnsCache[templateId] = columns;
-        return columns;
-    } catch (error) {
-        console.error('Failed to load template columns for Cross-check-eligible Fields:', error);
-        arTemplateColumnsCache[templateId] = [];
-        return [];
-    }
-}
-
-// Populates arFieldsSelect from the Document's currently-selected template, excluding
-// columns already present in fieldsState (case-insensitive) — same dedup rule addField()
-// already enforced for free text. Called on template change and whenever fieldsState
-// changes (add/remove), plus on selectDocument()/startNewDocument().
-async function renderFieldsDropdown() {
-    return refreshFieldsMirror();
-    const templateId = arTemplateSelect.value;
-
-    if (!templateId) {
-        arFieldsSelect.innerHTML = '<option value="">Select a template first</option>';
-        arFieldsSelect.disabled = true;
-        arFieldsAddBtn.disabled = true;
-        renderFieldChips();
-        return;
-    }
-
-    const columns = await fetchArTemplateColumns(templateId);
-    // Re-render chips now that arTemplateColumnsCache[templateId] is populated, so the
-    // resolved/flagged state reflects real data rather than a transient empty cache.
-    renderFieldChips();
-
-    const eligible = columns.filter(c => !fieldsState.some(f => f.toLowerCase() === c.column_name.toLowerCase()));
-
-    if (eligible.length === 0) {
-        arFieldsSelect.innerHTML = '<option value="">No more fields available</option>';
-        arFieldsSelect.disabled = true;
-        arFieldsAddBtn.disabled = true;
-        return;
-    }
-
-    arFieldsSelect.innerHTML = '<option value="">-- Select a field --</option>' +
-        eligible.map(c => `<option value="${c.column_name}">${c.column_name}</option>`).join('');
-    arFieldsSelect.disabled = false;
-    arFieldsAddBtn.disabled = false;
-} */
-
-// The field list is a live mirror of active Master Columns, independent of the linked template.
-// Fetch it whenever a Document is opened or its type changes so newly added/renamed columns are
-// visible without editing each Document.
-async function fetchActiveMasterColumns() {
-    try {
-        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/columns');
-        if (!res.ok) throw new Error('Failed to fetch active Master Columns');
-        const columns = await res.json();
-        return columns.map(column => column.column_name);
-    } catch (error) {
-        console.error('Failed to load active Master Columns for Cross-check-eligible Fields:', error);
-        return [];
-    }
-}
-
-async function refreshFieldsMirror() {
-    if (arDocumentTypeSelect.value === 'physical_bill') {
-        fieldsState = [];
-    } else {
-        fieldsState = (await fetchActiveMasterColumns()).slice();
-    }
-    renderFieldChips();
-}
 
 // ---------- DOCUMENT TYPE (Physical Bill evidence type, Phase 4 of 8) ----------
 function updateDocumentTypeVisibility() {
-    // A Physical Bill has no linked Data Bank template and no configurable field list - its fields
-    // (Bill No / Date / Amount / Vendor name) are fixed by type. The Cross-Checks section heading
-    // is hidden alongside its only field so the form doesn't show an empty section header.
+    // A Physical Bill has no linked Data Bank template - its fields (Bill No / Date / Amount /
+    // Vendor name) are fixed by type - so the Template field is hidden for it.
     const isPhysicalBill = arDocumentTypeSelect.value === 'physical_bill';
     const display = isPhysicalBill ? 'none' : '';
 
     arDocTemplateField.style.display = display;
-    arDocFieldsField.style.display = display;
-    arDocCrossChecksSectionTitle.style.display = display;
     arDocumentTypeHint.style.display = isPhysicalBill ? 'block' : 'none';
 }
 
@@ -466,9 +305,7 @@ async function selectDocument(id) {
         updateDocumentTypeVisibility();
         rolesState = (doc.auth_roles || []).slice();
         requiredAuthorityState = { ...(doc.auth_role_authorities || {}) };
-        fieldsState = (doc.cross_check_fields || []).slice();
         renderRoleChips();
-        await refreshFieldsMirror();
 
         arUsedByRow.style.display = 'block';
         arUsedByCount.textContent = doc.used_by_categories_count;
@@ -510,9 +347,7 @@ function startNewDocument() {
     updateDocumentTypeVisibility();
     rolesState = [];
     requiredAuthorityState = {};
-    fieldsState = [];
     renderRoleChips();
-    refreshFieldsMirror();
 
     arUsedByRow.style.display = 'none';
     arDeleteBtn.style.display = 'none';
@@ -549,44 +384,34 @@ async function saveDocument(triggerBtn) {
 
     const isPhysicalBill = documentType === 'physical_bill';
 
-    // Destructive-switch guard (the confirm step Phase 2 deferred to this phase): turning an
-    // existing linked-template Document into a Physical Bill clears its template and its
-    // cross-check-eligible fields server-side. Only asks when there's actually something to lose.
+    // Destructive-switch guard: turning an existing linked-template Document into a Physical Bill
+    // clears its template link server-side. Only asks when there's actually a template to lose.
     // A native confirm(), matching this codebase's convention for a single flat destructive action
     // (Assign Categories' force-apply, Clear Saved Mapping) - custom modals here are reserved for
     // multi-step flows.
-    if (editingId && savedDocumentType === 'linked_template' && isPhysicalBill) {
-        const losing = [];
-        if (arTemplateSelect.value) {
-            const templateName = arTemplateSelect.options[arTemplateSelect.selectedIndex].text;
-            losing.push('its linked template (' + templateName + ')');
-        }
-        if (fieldsState.length) {
-            losing.push('its mirrored cross-check-eligible fields');
-        }
-        if (losing.length) {
-            const proceed = confirm(
-                'Switching "' + name + '" to Physical Bill will permanently clear ' + losing.join(' and ') + '.\n\n' +
-                'A Physical Bill has fixed fields (Bill No, Date, Amount, Vendor name), so it cannot keep either. ' +
-                'Any Cross-check comparing a field from this document will stop validating.\n\n' +
-                'Continue?'
-            );
-            if (!proceed) return;
-        }
+    if (editingId && savedDocumentType === 'linked_template' && isPhysicalBill && arTemplateSelect.value) {
+        const templateName = arTemplateSelect.options[arTemplateSelect.selectedIndex].text;
+        const proceed = confirm(
+            'Switching "' + name + '" to Physical Bill will permanently clear its linked template (' + templateName + ').\n\n' +
+            'A Physical Bill has fixed fields (Bill No, Date, Amount, Vendor name), so it cannot keep a template link. ' +
+            'Any Cross-check sourcing a column from this document will stop validating.\n\n' +
+            'Continue?'
+        );
+        if (!proceed) return;
     }
 
     const payload = {
         name: name,
         kb_note: arKbNoteInput.value.trim() || null,
-        // Send what will actually be stored rather than whatever the now-hidden controls still
-        // hold. The backend forces both empty for a physical_bill anyway
+        // Send what will actually be stored rather than whatever the now-hidden Template control
+        // still holds. The backend forces template_id NULL for a physical_bill anyway
         // (apply_document_type_constraints()), but sending the real outcome keeps the UI from
-        // briefly implying a template/field survived the switch.
+        // briefly implying a template survived the switch. cross_check_fields is no longer sent -
+        // it was a read-only Master Columns mirror; the backend model defaults it to [].
         template_id: (!isPhysicalBill && arTemplateSelect.value) ? parseInt(arTemplateSelect.value) : null,
         risk_rating: arRiskRatingSelect.value || null,
         auth_roles: rolesState,
         auth_role_authorities: requiredAuthorityState,
-        cross_check_fields: isPhysicalBill ? [] : fieldsState,
         document_type: documentType
     };
 
@@ -882,12 +707,9 @@ arRolesInput.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') { e.preventDefault(); addRole(); }
 });
 
-// Physical Bill evidence type (Phase 4 of 8): show/hide Template + Cross-check fields live as the
-// type changes, so the form always reflects what the chosen type can actually carry.
-arDocumentTypeSelect.addEventListener('change', () => {
-    updateDocumentTypeVisibility();
-    refreshFieldsMirror();
-});
+// Physical Bill evidence type (Phase 4 of 8): show/hide the Template field live as the type
+// changes, so the form always reflects what the chosen type can actually carry.
+arDocumentTypeSelect.addEventListener('change', updateDocumentTypeVisibility);
 
 arSaveBtn.addEventListener('click', () => saveDocument(arSaveBtn));
 arDeleteBtn.addEventListener('click', deleteDocument);

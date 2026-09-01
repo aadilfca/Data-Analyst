@@ -104,6 +104,39 @@ Helpers: `get_document_template_columns(document_id)` (resolves `template_id`, r
 `validate_cross_check_cell()`, `get_cross_check_matrix()`. Models: `CrossCheckFieldOrder`,
 `CrossCheckCellUpdate`. Full suite: 83 passed.
 
+### Phase 3 of 5 — remove the Documents-tab fields section
+
+**Date:** 2026-09-01 | **Files:** `static/audit_rules.html`, `static/audit_rules.js`,
+`static/style.css`. **UI-only.**
+
+The Documents detail form's "Cross-Checks" section — a single read-only "Cross-check-eligible
+Fields (automatic mirror)" chip list of every active Master Column — is removed. It duplicated
+what the Cross-Check tab now derives per-document from the linked template, and it isn't what the
+matrix reads.
+
+Removed from `audit_rules.js`: `fieldsState`, `renderFieldChips()`, `fetchActiveMasterColumns()`,
+`refreshFieldsMirror()`, the three element refs, two already-commented-out legacy blocks, the
+`cross_check_fields` key from `saveDocument()`'s payload, and the "losing its mirrored
+cross-check-eligible fields" clause from the physical-bill switch confirm (the linked-template
+clause stays). `updateDocumentTypeVisibility()` and the type-change listener no longer touch the
+removed section. From `style.css`: the orphaned `.ar-chip-warning` rule (`.ar-chip*` base classes
+stay — shared with Authorisation Roles / Category Cross-checks). `audit_rules.js?v=8 → ?v=9`.
+
+**Left in place (confirmed with Aadil):** the Document `cross_check_fields` backend storage and
+the `audit_rule_document_fields` table — a later cleanup phase retires them. `DocumentCreate` /
+`DocumentUpdate` default `cross_check_fields` to `[]`, so omitting the payload key is safe;
+`get_document_cross_check_fields()` returns the live Master Columns mirror (not that table), so
+the Documents list endpoint and the rulebook compiler are unaffected — the **old Cross-Check tab
+per-document `compare_field` picker keeps working unchanged** (it reads the list endpoint).
+**Side effect:** each Document save now writes an empty `audit_rule_document_fields` list through
+`save_document_cross_check_fields()`, so that legacy table zeroes out over time — benign (nothing
+reads it), and the follow-on cleanup should expect it near-empty.
+
+Verification: 83 tests pass (no backend change); `node --check` clean; no orphaned references to
+the removed ids. Live browser check of the Documents pane was blocked — the dev server on :5000
+is Postgres-backed and the seeded `admin`/`admin123` login returns 401 there — so pane rendering
+needs a manual click-through.
+
 ## Cross-check per-document field names
 
 **Superseded 2026-09-01 by the Cross-Check Matrix Redesign (above).** Phases 1–3 shipped
