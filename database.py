@@ -1019,6 +1019,19 @@ def init_db():
         conn.execute(
             "INSERT OR IGNORE INTO audit_rules_config_state (id, config_version) VALUES (1, 1)"
         )
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rules_config_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                config_version INTEGER NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id INTEGER,
+                entity_name TEXT,
+                action TEXT NOT NULL,
+                changed_by TEXT DEFAULT 'System',
+                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rules_config_changes_version ON audit_rules_config_changes (config_version)")
 
         # --- Schema upgrades for existing databases ---
         # Add client_id column to uploaded_files if missing
@@ -3023,6 +3036,19 @@ def init_db_postgres(conn):
         VALUES (1, 1)
         ON CONFLICT (id) DO NOTHING
     ''')
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rules_config_changes (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            config_version INTEGER NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id INTEGER,
+            entity_name TEXT,
+            action TEXT NOT NULL,
+            changed_by TEXT DEFAULT 'System',
+            changed_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "audit_rules_config_changes")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rules_config_changes_version ON audit_rules_config_changes (config_version)")
 
     # ---------- 16. data_audit_log ----------
     # changed_at (not created_at): fixes get_data_audit_history()'s pre-existing
@@ -4019,6 +4045,52 @@ def bump_persisted_audit_rules_config_version() -> int | None:
     except sqlite3.OperationalError as exc:
         if "no such table" in str(exc).lower():
             return None
+        raise
+
+
+def record_audit_rules_config_change(config_version: int, entity_type: str,
+                                     entity_id=None, entity_name=None,
+                                     action: str = "Updated", changed_by: str = "System"):
+    """Record the stable Rulebook change that produced a configuration version."""
+    if _POSTGRES_SCHEMA_READY:
+        execute_write_pg(
+            "INSERT INTO audit_rules_config_changes "
+            "(config_version, entity_type, entity_id, entity_name, action, changed_by) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (config_version, entity_type, entity_id, entity_name, action, changed_by)
+        )
+        return
+    try:
+        execute_write(
+            "INSERT INTO audit_rules_config_changes "
+            "(config_version, entity_type, entity_id, entity_name, action, changed_by) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (config_version, entity_type, entity_id, entity_name, action, changed_by)
+        )
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+
+
+def get_audit_rules_config_changes_since(config_version: int):
+    """Return Rulebook changes newer than a session's captured version."""
+    if _POSTGRES_SCHEMA_READY:
+        return execute_query_pg(
+            "SELECT config_version, entity_type, entity_id, entity_name, action, changed_by, changed_at "
+            "FROM audit_rules_config_changes WHERE config_version > %s "
+            "ORDER BY config_version, id",
+            (config_version,)
+        )
+    try:
+        return execute_query(
+            "SELECT config_version, entity_type, entity_id, entity_name, action, changed_by, changed_at "
+            "FROM audit_rules_config_changes WHERE config_version > ? "
+            "ORDER BY config_version, id",
+            (config_version,)
+        )
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return []
         raise
 
 

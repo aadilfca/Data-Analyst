@@ -537,30 +537,103 @@ function awRenderGateRowHtml(g) {
 // session Rulebook itself remains one request per Audit Workbook session.
 let awAuditGuidanceCache = {};
 
+function awRulebookChangeLabel(change) {
+    const subject = change.entity_name
+        ? `${change.entity_type || 'Rulebook item'} “${change.entity_name}”`
+        : (change.entity_type || 'Audit Rules configuration');
+    return `${change.action || 'Updated'}: ${subject}`;
+}
+
+function awShowRulebookChangeAlert(error) {
+    return new Promise(resolve => {
+        document.getElementById('rulebookChangeAlert')?.remove();
+        const changes = error.changes || [];
+        const changeHtml = changes.length
+            ? changes.map(change => `<li>${escapeHtml(awRulebookChangeLabel(change))}</li>`).join('')
+            : '<li>One or more Audit Rules settings changed.</li>';
+        document.body.insertAdjacentHTML('beforeend', `
+            <div id="rulebookChangeAlert" class="rulebook-change-alert" role="dialog" aria-modal="true" aria-labelledby="rulebookChangeAlertTitle">
+                <div class="rulebook-change-alert-card">
+                    <div class="rulebook-change-alert-icon" aria-hidden="true">⚠️</div>
+                    <h2 id="rulebookChangeAlertTitle">Audit Rules changed</h2>
+                    <p>This session was started with an older Rulebook. The following factory setting change may affect verification results:</p>
+                    <ul>${changeHtml}</ul>
+                    <p class="rulebook-change-alert-versions">Session version ${escapeHtml(String(error.sessionVersion ?? 'unknown'))} → current version ${escapeHtml(String(error.currentVersion ?? 'unknown'))}</p>
+                    <p class="rulebook-change-alert-preserved">Your saved verification work will be preserved.</p>
+                    <div class="rulebook-change-alert-actions">
+                        <button type="button" class="btn-ghost" data-rulebook-alert-action="cancel">Leave session unchanged</button>
+                        <button type="button" class="btn-primary" data-rulebook-alert-action="recover">Update session and continue</button>
+                    </div>
+                </div>
+            </div>
+        `);
+        const alert = document.getElementById('rulebookChangeAlert');
+        const finish = recovered => {
+            alert?.remove();
+            resolve(recovered);
+        };
+        alert?.querySelector('[data-rulebook-alert-action="cancel"]')?.addEventListener('click', () => finish(false));
+        alert?.querySelector('[data-rulebook-alert-action="recover"]')?.addEventListener('click', () => finish(true));
+    });
+}
+
+async function awRequestSessionRulebook(sessionId) {
+    const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/session/${sessionId}/rulebook`);
+    if (!res.ok) {
+        let detail = 'Unable to load the session Rulebook.';
+        try {
+            const payload = await res.json();
+            detail = payload.detail || detail;
+            if (res.status === 409 && detail && typeof detail === 'object' &&
+                detail.code === 'RULEBOOK_VERSION_MISMATCH') {
+                const error = new Error(detail.message || 'This session uses an older Rulebook version.');
+                error.code = detail.code;
+                error.recovery = detail.recovery || null;
+                error.changes = Array.isArray(detail.changes) ? detail.changes : [];
+                error.sessionVersion = detail.session_version;
+                error.currentVersion = detail.current_version;
+                throw error;
+            }
+        } catch (error) {
+            if (error.code === 'RULEBOOK_VERSION_MISMATCH') throw error;
+        }
+        throw new Error(typeof detail === 'string' ? detail : 'Unable to load the session Rulebook.');
+    }
+    const payload = await res.json();
+    const rulebook = payload && payload.rulebook;
+    if (!rulebook || !Array.isArray(rulebook.categories)) {
+        throw new Error('The session Rulebook response is invalid.');
+    }
+    return rulebook;
+}
+
 async function awLoadSessionRulebook() {
     if (awSessionRulebook) return awSessionRulebook;
     if (awSessionRulebookPromise) return awSessionRulebookPromise;
     if (!currentSessionId) throw new Error('Audit Workbook session is not available.');
 
     const sessionIdAtStart = currentSessionId;
-    awSessionRulebookPromise = window.ApiUtils.apiFetch(
-        `${API_BASE}/api/verification/session/${sessionIdAtStart}/rulebook`
-    ).then(async res => {
-        if (!res.ok) {
-            let detail = 'Unable to load the session Rulebook.';
-            try {
-                const error = await res.json();
-                detail = error.detail || detail;
-            } catch (_) {
-                // Keep the stable user-facing error when the response is not JSON.
+    awSessionRulebookPromise = (async () => {
+        try {
+            return await awRequestSessionRulebook(sessionIdAtStart);
+        } catch (error) {
+            if (error.code !== 'RULEBOOK_VERSION_MISMATCH' || !error.recovery) throw error;
+            const confirmed = await awShowRulebookChangeAlert(error);
+            if (!confirmed) {
+                error.recoveryDeclined = true;
+                throw error;
             }
-            throw new Error(detail);
+            const recoveryResponse = await window.ApiUtils.apiFetchMutate(error.recovery.path, {
+                method: error.recovery.method || 'POST'
+            });
+            const recoveryPayload = await recoveryResponse.json().catch(() => ({}));
+            if (!recoveryResponse.ok) {
+                const detail = recoveryPayload.detail || 'Unable to recover this Audit Workbook session.';
+                throw new Error(typeof detail === 'string' ? detail : 'Unable to recover this Audit Workbook session.');
+            }
+            return await awRequestSessionRulebook(sessionIdAtStart);
         }
-        const payload = await res.json();
-        const rulebook = payload && payload.rulebook;
-        if (!rulebook || !Array.isArray(rulebook.categories)) {
-            throw new Error('The session Rulebook response is invalid.');
-        }
+    })().then(rulebook => {
         if (currentSessionId === sessionIdAtStart) awSessionRulebook = rulebook;
         return rulebook;
     }).finally(() => {
@@ -708,6 +781,51 @@ async function awSaveLineItems(uid) {
     }
 }
 
+// Direct voucher-check persistence for the shared Procedure Modal. Verification deliberately
+// omits these adapter methods so its modal remains local-first and sends the complete check state
+// through save_and_verify_voucher_bundle. Audit Workbook has no grouped save endpoint, so it keeps
+// the shared modal's immediate optimistic-save/rollback behavior through this explicit contract.
+async function awSaveVoucherCheck({ transactionRef, checkId, state, target }) {
+    try {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_voucher_check`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                client_id: sessionClientId,
+                transaction_ref: transactionRef,
+                check_id: checkId,
+                state
+            })
+        }, { target, message: 'Saving' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            return { ok: false, error: { detail: err.detail || 'Failed to save voucher check.' } };
+        }
+        awInvalidateVoucherSupportCache();
+        return { ok: true, data: await res.json().catch(() => ({})) };
+    } catch (e) {
+        return { ok: false, error: { detail: e.message || 'Failed to save voucher check.' } };
+    }
+}
+
+async function awSaveVoucherChecksBatch({ transactionRef, checks }) {
+    try {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_voucher_checks_batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_id: sessionClientId, transaction_ref: transactionRef, checks })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            return { ok: false, error: { detail: err.detail || 'Failed to save voucher checks.' } };
+        }
+        awInvalidateVoucherSupportCache();
+        return { ok: true, data: await res.json().catch(() => ({})) };
+    } catch (e) {
+        return { ok: false, error: { detail: e.message || 'Failed to save voucher checks.' } };
+    }
+}
+
 // The "row/pill refreshes after save" mechanism — called by procedure_modal.js's
 // hideProcedureModalOnly() unconditionally on every close path (✕, Verify & Next/Close, plain
 // Verify). Duplicates the same isDocDone()-style completion rule verification.js's own
@@ -839,6 +957,8 @@ function buildAuditWorkbookAdapter(voucherGroup) {
         },
         showStatus: awShowStatus,
         saveLineItems: awSaveLineItems,
+        saveVoucherCheck: awSaveVoucherCheck,
+        saveVoucherChecksBatch: awSaveVoucherChecksBatch,
         saveAllVoucherLines: async () => {
             for (const line of (voucherGroup.lines || [])) {
                 await awSaveLineItems(line.detail_id);

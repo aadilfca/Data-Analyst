@@ -18,6 +18,7 @@ from database import (
     log_audit,
     bump_persisted_audit_rules_config_version,
     get_persisted_audit_rules_config_version,
+    record_audit_rules_config_change,
 )
 
 router = APIRouter()
@@ -85,7 +86,7 @@ def cache_set(key: str, value, ttl: float = AUDIT_RULES_CACHE_TTL_SECONDS):
     with _audit_rules_cache_lock:
         _audit_rules_cache[key] = (time.monotonic() + ttl, _audit_rules_config_version, value)
 
-def invalidate_audit_rules_cache():
+def invalidate_audit_rules_cache(change=None):
     """
     Clear the entire cache. Called from every Documents/Cross-checks/Categories write
     endpoint below (create/update/delete/restore, plus the two per-field toggle endpoints) -
@@ -103,6 +104,19 @@ def invalidate_audit_rules_cache():
         )
         _audit_rules_cache.clear()
         _verification_rulebook_cache.clear()
+        change = change or {
+            "entity_type": "Audit Rules configuration",
+            "entity_name": None,
+            "action": "Updated",
+        }
+        record_audit_rules_config_change(
+            _audit_rules_config_version,
+            change.get("entity_type", "Audit Rules configuration"),
+            change.get("entity_id"),
+            change.get("entity_name"),
+            change.get("action", "Updated"),
+            change.get("changed_by", "System"),
+        )
 
 def category_for_account_cache_key(client_id: int, account_code: str) -> str:
     """Key shape for the client-scoped category-for-account cache (Modal Caching Phase 3 extension)."""
@@ -821,7 +835,8 @@ def create_document(document: DocumentCreate):
     save_document_cross_check_fields(document_id, cross_check_fields)
 
     log_audit("Admin", "Create", "AuditRules", f"Created Document: {document.name}")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Document", "entity_id": document_id,
+                                  "entity_name": document.name, "action": "Created"})
     return {"message": f"Document '{document.name}' created successfully", "document_id": document_id}
 
 @router.put("/api/audit-rules/documents/{document_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -846,7 +861,8 @@ def update_document(document_id: int, document: DocumentUpdate):
     save_document_cross_check_fields(document_id, cross_check_fields)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated Document ID {document_id}")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Document", "entity_id": document_id,
+                                  "entity_name": document.name, "action": "Updated"})
     return {"message": "Document updated successfully"}
 
 @router.delete("/api/audit-rules/documents/{document_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -859,7 +875,8 @@ def delete_document(document_id: int):
         raise HTTPException(404, "Active Document not found")
     execute_write_pg("UPDATE audit_rule_documents SET is_active = FALSE WHERE id = %s", (document_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Document: {existing[0]['name']} (ID: {document_id})")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Document", "entity_id": document_id,
+                                  "entity_name": existing[0]['name'], "action": "Deleted"})
     return {"message": "Document deleted (soft-delete) successfully"}
 
 @router.post("/api/audit-rules/documents/{document_id}/restore", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -872,7 +889,8 @@ def restore_document(document_id: int):
         raise HTTPException(404, "Inactive Document not found")
     execute_write_pg("UPDATE audit_rule_documents SET is_active = TRUE WHERE id = %s", (document_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Document: {existing[0]['name']} (ID: {document_id})")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Document", "entity_id": document_id,
+                                  "entity_name": existing[0]['name'], "action": "Restored"})
     return {"message": "Document restored successfully"}
 
 
@@ -1046,7 +1064,8 @@ def create_cross_check(cross_check: CrossCheckCreate):
     save_cross_check_documents(cross_check_id, cross_check.document_ids)
 
     log_audit("Admin", "Create", "AuditRules", f"Created Cross-check: {cross_check.name}")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
+                                  "entity_name": cross_check.name, "action": "Created"})
     return {"message": f"Cross-check '{cross_check.name}' created successfully", "cross_check_id": cross_check_id}
 
 @router.put("/api/audit-rules/cross-checks/{cross_check_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1067,7 +1086,8 @@ def update_cross_check(cross_check_id: int, cross_check: CrossCheckUpdate):
     save_cross_check_documents(cross_check_id, cross_check.document_ids)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated Cross-check ID {cross_check_id}")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
+                                  "entity_name": cross_check.name, "action": "Updated"})
     return {"message": "Cross-check updated successfully"}
 
 @router.delete("/api/audit-rules/cross-checks/{cross_check_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1080,7 +1100,8 @@ def delete_cross_check(cross_check_id: int):
         raise HTTPException(404, "Active Cross-check not found")
     execute_write_pg("UPDATE audit_rule_cross_checks SET is_active = FALSE WHERE id = %s", (cross_check_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Cross-check: {existing[0]['name']} (ID: {cross_check_id})")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
+                                  "entity_name": existing[0]['name'], "action": "Deleted"})
     return {"message": "Cross-check deleted (soft-delete) successfully"}
 
 @router.post("/api/audit-rules/cross-checks/{cross_check_id}/restore", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1093,7 +1114,8 @@ def restore_cross_check(cross_check_id: int):
         raise HTTPException(404, "Inactive Cross-check not found")
     execute_write_pg("UPDATE audit_rule_cross_checks SET is_active = TRUE WHERE id = %s", (cross_check_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Cross-check: {existing[0]['name']} (ID: {cross_check_id})")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
+                                  "entity_name": existing[0]['name'], "action": "Restored"})
     return {"message": "Cross-check restored successfully"}
 
 
@@ -1450,7 +1472,8 @@ def create_category(category: CategoryCreate):
     save_category_cross_checks(category_id, category.cross_check_ids)
 
     log_audit("Admin", "Create", "AuditRules", f"Created Category: {category.name}")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Category", "entity_id": category_id,
+                                  "entity_name": category.name, "action": "Created"})
     return {"message": f"Category '{category.name}' created successfully", "category_id": category_id}
 
 @router.put("/api/audit-rules/categories/{category_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1481,7 +1504,8 @@ def update_category(category_id: int, category: CategoryUpdate):
         bump_category_matrix_version(category_id)
 
     log_audit("Admin", "Update", "AuditRules", f"Updated Category ID {category_id}")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Category", "entity_id": category_id,
+                                  "entity_name": category.name, "action": "Updated"})
     return {"message": "Category updated successfully"}
 
 @router.delete("/api/audit-rules/categories/{category_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1494,7 +1518,8 @@ def delete_category(category_id: int):
         raise HTTPException(404, "Active Category not found")
     execute_write_pg("UPDATE audit_rule_categories SET is_active = FALSE WHERE id = %s", (category_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Category: {existing[0]['name']} (ID: {category_id})")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Category", "entity_id": category_id,
+                                  "entity_name": existing[0]['name'], "action": "Deleted"})
     return {"message": "Category deleted (soft-delete) successfully"}
 
 @router.post("/api/audit-rules/categories/{category_id}/restore", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1507,7 +1532,8 @@ def restore_category(category_id: int):
         raise HTTPException(404, "Inactive Category not found")
     execute_write_pg("UPDATE audit_rule_categories SET is_active = TRUE WHERE id = %s", (category_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored Category: {existing[0]['name']} (ID: {category_id})")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Category", "entity_id": category_id,
+                                  "entity_name": existing[0]['name'], "action": "Restored"})
     return {"message": "Category restored successfully"}
 
 @router.get("/api/audit-rules/categories/{category_id}/cleared-requirements")
@@ -1651,7 +1677,8 @@ def create_voucher_check(voucher_check: VoucherCheckCreate):
     )
 
     log_audit("Admin", "Create", "AuditRules", f"Created voucher check: {voucher_check.name}")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Voucher-level Check", "entity_id": voucher_check_id,
+                                  "entity_name": voucher_check.name, "action": "Created"})
     return {"message": f"Voucher check '{voucher_check.name}' created successfully", "voucher_check_id": voucher_check_id}
 
 @router.put("/api/audit-rules/voucher-checks/{voucher_check_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1666,7 +1693,8 @@ def update_voucher_check(voucher_check_id: int, voucher_check: VoucherCheckUpdat
     )
 
     log_audit("Admin", "Update", "AuditRules", f"Updated voucher check ID {voucher_check_id}")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Voucher-level Check", "entity_id": voucher_check_id,
+                                  "entity_name": voucher_check.name, "action": "Updated"})
     return {"message": "Voucher check updated successfully"}
 
 @router.delete("/api/audit-rules/voucher-checks/{voucher_check_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1679,7 +1707,8 @@ def delete_voucher_check(voucher_check_id: int):
         raise HTTPException(404, "Active voucher check not found")
     execute_write_pg("UPDATE audit_rule_voucher_checks SET is_active = FALSE WHERE id = %s", (voucher_check_id,))
     log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted voucher check: {existing[0]['name']} (ID: {voucher_check_id})")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Voucher-level Check", "entity_id": voucher_check_id,
+                                  "entity_name": existing[0]['name'], "action": "Deleted"})
     return {"message": "Voucher check deleted (soft-delete) successfully"}
 
 @router.post("/api/audit-rules/voucher-checks/{voucher_check_id}/restore", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1692,7 +1721,8 @@ def restore_voucher_check(voucher_check_id: int):
         raise HTTPException(404, "Inactive voucher check not found")
     execute_write_pg("UPDATE audit_rule_voucher_checks SET is_active = TRUE WHERE id = %s", (voucher_check_id,))
     log_audit("Admin", "Restore", "AuditRules", f"Restored voucher check: {existing[0]['name']} (ID: {voucher_check_id})")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Voucher-level Check", "entity_id": voucher_check_id,
+                                  "entity_name": existing[0]['name'], "action": "Restored"})
     return {"message": "Voucher check restored successfully"}
 
 @router.post("/api/audit-rules/voucher-checks/reorder", dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1704,7 +1734,8 @@ def reorder_voucher_checks(check_ids: List[int] = Body(...)):
             (idx, check_id)
         )
     log_audit("Admin", "Reorder", "AuditRules", "Reordered voucher checks")
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Voucher-level Check", "entity_name": "Voucher-level Checks",
+                                  "action": "Reordered"})
     return {"message": "Order updated successfully"}
 
 

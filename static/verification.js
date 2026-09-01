@@ -1447,6 +1447,9 @@ async function loadSessionRulebook(sessionId) {
             const error = new Error(detail.message || 'This Verification session uses an older Rulebook version.');
             error.code = detail.code;
             error.recovery = detail.recovery || null;
+            error.changes = Array.isArray(detail.changes) ? detail.changes : [];
+            error.sessionVersion = detail.session_version;
+            error.currentVersion = detail.current_version;
             throw error;
         }
         const message = typeof detail === 'string'
@@ -1457,6 +1460,47 @@ async function loadSessionRulebook(sessionId) {
     return (await rulebookResponse.json()).rulebook || null;
 }
 
+function rulebookChangeLabel(change) {
+    const subject = change.entity_name
+        ? `${change.entity_type || 'Rulebook item'} “${change.entity_name}”`
+        : (change.entity_type || 'Audit Rules configuration');
+    return `${change.action || 'Updated'}: ${subject}`;
+}
+
+function showRulebookChangeAlert(error) {
+    return new Promise(resolve => {
+        document.getElementById('rulebookChangeAlert')?.remove();
+        const changes = error.changes || [];
+        const changeHtml = changes.length
+            ? changes.map(change => `<li>${escapeHtml(rulebookChangeLabel(change))}</li>`).join('')
+            : '<li>One or more Audit Rules settings changed.</li>';
+        document.body.insertAdjacentHTML('beforeend', `
+            <div id="rulebookChangeAlert" class="rulebook-change-alert" role="dialog" aria-modal="true" aria-labelledby="rulebookChangeAlertTitle">
+                <div class="rulebook-change-alert-card">
+                    <div class="rulebook-change-alert-icon" aria-hidden="true">⚠️</div>
+                    <h2 id="rulebookChangeAlertTitle">Audit Rules changed</h2>
+                    <p>This session was started with an older Rulebook. The following factory setting change may affect verification results:</p>
+                    <ul>${changeHtml}</ul>
+                    <p class="rulebook-change-alert-versions">Session version ${escapeHtml(String(error.sessionVersion ?? 'unknown'))} → current version ${escapeHtml(String(error.currentVersion ?? 'unknown'))}</p>
+                    <p class="rulebook-change-alert-preserved">Your saved verification work will be preserved.</p>
+                    <div class="rulebook-change-alert-actions">
+                        <button type="button" class="btn-ghost" data-rulebook-alert-action="cancel">Leave session unchanged</button>
+                        <button type="button" class="btn-primary" data-rulebook-alert-action="recover">Update session and continue</button>
+                    </div>
+                </div>
+            </div>
+        `);
+        const alert = document.getElementById('rulebookChangeAlert');
+        const finish = recovered => {
+            alert?.remove();
+            resolve(recovered);
+        };
+        alert?.querySelector('[data-rulebook-alert-action="cancel"]')?.addEventListener('click', () => finish(false));
+        alert?.querySelector('[data-rulebook-alert-action="recover"]')?.addEventListener('click', () => finish(true));
+        alert?.querySelector('.rulebook-change-alert-card')?.focus?.();
+    });
+}
+
 // A Rulebook mismatch is safe to recover only through an explicit user action. The backend
 // changes the session version only; all existing verification work remains in place.
 async function loadSessionRulebookWithRecovery(sessionId) {
@@ -1464,10 +1508,7 @@ async function loadSessionRulebookWithRecovery(sessionId) {
         return await loadSessionRulebook(sessionId);
     } catch (error) {
         if (error.code !== 'RULEBOOK_VERSION_MISMATCH' || !error.recovery) throw error;
-        const confirmed = window.confirm(
-            'This Verification session uses an older Rulebook. Update the session to the current '
-            + 'Rulebook to resume? Your saved verification work will be preserved.'
-        );
+        const confirmed = await showRulebookChangeAlert(error);
         if (!confirmed) {
             error.recoveryDeclined = true;
             throw error;
@@ -4171,6 +4212,13 @@ function buildLineSavePayload(detailId) {
 }
 
 async function saveAndVerifyVoucher(detailId, verify = true) {
+    // The grouped request persists every line in the current voucher. Capture each line's dirty
+    // revision so a successful response clears only edits included in this request; an edit made
+    // while the request is in flight must remain dirty for a later retry/save.
+    const revisionsAtStart = {};
+    currentVoucherLines.forEach(line => {
+        revisionsAtStart[String(line.detail_id)] = voucherLineDirtyRevisions[String(line.detail_id)] || 0;
+    });
     const lines = currentVoucherLines.map(line => ({
         ...buildLineSavePayload(line.detail_id),
         transaction_ref: line.transaction_ref || line.voucher_id
@@ -4197,6 +4245,12 @@ async function saveAndVerifyVoucher(detailId, verify = true) {
     });
     const line = currentVoucherLines.find(l => String(l.detail_id) === String(detailId));
     if (line && data.cleared_status) line.cleared_status = data.cleared_status;
+    currentVoucherLines.forEach(savedLine => {
+        const key = String(savedLine.detail_id);
+        if ((voucherLineDirtyRevisions[key] || 0) === revisionsAtStart[key]) {
+            voucherLineDirtyRevisions[key] = 0;
+        }
+    });
     // The bundle just persisted every line in this voucher (procedure/voucher ticks included) —
     // drop the voucher-wide support cache, mirroring invalidateProcedureModalDataForVoucher() at
     // procedure_modal.js's own post-bundle-save call sites, so hideProcedureModalOnly()'s badge

@@ -7,6 +7,7 @@ import importlib
 
 import database
 from database import init_db
+from database import get_audit_rules_config_changes_since
 from routers.audit_rules import (
     cache_get,
     cache_set,
@@ -44,6 +45,22 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertEqual(get_audit_rules_config_version(), starting_version + 1)
         self.assertIsNone(cache_get("rulebook:test"))
 
+    def test_invalidation_records_rulebook_change_details(self):
+        starting_version = get_audit_rules_config_version()
+        invalidate_audit_rules_cache({
+            "entity_type": "Voucher-level Check",
+            "entity_id": 9,
+            "entity_name": "Test check",
+            "action": "Deleted",
+        })
+
+        changes = get_audit_rules_config_changes_since(starting_version)
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["config_version"], starting_version + 1)
+        self.assertEqual(changes[0]["entity_type"], "Voucher-level Check")
+        self.assertEqual(changes[0]["entity_name"], "Test check")
+        self.assertEqual(changes[0]["action"], "Deleted")
+
     def test_session_schema_has_nullable_rulebook_version(self):
         conn = sqlite3.connect(database.DB_NAME)
         try:
@@ -67,12 +84,16 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         with patch(
             "routers.verification.execute_query_pg",
             return_value=[{"client_id": 7, "rulebook_version": 1}],
-        ), patch("routers.verification.get_audit_rules_config_version", return_value=2):
+        ), patch("routers.verification.get_audit_rules_config_version", return_value=2), patch(
+            "routers.verification.get_audit_rules_config_changes_since",
+            return_value=[{"entity_type": "Voucher-level Check", "entity_name": "Test check", "action": "Deleted"}],
+        ):
             with self.assertRaises(Exception) as raised:
                 get_verification_session_rulebook(12)
 
         self.assertEqual(raised.exception.status_code, 409)
         self.assertEqual(raised.exception.detail["code"], "RULEBOOK_VERSION_MISMATCH")
+        self.assertEqual(raised.exception.detail["changes"][0]["entity_name"], "Test check")
         self.assertTrue(raised.exception.detail["recovery"]["preserves_work"])
 
     def test_explicit_session_rebase_preserves_work_contract(self):

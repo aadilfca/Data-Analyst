@@ -39,6 +39,7 @@ from routers.import_export import (
 # content is keyed by Category name/id, not client_id, since Categories aren't client-scoped
 # (see cache_get()/cache_set()'s own docstring in audit_rules.py for why).
 from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key, get_audit_rules_config_version, load_client_account_category_index, load_client_verification_rulebook
+from database import get_audit_rules_config_changes_since
 from routers.auth import get_current_user
 # "Why is this line Query?" gate breakdown only (see compute_and_persist_cleared_status()'s
 # detail mode) — the pass/fail answer itself still comes from check_approved_by_authority_gate()
@@ -2577,6 +2578,17 @@ def load_verification_rulebook_for_session(session_id: int) -> dict:
     session_version = sessions[0].get("rulebook_version")
     current_version = get_audit_rules_config_version()
     if session_version is not None and session_version != current_version:
+        changes = get_audit_rules_config_changes_since(session_version)
+        if not changes:
+            changes = [{
+                "config_version": current_version,
+                "entity_type": "Audit Rules configuration",
+                "entity_id": None,
+                "entity_name": None,
+                "action": "Updated",
+                "changed_by": "System",
+                "changed_at": None,
+            }]
         raise HTTPException(
             409,
             {
@@ -2585,6 +2597,7 @@ def load_verification_rulebook_for_session(session_id: int) -> dict:
                 "session_id": session_id,
                 "session_version": session_version,
                 "current_version": current_version,
+                "changes": changes,
                 "recovery": {
                     "method": "POST",
                     "path": f"/api/verification/session/{session_id}/rulebook/rebase",

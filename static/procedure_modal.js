@@ -1524,20 +1524,18 @@ function renderVoucherChecksBar(uid) {
             hostAdapter.markAllLinesDirty('voucher-level check changed');
             renderVoucherChecksBar(uid);
             renderProcedureModalTabs(uid);
+            // Verification keeps this change local until grouped Save -> Verify. Audit Workbook
+            // supplies this method because it has no grouped voucher save path.
+            if (typeof hostAdapter.saveVoucherCheck !== 'function') {
+                invalidateProcedureModalData(uid);
+                return;
+            }
             try {
-                const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_voucher_check`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        client_id: hostAdapter.getClientId(),
-                        transaction_ref: transactionRef,
-                        check_id: checkId,
-                        state: newState
-                    })
-                }, { target: this, message: 'Saving' });
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Failed to save voucher check.');
+                const result = await hostAdapter.saveVoucherCheck({
+                    transactionRef, checkId, state: newState, target: this
+                });
+                if (!result || !result.ok) {
+                    throw new Error(result?.error?.detail || 'Failed to save voucher check.');
                 }
                 // Completion-dot/gate logic depends on check state, so a successful toggle must
                 // refresh the rail's dots, the main table's Procedures badges, and the footer's
@@ -1552,6 +1550,7 @@ function renderVoucherChecksBar(uid) {
                 check.state = previousState;
                 hostAdapter.showStatus('Failed to save voucher-level check — please try again.', 'error');
                 renderVoucherChecksBar(uid);
+                renderProcedureModalTabs(uid);
             }
         });
     });
@@ -1578,6 +1577,13 @@ async function toggleAllVoucherChecks(uid) {
     hostAdapter.markAllLinesDirty('voucher-level checks changed');
     renderProcedureModalTabs(uid);
 
+    // Verification persists the complete voucher-check state in grouped Save -> Verify. Audit
+    // Workbook provides the direct batch method used below.
+    if (typeof hostAdapter.saveVoucherChecksBatch !== 'function') {
+        invalidateProcedureModalData(uid);
+        return;
+    }
+
     // Re-queried after the render above (not the click's own captured element) since that render
     // just replaced the select-all button's DOM node - a spinner on the old reference would be
     // invisible. Shown once for the whole batch, not per-item (LoadingUI's show/hide state is a
@@ -1586,13 +1592,13 @@ async function toggleAllVoucherChecks(uid) {
     if (window.LoadingUI && selectAllBtn) window.LoadingUI.showSpinner(selectAllBtn, 'Saving');
 
     try {
-        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_voucher_checks_batch`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ client_id: hostAdapter.getClientId(), transaction_ref: transactionRef,
-                checks: toChange.map(c => ({ check_id: c.id, state: newState })) })
+        const result = await hostAdapter.saveVoucherChecksBatch({
+            transactionRef,
+            checks: toChange.map(c => ({ check_id: c.id, state: newState }))
         });
-        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Failed to save voucher checks.');
+        if (!result || !result.ok) {
+            throw new Error(result?.error?.detail || 'Failed to save voucher checks.');
+        }
         renderVoucherChecksBar(uid);
         renderProcedureModalTabs(uid);
         invalidateProcedureModalData(uid);
@@ -1602,6 +1608,7 @@ async function toggleAllVoucherChecks(uid) {
         toChange.forEach(c => { c.state = previousStates[c.id]; });
         hostAdapter.showStatus('Failed to update all checks — please try again.', 'error');
         renderVoucherChecksBar(uid);
+        renderProcedureModalTabs(uid);
     } finally {
         if (window.LoadingUI && selectAllBtn) window.LoadingUI.hideSpinner(selectAllBtn);
     }

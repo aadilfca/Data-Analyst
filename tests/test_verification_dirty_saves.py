@@ -159,3 +159,61 @@ def test_save_and_verify_failure_is_reported_without_extra_request(dirty_page):
 
     assert not result["saveResult"]["ok"]
     assert len(result["calls"]) == 1
+
+
+def test_rulebook_change_alert_shows_change_and_returns_user_choice(dirty_page):
+    result = dirty_page.evaluate("""async () => {
+        const recoverPromise = showRulebookChangeAlert({
+            changes: [{entity_type: 'Voucher-level Check', entity_name: 'Test check', action: 'Deleted'}],
+            sessionVersion: 4,
+            currentVersion: 5
+        });
+        const alert = document.getElementById('rulebookChangeAlert');
+        const visibleText = alert.textContent;
+        alert.querySelector('[data-rulebook-alert-action="recover"]').click();
+        const recovered = await recoverPromise;
+
+        const cancelPromise = showRulebookChangeAlert({changes: [], sessionVersion: 5, currentVersion: 6});
+        document.querySelector('[data-rulebook-alert-action="cancel"]').click();
+        const cancelled = await cancelPromise;
+        return {visibleText, recovered, cancelled, remaining: !!document.getElementById('rulebookChangeAlert')};
+    }""")
+
+    assert 'Voucher-level Check “Test check”' in result["visibleText"]
+    assert 'Session version 4' in result["visibleText"]
+    assert result["recovered"] is True
+    assert result["cancelled"] is False
+    assert result["remaining"] is False
+
+
+def test_grouped_save_clears_only_revisions_included_in_request(dirty_page):
+    result = dirty_page.evaluate("""async () => {
+        markAllVoucherLinesDirty('voucher check changed');
+        const saveResult = await saveAndVerifyVoucher(1);
+        const afterSave = [1, 2, 3].map(isVoucherLineDirty);
+        return {saveResult, afterSave, requests: window.fetchCalls.length};
+    }""")
+
+    assert result["saveResult"]["ok"]
+    assert result["afterSave"] == [False, False, False]
+    assert result["requests"] == 1
+
+
+def test_grouped_save_preserves_edit_made_during_request(dirty_page):
+    result = dirty_page.evaluate("""async () => {
+        let releaseFetch;
+        window.fetch = () => new Promise(resolve => { releaseFetch = resolve; });
+        markAllVoucherLinesDirty('voucher check changed');
+        const savePromise = saveAndVerifyVoucher(1);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        markVoucherLineDirty(2, 'newer edit');
+        releaseFetch(new Response(JSON.stringify({line_statuses: {}}), {
+            status: 200,
+            headers: {'Content-Type': 'application/json'}
+        }));
+        const saveResult = await savePromise;
+        return {saveResult, dirty: [1, 2, 3].map(isVoucherLineDirty)};
+    }""")
+
+    assert result["saveResult"]["ok"]
+    assert result["dirty"] == [False, True, False]

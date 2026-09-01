@@ -15,6 +15,30 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Prominent Rulebook change alert
+
+**Date:** 2026-09-01 | **Files:** `database.py`, `routers/audit_rules.py`,
+`routers/verification.py`, `static/verification.js`, `static/audit_workbook.js`,
+`static/style.css`, `tests/test_audit_rulebook.py`, `tests/test_verification_dirty_saves.py`,
+`DEVELOPMENT_PLAN.md`.
+
+The Rulebook mismatch investigation showed that an older Audit Workbook session displayed only a
+generic failure while the browser's network panel exposed the HTTP 409. A durable
+`audit_rules_config_changes` history now records the Rulebook version, entity type, item name,
+action, user, and timestamp whenever stable Audit Rules configuration is invalidated. The
+session Rulebook mismatch response includes the changes newer than the session's captured version,
+with a safe generic fallback when historical records are unavailable.
+
+Verification and Audit Workbook now display a prominent blocking alert listing the changed factory
+settings and the session/current versions. The user can leave the session unchanged or explicitly
+rebase it; the rebase continues to preserve saved verification work. No silent Rulebook change or
+automatic recovery was added.
+
+Focused Rulebook, alert, and dirty-save tests passed 25 tests. Aadil manually confirmed that Audit
+Rules changes are not silently applied while a session is in progress and that the prominent alert
+identifies the changed factory setting. The approved Git closeout is now complete; Phase 2 is the
+next active implementation stage.
+
 ## Code Health Review — Rulebook and shared-modal reconciliation
 
 **Date:** 2026-08-31 | **Scope:** `routers/audit_rules.py`, `routers/verification.py`,

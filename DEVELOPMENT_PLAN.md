@@ -63,7 +63,7 @@ application code or test behavior is changed here.
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| 2 | **This phase - host-specific voucher-check persistence** | Preserve Verification local-first behavior and Audit Workbook direct saves | Next phase; high priority |
+| 2 | **This phase - host-specific voucher-check persistence** | Preserve Verification local-first behavior and Audit Workbook direct saves | Next implementation stage; high priority |
 | 3 | Verification guidance normalization | Restore Rulebook cross-check chains and document-level comparison fields | Pending |
 | 4A/4B | Safety acceptance and status matrix | Prove presence handling and Pending/Query/Cleared transitions across save paths | Pending |
 | 5 | Regression coverage | Cover restart recovery, host persistence, guidance, and status transitions; repair obsolete SQLite assumptions | Pending |
@@ -74,9 +74,9 @@ application code or test behavior is changed here.
 
 ### Next approved phase boundary
 
-Phase 0 is complete. Phase 1 is now complete after automated and manual verification. The next phase
-is Phase 2: host-specific voucher-check persistence. Its candidate files and implementation approach
-must be confirmed and explicitly approved before code changes begin.
+Phase 0 and Phase 1 are complete after automated and manual verification. The prominent Rulebook
+change alert is also complete. The next active stage is Phase 2: host-specific voucher-check
+persistence.
 
 ### Phase 1 status - Rulebook persistence and session recovery
 
@@ -97,8 +97,25 @@ Verification completed:
 - Python compilation, JavaScript syntax validation, and scoped `git diff --check` passed.
 - Aadil manually confirmed the Phase 1 behavior.
 
-Phase 1 is complete and ready for the approved Git closeout. The next implementation phase is Phase 2:
-host-specific voucher-check persistence.
+Phase 1 is complete and its approved changes were closed out after manual confirmation. The next
+implementation phase is Phase 2: host-specific voucher-check persistence.
+
+### Rulebook change alert enhancement
+
+The Rulebook mismatch response now carries version-linked change records so an older session can
+show the user which stable Audit Rules item changed, including its action and name. SQLite and
+Postgres both retain the change history alongside the durable configuration version. Verification
+and Audit Workbook now show a prominent blocking alert before continuing, with the choices to leave
+the session unchanged or explicitly update it. Saved verification work remains preserved; no
+automatic rebase was introduced.
+
+Verification completed:
+
+- Focused Rulebook, alert, and dirty-save tests: 25 passed with one existing pytest cache warning.
+- JavaScript syntax validation passed for Verification and Audit Workbook.
+- Aadil manually confirmed that Audit Rules changes are not silently applied while a session is in
+  progress and that the prominent alert identifies the changed factory setting.
+- Git closeout is approved and included with this phase transition.
 
 ## Current development: Verification and application performance
 
