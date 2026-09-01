@@ -18,9 +18,8 @@ let editingId = null;
 // for the destructive-switch confirm in saveDocument(). null while creating a new Document.
 let savedDocumentType = null;
 
-// Two independent flat string arrays edited by the chip editors below, sent as
-// auth_roles/cross_check_fields on save. Reset on both selectDocument() and
-// startNewDocument().
+// Authorisation roles remain editable. Cross-check fields are a read-only mirror of the active
+// Master Columns registry and are sent as a compatibility snapshot on save.
 let rolesState = [];
 let fieldsState = [];
 
@@ -64,8 +63,6 @@ const arRolesChipList = document.getElementById('arRolesChipList');
 const arRolesInput = document.getElementById('arRolesInput');
 const arRolesAddBtn = document.getElementById('arRolesAddBtn');
 const arFieldsChipList = document.getElementById('arFieldsChipList');
-const arFieldsSelect = document.getElementById('arFieldsSelect');
-const arFieldsAddBtn = document.getElementById('arFieldsAddBtn');
 const arDocSignatureSpecimensHint = document.getElementById('arDocSignatureSpecimensHint');
 const arDocSignatureSpecimensContainer = document.getElementById('arDocSignatureSpecimensContainer');
 const arUsedByRow = document.getElementById('arUsedByRow');
@@ -228,6 +225,7 @@ function renderRoleChips() {
 // match — this mirrors, client-side, the same case-insensitive/trimmed matching
 // routers/audit_rules.py's resolve_field_name_to_master_column_id() does on save, so a
 // flagged chip here is exactly one that would save with a NULL master_column_id.
+/* Legacy template-scoped chip renderer retained only inside this comment for source history.
 function renderFieldChips() {
     arFieldsChipList.innerHTML = '';
     if (fieldsState.length === 0) {
@@ -238,11 +236,8 @@ function renderFieldChips() {
         return;
     }
 
-    const templateId = arTemplateSelect.value;
-    const templateColumns = templateId ? (arTemplateColumnsCache[templateId] || []) : [];
-
     fieldsState.forEach(item => {
-        const isResolved = templateColumns.some(c => c.column_name.toLowerCase() === item.toLowerCase());
+        const isResolved = true;
 
         const chip = document.createElement('span');
         chip.className = 'ar-chip' + (isResolved ? '' : ' ar-chip-warning');
@@ -257,11 +252,33 @@ function renderFieldChips() {
         const removeBtn = document.createElement('button');
         removeBtn.type = 'button';
         removeBtn.className = 'ar-chip-remove';
+        removeBtn.style.display = 'none';
         removeBtn.textContent = '✕';
         removeBtn.title = 'Remove';
-        removeBtn.addEventListener('click', () => removeField(item));
         chip.appendChild(removeBtn);
 
+        arFieldsChipList.appendChild(chip);
+    });
+}
+
+}
+*/
+
+function renderFieldChips() {
+    arFieldsChipList.innerHTML = '';
+    if (fieldsState.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ar-chip-empty';
+        empty.textContent = 'No active Master Columns.';
+        arFieldsChipList.appendChild(empty);
+        return;
+    }
+    fieldsState.forEach(item => {
+        const chip = document.createElement('span');
+        chip.className = 'ar-chip';
+        const label = document.createElement('span');
+        label.textContent = item;
+        chip.appendChild(label);
         arFieldsChipList.appendChild(chip);
     });
 }
@@ -281,22 +298,6 @@ function removeRole(value) {
     rolesState = rolesState.filter(r => r !== value);
     delete requiredAuthorityState[value];
     renderRoleChips();
-}
-
-function addField() {
-    const value = arFieldsSelect.value;
-    if (!value) return;
-    if (fieldsState.some(f => f.toLowerCase() === value.toLowerCase())) {
-        return;
-    }
-    fieldsState.push(value);
-    renderFieldChips();
-    renderFieldsDropdown();
-}
-function removeField(value) {
-    fieldsState = fieldsState.filter(f => f !== value);
-    renderFieldChips();
-    renderFieldsDropdown();
 }
 
 // ---------- TEMPLATES (Phase 9: Document -> Data Bank template link) ----------
@@ -326,6 +327,7 @@ async function loadTemplatesForDocuments() {
 // `id` (the master_column_id) in the cached shape since it's directly relevant to this
 // feature's naming, even though the actual save payload is still by column_name text —
 // see saveDocument(), unchanged this phase.
+/* Legacy template-scoped field picker removed: cross-check fields now mirror Master Columns.
 let arTemplateColumnsCache = {};
 async function fetchArTemplateColumns(templateId) {
     if (!templateId) return [];
@@ -351,6 +353,7 @@ async function fetchArTemplateColumns(templateId) {
 // already enforced for free text. Called on template change and whenever fieldsState
 // changes (add/remove), plus on selectDocument()/startNewDocument().
 async function renderFieldsDropdown() {
+    return refreshFieldsMirror();
     const templateId = arTemplateSelect.value;
 
     if (!templateId) {
@@ -379,6 +382,30 @@ async function renderFieldsDropdown() {
         eligible.map(c => `<option value="${c.column_name}">${c.column_name}</option>`).join('');
     arFieldsSelect.disabled = false;
     arFieldsAddBtn.disabled = false;
+} */
+
+// The field list is a live mirror of active Master Columns, independent of the linked template.
+// Fetch it whenever a Document is opened or its type changes so newly added/renamed columns are
+// visible without editing each Document.
+async function fetchActiveMasterColumns() {
+    try {
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/columns');
+        if (!res.ok) throw new Error('Failed to fetch active Master Columns');
+        const columns = await res.json();
+        return columns.map(column => column.column_name);
+    } catch (error) {
+        console.error('Failed to load active Master Columns for Cross-check-eligible Fields:', error);
+        return [];
+    }
+}
+
+async function refreshFieldsMirror() {
+    if (arDocumentTypeSelect.value === 'physical_bill') {
+        fieldsState = [];
+    } else {
+        fieldsState = (await fetchActiveMasterColumns()).slice();
+    }
+    renderFieldChips();
 }
 
 // ---------- DOCUMENT TYPE (Physical Bill evidence type, Phase 4 of 8) ----------
@@ -441,8 +468,7 @@ async function selectDocument(id) {
         requiredAuthorityState = { ...(doc.auth_role_authorities || {}) };
         fieldsState = (doc.cross_check_fields || []).slice();
         renderRoleChips();
-        renderFieldChips();
-        renderFieldsDropdown();
+        await refreshFieldsMirror();
 
         arUsedByRow.style.display = 'block';
         arUsedByCount.textContent = doc.used_by_categories_count;
@@ -486,8 +512,7 @@ function startNewDocument() {
     requiredAuthorityState = {};
     fieldsState = [];
     renderRoleChips();
-    renderFieldChips();
-    renderFieldsDropdown();
+    refreshFieldsMirror();
 
     arUsedByRow.style.display = 'none';
     arDeleteBtn.style.display = 'none';
@@ -537,7 +562,7 @@ async function saveDocument(triggerBtn) {
             losing.push('its linked template (' + templateName + ')');
         }
         if (fieldsState.length) {
-            losing.push('its cross-check-eligible field(s): ' + fieldsState.join(', '));
+            losing.push('its mirrored cross-check-eligible fields');
         }
         if (losing.length) {
             const proceed = confirm(
@@ -857,16 +882,12 @@ arRolesInput.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') { e.preventDefault(); addRole(); }
 });
 
-arFieldsAddBtn.addEventListener('click', addField);
-
-// Switching the linked Template mid-edit re-scopes the eligible-fields dropdown and
-// re-flags any already-added field against the newly-selected template's columns
-// (ID-based Cross-check-eligible Fields, Phase 2 of 4) — existing fields are never
-// auto-removed on a template switch, only re-flagged.
-arTemplateSelect.addEventListener('change', renderFieldsDropdown);
 // Physical Bill evidence type (Phase 4 of 8): show/hide Template + Cross-check fields live as the
 // type changes, so the form always reflects what the chosen type can actually carry.
-arDocumentTypeSelect.addEventListener('change', updateDocumentTypeVisibility);
+arDocumentTypeSelect.addEventListener('change', () => {
+    updateDocumentTypeVisibility();
+    refreshFieldsMirror();
+});
 
 arSaveBtn.addEventListener('click', () => saveDocument(arSaveBtn));
 arDeleteBtn.addEventListener('click', deleteDocument);

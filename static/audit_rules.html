@@ -238,19 +238,13 @@
                          form doesn't show an empty section header. -->
                     <div class="ar-detail-section-title" id="arDocCrossChecksSectionTitle">Cross-Checks</div>
 
-                    <!-- Cross-check-eligible Fields: dropdown sourced from the linked Template's
-                         master columns (ID-based Cross-check-eligible Fields, Phase 2 of 4).
-                         Existing entries that don't match the current template's columns render
-                         flagged (see renderFieldChips() in audit_rules.js). -->
+                    <!-- Cross-check-eligible Fields mirrors the active Master Columns registry.
+                         It is read-only here so every existing and future client-data field is
+                         available to every non-Physical-Bill Document automatically. -->
                     <div class="ar-field" id="arDocFieldsField">
-                        <label>Cross-check-eligible Fields</label>
+                        <label>Cross-check-eligible Fields (automatic mirror)</label>
                         <div class="ar-chip-list" id="arFieldsChipList"></div>
-                        <div class="ar-chip-input-row">
-                            <select id="arFieldsSelect">
-                                <option value="">Select a template first</option>
-                            </select>
-                            <button type="button" id="arFieldsAddBtn" class="ar-btn-chip-add">Add</button>
-                        </div>
+                        <small class="ar-field-help">All active Master Columns are included automatically. New columns appear after the data is refreshed.</small>
                     </div>
 
                     <div class="ar-field" id="arUsedByRow" style="display:none;">

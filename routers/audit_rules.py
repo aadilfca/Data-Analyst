@@ -166,9 +166,12 @@ def compile_verification_rulebook(client_id: int) -> dict:
         "SELECT document_id, role_name, required_authority, sort_order "
         "FROM audit_rule_document_auth_roles ORDER BY document_id, sort_order"
     )
-    fields = execute_query_pg(
-        "SELECT document_id, field_name, sort_order, master_column_id "
-        "FROM audit_rule_document_fields ORDER BY document_id, sort_order"
+    # Cross-check fields are a mirror of the active Master Columns registry.  The legacy
+    # audit_rule_document_fields table is retained for compatibility, but it is no longer the
+    # source of truth because a manually saved list cannot include Master Columns added later.
+    master_columns = execute_query_pg(
+        "SELECT id, column_name FROM master_columns "
+        "WHERE is_active = TRUE ORDER BY category, column_name"
     )
     requirements = execute_query_pg(
         "SELECT category_id, document_id, is_required, sort_order "
@@ -223,12 +226,13 @@ def compile_verification_rulebook(client_id: int) -> dict:
                 "role_name": row["role_name"],
                 "required_authority": row.get("required_authority")
             })
-    for row in fields:
-        if row["document_id"] in fields_by_document:
-            fields_by_document[row["document_id"]].append({
-                "field_name": row["field_name"],
-                "master_column_id": row.get("master_column_id")
-            })
+    mirrored_fields = [
+        {"field_name": row["column_name"], "master_column_id": row["id"]}
+        for row in master_columns
+    ]
+    for document in documents:
+        if (document.get("document_type") or "linked_template") != "physical_bill":
+            fields_by_document[document["id"]] = [field.copy() for field in mirrored_fields]
     for row in requirements:
         if row["category_id"] in required_by_category:
             required_by_category[row["category_id"]].append(row)
@@ -591,12 +595,30 @@ def check_approved_by_authority_gate(client_id: int, category_id: int) -> bool:
             return False
     return True
 
-def get_document_cross_check_fields(document_id: int) -> List[str]:
-    rows = execute_query_pg(
-        "SELECT field_name FROM audit_rule_document_fields WHERE document_id = %s ORDER BY sort_order",
-        (document_id,)
+def get_active_master_columns() -> List[dict]:
+    """Return the live Master Columns registry used by cross-check field mirrors."""
+    return execute_query_pg(
+        "SELECT id, column_name FROM master_columns "
+        "WHERE is_active = TRUE ORDER BY category, column_name"
     )
-    return [r["field_name"] for r in rows]
+
+
+def get_document_cross_check_fields(document_id: int, document_type: Optional[str] = None) -> List[str]:
+    """Return the current Master Columns mirror for a Document.
+
+    Physical Bills intentionally return no Data Bank fields because their evidence fields are
+    fixed by document type. For every other Document, the active Master Columns registry is the
+    authority, so newly added columns appear without editing each Document.
+    """
+    if document_type is None:
+        rows = execute_query_pg(
+            "SELECT document_type FROM audit_rule_documents WHERE id = %s",
+            (document_id,)
+        )
+        document_type = (rows[0].get("document_type") if rows else None) or "linked_template"
+    if document_type == "physical_bill":
+        return []
+    return [row["column_name"] for row in get_active_master_columns()]
 
 def get_document_used_by_count(document_id: int) -> int:
     rows = execute_query_pg(
@@ -619,19 +641,24 @@ def row_to_document(row: dict) -> dict:
         "is_active": bool(row["is_active"]),
         "auth_roles": get_document_auth_roles(document_id),
         "auth_role_authorities": get_document_auth_role_authorities(document_id),
-        "cross_check_fields": get_document_cross_check_fields(document_id),
+        "cross_check_fields": get_document_cross_check_fields(document_id, row.get("document_type")),
         "used_by_categories_count": get_document_used_by_count(document_id)
     }
 
-def row_to_document_list(row: dict) -> dict:
+def row_to_document_list(row: dict, mirrored_fields: Optional[List[str]] = None) -> dict:
     """
-    Lean shape for the Documents LIST endpoint (Column trimming, Phase 4 of 13) -
-    renderDocumentList() (static/audit_rules.js) only reads id/name/is_active per row, so the
-    list endpoint no longer pays for row_to_document()'s 4 extra per-row queries
-    (auth_roles/auth_role_authorities/cross_check_fields/used_by_categories_count) that only
-    the detail view (selectDocument(), via the single-item GET) actually needs.
+    List shape used by both the Documents rail and the Cross-check document picker. The field
+    mirror is included here so the picker can calculate common fields without fetching every
+    Document detail record separately. Other detail-only fields remain trimmed.
     """
-    return {"id": row["id"], "name": row["name"], "is_active": bool(row["is_active"])}
+    document_type = row.get("document_type") or "linked_template"
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "is_active": bool(row["is_active"]),
+        "document_type": document_type,
+        "cross_check_fields": [] if document_type == "physical_bill" else (mirrored_fields or [])
+    }
 
 def validate_document_template_id(template_id: Optional[int]):
     """Raises HTTPException(400) if template_id is set but doesn't reference an active template."""
@@ -741,22 +768,14 @@ def resolve_field_name_to_master_column_id(template_id: Optional[int], field_nam
 
 def save_document_cross_check_fields(document_id: int, cross_check_fields: List[str]):
     """
-    Replace a Document's cross-check-eligible fields list (delete-then-reinsert). Each
-    field_name is also best-effort resolved to a master_column_id scoped to the Document's
-    own linked template (ID-based Cross-check-eligible Fields, Phase 1 of 4) - an unmatched
-    name is stored with master_column_id NULL, flagged for manual re-selection once a later
-    phase's dropdown UI lands, never silently dropped. field_name itself is unchanged/still
-    authoritative for the API's existing List[str] contract.
+    Compatibility hook for the old per-Document field persistence path.
+
+    Cross-check-eligible fields now come directly from active Master Columns, so persisting a
+    snapshot here would reintroduce the original bug whenever a new column is added. Existing
+    audit_rule_document_fields rows are deliberately left intact for older data and migration
+    compatibility, but no longer participate in display, validation, or Rulebook compilation.
     """
-    doc_rows = execute_query_pg("SELECT template_id FROM audit_rule_documents WHERE id = %s", (document_id,))
-    template_id = doc_rows[0]["template_id"] if doc_rows else None
-    execute_write_pg("DELETE FROM audit_rule_document_fields WHERE document_id = %s", (document_id,))
-    for idx, field_name in enumerate(cross_check_fields):
-        master_column_id = resolve_field_name_to_master_column_id(template_id, field_name)
-        execute_write_pg(
-            "INSERT INTO audit_rule_document_fields (document_id, field_name, sort_order, master_column_id) VALUES (%s, %s, %s, %s)",
-            (document_id, field_name, idx, master_column_id)
-        )
+    return None
 
 # ---------- ENDPOINTS ----------
 
@@ -802,7 +821,8 @@ def get_documents(response: Response, include_inactive: bool = False, limit: Opt
     rows, total = fetch_paginated_rows(base_query, count_query, "ORDER BY name", limit, offset)
     if total is not None:
         response.headers["X-Total-Count"] = str(total)
-    result = [row_to_document_list(r) for r in rows]
+    mirrored_fields = [row["column_name"] for row in get_active_master_columns()]
+    result = [row_to_document_list(r, mirrored_fields) for r in rows]
     cache_set(cache_key, (result, total))
     return result
 
@@ -999,10 +1019,13 @@ def validate_cross_check_payload(compare_field: str, comparison_type: str, docum
         raise HTTPException(400, "compare_to_voucher_line requires at least one Document (used as the anchor)")
 
     for document_id in document_ids:
-        doc_rows = execute_query_pg("SELECT name FROM audit_rule_documents WHERE id = %s", (document_id,))
+        doc_rows = execute_query_pg(
+            "SELECT name, document_type FROM audit_rule_documents WHERE id = %s",
+            (document_id,)
+        )
         if not doc_rows:
             raise HTTPException(400, f"Document ID {document_id} not found")
-        doc_fields = get_document_cross_check_fields(document_id)
+        doc_fields = get_document_cross_check_fields(document_id, doc_rows[0].get("document_type"))
         if compare_field not in doc_fields:
             raise HTTPException(
                 400,

@@ -1936,6 +1936,54 @@ let auditGuidanceCache = {};
 let auditGuidanceLoadingPromises = {};
 let categoryForAccountLoadingPromises = {};
 
+// The session Rulebook intentionally stores cross-check document references as stable IDs. The
+// legacy guidance endpoint already returns display names, so normalize the session shape here at
+// the Verification adapter boundary instead of changing either public response contract. Keep the
+// original IDs and all document metadata available for future consumers while supplying the
+// `documents` name list expected by buildAuditGuidanceTable().
+function normalizeSessionRulebookGuidance(profile) {
+    const sourceDocuments = Array.isArray(profile?.documents) ? profile.documents : [];
+    const documents = sourceDocuments.map(document => {
+        const documentId = document.document_id ?? document.id;
+        const authorityRoles = Array.isArray(document.authority_roles)
+            ? document.authority_roles
+            : (Array.isArray(document.auth_roles) ? document.auth_roles : []);
+        return {
+            ...document,
+            document_id: documentId,
+            id: documentId,
+            auth_roles: authorityRoles.map(role => role?.role_name || role)
+        };
+    });
+    const documentNamesById = new Map(
+        documents
+            .filter(document => document.document_id != null)
+            .map(document => [String(document.document_id), document.name || `Document ${document.document_id}`])
+    );
+    const crossChecks = (Array.isArray(profile?.cross_checks) ? profile.cross_checks : []).map(check => {
+        const documentIds = Array.isArray(check.document_ids)
+            ? check.document_ids
+            : (Array.isArray(check.documentIds) ? check.documentIds : []);
+        const resolvedNames = documentIds.map(documentId =>
+            documentNamesById.get(String(documentId)) || `Document ${documentId}`
+        );
+        const existingNames = Array.isArray(check.documents) ? check.documents : [];
+        return {
+            ...check,
+            document_ids: documentIds,
+            documents: resolvedNames.length ? resolvedNames : existingNames
+        };
+    });
+    return {
+        category_id: profile?.category_id,
+        category_name: profile?.name,
+        kb_overview: profile?.kb_overview,
+        matrix_version: profile?.matrix_version,
+        documents,
+        cross_checks: crossChecks
+    };
+}
+
 async function fetchAuditGuidanceData(type, forceRefresh = false) {
     if (!forceRefresh && Object.prototype.hasOwnProperty.call(auditGuidanceCache, type)) {
         return auditGuidanceCache[type];
@@ -1947,18 +1995,7 @@ async function fetchAuditGuidanceData(type, forceRefresh = false) {
         if (sessionRulebook) {
             const profile = (sessionRulebook.categories || []).find(category => category.name === type);
             if (profile) {
-                const guidance = {
-                    category_id: profile.category_id,
-                    category_name: profile.name,
-                    kb_overview: profile.kb_overview,
-                    matrix_version: profile.matrix_version,
-                    documents: (profile.documents || []).map(document => ({
-                        ...document,
-                        id: document.document_id,
-                        auth_roles: (document.authority_roles || []).map(role => role.role_name || role)
-                    })),
-                    cross_checks: profile.cross_checks || []
-                };
+                const guidance = normalizeSessionRulebookGuidance(profile);
                 auditGuidanceCache[type] = guidance;
                 return guidance;
             }

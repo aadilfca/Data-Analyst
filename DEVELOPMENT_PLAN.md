@@ -63,8 +63,9 @@ application code or test behavior is changed here.
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| 2 | **This phase - host-specific voucher-check persistence** | Preserve Verification local-first behavior and Audit Workbook direct saves | Next implementation stage; high priority |
-| 3 | Verification guidance normalization | Restore Rulebook cross-check chains and document-level comparison fields | Pending |
+| 3B | **This phase - Cross-check-eligible field mirror** | Make every non-Physical-Bill Document and Cross-check picker read the complete active Master Columns registry, including future columns | Developed and automated checks passed; awaiting manual browser validation |
+| 3A | Edit Template close/save regression | Keep template edits open as a draft until explicit Save Template submission | Automated checks passed; awaiting manual validation |
+| 3 | Verification guidance normalization | Restore Rulebook cross-check chains and document-level comparison fields | Pending manual validation after this UI fix |
 | 4A/4B | Safety acceptance and status matrix | Prove presence handling and Pending/Query/Cleared transitions across save paths | Pending |
 | 5 | Regression coverage | Cover restart recovery, host persistence, guidance, and status transitions; repair obsolete SQLite assumptions | Pending |
 | 5A | Verification session lifecycle | Decide whether to add explicit Completed/Cancelled states | Design feature; pending decision |
@@ -74,9 +75,9 @@ application code or test behavior is changed here.
 
 ### Next approved phase boundary
 
-Phase 0 and Phase 1 are complete after automated and manual verification. The prominent Rulebook
-change alert is also complete. The next active stage is Phase 2: host-specific voucher-check
-persistence.
+Phase 0, Phase 1, and Phase 2 are complete after automated and manual verification. The prominent
+Rulebook change alert is also complete. The active stage is Phase 3B: Cross-check-eligible field
+mirror, followed by the pending Phase 3A manual validation and Phase 3 guidance validation.
 
 ### Phase 1 status - Rulebook persistence and session recovery
 
@@ -97,8 +98,9 @@ Verification completed:
 - Python compilation, JavaScript syntax validation, and scoped `git diff --check` passed.
 - Aadil manually confirmed the Phase 1 behavior.
 
-Phase 1 is complete and its approved changes were closed out after manual confirmation. The next
-implementation phase is Phase 2: host-specific voucher-check persistence.
+Phase 1 is complete and its approved changes were closed out after manual confirmation. Phase 2
+was subsequently completed and the next implementation phase is Phase 3: Verification guidance
+normalization.
 
 ### Rulebook change alert enhancement
 
@@ -115,7 +117,81 @@ Verification completed:
 - JavaScript syntax validation passed for Verification and Audit Workbook.
 - Aadil manually confirmed that Audit Rules changes are not silently applied while a session is in
   progress and that the prominent alert identifies the changed factory setting.
-- Git closeout is approved and included with this phase transition.
+- Git closeout was approved and included with the Phase 1A implementation commit.
+
+### Phase 2 status - host-specific voucher-check persistence
+
+The existing shared Procedure Modal contract now keeps voucher-check persistence host-specific.
+Verification omits direct voucher-check save methods, retaining local-first state until its grouped
+Save -> Verify or save-only bundle request. Audit Workbook supplies individual and batch save methods
+because it has no grouped voucher save endpoint. Optimistic rendering, rollback, cache invalidation,
+Verify, and Verify & Next behavior are preserved.
+
+Verification completed:
+
+- Focused dirty-save regression suite: 12 passed with one existing pytest cache warning.
+- JavaScript syntax validation passed for the shared Procedure Modal, Verification, and Audit
+  Workbook files.
+- Aadil manually confirmed the Audit Workbook individual/batch check persistence and Verify flows.
+- Phase 2 is complete; Phase 3 is now the active implementation stage.
+
+### Phase 3 status - Verification guidance normalization
+
+Verification now normalizes the session Rulebook at the guidance adapter boundary. Stable
+`document_ids` in each cross-check are resolved to the matching document names expected by the
+guidance renderer, while the original IDs, comparison field/type, and document-level metadata are
+retained. Unknown document IDs remain visible as safe `Document <id>` placeholders instead of
+silently disappearing. The legacy live guidance endpoint and the existing status/gate logic are
+unchanged.
+
+Verification completed:
+
+- Focused Rulebook and dirty-save suites: 26 passed with one existing pytest cache warning.
+- JavaScript syntax validation passed for Verification.
+- Python compilation and scoped `git diff --check` passed.
+- Manual browser validation is the remaining phase gate.
+
+### Phase 3A status - Edit Template close/save regression
+
+The Edit Template modal now remains open when the backdrop is clicked, and the Escape key no longer
+closes it. Dynamically rendered Select/Remove controls and the search clear control are explicitly
+non-submit buttons, so selecting a column only changes the modal draft. The template is persisted
+only by the explicit Save Template submission; the existing intentional Cancel and top-right close
+controls remain available.
+
+Verification completed:
+
+- Disposable-template Playwright regression plus the Rulebook and dirty-save suites: 27 passed with
+  one existing pytest cache warning.
+- JavaScript syntax validation, Python compilation, and scoped `git diff --check` passed.
+- Manual browser validation is the remaining phase gate.
+
+### Phase 3B status - Cross-check-eligible field mirror
+
+Implemented in `routers/audit_rules.py`, `static/audit_rules.html`, and `static/audit_rules.js`,
+with focused coverage in `tests/test_audit_rulebook.py`.
+
+- Cross-check-eligible fields now mirror all active Master Columns for every non-Physical-Bill
+  Document, independent of the linked template or an old per-Document snapshot.
+- The Documents list response includes the mirrored field set, allowing the Cross-check picker to
+  calculate common fields correctly across all selected Documents.
+- The editor presents the field list as read-only automatic coverage; newly added or renamed
+  Master Columns are fetched when a Document is opened or its type changes.
+- Physical Bills continue to expose no Data Bank field mirror because their evidence fields are
+  fixed by document type.
+- The legacy `audit_rule_document_fields` rows remain intact for compatibility but are no longer
+  authoritative for display, validation, or Rulebook compilation.
+
+Verification completed:
+
+- `./venv/Scripts/python.exe -m pytest tests/test_audit_rulebook.py -q` - 15 passed with one
+  existing pytest cache warning.
+- `node --check static/audit_rules.js` - passed.
+- `./venv/Scripts/python.exe -m py_compile routers/audit_rules.py tests/test_audit_rulebook.py` - passed.
+- Scoped `git diff --check` - passed.
+
+Manual browser validation is the remaining phase gate. Commit/push is not required yet; it waits
+for manual confirmation and explicit approval.
 
 ## Current development: Verification and application performance
 

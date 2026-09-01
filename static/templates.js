@@ -306,6 +306,7 @@ function renderSearchResults(query) {
         appendNotesIcon(nameWrap, col.notes ? col.notes.trim() : '');
 
         const actionBtn = document.createElement('button');
+        actionBtn.type = 'button';
         if (isSelected) {
             actionBtn.textContent = '✅ Selected';
             actionBtn.style.cssText = 'background:#e8f5e9; color:#2e7d32; border:1px solid #a5d6a7; padding:4px 14px; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; display:flex; align-items:center; gap:4px;';
@@ -555,6 +556,7 @@ function renderSelectedColumns() {
         div.appendChild(nameWrap);
 
         const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
         removeBtn.textContent = '✕';
         removeBtn.style.cssText = 'background:none; border:none; color:#dc2626; cursor:pointer; font-size:16px; padding:0 6px;';
         removeBtn.addEventListener('click', function() { removeFromSelected(col.id); });
@@ -695,7 +697,6 @@ function openEditModal(template) {
 
 cancelBtn.addEventListener('click', closeModal);
 closeModalBtn.addEventListener('click', closeModal);
-modalOverlay.addEventListener('click', closeModal);
 
 // ---------- FORM SUBMIT ----------
 document.getElementById('templateForm').addEventListener('submit', async function(e) {
@@ -852,11 +853,6 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         if (quickAddModal && quickAddModal.style.display === 'block') {
             closeQuickAddColumnModal();
-            return;
-        }
-        const templateModal = document.getElementById('templateModal');
-        if (templateModal && templateModal.style.display === 'block') {
-            closeModal();
             return;
         }
         const previewModal = document.getElementById('previewModal');
