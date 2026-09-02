@@ -120,6 +120,11 @@ convention; needs its own Fix Mode brief, out of scope for this investigation.
   priority now that #1/#2 are confirmed as the dominant cost, but would confirm the
   query-cost conclusion still holds at the larger scale.
 
+**2026-09-02 addendum:** re-measured on the local dev server (procedure_modal_data,
+5 runs) — same finding #1 root cause, plus a new nuance (cold-connection-pool
+overhead, `PG_POOL_MIN=1`). See `INVESTIGATION_VERIFICATION_PERF_PHASE3.md`'s
+"Post-fix re-measurement" section and `KNOWN_ISSUES.md` (2026-09-02).
+
 ---
 
 ## Final Speed Investigation — 2026-08-25

@@ -247,3 +247,48 @@ A full browser waterfall of a real "Verify & Next" was **not** run — clicking 
 verification state for a real client (Leather Crop), and 3d is investigation-only. The step map
 above is from code plus the DB-call arithmetic. A live before/after belongs in Phase 3f's Render
 (staging) test, or run against a throwaway session with explicit go-ahead.
+
+---
+
+## Post-fix re-measurement (local dev server), 2026-09-02
+
+**Trigger:** user asked why the procedure window's data fetch still feels slow, right after the
+2026-09-02 cross-check shortfall fix. Read-only: 5 consecutive `GET
+/api/verification/procedure_modal_data/296378?perf=1` calls (a real, already-linked voucher line)
+against the local dev server — this endpoint has no auth guard, so no session/cookie was needed;
+nothing was written.
+
+| Run | `support_data_ms` | `voucher_checks_ms` | `cross_checks_ms` | `db_calls` | `db_ms` |
+|---|---|---|---|---|---|
+| 1 | 3641.7 | 477.0 | 1070.7 | 4 | 1547.4 |
+| 2 | 2356.2 | 464.0 | 969.2 | 6 | 1432.9 |
+| 3 | 2216.3 | 455.0 | 513.5 | 4 | 968.1 |
+| 4 | 2107.3 | 774.4 | 462.2 | 4 | 1236.4 |
+| 5 | 1984.4 | 461.7 | 453.9 | 4 | 915.5 |
+
+**No new root-cause class** — this is the same finding #1/#2 from `PERFORMANCE_INVESTIGATION.md`
+(fixed cross-region round-trip tax to Supabase Mumbai, still present even for a request that never
+leaves this machine, since only the database is remote) and the same endpoint Phase 3c already cut
+17→11 DB calls on. One genuinely new nuance from this pass:
+
+**The gap between `db_ms` (SQL execution time only) and each component's own wall-clock time is
+real, and it shrinks run over run** — e.g. run 1's `support_data_ms` (3641.7) is nearly 3x that
+run's share of `db_ms`, while run 5's `support_data_ms` (1984.4) is much closer to its share. All
+three components trend down across the 5 runs even though `db_calls` stays flat (4, occasionally
+6). This is the signature of **connection-acquisition overhead**, not query cost: `get_pg_pool()`
+(`database.py`) is created with `PG_POOL_MIN=1`, so only one physical connection is pre-warmed;
+every additional connection the pool needs under concurrent load is opened on demand, and each
+brand-new physical connection pays its own TCP+TLS+Postgres-auth round trip to Mumbai before any
+query can run on it — a cost `db_ms`'s instrumentation (which only wraps the `cur.execute()` call)
+never sees. Repeated calls reuse already-open pooled connections and warm toward the lower plateau
+seen by run 5.
+
+**Not actioned, diagnostic only** — consistent with every prior pass, the residual cost here is
+network/infrastructure (round-trip distance to Supabase Mumbai plus per-connection handshake cost
+under a cold pool), not a query-design or missing-index problem. `db_calls` varying between 4 and 6
+run-to-run (support_data's own conditional branches — `sibling_rows`/`links`/`checks`/`obs`/`bills`/
+`items` each skip with `if ... else []` when nothing exists to join against) is expected, not a bug.
+Two paths forward, same as `PERFORMANCE_INVESTIGATION.md` already lays out: raise `PG_POOL_MIN`
+above 1 so more connections are pre-warmed before traffic arrives (a small, low-risk config change,
+worth its own brief if this is ever worth doing) is the only lever specific to this new finding;
+the larger region-distance cost remains an infrastructure decision, not a code fix.
