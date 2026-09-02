@@ -595,7 +595,7 @@ function formatAssignedVoucherLabel(voucherId, lineSrno) {
 // assigned_to_line_client_data_id field routers/data.py's attach_assignment_flags() now returns.
 function isSameUnderlyingLine(uid, row) {
     if (!row.is_assigned) return false;
-    const currentLine = hostAdapter.currentVoucherLines.find(l => l.detail_id === uid);
+    const currentLine = hostAdapter.currentVoucherLines.find(l => String(l.detail_id) === String(uid));
     if (!currentLine || currentLine.client_data_id == null || row.assigned_to_line_client_data_id == null) return false;
     return String(currentLine.client_data_id) === String(row.assigned_to_line_client_data_id);
 }

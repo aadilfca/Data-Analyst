@@ -298,6 +298,8 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-02: Fixed cross-check shortfall note-save invalid placeholder document ID crashing Save-and-Verify; real hidden sentinel Document seeded lazily per cross-check. See CHANGELOG_ARCHIVE.md.
 - 2026-09-02: Investigated procedure-window fetch slowness (no code change) — confirmed same cross-region tax, new nuance: cold-pool connection overhead. See INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
 - 2026-09-02: Postgres pool reliability (2 phases, COMPLETE) — retry-once on a stale pooled connection (`_run_pooled_pg`/`_getconn_pg_checked`; `_PooledConnection`/`get_db_pg` removed) + `PG_POOL_MIN` 1→3 warm-start; `database.py`, `.env.example`, new `tests/test_pg_pool_retry.py`. See CHANGELOG_ARCHIVE.md.
+- 2026-09-02: Revised Cross-check pending plan — completed matrix, field-selection, persistence, and Verification result phases retired; acceptance through Git closeout remain active. See CHANGELOG_ARCHIVE.md.
+- 2026-09-02: Revised plan adds risk-based configurable Verification Data Fields before Data Table optimization and inventory-control Cross-check work. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

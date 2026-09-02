@@ -5267,6 +5267,7 @@ def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
         cph = ",".join("%s" for _ in cd_ids)
 
         links = execute_query_pg(f"""SELECT vld.id, vld.voucher_line_id, vld.client_data_id,
+            vd.client_data_id AS voucher_line_client_data_id,
             vld.document_id, vld.linked_by, vld.linked_at, vld.signature_exception,
             ard.name AS document_name, ard.is_active AS document_is_active, cd.row_data,
             cd.extract_date, cd.extract_amount, cd.rate_source
@@ -5308,7 +5309,10 @@ def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
         link_map={}; check_map={}; obs_map={}; bill_map={}
         for r in links:
             d=json.loads(r['row_data']) if isinstance(r['row_data'],str) else r['row_data']
-            link_map.setdefault(r['client_data_id'],[]).append({"id":r['id'],"voucher_line_id":r['voucher_line_id'],"client_data_id":r['client_data_id'],"document_id":r['document_id'],"document_name":r['document_name'],"is_active":bool(r['document_is_active']),"linked_by":r['linked_by'],"linked_at":r['linked_at'],"signature_exception":bool(r['signature_exception']),"row_data":d,"extract_date":r['extract_date'],"extract_amount":r['extract_amount'],"rate_source":r['rate_source']})
+            # Group by the voucher line's stable identity. client_data_id in the payload remains
+            # the linked evidence row's id; using that id as the map key made links disappear
+            # after the procedure modal reopened.
+            link_map.setdefault(r['voucher_line_client_data_id'],[]).append({"id":r['id'],"voucher_line_id":r['voucher_line_id'],"client_data_id":r['client_data_id'],"document_id":r['document_id'],"document_name":r['document_name'],"is_active":bool(r['document_is_active']),"linked_by":r['linked_by'],"linked_at":r['linked_at'],"signature_exception":bool(r['signature_exception']),"row_data":d,"extract_date":r['extract_date'],"extract_amount":r['extract_amount'],"rate_source":r['rate_source']})
         for r in latest_check.values(): check_map.setdefault(r['client_data_id'],[]).append({"document_id":r['document_id'],"role_name":r['role_name'],"is_checked":bool(r['is_checked']),"checked_by":r['checked_by'],"checked_at":r['checked_at'],"document_name":r['document_name'],"is_active":r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])})
         for r in latest_obs.values(): obs_map.setdefault(r['client_data_id'],[]).append({"document_id":r['document_id'],"observation_text":r['observation_text'] or '',"synced":bool(r['synced']),"last_synced_text":r['last_synced_text'],"updated_by":r['updated_by'],"updated_at":r['updated_at'],"document_name":r['document_name'],"is_active":r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])})
         for r in bills:

@@ -22,62 +22,32 @@ phase-status and decision-history sections.
 
 ## Current stabilization roadmap
 
-### Phase 0 - documentation and scope reconciliation
-
-**Date:** 2026-08-31
-
-This phase reconciles the latest Code Health Review with the current `HEAD`, records the true
-remaining risks, and establishes the safe order for stabilization. It is documentation-only; no
-application code or test behavior is changed here.
-
-#### Phase 0 outcome
-
-- The reported permanent Audit Rules lock is not a current defect. The active guard uses an
-  expiring, ended-aware `verification_presence` lease. An explicit terminal session lifecycle is
-  still a separate design feature.
-- Rulebook version recovery is the highest-priority defect. The process-local version resets on
-  restart, while resumable sessions retain their captured version; stable-rule invalidation can
-  also create an unrecoverable HTTP 409 mismatch.
-- Shared voucher-check persistence requires an explicit host contract. Verification must remain
-  local-first and persist through grouped Save and Verify; Audit Workbook must retain direct saves.
-- Verification guidance must normalize Rulebook cross-check document IDs and document-level fields
-  before rendering the document chain.
-- The ThreadPool/ContextVar memo issue and Audit Workbook error-boundary issue remain deferred.
-- Cross-check Field-to-Compare remains a later product phase, after stabilization and Git closeout.
-
-#### Approved stabilization sequence
-
-| Phase | Objective | Exit condition |
-|---|---|---|
-| **Phase 0 - This phase** | Reconcile Markdown records and establish scope | Plan, changelog, and known-issue records agree; no code changed |
-| Phase 1 | Persist Rulebook versions and provide safe session recovery | Restart and version-drift tests pass; saved work is not lost or silently rebased |
-| Phase 2 | Make voucher-check persistence host-specific | Verification has one grouped persistence path; Audit Workbook direct persistence still works |
-| Phase 3 | Normalize Verification Rulebook guidance | Cross-check chains and document comparison fields render correctly |
-| Phase 4 | Complete Safety A/B acceptance | Presence, leave, expiry, resume, and Pending/Query/Cleared transitions pass |
-| Phase 5 | Add focused regression coverage and repair Postgres-cutover test assumptions | Required regression suite is trustworthy and passing, or exceptions are documented |
-| Phase 6 | Apply deferred performance and adapter hardening | Only measured, separately approved improvements are implemented |
-| Phase 7 | Reconcile documentation and complete Git closeout | Manual testing is confirmed, then one approved commit/push is made |
-| Phase 8 | Begin deferred product work | Cross-check Field-to-Compare is separately scoped and approved |
-
 #### Current pending phases
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| 3B | **This phase - Cross-check-eligible field mirror** | Make every non-Physical-Bill Document and Cross-check picker read the complete active Master Columns registry, including future columns | Developed and automated checks passed; awaiting manual browser validation |
-| 3A | Edit Template close/save regression | Keep template edits open as a draft until explicit Save Template submission | Automated checks passed; awaiting manual validation |
-| 3 | Verification guidance normalization | Restore Rulebook cross-check chains and document-level comparison fields | Pending manual validation after this UI fix |
-| 4A/4B | Safety acceptance and status matrix | Prove presence handling and Pending/Query/Cleared transitions across save paths | Pending |
-| 5 | Regression coverage | Cover restart recovery, host persistence, guidance, and status transitions; repair obsolete SQLite assumptions | Pending |
-| 5A | Verification session lifecycle | Decide whether to add explicit Completed/Cancelled states | Design feature; pending decision |
-| 6 | Deferred hardening | Address ThreadPool/ContextVar memo reuse and Audit Workbook error boundaries | Deferred |
-| 7 | Documentation and Git closeout | Reconcile final records and complete the approved Git closeout | Pending |
-| 8 | Cross-check Field-to-Compare | Add field setup, selection, validation, and persistence | Deferred product phase |
+| 1 | **This phase - Procedure evidence persistence** | Reproduce and fix evidence/procedure persistence across Back, Verify, Verify & Next, and close | Pending |
+| 2 | Configurable Verification Data Fields | Implement core fields, optional risk-based fields, ordering, and unavailable-field handling in Audit Rules | Pending |
+| 3 | Data Table retrieval baseline | Measure configured-field retrieval: cold/warm time, DB calls, DB time, payload size, and browser render time | Pending measurement |
+| 4 | Inventory purchase Cross-check model | Define separate atomic controls for amount, rate, quantity, and quantity limits | Pending design |
+| 5 | Cross-check runtime integration | Connect matrix selections to runtime evaluation, including physical-bill values, mappings, totals, and rate row matching | Pending implementation |
+| 6 | Copy from lines repair | Add configurable Store Receiving → Physical Bill mappings with source provenance | Pending implementation |
+| 7 | Data Table performance optimization | Apply one measured optimization: field projection, fewer round trips, targeted search, or safe caching | Pending decision |
+| 8 | Cross-check source and legacy-path review | Retire legacy compare_field paths only where runtime no longer depends on them | Pending correctness review |
+| 9 | Cross-check end-to-end acceptance | Test CPV-0826-480 and representative inventory transactions, including dropdowns, shortfalls, and not-configured states | Pending manual validation |
+| 10 | Edit Template and guidance acceptance | Confirm explicit Save Template behavior, popup close behavior, Rulebook guidance, and visible Cross-check chains | Pending manual validation |
+| 11 | Procedure-save performance audit | Capture five cold and warm runs for save_line_items and save_and_verify_voucher_bundle | Pending measurement |
+| 12 | Final procedure-save performance decision | Decide using DB calls, DB time, total time, and network delay | Pending decision |
+| 13 | Safety and status acceptance | Test session locking, presence expiry/resume, Pending/Query/Cleared transitions, and fresh status badges | Pending |
+| 14 | Regression and lifecycle cleanup | Run focused regressions, resolve confirmed issues only, and decide whether Completed/Cancelled states are required | Pending |
+| 15 | Documentation and Git closeout | Update authoritative MD files, wait for manual confirmation, then perform the approved commit/push | Pending |
 
 ### Next approved phase boundary
 
-Phase 0, Phase 1, and Phase 2 are complete after automated and manual verification. The prominent
-Rulebook change alert is also complete. The active stage is Phase 3B: Cross-check-eligible field
-mirror, followed by the pending Phase 3A manual validation and Phase 3 guidance validation.
+Phase 0 documentation reconciliation is complete. Completed Cross-check matrix, field-selection,
+persistence, and Verification result work remains historical only. The revised Phases 1–15 above
+cover persistence, configurable data retrieval, inventory controls, performance, safety, regression,
+and closeout.
 
 ### Phase 1 status - Rulebook persistence and session recovery
 

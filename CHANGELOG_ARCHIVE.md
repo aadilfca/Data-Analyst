@@ -8,6 +8,18 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## Revised Cross-check pending plan — 2026-09-02
+
+The Cross-check matrix, field selection, persistence, and Verification result functionality are
+complete. Their development phases are retired from `DEVELOPMENT_PLAN.md`; only acceptance,
+correctness review, performance, safety, regression, and closeout phases remain active there.
+
+The revised plan adds a configurable Verification Data Field policy before performance optimization.
+Vendor, Item, Unit of Measurement, Quantity, Rate, and Amount are the core fields; Audit Rules may
+add optional active Master Columns by Low/Medium/High risk level and order, with unavailable fields
+shown explicitly. The backend must derive the allowed projection and targeted search fields rather
+than accepting arbitrary browser requests.
+
 This file was assembled on 2026-07-25 from the previous single-file CLAUDE.md's
 Conventions and Status log sections, split out project-by-project so CLAUDE.md
 itself could go back to being lean. Entries below are the original, unedited
