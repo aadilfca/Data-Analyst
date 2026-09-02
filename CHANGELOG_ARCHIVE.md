@@ -4330,7 +4330,7 @@ lines now have a persisted `cleared_status` (`Query`) instead of being permanent
 ## Postgres Pool Stale-Connection Retry
 
 **Date:** 2026-09-02 | **Files:** `database.py`, new `tests/test_pg_pool_retry.py`.
-Phase 1 of a two-phase brief (Phase 2 = raise `PG_POOL_MIN`, separate).
+Phase 1 of a two-phase brief; Phase 2 (`PG_POOL_MIN` warm-start) is the next section.
 
 **Problem.** `database.py`'s psycopg2 `ThreadedConnectionPool` never checked whether a
 connection it handed back was still alive. On this low-traffic free-tier Supabase (Mumbai),
@@ -4399,5 +4399,38 @@ silent; and the same retry end-to-end through `execute_query_pg`.
 regressions; `python -c "import database"` clean. Live server boot / Verification-flow check
 done by Aadil (browser HAR: all API responses `200`, no errors) — Phase 1 adds no
 import-time behaviour and does not touch `get_pg_pool()` construction.
+
+---
+
+## Postgres Pool Warm-Start (PG_POOL_MIN 1 → 3)
+
+**Date:** 2026-09-02 | **Files:** `database.py`, `.env.example`. Phase 2 (final) of the
+two-phase brief above.
+
+**Why.** `PG_POOL_MIN` controls how many connections `get_pg_pool()` opens *eagerly* at
+startup; the rest open lazily on first use, and each new physical connection pays a full
+round trip to Supabase (Mumbai) — costliest right after a cold start (Render free tier
+spins down on idle). The 2026-09-02 investigation measured `procedure_modal_data`'s
+`support_data_ms` dropping 3641→1984ms run-over-run at a flat DB-call count, the signature
+of that first-use connection cost. `MIN=1` was never a deliberate choice, just the original
+default.
+
+**Change.** `get_pg_pool()` — `int(os.environ.get("PG_POOL_MIN", "1"))` → `"3"`, plus a
+comment on the reasoning. `3` pre-warms enough for the first small burst of work after a
+wake, stays well below `PG_POOL_MAX` (15, unchanged — deliberately raised 10→15 on
+2026-08-25 for a real exhaustion incident) and the `asyncio.Semaphore(5)` availability
+fan-out cap in `routers/data.py`. `5` was considered and rejected (bigger one-time boot
+cost, more idle connections, no clear extra benefit for this traffic). Env var still
+overrides. `.env.example` corrected: `Defaults: 1 / 10` → `Defaults: 3 / 15` and the
+commented `PG_POOL_MIN`/`PG_POOL_MAX` examples (the MAX line had been stale since the
+2026-08-25 bump), plus a half-line explaining MIN vs MAX.
+
+**Cost.** ~+0.5s one-time at startup (3 sequential connects to Mumbai instead of 1). No
+per-request change; connections beyond 3 still open on demand exactly as before.
+
+**Verified:** `python -c "import database"` clean; full `pytest tests/` 98/98 (nothing
+asserts the constant). Live check by Aadil — dev server restarted, procedure window
+open/save/close exercised, browser HAR shows all API responses `200`/`304`, no errors.
+Startup line now reads `[postgres] connection pool created (min=3, max=15)`.
 
 ---

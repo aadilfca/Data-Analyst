@@ -17,6 +17,8 @@ Before investigating, planning, reviewing, or changing the project, read `CLAUDE
 
 Also consult `File_Map.md` before identifying affected files. Read relevant sections of `CHANGELOG_ARCHIVE.md` when work touches an existing module, behavior, or previously documented pattern. Use `KNOWN_ISSUES.md` for code-health findings as directed by `CLAUDE.md`.
 
+Claude Code also develops in this repository. Its completed work and design history are recorded in `CLAUDE.md`'s Status log and `CHANGELOG_ARCHIVE.md` — consult those before assuming a module or pattern is untouched.
+
 If this file conflicts with `CLAUDE.md`, stop and ask the user which instruction should prevail. Do not silently choose one or rewrite either file.
 
 ## Required workflow

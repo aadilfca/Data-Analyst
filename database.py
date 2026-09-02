@@ -4171,7 +4171,13 @@ def get_pg_pool():
             "variable (Render, Phase 7)."
         )
 
-    min_conn = int(os.environ.get("PG_POOL_MIN", "1"))
+    # min_conn connections are opened eagerly here at startup; every connection
+    # beyond that is opened lazily on first use, and each new physical connection
+    # pays a full round trip to a cross-region Supabase (Mumbai) - costliest
+    # right after a cold start. Default 3 (not 1) pre-warms enough to cover the
+    # first small burst of work; still well under max_conn (15) and the
+    # asyncio.Semaphore(5) availability fan-out cap in routers/data.py.
+    min_conn = int(os.environ.get("PG_POOL_MIN", "3"))
     max_conn = int(os.environ.get("PG_POOL_MAX", "15"))
     _pg_pool = psycopg2.pool.ThreadedConnectionPool(min_conn, max_conn, dsn=database_url)
     print(f"[postgres] connection pool created (min={min_conn}, max={max_conn})")
