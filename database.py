@@ -3967,8 +3967,8 @@ def _seed_postgres_data(conn):
 # migration.
 # ============================================================================
 # Pooled, env-var-driven Postgres equivalents of the SQLite helpers above
-# (get_db/execute_query/execute_write/get_raw_conn). Purely additive: no
-# SQLite function is touched, DB_NAME/get_db()/execute_query()/execute_write()/
+# (execute_query/execute_write/get_raw_conn). Purely additive: no SQLite
+# function is touched, DB_NAME/get_db()/execute_query()/execute_write()/
 # get_raw_conn()/init_db() all behave exactly as before. These functions exist
 # so a Supabase project can actually be connected to and initialized (see
 # main.py's startup handler) - Phase 3+ is what migrates individual routers
@@ -3976,8 +3976,9 @@ def _seed_postgres_data(conn):
 #
 # Uses a psycopg2 ThreadedConnectionPool (not SQLAlchemy) to match this
 # codebase's existing raw-SQL-plus-dict-rows style. Connections are borrowed
-# from the pool and returned (never closed) when done - RealDictCursor is
-# what gives rows dict-like access, the Postgres analogue of sqlite3.Row.
+# from the pool and returned when done (closed instead of re-pooled only when
+# found dead - see _run_pooled_pg / _getconn_pg_checked below) - RealDictCursor
+# is what gives rows dict-like access, the Postgres analogue of sqlite3.Row.
 #
 # Postgres uses %s placeholders (not SQLite's ?) - callers write native
 # psycopg2-style SQL, same convention _seed_postgres_data() (above) already
@@ -3986,13 +3987,148 @@ _pg_pool = None
 _pg_transaction = contextvars.ContextVar("_pg_transaction", default=None)
 
 
-class _ExistingConnection:
-    def __init__(self, conn):
-        self.conn = conn
-    def __enter__(self):
-        return self.conn
-    def __exit__(self, exc_type, exc_val, exc_tb):
+# --- Stale pooled-connection recovery --------------------------------------
+# psycopg2's ThreadedConnectionPool never checks whether a connection it hands
+# back is still alive. On this low-traffic free-tier Supabase (Mumbai), a
+# pooled connection dropped server-side while idle is handed straight back out
+# and the first statement on it raises - 13 real HTTP 500s across 8 endpoints
+# between 2026-08-25 and 2026-09-02 (KNOWN_ISSUES.md). Worse, a connection that
+# breaks mid-request can be rolled back into the pool and re-served.
+#
+# psycopg2 signals a dead/unreachable connection two ways, both subclasses of
+# psycopg2.Error:
+#   psycopg2.InterfaceError  -> the connection object is already closed
+#                               client-side ("connection already closed")
+#   psycopg2.OperationalError -> the server dropped a still-"open" connection
+#                               ("server closed the connection unexpectedly",
+#                               "terminating connection due to administrator
+#                               command"), or a fresh connect attempt failed
+#                               ("could not connect to server")
+# OperationalError also covers unrelated runtime faults a blind retry must NOT
+# paper over (deadlock, "too many clients", disk full), so we match the
+# message text as well as the type before deciding a connection is merely
+# stale.
+_STALE_PG_CONNECTION_MARKERS = (
+    "connection already closed",
+    "connection is closed",
+    "connection not open",
+    "server closed the connection unexpectedly",
+    "could not connect",
+    "terminating connection due to administrator command",
+    "terminating connection due to idle-in-transaction timeout",
+    "ssl connection has been closed unexpectedly",
+    "ssl syscall error",
+    "eof detected",
+    "consuming input failed",
+    "no connection to the server",
+    "bad connection",
+    "server conn crashed",
+)
+
+
+def _is_stale_pg_connection_error(exc) -> bool:
+    """
+    True only for a psycopg2 error meaning "this pooled connection is dead,
+    throw it away" - never for deadlocks, pool exhaustion, constraint
+    violations, bad SQL, or a non-psycopg2 exception, all of which propagate
+    unchanged.
+    """
+    if not isinstance(exc, (psycopg2.InterfaceError, psycopg2.OperationalError)):
         return False
+    text = str(exc).lower()
+    return any(marker in text for marker in _STALE_PG_CONNECTION_MARKERS)
+
+
+def _safe_pg_rollback(conn):
+    """
+    Best-effort rollback before a connection re-enters the pool. A dead or
+    already-rolled-back connection must not turn cleanup into a second error.
+    """
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
+
+def _run_pooled_pg(operation):
+    """
+    Borrow a pooled connection, run operation(conn), return the connection to
+    the pool, and return operation's result. This is the retry-once-on-stale
+    layer for the no-active-transaction path of execute_query_pg /
+    execute_write_pg.
+
+    If the borrowed connection turns out to be dead (see
+    _is_stale_pg_connection_error) it is discarded with putconn(close=True) -
+    so the pool opens a fresh one next time instead of re-serving the corpse -
+    and operation runs exactly once more on a new connection. A second stale
+    failure, or any non-stale error, propagates unchanged (the connection is
+    rolled back and returned to the pool first, the same cleanup the previous
+    context-manager borrow did).
+
+    NOT used inside pg_transaction(): there one connection is shared across
+    several statements forming a single unit of work and cannot be swapped
+    mid-stream, so that path validates the connection at borrow time instead
+    (_getconn_pg_checked). Accepted edge: if a write's `execute` succeeds but
+    the connection then dies within the `commit` round trip, the retry could
+    re-apply it - vanishingly rare, standard for retry wrappers, and not the
+    observed failure mode (every one of the 13 failed on the first statement,
+    before anything was sent).
+    """
+    pool = get_pg_pool()
+    stale_reason = None  # set once a first attempt is abandoned as stale
+    for attempt in (1, 2):
+        try:
+            conn = pool.getconn()
+        except Exception as exc:
+            # The pool opening a brand-new physical connection can transiently
+            # fail ("could not connect"); give that one retry too.
+            if attempt == 1 and _is_stale_pg_connection_error(exc):
+                stale_reason = exc
+                continue
+            raise
+        try:
+            result = operation(conn)
+        except Exception as exc:
+            if _is_stale_pg_connection_error(exc):
+                pool.putconn(conn, close=True)
+                if attempt == 1:
+                    stale_reason = exc
+                    continue
+                print(f"[postgres] stale pooled connection on both attempts ({exc}); failing request")
+                raise
+            _safe_pg_rollback(conn)
+            pool.putconn(conn)
+            raise
+        pool.putconn(conn)
+        if stale_reason is not None:
+            # The one place Phase 1's recovery is observable in the logs.
+            print(f"[postgres] discarded a stale pooled connection ({stale_reason}), retried OK")
+        return result
+
+
+def _getconn_pg_checked():
+    """
+    getconn() that skips a connection psycopg2 already knows is broken, for the
+    two paths that can't retry at the operation level - pg_transaction() (one
+    shared transaction) and get_raw_conn_pg() (connection handed to caller
+    code). The check is the client-side conn.closed flag only: no round trip,
+    so it is free on every call. It catches a connection that failed on an
+    earlier request and got recycled back into the pool; a connection silently
+    dropped while idle but not yet re-used is still only caught when its first
+    statement fails on these two paths (logged as a known residual gap).
+    """
+    pool = get_pg_pool()
+    discarded = 0
+    for _ in range(3):
+        conn = pool.getconn()
+        if not conn.closed:
+            if discarded:
+                print(f"[postgres] skipped {discarded} closed pooled connection(s) at borrow, using a live one")
+            return conn
+        pool.putconn(conn, close=True)
+        discarded += 1
+    print("[postgres] pool returned only closed connections, proceeding with the next one as-is")
+    return pool.getconn()
 
 
 @contextmanager
@@ -4002,17 +4138,18 @@ def pg_transaction():
     if existing is not None:
         yield existing
         return
-    conn = get_pg_pool().getconn()
+    conn = _getconn_pg_checked()
     token = _pg_transaction.set(conn)
     try:
         yield conn
         conn.commit()
     except Exception:
-        conn.rollback()
+        _safe_pg_rollback(conn)
         raise
     finally:
         _pg_transaction.reset(token)
-        get_pg_pool().putconn(conn)
+        # A connection that broke during the transaction must not be re-pooled.
+        get_pg_pool().putconn(conn, close=bool(conn.closed))
 
 
 def get_pg_pool():
@@ -4039,32 +4176,6 @@ def get_pg_pool():
     _pg_pool = psycopg2.pool.ThreadedConnectionPool(min_conn, max_conn, dsn=database_url)
     print(f"[postgres] connection pool created (min={min_conn}, max={max_conn})")
     return _pg_pool
-
-
-class _PooledConnection:
-    """
-    Context-manager wrapper returned by get_db_pg(): `with get_db_pg() as conn:`
-    borrows a connection from the pool and returns it (never closes it) when
-    the block exits - the pooled analogue of SQLite's get_db(), which opens
-    and closes a real file connection every call.
-    """
-    def __init__(self):
-        self._pool = get_pg_pool()
-        self._conn = self._pool.getconn()
-
-    def __enter__(self):
-        return self._conn
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is not None:
-            self._conn.rollback()
-        self._pool.putconn(self._conn)
-        return False
-
-
-def get_db_pg():
-    """Postgres equivalent of get_db() - use as `with get_db_pg() as conn:`."""
-    return _PooledConnection()
 
 
 # === OPT-IN PERFORMANCE DIAGNOSTICS ========================================
@@ -4111,29 +4222,36 @@ def _instrument_db_call(kind):
 @_instrument_db_call("reads")
 def execute_query_pg(query, params=None):
     """
-    Postgres equivalent of execute_query(): borrows a pooled connection, runs
-    a SELECT with a RealDictCursor, returns a list of dicts, returns the
-    connection to the pool. Uses %s placeholders (psycopg2 native), not
-    SQLite's ?.
+    Postgres equivalent of execute_query(): runs a SELECT with a RealDictCursor
+    and returns a list of dicts. Uses %s placeholders (psycopg2 native), not
+    SQLite's ?. Outside an active pg_transaction() the pooled connection is
+    borrowed via _run_pooled_pg(), which retries once on a stale connection.
     """
-    active = _pg_transaction.get()
-    with (get_db_pg() if active is None else _ExistingConnection(active)) as conn:
+    def _run(conn):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(query, params or ())
             return [dict(row) for row in cur.fetchall()]
+
+    active = _pg_transaction.get()
+    if active is not None:
+        return _run(active)
+    return _run_pooled_pg(_run)
 
 
 @_instrument_db_call("writes")
 def execute_write_pg(query, params=None):
     """
-    Postgres equivalent of execute_write(): borrows a pooled connection, runs
-    an INSERT/UPDATE/DELETE, commits, returns the connection to the pool.
-    Postgres has no sqlite3-style lastrowid - a caller that needs the new
-    row's id should add RETURNING id to its own query (already the pattern
-    _seed_postgres_data() above uses) and read it off the first returned row.
+    Postgres equivalent of execute_write(): runs an INSERT/UPDATE/DELETE and
+    commits (unless a pg_transaction() owns the commit). Postgres has no
+    sqlite3-style lastrowid - a caller that needs the new row's id should add
+    RETURNING id to its own query (already the pattern _seed_postgres_data()
+    above uses) and read it off the first returned row. Outside an active
+    pg_transaction() the pooled connection is borrowed via _run_pooled_pg(),
+    which retries once on a stale connection.
     """
     active = _pg_transaction.get()
-    with (get_db_pg() if active is None else _ExistingConnection(active)) as conn:
+
+    def _run(conn):
         with conn.cursor() as cur:
             cur.execute(query, params or ())
             if active is None:
@@ -4142,6 +4260,10 @@ def execute_write_pg(query, params=None):
                 row = cur.fetchone()
                 return row[0] if row else None
             return None
+
+    if active is not None:
+        return _run(active)
+    return _run_pooled_pg(_run)
 
 
 def is_postgres_schema_ready() -> bool:
@@ -4241,15 +4363,21 @@ def get_raw_conn_pg():
     that wants to manage its own transaction/cursor directly (e.g.
     init_db_postgres(), which expects a conn with .cursor()/.commit()). Pair
     with release_raw_conn_pg(conn) instead of conn.close() - closing a pooled
-    connection directly would just discard it rather than returning it.
+    connection directly would just discard it rather than returning it. Fresh
+    borrows go through _getconn_pg_checked() so an obviously-dead pooled
+    connection is skipped before the caller's first statement runs.
     """
-    return _pg_transaction.get() or get_pg_pool().getconn()
+    return _pg_transaction.get() or _getconn_pg_checked()
 
 
 def release_raw_conn_pg(conn):
-    """Returns a connection borrowed via get_raw_conn_pg() back to the pool."""
+    """
+    Returns a connection borrowed via get_raw_conn_pg() back to the pool - but
+    closes rather than re-pools one that broke while the caller held it
+    (conn.closed set), so a dead connection can't be handed to the next borrow.
+    """
     if conn is not _pg_transaction.get():
-        get_pg_pool().putconn(conn)
+        get_pg_pool().putconn(conn, close=bool(conn.closed))
 
 
 def close_pg_pool():

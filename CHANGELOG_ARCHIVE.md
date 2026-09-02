@@ -4326,3 +4326,78 @@ real `shortfall_document_id` pointing at a genuine hidden Document row, and all 
 lines now have a persisted `cleared_status` (`Query`) instead of being permanently stuck.
 
 ---
+
+## Postgres Pool Stale-Connection Retry
+
+**Date:** 2026-09-02 | **Files:** `database.py`, new `tests/test_pg_pool_retry.py`.
+Phase 1 of a two-phase brief (Phase 2 = raise `PG_POOL_MIN`, separate).
+
+**Problem.** `database.py`'s psycopg2 `ThreadedConnectionPool` never checked whether a
+connection it handed back was still alive. On this low-traffic free-tier Supabase (Mumbai),
+a pooled connection dropped server-side while idle was handed straight out and the first
+statement on it raised — 13 real HTTP 500s across 8 endpoints between 2026-08-25 and
+2026-09-02 (dashboard/kpi-stats ×4, auth/login ×2, verification presence/heartbeat ×2,
+audit-rules/documents, data/availability, verification latest_cashbook_date /
+preview_cashbook / start_session — one each; `KNOWN_ISSUES.md`). A connection that broke
+mid-request could also be rolled back into the pool and re-served, spreading the failure.
+
+**Confirmed before building** (read-only): all three pool-borrow chokepoints
+(`_PooledConnection` backing `get_db_pg()`, `pg_transaction()`,
+`get_raw_conn_pg()`/`release_raw_conn_pg()`) borrowed and used blindly — nothing caught
+`psycopg2.InterfaceError`/`OperationalError` anywhere in the pooling layer. `execute_batch_pg`
+/ `execute_batch_insert_with_ids_pg` receive an already-borrowed `conn`, so fixing the borrow
+points covers them. `_PooledConnection`/`get_db_pg()`/`_ExistingConnection` had exactly two
+callers — `execute_query_pg`/`execute_write_pg`.
+
+**Approach** (both decisions confirmed with Aadil):
+
+- `_is_stale_pg_connection_error(exc)` — `True` only for a `psycopg2.InterfaceError` /
+  `OperationalError` whose lowercased message contains a known stale marker
+  (`_STALE_PG_CONNECTION_MARKERS`: "server closed the connection unexpectedly",
+  "connection already closed", "could not connect", "terminating connection due to
+  administrator command", SSL-drop, "eof detected", …). Type check first because
+  `OperationalError` also covers deadlock / "too many clients" / disk-full, which a blind
+  retry must not paper over — those propagate untouched, as does any non-psycopg2 error.
+- `_run_pooled_pg(operation)` — the retry-once layer, replacing `_PooledConnection` et al.
+  Borrows, runs `operation(conn)`; on a stale failure discards the connection with
+  `putconn(close=True)` (pool rebuilds instead of re-serving the corpse) and runs
+  `operation` once more on a fresh connection. A second stale failure, or any non-stale
+  error, propagates (with a safe rollback + normal return-to-pool first). Also retries once
+  if `getconn()` itself transiently fails opening a new physical connection.
+  `execute_query_pg()`/`execute_write_pg()` now extract their body to a local `_run(conn)`
+  and call `_run_pooled_pg(_run)` on the no-transaction path (unchanged while a
+  `pg_transaction()` is active). Covers 12 of the 13 observed 500s.
+- `_getconn_pg_checked()` — for `pg_transaction()` and `get_raw_conn_pg()`, which share one
+  connection across a multi-statement unit of work and so can't be retried mid-stream. A
+  **free client-side** `conn.closed` check (no round trip — deliberately not a `SELECT 1`
+  ping, which would double this cross-region app's DB round trips): skip an already-broken
+  connection at borrow, up to 3×. `release_raw_conn_pg()` and the `pg_transaction()` finally
+  now `putconn(conn, close=bool(conn.closed))` so a connection that broke while held is not
+  re-pooled.
+- Recovery is logged (added after a log-visibility check with Aadil — the fix is otherwise
+  invisible): `[postgres] discarded a stale pooled connection (<reason>), retried OK` on a
+  successful retry; `[postgres] stale pooled connection on both attempts (...); failing
+  request` on a double failure; `[postgres] skipped N closed pooled connection(s) at
+  borrow` from `_getconn_pg_checked()`. Plain ASCII (no emoji, per the console-encoding
+  gotcha). The healthy path prints nothing.
+
+**Residual gap** (`KNOWN_ISSUES.md` 2026-09-02, Defer): a connection silently dropped while
+idle and first re-used *inside* a bare `pg_transaction()` / `get_raw_conn_pg()` block still
+fails that one request — no operation-level retry is possible there. Rare (≤1 of the 13),
+and the `close=True` recycling stops it spreading. Closing it fully needs the `SELECT 1`
+pre-ping, judged not worth one extra round trip per heavy write.
+
+**Tests** — `tests/test_pg_pool_retry.py`, 10 tests, hand-built fake pool/connection/cursor,
+no live Postgres, no `test.db`: retry-once-and-succeed; non-stale error propagates unchanged
+with no retry; give up after exactly one retry; transient `getconn` retry; the stale-vs-not
+predicate (matches the two documented conditions, rejects deadlock / "too many clients" /
+`ProgrammingError` / `ValueError`); `_getconn_pg_checked` skips a closed connection and
+leaves a healthy one untouched; each recovery log line fires and the non-stale path is
+silent; and the same retry end-to-end through `execute_query_pg`.
+
+**Verified:** `pytest tests/test_pg_pool_retry.py` 10/10; full `pytest tests/` 98/98, no
+regressions; `python -c "import database"` clean. Live server boot / Verification-flow check
+done by Aadil (browser HAR: all API responses `200`, no errors) — Phase 1 adds no
+import-time behaviour and does not touch `get_pg_pool()` construction.
+
+---
