@@ -2173,6 +2173,20 @@ function renderAccountHeadResultsButtonState(uid) {
 // detail, not a new UI language). Pure display: every value used here already exists in the
 // fetched rule result (see GET /api/verification/cross_check_results/{id}), nothing recomputed.
 
+// A not_evaluated rule can never leave that state no matter what gets linked when it has fewer
+// than 2 configured Documents and no voucher-line comparison — there's nothing for a linked value
+// to compare against (chain.length === 0 can't produce an anchor either way, so it's unconfigured
+// regardless of compare_to_voucher_line; kept for a future non-per-Document reader even though
+// today's per-Document-tab filtering, docCrossChecks below, means a chain can never actually be
+// empty when this runs — the open Document is always a chain member). Distinguishes a genuine
+// Audit Rules setup gap ("check not configured") from this voucher line simply not having enough
+// evidence linked yet ("documents not linked yet") — see summarizeCrossCheckRule()/
+// buildCrossCheckEmptyStateDetail() below, both empty/no-data redesign, Phase 2.
+function isCrossCheckRuleUnconfigured(rule) {
+    if (rule.chain.length === 0) return true;
+    return rule.chain.length < 2 && !rule.compare_to_voucher_line;
+}
+
 // One compact line per rule. A shortfall gets its own distinct (amber) state — not folded into
 // fail — since Phase 7/8 already treat it differently (doesn't gate Cleared, only observed).
 function summarizeCrossCheckRule(rule) {
@@ -2184,7 +2198,10 @@ function summarizeCrossCheckRule(rule) {
         return { icon: '⚠', text: `${field} shortfall`, cssClass: 'cc-badge-shortfall' };
     }
     if (rule.status === 'not_evaluated') {
-        return { icon: '—', text: `${field} not enough data`, cssClass: 'cc-badge-neutral' };
+        if (isCrossCheckRuleUnconfigured(rule)) {
+            return { icon: '⚙', text: `${field}: check not configured`, cssClass: 'cc-badge-neutral' };
+        }
+        return { icon: '—', text: `${field}: documents not linked yet`, cssClass: 'cc-badge-neutral' };
     }
     // pass
     const linkedCount = rule.chain.filter(c => c.linked && c.value !== null).length;
@@ -2196,8 +2213,12 @@ function summarizeCrossCheckRule(rule) {
 
 // Expanded detail: the actual per-document values feeding the rule, plus the voucher-line
 // comparison (if configured) and the rule's own message — all already present in `rule`, no
-// new lookups.
+// new lookups. not_evaluated is a dedicated redesign (buildCrossCheckEmptyStateDetail(), below) —
+// pass/fail/shortfall keep this original raw chain-list rendering unchanged.
 function buildCrossCheckRuleDetail(rule) {
+    if (rule.status === 'not_evaluated') {
+        return buildCrossCheckEmptyStateDetail(rule);
+    }
     let html = '<ul class="cc-chain-list">';
     rule.chain.forEach(c => {
         const isAnchor = rule.anchor_document_id === c.document_id;
@@ -2222,6 +2243,60 @@ function buildCrossCheckRuleDetail(rule) {
         html += `<div class="cc-rule-message cc-rule-message-${rule.status}">${hostAdapter.escapeHtml(rule.message)}</div>`;
     }
     return html;
+}
+
+// Empty/no-data state redesign (Phase 2): replaces the old plain "<field> not enough data" text
+// for a not_evaluated rule with a chip row (name + a ✓/✕ circle per configured Document, reusing
+// the same tick/cross circle language as the voucher-level Checks bar's
+// .procedure-voucher-check-btn, style.css) so an auditor can see at a glance exactly which
+// Documents still need linking, a plain-English explainer that differs for the two causes
+// (isCrossCheckRuleUnconfigured() above), a static info-icon tooltip (title attribute only, no
+// popover — same convention as the column-notes ℹ️ icon in static/templates.js), and a footnote
+// that reuses the engine's own already-computed rule.message verbatim (no new wording to keep in
+// sync with the backend). Every value used here already exists on `rule` — no new fetch.
+function buildCrossCheckEmptyStateDetail(rule) {
+    const unconfigured = isCrossCheckRuleUnconfigured(rule);
+
+    let chipsHtml = rule.chain.map(c => `
+        <span class="cc-empty-chip">
+            <span class="cc-empty-chip-circle${c.linked ? ' linked' : ''}">${c.linked ? '✓' : '✕'}</span>
+            <span class="cc-empty-chip-name">${hostAdapter.escapeHtml(c.document_name)}</span>
+        </span>
+    `).join('');
+
+    if (rule.compare_to_voucher_line) {
+        const vlc = rule.voucher_line_comparison;
+        const hasAnchorValue = !!(vlc && vlc.anchor_value !== null);
+        chipsHtml += `
+            <span class="cc-empty-chip">
+                <span class="cc-empty-chip-circle${hasAnchorValue ? ' linked' : ''}">${hasAnchorValue ? '✓' : '✕'}</span>
+                <span class="cc-empty-chip-name">Voucher Line Amount</span>
+            </span>
+        `;
+    }
+
+    const explainerText = unconfigured
+        ? 'This check needs another document to compare against, or a voucher-line comparison, before it can run.'
+        : `Link the document${rule.chain.length > 1 ? 's' : ''} above as evidence on this voucher line to run this check.`;
+
+    const tooltipText = 'A Cross-check compares a value across two or more documents, or against ' +
+        'the amount on this voucher line. It shows no result until enough of them are linked here ' +
+        'with a usable value.';
+
+    const footnoteHtml = rule.message
+        ? `<p class="cc-empty-footnote">${hostAdapter.escapeHtml(rule.message)}</p>`
+        : '';
+
+    return `
+        <div class="cc-empty-state">
+            <div class="cc-empty-chips">${chipsHtml}</div>
+            <p class="cc-empty-explainer">
+                <span>${hostAdapter.escapeHtml(explainerText)}</span>
+                <span class="cc-info-icon" title="${hostAdapter.escapeHtml(tooltipText)}">ℹ️</span>
+            </p>
+            ${footnoteHtml}
+        </div>
+    `;
 }
 
 function buildCrossCheckRollup(rules) {

@@ -4466,8 +4466,71 @@ body {
 }
 .cc-rule-message-fail { background: #fee2e2; color: #991b1b; }
 .cc-rule-message-shortfall { background: #fef3c7; color: #92400e; }
-.cc-rule-message-not_evaluated { background: #f1f5f9; color: #64748b; }
 .cc-rule-message-pass { background: #f8fafc; color: #64748b; }
+/* .cc-rule-message-not_evaluated removed - that status now renders via buildCrossCheckEmptyStateDetail()
+   (.cc-empty-* below), which never constructs a "cc-rule-message-<status>" class. */
+
+/* ----- Cross-check empty/no-data state redesign (Phase 2) ----- Replaces the old plain "<field>
+   not enough data" text for a not_evaluated rule. Chip circles reuse the same tick/cross visual
+   as the voucher-level Checks bar's .procedure-voucher-check-btn (muted grey outline = not linked,
+   solid green = linked) rather than a new color pairing. .cc-info-icon is a static tooltip only
+   (title attribute, no popover) - same convention as static/templates.js's column-notes ℹ️ icon. */
+.cc-empty-state {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.cc-empty-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.cc-empty-chip {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: #475569;
+}
+.cc-empty-chip-circle {
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1.5px solid #cbd5e1;
+    background: #f8fafc;
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+.cc-empty-chip-circle.linked {
+    background: #16a34a;
+    border-color: #16a34a;
+    color: #ffffff;
+}
+.cc-empty-explainer {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12px;
+    color: #334155;
+    margin: 0;
+}
+.cc-info-icon {
+    cursor: help;
+    flex-shrink: 0;
+    font-size: 12px;
+    line-height: 1;
+}
+.cc-empty-footnote {
+    font-size: 11px;
+    font-style: italic;
+    color: #94a3b8;
+    margin: 0;
+}
 
 .procedure-selected-table-wrapper {
     overflow-x: auto;
