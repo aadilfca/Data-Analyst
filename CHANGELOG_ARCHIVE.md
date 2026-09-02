@@ -4205,3 +4205,65 @@ manual WebInspector trace recorded 42 API requests with no non-200 responses. Th
 `procedure_modal_data` and Save → Verify timings remain tracked separately for performance work.
 
 ---
+
+## Data Table Cross-check Empty State Redesign
+
+**Date:** 2026-09-02 | **Files:** `routers/verification.py` (Phase 1, read-only investigation, no
+change), `static/procedure_modal.js`, `static/style.css`, `static/verification.html`,
+`static/audit_workbook.html` (Phase 2).
+
+Replaced the Data Table segment's single generic "`<field>` not enough data" text for a
+`not_evaluated` Cross-check rule with a design that distinguishes two different causes:
+
+- **"documents not linked yet"** — the Cross-check is fully configured; this voucher line simply
+  hasn't linked enough evidence.
+- **"check not configured"** — the Cross-check can never produce a result no matter what gets
+  linked (fewer than 2 configured Documents and no voucher-line comparison enabled) — an Audit
+  Rules setup gap, not a Verification to-do.
+
+Phase 1 traced `GET /api/verification/cross_check_results/{voucher_line_id}` →
+`evaluate_cross_checks_for_line()` → `_evaluate_single_cross_check()` and confirmed the response
+already carries everything needed client-side: each rule's `chain[]` has one entry per configured
+Document (with `linked`/`document_name`), plus `compare_to_voucher_line`. No backend change was
+needed.
+
+Phase 2 added `isCrossCheckRuleUnconfigured(rule)` (`chain.length === 0`, or `chain.length < 2`
+with no voucher-line comparison) and used it to branch both the collapsed badge
+(`summarizeCrossCheckRule()`) and a new expanded-detail renderer,
+`buildCrossCheckEmptyStateDetail()` (delegated to from `buildCrossCheckRuleDetail()` only for
+`not_evaluated` — pass/fail/shortfall keep the original raw chain-list rendering unchanged). The
+new detail renders a chip row (one ✓/✕ circle per configured Document, reusing the existing
+`.procedure-voucher-check-btn` tick/cross visual — green filled = linked, muted grey outline = not
+linked — plus a "Voucher Line Amount" chip when `compare_to_voucher_line` is set), a plain-English
+explainer sentence that differs by cause, a static `ℹ️` info-icon tooltip (`title` attribute only,
+no popover, same convention as `templates.js`'s column-notes icon) with fixed generic copy, and a
+footnote that reuses the engine's own already-computed `rule.message` verbatim. The now-unreachable
+`.cc-rule-message-not_evaluated` CSS rule was removed.
+
+A reachability finding surfaced during design: `docCrossChecks` filters rules to
+`chain.some(c => c.document_id === docId)`, so a rule with a fully empty chain can never render
+under any Document tab — the literal `chain.length === 0` condition is dead code today. The
+practically-reachable "check not configured" case is a chain of exactly one Document (the open
+tab's own) with no voucher-line comparison, which the engine's own `len(comparable) >= 2 or
+compare_to_voucher_line` rule means can never evaluate regardless of linking. `isCrossCheckRuleUnconfigured()`
+covers both conditions (a strict superset), so the design is demonstrable today without contradicting
+the narrower rule confirmed in Phase 1.
+
+Also fixed, discovered while bumping this file's cache-bust version: `verification.html` and
+`audit_workbook.html` had drifted to different `procedure_modal.js?v=` numbers (15 vs 14) — both
+now share `?v=16`. `style.css?v=` bumped 12→13 on all 18 pages per the existing convention.
+
+**Verified:** full backend suite passed (88 passed, unaffected — no backend change). No login
+credentials were available for this live Supabase-backed dev server, and this app holds real
+client audit data, so rather than a live logged-in walkthrough, verification used a Playwright
+harness (`page.evaluate()`) loading the live server's actual `procedure_modal.js`/`style.css` and
+invoking `summarizeCrossCheckRule()`/`buildCrossCheckRuleDetail()`/`buildCrossCheckRollup()`
+directly against hand-built `rule` objects covering: two Documents (one linked, one not), a single
+linked Document with no voucher-line comparison, a single unlinked Document with voucher-line
+comparison enabled, and an unrelated `fail`-status rule. Confirmed via computed styles/bounding
+rects and a screenshot: correct chip states, correct branch selection in all four cases, identical
+(static) tooltip text across rules, and the `fail` rule still rendering through the untouched old
+chain-list path with no `.cc-empty-state` bleed-through. Live in-app confirmation with a real
+voucher line is still recommended before considering this fully done end-to-end.
+
+---
