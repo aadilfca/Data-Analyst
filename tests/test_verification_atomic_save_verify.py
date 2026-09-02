@@ -338,3 +338,43 @@ def test_status_engine_uses_session_rulebook_loader_when_not_preloaded(monkeypat
 
     assert result is None
     assert loaded_sessions == [10]
+
+
+# --- Cross-check shortfall note-save fix ------------------------------------------------------
+# Confirmed root cause (2026-09-02): the old fixed negative-ID sentinel was never a real
+# audit_rule_documents row, which Postgres's real FK on voucher_line_observations.document_id
+# rejects outright, poisoning the whole shared Save-and-Verify transaction. The fix creates one
+# real, hidden Document row lazily per Cross-check and remembers it on
+# audit_rule_cross_checks.shortfall_document_id.
+
+def test_cross_check_shortfall_document_id_created_once_and_reused(monkeypatch):
+    state = {"shortfall_document_id": None}
+    inserted_docs = []
+    updates = []
+
+    def execute_query_pg(query, params=None):
+        if "SELECT shortfall_document_id" in query:
+            return [{"shortfall_document_id": state["shortfall_document_id"]}]
+        return []
+
+    def execute_write_pg(query, params=None):
+        if "INSERT INTO audit_rule_documents" in query:
+            inserted_docs.append(params)
+            return 555
+        if "UPDATE audit_rule_cross_checks SET shortfall_document_id" in query:
+            updates.append(params)
+            state["shortfall_document_id"] = params[0]
+            return None
+        return None
+
+    monkeypatch.setattr(verification, "execute_query_pg", execute_query_pg)
+    monkeypatch.setattr(verification, "execute_write_pg", execute_write_pg)
+
+    first = verification._get_or_create_cross_check_shortfall_document_id(31)
+    assert first == 555
+    assert inserted_docs == [("[System] Cross-check shortfall note (cross_check_id=31)",)]
+    assert updates == [(555, 31)]
+
+    second = verification._get_or_create_cross_check_shortfall_document_id(31)
+    assert second == 555
+    assert len(inserted_docs) == 1  # not created a second time - reused via the cached column

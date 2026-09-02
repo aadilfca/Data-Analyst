@@ -806,6 +806,11 @@ def get_documents(response: Response, include_inactive: bool = False, limit: Opt
     Set include_inactive=True to get all. Optional limit/offset paginate the result
     (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above. Read-side
     cache wiring (Modal Caching Phase 3, sub-phase 2) - see cache_get()/cache_set() above.
+
+    is_system rows (e.g. a Cross-check's own lazily-created shortfall-note placeholder, see
+    routers/verification.py's _get_or_create_cross_check_shortfall_document_id()) are excluded
+    unconditionally, even with include_inactive=True - they're never a real evidence requirement
+    and must never appear in this list.
     """
     cache_key = f"documents:list:{include_inactive}:{limit}:{offset}"
     cached = cache_get(cache_key)
@@ -815,7 +820,8 @@ def get_documents(response: Response, include_inactive: bool = False, limit: Opt
             response.headers["X-Total-Count"] = str(total)
         return result
 
-    where = "" if include_inactive else " WHERE is_active = TRUE"
+    where = " WHERE (is_system IS NOT TRUE)" if include_inactive \
+        else " WHERE (is_system IS NOT TRUE) AND is_active = TRUE"
     base_query = "SELECT * FROM audit_rule_documents" + where
     count_query = "SELECT COUNT(*) as cnt FROM audit_rule_documents" + where
     rows, total = fetch_paginated_rows(base_query, count_query, "ORDER BY name", limit, offset)

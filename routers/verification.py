@@ -138,17 +138,49 @@ def get_account_code_value(row_data: dict) -> Optional[str]:
 # server-side the same way the frontend already does for the voucher table.
 DESCRIPTION_ALIASES = ['Description', 'Voucher Detail', 'Narration', 'Remarks', 'Particulars']
 
-# Automated cross-document validation engine, Phase 8 of 10: reserved sentinel document_id
-# range for auto-written shortfall observations - same non-FK-enforced-sentinel convention as
-# ACCOUNT_HEAD_OBSERVATION_DOC_ID (-1, defined further below in this file) but a distinct range,
-# so the two never collide (cross_check_id is always >= 1, so every sentinel here is <= -1001).
-# One row per (voucher_line_id, cross_check_id): voucher_line_observations' existing
-# UNIQUE(voucher_line_id, document_id) constraint is reused AS-IS as this feature's dedupe key -
-# no schema change, no new duplication-prevention mechanism.
-CROSS_CHECK_SHORTFALL_DOC_ID_BASE = -1000
+# Automated cross-document validation engine, Phase 8 of 10 (fixed): each Cross-check gets its
+# own real, hidden audit_rule_documents row for its shortfall observations, created lazily the
+# first time it's needed and remembered on audit_rule_cross_checks.shortfall_document_id - one row
+# per (voucher_line_id, cross_check_id), same as before, still via voucher_line_observations'
+# existing UNIQUE(voucher_line_id, document_id) dedupe key.
+#
+# Superseded design, kept here as a comment since the failure mode is instructive: this used to be
+# a fixed negative-ID sentinel (CROSS_CHECK_SHORTFALL_DOC_ID_BASE - cross_check_id) that was never
+# a real row, on the assumption (true for SQLite, which never enables PRAGMA foreign_keys) that a
+# non-existent id is safe at the DB level. Postgres's real FK on
+# voucher_line_observations.document_id rejects it outright - _write_shortfall_observations()'s
+# own try/except swallowed that error locally, but couldn't undo Postgres's resulting "transaction
+# aborted" state, so every later statement in the same shared Save-and-Verify transaction failed
+# too. Dormant since Phase 8 was written (no Category had a real active Cross-check until the
+# cross-check matrix redesign); confirmed root cause of the "Verify & Next Line" 500 on
+# CPV-0826-180, 2026-09-02.
+def _get_or_create_cross_check_shortfall_document_id(cross_check_id: int) -> int:
+    rows = execute_query_pg(
+        "SELECT shortfall_document_id FROM audit_rule_cross_checks WHERE id = %s",
+        (cross_check_id,)
+    )
+    if rows and rows[0]['shortfall_document_id'] is not None:
+        return rows[0]['shortfall_document_id']
 
-def _cross_check_shortfall_sentinel_doc_id(cross_check_id: int) -> int:
-    return CROSS_CHECK_SHORTFALL_DOC_ID_BASE - cross_check_id
+    # Lazily create the one real Document row this Cross-check will reuse from now on. is_active
+    # = FALSE so it's naturally excluded from every existing "WHERE is_active = TRUE" document
+    # query (Documents tab, Rulebook compiler, evidence-linking pickers) with no further change
+    # needed there; is_system = TRUE is the explicit "hidden system row" flag, also used by
+    # sync_line_observations_to_voucher()/sync_voucher_observations_to_voucher() below to label
+    # this entry instead of the old numeric-range test.
+    new_id = execute_write_pg(
+        """
+        INSERT INTO audit_rule_documents (name, is_active, is_system, document_type)
+        VALUES (%s, FALSE, TRUE, 'linked_template')
+        RETURNING id
+        """,
+        (f"[System] Cross-check shortfall note (cross_check_id={cross_check_id})",)
+    )
+    execute_write_pg(
+        "UPDATE audit_rule_cross_checks SET shortfall_document_id = %s WHERE id = %s",
+        (new_id, cross_check_id)
+    )
+    return new_id
 
 def _has_pending_account_head_note(voucher_line_id: int, sibling_ids: Optional[List[int]] = None) -> bool:
     """
@@ -216,7 +248,8 @@ def _write_shortfall_observations(voucher_line_id: int, cross_check_result: dict
     Auto-log a minor observation for every currently-shortfall Cross-check result (Automated
     cross-document validation engine, Phase 8 of 10), reusing voucher_line_observations exactly
     as-is - same upsert shape save_line_observation() already uses for a real Document, one row
-    per (voucher_line_id, sentinel document_id) via _cross_check_shortfall_sentinel_doc_id().
+    per (voucher_line_id, sentinel document_id) via
+    _get_or_create_cross_check_shortfall_document_id().
 
     Self-correcting, not append-only: every rule in cross_check_result['results'] (i.e. every
     active Cross-check on the Category Phase 7 already resolved) has its sentinel row written
@@ -234,14 +267,14 @@ def _write_shortfall_observations(voucher_line_id: int, cross_check_result: dict
     elsewhere.
 
     Returns True iff at least one Cross-check was evaluated (i.e. results was non-empty) - the
-    caller uses this to skip an unnecessary re-sync call when there was nothing to write (today:
-    always, since zero active Cross-checks exist anywhere). Never raises - a failure here must
-    not block Cleared/Query computation, matching every other helper's contract in this file.
+    caller uses this to skip an unnecessary re-sync call when there was nothing to write (a
+    Category with zero active Cross-checks). Never raises - a failure here must not block
+    Cleared/Query computation, matching every other helper's contract in this file.
     """
     try:
         results = cross_check_result.get('results') or []
         for rule_result in results:
-            sentinel_id = _cross_check_shortfall_sentinel_doc_id(rule_result['cross_check_id'])
+            sentinel_id = _get_or_create_cross_check_shortfall_document_id(rule_result['cross_check_id'])
             text = _format_shortfall_observation_text(rule_result) if rule_result['status'] == 'shortfall' else ''
             execute_write_pg(
                 """
@@ -4411,7 +4444,7 @@ def sync_line_observations_to_voucher(voucher_line_id: int, sibling_ids: Optiona
         all_entries = execute_query_pg(
             f"""
             SELECT vlo.id, vlo.document_id, vlo.observation_text, vlo.updated_at,
-                   ard.name AS document_name
+                   ard.name AS document_name, ard.is_system AS is_system
             FROM voucher_line_observations vlo
             LEFT JOIN audit_rule_documents ard ON ard.id = vlo.document_id
             WHERE vlo.voucher_line_id IN ({placeholders})
@@ -4439,12 +4472,11 @@ def sync_line_observations_to_voucher(voucher_line_id: int, sibling_ids: Optiona
             if entry['document_id'] == ACCOUNT_HEAD_OBSERVATION_DOC_ID:
                 return (f"[Account Head Recommendation]: New account head recommended: "
                         f"{entry['observation_text'].strip()} — no match in Trial Balance")
-            # Automated cross-document validation engine, Phase 8 of 10: a shortfall sentinel
-            # (see CROSS_CHECK_SHORTFALL_DOC_ID_BASE) also has no matching audit_rule_documents
-            # row by design - the Cross-check's own name is already embedded in the stored text
-            # itself (_format_shortfall_observation_text()), so this label stays generic and
-            # needs no new JOIN here.
-            if entry['document_id'] <= CROSS_CHECK_SHORTFALL_DOC_ID_BASE:
+            # Automated cross-document validation engine, Phase 8 of 10: a shortfall sentinel is
+            # a real, hidden Document row (ard.is_system) - the Cross-check's own name is already
+            # embedded in the stored text itself (_format_shortfall_observation_text()), so this
+            # label stays generic rather than showing the sentinel's own internal document_name.
+            if entry.get('is_system'):
                 return f"[Cross-check Shortfall]: {entry['observation_text'].strip()}"
             return f"[{entry['document_name']}]: {entry['observation_text'].strip()}"
 
@@ -4520,7 +4552,8 @@ def sync_voucher_observations_to_voucher(voucher_line_ids: List[int], sibling_id
         sibling_ph = ",".join("%s" for _ in sibling_ids)
         rows = execute_query_pg(
             f"""SELECT vd.id AS line_id, vd.client_data_id, vlo.id, vlo.document_id,
-                       vlo.observation_text, vlo.updated_at, ard.name AS document_name
+                       vlo.observation_text, vlo.updated_at, ard.name AS document_name,
+                       ard.is_system AS is_system
                 FROM verification_details vd
                 LEFT JOIN verification_details sibling ON sibling.client_data_id=vd.client_data_id
                 LEFT JOIN voucher_line_observations vlo ON vlo.voucher_line_id=sibling.id
@@ -4560,7 +4593,7 @@ def sync_voucher_observations_to_voucher(voucher_line_ids: List[int], sibling_id
                     continue
                 if entry['document_id'] == ACCOUNT_HEAD_OBSERVATION_DOC_ID:
                     blocks.append(f"[Account Head Recommendation]: New account head recommended: {entry['observation_text'].strip()} — no match in Trial Balance")
-                elif entry['document_id'] <= CROSS_CHECK_SHORTFALL_DOC_ID_BASE:
+                elif entry.get('is_system'):
                     blocks.append(f"[Cross-check Shortfall]: {entry['observation_text'].strip()}")
                 else:
                     blocks.append(f"[{entry['document_name']}]: {entry['observation_text'].strip()}")
@@ -4624,11 +4657,14 @@ def get_line_observations(voucher_line_id: int):
             "last_synced_text": r['last_synced_text'],
             "updated_by": r['updated_by'],
             "updated_at": r['updated_at'],
-            # Inactive-document handling: LEFT JOIN so reserved sentinel document_ids
-            # (ACCOUNT_HEAD_OBSERVATION_DOC_ID, CROSS_CHECK_SHORTFALL_DOC_ID_BASE range,
-            # neither a real audit_rule_documents row) are never dropped. document_name/
-            # is_active come back None for those - never coerced to False - so the
-            # frontend can tell "not a real document" apart from "real, deactivated".
+            # Inactive-document handling: LEFT JOIN so the reserved ACCOUNT_HEAD_OBSERVATION_DOC_ID
+            # sentinel (still not a real audit_rule_documents row) is never dropped - its
+            # document_name/is_active come back None, never coerced to False, so the frontend can
+            # tell "not a real document" apart from "real, deactivated". A cross-check-shortfall
+            # entry is different since the note-save fix: it now has a real (but is_system=TRUE,
+            # is_active=FALSE) Document row, so this comes back as a real name and
+            # is_active: false rather than None/None - inert today, since nothing in the frontend
+            # renders this sentinel as a Document tab (it's never attached to any Category).
             "document_name": r['document_name'],
             "is_active": r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])
         }

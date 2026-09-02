@@ -1478,6 +1478,19 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add transaction_level_approval to audit_rule_documents:", e)
 
+        # Cross-check shortfall note-save fix: marks a Document row as a system-created
+        # placeholder (e.g. a Cross-check's own shortfall-observation sentinel, lazily created by
+        # routers/verification.py's get-or-create helper) - never shown in the Documents tab, never
+        # a real evidence requirement. Same upgrade-block treatment as is_active/template_id above.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'is_system' not in columns:
+                conn.execute("ALTER TABLE audit_rule_documents ADD COLUMN is_system INTEGER DEFAULT 0")
+                print("✅ Added is_system column to audit_rule_documents")
+        except Exception as e:
+            print("⚠️ Could not add is_system to audit_rule_documents:", e)
+
         # Physical Bill evidence type (new, confirmed 8-phase requirement, Phase 1 of 8):
         # document_type says HOW a Document's evidence is satisfied - 'linked_template' is
         # today's behaviour (a linked Data Bank row, or ticked procedure roles when the
@@ -1683,6 +1696,20 @@ def init_db():
                 print("✅ Added compare_to_voucher_line column to audit_rule_cross_checks")
         except Exception as e:
             print("⚠️ Could not add compare_to_voucher_line to audit_rule_cross_checks:", e)
+
+        # Cross-check shortfall note-save fix: caches the one real, hidden audit_rule_documents
+        # row lazily created for this Cross-check's shortfall observations (routers/verification.py
+        # get-or-create helper) - NULL until first needed. Replaces the old fixed negative-ID
+        # sentinel scheme, which Postgres's real FK on voucher_line_observations.document_id
+        # silently rejected (SQLite never enforces that FK, so this went unnoticed there).
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_cross_checks)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'shortfall_document_id' not in columns:
+                conn.execute("ALTER TABLE audit_rule_cross_checks ADD COLUMN shortfall_document_id INTEGER")
+                print("✅ Added shortfall_document_id column to audit_rule_cross_checks")
+        except Exception as e:
+            print("⚠️ Could not add shortfall_document_id to audit_rule_cross_checks:", e)
 
         # Ordered list of Documents a Cross-check applies to.
         conn.execute('''
@@ -2863,6 +2890,11 @@ def init_db_postgres(conn):
             transaction_level_approval BOOLEAN DEFAULT FALSE
         )
     ''', "audit_rule_documents")
+    # Cross-check shortfall note-save fix: marks a system-created placeholder Document (e.g. a
+    # Cross-check's own shortfall-observation sentinel, lazily created by
+    # routers/verification.py's get-or-create helper) - never shown in the Documents tab, never a
+    # real evidence requirement.
+    run("ALTER TABLE audit_rule_documents ADD COLUMN IF NOT EXISTS is_system BOOLEAN DEFAULT FALSE")
 
     # ---------- 5. template_column_mappings ----------
     run('''
@@ -3215,6 +3247,12 @@ def init_db_postgres(conn):
             compare_to_voucher_line BOOLEAN DEFAULT FALSE
         )
     ''', "audit_rule_cross_checks")
+    # Cross-check shortfall note-save fix: caches the one real, hidden audit_rule_documents row
+    # lazily created for this Cross-check's shortfall observations (routers/verification.py
+    # get-or-create helper) - NULL until first needed. Replaces the old fixed negative-ID sentinel
+    # scheme, which this table's real FK on voucher_line_observations.document_id silently
+    # rejected (SQLite never enforces that FK, so this went unnoticed there).
+    run("ALTER TABLE audit_rule_cross_checks ADD COLUMN IF NOT EXISTS shortfall_document_id INTEGER REFERENCES audit_rule_documents(id)")
 
     # ---------- 23. audit_rule_cross_check_documents ----------
     run('''
