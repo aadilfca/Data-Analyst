@@ -4267,3 +4267,62 @@ chain-list path with no `.cc-empty-state` bleed-through. Live in-app confirmatio
 voucher line is still recommended before considering this fully done end-to-end.
 
 ---
+
+## Cross-check Shortfall Note-Save Invalid Placeholder ID Fix
+
+**Date:** 2026-09-02 | **Files:** `database.py`, `routers/verification.py`,
+`routers/audit_rules.py`, `tests/test_verification_atomic_save_verify.py`.
+
+**Symptom:** "Verify & Next Line" on voucher CPV-0826-180 (session 891) returned HTTP 500 from
+`POST /api/verification/save_and_verify_voucher_bundle`, reproducibly, 3 times. The browser-side
+error body carried no useful detail (a generic 500 JSON), and the app's own `error_log` table
+(read read-only to diagnose, no live data touched) showed only a downstream Postgres cascade
+message — "current transaction is aborted, commands ignored until end of transaction block" —
+truncated before the real originating statement (`log_error()` caps `stack_trace` at 5000 chars).
+
+**Root cause:** `_write_shortfall_observations()` wrote a bookkeeping row into
+`voucher_line_observations` for every active Cross-check result, using a synthetic negative
+`document_id` (`CROSS_CHECK_SHORTFALL_DOC_ID_BASE - cross_check_id`) that was never a real row in
+`audit_rule_documents`. This was harmless on SQLite (`PRAGMA foreign_keys` is never enabled here —
+already a documented app-wide gotcha) but `voucher_line_observations.document_id` has a real `REFERENCES
+audit_rule_documents(id)` FK on the live Postgres database, so the INSERT was rejected outright.
+The function's own `try/except` swallowed that error locally (printed a warning, never reached
+`error_log`) but could not undo Postgres's resulting aborted-transaction state — and because the
+whole 5-line Save-and-Verify bundle runs in one shared transaction (a deliberate Rulebook-era speed
+optimization), every later statement in the same request then failed with the generic cascade,
+which is what actually reached the browser as a 500. The code path had been dormant since it was
+written (no Category had a real active Cross-check before the cross-check matrix redesign);
+Category "Material Purchased" — this voucher's own category — got its first one ("Purchase demand
+vs Purchase order", `cross_check_id=31`) on 2026-09-01, so this was the first live trigger.
+
+Confirmed via safe, read-only checks throughout (a live Supabase-backed dev server; no test data
+created, no writes made during diagnosis): the real Postgres error message, the resolved category
+and its attached Cross-check, and the confirmed absence of any negative-id row in
+`audit_rule_documents`.
+
+**Fix (approved approach — lazy get-or-create, not a pre-seeded block):** two additive schema
+columns — `audit_rule_documents.is_system` (marks a row as a hidden system placeholder) and
+`audit_rule_cross_checks.shortfall_document_id` (caches the one real Document row created for that
+Cross-check, `NULL` until first needed). `_get_or_create_cross_check_shortfall_document_id()`
+(replacing `_cross_check_shortfall_sentinel_doc_id()`) reads the cached id, or creates one real
+`is_system=TRUE, is_active=FALSE` Document row on first use and remembers it — safe for multiple
+simultaneous Cross-checks on one category, no guessed reserved ID range. The two label-detection
+call sites that used to test the old fixed numeric range (`sync_line_observations_to_voucher()`,
+`sync_voucher_observations_to_voucher()`) now check the same `is_system` flag instead.
+`get_documents()` (routers/audit_rules.py) excludes `is_system` rows unconditionally (even with
+`include_inactive=True`) so the placeholder never appears in the Documents tab.
+`ACCOUNT_HEAD_OBSERVATION_DOC_ID` (a separate, still-nonexistent sentinel) is untouched — out of
+scope for this fix.
+
+**Verified:** full backend suite passed (89/89, including one new test —
+`test_cross_check_shortfall_document_id_created_once_and_reused`, confirming create-once/reuse
+behavior). The dev server's own file-watcher auto-reloaded on the `.py` edits; the two new
+Postgres columns hadn't actually applied yet at that point, so the app's own idempotent
+`init_db_postgres()` was run once directly (safe, additive-only) and re-confirmed read-only:
+correct column types/defaults, zero existing rows affected (20 documents, 4 active Cross-checks
+unchanged). Live confirmation: Aadil re-ran "Verify & Next Line" on the same voucher (new session
+892) — read-only re-check afterward showed zero new errors logged, `cross_check_id=31` now has a
+real `shortfall_document_id` pointing at a genuine hidden Document row, and all 5 of the voucher's
+lines now have a persisted `cleared_status` (`Query`) instead of being permanently stuck.
+
+---

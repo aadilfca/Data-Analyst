@@ -294,6 +294,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-01: Doc compression — Architecture bullets rewritten as one-liners, Status log trimmed, cross-agent "keep every .md brief" rule added; CLAUDE.md, AGENTS.md.
 - 2026-09-01: Cross-check matrix redesign, 5 phases (COMPLETE) — cross-checks rebuilt as a document×field matrix: fields/cells schema, matrix CRUD + /documents + /meta + template-column endpoints, Documents-tab fields section removed, UI wired to live save/load; compare_field drop + engine migration deferred. See CHANGELOG_ARCHIVE.md.
 - 2026-09-02: Data Table cross-check empty state redesign (COMPLETE, 2 phases) — chip-style not-configured/not-linked states, no backend change needed; procedure_modal.js/style.css. See CHANGELOG_ARCHIVE.md.
+- 2026-09-02: Fixed cross-check shortfall note-save invalid placeholder document ID crashing Save-and-Verify; real hidden sentinel Document seeded lazily per cross-check. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
