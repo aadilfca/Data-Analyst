@@ -26,32 +26,45 @@ phase-status and decision-history sections.
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| 4 | **This phase - Inventory purchase Cross-check model** | Define separate atomic controls for amount, rate, quantity, and quantity limits | Pending design |
-| 5 | Cross-check runtime integration | Connect matrix selections to runtime evaluation, including physical-bill values, mappings, totals, and rate row matching | Pending implementation |
-| 6 | Copy from lines repair | Add configurable Store Receiving → Physical Bill mappings with source provenance | Pending implementation |
-| 7 | Data Table performance optimization | Apply one measured optimization: field projection, fewer round trips, targeted search, or safe caching | Pending decision |
-| 8 | Cross-check source and legacy-path review | Retire legacy compare_field paths only where runtime no longer depends on them | Pending correctness review |
-| 9 | Cross-check end-to-end acceptance | Test CPV-0826-480 and representative inventory transactions, including dropdowns, shortfalls, and not-configured states | Pending manual validation |
-| 10 | Edit Template and guidance acceptance | Confirm explicit Save Template behavior, popup close behavior, Rulebook guidance, and visible Cross-check chains | Pending manual validation |
-| 11 | Procedure-save performance audit | Capture five cold and warm runs for save_line_items and save_and_verify_voucher_bundle | Pending measurement |
-| 12 | Final procedure-save performance decision | Decide using DB calls, DB time, total time, and network delay | Pending decision |
-| 13 | Safety and status acceptance | Test session locking, presence expiry/resume, Pending/Query/Cleared transitions, and fresh status badges | Pending |
-| 14 | Regression and lifecycle cleanup | Run focused regressions, resolve confirmed issues only, and decide whether Completed/Cancelled states are required | Pending |
-| 15 | Documentation and Git closeout | Update authoritative MD files, wait for manual confirmation, then perform the approved commit/push | Pending |
+| 1 | **This phase - Data assignment and persistence investigation** | Unlock the affected voucher data safely, reproduce every save path, and correct assignment/persistence lifecycle failures | Pending investigation |
+| 2 | Data retrieval and field-scope redesign | Fetch only core verification fields, with risk-based additional fields configurable in Audit Rules | Pending design and implementation |
+| 3 | Data retrieval performance implementation | Measure and improve round trips, payload size, JSON scanning, pagination, batching, and caching within free Supabase limits | Pending measurement |
+| 4 | Unified Audit Rules architecture and UI | Build one Category Validation Rules section with separate Procedure/Evidence and Cross-check tables | Pending design approval |
+| 5 | Inventory purchase Cross-check rules and runtime | Implement and evaluate the five approved amount, rate, and quantity assertions in Verification | Pending implementation |
+| 6 | Cross-check source and legacy-path review | Confirm Template-scoped active mappings and retire legacy paths only where runtime no longer depends on them | Pending correctness review |
+| 7 | Vendor Bill Copy from lines | Repair Store receiving to Physical Bill copying with clear mappings, conflict handling, preview, and persistence | Pending investigation |
+| 8 | Edit Template and guidance acceptance | Confirm explicit Save Template, popup close, Rulebook guidance, and visible Cross-check chains | Pending manual validation |
+| 9 | Procedure-save performance audit | Capture five cold and five warm runs with total time, DB calls, DB time, and component timings | Pending measurement |
+| 10 | Final procedure-save performance decision | Apply one measured batching/reuse improvement or document the Supabase/network limitation | Pending decision |
+| 11 | Safety and status acceptance | Test session locking, assignment release, presence expiry/resume, and Pending/Query/Cleared transitions | Pending manual validation |
+| 12 | Regression and lifecycle cleanup | Run focused regressions, resolve confirmed issues only, and decide whether Completed/Cancelled states are required | Pending |
+| 13 | Documentation and Git closeout | Update authoritative MD files, obtain manual confirmation, then perform the approved commit/push | Pending |
+
+### Approved target design
+
+- Documents retain Name, Document Type, Template, Authorisation, Authorisation Roles, Signature
+  Specimens, and Used by Categories; duplicate metadata is removed only after dependency review.
+- Categories retain Name, Evidence Type, KB Overview, and Documents, and become the single policy
+  entry point through one Category Validation Rules section.
+- Procedure/Evidence checks (Prepared by, Checked by, Approved by, required documents, roles, and
+  signatures) remain separate from mathematical Cross-check comparisons.
+- Cross Checks use one configurable comparison table for operands, mapped fields, operators,
+  tolerances, missing-data behavior, and blocking status. Voucher-level checks remain separate.
+- Verification reads the Category policy and produces one consistent voucher-line status.
 
 ### Next approved phase boundary
 
-Phase 0 documentation reconciliation is complete. Completed Cross-check matrix, field-selection,
-persistence, Verification result, and configurable verification-field work remains historical only.
-The revised Phases 4–15 above cover inventory controls,
-performance, safety, regression, and closeout.
+Phase 0 plan and repository reconciliation is complete and archived. The active work now starts
+with Phase 1. Completed matrix, field-selection, Verification-result, and retrieval-baseline work
+remains historical only. The uncommitted atomic-control prototype is not final and will be
+reassessed under Phase 4.
 
 ### Chat reconciliation — 2026-09-02
 
-Completed in this chat: Phase 0 plan/repository reconciliation; Phase 1 procedure-evidence
-persistence (commit `02ecb52`, pushed); local server launcher recovery; Phase 2 configurable
-verification-field projection; and Phase 3 Data Table retrieval baseline. Inventory Cross-check,
-Copy from lines, optimization, safety, regression, and Git closeout remain pending below.
+Completed in this chat: procedure-evidence persistence (commit `02ecb52`, pushed); local server
+launcher recovery; configurable verification-field projection; and the Data Table retrieval
+baseline. Unified validation, inventory Cross-check runtime, Copy from lines, optimization,
+safety, regression, and Git closeout remain pending below.
 
 ### Phase 3 status - Data Table retrieval baseline — 2026-09-03
 
@@ -62,6 +75,12 @@ configured preview averages of 2.98/3.04 seconds client-side, 2.44/2.56 seconds 
 API/DB time, and 8 DB calls. Payloads averaged 25.5 KB configured and 34.3 KB normal. No runtime
 optimization was applied. Phase 3 is complete; browser console timing remains available for future
 comparisons, and the next active work is the inventory-purchase Cross-check model.
+
+### Phase 4 prototype note — 2026-09-03
+
+An uncommitted atomic-control prototype exists in the working tree. It is retained for review but
+is not the approved final design; Phase 4 will consolidate the user-facing policy under Categories
+and keep Procedure/Evidence and Cross-check rules as separate typed tables.
 
 ### Phase 1 status - Rulebook persistence and session recovery
 

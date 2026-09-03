@@ -8,17 +8,43 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
-## Revised Cross-check pending plan — 2026-09-02
+## Revised Cross-check plan and Phase 0 reconciliation — 2026-09-03
 
 The Cross-check matrix, field selection, persistence, and Verification result functionality are
 complete. Their development phases are retired from `DEVELOPMENT_PLAN.md`; only acceptance,
-correctness review, performance, safety, regression, and closeout phases remain active there.
+correctness review, performance, safety, regression, and closeout phases remain active there. Phase
+0 reconciliation is complete; the new active order starts with assignment/persistence investigation,
+retrieval scope and performance, unified rule configuration, runtime Cross-checks, and Copy from lines.
 
-The revised plan adds a configurable Verification Data Field policy before performance optimization.
-Vendor, Item, Unit of Measurement, Quantity, Rate, and Amount are the core fields; Audit Rules may
-add optional active Master Columns by Low/Medium/High risk level and order, with unavailable fields
-shown explicitly. The backend must derive the allowed projection and targeted search fields rather
-than accepting arbitrary browser requests.
+The approved target retains Document Type, adds one Category Validation Rules section, and separates
+Procedure/Evidence checks from mathematical Cross-check rules. Categories are the policy entry point;
+Voucher-level checks remain separate. Cross Checks will use one configurable comparison table, while
+the backend owns rule semantics and Verification owns status aggregation.
+
+## Unified Category Validation Rules architecture — 2026-09-03
+
+Procedure checks such as Prepared by, Checked by, Approved by, required documents, roles, and
+signatures are checklist/evidence requirements. Quantity, rate, amount, text, and date comparisons
+are mathematical Cross-check rules. They share one Category policy screen and status engine but use
+separate typed tables to avoid ambiguous nullable fields, invalid combinations, and duplicated
+validation logic. The existing uncommitted atomic-control prototype will be reassessed under Phase 4.
+
+## Inventory purchase Cross-check controls — 2026-09-03
+
+**Files:** `database.py`, `routers/audit_rules.py`, `static/audit_rules.html`,
+`static/audit_rules.js`, `tests/test_audit_rulebook.py`.
+
+Added normalized atomic controls beneath the existing document×field matrix. Each control stores a
+measure (`Amount`, `Rate`, or `Quantity`), operator (`Equal to` or `Greater than or equal to`),
+one matrix field row, and ordered Document/voucher-line operands. Server validation rejects missing
+matrix mappings, non-numeric fields, duplicate or out-of-axis Documents, invalid source combinations,
+and incomplete controls. The Audit Rules editor now presents readable controls with add/edit/delete
+actions and protects matrix rows/columns used by saved controls. Physical Bill fixed fields are
+available to the matrix picker; runtime evaluation remains Phase 5.
+
+Verification: full suite 108/108, Python/JavaScript syntax checks, and Playwright pilot checks passed
+with no page or console errors. No production verification result logic was changed. Pilot-mode
+manual confirmation remains pending. This prototype is not the final unified Category-rule design.
 
 ## Data Table retrieval baseline — 2026-09-03
 

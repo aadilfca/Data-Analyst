@@ -298,7 +298,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-02: Fixed cross-check shortfall note-save invalid placeholder document ID crashing Save-and-Verify; real hidden sentinel Document seeded lazily per cross-check. See CHANGELOG_ARCHIVE.md.
 - 2026-09-02: Investigated procedure-window fetch slowness (no code change) — confirmed same cross-region tax, new nuance: cold-pool connection overhead. See INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
 - 2026-09-02: Postgres pool reliability (2 phases, COMPLETE) — retry-once on a stale pooled connection (`_run_pooled_pg`/`_getconn_pg_checked`; `_PooledConnection`/`get_db_pg` removed) + `PG_POOL_MIN` 1→3 warm-start; `database.py`, `.env.example`, new `tests/test_pg_pool_retry.py`. See CHANGELOG_ARCHIVE.md.
-- 2026-09-02: Revised Cross-check pending plan — completed matrix, field-selection, persistence, and Verification result phases retired; acceptance through Git closeout remain active. See CHANGELOG_ARCHIVE.md.
+- 2026-09-03: Unified Category Validation Rules plan approved — procedure/evidence and mathematical Cross-check rules use separate typed tables under one Category policy. See CHANGELOG_ARCHIVE.md.
 - 2026-09-03: Configurable Verification Data Fields completed with Template-scoped persistence, server projection, Audit Rules UI, and Procedure Modal wiring. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
