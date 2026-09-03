@@ -106,6 +106,12 @@ local HTTP asset checks, and a live configured preview check passed. A live prev
 the configured keys from 11,515 available rows. Manual authenticated UI save/reopen confirmation
 remains the next-user checkpoint.
 
+Phase 2 reconciliation — 2026-09-03: the implementation was already present in commit `23b8e17`
+and the retrieval baseline in `ab847ee`; no duplicate code was added. Focused tests passed (49),
+the full suite passed (104), and Python/JavaScript checks passed. The superseded Phase 4 prototype
+was preserved in a local temporary checkpoint and removed from the active worktree. Manual
+authenticated UI confirmation remains pending; no commit or push was performed.
+
 ## Local tray launcher rebuild
 
 **Date:** 2026-09-02 | **Files:** `tray_control.py`, `start_tray.vbs`, `run.bat`.

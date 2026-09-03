@@ -26,9 +26,7 @@ phase-status and decision-history sections.
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| 1 | **This phase - Data assignment and persistence investigation** | Unlock the affected voucher data safely, reproduce every save path, and correct assignment/persistence lifecycle failures | Implementation complete; manual validation pending |
-| 2 | Data retrieval and field-scope redesign | Fetch only core verification fields, with risk-based additional fields configurable in Audit Rules | Pending design and implementation |
-| 3 | Data retrieval performance implementation | Measure and improve round trips, payload size, JSON scanning, pagination, batching, and caching within free Supabase limits | Pending measurement |
+| 2 | **This phase - Data retrieval and field-scope redesign** | Fetch only core verification fields, with risk-based additional fields configurable in Audit Rules | Implementation already complete; manual UI confirmation pending |
 | 4 | Unified Audit Rules architecture and UI | Build one Category Validation Rules section with separate Procedure/Evidence and Cross-check tables | Pending design approval |
 | 5 | Inventory purchase Cross-check rules and runtime | Implement and evaluate the five approved amount, rate, and quantity assertions in Verification | Pending implementation |
 | 6 | Cross-check source and legacy-path review | Confirm Template-scoped active mappings and retire legacy paths only where runtime no longer depends on them | Pending correctness review |
@@ -54,42 +52,25 @@ phase-status and decision-history sections.
 
 ### Next approved phase boundary
 
-Phase 0 plan and repository reconciliation is complete and archived. Phase 1 implementation is
-complete but remains the active phase until manual voucher validation confirms all save paths.
-Completed matrix, field-selection, Verification-result, and retrieval-baseline work remains
-historical only. The uncommitted atomic-control prototype is not final and will be reassessed under
-Phase 4.
+Phase 0 plan and repository reconciliation is complete and archived. Phase 1 and the retrieval
+performance baseline are complete and retired from the active table. Phase 2 implementation is
+already present and remains active only for manual UI confirmation. Completed matrix,
+Verification-result, and field-selection work remains historical only. The atomic-control
+prototype is quarantined locally and will be reassessed under Phase 4.
 
 ### Chat reconciliation — 2026-09-02
 
 Completed in this chat: procedure-evidence persistence (commit `02ecb52`, pushed); local server
 launcher recovery; configurable verification-field projection; and the Data Table retrieval
-baseline. Unified validation, inventory Cross-check runtime, Copy from lines, optimization,
-safety, regression, and Git closeout remain pending below.
-
-### Phase 3 status - Data Table retrieval baseline — 2026-09-03
-
-Added opt-in `perf=true` diagnostics to the configured Data Table preview path and browser console
-timing for Procedure Modal and Data Bank previews. Five cold and five warm live Supabase runs show
-configured preview averages of 2.98/3.04 seconds client-side, 2.44/2.56 seconds API/DB time, and
-10 DB calls; normal Data Bank preview averages 2.11/2.13 seconds client-side, 1.91/1.92 seconds
-API/DB time, and 8 DB calls. Payloads averaged 25.5 KB configured and 34.3 KB normal. No runtime
-optimization was applied. Phase 3 is complete; browser console timing remains available for future
-comparisons, and the next active work is the inventory-purchase Cross-check model.
+baseline. Phase 2 now needs only manual UI confirmation. Unified validation, inventory Cross-check
+runtime, Copy from lines, optimization, safety, regression, and Git closeout remain pending below.
 
 ### Phase 4 prototype note — 2026-09-03
 
-An uncommitted atomic-control prototype exists in the working tree. It is retained for review but
-is not the approved final design; Phase 4 will consolidate the user-facing policy under Categories
-and keep Procedure/Evidence and Cross-check rules as separate typed tables.
-
-### Phase 1 progress — 2026-09-03
-
-The live Supabase records for CPV-0826-480 contain active assignments, and the composite modal API
-returns them across recreated verification sessions. Fixed client-side modal cache invalidation for
-assignment/save races and normalized document identity comparisons. Added a Playwright regression
-for invalidated in-flight responses. Manual testing of line 1/line 2 and all four close/save paths
-remains pending.
+The superseded atomic-control prototype is not active in the working tree and was preserved in a
+reversible local checkpoint. It is not the approved final design; Phase 4 will consolidate the
+user-facing policy under Categories and keep Procedure/Evidence and Cross-check rules as separate
+typed tables.
 
 ### Phase 1 status - Rulebook persistence and session recovery
 
