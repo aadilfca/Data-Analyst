@@ -287,7 +287,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-29: Investigated verification_details.status — confirmed legacy, superseded by cleared_status, no live dependency. Logged KNOWN_ISSUES (Defer).
 
 
-- 2026-08-30: Tray server launch now uses the project virtual environment directly, preventing stale run.bat processes from masking updated local configuration.
+- 2026-09-02: Rebuilt tray controller and VBS launcher with stable server lifecycle and a default Start/Stop toggle; Windows restart cleared stale runtime state.
 
 - 2026-08-31: Fixed the standalone Verification line-save Rulebook loader name mismatch; focused backend tests and the latest manual network trace are clean.
 - 2026-08-31: Added a required concise pendencies/objectives table to every development handoff.
@@ -299,7 +299,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-02: Investigated procedure-window fetch slowness (no code change) — confirmed same cross-region tax, new nuance: cold-pool connection overhead. See INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
 - 2026-09-02: Postgres pool reliability (2 phases, COMPLETE) — retry-once on a stale pooled connection (`_run_pooled_pg`/`_getconn_pg_checked`; `_PooledConnection`/`get_db_pg` removed) + `PG_POOL_MIN` 1→3 warm-start; `database.py`, `.env.example`, new `tests/test_pg_pool_retry.py`. See CHANGELOG_ARCHIVE.md.
 - 2026-09-02: Revised Cross-check pending plan — completed matrix, field-selection, persistence, and Verification result phases retired; acceptance through Git closeout remain active. See CHANGELOG_ARCHIVE.md.
-- 2026-09-02: Revised plan adds risk-based configurable Verification Data Fields before Data Table optimization and inventory-control Cross-check work. See CHANGELOG_ARCHIVE.md.
+- 2026-09-03: Configurable Verification Data Fields completed with Template-scoped persistence, server projection, Audit Rules UI, and Procedure Modal wiring. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

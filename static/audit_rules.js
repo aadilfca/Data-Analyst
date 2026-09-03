@@ -27,6 +27,13 @@ let rolesState = [];
 // shape, so nothing else reading auth_roles as plain strings needs to change.
 let requiredAuthorityState = {};
 
+// Phase 2: live editor state for the Template-scoped verification projection. The server's
+// detail response remains the source of truth after every save; this state only represents
+// unsaved changes in the open Audit Rules form.
+let verificationPolicyState = null;
+let verificationPolicyTemplateId = null;
+let verificationPolicyView = null;
+
 // ---------- DOM REFS ----------
 const arListBody = document.getElementById('arListBody');
 const arListEmptyMessage = document.getElementById('arListEmptyMessage');
@@ -51,6 +58,14 @@ const arNameInput = document.getElementById('arNameInput');
 const arKbNoteInput = document.getElementById('arKbNoteInput');
 const arTemplateSelect = document.getElementById('arTemplateSelect');
 const arRiskRatingSelect = document.getElementById('arRiskRatingSelect');
+const arVerificationFieldsField = document.getElementById('arVerificationFieldsField');
+const arVerificationPolicyStatus = document.getElementById('arVerificationPolicyStatus');
+const arVerificationCoreFields = document.getElementById('arVerificationCoreFields');
+const arVerificationOptionalFields = document.getElementById('arVerificationOptionalFields');
+const arVerificationOptionalSelect = document.getElementById('arVerificationOptionalSelect');
+const arVerificationOptionalRisk = document.getElementById('arVerificationOptionalRisk');
+const arVerificationOptionalAddBtn = document.getElementById('arVerificationOptionalAddBtn');
+const arVerificationPolicyHint = document.getElementById('arVerificationPolicyHint');
 // Physical Bill evidence type (Phase 4 of 8): the type picker plus the blocks it hides.
 const arDocumentTypeSelect = document.getElementById('arDocumentTypeSelect');
 const arDocumentTypeHint = document.getElementById('arDocumentTypeHint');
@@ -250,6 +265,208 @@ async function loadTemplatesForDocuments() {
 }
 
 
+// ---------- VERIFICATION DATA FIELDS (Phase 2) ----------
+function verificationPolicyStateFromServer(policy) {
+    const state = { core: {}, optional: [] };
+    (policy && policy.core_fields || []).forEach(field => {
+        if (field.column_id !== null && field.column_id !== undefined) {
+            state.core[field.key] = Number(field.column_id);
+        }
+    });
+    (policy && policy.optional_fields || []).forEach((field, index) => {
+        state.optional.push({
+            column_id: Number(field.column_id),
+            risk_level: field.risk_level || 'Medium',
+            sort_order: index
+        });
+    });
+    return state;
+}
+
+function verificationPolicyPayload() {
+    if (!verificationPolicyState) return null;
+    const core = {};
+    Object.keys(verificationPolicyState.core || {}).forEach(key => {
+        const columnId = Number(verificationPolicyState.core[key]);
+        if (Number.isInteger(columnId) && columnId > 0) core[key] = columnId;
+    });
+    return {
+        version: 1,
+        core: core,
+        optional: (verificationPolicyState.optional || []).map((field, index) => ({
+            column_id: Number(field.column_id),
+            risk_level: field.risk_level || 'Medium',
+            sort_order: index
+        }))
+    };
+}
+
+function renderVerificationFieldPolicy(policy) {
+    if (!arVerificationFieldsField) return;
+    if (policy) verificationPolicyView = policy;
+    const hasTemplate = !!(policy && policy.template_id);
+    const isPhysicalBill = arDocumentTypeSelect.value === 'physical_bill';
+    arVerificationFieldsField.style.display = hasTemplate && !isPhysicalBill ? '' : 'none';
+    arVerificationCoreFields.innerHTML = '';
+    arVerificationOptionalFields.innerHTML = '';
+    arVerificationOptionalSelect.innerHTML = '';
+
+    if (!hasTemplate || isPhysicalBill) {
+        verificationPolicyState = null;
+        verificationPolicyTemplateId = null;
+        verificationPolicyView = null;
+        return;
+    }
+
+    verificationPolicyTemplateId = Number(policy.template_id);
+    if (!verificationPolicyState) verificationPolicyState = verificationPolicyStateFromServer(policy);
+    const columns = policy.template_columns || [];
+    const selectedIds = () => new Set([
+        ...Object.values(verificationPolicyState.core || {}).map(Number),
+        ...(verificationPolicyState.optional || []).map(field => Number(field.column_id))
+    ]);
+
+    (policy.core_fields || []).forEach(field => {
+        const row = document.createElement('div');
+        row.className = 'ar-verification-core-row';
+        const label = document.createElement('span');
+        label.className = 'ar-verification-field-label';
+        label.textContent = field.label;
+        row.appendChild(label);
+
+        const select = document.createElement('select');
+        select.className = 'ar-verification-field-select';
+        select.setAttribute('aria-label', field.label + ' verification column');
+        const empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = '-- Not mapped in this Template --';
+        select.appendChild(empty);
+        const currentId = Number(verificationPolicyState.core[field.key] || 0);
+        columns.forEach(column => {
+            const columnId = Number(column.column_id);
+            if (columnId !== currentId && selectedIds().has(columnId)) return;
+            const option = document.createElement('option');
+            option.value = columnId;
+            option.textContent = column.column_name;
+            option.selected = columnId === currentId;
+            select.appendChild(option);
+        });
+        if (currentId && !columns.some(column => Number(column.column_id) === currentId)) {
+            const unavailable = document.createElement('option');
+            unavailable.value = currentId;
+            unavailable.textContent = 'Unavailable saved column #' + currentId;
+            unavailable.selected = true;
+            select.appendChild(unavailable);
+        }
+        select.value = currentId ? String(currentId) : '';
+        select.addEventListener('change', () => {
+            if (select.value) verificationPolicyState.core[field.key] = Number(select.value);
+            else delete verificationPolicyState.core[field.key];
+            renderVerificationFieldPolicy({ ...policy, configured: true });
+        });
+        row.appendChild(select);
+        const type = document.createElement('span');
+        type.className = 'ar-verification-field-type';
+        type.textContent = field.data_type || '';
+        row.appendChild(type);
+        arVerificationCoreFields.appendChild(row);
+    });
+
+    (verificationPolicyState.optional || []).forEach((field, index) => {
+        const column = columns.find(item => Number(item.column_id) === Number(field.column_id));
+        const row = document.createElement('div');
+        row.className = 'ar-verification-optional-row';
+        const name = document.createElement('span');
+        name.className = 'ar-verification-optional-name';
+        name.textContent = column ? column.column_name : 'Unavailable saved column #' + field.column_id;
+        row.appendChild(name);
+        const risk = document.createElement('select');
+        risk.className = 'ar-verification-risk-select';
+        ['Low', 'Medium', 'High'].forEach(level => {
+            const option = document.createElement('option');
+            option.value = level;
+            option.textContent = level + ' risk';
+            option.selected = (field.risk_level || 'Medium') === level;
+            risk.appendChild(option);
+        });
+        risk.addEventListener('change', () => { field.risk_level = risk.value; });
+        row.appendChild(risk);
+        const move = (direction, text) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'ar-verification-order-btn';
+            button.textContent = text;
+            button.title = direction < 0 ? 'Move field up' : 'Move field down';
+            button.disabled = direction < 0 ? index === 0 : index === verificationPolicyState.optional.length - 1;
+            button.addEventListener('click', () => {
+                const target = index + direction;
+                if (target < 0 || target >= verificationPolicyState.optional.length) return;
+                const items = verificationPolicyState.optional;
+                [items[index], items[target]] = [items[target], items[index]];
+                renderVerificationFieldPolicy({ ...policy, configured: true });
+            });
+            row.appendChild(button);
+        };
+        move(-1, '↑');
+        move(1, '↓');
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'ar-verification-remove-btn';
+        remove.textContent = 'Remove';
+        remove.addEventListener('click', () => {
+            verificationPolicyState.optional.splice(index, 1);
+            renderVerificationFieldPolicy({ ...policy, configured: true });
+        });
+        row.appendChild(remove);
+        arVerificationOptionalFields.appendChild(row);
+    });
+
+    const usedIds = selectedIds();
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = columns.length ? '-- Add a mapped column --' : '-- No active mapped columns --';
+    arVerificationOptionalSelect.appendChild(placeholder);
+    columns.forEach(column => {
+        if (usedIds.has(Number(column.column_id))) return;
+        const option = document.createElement('option');
+        option.value = Number(column.column_id);
+        option.textContent = column.column_name;
+        arVerificationOptionalSelect.appendChild(option);
+    });
+
+    arVerificationPolicyStatus.textContent = policy.configured
+        ? 'Saved field policy — changes apply after Save.'
+        : 'Automatic core-field matches are shown. Save to store this selection for the Document.';
+    arVerificationPolicyStatus.className = 'ar-verification-policy-status ' + (policy.configured ? 'saved' : 'default');
+    const unavailableCount = (policy.unavailable_fields || []).length;
+    arVerificationPolicyHint.textContent = unavailableCount
+        ? unavailableCount + ' saved field(s) are no longer active in this Template. Review the unavailable field rows before saving.'
+        : 'Only active columns mapped to this Template can be selected.';
+    arVerificationPolicyHint.style.display = unavailableCount ? 'block' : 'none';
+}
+
+function resetVerificationFieldPolicy() {
+    verificationPolicyState = null;
+    verificationPolicyTemplateId = null;
+    verificationPolicyView = null;
+    renderVerificationFieldPolicy(null);
+}
+
+function addVerificationOptionalField() {
+    if (!verificationPolicyState || !arVerificationOptionalSelect.value) return;
+    const columnId = Number(arVerificationOptionalSelect.value);
+    if (!Number.isInteger(columnId)) return;
+    verificationPolicyState.optional.push({
+        column_id: columnId,
+        risk_level: arVerificationOptionalRisk.value || 'Medium',
+        sort_order: verificationPolicyState.optional.length
+    });
+    arVerificationOptionalSelect.value = '';
+    // Preserve the current server read model while redrawing the local editor state.
+    // The server read model is retained on the field panel for redraws without another fetch.
+    renderVerificationFieldPolicy({ ...verificationPolicyView, configured: true });
+}
+
 // ---------- DOCUMENT TYPE (Physical Bill evidence type, Phase 4 of 8) ----------
 function updateDocumentTypeVisibility() {
     // A Physical Bill has no linked Data Bank template - its fields (Bill No / Date / Amount /
@@ -259,6 +476,7 @@ function updateDocumentTypeVisibility() {
 
     arDocTemplateField.style.display = display;
     arDocumentTypeHint.style.display = isPhysicalBill ? 'block' : 'none';
+    if (isPhysicalBill) resetVerificationFieldPolicy();
 }
 
 // ---------- TRANSACTION LEVEL APPROVAL (new, confirmed requirement) ----------
@@ -303,6 +521,10 @@ async function selectDocument(id) {
         savedDocumentType = doc.document_type || 'linked_template';
         arDocumentTypeSelect.value = savedDocumentType;
         updateDocumentTypeVisibility();
+        verificationPolicyState = null;
+        verificationPolicyTemplateId = null;
+        verificationPolicyView = null;
+        renderVerificationFieldPolicy(doc.verification_field_policy);
         rolesState = (doc.auth_roles || []).slice();
         requiredAuthorityState = { ...(doc.auth_role_authorities || {}) };
         renderRoleChips();
@@ -345,6 +567,7 @@ function startNewDocument() {
     savedDocumentType = null;
     arDocumentTypeSelect.value = '';
     updateDocumentTypeVisibility();
+    resetVerificationFieldPolicy();
     rolesState = [];
     requiredAuthorityState = {};
     renderRoleChips();
@@ -412,7 +635,10 @@ async function saveDocument(triggerBtn) {
         risk_rating: arRiskRatingSelect.value || null,
         auth_roles: rolesState,
         auth_role_authorities: requiredAuthorityState,
-        document_type: documentType
+        document_type: documentType,
+        verification_field_policy: (!isPhysicalBill && arTemplateSelect.value &&
+            verificationPolicyTemplateId === parseInt(arTemplateSelect.value, 10))
+            ? verificationPolicyPayload() : null
     };
 
     try {
@@ -710,6 +936,14 @@ arRolesInput.addEventListener('keydown', function(e) {
 // Physical Bill evidence type (Phase 4 of 8): show/hide the Template field live as the type
 // changes, so the form always reflects what the chosen type can actually carry.
 arDocumentTypeSelect.addEventListener('change', updateDocumentTypeVisibility);
+arTemplateSelect.addEventListener('change', () => {
+    // A Template change invalidates the previous Template's column IDs. Save the document first;
+    // the refreshed detail response will then present the new Template's automatic core matches.
+    if (!arTemplateSelect.value || verificationPolicyTemplateId !== parseInt(arTemplateSelect.value, 10)) {
+        resetVerificationFieldPolicy();
+    }
+});
+arVerificationOptionalAddBtn.addEventListener('click', addVerificationOptionalField);
 
 arSaveBtn.addEventListener('click', () => saveDocument(arSaveBtn));
 arDeleteBtn.addEventListener('click', deleteDocument);

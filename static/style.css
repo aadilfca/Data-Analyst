@@ -7269,3 +7269,160 @@ body {
         width: 60%;
     }
 }
+
+/* Audit Rules — Template-scoped Verification Data Fields (Phase 2).  Uses the existing
+   blue/white detail-panel language while giving this higher-impact configuration a calm,
+   compact hierarchy. */
+.ar-verification-fields-field {
+    margin-top: 18px;
+}
+.ar-verification-fields-heading {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 8px;
+}
+.ar-verification-fields-heading label {
+    margin-bottom: 0;
+}
+.ar-policy-badge {
+    padding: 3px 8px;
+    border: 1px solid #bfdbfe;
+    border-radius: 999px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .02em;
+}
+.ar-verification-fields-panel {
+    padding: 14px;
+    border: 1px solid #dbeafe;
+    border-radius: 10px;
+    background: #f8fbff;
+}
+.ar-verification-fields-intro {
+    margin: 0 0 12px;
+    color: #475569;
+    font-size: 12px;
+    line-height: 1.5;
+}
+.ar-verification-policy-status {
+    margin-bottom: 12px;
+    padding: 8px 10px;
+    border-radius: 7px;
+    font-size: 12px;
+}
+.ar-verification-policy-status.saved {
+    background: #ecfdf5;
+    color: #047857;
+}
+.ar-verification-policy-status.default {
+    background: #fff7ed;
+    color: #9a3412;
+}
+.ar-verification-subtitle {
+    margin: 10px 0 7px;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+.ar-verification-optional-title {
+    margin-top: 16px;
+}
+.ar-verification-core-row,
+.ar-verification-optional-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 5px 0;
+    border-bottom: 1px solid #e2e8f0;
+}
+.ar-verification-field-label {
+    width: 146px;
+    flex: 0 0 146px;
+    color: #334155;
+    font-size: 13px;
+    font-weight: 600;
+}
+.ar-verification-field-select,
+.ar-verification-risk-select,
+.ar-verification-add-row select {
+    min-width: 0;
+    padding: 7px 9px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: #1e293b;
+    font-size: 12px;
+}
+.ar-verification-field-select {
+    flex: 1;
+}
+.ar-verification-field-type {
+    width: 64px;
+    color: #64748b;
+    font-size: 11px;
+    text-align: right;
+}
+.ar-verification-optional-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: #334155;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ar-verification-order-btn,
+.ar-verification-remove-btn {
+    min-width: 29px;
+    padding: 5px 7px;
+    border: 1px solid #cbd5e1;
+    border-radius: 5px;
+    background: #fff;
+    color: #475569;
+    cursor: pointer;
+    font-size: 11px;
+}
+.ar-verification-order-btn:disabled {
+    cursor: default;
+    opacity: .4;
+}
+.ar-verification-remove-btn {
+    border-color: #fecaca;
+    color: #b91c1c;
+}
+.ar-verification-add-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 11px;
+}
+.ar-verification-add-row select:first-child {
+    flex: 1 1 190px;
+}
+.ar-verification-add-row select:nth-child(2) {
+    flex: 0 1 118px;
+}
+.ar-verification-policy-status + .ar-verification-subtitle {
+    margin-top: 0;
+}
+@media (max-width: 700px) {
+    .ar-verification-field-label {
+        width: 116px;
+        flex-basis: 116px;
+    }
+    .ar-verification-field-type {
+        display: none;
+    }
+    .ar-verification-optional-row {
+        flex-wrap: wrap;
+    }
+    .ar-verification-optional-name {
+        flex-basis: 100%;
+    }
+}

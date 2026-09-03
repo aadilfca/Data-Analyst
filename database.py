@@ -1419,6 +1419,7 @@ def init_db():
                 is_active INTEGER DEFAULT 1,
                 document_type TEXT NOT NULL DEFAULT 'linked_template'
                     CHECK (document_type IN ('linked_template', 'physical_bill')),
+                verification_field_policy TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (template_id) REFERENCES templates(id)
             )
@@ -1490,6 +1491,17 @@ def init_db():
                 print("✅ Added is_system column to audit_rule_documents")
         except Exception as e:
             print("⚠️ Could not add is_system to audit_rule_documents:", e)
+
+        # Phase 2: durable per-Document, Template-scoped verification field policy. SQLite
+        # stores the JSON contract as TEXT so existing local databases upgrade in place.
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_documents)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'verification_field_policy' not in columns:
+                conn.execute("ALTER TABLE audit_rule_documents ADD COLUMN verification_field_policy TEXT")
+                print("Added verification_field_policy column to audit_rule_documents")
+        except Exception as e:
+            print("Could not add verification_field_policy to audit_rule_documents:", e)
 
         # Physical Bill evidence type (new, confirmed 8-phase requirement, Phase 1 of 8):
         # document_type says HOW a Document's evidence is satisfied - 'linked_template' is
@@ -2887,7 +2899,8 @@ def init_db_postgres(conn):
                 CHECK (document_type IN ('linked_template', 'physical_bill')),
             created_at TIMESTAMPTZ DEFAULT now(),
             risk_rating TEXT,
-            transaction_level_approval BOOLEAN DEFAULT FALSE
+            transaction_level_approval BOOLEAN DEFAULT FALSE,
+            verification_field_policy JSONB
         )
     ''', "audit_rule_documents")
     # Cross-check shortfall note-save fix: marks a system-created placeholder Document (e.g. a
@@ -2895,6 +2908,7 @@ def init_db_postgres(conn):
     # routers/verification.py's get-or-create helper) - never shown in the Documents tab, never a
     # real evidence requirement.
     run("ALTER TABLE audit_rule_documents ADD COLUMN IF NOT EXISTS is_system BOOLEAN DEFAULT FALSE")
+    run("ALTER TABLE audit_rule_documents ADD COLUMN IF NOT EXISTS verification_field_policy JSONB")
 
     # ---------- 5. template_column_mappings ----------
     run('''

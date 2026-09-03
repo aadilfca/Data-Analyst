@@ -6,10 +6,12 @@
 # Categories) in the Audit Rules module now have CRUD. Categories is the entity a
 # voucher will eventually reference (wired up in Phase 9).
 
+import json
 import time
 import threading
 from fastapi import APIRouter, HTTPException, Body, Query, Response, Depends
 from pydantic import BaseModel
+from psycopg2.extras import Json
 import database
 from typing import Any, Optional, List, Dict
 from database import (
@@ -442,6 +444,9 @@ class DocumentCreate(BaseModel):
     # per voucher line in Phase 5). Optional/None rather than a literal default here so
     # resolve_document_type() below stays the single place the default lives.
     document_type: Optional[str] = None
+    # Phase 2: selected verification fields for the linked Template. The server validates this
+    # against the active Template mapping before persisting it.
+    verification_field_policy: Optional[Dict[str, Any]] = None
 
 class DocumentUpdate(BaseModel):
     name: str
@@ -452,6 +457,7 @@ class DocumentUpdate(BaseModel):
     auth_role_authorities: Dict[str, Optional[str]] = {}
     cross_check_fields: List[str] = []
     document_type: Optional[str] = None
+    verification_field_policy: Optional[Dict[str, Any]] = None
 
 # ---------- HELPERS ----------
 def get_document_auth_roles(document_id: int) -> List[str]:
@@ -603,6 +609,190 @@ def get_active_master_columns() -> List[dict]:
     )
 
 
+# Phase 2: Verification Data Fields ---------------------------------------------------------
+# These are the six transaction fields used by the inventory-purchase verification workflow.
+# Their labels and aliases are stable product vocabulary; the actual column IDs remain
+# Template-scoped and are always resolved from the active mapping table.
+VERIFICATION_CORE_FIELDS = (
+    ("vendor", "Vendor", ("vendor", "vendor name", "supplier", "supplier name")),
+    ("item", "Item", ("item", "item name", "item description", "description")),
+    ("unit", "Unit of measurement", ("unit", "unit of measurement", "uom")),
+    ("quantity", "Quantity", ("quantity", "qty")),
+    ("rate", "Rate", ("rate", "unit rate")),
+    ("amount", "Amount", ("amount", "total amount", "line amount", "net amount")),
+)
+VERIFICATION_RISK_LEVELS = ("Low", "Medium", "High")
+
+
+def _verification_name_key(value: Any) -> str:
+    """Normalize a Master Column name for conservative alias matching."""
+    return "".join(ch.lower() for ch in str(value or "") if ch.isalnum())
+
+
+def _parse_verification_field_policy(value: Any) -> Optional[dict]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _get_verification_template_columns(template_id: Optional[int]) -> List[dict]:
+    if template_id is None:
+        return []
+    return execute_query_pg(
+        "SELECT m.id AS column_id, m.column_name, m.data_type, p.sort_order "
+        "FROM template_column_mappings p "
+        "JOIN master_columns m ON m.id = p.column_id "
+        "WHERE p.template_id = %s AND m.is_active = TRUE "
+        "ORDER BY p.sort_order, m.id",
+        (template_id,)
+    )
+
+
+def validate_and_normalize_verification_field_policy(
+    template_id: Optional[int], raw_policy: Optional[dict]
+) -> Optional[dict]:
+    """Validate the saved field selection and return a small stable JSON contract."""
+    if raw_policy is None:
+        return None
+    if not isinstance(raw_policy, dict):
+        raise HTTPException(400, "Verification field policy must be an object")
+    if template_id is None:
+        raise HTTPException(400, "A linked Template is required for verification fields")
+
+    columns = _get_verification_template_columns(template_id)
+    by_id = {int(row["column_id"]): row for row in columns}
+    if not by_id:
+        raise HTTPException(400, "The selected Template has no active mapped columns")
+
+    raw_core = raw_policy.get("core") or {}
+    if not isinstance(raw_core, dict):
+        raise HTTPException(400, "Verification core fields must be an object")
+    core_ids = {}
+    for key, _label, _aliases in VERIFICATION_CORE_FIELDS:
+        value = raw_core.get(key)
+        if value is None or value == "":
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise HTTPException(400, f"Core verification field '{key}' must use a column ID")
+        if value not in by_id:
+            raise HTTPException(400, f"Core verification field '{key}' is not active in this Template")
+        core_ids[key] = value
+    if len(set(core_ids.values())) != len(core_ids):
+        raise HTTPException(400, "Each core verification field must use a different Template column")
+
+    raw_optional = raw_policy.get("optional") or []
+    if not isinstance(raw_optional, list):
+        raise HTTPException(400, "Optional verification fields must be a list")
+    optional = []
+    optional_ids = set()
+    for index, entry in enumerate(raw_optional):
+        if not isinstance(entry, dict):
+            raise HTTPException(400, f"Optional verification field {index + 1} must be an object")
+        column_id = entry.get("column_id")
+        if isinstance(column_id, bool) or not isinstance(column_id, int) or column_id not in by_id:
+            raise HTTPException(400, f"Optional verification field {index + 1} is not active in this Template")
+        if column_id in optional_ids or column_id in core_ids.values():
+            raise HTTPException(400, "Verification fields cannot be duplicated")
+        risk_level = entry.get("risk_level") or "Medium"
+        if risk_level not in VERIFICATION_RISK_LEVELS:
+            raise HTTPException(400, f"Invalid optional verification risk level '{risk_level}'")
+        sort_order = entry.get("sort_order", index)
+        if isinstance(sort_order, bool) or not isinstance(sort_order, int):
+            raise HTTPException(400, "Optional verification field order must be an integer")
+        optional_ids.add(column_id)
+        optional.append({"column_id": column_id, "risk_level": risk_level, "sort_order": sort_order})
+    optional.sort(key=lambda entry: (entry["sort_order"], entry["column_id"]))
+    for index, entry in enumerate(optional):
+        entry["sort_order"] = index
+    return {"version": 1, "core": core_ids, "optional": optional}
+
+
+def build_verification_field_policy(template_id: Optional[int], stored_policy: Any) -> dict:
+    """Build the UI/read model, including safe defaults and unavailable-field notices."""
+    columns = _get_verification_template_columns(template_id)
+    parsed = _parse_verification_field_policy(stored_policy)
+    by_id = {int(row["column_id"]): row for row in columns}
+    normalized_by_name = {_verification_name_key(row["column_name"]): row for row in columns}
+    raw_core = (parsed or {}).get("core") or {}
+    selected_core = {}
+    unavailable = []
+
+    for key, label, aliases in VERIFICATION_CORE_FIELDS:
+        column = None
+        configured_id = raw_core.get(key)
+        if isinstance(configured_id, int) and not isinstance(configured_id, bool):
+            column = by_id.get(configured_id)
+            if column is None:
+                unavailable.append({"kind": "core", "key": key, "label": label, "column_id": configured_id})
+        if column is None and configured_id is None:
+            for alias in aliases:
+                column = normalized_by_name.get(_verification_name_key(alias))
+                if column:
+                    break
+        if column:
+            selected_core[key] = int(column["column_id"])
+
+    used_ids = set(selected_core.values())
+    optional = []
+    for entry in ((parsed or {}).get("optional") or []):
+        if not isinstance(entry, dict):
+            continue
+        column_id = entry.get("column_id")
+        if not isinstance(column_id, int) or isinstance(column_id, bool):
+            continue
+        column = by_id.get(column_id)
+        if column is None:
+            unavailable.append({"kind": "optional", "column_id": column_id})
+            continue
+        if column_id in used_ids or any(item["column_id"] == column_id for item in optional):
+            continue
+        optional.append({
+            "column_id": column_id,
+            "column_name": column["column_name"],
+            "data_type": column.get("data_type"),
+            "risk_level": entry.get("risk_level") if entry.get("risk_level") in VERIFICATION_RISK_LEVELS else "Medium",
+            "sort_order": entry.get("sort_order", len(optional)),
+        })
+    optional.sort(key=lambda entry: (entry["sort_order"], entry["column_id"]))
+
+    core_fields = []
+    for key, label, aliases in VERIFICATION_CORE_FIELDS:
+        column_id = selected_core.get(key)
+        column = by_id.get(column_id) if column_id is not None else None
+        core_fields.append({
+            "key": key,
+            "label": label,
+            "aliases": list(aliases),
+            "column_id": column_id,
+            "column_name": column.get("column_name") if column else None,
+            "data_type": column.get("data_type") if column else None,
+            "available": bool(column),
+        })
+    return {
+        "version": 1,
+        "template_id": template_id,
+        "configured": parsed is not None,
+        "template_columns": [
+            {"column_id": int(row["column_id"]), "column_name": row["column_name"],
+             "data_type": row.get("data_type"), "sort_order": row.get("sort_order", 0)}
+            for row in columns
+        ],
+        "core_fields": core_fields,
+        "optional_fields": optional,
+        "unavailable_fields": unavailable,
+        "selected_column_ids": [field["column_id"] for field in core_fields if field["column_id"] is not None]
+            + [field["column_id"] for field in optional],
+    }
+
+
 def get_document_cross_check_fields(document_id: int, document_type: Optional[str] = None) -> List[str]:
     """Return the current Master Columns mirror for a Document.
 
@@ -642,6 +832,9 @@ def row_to_document(row: dict) -> dict:
         "auth_roles": get_document_auth_roles(document_id),
         "auth_role_authorities": get_document_auth_role_authorities(document_id),
         "cross_check_fields": get_document_cross_check_fields(document_id, row.get("document_type")),
+        "verification_field_policy": build_verification_field_policy(
+            row.get("template_id"), row.get("verification_field_policy")
+        ),
         "used_by_categories_count": get_document_used_by_count(document_id)
     }
 
@@ -853,9 +1046,15 @@ def create_document(document: DocumentCreate):
     )
     validate_document_template_id(template_id)
     validate_document_risk_rating(document.risk_rating)
+    verification_field_policy = validate_and_normalize_verification_field_policy(
+        template_id, document.verification_field_policy
+    )
     document_id = execute_write_pg(
-        "INSERT INTO audit_rule_documents (name, kb_note, template_id, risk_rating, document_type) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-        (document.name, document.kb_note, template_id, document.risk_rating, document_type)
+        "INSERT INTO audit_rule_documents "
+        "(name, kb_note, template_id, risk_rating, document_type, verification_field_policy) "
+        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+        (document.name, document.kb_note, template_id, document.risk_rating, document_type,
+         Json(verification_field_policy) if verification_field_policy is not None else None)
     )
     save_document_auth_roles(document_id, document.auth_roles, document.auth_role_authorities)
     save_document_cross_check_fields(document_id, cross_check_fields)
@@ -867,7 +1066,10 @@ def create_document(document: DocumentCreate):
 
 @router.put("/api/audit-rules/documents/{document_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
 def update_document(document_id: int, document: DocumentUpdate):
-    existing = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s", (document_id,))
+    existing = execute_query_pg(
+        "SELECT id, template_id, verification_field_policy FROM audit_rule_documents WHERE id = %s",
+        (document_id,)
+    )
     if not existing:
         raise HTTPException(404, "Document not found")
     document_type = resolve_document_type(document.document_type)
@@ -877,9 +1079,26 @@ def update_document(document_id: int, document: DocumentUpdate):
     validate_document_template_id(template_id)
     validate_document_risk_rating(document.risk_rating)
 
+    # Omitted policy means preserve the current policy for API compatibility. The Audit Rules
+    # UI sends the field explicitly when the administrator changes it.
+    verification_field_policy = None
+    policy_sql = ""
+    policy_params = []
+    if document.verification_field_policy is not None:
+        verification_field_policy = validate_and_normalize_verification_field_policy(
+            template_id, document.verification_field_policy
+        )
+        policy_sql = ", verification_field_policy = %s"
+        policy_params.append(Json(verification_field_policy))
+    elif template_id != existing[0].get("template_id"):
+        # A changed Template cannot safely inherit column IDs from the old Template.
+        policy_sql = ", verification_field_policy = NULL"
+
     execute_write_pg(
-        "UPDATE audit_rule_documents SET name = %s, kb_note = %s, template_id = %s, risk_rating = %s, document_type = %s WHERE id = %s",
-        (document.name, document.kb_note, template_id, document.risk_rating, document_type, document_id)
+        "UPDATE audit_rule_documents SET name = %s, kb_note = %s, template_id = %s, "
+        "risk_rating = %s, document_type = %s" + policy_sql + " WHERE id = %s",
+        (document.name, document.kb_note, template_id, document.risk_rating, document_type,
+         *policy_params, document_id)
     )
     save_document_auth_roles(document_id, document.auth_roles, document.auth_role_authorities)
     # save_document_cross_check_fields() is still called unconditionally (one write path), but

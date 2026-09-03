@@ -554,7 +554,7 @@ function getProcedureSearchDateEnd() {
 // Shared fetch used by both the search dropdown and the browse modal — GET /api/data/preview
 // scoped to one document's own template, over the wide fixed date window above. search='' (browse
 // mode) returns every row for that template, paginated; a non-empty search narrows it.
-async function fetchProcedureRows(templateId, search, page, limit) {
+async function fetchProcedureRows(templateId, documentId, search, page, limit) {
     const clientId = hostAdapter.getClientId();
     if (!clientId) throw new Error('No client selected.');
     const params = new URLSearchParams({
@@ -563,7 +563,8 @@ async function fetchProcedureRows(templateId, search, page, limit) {
         date_start: PROCEDURE_SEARCH_DATE_START,
         date_end: getProcedureSearchDateEnd(),
         page: page,
-        limit: limit
+        limit: limit,
+        document_id: documentId
     });
     if (search) params.set('search', search);
     const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/data/preview?${params}`);
@@ -3027,7 +3028,7 @@ async function performProcedureSearch(uid, docId, term) {
     if (dropdown) dropdown.innerHTML = '<div class="procedure-search-loading"><span class="spinner"></span> Searching...</div>';
 
     try {
-        const data = await fetchProcedureRows(doc.template_id, term.trim(), 1, 10);
+        const data = await fetchProcedureRows(doc.template_id, doc.id, term.trim(), 1, 10);
         // Stale guard: a later search (or a tab switch that changed the input's value) may have
         // started after this one — only the most recently dispatched request may write state/DOM.
         if (thisRequest !== procedureSearchRequestToken) return;
@@ -3640,7 +3641,7 @@ async function fetchProcedureBrowsePage() {
         procedureBrowseTableContainer.innerHTML = '<div style="text-align:center; padding:20px;"><span class="spinner"></span> Loading...</div>';
     }
     try {
-        const data = await fetchProcedureRows(doc.template_id, '', page, PROCEDURE_BROWSE_PAGE_SIZE);
+        const data = await fetchProcedureRows(doc.template_id, doc.id, '', page, PROCEDURE_BROWSE_PAGE_SIZE);
         procedureBrowseState.rows = data.rows || [];
         procedureBrowseState.totalRows = data.total_rows || 0;
         renderProcedureBrowseTable();

@@ -16,6 +16,8 @@ from routers.audit_rules import (
     cache_set,
     get_audit_rules_config_version,
     get_document_cross_check_fields,
+    build_verification_field_policy,
+    validate_and_normalize_verification_field_policy,
     invalidate_audit_rules_cache,
     invalidate_category_for_account_cache,
     load_client_account_category_index,
@@ -77,6 +79,90 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             conn.close()
         self.assertIn("rulebook_version", columns)
         self.assertEqual(columns["rulebook_version"], 0)
+
+    def test_document_schema_has_verification_field_policy(self):
+        conn = sqlite3.connect(database.DB_NAME)
+        try:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(audit_rule_documents)")}
+        finally:
+            conn.close()
+        self.assertIn("verification_field_policy", columns)
+
+    def test_verification_policy_normalizes_order_and_rejects_duplicate_columns(self):
+        columns = [
+            {"column_id": 1, "column_name": "Vendor Name", "data_type": "Text", "sort_order": 0},
+            {"column_id": 2, "column_name": "Quantity", "data_type": "Numeric", "sort_order": 1},
+            {"column_id": 3, "column_name": "Batch No", "data_type": "Text", "sort_order": 2},
+        ]
+        policy = {"core": {"vendor": 1, "quantity": 2},
+                  "optional": [{"column_id": 3, "risk_level": "High", "sort_order": 8}]}
+        with patch("routers.audit_rules.execute_query_pg", return_value=columns):
+            normalized = validate_and_normalize_verification_field_policy(9, policy)
+        self.assertEqual(normalized["optional"], [{"column_id": 3, "risk_level": "High", "sort_order": 0}])
+
+        duplicate = {"core": {"vendor": 1, "item": 1}}
+        with patch("routers.audit_rules.execute_query_pg", return_value=columns):
+            with self.assertRaises(Exception) as raised:
+                validate_and_normalize_verification_field_policy(9, duplicate)
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_verification_policy_uses_core_aliases_and_reports_unavailable_saved_fields(self):
+        columns = [
+            {"column_id": 1, "column_name": "Supplier Name", "data_type": "Text", "sort_order": 0},
+            {"column_id": 2, "column_name": "Quantity", "data_type": "Numeric", "sort_order": 1},
+        ]
+        stored = {"version": 1, "core": {"vendor": 1, "amount": 99},
+                  "optional": [{"column_id": 88, "risk_level": "Low", "sort_order": 0}]}
+        with patch("routers.audit_rules.execute_query_pg", return_value=columns):
+            result = build_verification_field_policy(9, stored)
+        vendor = next(field for field in result["core_fields"] if field["key"] == "vendor")
+        self.assertEqual(vendor["column_name"], "Supplier Name")
+        self.assertEqual({item["column_id"] for item in result["unavailable_fields"]}, {99, 88})
+
+    def test_preview_document_policy_projects_only_selected_columns(self):
+        from routers.data import get_preview_rows
+
+        columns = [
+            {"column_id": 1, "column_name": "Vendor", "data_type": "Text", "sort_order": 0},
+            {"column_id": 2, "column_name": "Internal Note", "data_type": "Text", "sort_order": 1},
+        ]
+        captured = []
+
+        def data_query(sql, params=()):
+            captured.append((sql, params))
+            if "FROM clients" in sql:
+                return [{"id": 7}]
+            if "FROM templates WHERE" in sql:
+                return [{"id": 9, "template_name": "Purchase Data"}]
+            if "FROM audit_rule_documents" in sql:
+                return [{"id": 12, "template_id": 9, "document_type": "linked_template", "verification_field_policy": None}]
+            if "SELECT m.column_name, m.data_type" in sql:
+                return columns
+            if "COUNT(*) as total" in sql:
+                return [{"total": 1}]
+            if "COUNT(*) as sunday_count" in sql:
+                return [{"sunday_count": 0}]
+            if "SELECT cd.id" in sql:
+                return [{"id": 501, "row_data": {"Vendor": "Acme"},
+                         "extract_amount": 100, "extract_date": "2026-08-11",
+                         "data_quality_flag": None, "rate_source": None}]
+            if "data_audit_log" in sql:
+                return []
+            raise AssertionError("Unexpected Data Bank query: " + sql)
+
+        with patch("routers.data.execute_query_pg", side_effect=data_query), \
+             patch("routers.audit_rules.execute_query_pg", return_value=columns), \
+             patch("routers.data.attach_history_flags"), \
+             patch("routers.data.attach_assignment_flags"):
+            result = get_preview_rows(client_id=7, template_id=9, date_start="2026-08-01",
+                                      date_end="2026-08-31", page=1, limit=50, search=None,
+                                      amount_min=None, amount_max=None, sunday_only=False,
+                                      data_quality=None, document_id=12)
+
+        self.assertEqual(result["rows"][0]["row_data"], {"Vendor": "Acme"})
+        data_call = next((item for item in captured if "SELECT cd.id" in item[0]), None)
+        self.assertIsNotNone(data_call)
+        self.assertEqual(data_call[1][0], ["Vendor"])
 
     def test_rulebook_config_version_survives_router_reload(self):
         first_version = get_audit_rules_config_version()

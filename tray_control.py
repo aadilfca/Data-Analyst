@@ -1,134 +1,193 @@
-"""
-System tray controller for the Internal Audit App's local server.
-Standalone utility — does not modify or import any app code.
-Right-click the tray icon for Start / Stop / Restart / Open in Browser.
-"""
+"""System-tray controller for the Internal Audit App local server."""
 
 import os
 import subprocess
-import webbrowser
 import threading
 import time
-import requests
+import urllib.error
+import urllib.request
+import webbrowser
+
 from PIL import Image, ImageDraw
 import pystray
 
-# --- Settings: adjust if your setup differs ---
-PROJECT_DIR = r"D:\Excel Auto\2. Python App"
-SERVER_URL = "http://127.0.0.1:5000"
-PYTHON_EXE = os.path.join(PROJECT_DIR, "venv", "Scripts", "python.exe")
-START_COMMAND = [
-    PYTHON_EXE, "-m", "uvicorn", "main:app",
-    "--reload", "--host", "0.0.0.0", "--port", "5000",
-]
-PORT = "5000"
-PROCESS = None  # holds the running server process (the whole tree's root)
-SERVER_LOG_HANDLE = None
 
-# Log file kept OUTSIDE the project folder on purpose — if it lived
-# inside PROJECT_DIR, writing to it could itself trigger uvicorn's
-# --reload file-watcher and cause the exact kind of PID-shifting
-# behaviour we saw in testing.
-LOG_PATH = os.path.join(os.environ.get("TEMP", PROJECT_DIR), "tray_debug.log")
-SERVER_OUTPUT_PATH = os.path.join(os.environ.get("TEMP", PROJECT_DIR), "audit_app_server.log")
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVER_URL = "http://127.0.0.1:5000"
+HEALTH_URL = f"{SERVER_URL}/static/login.html"
+PYTHON_EXE = os.path.join(PROJECT_DIR, "venv", "Scripts", "python.exe")
+PORT = "5000"
+
+START_TIMEOUT = 20
+STOP_TIMEOUT = 15
+POLL_INTERVAL = 0.5
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+TEMP_DIR = os.environ.get("TEMP", PROJECT_DIR)
+TRAY_LOG = os.path.join(TEMP_DIR, "tray_debug.log")
+SERVER_LOG = os.path.join(TEMP_DIR, "audit_app_server.log")
+
+SERVER_PROCESS = None
+SERVER_LOG_HANDLE = None
 
 
 def log(message):
-    with open(LOG_PATH, "a") as f:
-        f.write(f"{time.ctime()}: {message}\n")
+    with open(TRAY_LOG, "a", encoding="utf-8") as handle:
+        handle.write(f"{time.ctime()}: {message}\n")
 
 
-def is_server_running():
+def server_is_running():
     try:
-        requests.get(SERVER_URL, timeout=1)
-        return True
-    except requests.exceptions.RequestException:
+        request = urllib.request.Request(HEALTH_URL, method="GET")
+        with urllib.request.urlopen(request, timeout=1) as response:
+            return response.status == 200
+    except (urllib.error.URLError, TimeoutError, OSError):
         return False
 
 
-def get_pid_on_port(port):
-    """Find the PID currently LISTENING on the given port, using plain
-    netstat (no PowerShell) — simpler and avoids the window-flash issue."""
+def wait_for_server(running, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if server_is_running() == running:
+            return True
+        time.sleep(POLL_INTERVAL)
+    return server_is_running() == running
+
+
+def listening_pids(port):
+    """Return live-looking LISTENING PIDs for the exact TCP port."""
     result = subprocess.run(
         ["netstat", "-aon"],
         capture_output=True,
         text=True,
-        creationflags=subprocess.CREATE_NO_WINDOW
+        creationflags=NO_WINDOW,
     )
+    pids = []
     for line in result.stdout.splitlines():
-        if f":{port} " in line and "LISTENING" in line:
-            parts = line.split()
-            return parts[-1]
-    return None
+        parts = line.split()
+        if len(parts) < 5 or "LISTENING" not in parts:
+            continue
+        local_address = parts[1]
+        pid = parts[-1]
+        if local_address.endswith(f":{port}") and pid.isdigit() and pid not in pids:
+            pids.append(pid)
+    return pids
+
+
+def kill_tree(pid, reason):
+    result = subprocess.run(
+        ["taskkill", "/F", "/T", "/PID", str(pid)],
+        capture_output=True,
+        text=True,
+        creationflags=NO_WINDOW,
+    )
+    detail = " ".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+    log(f"{reason} PID {pid}: {detail or 'completed'}")
+    return result.returncode == 0
+
+
+def close_server_log():
+    global SERVER_LOG_HANDLE
+    if SERVER_LOG_HANDLE is not None:
+        SERVER_LOG_HANDLE.close()
+        SERVER_LOG_HANDLE = None
 
 
 def start_server(icon=None, item=None):
-    global PROCESS, SERVER_LOG_HANDLE
-    if is_server_running():
-        log("Start requested but server already running — ignored.")
-        return
-    # Launch Uvicorn directly from the project venv so the tray server uses
-    # the same project environment and .env as the application code.
-    # Keep the background server's stdout/stderr so Uvicorn and the opt-in performance
-    # diagnostics remain available when the tray has no visible console window.
-    SERVER_LOG_HANDLE = open(SERVER_OUTPUT_PATH, "a", encoding="utf-8", buffering=1)
-    SERVER_LOG_HANDLE.write(f"\n--- Server start: {time.ctime()} ---\n")
-    PROCESS = subprocess.Popen(
-        START_COMMAND, shell=False, cwd=PROJECT_DIR,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-        stdout=SERVER_LOG_HANDLE, stderr=subprocess.STDOUT
+    global SERVER_PROCESS, SERVER_LOG_HANDLE
+
+    if server_is_running():
+        log("Start ignored: server is already healthy.")
+        update_icon()
+        return True
+
+    if not os.path.isfile(PYTHON_EXE):
+        log(f"Start failed: project Python not found at {PYTHON_EXE}")
+        update_icon()
+        return False
+
+    # Clear a stale listener before creating a new server process.
+    for pid in listening_pids(PORT):
+        kill_tree(pid, "Stale-listener cleanup")
+    if not wait_for_server(False, STOP_TIMEOUT):
+        log("Start aborted: an existing server still responds on port 5000.")
+        update_icon()
+        return False
+
+    close_server_log()
+    SERVER_LOG_HANDLE = open(SERVER_LOG, "a", encoding="utf-8", buffering=1)
+    SERVER_LOG_HANDLE.write(f"\n--- Tray server start: {time.ctime()} ---\n")
+
+    command = [
+        PYTHON_EXE,
+        "-m",
+        "uvicorn",
+        "main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        PORT,
+    ]
+    SERVER_PROCESS = subprocess.Popen(
+        command,
+        cwd=PROJECT_DIR,
+        stdout=SERVER_LOG_HANDLE,
+        stderr=subprocess.STDOUT,
+        creationflags=NO_WINDOW,
     )
-    log(f"Start command issued. Tracked root PID: {PROCESS.pid}; server output: {SERVER_OUTPUT_PATH}")
-    time.sleep(2)  # give the server a moment to bind the port
+    log(f"Start requested. Tracked PID {SERVER_PROCESS.pid}; command has no --reload.")
+
+    ready = wait_for_server(True, START_TIMEOUT)
+    if not ready:
+        log(f"Start failed: server was not healthy after {START_TIMEOUT}s.")
+        if SERVER_PROCESS.poll() is None:
+            kill_tree(SERVER_PROCESS.pid, "Failed-start cleanup")
+        SERVER_PROCESS = None
+        close_server_log()
     update_icon()
+    return ready
 
 
 def stop_server(icon=None, item=None):
-    global PROCESS
+    global SERVER_PROCESS
 
-    killed_something = False
+    if SERVER_PROCESS is not None and SERVER_PROCESS.poll() is None:
+        kill_tree(SERVER_PROCESS.pid, "Tracked-process stop")
 
-    # Preferred method: kill the ENTIRE process tree we started
-    # (cmd.exe -> venv activate -> uvicorn supervisor -> uvicorn worker).
-    # /T ensures child processes die too — this is what --reload needs,
-    # since killing only the worker lets the supervisor carry on.
-    if PROCESS is not None:
-        result = subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(PROCESS.pid)],
-            capture_output=True,
-            text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        log(f"Tree-kill on tracked PID {PROCESS.pid}: {result.stdout.strip()} {result.stderr.strip()}")
-        killed_something = True
+    deadline = time.monotonic() + STOP_TIMEOUT
+    while time.monotonic() < deadline:
+        if not server_is_running():
+            break
+        for pid in listening_pids(PORT):
+            kill_tree(pid, "Port-process stop")
+        time.sleep(POLL_INTERVAL)
 
-    # Fallback / cleanup: also directly kill whatever is still listening
-    # on the port, in case the server was started outside the tray, or
-    # a stray process survived the step above.
-    pid_on_port = get_pid_on_port(PORT)
-    if pid_on_port:
-        result = subprocess.run(
-            ["taskkill", "/F", "/PID", pid_on_port],
-            capture_output=True,
-            text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
-        log(f"Port-kill on PID {pid_on_port}: {result.stdout.strip()} {result.stderr.strip()}")
-        killed_something = True
-
-    if not killed_something:
-        log("Stop requested but no tracked process and nothing found on the port.")
-
-    PROCESS = None
-    time.sleep(1)
+    stopped = wait_for_server(False, 2)
+    if stopped:
+        SERVER_PROCESS = None
+        close_server_log()
+        log("Stop completed: health endpoint is offline.")
+    else:
+        log("Stop failed: health endpoint still responds after timeout.")
     update_icon()
+    return stopped
 
 
 def restart_server(icon=None, item=None):
     log("Restart requested.")
-    stop_server()
-    time.sleep(1)
-    start_server()
+    if stop_server(icon, item):
+        return start_server(icon, item)
+    return False
+
+
+def toggle_server(icon=None, item=None):
+    if server_is_running():
+        return stop_server(icon, item)
+    return start_server(icon, item)
+
+
+def toggle_label(item):
+    return "Stop Server" if server_is_running() else "Start Server"
 
 
 def open_browser(icon=None, item=None):
@@ -136,25 +195,25 @@ def open_browser(icon=None, item=None):
 
 
 def make_icon_image(running):
-    # Simple green (running) or grey (stopped) circle icon
     color = "green" if running else "grey"
-    img = Image.new("RGB", (64, 64), "white")
-    draw = ImageDraw.Draw(img)
-    draw.ellipse((8, 8, 56, 56), fill=color)
-    return img
+    image = Image.new("RGB", (64, 64), "white")
+    ImageDraw.Draw(image).ellipse((8, 8, 56, 56), fill=color)
+    return image
 
 
 def update_icon():
-    running = is_server_running()
+    running = server_is_running()
     tray_icon.icon = make_icon_image(running)
     tray_icon.title = "Server: Running" if running else "Server: Stopped"
 
 
 def quit_app(icon, item):
+    close_server_log()
     icon.stop()
 
 
 menu = pystray.Menu(
+    pystray.MenuItem(toggle_label, toggle_server, default=True),
     pystray.MenuItem("Start Server", start_server),
     pystray.MenuItem("Stop Server", stop_server),
     pystray.MenuItem("Restart Server", restart_server),
@@ -162,17 +221,22 @@ menu = pystray.Menu(
     pystray.MenuItem("Quit", quit_app),
 )
 
-tray_icon = pystray.Icon("audit_app_server", make_icon_image(False), "Server: Stopped", menu)
+tray_icon = pystray.Icon(
+    "audit_app_server",
+    make_icon_image(server_is_running()),
+    "Server: Running" if server_is_running() else "Server: Stopped",
+    menu,
+)
 
 
-# Background thread to keep the icon colour accurate even if the
-# server is started/stopped some other way (e.g. manually).
 def watcher():
     while True:
-        update_icon()
+        try:
+            update_icon()
+        except Exception as error:
+            log(f"Tray status refresh failed: {error}")
         time.sleep(5)
 
 
 threading.Thread(target=watcher, daemon=True).start()
-
 tray_icon.run()

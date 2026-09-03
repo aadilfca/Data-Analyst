@@ -202,6 +202,42 @@
                         </select>
                     </div>
 
+                    <!-- Phase 2: controlled Data Bank projection for Verification. Core fields
+                         are fixed transaction fields; optional fields are selected from this
+                         Template and assigned a risk level. -->
+                    <div class="ar-field ar-verification-fields-field" id="arVerificationFieldsField">
+                        <div class="ar-verification-fields-heading">
+                            <label>Verification Data Fields</label>
+                            <span class="ar-policy-badge">Template-scoped</span>
+                        </div>
+                        <div class="ar-verification-fields-panel">
+                            <p class="ar-verification-fields-intro">
+                                Verification retrieves only the fields needed for this Document.
+                                Vendor, Item, Unit, Quantity, Rate and Amount are the core fields;
+                                add other mapped columns only when the risk assessment requires them.
+                            </p>
+                            <div id="arVerificationPolicyStatus" class="ar-verification-policy-status"></div>
+                            <div class="ar-verification-subtitle">Core transaction fields</div>
+                            <div id="arVerificationCoreFields" class="ar-verification-core-list"></div>
+                            <div class="ar-verification-subtitle ar-verification-optional-title">
+                                Additional fields by risk
+                            </div>
+                            <div id="arVerificationOptionalFields" class="ar-verification-optional-list"></div>
+                            <div class="ar-verification-add-row">
+                                <select id="arVerificationOptionalSelect" aria-label="Additional verification field">
+                                    <option value="">-- Add a mapped column --</option>
+                                </select>
+                                <select id="arVerificationOptionalRisk" aria-label="Risk level for additional verification field">
+                                    <option value="Low">Low risk</option>
+                                    <option value="Medium" selected>Medium risk</option>
+                                    <option value="High">High risk</option>
+                                </select>
+                                <button type="button" id="arVerificationOptionalAddBtn" class="ar-btn-chip-add">Add field</button>
+                            </div>
+                            <div id="arVerificationPolicyHint" class="ar-field-warning"></div>
+                        </div>
+                    </div>
+
                     <!-- Authorisation section: Authorisation Roles immediately followed by
                          Signature Specimens (the people-list for those roles), grouped together
                          and visually separated from Identity/Setup above

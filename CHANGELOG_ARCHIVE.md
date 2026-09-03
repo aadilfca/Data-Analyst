@@ -27,6 +27,42 @@ write-ups — nothing was reworded, only relocated and grouped.
 
 ---
 
+## Configurable Verification Data Fields
+
+**Date:** 2026-09-03 | **Files:** `database.py`, `routers/audit_rules.py`, `routers/data.py`,
+`static/audit_rules.html`, `static/audit_rules.js`, `static/procedure_modal.js`, `static/style.css`.
+
+Added a durable Template-scoped Verification Field Policy. Vendor, Item, Unit of Measurement,
+Quantity, Rate, and Amount are core fields; optional active Template columns can be added,
+risk-labelled, and reordered in Audit Rules. The Data Bank now uses server-side JSON projection
+and configured-field search when a Procedure Document is supplied, while legacy requests retain
+their existing full-row behavior. Invalid, inactive, duplicate, mismatched, and Physical Bill
+field selections are rejected or reported safely. Existing evidence, assignments, and results
+were not changed.
+
+Verification: 48 focused tests passed; Python/JavaScript syntax checks, schema upgrade smoke test,
+local HTTP asset checks, and a live configured preview check passed. A live preview returned only
+the configured keys from 11,515 available rows. Manual authenticated UI save/reopen confirmation
+remains the next-user checkpoint.
+
+## Local tray launcher rebuild
+
+**Date:** 2026-09-02 | **Files:** `tray_control.py`, `start_tray.vbs`, `run.bat`.
+
+Rebuilt the local tray controller and VBS launcher with script-relative paths, the project virtual
+environment, a single non-reloading Uvicorn process, health-based lifecycle control, and a default
+Start/Stop tray action. Windows restart cleared the stale runtime state; Aadil confirmed local
+server control recovered. Commit/push intentionally deferred.
+
+## Procedure evidence persistence fix
+
+**Date:** 2026-09-02 | **Files:** `routers/verification.py`, `static/procedure_modal.js`,
+`tests/test_verification_voucher_support.py`.
+
+Saved evidence now resolves by the stable voucher-line `client_data_id` when verification sessions
+are reopened, while modal identifiers are normalized consistently. The regression test passed and
+Render was confirmed to show the saved data. Commit `02ecb52` was pushed.
+
 ## Cross-Check Matrix Redesign
 
 **Requirement:** Rebuild the Audit Rules Cross-Check feature as a document × field matrix —

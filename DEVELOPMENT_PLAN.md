@@ -26,9 +26,7 @@ phase-status and decision-history sections.
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| 1 | **This phase - Procedure evidence persistence** | Reproduce and fix evidence/procedure persistence across Back, Verify, Verify & Next, and close | Pending |
-| 2 | Configurable Verification Data Fields | Implement core fields, optional risk-based fields, ordering, and unavailable-field handling in Audit Rules | Pending |
-| 3 | Data Table retrieval baseline | Measure configured-field retrieval: cold/warm time, DB calls, DB time, payload size, and browser render time | Pending measurement |
+| 3 | **This phase - Data Table retrieval baseline** | Measure configured-field retrieval: cold/warm time, DB calls, DB time, payload size, and browser render time | Pending measurement |
 | 4 | Inventory purchase Cross-check model | Define separate atomic controls for amount, rate, quantity, and quantity limits | Pending design |
 | 5 | Cross-check runtime integration | Connect matrix selections to runtime evaluation, including physical-bill values, mappings, totals, and rate row matching | Pending implementation |
 | 6 | Copy from lines repair | Add configurable Store Receiving → Physical Bill mappings with source provenance | Pending implementation |
@@ -45,9 +43,16 @@ phase-status and decision-history sections.
 ### Next approved phase boundary
 
 Phase 0 documentation reconciliation is complete. Completed Cross-check matrix, field-selection,
-persistence, and Verification result work remains historical only. The revised Phases 1–15 above
-cover persistence, configurable data retrieval, inventory controls, performance, safety, regression,
-and closeout.
+persistence, Verification result, and configurable verification-field work remains historical only.
+The revised Phases 3–15 above cover configured retrieval measurement, inventory controls,
+performance, safety, regression, and closeout.
+
+### Chat reconciliation — 2026-09-02
+
+Completed in this chat: Phase 0 plan/repository reconciliation; Phase 1 procedure-evidence
+persistence (commit `02ecb52`, pushed); local server launcher recovery; and Phase 2 configurable
+verification-field projection. Cross-check runtime, Copy from lines, performance, safety,
+regression, and Git closeout remain pending below.
 
 ### Phase 1 status - Rulebook persistence and session recovery
 

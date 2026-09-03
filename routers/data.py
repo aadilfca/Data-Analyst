@@ -14,6 +14,7 @@ import json
 # voucher_line_documents lookup instead of duplicating that SQL here - no circular import,
 # since routers/verification.py never imports from this module.
 from routers.verification import get_assignment_status_map
+from routers.audit_rules import build_verification_field_policy
 
 router = APIRouter()
 
@@ -464,7 +465,8 @@ def get_preview_rows(
     amount_min: Optional[float] = Query(None, description="Minimum extract_amount"),
     amount_max: Optional[float] = Query(None, description="Maximum extract_amount"),
     sunday_only: bool = Query(False, description="If true, only show rows with extract_date on Sunday"),
-    data_quality: Optional[str] = Query(None, description="Filter by data_quality_flag: 'complete' (flag is null) or 'incomplete'")
+    data_quality: Optional[str] = Query(None, description="Filter by data_quality_flag: 'complete' (flag is null) or 'incomplete'"),
+    document_id: Optional[int] = Query(None, description="Optional Audit Rules Document used to limit the returned fields")
 ):
     """
     Get paginated rows for a specific client, template, and date range.
@@ -491,6 +493,32 @@ def get_preview_rows(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
 
+    # When Verification supplies a Document, resolve its saved policy server-side. The browser
+    # never supplies arbitrary column names; it can only select from the active Template mapping
+    # already approved in Audit Rules.
+    verification_policy = None
+    verification_column_names = None
+    if document_id is not None:
+        document_rows = execute_query_pg(
+            "SELECT id, template_id, document_type, verification_field_policy "
+            "FROM audit_rule_documents WHERE id = %s AND is_active = TRUE",
+            (document_id,)
+        )
+        if not document_rows:
+            raise HTTPException(404, "Audit Rules Document not found or inactive")
+        document_row = document_rows[0]
+        if (document_row.get("document_type") or "linked_template") == "physical_bill":
+            raise HTTPException(400, "Physical Bill documents do not use Data Bank fields")
+        if document_row.get("template_id") != template_id:
+            raise HTTPException(400, "The selected Document is linked to a different Template")
+        verification_policy = build_verification_field_policy(
+            template_id, document_row.get("verification_field_policy")
+        )
+        verification_column_names = [
+            field["column_name"] for field in verification_policy["core_fields"]
+            if field.get("available") and field.get("column_name")
+        ] + [field["column_name"] for field in verification_policy["optional_fields"]]
+
     # Document grouping / subtotal support: resolve the document-key column
     # (first template column), the Date column, and all Amount (Numeric)
     # columns once per request - reused for both the empty-result early
@@ -513,8 +541,15 @@ def get_preview_rows(
     # Search in row_data (case-insensitive) – jsonb_each_text is the Postgres
     # equivalent of SQLite's json_each for searching all values in a JSONB column.
     if search:
-        base_where.append("EXISTS (SELECT 1 FROM jsonb_each_text(cd.row_data) WHERE LOWER(value) LIKE LOWER(%s))")
-        base_params.append(f"%{search}%")
+        if verification_column_names is not None:
+            base_where.append(
+                "EXISTS (SELECT 1 FROM jsonb_each_text(cd.row_data) "
+                "WHERE key = ANY(%s) AND LOWER(value) LIKE LOWER(%s))"
+            )
+            base_params.extend([verification_column_names, f"%{search}%"])
+        else:
+            base_where.append("EXISTS (SELECT 1 FROM jsonb_each_text(cd.row_data) WHERE LOWER(value) LIKE LOWER(%s))")
+            base_params.append(f"%{search}%")
 
     # Amount range
     if amount_min is not None:
@@ -569,14 +604,21 @@ def get_preview_rows(
 
     # Pagination
     offset = (page - 1) * limit
+    row_data_sql = "cd.row_data"
+    if verification_column_names is not None:
+        row_data_sql = (
+            "COALESCE((SELECT jsonb_object_agg(pair.key, pair.value) "
+            "FROM jsonb_each(cd.row_data) AS pair "
+            "WHERE pair.key = ANY(%s)), '{}'::jsonb)"
+        )
     data_sql = f"""
-        SELECT cd.id, cd.row_data, cd.extract_amount, cd.extract_date, cd.data_quality_flag, cd.rate_source
+        SELECT cd.id, {row_data_sql} AS row_data, cd.extract_amount, cd.extract_date, cd.data_quality_flag, cd.rate_source
         FROM client_data cd
         WHERE {where_sql}
         ORDER BY cd.extract_date DESC, cd.id
         LIMIT %s OFFSET %s
     """
-    data_params = final_params + [limit, offset]
+    data_params = ([verification_column_names] + final_params if verification_column_names is not None else final_params) + [limit, offset]
     rows = execute_query_pg(data_sql, data_params)
 
     # Format rows. row_data is JSONB - execute_query_pg already returns a
@@ -605,7 +647,7 @@ def get_preview_rows(
     # voucher line, so the Verification search/select UI (Phases 3-4) can grey them out.
     attach_assignment_flags(result_rows)
 
-    return {
+    response = {
         "template_id": template_id,
         "template_name": template[0]['template_name'],
         "total_rows": total_count,
@@ -617,6 +659,9 @@ def get_preview_rows(
         "amount_columns": amount_columns,
         "rows": result_rows
     }
+    if verification_policy is not None:
+        response["verification_field_policy"] = verification_policy
+    return response
 @router.get("/api/data/datasets/{upload_id}/rows")
 def get_dataset_rows(
     upload_id: int,
