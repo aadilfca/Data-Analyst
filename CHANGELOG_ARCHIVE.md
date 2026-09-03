@@ -20,6 +20,21 @@ add optional active Master Columns by Low/Medium/High risk level and order, with
 shown explicitly. The backend must derive the allowed projection and targeted search fields rather
 than accepting arbitrary browser requests.
 
+## Data Table retrieval baseline — 2026-09-03
+
+**Files:** `routers/data.py`, `static/procedure_modal.js`, `static/databank.js`,
+`tests/test_audit_rulebook.py`.
+
+Added opt-in `perf=true` diagnostics for preview requests. The backend reports total time, DB calls,
+read/write counts, and DB time; Procedure Modal and Data Bank log fetch and render timings without
+changing normal requests. Five cold (new HTTP connection) and five warm (reused session) live
+Supabase runs were captured. Configured preview averaged 2.98/3.04 seconds client-side,
+2.44/2.56 seconds API/DB time, 10 DB calls, and 25.5 KB for cold/warm runs. Normal Data Bank
+preview averaged 2.11/2.13 seconds client-side, 1.91/1.92 seconds API/DB time, 8 DB calls, and
+34.3 KB. DB time tracks API time closely, so the delay is primarily Supabase/network-bound; no
+optimization was applied in this measurement phase. Phase 3 was closed after the baseline review;
+the browser timing instrumentation remains available for future comparisons.
+
 This file was assembled on 2026-07-25 from the previous single-file CLAUDE.md's
 Conventions and Status log sections, split out project-by-project so CLAUDE.md
 itself could go back to being lean. Entries below are the original, unedited

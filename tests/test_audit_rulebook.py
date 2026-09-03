@@ -157,9 +157,11 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             result = get_preview_rows(client_id=7, template_id=9, date_start="2026-08-01",
                                       date_end="2026-08-31", page=1, limit=50, search=None,
                                       amount_min=None, amount_max=None, sunday_only=False,
-                                      data_quality=None, document_id=12)
+                                      data_quality=None, document_id=12, perf=True)
 
         self.assertEqual(result["rows"][0]["row_data"], {"Vendor": "Acme"})
+        self.assertIn("_perf", result)
+        self.assertIn("db_calls", result["_perf"])
         data_call = next((item for item in captured if "SELECT cd.id" in item[0]), None)
         self.assertIsNotNone(data_call)
         self.assertEqual(data_call[1][0], ["Vendor"])

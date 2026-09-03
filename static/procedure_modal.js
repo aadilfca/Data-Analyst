@@ -551,12 +551,27 @@ function getProcedureSearchDateEnd() {
     return new Date().toISOString().slice(0, 10);
 }
 
+function procedurePreviewPerfEnabled() {
+    return (window.VerificationPerf && window.VerificationPerf.enabled) ||
+        new URLSearchParams(window.location.search).get('perf') === '1';
+}
+
+function logProcedurePreviewPerf(operation, startedAt, details) {
+    if (!procedurePreviewPerfEnabled()) return;
+    console.info('[data-preview-perf]', {
+        operation,
+        elapsed_ms: Math.round((performance.now() - startedAt) * 10) / 10,
+        ...details
+    });
+}
+
 // Shared fetch used by both the search dropdown and the browse modal — GET /api/data/preview
 // scoped to one document's own template, over the wide fixed date window above. search='' (browse
 // mode) returns every row for that template, paginated; a non-empty search narrows it.
 async function fetchProcedureRows(templateId, documentId, search, page, limit) {
     const clientId = hostAdapter.getClientId();
     if (!clientId) throw new Error('No client selected.');
+    const perfStarted = performance.now();
     const params = new URLSearchParams({
         client_id: clientId,
         template_id: templateId,
@@ -567,9 +582,17 @@ async function fetchProcedureRows(templateId, documentId, search, page, limit) {
         document_id: documentId
     });
     if (search) params.set('search', search);
+    if (procedurePreviewPerfEnabled()) params.set('perf', 'true');
     const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/data/preview?${params}`);
     if (!res.ok) throw new Error('Failed to fetch Data Bank rows.');
-    return res.json();
+    const result = await res.json();
+    logProcedurePreviewPerf(search ? 'procedure_search' : 'procedure_browse', perfStarted, {
+        template_id: templateId,
+        document_id: documentId,
+        row_count: (result.rows || []).length,
+        backend: result._perf || null
+    });
+    return result;
 }
 
 // Voucher Supporting-Document Linking follow-up, Phase 2 of 4: formats an assigned row's voucher

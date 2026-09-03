@@ -10,6 +10,9 @@ from datetime import datetime, date
 import asyncio
 import calendar
 import json
+import time
+from functools import wraps
+import database
 # Voucher Supporting-Document Linking (Phase 2 of 6): reuses verification.py's own
 # voucher_line_documents lookup instead of duplicating that SQL here - no circular import,
 # since routers/verification.py never imports from this module.
@@ -17,6 +20,41 @@ from routers.verification import get_assignment_status_map
 from routers.audit_rules import build_verification_field_policy
 
 router = APIRouter()
+
+
+def _preview_perf_diagnostics(fn):
+    """Attach opt-in backend timings without adding work to normal preview requests."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        if not kwargs.get("perf", False):
+            return fn(*args, **kwargs)
+        token = database.start_db_metrics()
+        started = time.perf_counter()
+        result = None
+        try:
+            result = fn(*args, **kwargs)
+            metrics = database.get_db_metrics()
+            if isinstance(result, dict):
+                result["_perf"] = {
+                    "total_ms": round((time.perf_counter() - started) * 1000, 1),
+                    "db_calls": metrics["calls"],
+                    "db_reads": metrics["reads"],
+                    "db_writes": metrics["writes"],
+                    "db_ms": round(metrics["db_time"] * 1000, 1),
+                }
+            return result
+        finally:
+            metrics = database.get_db_metrics()
+            print(json.dumps({
+                "perf": "data_preview",
+                "total_ms": round((time.perf_counter() - started) * 1000, 1),
+                "db_calls": metrics["calls"],
+                "db_reads": metrics["reads"],
+                "db_writes": metrics["writes"],
+                "db_ms": round(metrics["db_time"] * 1000, 1),
+            }))
+            database.stop_db_metrics(token)
+    return wrapped
 
 # ---------- MODELS ----------
 class DatasetSummary(BaseModel):
@@ -454,6 +492,7 @@ def get_client_overdue_uploads(client_id: int = Query(..., description="Client I
 # ==============================================
 
 @router.get("/api/data/preview")
+@_preview_perf_diagnostics
 def get_preview_rows(
     client_id: int = Query(..., description="Client ID"),
     template_id: int = Query(..., description="Template ID"),
@@ -466,7 +505,8 @@ def get_preview_rows(
     amount_max: Optional[float] = Query(None, description="Maximum extract_amount"),
     sunday_only: bool = Query(False, description="If true, only show rows with extract_date on Sunday"),
     data_quality: Optional[str] = Query(None, description="Filter by data_quality_flag: 'complete' (flag is null) or 'incomplete'"),
-    document_id: Optional[int] = Query(None, description="Optional Audit Rules Document used to limit the returned fields")
+    document_id: Optional[int] = Query(None, description="Optional Audit Rules Document used to limit the returned fields"),
+    perf: bool = Query(False, include_in_schema=False)
 ):
     """
     Get paginated rows for a specific client, template, and date range.

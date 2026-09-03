@@ -26,8 +26,7 @@ phase-status and decision-history sections.
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| 3 | **This phase - Data Table retrieval baseline** | Measure configured-field retrieval: cold/warm time, DB calls, DB time, payload size, and browser render time | Pending measurement |
-| 4 | Inventory purchase Cross-check model | Define separate atomic controls for amount, rate, quantity, and quantity limits | Pending design |
+| 4 | **This phase - Inventory purchase Cross-check model** | Define separate atomic controls for amount, rate, quantity, and quantity limits | Pending design |
 | 5 | Cross-check runtime integration | Connect matrix selections to runtime evaluation, including physical-bill values, mappings, totals, and rate row matching | Pending implementation |
 | 6 | Copy from lines repair | Add configurable Store Receiving → Physical Bill mappings with source provenance | Pending implementation |
 | 7 | Data Table performance optimization | Apply one measured optimization: field projection, fewer round trips, targeted search, or safe caching | Pending decision |
@@ -44,15 +43,25 @@ phase-status and decision-history sections.
 
 Phase 0 documentation reconciliation is complete. Completed Cross-check matrix, field-selection,
 persistence, Verification result, and configurable verification-field work remains historical only.
-The revised Phases 3–15 above cover configured retrieval measurement, inventory controls,
+The revised Phases 4–15 above cover inventory controls,
 performance, safety, regression, and closeout.
 
 ### Chat reconciliation — 2026-09-02
 
 Completed in this chat: Phase 0 plan/repository reconciliation; Phase 1 procedure-evidence
-persistence (commit `02ecb52`, pushed); local server launcher recovery; and Phase 2 configurable
-verification-field projection. Cross-check runtime, Copy from lines, performance, safety,
-regression, and Git closeout remain pending below.
+persistence (commit `02ecb52`, pushed); local server launcher recovery; Phase 2 configurable
+verification-field projection; and Phase 3 Data Table retrieval baseline. Inventory Cross-check,
+Copy from lines, optimization, safety, regression, and Git closeout remain pending below.
+
+### Phase 3 status - Data Table retrieval baseline — 2026-09-03
+
+Added opt-in `perf=true` diagnostics to the configured Data Table preview path and browser console
+timing for Procedure Modal and Data Bank previews. Five cold and five warm live Supabase runs show
+configured preview averages of 2.98/3.04 seconds client-side, 2.44/2.56 seconds API/DB time, and
+10 DB calls; normal Data Bank preview averages 2.11/2.13 seconds client-side, 1.91/1.92 seconds
+API/DB time, and 8 DB calls. Payloads averaged 25.5 KB configured and 34.3 KB normal. No runtime
+optimization was applied. Phase 3 is complete; browser console timing remains available for future
+comparisons, and the next active work is the inventory-purchase Cross-check model.
 
 ### Phase 1 status - Rulebook persistence and session recovery
 
@@ -1308,3 +1317,6 @@ The standalone `save_line_items` path had a stale function name for session Rule
 causing status recomputation to raise a `NameError` and return HTTP 500. The reference was corrected,
 and the focused regression suite now passes. A fresh manual network trace recorded 42 successful API
 requests, including line saves and Save → Verify. Performance optimization remains a separate phase.
+Phase 3 is complete. The baseline identifies Supabase/database/network time as the dominant delay;
+the opt-in browser timing remains available for future comparisons, and no optimization was applied
+in this measurement phase.

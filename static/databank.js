@@ -3,6 +3,16 @@
 // ==============================================
 
 // API_BASE and STORAGE_KEY are defined in client_context.js
+const dataBankPerfEnabled = new URLSearchParams(window.location.search).get('perf') === '1';
+
+function logDataBankPerf(operation, startedAt, details) {
+    if (!dataBankPerfEnabled) return;
+    console.info('[data-preview-perf]', {
+        operation,
+        elapsed_ms: Math.round((performance.now() - startedAt) * 10) / 10,
+        ...details
+    });
+}
 
 // ---------- STATE ----------
 let availabilityData = [];
@@ -1228,7 +1238,10 @@ async function fetchPreviewData() {
     }
 
     try {
-        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/data/preview?${params.toString()}`);
+        const perfStarted = dataBankPerfEnabled ? performance.now() : null;
+        const requestParams = dataBankPerfEnabled ? new URLSearchParams(params) : params;
+        if (dataBankPerfEnabled) requestParams.set('perf', 'true');
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/data/preview?${requestParams.toString()}`);
         if (!res.ok) {
             const err = await res.json();
             throw new Error(err.detail || 'Failed to fetch preview');
@@ -1246,8 +1259,19 @@ async function fetchPreviewData() {
         sundayCountBadge.textContent = `Sunday rows: ${previewSundayCount}`;
         
         // Render table
+        const renderStarted = dataBankPerfEnabled ? performance.now() : null;
         await renderPreviewRows(rows);
         updatePagination();
+        if (dataBankPerfEnabled) {
+            logDataBankPerf('databank_preview', perfStarted, {
+                template_id: previewTemplateId,
+                row_count: rows.length,
+                total_rows: previewTotalRows,
+                fetch_ms: Math.round((renderStarted - perfStarted) * 10) / 10,
+                render_ms: Math.round((performance.now() - renderStarted) * 10) / 10,
+                backend: data._perf || null
+            });
+        }
         
         if (rows.length === 0 && previewTotalRows === 0) {
             previewTableBody.innerHTML = '<tr><td colspan="100" style="text-align:center; padding:40px; color:#94a3b8;">No data found for the selected criteria.</td></tr>';
