@@ -108,9 +108,10 @@ remains the next-user checkpoint.
 
 Phase 2 reconciliation — 2026-09-03: the implementation was already present in commit `23b8e17`
 and the retrieval baseline in `ab847ee`; no duplicate code was added. Focused tests passed (49),
-the full suite passed (104), and Python/JavaScript checks passed. The superseded Phase 4 prototype
-was preserved in a local temporary checkpoint and removed from the active worktree. Manual
-authenticated UI confirmation remains pending; no commit or push was performed.
+the full suite passed (104), Python/JavaScript checks passed, and the Audit Rules field-policy
+controls passed a browser-level static check. Aadil manually confirmed Phase 2. The superseded
+Phase 4 prototype was preserved in a local temporary checkpoint and removed from the active
+worktree. Documentation was committed and pushed in `425ad7c`.
 
 ## Local tray launcher rebuild
 

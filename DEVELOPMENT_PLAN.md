@@ -26,8 +26,7 @@ phase-status and decision-history sections.
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| 2 | **This phase - Data retrieval and field-scope redesign** | Fetch only core verification fields, with risk-based additional fields configurable in Audit Rules | Implementation already complete; manual UI confirmation pending |
-| 4 | Unified Audit Rules architecture and UI | Build one Category Validation Rules section with separate Procedure/Evidence and Cross-check tables | Pending design approval |
+| 4 | **This phase - Unified Audit Rules architecture and UI** | Build one Category Validation Rules section with separate Procedure/Evidence and Cross-check tables | Pending design approval |
 | 5 | Inventory purchase Cross-check rules and runtime | Implement and evaluate the five approved amount, rate, and quantity assertions in Verification | Pending implementation |
 | 6 | Cross-check source and legacy-path review | Confirm Template-scoped active mappings and retire legacy paths only where runtime no longer depends on them | Pending correctness review |
 | 7 | Vendor Bill Copy from lines | Repair Store receiving to Physical Bill copying with clear mappings, conflict handling, preview, and persistence | Pending investigation |
@@ -52,9 +51,8 @@ phase-status and decision-history sections.
 
 ### Next approved phase boundary
 
-Phase 0 plan and repository reconciliation is complete and archived. Phase 1 and the retrieval
-performance baseline are complete and retired from the active table. Phase 2 implementation is
-already present and remains active only for manual UI confirmation. Completed matrix,
+Phase 0 plan and repository reconciliation is complete and archived. Phases 1–3 are complete and
+retired from the active table. Phase 4 is now the active boundary. Completed matrix,
 Verification-result, and field-selection work remains historical only. The atomic-control
 prototype is quarantined locally and will be reassessed under Phase 4.
 
@@ -62,7 +60,7 @@ prototype is quarantined locally and will be reassessed under Phase 4.
 
 Completed in this chat: procedure-evidence persistence (commit `02ecb52`, pushed); local server
 launcher recovery; configurable verification-field projection; and the Data Table retrieval
-baseline. Phase 2 now needs only manual UI confirmation. Unified validation, inventory Cross-check
+baseline. Phase 2 is complete and manually confirmed. Unified validation, inventory Cross-check
 runtime, Copy from lines, optimization, safety, regression, and Git closeout remain pending below.
 
 ### Phase 4 prototype note — 2026-09-03
