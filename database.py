@@ -1859,6 +1859,15 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add evidence_type to audit_rule_categories:", e)
 
+        try:
+            cur = conn.execute("PRAGMA table_info(audit_rule_categories)")
+            columns = [row[1] for row in cur.fetchall()]
+            if 'validation_rules_json' not in columns:
+                conn.execute("ALTER TABLE audit_rule_categories ADD COLUMN validation_rules_json TEXT")
+                print("✅ Added validation_rules_json column to audit_rule_categories")
+        except Exception as e:
+            print("⚠️ Could not add validation_rules_json to audit_rule_categories:", e)
+
         # Documents a Category uses. approval_required (Validation Rules Phase 1 of 7) has since
         # been hard-removed (confirmed requirement, 2026-08-02) - approval requirement is now
         # decided entirely at Document level via the "Approved by" role's Required Authority
@@ -3329,9 +3338,11 @@ def init_db_postgres(conn):
             is_active BOOLEAN DEFAULT TRUE,
             evidence_type TEXT CHECK (evidence_type IN ('billable', 'non_billable')),
             created_at TIMESTAMPTZ DEFAULT now(),
-            matrix_version INTEGER NOT NULL DEFAULT 1
+            matrix_version INTEGER NOT NULL DEFAULT 1,
+            validation_rules_json JSONB
         )
     ''', "audit_rule_categories")
+    run("ALTER TABLE audit_rule_categories ADD COLUMN IF NOT EXISTS validation_rules_json JSONB", "audit_rule_categories.validation_rules_json")
 
     # ---------- 25. audit_rule_category_documents ----------
     run('''

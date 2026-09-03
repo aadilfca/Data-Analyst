@@ -29,6 +29,24 @@ are mathematical Cross-check rules. They share one Category policy screen and st
 separate typed tables to avoid ambiguous nullable fields, invalid combinations, and duplicated
 validation logic. The existing uncommitted atomic-control prototype will be reassessed under Phase 4.
 
+## Unified Category Validation Rules UI checkpoint — 2026-09-03
+
+**Status:** Work in process. **Files:** `database.py`, `routers/audit_rules.py`,
+`static/audit_rules.html`, `static/audit_rules.js`, `static/style.css`.
+
+The Category editor now uses one Category-first Validation Rules section. The duplicate Category
+Documents list, Cross-check attachment list, and Document Chains preview were removed from the UI.
+Procedure/Evidence checks use repeatable rows for Template Documents, conditions, and detail values.
+Mathematical Cross-checks use Template Document and field selectors, an operator, optional tolerance,
+missing-data behavior, and blocking status. A read-only Clearing Rules popover summarizes the current
+authoring state. The visible Cross-check Comparison Type control is hidden, while legacy records and
+backend paths remain intact for compatibility.
+
+Rules are stored as a structured Category payload with additive SQLite/Postgres schema support and
+dedicated GET/PUT endpoints. Python compilation, JavaScript syntax checks, diff checks, the focused
+Audit Rules suite (49 tests), and the full suite (104 tests) passed. Manual browser review and the
+Verification runtime migration are intentionally pending; no Verification result logic changed.
+
 ## Data assignment and modal persistence fix — 2026-09-03
 
 **Files:** `static/procedure_modal.js`, `static/verification.js`, `tests/test_audit_rulebook.py`.

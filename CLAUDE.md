@@ -31,8 +31,8 @@ One line per file group: what it is now. Full build history for every entry live
 - static/audit_workbook.js, static/audit_workbook.html → session-scoped Audit Workbook list; status filtering, running totals, Verification deep links, shared procedure modal, cached `voucher_support_data` badge refresh. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, mapping suggestions, period-conflict checks, classification/override, upload history, category assignment, deletion; scoped cache invalidation. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
-- routers/audit_rules.py → Audit Rules APIs: Documents, Cross-checks, Categories, Signature Specimens, ordered Voucher-level Checks; soft-delete/restore, scoped caching. See CHANGELOG_ARCHIVE.md.
-- static/audit_rules.html, static/audit_rules.js → three-pane Audit Rules UI + embedded Signature Specimens + full-page Assign Categories; drag ordering, smart-fill, Verification deep links. See CHANGELOG_ARCHIVE.md.
+- routers/audit_rules.py → Audit Rules APIs: Documents, Cross-checks, Category policies, Signature Specimens, ordered Voucher-level Checks; soft-delete/restore, scoped caching. See CHANGELOG_ARCHIVE.md.
+- static/audit_rules.html, static/audit_rules.js → three-pane Audit Rules UI with Category-first Validation Rules authoring, embedded Signature Specimens, Assign Categories, and Verification deep links. See CHANGELOG_ARCHIVE.md.
 - routers/verification.py + static/verification.* → Cash/Bank Verification: sessions, voucher navigation, category freezing, evidence/procedures/observations/cross-checks/voucher checks, Cleared/Query rollup, revision-based dirty save, `?perf=1` timings. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
@@ -298,7 +298,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-02: Fixed cross-check shortfall note-save invalid placeholder document ID crashing Save-and-Verify; real hidden sentinel Document seeded lazily per cross-check. See CHANGELOG_ARCHIVE.md.
 - 2026-09-02: Investigated procedure-window fetch slowness (no code change) — confirmed same cross-region tax, new nuance: cold-pool connection overhead. See INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
 - 2026-09-02: Postgres pool reliability (2 phases, COMPLETE) — retry-once on a stale pooled connection (`_run_pooled_pg`/`_getconn_pg_checked`; `_PooledConnection`/`get_db_pg` removed) + `PG_POOL_MIN` 1→3 warm-start; `database.py`, `.env.example`, new `tests/test_pg_pool_retry.py`. See CHANGELOG_ARCHIVE.md.
-- 2026-09-03: Unified Category Validation Rules plan approved — procedure/evidence and mathematical Cross-check rules use separate typed tables under one Category policy. See CHANGELOG_ARCHIVE.md.
+- 2026-09-03: Category Validation Rules authoring is work in process; Verification runtime linkage remains pending. See CHANGELOG_ARCHIVE.md.
 - 2026-09-03: Configurable Verification Data Fields completed with Template-scoped persistence, server projection, Audit Rules UI, and Procedure Modal wiring. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance

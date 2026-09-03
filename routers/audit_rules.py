@@ -850,6 +850,7 @@ def row_to_document_list(row: dict, mirrored_fields: Optional[List[str]] = None)
         "name": row["name"],
         "is_active": bool(row["is_active"]),
         "document_type": document_type,
+        "template_id": row.get("template_id"),
         "cross_check_fields": [] if document_type == "physical_bill" else (mirrored_fields or [])
     }
 
@@ -1763,6 +1764,47 @@ class CategoryUpdate(BaseModel):
     cross_check_ids: List[int] = []
     evidence_type: Optional[str] = None
 
+class CategoryValidationRules(BaseModel):
+    procedure_evidence: Dict[str, Any] = {}
+    mathematical_cross_checks: List[Dict[str, Any]] = []
+
+def get_category_validation_rules(category_id: int) -> dict:
+    rows = execute_query_pg("SELECT validation_rules_json FROM audit_rule_categories WHERE id = %s", (category_id,))
+    if not rows:
+        raise HTTPException(404, "Category not found")
+    raw = rows[0].get("validation_rules_json")
+    if not raw:
+        return {"procedure_evidence": {}, "mathematical_cross_checks": []}
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        value = {}
+    return {
+        "procedure_evidence": value.get("procedure_evidence") or {},
+        "mathematical_cross_checks": value.get("mathematical_cross_checks") or [],
+    }
+
+def validate_category_validation_rules(rules: CategoryValidationRules):
+    allowed_missing = {"not_configured", "not_linked", "missing", "shortfall"}
+    allowed_conditions = {"required_document", "prepared_by", "checked_by", "approved_by", "signature"}
+    for index, rule in enumerate((rules.procedure_evidence or {}).get("checks", [])):
+        if not rule.get("document_id") or rule.get("condition") not in allowed_conditions:
+            raise HTTPException(400, f"Procedure/Evidence row {index + 1} needs a document and valid condition")
+        rows = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE AND document_type = 'linked_template'", (rule["document_id"],))
+        if not rows:
+            raise HTTPException(400, f"Procedure/Evidence row {index + 1} must use an active Template document")
+    for index, rule in enumerate(rules.mathematical_cross_checks):
+        required = ("left_document_id", "left_field", "right_document_id", "right_field", "operator")
+        if any(not rule.get(key) for key in required):
+            raise HTTPException(400, f"Mathematical Cross-check row {index + 1} needs two documents, two fields, and an operator")
+        document_ids = {rule["left_document_id"], rule["right_document_id"]}
+        for document_id in document_ids:
+            rows = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE AND document_type = 'linked_template'", (document_id,))
+            if not rows:
+                raise HTTPException(400, f"Mathematical Cross-check row {index + 1} must use active Template documents")
+        if rule.get("missing_data_behavior") and rule["missing_data_behavior"] not in allowed_missing:
+            raise HTTPException(400, f"Mathematical Cross-check row {index + 1} has an invalid missing-data behavior")
+
 # Physical Bill evidence type (Phase 3 of 8). Validated in code for the same reason as
 # DOCUMENT_TYPES above - Phase 1 could only attach a real CHECK to the CREATE TABLE, so on an
 # already-initialized database this is the only enforcement.
@@ -1958,6 +2000,7 @@ def row_to_category(row: dict) -> dict:
         "matrix_version": row.get("matrix_version", 1),
         "documents": get_category_documents(category_id),
         "cross_checks": get_category_cross_checks(category_id),
+        "validation_rules": get_category_validation_rules(category_id),
         "used_by_vouchers_count": get_category_used_by_vouchers_count(category_id)
     }
 
@@ -2071,6 +2114,22 @@ def get_category(category_id: int):
     result = row_to_category(rows[0])
     cache_set(cache_key, result)
     return result
+
+@router.get("/api/audit-rules/categories/{category_id}/validation-rules")
+def get_category_validation_rules_endpoint(category_id: int):
+    return get_category_validation_rules(category_id)
+
+@router.put("/api/audit-rules/categories/{category_id}/validation-rules", dependencies=[Depends(ensure_no_active_verification_sessions)])
+def update_category_validation_rules(category_id: int, rules: CategoryValidationRules):
+    validate_category_validation_rules(rules)
+    existing = execute_query_pg("SELECT id FROM audit_rule_categories WHERE id = %s", (category_id,))
+    if not existing:
+        raise HTTPException(404, "Category not found")
+    payload = Json(rules.dict())
+    execute_write_pg("UPDATE audit_rule_categories SET validation_rules_json = %s WHERE id = %s", (payload, category_id))
+    log_audit("Admin", "Update", "AuditRules", f"Updated validation rules for Category ID {category_id}")
+    invalidate_audit_rules_cache({"entity_type": "Category", "entity_id": category_id, "action": "Updated"})
+    return get_category_validation_rules(category_id)
 
 @router.post("/api/audit-rules/categories", dependencies=[Depends(ensure_no_active_verification_sessions)])
 def create_category(category: CategoryCreate):

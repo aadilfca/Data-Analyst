@@ -1793,13 +1793,7 @@ const arCategoryNameInput = document.getElementById('arCategoryNameInput');
 const arCategoryKbOverviewInput = document.getElementById('arCategoryKbOverviewInput');
 // Physical Bill evidence type (Phase 4 of 8): forced choice, no default - see saveCategory().
 const arCategoryEvidenceTypeSelect = document.getElementById('arCategoryEvidenceTypeSelect');
-const arCategoryDocsList = document.getElementById('arCategoryDocsList');
-const arCategoryAddDocumentSelect = document.getElementById('arCategoryAddDocumentSelect');
-const arCategoryAddDocumentBtn = document.getElementById('arCategoryAddDocumentBtn');
-const arCategoryCrossChecksChipList = document.getElementById('arCategoryCrossChecksChipList');
-const arCategoryAddCrossCheckSelect = document.getElementById('arCategoryAddCrossCheckSelect');
-const arCategoryAddCrossCheckBtn = document.getElementById('arCategoryAddCrossCheckBtn');
-const arCategoryCrossCheckChainPreview = document.getElementById('arCategoryCrossCheckChainPreview');
+const arCategoryDetailMeta = document.querySelector('.ar-category-detail-meta');
 
 // ---------- CATEGORY DETAIL: VALIDATION RULES SECTION SHELL (Phase 1 of 3) ----------
 // Groups the Cross-checks field + its Document Chains preview into one visually distinct
@@ -1812,10 +1806,6 @@ const arCategoryCrossCheckChainPreview = document.getElementById('arCategoryCros
 // change) — it's back to being its own top-level rail entity (see the VOUCHER-LEVEL CHECKS
 // section further down), so this box now only ever has one sub-section.
 function buildCategoryValidationRulesSection() {
-    const crossChecksField = arCategoryCrossChecksChipList.closest('.ar-field');
-    const chainPreviewField = arCategoryCrossCheckChainPreview.closest('.ar-field');
-    if (!crossChecksField || !chainPreviewField) return;
-
     const section = document.createElement('div');
     section.className = 'ar-validation-rules-section';
     section.id = 'arCategoryValidationRulesSection';
@@ -1825,38 +1815,96 @@ function buildCategoryValidationRulesSection() {
     header.textContent = '⚠️ Validation Rules';
     section.appendChild(header);
 
-    // Cleared Requirements summary (new, confirmed requirement, Phase 2 of 3) — read-only,
-    // no manual toggles, sits first/above the Cross-checks subsection per the confirmed scope.
-    const clearedReqSubsection = document.createElement('div');
-    clearedReqSubsection.className = 'ar-validation-subsection';
-    clearedReqSubsection.id = 'arValidationSubsectionClearedRequirements';
-    const clearedReqTitle = document.createElement('div');
-    clearedReqTitle.className = 'ar-validation-subsection-title';
-    clearedReqTitle.textContent = 'What Cleared Requires';
-    clearedReqSubsection.appendChild(clearedReqTitle);
-    const clearedReqList = document.createElement('div');
-    clearedReqList.id = 'arCategoryClearedRequirementsList';
-    clearedReqList.className = 'ar-cleared-requirements-list';
-    clearedReqSubsection.appendChild(clearedReqList);
-    section.appendChild(clearedReqSubsection);
+    const procedure = document.createElement('div');
+    procedure.className = 'ar-validation-subsection';
+    procedure.innerHTML = '<div class="ar-validation-subsection-title">Procedure / Evidence</div>' +
+        '<div class="ar-rule-table-wrap"><table class="ar-category-rule-table"><thead><tr><th>Document</th><th>Condition</th><th>Role / signature</th><th></th></tr></thead><tbody id="arProcedureRulesBody"></tbody></table></div>' +
+        '<button type="button" class="ar-btn-chip-add" id="arAddProcedureRuleBtn">Add procedure check</button>';
+    section.appendChild(procedure);
 
-    const crossChecksSubsection = document.createElement('div');
-    crossChecksSubsection.className = 'ar-validation-subsection';
-    crossChecksSubsection.id = 'arValidationSubsectionCrossChecks';
-    const crossChecksTitle = document.createElement('div');
-    crossChecksTitle.className = 'ar-validation-subsection-title';
-    crossChecksTitle.textContent = 'Cross-checks';
-    crossChecksSubsection.appendChild(crossChecksTitle);
-    section.appendChild(crossChecksSubsection);
-
-    // Insert the new section where the Cross-checks field currently sits, then move both
-    // existing fields into the Cross-checks sub-section (appendChild on an existing node moves
-    // it, it does not clone it).
-    crossChecksField.parentNode.insertBefore(section, crossChecksField);
-    crossChecksSubsection.appendChild(crossChecksField);
-    crossChecksSubsection.appendChild(chainPreviewField);
+    const math = document.createElement('div');
+    math.className = 'ar-validation-subsection';
+    math.innerHTML = '<div class="ar-validation-subsection-title">Mathematical Cross-checks</div>' +
+        '<p class="ar-validation-help">Compare financial or quantity fields from Template documents selected below.</p>' +
+        '<div class="ar-rule-table-wrap"><table class="ar-category-rule-table"><thead><tr><th>Left document</th><th>Left field</th><th>Operator</th><th>Right document</th><th>Right field</th><th>Tolerance</th><th>Missing data</th><th>Blocking</th><th></th></tr></thead><tbody id="arMathRulesBody"></tbody></table></div>' +
+        '<button type="button" class="ar-btn-chip-add" id="arAddMathRuleBtn">Add comparison</button>';
+    section.appendChild(math);
+    const clearing = document.createElement('button');
+    clearing.type = 'button'; clearing.className = 'ar-btn-secondary ar-clearing-rules-btn'; clearing.id = 'arClearingRulesBtn'; clearing.textContent = 'Clearing Rules';
+    clearing.addEventListener('click', showClearingRules);
+    section.appendChild(clearing);
+    arCategoryDetailMeta.parentNode.insertBefore(section, arCategoryDetailMeta);
 }
 buildCategoryValidationRulesSection();
+document.getElementById('arAddMathRuleBtn')?.addEventListener('click', () => addMathRuleRow());
+document.getElementById('arAddProcedureRuleBtn')?.addEventListener('click', () => addProcedureRuleRow());
+
+function escapeHtml(value) {
+    const div = document.createElement('div'); div.textContent = value == null ? '' : String(value); return div.innerHTML;
+}
+
+function templateDocuments() {
+    return allDocuments.filter(doc => doc.is_active !== false && (doc.document_type || 'linked_template') === 'linked_template');
+}
+
+function optionMarkup(items, selected, placeholder) {
+    return '<option value="">' + placeholder + '</option>' + items.map(item => '<option value="' + item.id + '"' + (String(item.id) === String(selected) ? ' selected' : '') + '>' + escapeHtml(item.name) + '</option>').join('');
+}
+
+function fieldMarkup(documentId, selected) {
+    const doc = templateDocuments().find(item => String(item.id) === String(documentId));
+    const fields = doc?.cross_check_fields || [];
+    return '<option value="">Select field</option>' + fields.map(field => '<option' + (field === selected ? ' selected' : '') + '>' + escapeHtml(field) + '</option>').join('');
+}
+
+function addProcedureRuleRow(rule = {}) {
+    const body = document.getElementById('arProcedureRulesBody'); if (!body) return;
+    const row = document.createElement('tr');
+    row.innerHTML = '<td><select data-rule="document_id">' + optionMarkup(templateDocuments(), rule.document_id, 'Select document') + '</select></td><td><select data-rule="condition"><option value="required_document">Required document</option><option value="prepared_by">Prepared by</option><option value="checked_by">Checked by</option><option value="approved_by">Approved by</option><option value="signature">Signature</option></select></td><td><select data-rule="sub_value"><option value="">Select after choosing a document</option></select></td><td><button type="button" class="ar-btn-delete">Remove</button></td>';
+    row.querySelector('[data-rule="condition"]').value = rule.condition || 'required_document';
+    const docSelect = row.querySelector('[data-rule="document_id"]'); const condition = row.querySelector('[data-rule="condition"]'); const sub = row.querySelector('[data-rule="sub_value"]');
+    const refreshSub = () => { const values = condition.value === 'signature' ? ['Any active signature specimen', 'Required authority match'] : condition.value === 'required_document' ? ['Document must be linked'] : ['Any configured role']; sub.innerHTML = '<option value="">Select detail</option>' + values.map(value => '<option>' + escapeHtml(value) + '</option>').join(''); sub.value = rule.sub_value || ''; };
+    docSelect.addEventListener('change', refreshSub); condition.addEventListener('change', refreshSub); refreshSub();
+    row.querySelector('button').addEventListener('click', () => row.remove()); body.appendChild(row);
+}
+
+function addMathRuleRow(rule = {}) {
+    const body = document.getElementById('arMathRulesBody');
+    if (!body) return;
+    const row = document.createElement('tr');
+    const docs = templateDocuments();
+    row.innerHTML = '<td><select data-rule="left_document_id">' + optionMarkup(docs, rule.left_document_id, 'Document') + '</select></td><td><select data-rule="left_field">' + fieldMarkup(rule.left_document_id, rule.left_field) + '</select></td><td><select data-rule="operator"><option value="=">Equals</option><option value=">=">At least</option><option value="<=">At most</option><option value="!=">Does not equal</option></select></td><td><select data-rule="right_document_id">' + optionMarkup(docs, rule.right_document_id, 'Document') + '</select></td><td><select data-rule="right_field">' + fieldMarkup(rule.right_document_id, rule.right_field) + '</select></td><td><input data-rule="tolerance" type="number" step="any" min="0" placeholder="0"></td><td><select data-rule="missing_data_behavior"><option value="not_configured">Not configured</option><option value="not_linked">Not linked</option><option value="missing">Missing</option><option value="shortfall">Shortfall</option></select></td><td><input data-rule="blocking" type="checkbox"></td><td><button type="button" class="ar-btn-delete">Remove</button></td>';
+    Object.keys(rule).forEach(key => { const el = row.querySelector('[data-rule="' + key + '"]'); if (el) el.type === 'checkbox' ? el.checked = !!rule[key] : el.value = rule[key] ?? ''; });
+    const leftDoc = row.querySelector('[data-rule="left_document_id"]'); const rightDoc = row.querySelector('[data-rule="right_document_id"]');
+    leftDoc.addEventListener('change', () => { row.querySelector('[data-rule="left_field"]').innerHTML = fieldMarkup(leftDoc.value, ''); });
+    rightDoc.addEventListener('change', () => { row.querySelector('[data-rule="right_field"]').innerHTML = fieldMarkup(rightDoc.value, ''); });
+    row.querySelector('button').addEventListener('click', () => row.remove());
+    body.appendChild(row);
+}
+
+function readCategoryValidationRules() {
+    const rows = selector => [...document.querySelectorAll(selector + ' tr')].map(row => Object.fromEntries([...row.querySelectorAll('[data-rule]')].map(el => [el.dataset.rule, el.type === 'checkbox' ? el.checked : (el.value || null)])));
+    return { procedure_evidence: { checks: rows('#arProcedureRulesBody') }, mathematical_cross_checks: rows('#arMathRulesBody') };
+}
+
+function showClearingRules() {
+    const rules = readCategoryValidationRules();
+    const procedureCount = rules.procedure_evidence.checks.length;
+    const mathCount = rules.mathematical_cross_checks.length;
+    const popover = document.createElement('div');
+    popover.className = 'ar-clearing-rules-popover';
+    popover.innerHTML = '<div class="ar-clearing-rules-popover-title">Clearing Rules</div><p>Clearing evaluates the configured Procedure / Evidence checks and ' + mathCount + ' mathematical cross-check' + (mathCount === 1 ? '' : 's') + '.</p><p>' + procedureCount + ' procedure/evidence check' + (procedureCount === 1 ? '' : 's') + ' configured.</p><button type="button" class="ar-btn-secondary">Close</button>';
+    popover.querySelector('button').addEventListener('click', () => popover.remove());
+    document.body.appendChild(popover);
+}
+
+async function loadCategoryValidationRules(categoryId) {
+    const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories/' + categoryId + '/validation-rules');
+    if (!res.ok) throw new Error('Failed to load validation rules');
+    const rules = await res.json(); const p = rules.procedure_evidence || {};
+    document.getElementById('arProcedureRulesBody').innerHTML = ''; (p.checks || []).forEach(addProcedureRuleRow);
+    document.getElementById('arMathRulesBody').innerHTML = ''; (rules.mathematical_cross_checks || []).forEach(addMathRuleRow);
+}
 
 const arCategoryClearedRequirementsList = document.getElementById('arCategoryClearedRequirementsList');
 
@@ -2519,9 +2567,7 @@ async function selectCategory(id) {
             categoryDocMeta[d.document_id] = { name: d.name, is_active: !!d.is_active };
         });
         arCategoryMatrixVersion.textContent = String(cat.matrix_version || 1);
-        renderCategoryDocsList();
-        renderCategoryCrossCheckChips();
-        renderCategoryClearedRequirements(cat.id);
+        await loadCategoryValidationRules(cat.id);
 
         arCategoryUsedByRow.style.display = 'block';
         arCategoryUsedByCount.textContent = cat.used_by_vouchers_count;
@@ -2557,9 +2603,7 @@ function startNewCategory() {
     categoryDocRequired = {};
     categoryDocMeta = {};
     arCategoryMatrixVersion.textContent = '1';
-    renderCategoryDocsList();
-    renderCategoryCrossCheckChips();
-    renderCategoryClearedRequirements(null);
+    document.getElementById('arProcedureRulesBody').innerHTML = ''; document.getElementById('arMathRulesBody').innerHTML = '';
 
     arCategoryUsedByRow.style.display = 'none';
     arCategoryDeleteBtn.style.display = 'none';
@@ -2590,10 +2634,12 @@ async function saveCategory(triggerBtn) {
         return;
     }
 
+    const validationRules = readCategoryValidationRules();
+    const ruleDocumentIds = [...validationRules.procedure_evidence.checks.map(rule => Number(rule.document_id)), ...validationRules.mathematical_cross_checks.flatMap(rule => [Number(rule.left_document_id), Number(rule.right_document_id)])].filter(id => Number.isInteger(id) && id > 0);
     const payload = {
         name: name,
         kb_overview: arCategoryKbOverviewInput.value.trim() || null,
-        document_ids: categoryDocIds,
+        document_ids: [...new Set(categoryDocIds.concat(ruleDocumentIds))],
         cross_check_ids: categoryCrossCheckIds,
         evidence_type: evidenceType
     };
@@ -2621,11 +2667,17 @@ async function saveCategory(triggerBtn) {
         // needed here.
         if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save category');
 
+        const savedId = editingCategoryId || result.category_id;
+        if (savedId) {
+            const rulesRes = await fetch(API_BASE + '/api/audit-rules/categories/' + savedId + '/validation-rules', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(validationRules) });
+            const rulesResult = await rulesRes.json();
+            if (!rulesRes.ok) throw new Error(rulesResult.detail || 'Failed to save validation rules');
+        }
+
         showCategoryDetailStatus('✅ ' + result.message, 'success');
 
         // POST doesn't echo back the full row, so re-fetch the list, then re-select
         // to refresh the detail panel's is_active/used_by state from the server.
-        const savedId = editingCategoryId || result.category_id;
         invalidateCategoriesListCache();
         await loadCategories();
         await selectCategory(savedId);
@@ -2676,15 +2728,6 @@ async function restoreCategory() {
 arCategoryAddNewBtn.addEventListener('click', startNewCategory);
 arCategoryShowInactiveCheckbox.addEventListener('change', loadCategories);
 arCategoryLoadMoreBtn.addEventListener('click', loadMoreCategories);
-
-arCategoryAddDocumentBtn.addEventListener('click', addCategoryDocument);
-// Confirmed fix: Add button stays hidden until a real, selectable (non-placeholder,
-// non-disabled/inactive) Document is chosen.
-arCategoryAddDocumentSelect.addEventListener('change', () => {
-    const selected = arCategoryAddDocumentSelect.selectedOptions[0];
-    arCategoryAddDocumentBtn.style.display = (selected && selected.value && !selected.disabled) ? '' : 'none';
-});
-arCategoryAddCrossCheckBtn.addEventListener('click', addCategoryCrossCheck);
 
 arCategorySaveBtn.addEventListener('click', () => saveCategory(arCategorySaveBtn));
 arCategoryDeleteBtn.addEventListener('click', deleteCategory);

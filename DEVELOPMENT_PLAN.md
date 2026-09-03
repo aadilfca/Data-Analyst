@@ -26,7 +26,7 @@ phase-status and decision-history sections.
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| 4 | **This phase - Unified Audit Rules architecture and UI** | Build one Category Validation Rules section with separate Procedure/Evidence and Cross-check tables | Pending design approval |
+| 4 | **This phase - Unified Audit Rules architecture and UI** | Refine Category-first Procedure/Evidence and mathematical Cross-check authoring before Verification linkage | Work in process; UI implemented, manual review pending |
 | 5 | Inventory purchase Cross-check rules and runtime | Implement and evaluate the five approved amount, rate, and quantity assertions in Verification | Pending implementation |
 | 6 | Cross-check source and legacy-path review | Confirm Template-scoped active mappings and retire legacy paths only where runtime no longer depends on them | Pending correctness review |
 | 7 | Vendor Bill Copy from lines | Repair Store receiving to Physical Bill copying with clear mappings, conflict handling, preview, and persistence | Pending investigation |
@@ -69,6 +69,14 @@ The superseded atomic-control prototype is not active in the working tree and wa
 reversible local checkpoint. It is not the approved final design; Phase 4 will consolidate the
 user-facing policy under Categories and keep Procedure/Evidence and Cross-check rules as separate
 typed tables.
+
+### Phase 4 UI checkpoint — 2026-09-03
+
+Category authoring now has one Validation Rules section with Template-document/field selectors,
+structured Procedure/Evidence checks, mathematical comparisons, and a Clearing Rules popover.
+Duplicate Category document and legacy Cross-check attachment controls are removed from the UI;
+existing backend records remain for compatibility. Automated checks pass, but manual browser review
+and Verification runtime linkage are still pending. This work is explicitly **work in process**.
 
 ### Phase 1 status - Rulebook persistence and session recovery
 
