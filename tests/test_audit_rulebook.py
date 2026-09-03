@@ -944,5 +944,38 @@ class CrossCheckMatrixColumnAxisAndMetaTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 400)
 
 
+class ProcedureModalPersistenceTests(unittest.TestCase):
+    def test_invalidated_inflight_modal_response_cannot_repopulate_cache(self):
+        procedure_modal_js = Path(__file__).resolve().parents[1] / "static" / "procedure_modal.js"
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            try:
+                page.set_content("<html><body></body></html>")
+                page.add_script_tag(content="""
+                    var API_BASE = '';
+                    window.ApiUtils = { apiFetch: null };
+                """)
+                page.add_script_tag(path=str(procedure_modal_js))
+                result = page.evaluate("""async () => {
+                    const responses = [];
+                    window.ApiUtils.apiFetch = () => new Promise(resolve => responses.push(resolve));
+                    const first = loadProcedureModalData(7, '');
+                    invalidateProcedureModalData(7);
+                    const second = loadProcedureModalData(7, '');
+                    responses[0]({ok: true, json: async () => ({value: 'stale'})});
+                    responses[1]({ok: true, json: async () => ({value: 'fresh'})});
+                    const values = await Promise.all([first, second]);
+                    const cached = await loadProcedureModalData(7, '');
+                    return {values, cached, requestCount: responses.length};
+                }""")
+                self.assertEqual(result["requestCount"], 2)
+                self.assertEqual(result["values"][0], {"value": "stale"})
+                self.assertEqual(result["values"][1], {"value": "fresh"})
+                self.assertEqual(result["cached"], {"value": "fresh"})
+            finally:
+                browser.close()
+
+
 if __name__ == "__main__":
     unittest.main()

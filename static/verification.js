@@ -2156,7 +2156,7 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
     ]);
     // Re-check the stale guard after these awaits, same reason as above.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
-    const assignedDocIds = new Set(assignedRecords.map(r => r.document_id));
+    const assignedDocIds = new Set(assignedRecords.map(r => String(r.document_id)));
     // This line's own amount, for the physical_bill amount-match check below — same lookup
     // openProcedureModal() already uses (currentVoucherLines is populated by seedVoucherLineState()
     // before renderVoucherLines()/this function can ever run).
@@ -2178,16 +2178,16 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
             // item's amount doesn't resolve numeric — same rule _evaluate_physical_bill_completion()
             // uses server-side, reproduced here in one field check rather than re-deriving item
             // sums client-side).
-            const docBills = physicalBills.filter(b => b.document_id === doc.id);
+        const docBills = physicalBills.filter(b => String(b.document_id) === String(doc.id));
             const headersComplete = docBills.length > 0 && docBills.every(bill =>
                 (bill.bill_no || '').trim() && (bill.bill_date || '').trim() && (bill.vendor_name || '').trim() && bill.bill_total != null
             );
             base = headersComplete && Math.abs(docBills.reduce((sum, bill) => sum + bill.bill_total, 0) - voucherLineAmount) <= 0.005;
         } else if (doc.template_id) {
-            base = assignedDocIds.has(doc.id);
+            base = assignedDocIds.has(String(doc.id));
         } else {
             const roles = doc.auth_roles || [];
-            base = roles.length > 0 && roles.every(role => procedureChecks.some(c => c.document_id === doc.id && c.role_name === role && c.is_checked));
+            base = roles.length > 0 && roles.every(role => procedureChecks.some(c => String(c.document_id) === String(doc.id) && c.role_name === role && c.is_checked));
         }
         if (!base) return false;
         if (doc.transaction_level_approval) return isVoucherChecksComplete(checks);
@@ -4188,6 +4188,11 @@ async function doSaveLineItems(detailId) {
         // The line (incl. its flushed observation text) is now persisted — drop the voucher-wide
         // support cache so the Procedures/Observations badge refresh re-reads saved state.
         invalidateVoucherSupportCache();
+        // A modal can be revisited through its Back button before the next full open. Drop that
+        // line's modal payload too, so a pre-save assignment snapshot cannot replace fresh state.
+        if (typeof invalidateProcedureModalData === 'function') {
+            invalidateProcedureModalData(detailId);
+        }
         return { ok: true, skipped: false };
         // Success – no status bar message
     } catch (e) {
@@ -4293,6 +4298,9 @@ async function saveAndVerifyVoucher(detailId, verify = true) {
     // procedure_modal.js's own post-bundle-save call sites, so hideProcedureModalOnly()'s badge
     // refresh reads saved state rather than the pre-save copy.
     invalidateVoucherSupportCache();
+    if (typeof invalidateProcedureModalDataForVoucher === 'function') {
+        invalidateProcedureModalDataForVoucher();
+    }
     return { ok: true, data };
 }
 

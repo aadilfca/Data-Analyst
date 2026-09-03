@@ -701,9 +701,11 @@ function getProcedureTabState(uid, docId) {
 // tabs from) or its Category has no documents.
 const procedureModalDataCache = new Map();
 const procedureModalDataLoading = new Map();
+const procedureModalDataRevisions = new Map();
 
 function invalidateProcedureModalData(uid) {
     const key = String(uid);
+    procedureModalDataRevisions.set(key, (procedureModalDataRevisions.get(key) || 0) + 1);
     procedureModalDataCache.delete(key);
     console.debug('[procedure-cache] invalidated', { uid: key, reason: 'line-data-changed' });
 }
@@ -721,23 +723,32 @@ function invalidateProcedureModalDataForVoucher() {
 
 function loadProcedureModalData(uid, perfSuffix) {
     const key = String(uid);
+    const revision = procedureModalDataRevisions.get(key) || 0;
     if (procedureModalDataCache.has(key)) {
         console.debug('[procedure-cache] hit', { uid: key });
         return Promise.resolve(procedureModalDataCache.get(key));
     }
-    if (procedureModalDataLoading.has(key)) {
+    const loading = procedureModalDataLoading.get(key);
+    if (loading && loading.revision === revision) {
         console.debug('[procedure-cache] in-flight reuse', { uid: key });
-        return procedureModalDataLoading.get(key);
+        return loading.promise;
     }
     console.debug('[procedure-cache] miss/request', { uid: key });
     const promise = window.ApiUtils.apiFetch(`${API_BASE}/api/verification/procedure_modal_data/${uid}${perfSuffix}`)
         .then(async res => {
             if (!res.ok) return null;
             const body = await res.json();
-            procedureModalDataCache.set(key, body);
+            // An assignment/save may have invalidated this request while it was in flight.
+            // Never allow that older response to become the cache used by a later reopen.
+            if ((procedureModalDataRevisions.get(key) || 0) === revision) {
+                procedureModalDataCache.set(key, body);
+            }
             return body;
-        }).catch(() => null).finally(() => procedureModalDataLoading.delete(key));
-    procedureModalDataLoading.set(key, promise);
+        }).catch(() => null).finally(() => {
+            const current = procedureModalDataLoading.get(key);
+            if (current && current.promise === promise) procedureModalDataLoading.delete(key);
+        });
+    procedureModalDataLoading.set(key, { revision, promise });
     return promise;
 }
 
@@ -852,7 +863,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // seeds each tab's selected-lines table, grouped by document_id. Re-fetched fresh on every
     // open (via the composite call above) so both can never drift from true server state.
     const assignedRecords = (modalData.linked_documents && modalData.linked_documents.documents) || [];
-    const assignedDocIds = new Set(assignedRecords.map(d => d.document_id));
+    const assignedDocIds = new Set(assignedRecords.map(d => String(d.document_id)));
 
     // Every ticked/unticked audit-procedure role for this line, across all documents — re-fetched
     // fresh on every open (via the composite call above).
@@ -944,16 +955,16 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // depends on tabState.checklist, populated here.
     documents.forEach(doc => {
         const tabState = getProcedureTabState(uid, doc.id);
-        tabState.selections = assignedRecords.filter(r => r.document_id === doc.id);
+        tabState.selections = assignedRecords.filter(r => String(r.document_id) === String(doc.id));
         const checklist = {};
-        procedureChecks.filter(c => c.document_id === doc.id).forEach(c => {
+        procedureChecks.filter(c => String(c.document_id) === String(doc.id)).forEach(c => {
             checklist[c.role_name] = { is_checked: c.is_checked, checked_by: c.checked_by, checked_at: c.checked_at };
         });
         tabState.checklist = checklist;
 
         // Phase 6: a saved entry always wins over a fresh auto-suggestion — mark
         // suggestionApplied so buildObservationSuggestion() never overwrites it.
-        const savedEntry = observationEntries.find(e => e.document_id === doc.id);
+        const savedEntry = observationEntries.find(e => String(e.document_id) === String(doc.id));
         if (savedEntry) {
             tabState.observation = savedEntry.observation_text;
             tabState.suggestionApplied = true;
@@ -966,7 +977,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
         // ids/timestamps/bill_total are display-only server fields, not needed client-side since
         // save is always full-replace, so only the editable fields are carried into tabState.
         if (doc.document_type === 'physical_bill') {
-            const savedBills = physicalBillEntries.filter(b => b.document_id === doc.id);
+            const savedBills = physicalBillEntries.filter(b => String(b.document_id) === String(doc.id));
             tabState.physicalBills = savedBills.map(b => ({
                 bill_no: b.bill_no || '',
                 bill_date: b.bill_date || '',
@@ -1680,7 +1691,7 @@ function isProcedureDocumentComplete(uid, doc) {
         }
     } else if (doc.template_id) {
         const lineState = hostAdapter.procedureModalState[uid];
-        baseComplete = !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(doc.id));
+        baseComplete = !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(String(doc.id)));
     } else {
         const tabState = getProcedureTabState(uid, doc.id);
         const roles = doc.auth_roles || [];
@@ -1703,7 +1714,7 @@ function renderProcedureModalTabs(uid) {
     const documents = lineState.documents || [];
 
     container.innerHTML = documents.map(doc => {
-        const isActive = doc.id === lineState.activeDocId;
+        const isActive = String(doc.id) === String(lineState.activeDocId);
         const isComplete = isProcedureDocumentComplete(uid, doc);
 
         // Generic Voucher-Level Checks cutover: the synthetic Voucher Line tab now only hosts the
@@ -2379,7 +2390,7 @@ function renderProcedureModalPanel(uid, docId) {
     // A Document in none of the Category's Cross-check chains gets no rollup section at all —
     // not an empty one.
     const docCrossChecks = (lineState.crossCheckResults || [])
-        .filter(rule => rule.chain.some(c => c.document_id === docId));
+        .filter(rule => rule.chain.some(c => String(c.document_id) === String(docId)));
 
     const dataSegmentHtml = hasTemplate ? `
         <div class="procedure-segment procedure-segment-data">
@@ -3119,7 +3130,10 @@ async function selectProcedureDocument(uid, docId, row, target = null) {
             extract_date: row.extract_date,
             extract_amount: row.extract_amount
         });
-        lineState.assignedDocIds.add(docId);
+        lineState.assignedDocIds.add(String(docId));
+        // The current panel is updated from local state below, but any previously fetched
+        // payload for this line must not overwrite it when the line is reopened or revisited.
+        invalidateProcedureModalData(uid);
         hostAdapter.markLineDirty(uid, 'supporting document linked');
         // Clear the search box/dropdown for this tab now that the row is locked — it stays
         // selected in the table below, no longer meaningful as a search result.
@@ -3164,8 +3178,9 @@ async function unassignSupportingDocument(uid, docId, assignmentId, target = nul
         tabState.selections = (tabState.selections || []).filter(sel => sel.id !== assignmentId);
         // If that was this document's last active link, its tab dot should un-fill too.
         if (!tabState.selections.length) {
-            lineState.assignedDocIds.delete(docId);
+            lineState.assignedDocIds.delete(String(docId));
         }
+        invalidateProcedureModalData(uid);
         hostAdapter.markLineDirty(uid, 'supporting document unlinked');
         renderProcedureModalTabs(uid);
         renderProcedureModalPanel(uid, docId);

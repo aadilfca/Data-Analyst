@@ -29,6 +29,26 @@ are mathematical Cross-check rules. They share one Category policy screen and st
 separate typed tables to avoid ambiguous nullable fields, invalid combinations, and duplicated
 validation logic. The existing uncommitted atomic-control prototype will be reassessed under Phase 4.
 
+## Data assignment and modal persistence fix — 2026-09-03
+
+**Files:** `static/procedure_modal.js`, `static/verification.js`, `tests/test_audit_rulebook.py`.
+
+Investigation of `CPV-0826-480` found active assignment rows in Supabase. Session 903 line 1 had
+four active assignments, and session 903 line 2 correctly received four assignments stored under
+its equivalent line in session 905 through the stable `client_data_id` lookup. The defect was on
+the client side: an older per-line modal response could remain cached after assignment or a save,
+and document identifiers were compared without normalizing their types.
+
+Added revision-aware modal caching so an invalidated in-flight response cannot repopulate the cache;
+stale loading entries are also protected from deleting a newer request. Assignment, unassignment,
+single-line save, and grouped voucher save now invalidate the relevant modal payloads. Document,
+procedure, observation, and Physical Bill identity comparisons now use normalized identifiers.
+No database rows were unlocked, deleted, or otherwise modified.
+
+Verification: focused tests 54 passed, full suite 109 passed, Python/JavaScript syntax checks passed,
+and a Playwright regression confirmed that an invalidated in-flight response cannot overwrite fresh
+modal data. Manual local-server validation remains pending.
+
 ## Inventory purchase Cross-check controls — 2026-09-03
 
 **Files:** `database.py`, `routers/audit_rules.py`, `static/audit_rules.html`,
