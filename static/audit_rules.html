@@ -175,10 +175,7 @@
                         </div>
                     </div>
 
-                    <div class="ar-field">
-                        <label for="arKbNoteInput">Knowledge Base</label>
-                        <textarea id="arKbNoteInput" rows="3"></textarea>
-                    </div>
+                    <input type="hidden" id="arKbNoteInput" value="">
 
                     <!-- Phase 9: which Data Bank template this Document's supporting evidence
                          is searched in (drives the Supporting column's search modal). Hidden for a
@@ -190,17 +187,7 @@
                         </select>
                     </div>
 
-                    <!-- Audit Risk indicator (Supporting Documents modal redesign, final phase):
-                         surfaced on the main voucher table's Risk column. -->
-                    <div class="ar-field">
-                        <label for="arRiskRatingSelect">Audit Risk Rating</label>
-                        <select id="arRiskRatingSelect">
-                            <option value="">-- None --</option>
-                            <option value="Low">Low</option>
-                            <option value="Medium">Medium</option>
-                            <option value="High">High</option>
-                        </select>
-                    </div>
+                    <input type="hidden" id="arRiskRatingSelect" value="">
 
                     <!-- Phase 2: controlled Data Bank projection for Verification. Core fields
                          are fixed transaction fields; optional fields are selected from this
@@ -211,27 +198,14 @@
                             <span class="ar-policy-badge">Template-scoped</span>
                         </div>
                         <div class="ar-verification-fields-panel">
-                            <p class="ar-verification-fields-intro">
-                                Verification retrieves only the fields needed for this Document.
-                                Vendor, Item, Unit, Quantity, Rate and Amount are the core fields;
-                                add other mapped columns only when the risk assessment requires them.
-                            </p>
                             <div id="arVerificationPolicyStatus" class="ar-verification-policy-status"></div>
-                            <div class="ar-verification-subtitle">Core transaction fields</div>
                             <div id="arVerificationCoreFields" class="ar-verification-core-list"></div>
-                            <div class="ar-verification-subtitle ar-verification-optional-title">
-                                Additional fields by risk
-                            </div>
                             <div id="arVerificationOptionalFields" class="ar-verification-optional-list"></div>
                             <div class="ar-verification-add-row">
                                 <select id="arVerificationOptionalSelect" aria-label="Additional verification field">
                                     <option value="">-- Add a mapped column --</option>
                                 </select>
-                                <select id="arVerificationOptionalRisk" aria-label="Risk level for additional verification field">
-                                    <option value="Low">Low risk</option>
-                                    <option value="Medium" selected>Medium risk</option>
-                                    <option value="High">High risk</option>
-                                </select>
+                                <select id="arVerificationOptionalRisk" aria-label="Add a Template column"></select>
                                 <button type="button" id="arVerificationOptionalAddBtn" class="ar-btn-chip-add">Add field</button>
                             </div>
                             <div id="arVerificationPolicyHint" class="ar-field-warning"></div>
@@ -244,14 +218,11 @@
                          (confirmed fix — pure reorder + labelling, no field/logic changes). -->
                     <div class="ar-detail-section-title">Authorisation</div>
 
-                    <!-- Authorisation Roles chip editor -->
                     <div class="ar-field">
-                        <label>Authorisation Roles</label>
-                        <div class="ar-chip-list" id="arRolesChipList"></div>
-                        <div class="ar-chip-input-row">
-                            <input type="text" id="arRolesInput" placeholder="e.g. Approved by">
-                            <button type="button" id="arRolesAddBtn" class="ar-btn-chip-add">Add</button>
-                        </div>
+                        <label>Audit checks and signatories</label>
+                        <div class="ar-authorisation-table-wrap"><table class="ar-authorisation-table"><thead><tr><th>Audit check</th><th>Signatories / authority</th><th>Action</th></tr></thead><tbody id="arAuthorisationTableBody"></tbody></table></div>
+                        <div id="arAuthorisationSaveHint" class="ar-field-warning ar-save-first-hint">Save the document first to manage signatories.</div>
+                        <div id="arRolesChipList" style="display:none"></div><input id="arRolesInput" type="hidden"><button id="arRolesAddBtn" type="button" style="display:none"></button>
                     </div>
 
                     <!-- Signature Specimens (Soft-delete conversion, Phase 4 of 4, FINAL): moved
@@ -260,7 +231,7 @@
                          renderDocumentSignatureSpecimensSection() in audit_rules.js. Hidden (hint
                          shown instead) until the Document is actually saved, since a specimen row
                          needs a real document_id. -->
-                    <div class="ar-field">
+                    <div class="ar-field" style="display:none">
                         <label>Signature Specimens</label>
                         <div id="arDocSignatureSpecimensHint" class="ar-field-warning" style="display:none;">
                             Save the document first to manage signature specimens.</div>

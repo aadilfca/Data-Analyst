@@ -300,6 +300,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-02: Postgres pool reliability (2 phases, COMPLETE) — retry-once on a stale pooled connection (`_run_pooled_pg`/`_getconn_pg_checked`; `_PooledConnection`/`get_db_pg` removed) + `PG_POOL_MIN` 1→3 warm-start; `database.py`, `.env.example`, new `tests/test_pg_pool_retry.py`. See CHANGELOG_ARCHIVE.md.
 - 2026-09-03: Category Validation Rules authoring is work in process; Verification runtime linkage remains pending. See CHANGELOG_ARCHIVE.md.
 - 2026-09-03: Configurable Verification Data Fields completed with Template-scoped persistence, server projection, Audit Rules UI, and Procedure Modal wiring. See CHANGELOG_ARCHIVE.md.
+- 2026-09-04: Category Procedure/Evidence now loads Document-specific authorisation roles and active signatories; Verification runtime linkage remains pending. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

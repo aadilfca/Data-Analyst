@@ -4568,3 +4568,17 @@ open/save/close exercised, browser HAR shows all API responses `200`/`304`, no e
 Startup line now reads `[postgres] connection pool created (min=3, max=15)`.
 
 ---
+
+## Category Procedure/Evidence authorisation values — 2026-09-04
+
+`static/audit_rules.js` now loads the selected Document's configured authorisation roles and
+active client-scoped signature specimens into the Category Procedure/Evidence `Role / signature`
+dropdown. Prepared, Checked, Approved, and generic Signature conditions resolve only against the
+selected Document; per-row request tokens prevent a fast Document/condition switch from painting
+stale values. The cache is invalidated after Document or signatory changes, while the existing
+Verification linkage remains untouched pending the runtime migration phase. Existing rule values
+are preserved when still present. `tests/test_audit_rulebook.py` retains the active-specimen and
+soft-delete contract coverage. Focused tests: 52 passed; full suite: 107 passed; JavaScript syntax
+and diff checks passed. No change was needed in `KNOWN_ISSUES.md` or `File_Map.md`.
+
+---

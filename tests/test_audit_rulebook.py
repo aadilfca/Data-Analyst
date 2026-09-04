@@ -854,6 +854,66 @@ class CrossCheckMatrixEndpointTests(unittest.TestCase):
                           side_effect=lambda sql, params=(): [{"template_id": None}]):
             self.assertEqual(audit_rules.get_document_template_columns(10), [])
 
+    def test_get_document_template_columns_returns_all_active_template_columns(self):
+        from routers import audit_rules
+
+        columns = [
+            {"column_id": 20, "column_name": "Amount", "data_type": "number", "sort_order": 0},
+            {"column_id": 21, "column_name": "Vendor", "data_type": "text", "sort_order": 1},
+        ]
+        with patch.object(audit_rules, "execute_query_pg",
+                          return_value=[{"template_id": 5}]), \
+             patch("routers.templates.get_cached_template_columns", return_value=columns) as cached:
+            result = audit_rules.get_document_template_columns(10)
+
+        self.assertEqual(result, columns)
+        cached.assert_called_once_with(5)
+
+    def test_signature_specimen_listing_excludes_inactive_rows_by_default(self):
+        from routers import audit_rules
+
+        captured = []
+        specimen = {
+            "id": 7,
+            "client_id": 3,
+            "document_id": 10,
+            "document_name": "Purchase Order",
+            "role_name": "Approved by",
+            "expected_signatory_name": "A. Manager",
+            "authority": None,
+            "is_active": True,
+            "created_at": "2026-09-04T00:00:00",
+            "updated_at": "2026-09-04T00:00:00",
+        }
+
+        def query(sql, params=()):
+            captured.append(sql)
+            return [specimen]
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=query):
+            result = audit_rules.get_signature_specimens(client_id=3, document_id=10)
+
+        self.assertEqual(result[0]["expected_signatory_name"], "A. Manager")
+        self.assertIn("s.is_active = TRUE", captured[0])
+
+    def test_signature_specimen_delete_uses_soft_delete(self):
+        from routers import audit_rules
+
+        writes = []
+
+        def query(sql, params=()):
+            return [{"expected_signatory_name": "A. Manager"}]
+
+        with patch.object(audit_rules, "execute_query_pg", side_effect=query), \
+             patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append((sql, params))), \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            result = audit_rules.delete_signature_specimen(7)
+
+        self.assertIn("UPDATE signature_specimens SET is_active = FALSE", writes[0][0])
+        self.assertEqual(result["message"], "Signature specimen deleted (soft-delete) successfully")
+
 
 class CrossCheckMatrixColumnAxisAndMetaTests(unittest.TestCase):
     """Cross-Check Matrix Redesign, Phase 5 of 5: the /documents (column axis) and /meta endpoints."""

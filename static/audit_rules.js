@@ -33,6 +33,9 @@ let requiredAuthorityState = {};
 let verificationPolicyState = null;
 let verificationPolicyTemplateId = null;
 let verificationPolicyView = null;
+let currentDocumentRecord = null;
+let verificationTemplateLoadToken = 0;
+let verificationTemplateLoading = false;
 
 // ---------- DOM REFS ----------
 const arListBody = document.getElementById('arListBody');
@@ -224,7 +227,75 @@ function isApprovalRole(roleName) {
 // which is untouched). No longer needs a dedicated implementation now that there's nothing
 // beyond a chip to render per role — reuses the shared renderChipList() other chip lists use.
 function renderRoleChips() {
-    renderChipList(arRolesChipList, rolesState, removeRole);
+    renderAuthorisationTable();
+}
+
+function renderAuthorisationTable() {
+    const body = document.getElementById('arAuthorisationTableBody');
+    if (!body) return;
+    body.innerHTML = '';
+    const checks = rolesState;
+    checks.forEach((role, index) => {
+        const row = document.createElement('tr');
+        const checkCell = document.createElement('td');
+        const checkInput = document.createElement('input'); checkInput.type = 'text'; checkInput.value = role; checkInput.className = 'ar-authorisation-check-input';
+        checkInput.addEventListener('input', () => {
+            // Keep the in-memory list synchronized even when Save is clicked before the
+            // input loses focus. Authority data remains keyed to the saved role name and is
+            // intentionally not rewritten on every keystroke.
+            rolesState[index] = checkInput.value.trim();
+        });
+        checkCell.appendChild(checkInput); row.appendChild(checkCell);
+        const signerCell = document.createElement('td'); signerCell.className = 'ar-authorisation-signers';
+        const signers = currentDocumentSpecimens.filter(item => item.role_name === role && item.is_active);
+        if (editingId) signers.forEach(signer => {
+            const chip = document.createElement('span');
+            chip.className = 'ar-signatory-chip';
+            const name = document.createElement('span');
+            name.textContent = signer.expected_signatory_name;
+            chip.appendChild(name);
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'ar-signatory-remove';
+            remove.textContent = '×';
+            remove.title = 'Remove signatory';
+            remove.setAttribute('aria-label', 'Remove signatory ' + signer.expected_signatory_name);
+            remove.addEventListener('click', () => toggleSignatureSpecimenActive(signer.id, false));
+            chip.appendChild(remove);
+            signerCell.appendChild(chip);
+        });
+        if (editingId) {
+            const input = document.createElement('input'); input.type = 'text'; input.placeholder = 'Add signatory name'; input.className = 'ar-signatory-input';
+            const add = document.createElement('button'); add.type = 'button'; add.className = 'ar-btn-chip-add'; add.textContent = 'Add';
+            add.addEventListener('click', () => {
+                syncAuthorisationTableState();
+                const currentRole = checkInput.value.trim();
+                if (currentRole) addSignatureSpecimenPerson(editingId, currentRole, input, null);
+            });
+            signerCell.appendChild(input); signerCell.appendChild(add);
+        }
+        else { const hint = document.createElement('span'); hint.className = 'ar-save-first-hint'; hint.textContent = 'Save the document first'; signerCell.appendChild(hint); }
+        row.appendChild(signerCell);
+        const actionCell = document.createElement('td'); const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'ar-row-remove'; remove.textContent = '×'; remove.title = 'Remove audit check'; remove.addEventListener('click', () => { rolesState.splice(index, 1); renderAuthorisationTable(); }); actionCell.appendChild(remove); row.appendChild(actionCell); body.appendChild(row);
+    });
+    const addRow = document.createElement('tr'); addRow.className = 'ar-authorisation-add-row'; addRow.innerHTML = '<td colspan="3"><button type="button" class="ar-btn-chip-add">+ Add audit check</button></td>'; addRow.querySelector('button').addEventListener('click', () => { rolesState.push(''); renderAuthorisationTable(); }); body.appendChild(addRow);
+    const hint = document.getElementById('arAuthorisationSaveHint'); if (hint) hint.style.display = editingId ? 'none' : 'block';
+}
+
+function syncAuthorisationTableState() {
+    const body = document.getElementById('arAuthorisationTableBody');
+    if (!body) return;
+    const nextRoles = [];
+    const seen = new Set();
+    body.querySelectorAll('.ar-authorisation-check-input').forEach(input => {
+        const value = input.value.trim();
+        const key = value.toLowerCase();
+        if (value && !seen.has(key)) {
+            nextRoles.push(value);
+            seen.add(key);
+        }
+    });
+    rolesState = nextRoles;
 }
 
 function addRole() {
@@ -261,6 +332,51 @@ async function loadTemplatesForDocuments() {
         console.error('Failed to load templates for Documents:', error);
     } finally {
         if (arTemplateSelect) window.LoadingUI.hideFieldLoading(arTemplateSelect);
+    }
+}
+
+async function loadVerificationFieldsForTemplate(templateId) {
+    const requestToken = ++verificationTemplateLoadToken;
+    const parsedTemplateId = Number(templateId);
+    if (!Number.isInteger(parsedTemplateId) || parsedTemplateId <= 0) {
+        verificationTemplateLoading = false;
+        resetVerificationFieldPolicy();
+        return;
+    }
+
+    verificationTemplateLoading = true;
+    verificationPolicyState = null;
+    verificationPolicyTemplateId = null;
+    verificationPolicyView = null;
+    arVerificationFieldsField.style.display = '';
+    arVerificationPolicyStatus.textContent = 'Loading Template columns...';
+    arVerificationPolicyStatus.className = 'ar-verification-policy-status default';
+
+    try {
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/templates/' + parsedTemplateId + '/columns');
+        if (!res.ok) throw new Error('Failed to load Template columns');
+        const columns = await res.json();
+        if (requestToken !== verificationTemplateLoadToken || String(arTemplateSelect.value) !== String(parsedTemplateId)) return;
+        verificationTemplateLoading = false;
+
+        // A newly selected Template starts with every active mapped column selected. The
+        // administrator can remove individual columns before saving the Document.
+        renderVerificationFieldPolicy({
+            version: 1,
+            template_id: parsedTemplateId,
+            configured: false,
+            template_columns: columns,
+            core_fields: [],
+            optional_fields: [],
+            selected_column_ids: []
+        });
+    } catch (error) {
+        if (requestToken !== verificationTemplateLoadToken) return;
+        verificationTemplateLoading = false;
+        arVerificationPolicyStatus.textContent = error.message;
+        arVerificationPolicyStatus.className = 'ar-verification-policy-status error';
+        arVerificationOptionalFields.innerHTML = '';
+        arVerificationOptionalSelect.innerHTML = '<option value="">Unable to load Template columns</option>';
     }
 }
 
@@ -307,142 +423,30 @@ function renderVerificationFieldPolicy(policy) {
     const hasTemplate = !!(policy && policy.template_id);
     const isPhysicalBill = arDocumentTypeSelect.value === 'physical_bill';
     arVerificationFieldsField.style.display = hasTemplate && !isPhysicalBill ? '' : 'none';
-    arVerificationCoreFields.innerHTML = '';
-    arVerificationOptionalFields.innerHTML = '';
-    arVerificationOptionalSelect.innerHTML = '';
-
-    if (!hasTemplate || isPhysicalBill) {
-        verificationPolicyState = null;
-        verificationPolicyTemplateId = null;
-        verificationPolicyView = null;
-        return;
-    }
-
+    arVerificationCoreFields.innerHTML = ''; arVerificationOptionalFields.innerHTML = ''; arVerificationOptionalSelect.innerHTML = '';
+    if (!hasTemplate || isPhysicalBill) { verificationPolicyState = null; verificationPolicyTemplateId = null; verificationPolicyView = null; return; }
     verificationPolicyTemplateId = Number(policy.template_id);
+    const shouldSelectAll = !verificationPolicyState && !policy.configured;
     if (!verificationPolicyState) verificationPolicyState = verificationPolicyStateFromServer(policy);
     const columns = policy.template_columns || [];
-    const selectedIds = () => new Set([
-        ...Object.values(verificationPolicyState.core || {}).map(Number),
-        ...(verificationPolicyState.optional || []).map(field => Number(field.column_id))
-    ]);
-
-    (policy.core_fields || []).forEach(field => {
-        const row = document.createElement('div');
-        row.className = 'ar-verification-core-row';
-        const label = document.createElement('span');
-        label.className = 'ar-verification-field-label';
-        label.textContent = field.label;
-        row.appendChild(label);
-
-        const select = document.createElement('select');
-        select.className = 'ar-verification-field-select';
-        select.setAttribute('aria-label', field.label + ' verification column');
-        const empty = document.createElement('option');
-        empty.value = '';
-        empty.textContent = '-- Not mapped in this Template --';
-        select.appendChild(empty);
-        const currentId = Number(verificationPolicyState.core[field.key] || 0);
-        columns.forEach(column => {
-            const columnId = Number(column.column_id);
-            if (columnId !== currentId && selectedIds().has(columnId)) return;
-            const option = document.createElement('option');
-            option.value = columnId;
-            option.textContent = column.column_name;
-            option.selected = columnId === currentId;
-            select.appendChild(option);
-        });
-        if (currentId && !columns.some(column => Number(column.column_id) === currentId)) {
-            const unavailable = document.createElement('option');
-            unavailable.value = currentId;
-            unavailable.textContent = 'Unavailable saved column #' + currentId;
-            unavailable.selected = true;
-            select.appendChild(unavailable);
-        }
-        select.value = currentId ? String(currentId) : '';
-        select.addEventListener('change', () => {
-            if (select.value) verificationPolicyState.core[field.key] = Number(select.value);
-            else delete verificationPolicyState.core[field.key];
-            renderVerificationFieldPolicy({ ...policy, configured: true });
-        });
-        row.appendChild(select);
-        const type = document.createElement('span');
-        type.className = 'ar-verification-field-type';
-        type.textContent = field.data_type || '';
-        row.appendChild(type);
-        arVerificationCoreFields.appendChild(row);
+    const used = () => new Set([...Object.values(verificationPolicyState.core || {}), ...(verificationPolicyState.optional || []).map(field => field.column_id)].map(Number));
+    // Default to every active mapped column. Core aliases remain in the API payload, while the
+    // editor presents one simple removable list to the administrator.
+    const allSelected = used();
+    if (shouldSelectAll) columns.forEach(column => { if (!allSelected.has(Number(column.column_id))) verificationPolicyState.optional.push({ column_id: Number(column.column_id), risk_level: 'Medium', sort_order: verificationPolicyState.optional.length }); });
+    [...used()].forEach(columnId => {
+        const column = columns.find(item => Number(item.column_id) === columnId); if (!column) return;
+        const chip = document.createElement('span'); chip.className = 'ar-verification-field-chip'; chip.textContent = column.column_name;
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'ar-verification-field-remove'; remove.textContent = '×'; remove.title = 'Remove field';
+        remove.addEventListener('click', () => { Object.keys(verificationPolicyState.core).forEach(key => { if (Number(verificationPolicyState.core[key]) === columnId) delete verificationPolicyState.core[key]; }); verificationPolicyState.optional = verificationPolicyState.optional.filter(field => Number(field.column_id) !== columnId); renderVerificationFieldPolicy({ ...policy, configured: true }); });
+        chip.appendChild(remove); arVerificationOptionalFields.appendChild(chip);
     });
-
-    (verificationPolicyState.optional || []).forEach((field, index) => {
-        const column = columns.find(item => Number(item.column_id) === Number(field.column_id));
-        const row = document.createElement('div');
-        row.className = 'ar-verification-optional-row';
-        const name = document.createElement('span');
-        name.className = 'ar-verification-optional-name';
-        name.textContent = column ? column.column_name : 'Unavailable saved column #' + field.column_id;
-        row.appendChild(name);
-        const risk = document.createElement('select');
-        risk.className = 'ar-verification-risk-select';
-        ['Low', 'Medium', 'High'].forEach(level => {
-            const option = document.createElement('option');
-            option.value = level;
-            option.textContent = level + ' risk';
-            option.selected = (field.risk_level || 'Medium') === level;
-            risk.appendChild(option);
-        });
-        risk.addEventListener('change', () => { field.risk_level = risk.value; });
-        row.appendChild(risk);
-        const move = (direction, text) => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.className = 'ar-verification-order-btn';
-            button.textContent = text;
-            button.title = direction < 0 ? 'Move field up' : 'Move field down';
-            button.disabled = direction < 0 ? index === 0 : index === verificationPolicyState.optional.length - 1;
-            button.addEventListener('click', () => {
-                const target = index + direction;
-                if (target < 0 || target >= verificationPolicyState.optional.length) return;
-                const items = verificationPolicyState.optional;
-                [items[index], items[target]] = [items[target], items[index]];
-                renderVerificationFieldPolicy({ ...policy, configured: true });
-            });
-            row.appendChild(button);
-        };
-        move(-1, '↑');
-        move(1, '↓');
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'ar-verification-remove-btn';
-        remove.textContent = 'Remove';
-        remove.addEventListener('click', () => {
-            verificationPolicyState.optional.splice(index, 1);
-            renderVerificationFieldPolicy({ ...policy, configured: true });
-        });
-        row.appendChild(remove);
-        arVerificationOptionalFields.appendChild(row);
-    });
-
-    const usedIds = selectedIds();
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = columns.length ? '-- Add a mapped column --' : '-- No active mapped columns --';
-    arVerificationOptionalSelect.appendChild(placeholder);
-    columns.forEach(column => {
-        if (usedIds.has(Number(column.column_id))) return;
-        const option = document.createElement('option');
-        option.value = Number(column.column_id);
-        option.textContent = column.column_name;
-        arVerificationOptionalSelect.appendChild(option);
-    });
-
-    arVerificationPolicyStatus.textContent = policy.configured
-        ? 'Saved field policy — changes apply after Save.'
-        : 'Automatic core-field matches are shown. Save to store this selection for the Document.';
-    arVerificationPolicyStatus.className = 'ar-verification-policy-status ' + (policy.configured ? 'saved' : 'default');
-    const unavailableCount = (policy.unavailable_fields || []).length;
-    arVerificationPolicyHint.textContent = unavailableCount
-        ? unavailableCount + ' saved field(s) are no longer active in this Template. Review the unavailable field rows before saving.'
-        : 'Only active columns mapped to this Template can be selected.';
-    arVerificationPolicyHint.style.display = unavailableCount ? 'block' : 'none';
+    const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = columns.length ? '-- Add a Template column --' : '-- No active mapped columns --'; arVerificationOptionalSelect.appendChild(placeholder);
+    columns.forEach(column => { if (!used().has(Number(column.column_id))) { const option = document.createElement('option'); option.value = column.column_id; option.textContent = column.column_name; arVerificationOptionalSelect.appendChild(option); } });
+    arVerificationOptionalRisk.style.display = 'none';
+    arVerificationPolicyStatus.textContent = '';
+    arVerificationPolicyStatus.className = 'ar-verification-policy-status default';
+    arVerificationPolicyHint.style.display = 'none';
 }
 
 function resetVerificationFieldPolicy() {
@@ -509,6 +513,7 @@ async function selectDocument(id) {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + id);
         if (!res.ok) throw new Error('Document not found');
         const doc = await res.json();
+        currentDocumentRecord = doc;
 
         editingId = doc.id;
         arEditingIdInput.value = doc.id;
@@ -524,9 +529,11 @@ async function selectDocument(id) {
         verificationPolicyState = null;
         verificationPolicyTemplateId = null;
         verificationPolicyView = null;
+        verificationTemplateLoading = false;
         renderVerificationFieldPolicy(doc.verification_field_policy);
-        rolesState = (doc.auth_roles || []).slice();
+        rolesState = [...new Set((doc.auth_roles || []).map(role => String(role).trim()).filter(Boolean))];
         requiredAuthorityState = { ...(doc.auth_role_authorities || {}) };
+        currentDocumentSpecimens = [];
         renderRoleChips();
 
         arUsedByRow.style.display = 'block';
@@ -557,6 +564,7 @@ async function selectDocument(id) {
 
 function startNewDocument() {
     editingId = null;
+    currentDocumentRecord = null;
     arEditingIdInput.value = '';
     arNameInput.value = '';
     arKbNoteInput.value = '';
@@ -568,7 +576,7 @@ function startNewDocument() {
     arDocumentTypeSelect.value = '';
     updateDocumentTypeVisibility();
     resetVerificationFieldPolicy();
-    rolesState = [];
+    rolesState = ['Prepared by', 'Checked by', 'Approved by'];
     requiredAuthorityState = {};
     renderRoleChips();
 
@@ -590,6 +598,7 @@ function startNewDocument() {
 
 // ---------- SAVE ----------
 async function saveDocument(triggerBtn) {
+    syncAuthorisationTableState();
     const name = arNameInput.value.trim();
     if (!name) {
         showDetailStatus('❌ Name is required.', 'error');
@@ -606,6 +615,15 @@ async function saveDocument(triggerBtn) {
     }
 
     const isPhysicalBill = documentType === 'physical_bill';
+
+    if (!isPhysicalBill && arTemplateSelect.value && verificationTemplateLoading) {
+        showDetailStatus('Please wait for the Template columns to load.', 'error');
+        return;
+    }
+    if (!isPhysicalBill && arTemplateSelect.value && verificationPolicyTemplateId !== parseInt(arTemplateSelect.value, 10)) {
+        showDetailStatus('Template columns could not be loaded. Please reselect the Template and try again.', 'error');
+        return;
+    }
 
     // Destructive-switch guard: turning an existing linked-template Document into a Physical Bill
     // clears its template link server-side. Only asks when there's actually a template to lose.
@@ -665,6 +683,8 @@ async function saveDocument(triggerBtn) {
         // (create: the new id; update: the same id) to refresh the detail panel's
         // is_active/used_by state from the server.
         const savedId = editingId || result.document_id;
+        delete categoryDocumentPolicyCache[savedId];
+        delete categoryDocumentAuthorisationCache[savedId];
         await loadDocuments();
         await selectDocument(savedId);
     } catch (error) {
@@ -719,6 +739,7 @@ async function restoreDocument() {
 // Current client's specimens for the currently-selected Document (include_inactive=true —
 // inactive rows stay visible, greyed, as a historical record, never hidden).
 let currentDocumentSpecimens = [];
+let signatureSpecimenLoadToken = 0;
 // The Document object last passed to loadDocumentSignatureSpecimens() — its own
 // server-persisted auth_roles (not the live-editing rolesState chip array, which can be
 // mid-edit/unsaved) is what drives the per-Role grouping, so add/toggle/hard-delete reloads
@@ -726,16 +747,20 @@ let currentDocumentSpecimens = [];
 let currentSpecimensDoc = null;
 
 async function loadDocumentSignatureSpecimens(doc) {
+    const requestToken = ++signatureSpecimenLoadToken;
     currentSpecimensDoc = doc;
     try {
         const res = await window.ApiUtils.apiFetch(
             API_BASE + '/api/audit-rules/signature-specimens?client_id=' + getSelectedClientId() +
-            '&document_id=' + doc.id + '&include_inactive=true'
+            '&document_id=' + doc.id + '&include_inactive=false'
         );
         if (!res.ok) throw new Error('Failed to load signature specimens');
+        if (requestToken !== signatureSpecimenLoadToken || currentDocumentRecord?.id !== doc.id) return;
         currentDocumentSpecimens = await res.json();
         renderDocumentSignatureSpecimensSection(doc);
+        renderAuthorisationTable();
     } catch (error) {
+        if (requestToken !== signatureSpecimenLoadToken || currentDocumentRecord?.id !== doc.id) return;
         arDocSignatureSpecimensContainer.innerHTML =
             '<div class="ar-list-empty">❌ Error loading signature specimens: ' + error.message + '</div>';
     }
@@ -865,12 +890,36 @@ function buildSpecimenAddRow(doc, role) {
     return row;
 }
 
+async function ensureDocumentAuthorisationRole(documentId, roleName) {
+    const existingRoles = currentDocumentRecord?.auth_roles || [];
+    if (existingRoles.includes(roleName)) return;
+    if (!currentDocumentRecord) throw new Error('Save the document first');
+    const templateId = currentDocumentRecord.template_id;
+    const payload = {
+        name: currentDocumentRecord.name,
+        kb_note: currentDocumentRecord.kb_note || null,
+        template_id: templateId,
+        risk_rating: currentDocumentRecord.risk_rating || null,
+        auth_roles: [...existingRoles, roleName],
+        auth_role_authorities: currentDocumentRecord.auth_role_authorities || {},
+        document_type: currentDocumentRecord.document_type,
+        verification_field_policy: templateId ? verificationPolicyPayload() : null
+    };
+    const res = await fetch(API_BASE + '/api/audit-rules/documents/' + documentId, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save authorisation role');
+    currentDocumentRecord.auth_roles = payload.auth_roles;
+    if (currentSpecimensDoc) currentSpecimensDoc.auth_roles = payload.auth_roles.slice();
+    rolesState = payload.auth_roles.slice();
+}
+
 async function addSignatureSpecimenPerson(documentId, roleName, inputEl, authorityInputEl) {
     const name = inputEl.value.trim();
     if (!name) return;
     const authority = authorityInputEl ? authorityInputEl.value.trim() : '';
 
     try {
+        await ensureDocumentAuthorisationRole(documentId, roleName);
         const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -888,6 +937,7 @@ async function addSignatureSpecimenPerson(documentId, roleName, inputEl, authori
         showDetailStatus('✅ ' + result.message, 'success');
         inputEl.value = '';
         if (authorityInputEl) authorityInputEl.value = '';
+        delete categoryDocumentAuthorisationCache[documentId];
         if (currentSpecimensDoc) await loadDocumentSignatureSpecimens(currentSpecimensDoc);
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
@@ -902,6 +952,7 @@ async function toggleSignatureSpecimenActive(specimenId, activate) {
         if (!res.ok) throw new Error(result.detail || result.message || 'Failed to update signature specimen');
 
         showDetailStatus('✅ ' + result.message, 'success');
+        if (currentSpecimensDoc) delete categoryDocumentAuthorisationCache[currentSpecimensDoc.id];
         if (currentSpecimensDoc) await loadDocumentSignatureSpecimens(currentSpecimensDoc);
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
@@ -917,6 +968,7 @@ async function hardDeleteSignatureSpecimen(specimenId, name, role) {
         if (!res.ok) throw new Error(result.detail || result.message || 'Failed to permanently delete signature specimen');
 
         showDetailStatus('✅ ' + result.message, 'success');
+        if (currentSpecimensDoc) delete categoryDocumentAuthorisationCache[currentSpecimensDoc.id];
         if (currentSpecimensDoc) await loadDocumentSignatureSpecimens(currentSpecimensDoc);
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
@@ -936,13 +988,7 @@ arRolesInput.addEventListener('keydown', function(e) {
 // Physical Bill evidence type (Phase 4 of 8): show/hide the Template field live as the type
 // changes, so the form always reflects what the chosen type can actually carry.
 arDocumentTypeSelect.addEventListener('change', updateDocumentTypeVisibility);
-arTemplateSelect.addEventListener('change', () => {
-    // A Template change invalidates the previous Template's column IDs. Save the document first;
-    // the refreshed detail response will then present the new Template's automatic core matches.
-    if (!arTemplateSelect.value || verificationPolicyTemplateId !== parseInt(arTemplateSelect.value, 10)) {
-        resetVerificationFieldPolicy();
-    }
-});
+arTemplateSelect.addEventListener('change', () => loadVerificationFieldsForTemplate(arTemplateSelect.value));
 arVerificationOptionalAddBtn.addEventListener('click', addVerificationOptionalField);
 
 arSaveBtn.addEventListener('click', () => saveDocument(arSaveBtn));
@@ -1818,7 +1864,7 @@ function buildCategoryValidationRulesSection() {
     const procedure = document.createElement('div');
     procedure.className = 'ar-validation-subsection';
     procedure.innerHTML = '<div class="ar-validation-subsection-title">Procedure / Evidence</div>' +
-        '<div class="ar-rule-table-wrap"><table class="ar-category-rule-table"><thead><tr><th>Document</th><th>Condition</th><th>Role / signature</th><th></th></tr></thead><tbody id="arProcedureRulesBody"></tbody></table></div>' +
+        '<div class="ar-rule-table-wrap"><table class="ar-category-rule-table"><thead><tr><th>Document</th><th>Condition</th><th>Role / signature</th><th>Risk</th><th></th></tr></thead><tbody id="arProcedureRulesBody"></tbody></table></div>' +
         '<button type="button" class="ar-btn-chip-add" id="arAddProcedureRuleBtn">Add procedure check</button>';
     section.appendChild(procedure);
 
@@ -1826,7 +1872,7 @@ function buildCategoryValidationRulesSection() {
     math.className = 'ar-validation-subsection';
     math.innerHTML = '<div class="ar-validation-subsection-title">Mathematical Cross-checks</div>' +
         '<p class="ar-validation-help">Compare financial or quantity fields from Template documents selected below.</p>' +
-        '<div class="ar-rule-table-wrap"><table class="ar-category-rule-table"><thead><tr><th>Left document</th><th>Left field</th><th>Operator</th><th>Right document</th><th>Right field</th><th>Tolerance</th><th>Missing data</th><th>Blocking</th><th></th></tr></thead><tbody id="arMathRulesBody"></tbody></table></div>' +
+        '<div class="ar-rule-table-wrap"><table class="ar-category-rule-table"><thead><tr><th>Left document</th><th>Left field</th><th>Operator</th><th>Right document</th><th>Right field</th><th>Tolerance</th><th>Missing data</th><th>Blocking</th><th>Risk</th><th></th></tr></thead><tbody id="arMathRulesBody"></tbody></table></div>' +
         '<button type="button" class="ar-btn-chip-add" id="arAddMathRuleBtn">Add comparison</button>';
     section.appendChild(math);
     const clearing = document.createElement('button');
@@ -1844,27 +1890,57 @@ function escapeHtml(value) {
 }
 
 function templateDocuments() {
-    return allDocuments.filter(doc => doc.is_active !== false && (doc.document_type || 'linked_template') === 'linked_template');
+    return allDocuments.filter(doc => doc.is_active !== false && (doc.document_type || 'linked_template') === 'linked_template' && doc.template_id);
 }
 
 function optionMarkup(items, selected, placeholder) {
     return '<option value="">' + placeholder + '</option>' + items.map(item => '<option value="' + item.id + '"' + (String(item.id) === String(selected) ? ' selected' : '') + '>' + escapeHtml(item.name) + '</option>').join('');
 }
 
-function fieldMarkup(documentId, selected) {
-    const doc = templateDocuments().find(item => String(item.id) === String(documentId));
-    const fields = doc?.cross_check_fields || [];
+function fieldMarkup(documentId, selected, selectedFields = null) {
+    // Do not fall back to the legacy Master Columns mirror here. Category rules must use
+    // only the active columns mapped to the selected Document's own Template.
+    const fields = selectedFields || [];
     return '<option value="">Select field</option>' + fields.map(field => '<option' + (field === selected ? ' selected' : '') + '>' + escapeHtml(field) + '</option>').join('');
 }
 
 function addProcedureRuleRow(rule = {}) {
     const body = document.getElementById('arProcedureRulesBody'); if (!body) return;
     const row = document.createElement('tr');
-    row.innerHTML = '<td><select data-rule="document_id">' + optionMarkup(templateDocuments(), rule.document_id, 'Select document') + '</select></td><td><select data-rule="condition"><option value="required_document">Required document</option><option value="prepared_by">Prepared by</option><option value="checked_by">Checked by</option><option value="approved_by">Approved by</option><option value="signature">Signature</option></select></td><td><select data-rule="sub_value"><option value="">Select after choosing a document</option></select></td><td><button type="button" class="ar-btn-delete">Remove</button></td>';
+    row.innerHTML = '<td><select data-rule="document_id">' + optionMarkup(templateDocuments(), rule.document_id, 'Select document') + '</select></td><td><select data-rule="condition"><option value="required_document">Required document</option><option value="prepared_by">Prepared by</option><option value="checked_by">Checked by</option><option value="approved_by">Approved by</option><option value="signature">Signature</option></select></td><td><select data-rule="sub_value"><option value="">Select after choosing a document</option></select></td><td><select data-rule="risk"><option value="Low">Low</option><option value="Medium" selected>Medium</option><option value="High">High</option></select></td><td><button type="button" class="ar-btn-delete">Remove</button></td>';
     row.querySelector('[data-rule="condition"]').value = rule.condition || 'required_document';
     const docSelect = row.querySelector('[data-rule="document_id"]'); const condition = row.querySelector('[data-rule="condition"]'); const sub = row.querySelector('[data-rule="sub_value"]');
-    const refreshSub = () => { const values = condition.value === 'signature' ? ['Any active signature specimen', 'Required authority match'] : condition.value === 'required_document' ? ['Document must be linked'] : ['Any configured role']; sub.innerHTML = '<option value="">Select detail</option>' + values.map(value => '<option>' + escapeHtml(value) + '</option>').join(''); sub.value = rule.sub_value || ''; };
-    docSelect.addEventListener('change', refreshSub); condition.addEventListener('change', refreshSub); refreshSub();
+    let subValueRequestToken = 0;
+    const renderSubValues = (values, selectedValue) => {
+        const uniqueValues = [...new Set((values || []).filter(Boolean))];
+        if (selectedValue && !uniqueValues.includes(selectedValue)) uniqueValues.unshift(selectedValue);
+        sub.innerHTML = '<option value="">Select detail</option>' + uniqueValues.map(value => '<option value="' + escapeHtml(value) + '">' + escapeHtml(value) + '</option>').join('');
+        sub.value = selectedValue || '';
+    };
+    const refreshSub = async (selectedValue = '') => {
+        const requestToken = ++subValueRequestToken;
+        if (condition.value === 'required_document') {
+            renderSubValues(['Document must be linked'], selectedValue || rule.sub_value || '');
+            return;
+        }
+        if (!docSelect.value) {
+            renderSubValues([], selectedValue);
+            return;
+        }
+        sub.innerHTML = '<option value="">Loading document values...</option>';
+        try {
+            const values = await getCategoryProcedureValues(docSelect.value, condition.value);
+            if (requestToken !== subValueRequestToken) return;
+            renderSubValues(values, selectedValue);
+        } catch (error) {
+            if (requestToken !== subValueRequestToken) return;
+            console.warn('Failed to load Category procedure values:', error);
+            renderSubValues([], selectedValue);
+        }
+    };
+    docSelect.addEventListener('change', () => refreshSub(''));
+    condition.addEventListener('change', () => refreshSub(''));
+    refreshSub(rule.sub_value || '');
     row.querySelector('button').addEventListener('click', () => row.remove()); body.appendChild(row);
 }
 
@@ -1873,11 +1949,13 @@ function addMathRuleRow(rule = {}) {
     if (!body) return;
     const row = document.createElement('tr');
     const docs = templateDocuments();
-    row.innerHTML = '<td><select data-rule="left_document_id">' + optionMarkup(docs, rule.left_document_id, 'Document') + '</select></td><td><select data-rule="left_field">' + fieldMarkup(rule.left_document_id, rule.left_field) + '</select></td><td><select data-rule="operator"><option value="=">Equals</option><option value=">=">At least</option><option value="<=">At most</option><option value="!=">Does not equal</option></select></td><td><select data-rule="right_document_id">' + optionMarkup(docs, rule.right_document_id, 'Document') + '</select></td><td><select data-rule="right_field">' + fieldMarkup(rule.right_document_id, rule.right_field) + '</select></td><td><input data-rule="tolerance" type="number" step="any" min="0" placeholder="0"></td><td><select data-rule="missing_data_behavior"><option value="not_configured">Not configured</option><option value="not_linked">Not linked</option><option value="missing">Missing</option><option value="shortfall">Shortfall</option></select></td><td><input data-rule="blocking" type="checkbox"></td><td><button type="button" class="ar-btn-delete">Remove</button></td>';
+    row.innerHTML = '<td><select data-rule="left_document_id">' + optionMarkup(docs, rule.left_document_id, 'Document') + '</select></td><td><select data-rule="left_field">' + fieldMarkup(rule.left_document_id, rule.left_field) + '</select></td><td><select data-rule="operator"><option value="=">Equal to</option><option value=">=">Greater than or equal to</option><option value="<=">Less than or equal to</option><option value=">">Greater than</option><option value="<">Less than</option><option value="!=">Does not equal</option></select></td><td><select data-rule="right_document_id">' + optionMarkup(docs, rule.right_document_id, 'Document') + '</select></td><td><select data-rule="right_field">' + fieldMarkup(rule.right_document_id, rule.right_field) + '</select></td><td><input data-rule="tolerance" type="number" step="any" min="0" placeholder="0"></td><td><select data-rule="missing_data_behavior"><option value="not_configured">Not configured</option><option value="not_linked">Not linked</option><option value="missing">Missing</option><option value="shortfall">Shortfall</option></select></td><td><input data-rule="blocking" type="checkbox"></td><td><select data-rule="risk"><option value="Low">Low</option><option value="Medium" selected>Medium</option><option value="High">High</option></select></td><td><button type="button" class="ar-btn-delete">Remove</button></td>';
     Object.keys(rule).forEach(key => { const el = row.querySelector('[data-rule="' + key + '"]'); if (el) el.type === 'checkbox' ? el.checked = !!rule[key] : el.value = rule[key] ?? ''; });
     const leftDoc = row.querySelector('[data-rule="left_document_id"]'); const rightDoc = row.querySelector('[data-rule="right_document_id"]');
-    leftDoc.addEventListener('change', () => { row.querySelector('[data-rule="left_field"]').innerHTML = fieldMarkup(leftDoc.value, ''); });
-    rightDoc.addEventListener('change', () => { row.querySelector('[data-rule="right_field"]').innerHTML = fieldMarkup(rightDoc.value, ''); });
+    const refreshFields = async (documentSelect, fieldSelect, selected) => { if (!documentSelect.value) { fieldSelect.innerHTML = fieldMarkup('', selected, []); return; } fieldSelect.innerHTML = '<option>Loading fields…</option>'; try { fieldSelect.innerHTML = fieldMarkup(documentSelect.value, selected, await getCategorySelectedFields(documentSelect.value)); } catch (error) { fieldSelect.innerHTML = fieldMarkup(documentSelect.value, selected, []); } };
+    leftDoc.addEventListener('change', () => refreshFields(leftDoc, row.querySelector('[data-rule="left_field"]'), ''));
+    rightDoc.addEventListener('change', () => refreshFields(rightDoc, row.querySelector('[data-rule="right_field"]'), ''));
+    refreshFields(leftDoc, row.querySelector('[data-rule="left_field"]'), rule.left_field || ''); refreshFields(rightDoc, row.querySelector('[data-rule="right_field"]'), rule.right_field || '');
     row.querySelector('button').addEventListener('click', () => row.remove());
     body.appendChild(row);
 }
@@ -1889,12 +1967,16 @@ function readCategoryValidationRules() {
 
 function showClearingRules() {
     const rules = readCategoryValidationRules();
-    const procedureCount = rules.procedure_evidence.checks.length;
-    const mathCount = rules.mathematical_cross_checks.length;
     const popover = document.createElement('div');
     popover.className = 'ar-clearing-rules-popover';
-    popover.innerHTML = '<div class="ar-clearing-rules-popover-title">Clearing Rules</div><p>Clearing evaluates the configured Procedure / Evidence checks and ' + mathCount + ' mathematical cross-check' + (mathCount === 1 ? '' : 's') + '.</p><p>' + procedureCount + ' procedure/evidence check' + (procedureCount === 1 ? '' : 's') + ' configured.</p><button type="button" class="ar-btn-secondary">Close</button>';
-    popover.querySelector('button').addEventListener('click', () => popover.remove());
+    const title = document.createElement('div'); title.className = 'ar-clearing-rules-popover-title'; title.textContent = 'Clearing Rules'; popover.appendChild(title);
+    const addSection = (heading, points, empty) => { const section = document.createElement('section'); section.className = 'ar-clearing-rules-section'; const h = document.createElement('h4'); h.textContent = heading; section.appendChild(h); const ul = document.createElement('ul'); (points.length ? points : [empty]).forEach(point => { const li = document.createElement('li'); li.textContent = point; ul.appendChild(li); }); section.appendChild(ul); popover.appendChild(section); };
+    const docName = id => { const doc = templateDocuments().find(item => String(item.id) === String(id)); return doc ? doc.name : 'Selected document'; };
+    const procedurePoints = rules.procedure_evidence.checks.map(rule => [docName(rule.document_id), ': ', rule.condition || 'condition', rule.sub_value ? ' — ' + rule.sub_value : '', rule.risk ? ' (' + rule.risk + ' risk)' : ''].join(''));
+    const mathPoints = rules.mathematical_cross_checks.map(rule => [docName(rule.left_document_id), ' / ', rule.left_field || 'field', ' ' + (rule.operator || 'equals') + ' ', docName(rule.right_document_id), ' / ', rule.right_field || 'field', rule.tolerance ? ' within tolerance ' + rule.tolerance : '', rule.blocking ? ' — blocking' : ' — informational'].join(''));
+    addSection('Procedure / Evidence', procedurePoints, 'No procedure or evidence conditions configured.');
+    addSection('Mathematical Cross-checks', mathPoints, 'No mathematical cross-check conditions configured.');
+    const close = document.createElement('button'); close.type = 'button'; close.className = 'ar-btn-secondary'; close.textContent = 'Close'; close.addEventListener('click', () => popover.remove()); popover.appendChild(close);
     document.body.appendChild(popover);
 }
 
@@ -2019,6 +2101,69 @@ let categoryDocMeta = {};
 // fetch existed before this phase (loadCrossChecks() is tied to the Cross-checks view's
 // own show-inactive filter), so this is a new, Categories-scoped cache.
 let allCrossChecks = [];
+const categoryDocumentPolicyCache = {};
+const categoryDocumentAuthorisationCache = {};
+
+function procedureConditionMatchesRole(condition, roleName) {
+    const role = String(roleName || '').toLowerCase();
+    if (condition === 'prepared_by') return role.includes('prepar');
+    if (condition === 'checked_by') return role.includes('check');
+    if (condition === 'approved_by') return role.includes('approv');
+    return true;
+}
+
+async function getCategoryDocumentAuthorisation(documentId) {
+    if (categoryDocumentAuthorisationCache[documentId]) {
+        return categoryDocumentAuthorisationCache[documentId];
+    }
+    const clientId = getSelectedClientId();
+    const result = (async () => {
+        const [documentRes, specimensRes] = await Promise.all([
+            window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + documentId),
+            window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/signature-specimens?client_id=' + clientId + '&document_id=' + documentId + '&include_inactive=false')
+        ]);
+        if (!documentRes.ok || !specimensRes.ok) throw new Error('Failed to load Document authorisation values');
+        return {
+            roles: (await documentRes.json()).auth_roles || [],
+            specimens: await specimensRes.json()
+        };
+    })();
+    categoryDocumentAuthorisationCache[documentId] = result;
+    try {
+        return await result;
+    } catch (error) {
+        delete categoryDocumentAuthorisationCache[documentId];
+        throw error;
+    }
+}
+
+async function getCategoryProcedureValues(documentId, condition) {
+    const authorisation = await getCategoryDocumentAuthorisation(documentId);
+    const matchingRoles = authorisation.roles.filter(role => procedureConditionMatchesRole(condition, role));
+    const matchingNames = authorisation.specimens
+        .filter(specimen => condition === 'signature' || procedureConditionMatchesRole(condition, specimen.role_name))
+        .map(specimen => specimen.expected_signatory_name);
+    const names = [...new Set(matchingNames.filter(Boolean))];
+    return names.length ? names : [...new Set(matchingRoles.filter(Boolean))];
+}
+
+async function getCategorySelectedFields(documentId) {
+    const cached = categoryDocumentPolicyCache[documentId];
+    if (cached) return cached.fields || cached;
+    const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + documentId);
+    if (!res.ok) throw new Error('Failed to load Template fields');
+    const doc = await res.json();
+    if (!doc.template_id) {
+        categoryDocumentPolicyCache[documentId] = { templateId: null, fields: [] };
+        return [];
+    }
+    const columnsRes = await window.ApiUtils.apiFetch(API_BASE + '/api/templates/' + doc.template_id + '/columns');
+    if (!columnsRes.ok) throw new Error('Failed to load Template fields');
+    const columns = await columnsRes.json();
+    const fields = columns.map(field => field.column_name).filter(Boolean);
+    categoryDocumentPolicyCache[documentId] = { templateId: doc.template_id, fields };
+    return fields;
+}
 
 // ---------- STATUS MESSAGES ----------
 // Standalone duplicate of showDetailStatus()/showCrossCheckDetailStatus() above, scoped
@@ -3412,7 +3557,7 @@ window.onload = async function() {
 
     // The Documents form's Template dropdown is needed regardless of which entity/view ends
     // up restored below.
-    loadTemplatesForDocuments();
+    await loadTemplatesForDocuments();
 
     // Global navbar Back icon: lets the history stack restore this page's own in-page views (see
     // restoreAuditRulesViewFromUrl() above) for the rare same-URL edge case.
