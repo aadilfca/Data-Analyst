@@ -569,7 +569,8 @@ class CrossCheckMatrixSchemaTests(unittest.TestCase):
     def test_field_row_table_shape(self):
         self.assertEqual(
             set(self._columns("audit_rule_cross_check_fields")),
-            {"id", "cross_check_id", "sort_order"},
+            {"id", "cross_check_id", "sort_order", "operator", "tolerance",
+             "missing_data_behavior", "blocking", "risk"},
         )
 
     def test_cell_table_shape(self):
@@ -675,7 +676,14 @@ class CrossCheckMatrixEndpointTests(unittest.TestCase):
              patch.object(audit_rules, "log_audit"):
             result = audit_rules.add_cross_check_field(30)
 
-        self.assertEqual(result, {"field_id": 7})
+        self.assertEqual(result, {
+            "field_id": 7,
+            "operator": "=",
+            "tolerance": 0,
+            "missing_data_behavior": "not_configured",
+            "blocking": False,
+            "risk": "Medium",
+        })
         insert = next(p for s, p in writes if "INSERT INTO audit_rule_cross_check_fields" in s)
         self.assertEqual(insert, (30, 3))
 
@@ -827,7 +835,12 @@ class CrossCheckMatrixEndpointTests(unittest.TestCase):
             if "FROM audit_rule_cross_check_documents ccd" in sql:
                 return [{"document_id": 10, "name": "Invoice", "template_id": 5, "sort_order": 0}]
             if "FROM audit_rule_cross_check_fields" in sql:
-                return [{"id": 1, "sort_order": 0}, {"id": 2, "sort_order": 1}]
+                return [
+                    {"id": 1, "sort_order": 0, "operator": ">=", "tolerance": 0.5,
+                     "missing_data_behavior": "missing", "blocking": True, "risk": "High"},
+                    {"id": 2, "sort_order": 1, "operator": "=", "tolerance": 0,
+                     "missing_data_behavior": "not_configured", "blocking": False, "risk": "Medium"},
+                ]
             if "FROM audit_rule_cross_check_cells" in sql:
                 return [{"field_id": 1, "document_id": 10, "column_name": "Amount"}]
             self.fail(f"Unhandled query: {sql}")
@@ -837,7 +850,41 @@ class CrossCheckMatrixEndpointTests(unittest.TestCase):
 
         self.assertEqual(matrix["documents"][0]["template_id"], 5)
         self.assertEqual(matrix["fields"][0]["cells"], {"10": "Amount"})
+        self.assertEqual(matrix["fields"][0]["operator"], ">=")
+        self.assertEqual(matrix["fields"][0]["tolerance"], 0.5)
+        self.assertTrue(matrix["fields"][0]["blocking"])
+        self.assertEqual(matrix["fields"][0]["risk"], "High")
         self.assertEqual(matrix["fields"][1]["cells"], {})
+
+    def test_condition_validation_rejects_invalid_values(self):
+        from routers import audit_rules
+
+        with self.assertRaises(Exception) as raised:
+            audit_rules.validate_cross_check_condition(
+                audit_rules.CrossCheckConditionUpdate(operator="~")
+            )
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_set_condition_persists_complete_reusable_rule(self):
+        from routers import audit_rules
+
+        writes = []
+
+        with patch.object(audit_rules, "execute_query_pg", return_value=[{"cross_check_id": 30}]), \
+             patch.object(audit_rules, "execute_write_pg",
+                          side_effect=lambda sql, params=None: writes.append((sql, params))), \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            result = audit_rules.set_cross_check_condition(
+                5,
+                audit_rules.CrossCheckConditionUpdate(
+                    operator=">=", tolerance=1.25, missing_data_behavior="shortfall",
+                    blocking=True, risk="High"
+                ),
+            )
+
+        self.assertEqual(result["message"], "Cross-check condition updated")
+        self.assertEqual(writes[0][1], (">=", 1.25, "shortfall", True, "High", 5))
 
     def test_matrix_404(self):
         from routers import audit_rules

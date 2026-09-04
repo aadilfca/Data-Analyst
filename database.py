@@ -1783,9 +1783,32 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 cross_check_id INTEGER NOT NULL,
                 sort_order INTEGER NOT NULL DEFAULT 0,
+                operator TEXT NOT NULL DEFAULT '=',
+                tolerance REAL NOT NULL DEFAULT 0,
+                missing_data_behavior TEXT NOT NULL DEFAULT 'not_configured',
+                blocking INTEGER NOT NULL DEFAULT 0,
+                risk TEXT NOT NULL DEFAULT 'Medium',
                 FOREIGN KEY (cross_check_id) REFERENCES audit_rule_cross_checks(id) ON DELETE CASCADE
             )
         ''')
+        # Cross-check canonical conditions (Suggestion 2): every matrix row owns the complete
+        # comparison condition so Categories only attach a reusable Cross-check by reference.
+        # Additive column upgrades keep databases created before this phase usable.
+        matrix_field_columns = {
+            'operator': "TEXT NOT NULL DEFAULT '='",
+            'tolerance': "REAL NOT NULL DEFAULT 0",
+            'missing_data_behavior': "TEXT NOT NULL DEFAULT 'not_configured'",
+            'blocking': 'INTEGER NOT NULL DEFAULT 0',
+            'risk': "TEXT NOT NULL DEFAULT 'Medium'",
+        }
+        existing_matrix_field_columns = {
+            row[1] for row in conn.execute('PRAGMA table_info(audit_rule_cross_check_fields)').fetchall()
+        }
+        for column_name, definition in matrix_field_columns.items():
+            if column_name not in existing_matrix_field_columns:
+                conn.execute(
+                    f"ALTER TABLE audit_rule_cross_check_fields ADD COLUMN {column_name} {definition}"
+                )
         conn.execute('''
             CREATE TABLE IF NOT EXISTS audit_rule_cross_check_cells (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3309,9 +3332,21 @@ def init_db_postgres(conn):
         CREATE TABLE IF NOT EXISTS audit_rule_cross_check_fields (
             id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             cross_check_id INTEGER NOT NULL REFERENCES audit_rule_cross_checks(id) ON DELETE CASCADE,
-            sort_order INTEGER NOT NULL DEFAULT 0
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            operator TEXT NOT NULL DEFAULT '=',
+            tolerance NUMERIC NOT NULL DEFAULT 0,
+            missing_data_behavior TEXT NOT NULL DEFAULT 'not_configured',
+            blocking BOOLEAN NOT NULL DEFAULT FALSE,
+            risk TEXT NOT NULL DEFAULT 'Medium'
         )
     ''', "audit_rule_cross_check_fields")
+    # Existing Postgres deployments may already have the additive matrix table from the prior
+    # phase. Keep this migration idempotent and let the router validate the value sets.
+    run("ALTER TABLE audit_rule_cross_check_fields ADD COLUMN IF NOT EXISTS operator TEXT NOT NULL DEFAULT '='")
+    run("ALTER TABLE audit_rule_cross_check_fields ADD COLUMN IF NOT EXISTS tolerance NUMERIC NOT NULL DEFAULT 0")
+    run("ALTER TABLE audit_rule_cross_check_fields ADD COLUMN IF NOT EXISTS missing_data_behavior TEXT NOT NULL DEFAULT 'not_configured'")
+    run("ALTER TABLE audit_rule_cross_check_fields ADD COLUMN IF NOT EXISTS blocking BOOLEAN NOT NULL DEFAULT FALSE")
+    run("ALTER TABLE audit_rule_cross_check_fields ADD COLUMN IF NOT EXISTS risk TEXT NOT NULL DEFAULT 'Medium'")
     run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_fields_crosscheck ON audit_rule_cross_check_fields (cross_check_id)")
 
     # ---------- 23c. audit_rule_cross_check_cells ----------

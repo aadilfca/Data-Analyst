@@ -6336,6 +6336,372 @@ body {
     color: #94a3b8;
     font-style: italic;
 }
+.ar-matrix-condition-heading {
+    background: #eef4ff !important;
+    color: #334155 !important;
+}
+.ar-matrix-condition-control {
+    min-width: 116px;
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: #1e293b;
+    font-size: 12px;
+}
+.ar-matrix-condition-control:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
+}
+.ar-matrix-blocking-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    color: #475569;
+    font-size: 12px;
+}
+
+/* Category Cross-check assignments are read-only summaries. Definition edits belong to the
+   Cross-check tab; this surface is optimized for quick audit-rule review. */
+.ar-applied-cross-checks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0 0 16px;
+}
+.ar-applied-cross-check-card {
+    overflow: hidden;
+    border: 1px solid #d9e2ef;
+    border-radius: 12px;
+    background: #fff;
+    color: #334155;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+}
+.ar-applied-cross-check-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 16px;
+    border-bottom: 1px solid #e8eef6;
+    background: linear-gradient(135deg, #f7faff 0%, #eef5ff 100%);
+}
+.ar-applied-cross-check-header-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.ar-applied-cross-check-kicker,
+.ar-applied-cross-check-section-heading,
+.ar-applied-cross-check-picker-label {
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    line-height: 1.3;
+    text-transform: uppercase;
+}
+.ar-applied-cross-check-title {
+    overflow: hidden;
+    color: #0f2f66;
+    font-size: 15px;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ar-applied-cross-check-remove {
+    flex: 0 0 auto;
+    padding: 5px 9px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+.ar-applied-cross-check-remove:hover {
+    border-color: #fca5a5;
+    background: #fff7f7;
+    color: #b91c1c;
+}
+.ar-applied-cross-check-section {
+    padding: 14px 16px;
+}
+.ar-applied-cross-check-section + .ar-applied-cross-check-section {
+    padding-top: 0;
+}
+.ar-applied-cross-check-section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+    color: #475569;
+}
+.ar-applied-cross-check-count {
+    padding: 3px 7px;
+    border: 1px solid #dbeafe;
+    border-radius: 999px;
+    background: #eff6ff;
+    color: #2563eb;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: normal;
+    text-transform: none;
+}
+.ar-applied-cross-check-chain {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+}
+.ar-applied-cross-check-document-pill {
+    max-width: 100%;
+    overflow: hidden;
+    padding: 6px 9px;
+    border: 1px solid #dbeafe;
+    border-radius: 7px;
+    background: #f8fbff;
+    color: #1e40af;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ar-applied-cross-check-chain-arrow {
+    color: #94a3b8;
+    font-size: 14px;
+    line-height: 1;
+}
+.ar-applied-cross-check-not-configured {
+    padding: 7px 9px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 7px;
+    color: #94a3b8;
+    font-size: 11px;
+}
+.ar-applied-cross-check-conditions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.ar-applied-cross-check-condition {
+    padding: 10px 11px;
+    border: 1px solid #e2e8f0;
+    border-radius: 9px;
+    background: #f8fafc;
+}
+.ar-applied-cross-check-condition-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.ar-applied-cross-check-row-label {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 700;
+}
+.ar-applied-cross-check-state,
+.ar-applied-cross-check-meta-badge {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    padding: 3px 7px;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #fff;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.25;
+    white-space: nowrap;
+}
+.ar-applied-cross-check-state.is-blocking {
+    border-color: #fecaca;
+    background: #fff1f2;
+    color: #b91c1c;
+}
+.ar-applied-cross-check-state.is-informational {
+    border-color: #bae6fd;
+    background: #f0f9ff;
+    color: #0369a1;
+}
+.ar-applied-cross-check-expression {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.ar-applied-cross-check-operand {
+    display: inline-flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+    padding: 7px 9px;
+    border: 1px solid #dbeafe;
+    border-radius: 7px;
+    background: #fff;
+}
+.ar-applied-cross-check-operand-document {
+    overflow: hidden;
+    color: #64748b;
+    font-size: 10px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ar-applied-cross-check-operand-field {
+    color: #1e3a8a;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+.ar-applied-cross-check-operator {
+    flex: 0 0 auto;
+    color: #475569;
+    font-size: 10px;
+    font-weight: 700;
+    text-align: center;
+    text-transform: uppercase;
+}
+.ar-applied-cross-check-metadata {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 8px;
+}
+.ar-applied-cross-check-risk.ar-risk-high {
+    border-color: #fecaca;
+    background: #fff1f2;
+    color: #b91c1c;
+}
+.ar-applied-cross-check-risk.ar-risk-medium {
+    border-color: #fde68a;
+    background: #fffbeb;
+    color: #a16207;
+}
+.ar-applied-cross-check-risk.ar-risk-low {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+    color: #15803d;
+}
+.ar-applied-cross-check-empty,
+.ar-applied-cross-check-loading {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 12px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 8px;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 11px;
+    line-height: 1.4;
+}
+.ar-applied-cross-check-empty strong {
+    color: #475569;
+    font-size: 12px;
+}
+.ar-applied-cross-check-empty-state {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 15px 16px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 10px;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.4;
+}
+.ar-applied-cross-check-empty-state strong {
+    color: #334155;
+    font-size: 13px;
+}
+.ar-applied-cross-check-unavailable {
+    border-color: #fecaca;
+    background: #fff7f7;
+    color: #991b1b;
+}
+.ar-applied-cross-check-picker {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #f8fafc;
+}
+.ar-applied-cross-check-picker-copy {
+    display: flex;
+    min-width: 150px;
+    flex-direction: column;
+    gap: 3px;
+}
+.ar-applied-cross-check-picker-help {
+    color: #64748b;
+    font-size: 11px;
+    line-height: 1.35;
+}
+.ar-applied-cross-check-picker-controls {
+    display: flex;
+    flex: 1 1 300px;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+}
+.ar-applied-cross-check-picker select {
+    flex: 1;
+    min-width: 0;
+}
+.ar-applied-cross-check-picker .ar-btn-chip-add {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+@media (max-width: 640px) {
+    .ar-applied-cross-check-header,
+    .ar-applied-cross-check-picker {
+        align-items: stretch;
+        flex-direction: column;
+    }
+    .ar-applied-cross-check-remove {
+        align-self: flex-start;
+    }
+    .ar-applied-cross-check-picker-controls {
+        flex-basis: auto;
+        justify-content: stretch;
+    }
+    .ar-applied-cross-check-picker-controls select {
+        width: 100%;
+    }
+    .ar-applied-cross-check-expression {
+        align-items: stretch;
+        flex-direction: column;
+    }
+    .ar-applied-cross-check-operator {
+        text-align: left;
+    }
+}
+.ar-legacy-rule-notice {
+    margin-top: 9px;
+    padding: 7px 9px;
+    border: 1px solid #fde68a;
+    border-radius: 6px;
+    background: #fffbeb;
+    color: #92400e;
+    font-size: 12px;
+    line-height: 1.4;
+}
 
 /* ---------- Assign Categories (Section 2, Phase 5 of 5, FINAL) ----------
    Full-page Trial Balance account-assignment view, opened from the Categories list

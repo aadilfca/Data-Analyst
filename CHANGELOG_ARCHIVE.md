@@ -4582,3 +4582,41 @@ soft-delete contract coverage. Focused tests: 52 passed; full suite: 107 passed;
 and diff checks passed. No change was needed in `KNOWN_ISSUES.md` or `File_Map.md`.
 
 ---
+
+## Cross-check canonical definitions and Category assignments — 2026-09-04
+
+Suggestion 2 is now implemented for Audit Rules administration. `database.py` adds additive
+condition columns to Cross-check matrix rows: operator, tolerance, missing-data behavior,
+blocking, and risk. `routers/audit_rules.py` validates and persists those values through the
+matrix contract, so each row is a reusable comparison definition.
+
+`static/audit_rules.js` removes the Category-owned Mathematical Cross-check editor and replaces
+it with one Applied Cross-checks surface. Categories can attach or remove reusable active rules,
+while their documents and matrix conditions are displayed read-only from the Cross-check tab.
+The legacy Category mathematical JSON is preserved and shown as an unmigrated notice rather than
+being silently deleted. `static/style.css` supplies the matrix condition and applied-rule cards.
+
+Verification files were deliberately untouched. The old Comparison Type remains stored as a
+compatibility value for the pending runtime migration, but is no longer part of the visible
+authoring workflow. Category document containment remains enforced; applied Cross-check documents
+are included in the Category payload automatically.
+
+Tests: focused Audit Rulebook suite 54 passed; full suite 109 passed with 4 existing warnings;
+`node --check static/audit_rules.js` and `git diff --check` passed. Browser verification with
+mocked APIs confirmed matrix condition controls, hidden Comparison Type, Applied Cross-checks,
+read-only condition summaries, and no Mathematical Cross-check editor.
+
+---
+
+## Applied Cross-check review layout — 2026-09-04
+
+The Category Applied Cross-check surface now presents each reusable rule as a structured,
+read-only audit card. Rule identity, removable assignment, wrapped document-flow pills,
+comparison operands, operator, tolerance, missing-data behavior, blocking state, and risk are
+separated into clear visual groups. Empty and incomplete rules have explicit guidance, and the
+picker has a labeled, responsive attachment layout. Data contracts, assignment behavior, and
+Verification runtime linkage were unchanged.
+
+Verified with `node --check static/audit_rules.js`, `git diff --check`, focused Audit Rulebook
+tests (54 passed), and a localhost Playwright smoke check using a five-document, two-condition
+rule. No change was needed in `KNOWN_ISSUES.md` or `File_Map.md`.

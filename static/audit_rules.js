@@ -1302,6 +1302,38 @@ function countRowSelections(row) {
     );
 }
 
+const MATRIX_OPERATOR_LABELS = {
+    '=': 'Equal to',
+    '>=': 'Greater than or equal to',
+    '<=': 'Less than or equal to',
+    '>': 'Greater than',
+    '<': 'Less than',
+    '!=': 'Does not equal'
+};
+const MATRIX_MISSING_LABELS = {
+    not_configured: 'Not configured',
+    not_linked: 'Not linked',
+    missing: 'Missing data',
+    shortfall: 'Shortfall'
+};
+
+function matrixSelect(options, selected, className) {
+    const select = document.createElement('select');
+    select.className = className || 'ar-matrix-condition-control';
+    options.forEach(option => {
+        const item = document.createElement('option');
+        item.value = option.value;
+        item.textContent = option.label;
+        select.appendChild(item);
+    });
+    select.value = selected;
+    return select;
+}
+
+function matrixConditionOptions(labels) {
+    return Object.entries(labels).map(([value, label]) => ({ value, label }));
+}
+
 function renderMatrix() {
     arMatrixTable.innerHTML = '';
     arMatrixWarnings.innerHTML = '';
@@ -1310,6 +1342,7 @@ function renderMatrix() {
     // persist against. Gate the whole editor until Name + Comparison Type are saved (which
     // creates the row) — see saveCrossCheck().
     if (!editingCrossCheckId) {
+        arMatrixNeedsSaveHint.textContent = 'Save this Cross-check before building its comparison matrix.';
         arMatrixNeedsSaveHint.style.display = 'block';
         arMatrixAddColumnSelect.innerHTML = '';
         arMatrixAddColumnBtn.disabled = true;
@@ -1349,7 +1382,12 @@ function renderMatrix() {
         th.appendChild(removeBtn);
         headRow.appendChild(th);
     });
-    headRow.appendChild(document.createElement('th')); // spacer above the remove-row buttons
+    ['Operator', 'Tolerance', 'Missing data', 'Blocking', 'Risk', ''].forEach(label => {
+        const th = document.createElement('th');
+        th.textContent = label;
+        th.className = 'ar-matrix-condition-heading';
+        headRow.appendChild(th);
+    });
 
     const tbody = arMatrixTable.createTBody();
     if (matrixState.rows.length === 0) {
@@ -1436,6 +1474,62 @@ function renderMatrix() {
             td.appendChild(select);
         });
 
+        const operatorCell = tr.insertCell();
+        const operatorSelect = matrixSelect(
+            matrixConditionOptions(MATRIX_OPERATOR_LABELS), row.operator || '=',
+            'ar-matrix-condition-control'
+        );
+        operatorSelect.addEventListener('change', () => updateMatrixCondition(row.id, {
+            operator: operatorSelect.value
+        }));
+        operatorCell.appendChild(operatorSelect);
+
+        const toleranceCell = tr.insertCell();
+        const toleranceInput = document.createElement('input');
+        toleranceInput.type = 'number';
+        toleranceInput.min = '0';
+        toleranceInput.step = 'any';
+        toleranceInput.value = row.tolerance == null ? '0' : row.tolerance;
+        toleranceInput.className = 'ar-matrix-condition-control';
+        toleranceInput.title = 'Allowed numeric difference';
+        toleranceInput.addEventListener('change', () => updateMatrixCondition(row.id, {
+            tolerance: Math.max(0, Number(toleranceInput.value) || 0)
+        }));
+        toleranceCell.appendChild(toleranceInput);
+
+        const missingCell = tr.insertCell();
+        const missingSelect = matrixSelect(
+            matrixConditionOptions(MATRIX_MISSING_LABELS), row.missing_data_behavior || 'not_configured',
+            'ar-matrix-condition-control'
+        );
+        missingSelect.addEventListener('change', () => updateMatrixCondition(row.id, {
+            missing_data_behavior: missingSelect.value
+        }));
+        missingCell.appendChild(missingSelect);
+
+        const blockingCell = tr.insertCell();
+        const blockingLabel = document.createElement('label');
+        blockingLabel.className = 'ar-matrix-blocking-control';
+        const blockingInput = document.createElement('input');
+        blockingInput.type = 'checkbox';
+        blockingInput.checked = !!row.blocking;
+        blockingInput.addEventListener('change', () => updateMatrixCondition(row.id, {
+            blocking: blockingInput.checked
+        }));
+        blockingLabel.appendChild(blockingInput);
+        blockingLabel.appendChild(document.createTextNode('Block'));
+        blockingCell.appendChild(blockingLabel);
+
+        const riskCell = tr.insertCell();
+        const riskSelect = matrixSelect(
+            matrixConditionOptions({ Low: 'Low', Medium: 'Medium', High: 'High' }),
+            row.risk || 'Medium', 'ar-matrix-condition-control'
+        );
+        riskSelect.addEventListener('change', () => updateMatrixCondition(row.id, {
+            risk: riskSelect.value
+        }));
+        riskCell.appendChild(riskSelect);
+
         // Trailing cell: remove this row.
         const removeCell = tr.insertCell();
         const removeRowBtn = document.createElement('button');
@@ -1489,6 +1583,9 @@ async function matrixPersist(doRequest, undo) {
         const res = await doRequest();
         const result = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(result.detail || result.message || 'Request failed');
+        if (typeof categoryCrossCheckDetailCache !== 'undefined' && editingCrossCheckId) {
+            delete categoryCrossCheckDetailCache[editingCrossCheckId];
+        }
         return result;
     } catch (error) {
         if (undo) undo();
@@ -1544,7 +1641,15 @@ async function addMatrixRow() {
         () => fetch(API_BASE + '/api/audit-rules/cross-checks/' + editingCrossCheckId + '/fields', { method: 'POST' })
     );
     if (result && result.field_id != null) {
-        matrixState.rows.push({ id: result.field_id, cells: {} });
+        matrixState.rows.push({
+            id: result.field_id,
+            cells: {},
+            operator: result.operator || '=',
+            tolerance: result.tolerance || 0,
+            missing_data_behavior: result.missing_data_behavior || 'not_configured',
+            blocking: !!result.blocking,
+            risk: result.risk || 'Medium'
+        });
         renderMatrix();
     }
 }
@@ -1598,6 +1703,33 @@ async function persistMatrixCell(fieldId, documentId, value, revert) {
     );
 }
 
+async function updateMatrixCondition(fieldId, changes) {
+    const row = matrixState.rows.find(item => item.id === fieldId);
+    if (!row) return;
+    const previous = {
+        operator: row.operator || '=',
+        tolerance: row.tolerance || 0,
+        missing_data_behavior: row.missing_data_behavior || 'not_configured',
+        blocking: !!row.blocking,
+        risk: row.risk || 'Medium'
+    };
+    Object.assign(row, changes);
+    renderMatrix();
+    await matrixPersist(
+        () => fetch(API_BASE + '/api/audit-rules/cross-check-fields/' + fieldId + '/condition', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                operator: row.operator,
+                tolerance: row.tolerance,
+                missing_data_behavior: row.missing_data_behavior,
+                blocking: row.blocking,
+                risk: row.risk
+            })
+        }),
+        () => Object.assign(row, previous)
+    );
+}
+
 // Load the full matrix for a Cross-check into matrixState (columns + field rows + cells).
 function loadMatrixFromServer(matrix) {
     matrixState = {
@@ -1610,7 +1742,15 @@ function loadMatrixFromServer(matrix) {
             Object.entries(f.cells || {}).forEach(([docId, colName]) => {
                 if (colName) cells[parseInt(docId, 10)] = colName;
             });
-            return { id: f.id, cells: cells };
+            return {
+                id: f.id,
+                cells: cells,
+                operator: f.operator || '=',
+                tolerance: f.tolerance || 0,
+                missing_data_behavior: f.missing_data_behavior || 'not_configured',
+                blocking: !!f.blocking,
+                risk: f.risk || 'Medium'
+            };
         })
     };
     matrixState.columns.forEach(c => fetchMatrixColumnsForDoc(c.documentId).then(renderMatrix));
@@ -1686,7 +1826,9 @@ function startNewCrossCheck() {
     arCrossCheckEditingIdInput.value = '';
     arCrossCheckNameInput.value = '';
     resetMatrix();  // renders the matrix in its disabled "save this cross-check first" state
-    arComparisonTypeSelect.value = '';
+    // Comparison Type is retained only as a legacy compatibility value. New reusable
+    // conditions are configured row-by-row in the matrix below.
+    arComparisonTypeSelect.value = 'All equal';
     arCompareToVoucherLineCheckbox.checked = false;
     updateCompareToVoucherLineHint();
 
@@ -1711,13 +1853,8 @@ function startNewCrossCheck() {
 //   - existing: PUT .../meta updates name / comparison type / voucher-line flag only.
 async function saveCrossCheck(triggerBtn) {
     const name = arCrossCheckNameInput.value.trim();
-    const comparisonType = arComparisonTypeSelect.value;
     if (!name) {
         showCrossCheckDetailStatus('❌ Name is required.', 'error');
-        return;
-    }
-    if (!comparisonType) {
-        showCrossCheckDetailStatus('❌ A comparison type is required.', 'error');
         return;
     }
 
@@ -1729,12 +1866,17 @@ async function saveCrossCheck(triggerBtn) {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     name: name,
-                    comparison_type: comparisonType,
+                    // Legacy field retained until Verification is migrated; the matrix rows
+                    // now own the actual reusable comparison conditions.
+                    comparison_type: 'All equal',
                     compare_to_voucher_line: arCompareToVoucherLineCheckbox.checked
                 })
             });
             result = await res.json();
             if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save cross-check');
+            if (typeof categoryCrossCheckDetailCache !== 'undefined') {
+                delete categoryCrossCheckDetailCache[editingCrossCheckId];
+            }
             showCrossCheckDetailStatus('✅ ' + result.message, 'success');
             await loadCrossChecks();
         } else {
@@ -1742,7 +1884,7 @@ async function saveCrossCheck(triggerBtn) {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     name: name,
-                    comparison_type: comparisonType,
+                    comparison_type: 'All equal',
                     compare_to_voucher_line: arCompareToVoucherLineCheckbox.checked,
                     compare_field: '(matrix)',  // filler: deferred flat model still requires it
                     document_ids: [],
@@ -1771,6 +1913,9 @@ async function deleteCrossCheck() {
         const res = await fetch(API_BASE + '/api/audit-rules/cross-checks/' + editingCrossCheckId, { method: 'DELETE' });
         const result = await res.json();
         if (!res.ok) throw new Error(result.detail || result.message || 'Failed to delete cross-check');
+        if (typeof categoryCrossCheckDetailCache !== 'undefined') {
+            delete categoryCrossCheckDetailCache[editingCrossCheckId];
+        }
 
         showCrossCheckDetailStatus('✅ ' + result.message, 'success');
         await loadCrossChecks();
@@ -1787,6 +1932,9 @@ async function restoreCrossCheck() {
         const res = await fetch(API_BASE + '/api/audit-rules/cross-checks/' + editingCrossCheckId + '/restore', { method: 'POST' });
         const result = await res.json();
         if (!res.ok) throw new Error(result.detail || result.message || 'Failed to restore cross-check');
+        if (typeof categoryCrossCheckDetailCache !== 'undefined') {
+            delete categoryCrossCheckDetailCache[editingCrossCheckId];
+        }
 
         showCrossCheckDetailStatus('✅ ' + result.message, 'success');
         await loadCrossChecks();
@@ -1841,16 +1989,9 @@ const arCategoryKbOverviewInput = document.getElementById('arCategoryKbOverviewI
 const arCategoryEvidenceTypeSelect = document.getElementById('arCategoryEvidenceTypeSelect');
 const arCategoryDetailMeta = document.querySelector('.ar-category-detail-meta');
 
-// ---------- CATEGORY DETAIL: VALIDATION RULES SECTION SHELL (Phase 1 of 3) ----------
-// Groups the Cross-checks field + its Document Chains preview into one visually distinct
-// "Validation Rules" box. Per the confirmed scope, static/audit_rules.html is not touched —
-// the Cross-checks chip list/Document Chains preview stay exactly as declared there; this
-// function reparents those existing nodes (moving them, not cloning) into a new wrapper
-// built here, so every id/listener/render function that already targets them
-// (renderCategoryCrossCheckChips(), renderCategoryCrossCheckChainPreview(), etc.) keeps
-// working untouched. Voucher-level Checks was briefly embedded here too (a since-reverted
-// change) — it's back to being its own top-level rail entity (see the VOUCHER-LEVEL CHECKS
-// section further down), so this box now only ever has one sub-section.
+// ---------- CATEGORY DETAIL: VALIDATION RULES SECTION SHELL ----------
+// Procedure/Evidence remains Category-specific. Cross-document comparisons are assigned here
+// by reference only; their reusable definitions and matrix conditions belong to Cross-checks.
 function buildCategoryValidationRulesSection() {
     const section = document.createElement('div');
     section.className = 'ar-validation-rules-section';
@@ -1868,13 +2009,15 @@ function buildCategoryValidationRulesSection() {
         '<button type="button" class="ar-btn-chip-add" id="arAddProcedureRuleBtn">Add procedure check</button>';
     section.appendChild(procedure);
 
-    const math = document.createElement('div');
-    math.className = 'ar-validation-subsection';
-    math.innerHTML = '<div class="ar-validation-subsection-title">Mathematical Cross-checks</div>' +
-        '<p class="ar-validation-help">Compare financial or quantity fields from Template documents selected below.</p>' +
-        '<div class="ar-rule-table-wrap"><table class="ar-category-rule-table"><thead><tr><th>Left document</th><th>Left field</th><th>Operator</th><th>Right document</th><th>Right field</th><th>Tolerance</th><th>Missing data</th><th>Blocking</th><th>Risk</th><th></th></tr></thead><tbody id="arMathRulesBody"></tbody></table></div>' +
-        '<button type="button" class="ar-btn-chip-add" id="arAddMathRuleBtn">Add comparison</button>';
-    section.appendChild(math);
+    const applied = document.createElement('div');
+    applied.className = 'ar-validation-subsection';
+    applied.innerHTML = '<div class="ar-validation-subsection-title">Applied Cross-checks</div>' +
+        '<p class="ar-validation-help">Attach reusable rules from Cross-checks. Definitions stay read-only here.</p>' +
+        '<div id="arAppliedCrossChecksList" class="ar-applied-cross-checks-list"></div>' +
+        '<div class="ar-applied-cross-check-picker"><div class="ar-applied-cross-check-picker-copy"><span class="ar-applied-cross-check-picker-label">Reusable rule</span><span class="ar-applied-cross-check-picker-help">Choose a rule to apply to this Category.</span></div><div class="ar-applied-cross-check-picker-controls"><select id="arCategoryAddCrossCheckSelect"></select>' +
+        '<button type="button" class="ar-btn-chip-add" id="arCategoryAddCrossCheckBtn">Add rule</button></div></div>' +
+        '<div id="arCategoryLegacyMathNotice" class="ar-legacy-rule-notice" style="display:none;"></div>';
+    section.appendChild(applied);
     const clearing = document.createElement('button');
     clearing.type = 'button'; clearing.className = 'ar-btn-secondary ar-clearing-rules-btn'; clearing.id = 'arClearingRulesBtn'; clearing.textContent = 'Clearing Rules';
     clearing.addEventListener('click', showClearingRules);
@@ -1882,8 +2025,8 @@ function buildCategoryValidationRulesSection() {
     arCategoryDetailMeta.parentNode.insertBefore(section, arCategoryDetailMeta);
 }
 buildCategoryValidationRulesSection();
-document.getElementById('arAddMathRuleBtn')?.addEventListener('click', () => addMathRuleRow());
 document.getElementById('arAddProcedureRuleBtn')?.addEventListener('click', () => addProcedureRuleRow());
+document.getElementById('arCategoryAddCrossCheckBtn')?.addEventListener('click', addCategoryCrossCheck);
 
 function escapeHtml(value) {
     const div = document.createElement('div'); div.textContent = value == null ? '' : String(value); return div.innerHTML;
@@ -1944,25 +2087,11 @@ function addProcedureRuleRow(rule = {}) {
     row.querySelector('button').addEventListener('click', () => row.remove()); body.appendChild(row);
 }
 
-function addMathRuleRow(rule = {}) {
-    const body = document.getElementById('arMathRulesBody');
-    if (!body) return;
-    const row = document.createElement('tr');
-    const docs = templateDocuments();
-    row.innerHTML = '<td><select data-rule="left_document_id">' + optionMarkup(docs, rule.left_document_id, 'Document') + '</select></td><td><select data-rule="left_field">' + fieldMarkup(rule.left_document_id, rule.left_field) + '</select></td><td><select data-rule="operator"><option value="=">Equal to</option><option value=">=">Greater than or equal to</option><option value="<=">Less than or equal to</option><option value=">">Greater than</option><option value="<">Less than</option><option value="!=">Does not equal</option></select></td><td><select data-rule="right_document_id">' + optionMarkup(docs, rule.right_document_id, 'Document') + '</select></td><td><select data-rule="right_field">' + fieldMarkup(rule.right_document_id, rule.right_field) + '</select></td><td><input data-rule="tolerance" type="number" step="any" min="0" placeholder="0"></td><td><select data-rule="missing_data_behavior"><option value="not_configured">Not configured</option><option value="not_linked">Not linked</option><option value="missing">Missing</option><option value="shortfall">Shortfall</option></select></td><td><input data-rule="blocking" type="checkbox"></td><td><select data-rule="risk"><option value="Low">Low</option><option value="Medium" selected>Medium</option><option value="High">High</option></select></td><td><button type="button" class="ar-btn-delete">Remove</button></td>';
-    Object.keys(rule).forEach(key => { const el = row.querySelector('[data-rule="' + key + '"]'); if (el) el.type === 'checkbox' ? el.checked = !!rule[key] : el.value = rule[key] ?? ''; });
-    const leftDoc = row.querySelector('[data-rule="left_document_id"]'); const rightDoc = row.querySelector('[data-rule="right_document_id"]');
-    const refreshFields = async (documentSelect, fieldSelect, selected) => { if (!documentSelect.value) { fieldSelect.innerHTML = fieldMarkup('', selected, []); return; } fieldSelect.innerHTML = '<option>Loading fields…</option>'; try { fieldSelect.innerHTML = fieldMarkup(documentSelect.value, selected, await getCategorySelectedFields(documentSelect.value)); } catch (error) { fieldSelect.innerHTML = fieldMarkup(documentSelect.value, selected, []); } };
-    leftDoc.addEventListener('change', () => refreshFields(leftDoc, row.querySelector('[data-rule="left_field"]'), ''));
-    rightDoc.addEventListener('change', () => refreshFields(rightDoc, row.querySelector('[data-rule="right_field"]'), ''));
-    refreshFields(leftDoc, row.querySelector('[data-rule="left_field"]'), rule.left_field || ''); refreshFields(rightDoc, row.querySelector('[data-rule="right_field"]'), rule.right_field || '');
-    row.querySelector('button').addEventListener('click', () => row.remove());
-    body.appendChild(row);
-}
-
 function readCategoryValidationRules() {
     const rows = selector => [...document.querySelectorAll(selector + ' tr')].map(row => Object.fromEntries([...row.querySelectorAll('[data-rule]')].map(el => [el.dataset.rule, el.type === 'checkbox' ? el.checked : (el.value || null)])));
-    return { procedure_evidence: { checks: rows('#arProcedureRulesBody') }, mathematical_cross_checks: rows('#arMathRulesBody') };
+    // Mathematical conditions are no longer Category-owned. They are persisted on Cross-check
+    // matrix rows; omitting this key lets the backend preserve old legacy JSON safely.
+    return { procedure_evidence: { checks: rows('#arProcedureRulesBody') } };
 }
 
 function showClearingRules() {
@@ -1973,9 +2102,12 @@ function showClearingRules() {
     const addSection = (heading, points, empty) => { const section = document.createElement('section'); section.className = 'ar-clearing-rules-section'; const h = document.createElement('h4'); h.textContent = heading; section.appendChild(h); const ul = document.createElement('ul'); (points.length ? points : [empty]).forEach(point => { const li = document.createElement('li'); li.textContent = point; ul.appendChild(li); }); section.appendChild(ul); popover.appendChild(section); };
     const docName = id => { const doc = templateDocuments().find(item => String(item.id) === String(id)); return doc ? doc.name : 'Selected document'; };
     const procedurePoints = rules.procedure_evidence.checks.map(rule => [docName(rule.document_id), ': ', rule.condition || 'condition', rule.sub_value ? ' — ' + rule.sub_value : '', rule.risk ? ' (' + rule.risk + ' risk)' : ''].join(''));
-    const mathPoints = rules.mathematical_cross_checks.map(rule => [docName(rule.left_document_id), ' / ', rule.left_field || 'field', ' ' + (rule.operator || 'equals') + ' ', docName(rule.right_document_id), ' / ', rule.right_field || 'field', rule.tolerance ? ' within tolerance ' + rule.tolerance : '', rule.blocking ? ' — blocking' : ' — informational'].join(''));
+    const mathPoints = categoryCrossCheckIds.map(ccId => {
+        const cc = getCrossCheckById(ccId);
+        return cc ? cc.name + ' — defined in Cross-checks tab' : 'Cross-check #' + ccId + ' — unavailable';
+    });
     addSection('Procedure / Evidence', procedurePoints, 'No procedure or evidence conditions configured.');
-    addSection('Mathematical Cross-checks', mathPoints, 'No mathematical cross-check conditions configured.');
+    addSection('Applied Cross-checks', mathPoints, 'No reusable Cross-checks applied.');
     const close = document.createElement('button'); close.type = 'button'; close.className = 'ar-btn-secondary'; close.textContent = 'Close'; close.addEventListener('click', () => popover.remove()); popover.appendChild(close);
     document.body.appendChild(popover);
 }
@@ -1985,7 +2117,7 @@ async function loadCategoryValidationRules(categoryId) {
     if (!res.ok) throw new Error('Failed to load validation rules');
     const rules = await res.json(); const p = rules.procedure_evidence || {};
     document.getElementById('arProcedureRulesBody').innerHTML = ''; (p.checks || []).forEach(addProcedureRuleRow);
-    document.getElementById('arMathRulesBody').innerHTML = ''; (rules.mathematical_cross_checks || []).forEach(addMathRuleRow);
+    categoryLegacyMathRuleCount = (rules.mathematical_cross_checks || []).length;
 }
 
 const arCategoryClearedRequirementsList = document.getElementById('arCategoryClearedRequirementsList');
@@ -2101,6 +2233,9 @@ let categoryDocMeta = {};
 // fetch existed before this phase (loadCrossChecks() is tied to the Cross-checks view's
 // own show-inactive filter), so this is a new, Categories-scoped cache.
 let allCrossChecks = [];
+let categoryLegacyMathRuleCount = 0;
+const categoryCrossCheckDetailCache = {};
+let appliedCrossChecksRenderToken = 0;
 const categoryDocumentPolicyCache = {};
 const categoryDocumentAuthorisationCache = {};
 
@@ -2181,7 +2316,9 @@ function showCategoryDetailStatus(message, type) {
 // ---------- CROSS-CHECK CACHE (for the add-cross-check picker + removal warning) ----------
 async function loadAllCrossChecksForCategories() {
     try {
-        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=false');
+        // Include inactive definitions so an existing Category can display and detach one
+        // safely; the picker below still offers active definitions only.
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=true');
         if (!res.ok) throw new Error('Failed to load cross-checks');
         allCrossChecks = await res.json();
     } catch (error) {
@@ -2688,6 +2825,260 @@ function removeCategoryCrossCheck(ccId) {
     renderCategoryCrossCheckChips();
 }
 
+// ---------- APPLIED CROSS-CHECKS (Suggestion 2) ----------
+// The Category owns only the assignment. The Cross-check detail and matrix are fetched for a
+// read-only summary, so changing a reusable rule in the Cross-check tab is reflected everywhere.
+async function getCategoryCrossCheckDefinition(ccId) {
+    if (categoryCrossCheckDetailCache[ccId]) return categoryCrossCheckDetailCache[ccId];
+    const promise = (async () => {
+        const detailRes = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks/' + ccId);
+        if (!detailRes.ok) throw new Error('Cross-check not found');
+        const detail = await detailRes.json();
+        const matrixRes = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks/' + ccId + '/matrix');
+        if (!matrixRes.ok) throw new Error('Cross-check matrix not found');
+        return { detail, matrix: await matrixRes.json() };
+    })();
+    categoryCrossCheckDetailCache[ccId] = promise;
+    try {
+        return await promise;
+    } catch (error) {
+        delete categoryCrossCheckDetailCache[ccId];
+        throw error;
+    }
+}
+
+function renderAppliedCrossCheckSummary(container, ccId, definition) {
+    const card = document.createElement('article');
+    card.className = 'ar-applied-cross-check-card';
+
+    const header = document.createElement('div');
+    header.className = 'ar-applied-cross-check-header';
+    const headerMain = document.createElement('div');
+    headerMain.className = 'ar-applied-cross-check-header-main';
+    const kicker = document.createElement('span');
+    kicker.className = 'ar-applied-cross-check-kicker';
+    kicker.textContent = 'Reusable comparison rule';
+    headerMain.appendChild(kicker);
+    const title = document.createElement('strong');
+    title.className = 'ar-applied-cross-check-title';
+    title.textContent = definition.detail.name || ('Cross-check #' + ccId);
+    headerMain.appendChild(title);
+    header.appendChild(headerMain);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'ar-applied-cross-check-remove';
+    remove.textContent = 'Remove';
+    remove.title = 'Remove this Cross-check from the Category';
+    remove.addEventListener('click', () => removeCategoryCrossCheck(ccId));
+    header.appendChild(remove);
+    card.appendChild(header);
+
+    const matrix = definition.matrix || {};
+    const documentNames = Object.fromEntries((matrix.documents || []).map(doc => [String(doc.document_id), doc.name]));
+    const documentsSection = document.createElement('section');
+    documentsSection.className = 'ar-applied-cross-check-section ar-applied-cross-check-documents';
+    const documentsHeading = document.createElement('div');
+    documentsHeading.className = 'ar-applied-cross-check-section-heading';
+    documentsHeading.textContent = 'Document flow';
+    documentsSection.appendChild(documentsHeading);
+    const chain = document.createElement('div');
+    chain.className = 'ar-applied-cross-check-chain';
+    if ((matrix.documents || []).length) {
+        (matrix.documents || []).forEach((doc, index) => {
+            const pill = document.createElement('span');
+            pill.className = 'ar-applied-cross-check-document-pill';
+            pill.textContent = doc.name || ('Document #' + doc.document_id);
+            chain.appendChild(pill);
+            if (index < matrix.documents.length - 1) {
+                const arrow = document.createElement('span');
+                arrow.className = 'ar-applied-cross-check-chain-arrow';
+                arrow.setAttribute('aria-hidden', 'true');
+                arrow.textContent = '→';
+                chain.appendChild(arrow);
+            }
+        });
+    } else {
+        const notConfigured = document.createElement('span');
+        notConfigured.className = 'ar-applied-cross-check-not-configured';
+        notConfigured.textContent = 'No document flow configured';
+        chain.appendChild(notConfigured);
+    }
+    documentsSection.appendChild(chain);
+    card.appendChild(documentsSection);
+
+    const conditionsSection = document.createElement('section');
+    conditionsSection.className = 'ar-applied-cross-check-section ar-applied-cross-check-comparisons';
+    const conditionsHeading = document.createElement('div');
+    conditionsHeading.className = 'ar-applied-cross-check-section-heading';
+    const headingLabel = document.createElement('span');
+    headingLabel.textContent = 'Comparison conditions';
+    conditionsHeading.appendChild(headingLabel);
+    const completeFields = (matrix.fields || []).filter(field => Object.values(field.cells || {}).filter(Boolean).length >= 2);
+    const conditionCount = document.createElement('span');
+    conditionCount.className = 'ar-applied-cross-check-count';
+    conditionCount.textContent = completeFields.length + (completeFields.length === 1 ? ' condition' : ' conditions');
+    conditionsHeading.appendChild(conditionCount);
+    conditionsSection.appendChild(conditionsHeading);
+    const conditions = document.createElement('div');
+    conditions.className = 'ar-applied-cross-check-conditions';
+    (matrix.fields || []).forEach((field, index) => {
+        const operands = Object.entries(field.cells || {}).filter(([, value]) => value);
+        if (operands.length < 2) return;
+        const item = document.createElement('div');
+        item.className = 'ar-applied-cross-check-condition';
+        const conditionTop = document.createElement('div');
+        conditionTop.className = 'ar-applied-cross-check-condition-top';
+        const rowLabel = document.createElement('span');
+        rowLabel.className = 'ar-applied-cross-check-row-label';
+        rowLabel.textContent = 'Condition ' + (index + 1);
+        conditionTop.appendChild(rowLabel);
+        const state = document.createElement('span');
+        state.className = 'ar-applied-cross-check-state ' + (field.blocking ? 'is-blocking' : 'is-informational');
+        state.textContent = field.blocking ? 'Blocking' : 'Informational';
+        conditionTop.appendChild(state);
+        item.appendChild(conditionTop);
+
+        const expression = document.createElement('div');
+        expression.className = 'ar-applied-cross-check-expression';
+        operands.forEach(([docId, value], operandIndex) => {
+            const operand = document.createElement('span');
+            operand.className = 'ar-applied-cross-check-operand';
+            const operandDocument = document.createElement('span');
+            operandDocument.className = 'ar-applied-cross-check-operand-document';
+            operandDocument.textContent = documentNames[docId] || 'Document #' + docId;
+            const operandField = document.createElement('span');
+            operandField.className = 'ar-applied-cross-check-operand-field';
+            operandField.textContent = value;
+            operand.appendChild(operandDocument);
+            operand.appendChild(operandField);
+            expression.appendChild(operand);
+            if (operandIndex < operands.length - 1) {
+                const operator = document.createElement('span');
+                operator.className = 'ar-applied-cross-check-operator';
+                operator.textContent = MATRIX_OPERATOR_LABELS[field.operator] || field.operator || '=';
+                expression.appendChild(operator);
+            }
+        });
+        item.appendChild(expression);
+
+        const metadata = document.createElement('div');
+        metadata.className = 'ar-applied-cross-check-metadata';
+        const tolerance = document.createElement('span');
+        tolerance.className = 'ar-applied-cross-check-meta-badge';
+        tolerance.textContent = 'Tolerance ' + (field.tolerance ?? 0);
+        metadata.appendChild(tolerance);
+        const missing = document.createElement('span');
+        missing.className = 'ar-applied-cross-check-meta-badge';
+        missing.textContent = MATRIX_MISSING_LABELS[field.missing_data_behavior] || field.missing_data_behavior || 'Not configured';
+        metadata.appendChild(missing);
+        const risk = document.createElement('span');
+        const riskClass = String(field.risk || 'Medium').toLowerCase().replace(/[^a-z]+/g, '-');
+        risk.className = 'ar-applied-cross-check-meta-badge ar-applied-cross-check-risk ar-risk-' + riskClass;
+        risk.textContent = (field.risk || 'Medium') + ' risk';
+        metadata.appendChild(risk);
+        item.appendChild(metadata);
+        conditions.appendChild(item);
+    });
+    if (!conditions.childElementCount) {
+        const empty = document.createElement('div');
+        empty.className = 'ar-applied-cross-check-empty';
+        const emptyTitle = document.createElement('strong');
+        emptyTitle.textContent = 'No comparison conditions yet';
+        empty.appendChild(emptyTitle);
+        const emptyText = document.createElement('span');
+        emptyText.textContent = 'Complete at least two document fields in the Cross-checks tab to show the rule here.';
+        empty.appendChild(emptyText);
+        conditions.appendChild(empty);
+    }
+    conditionsSection.appendChild(conditions);
+    card.appendChild(conditionsSection);
+    container.appendChild(card);
+}
+
+async function renderAppliedCrossChecks() {
+    const container = document.getElementById('arAppliedCrossChecksList');
+    const picker = document.getElementById('arCategoryAddCrossCheckSelect');
+    const addButton = document.getElementById('arCategoryAddCrossCheckBtn');
+    const legacyNotice = document.getElementById('arCategoryLegacyMathNotice');
+    if (!container || !picker || !addButton) return;
+    const renderToken = ++appliedCrossChecksRenderToken;
+
+    container.innerHTML = '';
+    picker.innerHTML = '';
+    const available = allCrossChecks.filter(cc => cc.is_active !== false && !categoryCrossCheckIds.includes(cc.id));
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = available.length ? 'Select a reusable Cross-check' : 'No reusable Cross-checks available';
+    placeholder.selected = true;
+    picker.appendChild(placeholder);
+    available.forEach(cc => {
+        const option = document.createElement('option');
+        option.value = cc.id;
+        option.textContent = cc.name;
+        picker.appendChild(option);
+    });
+    addButton.disabled = available.length === 0;
+
+    if (!categoryCrossCheckIds.length) {
+        const empty = document.createElement('div');
+        empty.className = 'ar-applied-cross-check-empty-state';
+        const emptyTitle = document.createElement('strong');
+        emptyTitle.textContent = 'No rules applied yet';
+        empty.appendChild(emptyTitle);
+        const emptyText = document.createElement('span');
+        emptyText.textContent = 'Attach a reusable Cross-check below to include it in this Category.';
+        empty.appendChild(emptyText);
+        container.appendChild(empty);
+    } else {
+        categoryCrossCheckIds.forEach(ccId => {
+            const known = getCrossCheckById(ccId);
+            if (!known) {
+                const unavailable = document.createElement('div');
+                unavailable.className = 'ar-applied-cross-check-card ar-applied-cross-check-unavailable';
+                unavailable.textContent = 'Cross-check #' + ccId + ' is inactive or unavailable.';
+                container.appendChild(unavailable);
+                return;
+            }
+            const loading = document.createElement('div');
+            loading.className = 'ar-applied-cross-check-card ar-applied-cross-check-loading';
+            loading.textContent = 'Loading ' + known.name + '…';
+            container.appendChild(loading);
+            getCategoryCrossCheckDefinition(ccId).then(definition => {
+                if (renderToken !== appliedCrossChecksRenderToken || !container.contains(loading)) return;
+                loading.remove();
+                renderAppliedCrossCheckSummary(container, ccId, definition);
+            }).catch(() => {
+                if (renderToken === appliedCrossChecksRenderToken && container.contains(loading)) {
+                    loading.textContent = known.name + ' — definition unavailable.';
+                }
+            });
+        });
+    }
+
+    if (legacyNotice) {
+        legacyNotice.style.display = categoryLegacyMathRuleCount ? 'block' : 'none';
+        legacyNotice.textContent = categoryLegacyMathRuleCount
+            ? categoryLegacyMathRuleCount + ' legacy Category comparison(s) are preserved but not editable. Recreate them as reusable Cross-checks above.'
+            : '';
+    }
+}
+
+// Keep old internal callers harmless while ensuring there is only one visible Category
+// Cross-check surface.
+function renderCategoryCrossCheckChainPreview() { renderAppliedCrossChecks(); }
+function renderCategoryCrossCheckChips() { renderAppliedCrossChecks(); }
+function addCategoryCrossCheck() {
+    const picker = document.getElementById('arCategoryAddCrossCheckSelect');
+    if (!picker || !picker.value) return;
+    const ccId = parseInt(picker.value, 10);
+    if (!categoryCrossCheckIds.includes(ccId)) categoryCrossCheckIds.push(ccId);
+    renderAppliedCrossChecks();
+}
+function removeCategoryCrossCheck(ccId) {
+    categoryCrossCheckIds = categoryCrossCheckIds.filter(id => id !== ccId);
+    renderAppliedCrossChecks();
+}
+
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectCategory(id) {
     try {
@@ -2713,6 +3104,7 @@ async function selectCategory(id) {
         });
         arCategoryMatrixVersion.textContent = String(cat.matrix_version || 1);
         await loadCategoryValidationRules(cat.id);
+        await renderAppliedCrossChecks();
 
         arCategoryUsedByRow.style.display = 'block';
         arCategoryUsedByCount.textContent = cat.used_by_vouchers_count;
@@ -2748,7 +3140,9 @@ function startNewCategory() {
     categoryDocRequired = {};
     categoryDocMeta = {};
     arCategoryMatrixVersion.textContent = '1';
-    document.getElementById('arProcedureRulesBody').innerHTML = ''; document.getElementById('arMathRulesBody').innerHTML = '';
+    document.getElementById('arProcedureRulesBody').innerHTML = '';
+    categoryLegacyMathRuleCount = 0;
+    renderAppliedCrossChecks();
 
     arCategoryUsedByRow.style.display = 'none';
     arCategoryDeleteBtn.style.display = 'none';
@@ -2780,7 +3174,20 @@ async function saveCategory(triggerBtn) {
     }
 
     const validationRules = readCategoryValidationRules();
-    const ruleDocumentIds = [...validationRules.procedure_evidence.checks.map(rule => Number(rule.document_id)), ...validationRules.mathematical_cross_checks.flatMap(rule => [Number(rule.left_document_id), Number(rule.right_document_id)])].filter(id => Number.isInteger(id) && id > 0);
+    let appliedDefinitions;
+    try {
+        appliedDefinitions = await Promise.all(categoryCrossCheckIds.map(getCategoryCrossCheckDefinition));
+    } catch (error) {
+        showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+        return;
+    }
+    const appliedDocumentIds = appliedDefinitions.flatMap(definition =>
+        (definition.matrix.documents || []).map(document => Number(document.document_id))
+    );
+    const ruleDocumentIds = [
+        ...validationRules.procedure_evidence.checks.map(rule => Number(rule.document_id)),
+        ...appliedDocumentIds
+    ].filter(id => Number.isInteger(id) && id > 0);
     const payload = {
         name: name,
         kb_overview: arCategoryKbOverviewInput.value.trim() || null,

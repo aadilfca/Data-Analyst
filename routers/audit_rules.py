@@ -1437,6 +1437,21 @@ class CrossCheckCellUpdate(BaseModel):
     # a real column name on the Document's linked template (validated server-side).
     column_name: Optional[str] = None
 
+
+# Suggestion 2: a matrix row is the reusable comparison rule. These values are validated here
+# rather than in the browser so a Category can safely display the same definition everywhere.
+MATRIX_OPERATORS = ('=', '>=', '<=', '>', '<', '!=')
+MATRIX_MISSING_DATA_BEHAVIORS = ('not_configured', 'not_linked', 'missing', 'shortfall')
+MATRIX_RISK_RATINGS = ('Low', 'Medium', 'High')
+
+
+class CrossCheckConditionUpdate(BaseModel):
+    operator: str = '='
+    tolerance: float = 0
+    missing_data_behavior: str = 'not_configured'
+    blocking: bool = False
+    risk: str = 'Medium'
+
 # ---------- HELPERS ----------
 def get_document_template_columns(document_id: int) -> List[dict]:
     """Return the linked-template column list for a Document (empty if it has no template).
@@ -1479,7 +1494,8 @@ def get_cross_check_matrix(cross_check_id: int) -> dict:
         (cross_check_id,),
     )
     field_rows = execute_query_pg(
-        "SELECT id, sort_order FROM audit_rule_cross_check_fields "
+        "SELECT id, sort_order, operator, tolerance, missing_data_behavior, blocking, risk "
+        "FROM audit_rule_cross_check_fields "
         "WHERE cross_check_id = %s ORDER BY sort_order, id",
         (cross_check_id,),
     )
@@ -1507,10 +1523,30 @@ def get_cross_check_matrix(cross_check_id: int) -> dict:
             for d in documents
         ],
         "fields": [
-            {"id": r["id"], "sort_order": r["sort_order"], "cells": cells_by_field.get(r["id"], {})}
+            {
+                "id": r["id"],
+                "sort_order": r["sort_order"],
+                "cells": cells_by_field.get(r["id"], {}),
+                "operator": r.get("operator") or '=',
+                "tolerance": float(r.get("tolerance") or 0),
+                "missing_data_behavior": r.get("missing_data_behavior") or 'not_configured',
+                "blocking": bool(r.get("blocking") or 0),
+                "risk": r.get("risk") or 'Medium',
+            }
             for r in field_rows
         ],
     }
+
+
+def validate_cross_check_condition(condition: CrossCheckConditionUpdate):
+    if condition.operator not in MATRIX_OPERATORS:
+        raise HTTPException(400, f"Invalid matrix operator '{condition.operator}'")
+    if condition.tolerance < 0:
+        raise HTTPException(400, "Matrix tolerance cannot be negative")
+    if condition.missing_data_behavior not in MATRIX_MISSING_DATA_BEHAVIORS:
+        raise HTTPException(400, f"Invalid matrix missing-data behavior '{condition.missing_data_behavior}'")
+    if condition.risk not in MATRIX_RISK_RATINGS:
+        raise HTTPException(400, f"Invalid matrix risk rating '{condition.risk}'")
 
 
 def validate_cross_check_cell(field_id: int, document_id: int, column_name: Optional[str]):
@@ -1562,7 +1598,7 @@ def get_cross_check_matrix_endpoint(cross_check_id: int):
 @router.post("/api/audit-rules/cross-checks/{cross_check_id}/fields",
              dependencies=[Depends(ensure_no_active_verification_sessions)])
 def add_cross_check_field(cross_check_id: int):
-    """Append a new (label-less) field row to a Cross-check's matrix."""
+    """Append a new reusable comparison row to a Cross-check's matrix."""
     existing = execute_query_pg("SELECT name FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
     if not existing:
         raise HTTPException(404, "Cross-check not found")
@@ -1578,7 +1614,14 @@ def add_cross_check_field(cross_check_id: int):
     log_audit("Admin", "Update", "AuditRules", f"Added Cross-check field row (Cross-check ID {cross_check_id})")
     invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
                                   "entity_name": existing[0]["name"], "action": "Updated"})
-    return {"field_id": field_id}
+    return {
+        "field_id": field_id,
+        "operator": '=',
+        "tolerance": 0,
+        "missing_data_behavior": 'not_configured',
+        "blocking": False,
+        "risk": 'Medium',
+    }
 
 @router.delete("/api/audit-rules/cross-check-fields/{field_id}",
                dependencies=[Depends(ensure_no_active_verification_sessions)])
@@ -1646,6 +1689,29 @@ def set_cross_check_cell(field_id: int, document_id: int, cell: CrossCheckCellUp
     invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": None,
                                   "entity_name": None, "action": "Updated"})
     return {"message": message}
+
+
+@router.put("/api/audit-rules/cross-check-fields/{field_id}/condition",
+            dependencies=[Depends(ensure_no_active_verification_sessions)])
+def set_cross_check_condition(field_id: int, condition: CrossCheckConditionUpdate):
+    """Persist the complete reusable condition owned by one Cross-check matrix row."""
+    validate_cross_check_condition(condition)
+    rows = execute_query_pg(
+        "SELECT cross_check_id FROM audit_rule_cross_check_fields WHERE id = %s", (field_id,)
+    )
+    if not rows:
+        raise HTTPException(404, "Cross-check field row not found")
+    cross_check_id = rows[0]["cross_check_id"]
+    execute_write_pg(
+        "UPDATE audit_rule_cross_check_fields SET operator = %s, tolerance = %s, "
+        "missing_data_behavior = %s, blocking = %s, risk = %s WHERE id = %s",
+        (condition.operator, condition.tolerance, condition.missing_data_behavior,
+         condition.blocking, condition.risk, field_id),
+    )
+    log_audit("Admin", "Update", "AuditRules", f"Updated Cross-check condition row {field_id}")
+    invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
+                                  "entity_name": None, "action": "Updated"})
+    return {"message": "Cross-check condition updated"}
 
 
 # ---------- COLUMN AXIS + META (Cross-Check Matrix Redesign, Phase 5 of 5) ----------
@@ -1766,7 +1832,10 @@ class CategoryUpdate(BaseModel):
 
 class CategoryValidationRules(BaseModel):
     procedure_evidence: Dict[str, Any] = {}
-    mathematical_cross_checks: List[Dict[str, Any]] = []
+    # Legacy Category-owned comparisons are retained for compatibility while Cross-checks are
+    # moved to their canonical reusable definitions. Omitted means "preserve existing legacy
+    # data" during a Procedure/Evidence-only save.
+    mathematical_cross_checks: Optional[List[Dict[str, Any]]] = None
 
 def get_category_validation_rules(category_id: int) -> dict:
     rows = execute_query_pg("SELECT validation_rules_json FROM audit_rule_categories WHERE id = %s", (category_id,))
@@ -2125,7 +2194,15 @@ def update_category_validation_rules(category_id: int, rules: CategoryValidation
     existing = execute_query_pg("SELECT id FROM audit_rule_categories WHERE id = %s", (category_id,))
     if not existing:
         raise HTTPException(404, "Category not found")
-    payload = Json(rules.dict())
+    payload_data = rules.dict(exclude_none=True)
+    if rules.mathematical_cross_checks is None:
+        # Do not erase pre-existing Category-owned comparisons merely because the new UI no
+        # longer edits them. They remain visibly legacy until the administrator recreates them
+        # as reusable Cross-check definitions.
+        payload_data["mathematical_cross_checks"] = get_category_validation_rules(category_id).get(
+            "mathematical_cross_checks", []
+        )
+    payload = Json(payload_data)
     execute_write_pg("UPDATE audit_rule_categories SET validation_rules_json = %s WHERE id = %s", (payload, category_id))
     log_audit("Admin", "Update", "AuditRules", f"Updated validation rules for Category ID {category_id}")
     invalidate_audit_rules_cache({"entity_type": "Category", "entity_id": category_id, "action": "Updated"})
