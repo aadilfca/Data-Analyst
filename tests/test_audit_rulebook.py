@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+import json
 import os
 import sqlite3
 import tempfile
@@ -238,9 +239,21 @@ class AuditRulebookCompilerTests(unittest.TestCase):
     def test_compiles_category_profile_and_client_specific_data(self):
         def query(sql, params=()):
             if "FROM audit_rule_categories" in sql:
-                return [{"id": 1, "name": "Fuel", "kb_overview": "Fuel controls", "evidence_type": "billable", "matrix_version": 3}]
+                return [{
+                    "id": 1, "name": "Fuel", "kb_overview": "Fuel controls", "evidence_type": "billable",
+                    "matrix_version": 3,
+                    "validation_rules_json": json.dumps({"procedure_evidence": {"checks": [{
+                        "document_id": 10, "condition": "signature", "sub_value": "Approved by",
+                        "role": "Approved by", "risk": "High"
+                    }]}}),
+                }]
             if "FROM audit_rule_documents" in sql:
-                return [{"id": 10, "name": "Invoice", "kb_note": "Keep invoice", "template_id": 5, "risk_rating": "High", "transaction_level_approval": True, "document_type": "linked_template"}]
+                return [{
+                    "id": 10, "name": "Invoice", "kb_note": "Keep invoice", "template_id": 5,
+                    "risk_rating": "High", "transaction_level_approval": True,
+                    "document_type": "linked_template",
+                    "verification_field_policy": {"version": 1, "core": {"amount": 20}, "optional": []},
+                }]
             if "FROM audit_rule_document_auth_roles" in sql:
                 return [{"document_id": 10, "role_name": "Approved by", "required_authority": "Manager", "sort_order": 0}]
             if "SELECT id, column_name FROM master_columns" in sql:
@@ -254,6 +267,13 @@ class AuditRulebookCompilerTests(unittest.TestCase):
                 return [{"id": 30, "name": "Invoice to order", "compare_field": "Amount", "comparison_type": "Exact", "compare_to_voucher_line": False}]
             if "FROM audit_rule_cross_check_documents" in sql:
                 return [{"cross_check_id": 30, "document_id": 10, "sort_order": 0}]
+            if "FROM audit_rule_cross_check_fields" in sql:
+                return [{
+                    "id": 31, "cross_check_id": 30, "sort_order": 0, "operator": ">=",
+                    "tolerance": 0.5, "missing_data_behavior": "missing", "blocking": True, "risk": "High",
+                }]
+            if "FROM audit_rule_cross_check_cells" in sql:
+                return [{"field_id": 31, "document_id": 10, "column_name": "Amount"}]
             if "FROM audit_rule_category_cross_checks" in sql:
                 return [{"category_id": 1, "cross_check_id": 30, "sort_order": 0}]
             if "FROM audit_rule_voucher_checks" in sql:
@@ -282,7 +302,17 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             {"field_name": "Vendor", "master_column_id": 21},
         ])
         self.assertEqual(document["signature_requirements"][0]["specimens"][0]["expected_signatory_name"], "A. Manager")
+        self.assertEqual(document["verification_fields"][0]["column_name"], "Amount")
+        self.assertEqual(document["signatories"][0]["role_name"], "Approved by")
+        procedure = rulebook["categories"][0]["procedure_evidence"]["checks"][0]
+        self.assertEqual(procedure["document_name"], "Invoice")
+        self.assertEqual(procedure["selected_detail"], "Approved by")
+        self.assertEqual(procedure["configured_signatories"][0]["expected_signatory_name"], "A. Manager")
         self.assertEqual(rulebook["categories"][0]["cross_checks"][0]["document_ids"], [10])
+        matrix = rulebook["categories"][0]["cross_checks"][0]["matrix"]
+        self.assertEqual(matrix["documents"][0]["name"], "Invoice")
+        self.assertEqual(matrix["fields"][0]["cells"], {"10": "Amount"})
+        self.assertEqual(matrix["fields"][0]["operator"], ">=")
         self.assertEqual(rulebook["templates"][0]["columns"], [{
             "column_id": 20,
             "column_name": "Amount",
@@ -370,7 +400,7 @@ class AuditRulebookCompilerTests(unittest.TestCase):
                 return []
             if "FROM account_category_assignments" in sql:
                 return [{"account_code": "7000", "category_id": 88}]
-            if "FROM audit_rule_document_auth_roles" in sql or "FROM audit_rule_document_fields" in sql or "FROM master_columns" in sql or "FROM audit_rule_cross_checks" in sql or "FROM audit_rule_cross_check_documents" in sql or "FROM audit_rule_category_cross_checks" in sql or "FROM audit_rule_voucher_checks" in sql:
+            if "FROM audit_rule_document_auth_roles" in sql or "FROM audit_rule_document_fields" in sql or "FROM master_columns" in sql or "FROM audit_rule_cross_checks" in sql or "FROM audit_rule_cross_check_documents" in sql or "FROM audit_rule_cross_check_fields" in sql or "FROM audit_rule_cross_check_cells" in sql or "FROM audit_rule_category_cross_checks" in sql or "FROM audit_rule_voucher_checks" in sql:
                 return []
             self.fail(f"Unhandled query: {sql}")
 

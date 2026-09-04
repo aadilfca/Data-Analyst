@@ -4655,3 +4655,24 @@ Verified with Python compilation, mocked connection-option assertions, the healt
 `git diff --check`, and a real isolated Uvicorn launch on port 5057. The server returned HTTP
 200 from `/healthz` with `status: ok` and `postgres: ready`, reached application startup
 completion, and its exact temporary process tree was stopped afterward.
+
+---
+
+## Verification Rulebook contract — 2026-09-04
+
+The compiled client Rulebook now includes the saved Category Procedure/Evidence checks with
+resolved Document name/type/template, available authorisation roles, active client signatories,
+selected detail/sub-value, and procedure risk. It also includes each linked Document's saved
+Template-scoped verification field policy and an ordered `verification_fields` projection; when
+no policy exists, all active mapped Template columns are exposed as the safe default.
+
+Reusable Cross-check definitions now carry their ordered Document chain and complete matrix rows:
+per-Document field cells, operator, tolerance, missing-data behavior, blocking flag, and risk.
+Existing legacy Rulebook keys remain intact for compatibility, and no Verification evaluator or
+frontend files were changed; this phase only prepares the stable read-only contract for the next
+runtime-linkage phase.
+
+Verified with `py_compile`, focused Audit Rulebook tests (54 passed), full suite (109 passed,
+4 existing warnings), and `git diff --check`. Aadil manually checked the local Rulebook response
+and confirmed the phase is ready to close. The next phase will connect this contract to
+Verification runtime consumers.

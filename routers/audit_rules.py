@@ -144,6 +144,163 @@ def invalidate_category_for_account_cache(client_id: int):
             del _verification_rulebook_cache[k]
 
 
+def _parse_category_validation_rules(value: Any) -> dict:
+    if not value:
+        return {"procedure_evidence": {}, "mathematical_cross_checks": []}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            value = {}
+    if not isinstance(value, dict):
+        value = {}
+    procedure_evidence = value.get("procedure_evidence")
+    if not isinstance(procedure_evidence, dict):
+        procedure_evidence = {}
+    mathematical_cross_checks = value.get("mathematical_cross_checks")
+    if not isinstance(mathematical_cross_checks, list):
+        mathematical_cross_checks = []
+    return {
+        "procedure_evidence": procedure_evidence,
+        "mathematical_cross_checks": mathematical_cross_checks,
+    }
+
+
+def _build_selected_verification_fields(
+    template_id: Optional[int], stored_policy: Any, mappings_by_template: Dict[int, List[dict]]
+) -> List[dict]:
+    """Return the exact Template columns the future Procedure window should project."""
+    if template_id is None:
+        return []
+    columns = mappings_by_template.get(template_id, [])
+    parsed = _parse_verification_field_policy(stored_policy)
+    if parsed is None:
+        return [
+            {
+                "column_id": column["column_id"],
+                "column_name": column.get("column_name"),
+                "data_type": column.get("data_type"),
+                "selection": "default",
+                "sort_order": index,
+            }
+            for index, column in enumerate(columns)
+        ]
+
+    columns_by_id = {int(column["column_id"]): column for column in columns}
+    selected = []
+    core_ids = parsed.get("core") or {}
+    for key, column_id in core_ids.items():
+        column = columns_by_id.get(column_id)
+        if column is not None:
+            selected.append({
+                "column_id": column["column_id"],
+                "column_name": column.get("column_name"),
+                "data_type": column.get("data_type"),
+                "selection": "core",
+                "key": key,
+                "sort_order": len(selected),
+            })
+    for optional in parsed.get("optional") or []:
+        column = columns_by_id.get(optional.get("column_id"))
+        if column is not None:
+            selected.append({
+                "column_id": column["column_id"],
+                "column_name": column.get("column_name"),
+                "data_type": column.get("data_type"),
+                "selection": "optional",
+                "risk_level": optional.get("risk_level"),
+                "sort_order": len(selected),
+            })
+    return selected
+
+
+def _build_procedure_evidence_contract(
+    validation_rules: dict,
+    document_by_id: Dict[int, dict],
+    roles_by_document: Dict[int, List[dict]],
+    specimens_by_key: Dict[tuple, List[dict]],
+) -> dict:
+    """Resolve saved Category checks to the Document/role data needed by Verification later."""
+    evidence = validation_rules.get("procedure_evidence") or {}
+    raw_checks = evidence.get("checks") if isinstance(evidence, dict) else []
+    if not isinstance(raw_checks, list):
+        raw_checks = []
+    checks = []
+    for raw_check in raw_checks:
+        if not isinstance(raw_check, dict):
+            continue
+        check = dict(raw_check)
+        document_id = raw_check.get("document_id")
+        try:
+            document_id = int(document_id) if document_id is not None else None
+        except (TypeError, ValueError):
+            document_id = None
+        document = document_by_id.get(document_id)
+        role_name = next(
+            (raw_check.get(key) for key in ("role", "role_name", "signature") if raw_check.get(key)),
+            None,
+        )
+        if document is not None:
+            check.update({
+                "document_id": document_id,
+                "document_name": document.get("name"),
+                "document_type": document.get("document_type") or "linked_template",
+                "template_id": document.get("template_id"),
+                "available_roles": roles_by_document.get(document_id, []),
+                "configured_signatories": [
+                    specimen
+                    for role in roles_by_document.get(document_id, [])
+                    if not role_name or role["role_name"].casefold() == str(role_name).casefold()
+                    for specimen in specimens_by_key.get((document_id, role["role_name"]), [])
+                ],
+            })
+        else:
+            check.update({
+                "document_id": document_id,
+                "document_name": None,
+                "document_type": None,
+                "template_id": None,
+                "available_roles": [],
+                "configured_signatories": [],
+            })
+        check["selected_detail"] = raw_check.get("sub_value") or raw_check.get("detail")
+        check["risk"] = raw_check.get("risk") or raw_check.get("risk_rating")
+        checks.append(check)
+    return {**evidence, "checks": checks}
+
+
+def _build_cross_check_matrix_contract(
+    check_id: int,
+    document_ids: List[int],
+    document_by_id: Dict[int, dict],
+    matrix_fields_by_check: Dict[int, List[dict]],
+    matrix_cells_by_field: Dict[int, Dict[str, Optional[str]]],
+) -> dict:
+    documents = [
+        {
+            "document_id": document_id,
+            "name": document_by_id[document_id].get("name") if document_id in document_by_id else None,
+            "template_id": document_by_id[document_id].get("template_id") if document_id in document_by_id else None,
+            "sort_order": sort_order,
+        }
+        for sort_order, document_id in enumerate(document_ids)
+    ]
+    fields = []
+    for field in matrix_fields_by_check.get(check_id, []):
+        field_id = field["id"]
+        fields.append({
+            "id": field_id,
+            "sort_order": field.get("sort_order", 0),
+            "cells": matrix_cells_by_field.get(field_id, {}),
+            "operator": field.get("operator") or "=",
+            "tolerance": float(field.get("tolerance") or 0),
+            "missing_data_behavior": field.get("missing_data_behavior") or "not_configured",
+            "blocking": bool(field.get("blocking")),
+            "risk": field.get("risk") or "Medium",
+        })
+    return {"documents": documents, "fields": fields}
+
+
 def compile_verification_rulebook(client_id: int) -> dict:
     """Compile active Audit Rules into a Verification-facing, read-only rulebook.
 
@@ -154,12 +311,13 @@ def compile_verification_rulebook(client_id: int) -> dict:
     warnings: List[dict] = []
 
     categories = execute_query_pg(
-        "SELECT id, name, kb_overview, evidence_type, matrix_version "
+        "SELECT id, name, kb_overview, evidence_type, matrix_version, validation_rules_json "
         "FROM audit_rule_categories WHERE is_active = TRUE ORDER BY id"
     )
     documents = execute_query_pg(
         "SELECT id, name, kb_note, template_id, risk_rating, transaction_level_approval, "
-        "document_type FROM audit_rule_documents WHERE is_active = TRUE ORDER BY id"
+        "document_type, verification_field_policy FROM audit_rule_documents "
+        "WHERE is_active = TRUE ORDER BY id"
     )
     document_ids = [row["id"] for row in documents]
     category_ids = [row["id"] for row in categories]
@@ -187,6 +345,15 @@ def compile_verification_rulebook(client_id: int) -> dict:
     cross_check_documents = execute_query_pg(
         "SELECT cross_check_id, document_id, sort_order "
         "FROM audit_rule_cross_check_documents ORDER BY cross_check_id, sort_order"
+    )
+    matrix_fields = execute_query_pg(
+        "SELECT id, cross_check_id, sort_order, operator, tolerance, missing_data_behavior, "
+        "blocking, risk FROM audit_rule_cross_check_fields "
+        "ORDER BY cross_check_id, sort_order, id"
+    )
+    matrix_cells = execute_query_pg(
+        "SELECT field_id, document_id, column_name FROM audit_rule_cross_check_cells "
+        "ORDER BY field_id, document_id"
     )
     category_cross_checks = execute_query_pg(
         "SELECT category_id, cross_check_id, sort_order "
@@ -219,6 +386,8 @@ def compile_verification_rulebook(client_id: int) -> dict:
     fields_by_document: Dict[int, List[dict]] = {doc_id: [] for doc_id in document_ids}
     required_by_category: Dict[int, List[dict]] = {category_id: [] for category_id in category_ids}
     cross_docs_by_id: Dict[int, List[int]] = {check_id: [] for check_id in cross_check_ids}
+    matrix_fields_by_check: Dict[int, List[dict]] = {check_id: [] for check_id in cross_check_ids}
+    matrix_cells_by_field: Dict[int, Dict[str, Optional[str]]] = {}
     checks_by_category: Dict[int, List[int]] = {category_id: [] for category_id in category_ids}
     specimens_by_key: Dict[tuple, List[dict]] = {}
 
@@ -245,6 +414,12 @@ def compile_verification_rulebook(client_id: int) -> dict:
             cross_docs_by_id[row["cross_check_id"]].append(row["document_id"])
             if row["document_id"] not in document_by_id:
                 warnings.append({"code": "inactive_cross_check_document", "cross_check_id": row["cross_check_id"], "document_id": row["document_id"]})
+    for row in matrix_fields:
+        if row["cross_check_id"] in matrix_fields_by_check:
+            matrix_fields_by_check[row["cross_check_id"]].append(row)
+            matrix_cells_by_field[row["id"]] = {}
+    for row in matrix_cells:
+        matrix_cells_by_field.setdefault(row["field_id"], {})[str(row["document_id"])] = row.get("column_name")
     for row in category_cross_checks:
         if row["category_id"] in checks_by_category and row["cross_check_id"] in cross_check_ids:
             checks_by_category[row["category_id"]].append(row["cross_check_id"])
@@ -281,7 +456,17 @@ def compile_verification_rulebook(client_id: int) -> dict:
             "required": bool(required), "transaction_level_approval": bool(row.get("transaction_level_approval")),
             "risk_rating": row.get("risk_rating"),
             "fields": fields_by_document.get(document_id, []),
+            "verification_field_policy": _parse_verification_field_policy(row.get("verification_field_policy")),
+            "verification_fields": _build_selected_verification_fields(
+                template_id, row.get("verification_field_policy"), mappings_by_template
+            ),
             "authority_roles": roles_by_document.get(document_id, []),
+            "signatories": [
+                {"role_name": role_name, **specimen}
+                for (specimen_document_id, role_name), role_specimens in specimens_by_key.items()
+                if specimen_document_id == document_id
+                for specimen in role_specimens
+            ],
             "signature_requirements": signature_requirements,
             "template_mapping_column_ids": [m["column_id"] for m in mappings_by_template.get(template_id, [])]
         }
@@ -298,18 +483,28 @@ def compile_verification_rulebook(client_id: int) -> dict:
         for check_id in checks_by_category[category_id]:
             check = cross_check_by_id[check_id]
             doc_ids = cross_docs_by_id.get(check_id, [])
+            matrix = _build_cross_check_matrix_contract(
+                check_id, doc_ids, document_by_id, matrix_fields_by_check, matrix_cells_by_field
+            )
             profile_cross_checks.append({
                 "cross_check_id": check_id, "name": check["name"], "compare_field": check["compare_field"],
                 "comparison_type": check["comparison_type"],
                 "compare_to_voucher_line": bool(check.get("compare_to_voucher_line")),
-                "document_ids": doc_ids
+                "document_ids": doc_ids,
+                "document_chain": matrix["documents"],
+                "matrix": matrix,
             })
             if not all(doc_id in document_by_id for doc_id in doc_ids):
                 warnings.append({"code": "cross_check_has_inactive_document", "category_id": category_id, "cross_check_id": check_id})
+        validation_rules = _parse_category_validation_rules(category.get("validation_rules_json"))
         category_profiles.append({
             "category_id": category_id, "name": category["name"], "kb_overview": category.get("kb_overview"),
             "matrix_version": category.get("matrix_version", 1), "evidence_type": category.get("evidence_type"),
             "documents": profile_documents, "cross_checks": profile_cross_checks,
+            "validation_rules": validation_rules,
+            "procedure_evidence": _build_procedure_evidence_contract(
+                validation_rules, document_by_id, roles_by_document, specimens_by_key
+            ),
             "working_paper_gates": {"approval": {}, "supporting_documents": {}, "account_head_classification": {}, "observation": {}}
         })
 
@@ -1848,10 +2043,7 @@ def get_category_validation_rules(category_id: int) -> dict:
         value = json.loads(raw) if isinstance(raw, str) else raw
     except (TypeError, ValueError):
         value = {}
-    return {
-        "procedure_evidence": value.get("procedure_evidence") or {},
-        "mathematical_cross_checks": value.get("mathematical_cross_checks") or [],
-    }
+    return _parse_category_validation_rules(value)
 
 def validate_category_validation_rules(rules: CategoryValidationRules):
     allowed_missing = {"not_configured", "not_linked", "missing", "shortfall"}
