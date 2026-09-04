@@ -4046,6 +4046,12 @@ def _seed_postgres_data(conn):
 _pg_pool = None
 _pg_transaction = contextvars.ContextVar("_pg_transaction", default=None)
 
+# Bound remote database waits so Uvicorn startup cannot remain blocked indefinitely when the
+# Supabase endpoint is slow or unavailable. Values remain environment-overridable for deployment.
+PG_CONNECT_TIMEOUT_SECONDS = max(1, int(os.environ.get("PG_CONNECT_TIMEOUT", "5")))
+PG_STATEMENT_TIMEOUT_MS = max(1000, int(os.environ.get("PG_STATEMENT_TIMEOUT_MS", "30000")))
+PG_LOCK_TIMEOUT_MS = max(1000, int(os.environ.get("PG_LOCK_TIMEOUT_MS", "5000")))
+
 
 # --- Stale pooled-connection recovery --------------------------------------
 # psycopg2's ThreadedConnectionPool never checks whether a connection it hands
@@ -4239,8 +4245,22 @@ def get_pg_pool():
     # asyncio.Semaphore(5) availability fan-out cap in routers/data.py.
     min_conn = int(os.environ.get("PG_POOL_MIN", "3"))
     max_conn = int(os.environ.get("PG_POOL_MAX", "15"))
-    _pg_pool = psycopg2.pool.ThreadedConnectionPool(min_conn, max_conn, dsn=database_url)
-    print(f"[postgres] connection pool created (min={min_conn}, max={max_conn})")
+    connection_options = (
+        f"-c statement_timeout={PG_STATEMENT_TIMEOUT_MS} "
+        f"-c lock_timeout={PG_LOCK_TIMEOUT_MS}"
+    )
+    _pg_pool = psycopg2.pool.ThreadedConnectionPool(
+        min_conn,
+        max_conn,
+        dsn=database_url,
+        connect_timeout=PG_CONNECT_TIMEOUT_SECONDS,
+        options=connection_options,
+        application_name="internal_audit_app",
+    )
+    print(
+        f"[postgres] connection pool created (min={min_conn}, max={max_conn}, "
+        f"connect_timeout={PG_CONNECT_TIMEOUT_SECONDS}s)"
+    )
     return _pg_pool
 
 

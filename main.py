@@ -15,6 +15,7 @@ import sys
 
 # ✅ CREATE the app instance FIRST
 app = FastAPI(title="System Analyst Dashboard", version="1.0.0")
+startup_state = {"postgres": "not_started"}
 
 # Then add middleware and static files
 app.add_middleware(
@@ -26,6 +27,12 @@ app.add_middleware(
 # Fast-data-handling Phase 1 of 13: compress responses over slow connections (Sialkot)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Lightweight process health signal used by the tray controller and local launchers. It does not
+# query Postgres: it distinguishes a live web process from database readiness without blocking.
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "postgres": startup_state["postgres"]}
 
 # ---------- ROOT ROUTE: LOGIN → CLIENT CARDS ENTRY FLOW ----------
 @app.get("/")
@@ -234,16 +241,20 @@ def startup():
     try:
         from database import get_pg_pool, get_raw_conn_pg, release_raw_conn_pg, init_db_postgres
         if os.environ.get("DATABASE_URL"):
+            startup_state["postgres"] = "initializing"
             get_pg_pool()
             pg_conn = get_raw_conn_pg()
             try:
                 init_db_postgres(pg_conn)
             finally:
                 release_raw_conn_pg(pg_conn)
+            startup_state["postgres"] = "ready"
             print("✅ Postgres (Supabase) schema initialized")
         else:
+            startup_state["postgres"] = "not_configured"
             print("ℹ️ DATABASE_URL not set — skipping Postgres init (SQLite-only mode)")
     except Exception as e:
+        startup_state["postgres"] = "degraded"
         print(f"⚠️ Postgres init skipped (non-fatal): {e}")
 
     print("✅ App ready!")

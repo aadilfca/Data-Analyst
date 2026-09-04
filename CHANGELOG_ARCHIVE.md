@@ -4618,5 +4618,40 @@ picker has a labeled, responsive attachment layout. Data contracts, assignment b
 Verification runtime linkage were unchanged.
 
 Verified with `node --check static/audit_rules.js`, `git diff --check`, focused Audit Rulebook
-tests (54 passed), and a localhost Playwright smoke check using a five-document, two-condition
-rule. No change was needed in `KNOWN_ISSUES.md` or `File_Map.md`.
+ tests (54 passed), and a localhost Playwright smoke check using a five-document, two-condition
+ rule. No change was needed in `KNOWN_ISSUES.md` or `File_Map.md`.
+
+---
+
+## Local tray launcher reliability fix — 2026-09-04
+
+`tray_control.py` now protects the system tray with a Windows user-session mutex, runs
+Start/Stop/Restart operations on a serialized background worker, detects an exited server
+process early, and allows up to 60 seconds for legitimate application/database startup.
+Duplicate operations are ignored without blocking the tray, and Quit is deferred while a
+lifecycle operation is active so it cannot leave an orphaned server process.
+
+`start_tray.vbs` adds a narrow WMI command-line guard for transition safety: controllers started
+by the older pre-mutex launcher are also detected and not duplicated. `run.bat` and application
+startup behavior were unchanged. The stale controller tree was restarted after its exact PIDs
+were verified and no server was listening.
+
+Verified with Python compilation, a mocked background-operation serialization check, a live
+fixed-controller restart, and a second `start_tray.vbs` launch that kept the process tree at
+the expected two launcher/interpreter processes. No server was started during the check.
+
+---
+
+## Bounded Postgres startup and health endpoint — 2026-09-04
+
+`database.py` now supplies finite Postgres connection, statement, and lock timeouts to the
+connection pool, with environment overrides for deployment. `main.py` exposes a lightweight
+`/healthz` endpoint and records whether Postgres initialization is initializing, ready,
+degraded, not configured, or not started. `tray_control.py` now checks this endpoint rather than
+using the login page as a server signal. The existing schema initialization remains intact but
+cannot wait indefinitely on an unavailable remote database.
+
+Verified with Python compilation, mocked connection-option assertions, the health contract,
+`git diff --check`, and a real isolated Uvicorn launch on port 5057. The server returned HTTP
+200 from `/healthz` with `status: ok` and `postgres: ready`, reached application startup
+completion, and its exact temporary process tree was stopped afterward.
