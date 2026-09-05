@@ -36,6 +36,9 @@ let verificationPolicyView = null;
 let currentDocumentRecord = null;
 let verificationTemplateLoadToken = 0;
 let verificationTemplateLoading = false;
+// Phase B: unsaved reusable Form field definitions for the open Document.
+let formFieldsState = [];
+let formTemplateColumns = [];
 
 // ---------- DOM REFS ----------
 const arListBody = document.getElementById('arListBody');
@@ -71,8 +74,14 @@ const arVerificationOptionalAddBtn = document.getElementById('arVerificationOpti
 const arVerificationPolicyHint = document.getElementById('arVerificationPolicyHint');
 // Physical Bill evidence type (Phase 4 of 8): the type picker plus the blocks it hides.
 const arDocumentTypeSelect = document.getElementById('arDocumentTypeSelect');
+const arLegacyPhysicalBillOption = document.getElementById('arLegacyPhysicalBillOption');
 const arDocumentTypeHint = document.getElementById('arDocumentTypeHint');
 const arDocTemplateField = document.getElementById('arDocTemplateField');
+const arDocTemplateLabel = document.getElementById('arDocTemplateLabel');
+const arFormFieldsField = document.getElementById('arFormFieldsField');
+const arFormFieldsBody = document.getElementById('arFormFieldsBody');
+const arFormAddFieldBtn = document.getElementById('arFormAddFieldBtn');
+const arFormFieldsHint = document.getElementById('arFormFieldsHint');
 const arRolesChipList = document.getElementById('arRolesChipList');
 const arRolesInput = document.getElementById('arRolesInput');
 const arRolesAddBtn = document.getElementById('arRolesAddBtn');
@@ -370,6 +379,8 @@ async function loadVerificationFieldsForTemplate(templateId) {
             optional_fields: [],
             selected_column_ids: []
         });
+        formTemplateColumns = columns;
+        renderFormFields();
     } catch (error) {
         if (requestToken !== verificationTemplateLoadToken) return;
         verificationTemplateLoading = false;
@@ -421,10 +432,10 @@ function renderVerificationFieldPolicy(policy) {
     if (!arVerificationFieldsField) return;
     if (policy) verificationPolicyView = policy;
     const hasTemplate = !!(policy && policy.template_id);
-    const isPhysicalBill = arDocumentTypeSelect.value === 'physical_bill';
-    arVerificationFieldsField.style.display = hasTemplate && !isPhysicalBill ? '' : 'none';
+    const isManualDocument = ['physical_bill', 'form'].includes(arDocumentTypeSelect.value);
+    arVerificationFieldsField.style.display = hasTemplate && !isManualDocument ? '' : 'none';
     arVerificationCoreFields.innerHTML = ''; arVerificationOptionalFields.innerHTML = ''; arVerificationOptionalSelect.innerHTML = '';
-    if (!hasTemplate || isPhysicalBill) { verificationPolicyState = null; verificationPolicyTemplateId = null; verificationPolicyView = null; return; }
+    if (!hasTemplate || isManualDocument) { verificationPolicyState = null; verificationPolicyTemplateId = null; verificationPolicyView = null; return; }
     verificationPolicyTemplateId = Number(policy.template_id);
     const shouldSelectAll = !verificationPolicyState && !policy.configured;
     if (!verificationPolicyState) verificationPolicyState = verificationPolicyStateFromServer(policy);
@@ -447,6 +458,77 @@ function renderVerificationFieldPolicy(policy) {
     arVerificationPolicyStatus.textContent = '';
     arVerificationPolicyStatus.className = 'ar-verification-policy-status default';
     arVerificationPolicyHint.style.display = 'none';
+}
+
+// ---------- FORM DOCUMENT FIELDS (Phase B) ----------
+function formFieldsFromServer(fields) {
+    return (fields || []).map((field, index) => ({
+        field_name: field.field_name || '', field_type: field.field_type || 'text',
+        field_scope: field.field_scope || 'header', linked_column: field.linked_column || '', sort_order: index
+    }));
+}
+
+function formFieldsPayload() {
+    return formFieldsState.map((field, index) => ({
+        field_name: field.field_name.trim(), field_type: field.field_type,
+        field_scope: field.field_scope, linked_column: field.linked_column || null, sort_order: index
+    }));
+}
+
+function renderFormFields() {
+    if (!arFormFieldsField || !arFormFieldsBody) return;
+    const isForm = arDocumentTypeSelect.value === 'form';
+    arFormFieldsField.style.display = isForm ? '' : 'none';
+    if (arDocTemplateLabel) arDocTemplateLabel.textContent = isForm
+        ? 'Linked Template (optional prefill source)' : 'Template (for Supporting search)';
+    if (!isForm) return;
+    arFormFieldsBody.innerHTML = '';
+    formFieldsState.forEach((field, index) => {
+        const row = document.createElement('tr');
+        const nameCell = row.insertCell();
+        const name = document.createElement('input'); name.type = 'text'; name.value = field.field_name;
+        name.placeholder = 'e.g. Bill No'; name.className = 'ar-form-field-name';
+        name.addEventListener('input', () => { field.field_name = name.value; }); nameCell.appendChild(name);
+
+        const typeCell = row.insertCell();
+        const type = document.createElement('select');
+        [['text', 'Text'], ['date', 'Date'], ['numeric', 'Numeric']].forEach(([value, label]) => {
+            const option = document.createElement('option'); option.value = value; option.textContent = label; type.appendChild(option);
+        });
+        type.value = field.field_type; type.addEventListener('change', () => { field.field_type = type.value; }); typeCell.appendChild(type);
+
+        const scopeCell = row.insertCell();
+        const scope = document.createElement('select');
+        [['header', 'Header'], ['item', 'Item row']].forEach(([value, label]) => {
+            const option = document.createElement('option'); option.value = value; option.textContent = label; scope.appendChild(option);
+        });
+        scope.value = field.field_scope; scope.addEventListener('change', () => { field.field_scope = scope.value; }); scopeCell.appendChild(scope);
+
+        const linkCell = row.insertCell();
+        const link = document.createElement('select');
+        const empty = document.createElement('option'); empty.value = ''; empty.textContent = formTemplateColumns.length ? '-- None --' : '-- Select a Linked Template first --'; link.appendChild(empty);
+        formTemplateColumns.forEach(column => { const option = document.createElement('option'); option.value = column.column_name; option.textContent = column.column_name; link.appendChild(option); });
+        if (field.linked_column && !formTemplateColumns.some(column => column.column_name === field.linked_column)) {
+            const stale = document.createElement('option'); stale.value = field.linked_column; stale.textContent = '⚠️ ' + field.linked_column + ' (not on template)'; link.appendChild(stale);
+        }
+        link.value = field.linked_column || ''; link.addEventListener('change', () => { field.linked_column = link.value; }); linkCell.appendChild(link);
+
+        const actions = row.insertCell();
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'ar-btn-delete'; remove.textContent = 'Remove';
+        remove.addEventListener('click', () => { formFieldsState.splice(index, 1); renderFormFields(); }); actions.appendChild(remove);
+        const up = document.createElement('button'); up.type = 'button'; up.className = 'ar-move-btn'; up.textContent = '▲'; up.title = 'Move field up'; up.disabled = index === 0;
+        up.addEventListener('click', () => { [formFieldsState[index - 1], formFieldsState[index]] = [formFieldsState[index], formFieldsState[index - 1]]; renderFormFields(); }); actions.appendChild(up);
+        const down = document.createElement('button'); down.type = 'button'; down.className = 'ar-move-btn'; down.textContent = '▼'; down.title = 'Move field down'; down.disabled = index === formFieldsState.length - 1;
+        down.addEventListener('click', () => { [formFieldsState[index], formFieldsState[index + 1]] = [formFieldsState[index + 1], formFieldsState[index]]; renderFormFields(); }); actions.appendChild(down);
+        arFormFieldsBody.appendChild(row);
+    });
+    arFormFieldsHint.textContent = formFieldsState.length ? '' : 'Add at least one field before using this Form in Verification.';
+}
+
+function addFormField() {
+    formFieldsState.push({ field_name: '', field_type: 'text', field_scope: 'header', linked_column: '', sort_order: formFieldsState.length });
+    renderFormFields();
+    arFormFieldsBody.lastElementChild?.querySelector('.ar-form-field-name')?.focus();
 }
 
 function resetVerificationFieldPolicy() {
@@ -476,11 +558,20 @@ function updateDocumentTypeVisibility() {
     // A Physical Bill has no linked Data Bank template - its fields (Bill No / Date / Amount /
     // Vendor name) are fixed by type - so the Template field is hidden for it.
     const isPhysicalBill = arDocumentTypeSelect.value === 'physical_bill';
+    const isForm = arDocumentTypeSelect.value === 'form';
     const display = isPhysicalBill ? 'none' : '';
 
     arDocTemplateField.style.display = display;
     arDocumentTypeHint.style.display = isPhysicalBill ? 'block' : 'none';
+    renderFormFields();
+    if (isForm && arTemplateSelect.value) loadVerificationFieldsForTemplate(arTemplateSelect.value);
     if (isPhysicalBill) resetVerificationFieldPolicy();
+}
+
+function setLegacyPhysicalBillOptionVisible(visible) {
+    if (!arLegacyPhysicalBillOption) return;
+    arLegacyPhysicalBillOption.hidden = !visible;
+    arLegacyPhysicalBillOption.disabled = !visible;
 }
 
 // ---------- TRANSACTION LEVEL APPROVAL (new, confirmed requirement) ----------
@@ -525,12 +616,16 @@ async function selectDocument(id) {
         // baseline for saveDocument()'s destructive-switch confirm.
         savedDocumentType = doc.document_type || 'linked_template';
         arDocumentTypeSelect.value = savedDocumentType;
+        setLegacyPhysicalBillOptionVisible(savedDocumentType === 'physical_bill');
+        formFieldsState = formFieldsFromServer(doc.form_fields);
+        formTemplateColumns = [];
         updateDocumentTypeVisibility();
         verificationPolicyState = null;
         verificationPolicyTemplateId = null;
         verificationPolicyView = null;
         verificationTemplateLoading = false;
         renderVerificationFieldPolicy(doc.verification_field_policy);
+        if (savedDocumentType === 'form' && arTemplateSelect.value) loadVerificationFieldsForTemplate(arTemplateSelect.value);
         rolesState = [...new Set((doc.auth_roles || []).map(role => String(role).trim()).filter(Boolean))];
         requiredAuthorityState = { ...(doc.auth_role_authorities || {}) };
         currentDocumentSpecimens = [];
@@ -574,8 +669,12 @@ function startNewDocument() {
     // one is picked (see saveDocument()). No saved baseline exists yet, so no switch confirm.
     savedDocumentType = null;
     arDocumentTypeSelect.value = '';
+    setLegacyPhysicalBillOptionVisible(false);
+    formFieldsState = [];
+    formTemplateColumns = [];
     updateDocumentTypeVisibility();
     resetVerificationFieldPolicy();
+    renderFormFields();
     rolesState = ['Prepared by', 'Checked by', 'Approved by'];
     requiredAuthorityState = {};
     renderRoleChips();
@@ -654,6 +753,7 @@ async function saveDocument(triggerBtn) {
         auth_roles: rolesState,
         auth_role_authorities: requiredAuthorityState,
         document_type: documentType,
+        form_fields: documentType === 'form' ? formFieldsPayload() : [],
         verification_field_policy: (!isPhysicalBill && arTemplateSelect.value &&
             verificationPolicyTemplateId === parseInt(arTemplateSelect.value, 10))
             ? verificationPolicyPayload() : null
@@ -988,7 +1088,12 @@ arRolesInput.addEventListener('keydown', function(e) {
 // Physical Bill evidence type (Phase 4 of 8): show/hide the Template field live as the type
 // changes, so the form always reflects what the chosen type can actually carry.
 arDocumentTypeSelect.addEventListener('change', updateDocumentTypeVisibility);
-arTemplateSelect.addEventListener('change', () => loadVerificationFieldsForTemplate(arTemplateSelect.value));
+arTemplateSelect.addEventListener('change', () => {
+    formTemplateColumns = [];
+    if (arTemplateSelect.value) loadVerificationFieldsForTemplate(arTemplateSelect.value);
+    else renderFormFields();
+});
+arFormAddFieldBtn?.addEventListener('click', addFormField);
 arVerificationOptionalAddBtn.addEventListener('click', addVerificationOptionalField);
 
 arSaveBtn.addEventListener('click', () => saveDocument(arSaveBtn));

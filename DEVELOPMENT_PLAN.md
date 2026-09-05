@@ -34,7 +34,7 @@ configuration rather than remaining a special-purpose document type.
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
 | A | Form data model | Define Form documents, ordered fields, Text/Date/Numeric types, optional Linked Template, linked-column mapping, and repeating item rows; plan safe Physical Bill migration. | Complete |
-| B | Form authoring UI | Add Form to Document Type, Linked Template selection, and a three-column field editor: Column Name, Column Type, Linked Column. | Pending |
+| B | Form authoring UI | Add Form to Document Type, Linked Template selection, and a three-column field editor: Column Name, Column Type, Linked Column. | Complete |
 | C | Form persistence | Validate and persist field definitions, ordering, types, linked columns, template changes, and invalid mappings. | Pending |
 | D | Form rendering | Show an assigned Form document as a normal Procedure-window tab with manual entry controls and clear field labels/types. | Pending |
 | E | Copy from lines | Add a visible Copy from lines action that reads the configured Linked Template evidence and populates mapped Form fields without preventing manual edits. | Pending |
@@ -71,8 +71,8 @@ configuration rather than remaining a special-purpose document type.
 
 ### Current next action
 
-**This phase: B — Form authoring UI.** Confirm Phase A's schema and migration contract before
-changing the Document editor or Verification UI.
+**This phase: C — Form persistence.** Validate and persist field definitions, ordering, types, linked
+columns, template changes, and invalid mappings.
 
 ### Approved target design
 

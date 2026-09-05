@@ -28,6 +28,21 @@ Postgres receives additive field-column/table upgrades. No Form UI or runtime va
 added in this phase; those belong to Phases B–F. Focused Audit Rules tests: 62 passed; Python
 compilation and `git diff --check` passed.
 
+## Form authoring UI — Phase B — 2026-09-05
+
+**Status:** Complete. **Files:** `static/audit_rules.html`,
+`static/audit_rules.js`, `static/style.css`.
+
+The Document editor now offers `Form (manual / linked)` as a Document Type. Forms may select an
+optional Linked Template and define ordered fields using Column Name, Text/Date/Numeric Column Type,
+Header or Item-row Scope, and an optional Linked Column. Linked Column choices are loaded from the
+selected Template, stale saved mappings remain visible for correction, and Form definitions load from
+the server when editing an existing Document. Remove/reorder controls update local state, and create/
+update payloads send normalized `form_fields`; Linked Template and legacy Physical Bill behavior stay
+separate. New Documents cannot select Physical Bill; existing legacy records remain available for
+migration. JavaScript syntax validation, 62 focused Audit Rules tests, and `git diff --check` passed;
+manual browser confirmation completed.
+
 The Cross-check matrix, field selection, persistence, and Verification result functionality are
 complete. Their development phases are retired from `DEVELOPMENT_PLAN.md`; only acceptance,
 correctness review, performance, safety, regression, and closeout phases remain active there. Phase
