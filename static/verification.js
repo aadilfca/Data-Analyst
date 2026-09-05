@@ -1943,6 +1943,8 @@ let categoryForAccountLoadingPromises = {};
 // `documents` name list expected by buildAuditGuidanceTable().
 function normalizeSessionRulebookGuidance(profile) {
     const sourceDocuments = Array.isArray(profile?.documents) ? profile.documents : [];
+    const procedureEvidence = profile?.procedure_evidence || profile?.validation_rules?.procedure_evidence || {};
+    const procedureChecks = Array.isArray(procedureEvidence.checks) ? procedureEvidence.checks : [];
     const documents = sourceDocuments.map(document => {
         const documentId = document.document_id ?? document.id;
         const authorityRoles = Array.isArray(document.authority_roles)
@@ -1952,7 +1954,9 @@ function normalizeSessionRulebookGuidance(profile) {
             ...document,
             document_id: documentId,
             id: documentId,
-            auth_roles: authorityRoles.map(role => role?.role_name || role)
+            auth_roles: authorityRoles.map(role => role?.role_name || role),
+            procedure_checks: procedureChecks.filter(check => String(check.document_id) === String(documentId)),
+            procedure_rules_configured: procedureChecks.length > 0
         };
     });
     const documentNamesById = new Map(
@@ -1963,7 +1967,9 @@ function normalizeSessionRulebookGuidance(profile) {
     const crossChecks = (Array.isArray(profile?.cross_checks) ? profile.cross_checks : []).map(check => {
         const documentIds = Array.isArray(check.document_ids)
             ? check.document_ids
-            : (Array.isArray(check.documentIds) ? check.documentIds : []);
+            : (Array.isArray(check.documentIds)
+                ? check.documentIds
+                : ((check.matrix?.documents || []).map(document => document.document_id)));
         const resolvedNames = documentIds.map(documentId =>
             documentNamesById.get(String(documentId)) || `Document ${documentId}`
         );
@@ -1980,7 +1986,12 @@ function normalizeSessionRulebookGuidance(profile) {
         kb_overview: profile?.kb_overview,
         matrix_version: profile?.matrix_version,
         documents,
-        cross_checks: crossChecks
+        cross_checks: crossChecks,
+        procedure_evidence: { ...procedureEvidence, checks: procedureChecks },
+        validation_rules: profile?.validation_rules || {
+            procedure_evidence: { ...procedureEvidence, checks: procedureChecks },
+            mathematical_cross_checks: []
+        }
     };
 }
 

@@ -554,10 +554,20 @@ def get_preview_rows(
         verification_policy = build_verification_field_policy(
             template_id, document_row.get("verification_field_policy")
         )
-        verification_column_names = [
-            field["column_name"] for field in verification_policy["core_fields"]
-            if field.get("available") and field.get("column_name")
-        ] + [field["column_name"] for field in verification_policy["optional_fields"]]
+        if not verification_policy["configured"]:
+            # A document with no saved field policy displays all active Template
+            # columns in Audit Rules, so its Verification preview must return the
+            # same complete set rather than falling back to core aliases only.
+            verification_column_names = [
+                field["column_name"]
+                for field in verification_policy["template_columns"]
+                if field.get("column_name")
+            ]
+        else:
+            verification_column_names = [
+                field["column_name"] for field in verification_policy["core_fields"]
+                if field.get("available") and field.get("column_name")
+            ] + [field["column_name"] for field in verification_policy["optional_fields"]]
 
     # Document grouping / subtotal support: resolve the document-key column
     # (first template column), the Date column, and all Amount (Numeric)

@@ -259,6 +259,16 @@ def startup():
 
     print("✅ App ready!")
 
+
+@app.on_event("shutdown")
+def shutdown():
+    """Return all Postgres connections cleanly when the local server stops."""
+    try:
+        from database import close_pg_pool
+        close_pg_pool()
+    except Exception as e:
+        print(f"⚠️ Postgres pool cleanup skipped: {e}", flush=True)
+
 if __name__ == "__main__":
     import uvicorn
     # Render (Phase 7 of 8) injects PORT at runtime; local dev falls back to 5000.

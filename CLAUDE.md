@@ -305,6 +305,9 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-04: Applied Cross-checks received a structured, responsive review layout; Verification runtime linkage remains pending. See CHANGELOG_ARCHIVE.md.
 - 2026-09-04: Local tray launcher now prevents duplicate controllers and keeps lifecycle actions responsive during slow startup. See CHANGELOG_ARCHIVE.md.
 - 2026-09-04: Postgres startup waits are now bounded and `/healthz` reports application/database state for local control. See CHANGELOG_ARCHIVE.md.
+- 2026-09-04: Verification now consumes compiled Category Procedure/Evidence and reusable Cross-check Rulebook data; runtime linkage is ready for local acceptance testing. See CHANGELOG_ARCHIVE.md.
+- 2026-09-04: Fixed Category Procedure/Evidence-only saves returning HTTP 500 when legacy mathematical rules are omitted; routers/audit_rules.py + regression test. See CHANGELOG_ARCHIVE.md.
+- 2026-09-05: Verification previews now return all active Template columns for unconfigured Documents; regression covered. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

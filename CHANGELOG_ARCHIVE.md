@@ -4676,3 +4676,52 @@ Verified with `py_compile`, focused Audit Rulebook tests (54 passed), full suite
 4 existing warnings), and `git diff --check`. Aadil manually checked the local Rulebook response
 and confirmed the phase is ready to close. The next phase will connect this contract to
 Verification runtime consumers.
+
+---
+
+## Verification Rulebook runtime linkage — 2026-09-04
+
+Verification now reads the session-scoped compiled Rulebook for Category Procedure/Evidence and
+reusable Cross-checks. Procedure checklists use only applicable Category conditions, configured
+roles, and client signatory details, with legacy Document-role fallback for older sessions.
+Procedure modal tables and browse previews honor each Document's selected Template fields,
+including an explicitly empty selection.
+
+Cross-check evaluation now consumes matrix-selected Document fields and supports `=`, `!=`, `>=`,
+`<=`, `>`, `<`, tolerance, missing-data behavior, blocking, and risk while preserving the prior
+result shape and legacy fallback. The status engine, result endpoint, and modal use the same
+session Rulebook; support data exposes session identity for this purpose.
+
+Verified with `py_compile`, `git diff --check`, focused tests (62 passed), and the full suite
+(112 passed, 4 existing deprecation/cache warnings). Local manual acceptance is still required
+before this phase is committed and pushed. `File_Map.md` and `KNOWN_ISSUES.md` needed no change.
+
+---
+
+## Category validation-rules save 500 — 2026-09-04
+
+The Category UI correctly omits the retired `mathematical_cross_checks` field so existing legacy
+values are preserved by the backend. Pydantic therefore supplied `None`, but
+`validate_category_validation_rules()` passed it to `enumerate()`, causing HTTP 500 on Save.
+
+The validator now treats an omitted list as empty; the update endpoint's existing preservation
+branch remains unchanged. Added a regression test for the Procedure/Evidence-only payload.
+
+---
+
+## Verification preview field projection fix — 2026-09-05
+
+The Purchase Demand Procedure window received 5,725 rows but displayed dashes for fields that
+were selected in Audit Rules. The Document had no saved field-policy payload, and the preview
+endpoint incorrectly projected only recognized core fields, so the other Template values were
+removed before the browser received the response.
+
+For an unconfigured linked Document, the preview now projects every active column from the
+linked Template, matching the Audit Rules default selection. Explicitly saved policies retain
+their existing selected-column behavior. The existing browser lookup remains tolerant of minor
+stored-key formatting differences.
+
+Verified with Python compilation, all 58 Audit Rules tests, the new unconfigured-policy
+regression, and `git diff --check`. Manual confirmation requires restarting the server,
+hard-refreshing Verification, and checking the Purchase Demand preview response contains all
+seven selected Template columns.

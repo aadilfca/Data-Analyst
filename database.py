@@ -2867,7 +2867,22 @@ def init_db():
 #    actual (unenforced) behavior, since Phase 3-6 hasn't verified every
 #    app code path against a stricter constraint yet.
 def init_db_postgres(conn):
+    global _POSTGRES_SCHEMA_READY
+
     cur = conn.cursor()
+
+    # A completed bootstrap creates this singleton state table near the end of
+    # the transaction.  Checking it first keeps normal local restarts fast and
+    # avoids replaying the full schema/seed pass every time the tray relaunches
+    # the server.  If bootstrap was interrupted before its final commit, this
+    # marker is absent and the complete idempotent bootstrap below still runs.
+    cur.execute("SELECT to_regclass('public.audit_rules_config_state')")
+    if cur.fetchone()[0] is not None:
+        conn.commit()
+        print("[postgres] existing schema verified; skipped bootstrap")
+        _POSTGRES_SCHEMA_READY = True
+        cur.close()
+        return
 
     def run(sql, label=None):
         cur.execute(sql)
@@ -3678,7 +3693,6 @@ def init_db_postgres(conn):
 
     conn.commit()
     print("[postgres] schema initialization complete")
-    global _POSTGRES_SCHEMA_READY
     _POSTGRES_SCHEMA_READY = True
 
 

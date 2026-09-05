@@ -2054,7 +2054,9 @@ def validate_category_validation_rules(rules: CategoryValidationRules):
         rows = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE AND document_type = 'linked_template'", (rule["document_id"],))
         if not rows:
             raise HTTPException(400, f"Procedure/Evidence row {index + 1} must use an active Template document")
-    for index, rule in enumerate(rules.mathematical_cross_checks):
+    # The current Category UI intentionally omits this legacy field. Pydantic represents the
+    # omission as None, while the save endpoint separately preserves any older stored rules.
+    for index, rule in enumerate(rules.mathematical_cross_checks or []):
         required = ("left_document_id", "left_field", "right_document_id", "right_field", "operator")
         if any(not rule.get(key) for key in required):
             raise HTTPException(400, f"Mathematical Cross-check row {index + 1} needs two documents, two fields, and an operator")

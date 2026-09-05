@@ -44,6 +44,9 @@ class FakeCursor:
     def fetchone(self):
         return self._conn.rows[0] if self._conn.rows else None
 
+    def close(self):
+        return None
+
     @property
     def description(self):
         return self._conn.description
@@ -226,6 +229,24 @@ class ExecuteQueryPgWiringTests(unittest.TestCase):
         self.assertEqual(rows, [{"n": 1}])
         self.assertEqual(pool.getconn_calls, 2)
         self.assertIn((dead, True), pool.putconn_calls)
+
+
+class PostgresSchemaBootstrapTests(unittest.TestCase):
+    def test_completed_schema_marker_skips_repeated_bootstrap(self):
+        conn = FakeConn(rows=[("audit_rules_config_state",)])
+
+        with patch.object(database, "_POSTGRES_SCHEMA_READY", False):
+            with patch("builtins.print") as printed:
+                database.init_db_postgres(conn)
+
+        self.assertEqual(
+            conn.executed,
+            [("SELECT to_regclass('public.audit_rules_config_state')", None)],
+        )
+        self.assertEqual(conn.commits, 1)
+        printed.assert_called_once_with(
+            "[postgres] existing schema verified; skipped bootstrap"
+        )
 
 
 if __name__ == "__main__":

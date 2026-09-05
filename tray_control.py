@@ -144,6 +144,18 @@ def close_server_log():
         SERVER_LOG_HANDLE = None
 
 
+def recent_server_log_detail(limit=6):
+    """Return the last useful server-log lines for a failed startup attempt."""
+    try:
+        if SERVER_LOG_HANDLE is not None:
+            SERVER_LOG_HANDLE.flush()
+        with open(SERVER_LOG, "r", encoding="utf-8", errors="replace") as handle:
+            lines = [line.strip() for line in handle.readlines() if line.strip()]
+        return " | ".join(lines[-limit:])
+    except (OSError, UnicodeError) as error:
+        return f"unable to read server log: {error}"
+
+
 def _start_server():
     global SERVER_PROCESS, SERVER_LOG_HANDLE
 
@@ -171,6 +183,7 @@ def _start_server():
 
     command = [
         PYTHON_EXE,
+        "-u",
         "-m",
         "uvicorn",
         "main:app",
@@ -194,6 +207,9 @@ def _start_server():
             log(f"Start failed: server process exited with code {SERVER_PROCESS.returncode} before health check.")
         else:
             log(f"Start failed: server was not healthy after {START_TIMEOUT}s.")
+        detail = recent_server_log_detail()
+        if detail:
+            log(f"Start failure detail: {detail}")
         if SERVER_PROCESS.poll() is None:
             kill_tree(SERVER_PROCESS.pid, "Failed-start cleanup")
         SERVER_PROCESS = None

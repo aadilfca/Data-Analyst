@@ -700,7 +700,10 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # With zero active Cross-checks configured (true of every category today),
     # evaluate_cross_checks_for_line() returns an empty results list, so this is a no-op until
     # a Cross-check is actually configured and activated. Never raises, per Phase 6's contract.
-    cross_check_result = evaluate_cross_checks_for_line(voucher_line_id, category_id=category_id, sibling_ids=sibling_ids, voucher_amount=voucher_amount)
+    cross_check_result = evaluate_cross_checks_for_line(
+        voucher_line_id, category_id=category_id, sibling_ids=sibling_ids,
+        voucher_amount=voucher_amount, rulebook=session_rulebook
+    )
     cross_checks_ok = not any(r['status'] == 'fail' for r in cross_check_result['results'])
 
     if detail:
@@ -5318,7 +5321,8 @@ def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
         for r in bills:
             if (_ts_sort_key(r['updated_at']),r['voucher_line_id']) == winning[(r['client_data_id'],r['document_id'])]: bill_map.setdefault(r['client_data_id'],[]).append(_shape_physical_bill(r,item_map.get(r['id'],[])))
         result={str(r['id']):{"linked_documents":{"voucher_line_id":r['id'],"documents":link_map.get(sibling_by_line[r['id']],[]),"count":len(link_map.get(sibling_by_line[r['id']],[]))},"procedure_checks":{"voucher_line_id":r['id'],"checks":check_map.get(sibling_by_line[r['id']],[])},"observations":{"voucher_line_id":r['id'],"entries":obs_map.get(sibling_by_line[r['id']],[])},"physical_bills":{"voucher_line_id":r['id'],"bills":bill_map.get(sibling_by_line[r['id']],[]),"count":len(bill_map.get(sibling_by_line[r['id']],[]))}} for r in lines_rows}
-        response={"voucher_line_id":voucher_line_id,"transaction_ref":anchor[0]['transaction_ref'],
+        response={"voucher_line_id":voucher_line_id,"session_id":anchor[0]['session_id'],
+                  "transaction_ref":anchor[0]['transaction_ref'],
                   "client_id":anchor[0].get('client_id'),"lines":result}
         if perf:
             response['_perf']={"total_ms":round((time.perf_counter()-started)*1000,1),**get_db_metrics()}
@@ -5594,7 +5598,40 @@ def _evaluate_physical_bill_completion(bills: List[dict], voucher_amount: Option
     return _cross_check_values_equal(grand_total, voucher_amount)
 
 
-def _get_category_cross_check_configs(category_id: int) -> List[dict]:
+def _rulebook_cross_check_configs(category_id: int, rulebook: dict) -> Optional[List[dict]]:
+    """Adapt one compiled Category profile to the evaluator's stable internal shape."""
+    profile = next(
+        (category for category in (rulebook or {}).get('categories', [])
+         if category.get('category_id') == category_id),
+        None,
+    )
+    if profile is None:
+        return None
+
+    configs = []
+    for check in profile.get('cross_checks', []):
+        matrix = check.get('matrix') or {}
+        matrix_documents = matrix.get('documents') or check.get('document_chain') or []
+        configs.append({
+            "id": check.get('cross_check_id', check.get('id')),
+            "name": check.get('name'),
+            "compare_field": check.get('compare_field'),
+            "comparison_type": check.get('comparison_type'),
+            "compare_to_voucher_line": bool(check.get('compare_to_voucher_line')),
+            "documents": [
+                {
+                    "document_id": document.get('document_id'),
+                    "document_name": document.get('name') or document.get('document_name'),
+                    "sort_order": document.get('sort_order', index),
+                }
+                for index, document in enumerate(matrix_documents)
+            ],
+            "matrix_fields": matrix.get('fields') or [],
+        })
+    return configs
+
+
+def _get_category_cross_check_configs(category_id: int, rulebook: Optional[dict] = None) -> List[dict]:
     """
     Every ACTIVE Cross-check attached to a Category, with its ordered Document chain.
 
@@ -5609,6 +5646,11 @@ def _get_category_cross_check_configs(category_id: int) -> List[dict]:
     chains are fetched in two set-based reads on a cache miss; do not reintroduce one document
     query per Cross-check here.
     """
+    if rulebook is not None:
+        compiled = _rulebook_cross_check_configs(category_id, rulebook)
+        if compiled is not None:
+            return compiled
+
     cache_key = f"cross_check_configs:{category_id}"
     cached = cache_get(cache_key)
     if cached is not None:
@@ -5720,6 +5762,181 @@ def _sum_document_field(client_data_ids: List[int], field_name: str):
     return total, count
 
 
+def _matrix_condition_matches(left: float, right: float, operator: str, tolerance: float) -> bool:
+    tolerance = max(float(tolerance or 0), 0)
+    if operator == '=':
+        return abs(left - right) <= tolerance + CROSS_CHECK_FLOAT_EPSILON
+    if operator == '!=':
+        return abs(left - right) > tolerance + CROSS_CHECK_FLOAT_EPSILON
+    if operator == '>=':
+        return left >= right - tolerance - CROSS_CHECK_FLOAT_EPSILON
+    if operator == '<=':
+        return left <= right + tolerance + CROSS_CHECK_FLOAT_EPSILON
+    if operator == '>':
+        return left > right + tolerance + CROSS_CHECK_FLOAT_EPSILON
+    if operator == '<':
+        return left < right - tolerance - CROSS_CHECK_FLOAT_EPSILON
+    return False
+
+
+def _evaluate_matrix_cross_check(config: dict, linked_by_document: Dict[int, List[int]],
+                                 voucher_amount: Optional[float]) -> dict:
+    """Evaluate the reusable Cross-check matrix while returning the legacy result shape."""
+    documents = config.get('documents') or []
+    matrix_fields = config.get('matrix_fields') or []
+    chain = [{
+        "document_id": document['document_id'],
+        "document_name": document['document_name'],
+        "sort_order": document['sort_order'],
+        "linked": bool(linked_by_document.get(document['document_id'])),
+        "value": None,
+        "row_count": 0,
+    } for document in documents]
+    chain_by_id = {entry['document_id']: entry for entry in chain}
+    matrix_rows = []
+    failures = []
+    shortfalls = []
+    has_not_evaluated = False
+
+    for field in matrix_fields:
+        cells = field.get('cells') or {}
+        configured_cells = []
+        missing_cells = []
+        for document in documents:
+            column_name = cells.get(str(document['document_id']))
+            if not column_name:
+                continue
+            value, row_count = _sum_document_field(
+                linked_by_document.get(document['document_id'], []), column_name
+            )
+            cell = {
+                "document_id": document['document_id'],
+                "document_name": document['document_name'],
+                "field_name": column_name,
+                "value": value,
+                "row_count": row_count,
+                "linked": bool(linked_by_document.get(document['document_id'])),
+            }
+            configured_cells.append(cell)
+            if value is None:
+                missing_cells.append(cell)
+            elif chain_by_id[document['document_id']]['value'] is None:
+                chain_by_id[document['document_id']]['value'] = value
+                chain_by_id[document['document_id']]['row_count'] = row_count
+
+        row_result = {
+            "field_id": field.get('id'),
+            "sort_order": field.get('sort_order', 0),
+            "operator": field.get('operator') or '=',
+            "tolerance": float(field.get('tolerance') or 0),
+            "missing_data_behavior": field.get('missing_data_behavior') or 'not_configured',
+            "blocking": bool(field.get('blocking')),
+            "risk": field.get('risk') or 'Medium',
+            "cells": cells,
+            "values": configured_cells,
+            "status": 'not_evaluated',
+            "message": '',
+        }
+        if len(configured_cells) < 2:
+            has_not_evaluated = True
+            row_result['message'] = 'At least two document fields are required.'
+        elif missing_cells:
+            behavior = row_result['missing_data_behavior']
+            message = 'One or more selected fields are missing or not linked.'
+            if behavior in ('not_configured', 'not_linked'):
+                has_not_evaluated = True
+                row_result['message'] = message
+            elif row_result['blocking']:
+                failures.append(f"Matrix row {row_result['sort_order'] + 1}: {message}")
+                row_result['status'] = 'fail'
+                row_result['message'] = message
+            else:
+                shortfalls.append({
+                    "row_id": row_result['field_id'],
+                    "message": message,
+                    "risk": row_result['risk'],
+                })
+                row_result['status'] = 'shortfall'
+                row_result['message'] = message
+        else:
+            comparisons = []
+            for left, right in zip(configured_cells, configured_cells[1:]):
+                matches = _matrix_condition_matches(
+                    left['value'], right['value'], row_result['operator'], row_result['tolerance']
+                )
+                comparisons.append((left, right, matches))
+            failed_comparisons = [comparison for comparison in comparisons if not comparison[2]]
+            if failed_comparisons:
+                left, right, _ = failed_comparisons[0]
+                message = (
+                    f"{left['document_name']} {left['field_name']} {left['value']:g} "
+                    f"{row_result['operator']} {right['document_name']} {right['field_name']} "
+                    f"{right['value']:g} condition failed."
+                )
+                row_result['message'] = message
+                if row_result['blocking']:
+                    failures.append(f"Matrix row {row_result['sort_order'] + 1}: {message}")
+                    row_result['status'] = 'fail'
+                else:
+                    shortfalls.append({
+                        "row_id": row_result['field_id'],
+                        "message": message,
+                        "risk": row_result['risk'],
+                    })
+                    row_result['status'] = 'shortfall'
+            else:
+                row_result['status'] = 'pass'
+                row_result['message'] = 'Condition passed.'
+        matrix_rows.append(row_result)
+
+    anchor = next((entry for entry in reversed(chain) if entry['value'] is not None), None)
+    result = {
+        "cross_check_id": config['id'],
+        "name": config['name'],
+        "compare_field": None,
+        "comparison_type": 'matrix',
+        "compare_to_voucher_line": bool(config.get('compare_to_voucher_line')),
+        "status": 'not_evaluated',
+        "message": '',
+        "anchor_document_id": anchor['document_id'] if anchor else None,
+        "anchor_document_name": anchor['document_name'] if anchor else None,
+        "chain": chain,
+        "matrix_rows": matrix_rows,
+        "voucher_line_comparison": None,
+        "failures": failures,
+        "shortfalls": shortfalls,
+        "risk": max((row['risk'] for row in matrix_rows), key=lambda value: {'Low': 1, 'Medium': 2, 'High': 3}.get(value, 0), default=None),
+    }
+    if config.get('compare_to_voucher_line') and anchor is not None:
+        if voucher_amount is not None:
+            match = _cross_check_values_equal(anchor['value'], voucher_amount)
+            result['voucher_line_comparison'] = {
+                "anchor_value": anchor['value'], "voucher_amount": voucher_amount, "match": match,
+            }
+            if not match:
+                result['failures'].append(
+                    f"{anchor['document_name']} does not equal the voucher line amount {voucher_amount:g}"
+                )
+        else:
+            result['voucher_line_comparison'] = {
+                "anchor_value": anchor['value'], "voucher_amount": None, "match": None,
+            }
+
+    if result['failures']:
+        result['status'] = 'fail'
+        result['message'] = '; '.join(result['failures'])
+    elif result['shortfalls']:
+        result['status'] = 'shortfall'
+        result['message'] = '; '.join(item['message'] for item in result['shortfalls'])
+    elif has_not_evaluated or not matrix_rows:
+        result['status'] = 'not_evaluated'
+        result['message'] = 'The matrix does not have enough complete data to evaluate.'
+    else:
+        result['status'] = 'pass'
+        result['message'] = 'All matrix conditions passed.'
+    return result
+
+
 def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, List[int]],
                                  voucher_amount: Optional[float]) -> dict:
     """
@@ -5730,6 +5947,9 @@ def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, Lis
     chain outranks a shortfall elsewhere, because an excess is a hard control failure while a
     shortfall is a reportable observation (Phase 8) rather than a rejection.
     """
+    if config.get('matrix_fields'):
+        return _evaluate_matrix_cross_check(config, linked_by_document, voucher_amount)
+
     compare_field = config['compare_field']
     comparison_type = config['comparison_type']
 
@@ -5923,7 +6143,8 @@ def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, Lis
 def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[int] = None,
                                     sibling_ids: Optional[List[int]] = None,
                                     voucher_amount: Optional[float] = None,
-                                    linked_by_document: Optional[Dict[int, List[int]]] = None) -> dict:
+                                    linked_by_document: Optional[Dict[int, List[int]]] = None,
+                                    rulebook: Optional[dict] = None) -> dict:
     """
     Chain-aware cross-document evaluation for one voucher line (Phase 6 of 10).
 
@@ -5956,7 +6177,7 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
     if category_id is None or voucher_amount is None:
         line = execute_query_pg(
             """
-            SELECT vd.id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id
+            SELECT vd.id, vd.session_id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id
             FROM verification_details vd
             JOIN client_data cd ON cd.id = vd.client_data_id
             JOIN verification_sessions vs ON vs.id = vd.session_id
@@ -5974,6 +6195,9 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
         row = line[0]
         if voucher_amount is None:
             voucher_amount = _cross_check_numeric(row['extract_amount'])
+
+    if rulebook is None and row is not None and row.get('session_id') is not None:
+        rulebook = load_verification_rulebook_for_session(row['session_id'])
 
     category_name = None
     if category_id is None:
@@ -6025,7 +6249,7 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
             }
         category_name = name_rows[0]['name']
 
-    configs = _get_category_cross_check_configs(category_id)
+    configs = _get_category_cross_check_configs(category_id, rulebook=rulebook)
     if linked_by_document is None:
         linked_by_document = _get_linked_evidence_by_document(voucher_line_id, sibling_ids=sibling_ids)
 
@@ -6149,10 +6373,12 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
                 component_ms["voucher_checks_ms"] = round((time.perf_counter() - voucher_checks_started) * 1000, 1)
 
         cross_checks_started = time.perf_counter()
-        cross_check_results = evaluate_cross_checks_for_line(
-            voucher_line_id,
-            linked_by_document=linked_by_document,
-        )
+        session_rulebook = load_verification_rulebook_for_session(support_data.get("session_id")) \
+            if support_data.get("session_id") is not None else None
+        cross_check_kwargs = {"linked_by_document": linked_by_document}
+        if session_rulebook is not None:
+            cross_check_kwargs["rulebook"] = session_rulebook
+        cross_check_results = evaluate_cross_checks_for_line(voucher_line_id, **cross_check_kwargs)
         if perf:
             component_ms["cross_checks_ms"] = round((time.perf_counter() - cross_checks_started) * 1000, 1)
 

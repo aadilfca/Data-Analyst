@@ -26,8 +26,11 @@ from routers.audit_rules import (
     row_to_document_list,
 )
 from routers.audit_rules import compile_verification_rulebook
+from routers.audit_rules import CategoryValidationRules, validate_category_validation_rules
 from routers.verification import (
     _build_working_paper_gates,
+    _evaluate_matrix_cross_check,
+    _rulebook_cross_check_configs,
     get_verification_session_rulebook,
     rebase_verification_session_rulebook,
 )
@@ -120,7 +123,13 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertEqual(vendor["column_name"], "Supplier Name")
         self.assertEqual({item["column_id"] for item in result["unavailable_fields"]}, {99, 88})
 
-    def test_preview_document_policy_projects_only_selected_columns(self):
+    def test_category_validation_rules_accepts_omitted_legacy_math_rules(self):
+        # The current UI sends Procedure/Evidence only; the legacy mathematical list is
+        # intentionally omitted so the backend can preserve any older stored value.
+        rules = CategoryValidationRules(procedure_evidence={"checks": []})
+        validate_category_validation_rules(rules)
+
+    def test_preview_unconfigured_document_policy_projects_all_template_columns(self):
         from routers.data import get_preview_rows
 
         columns = [
@@ -144,7 +153,7 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             if "COUNT(*) as sunday_count" in sql:
                 return [{"sunday_count": 0}]
             if "SELECT cd.id" in sql:
-                return [{"id": 501, "row_data": {"Vendor": "Acme"},
+                return [{"id": 501, "row_data": {"Vendor": "Acme", "Internal Note": "memo"},
                          "extract_amount": 100, "extract_date": "2026-08-11",
                          "data_quality_flag": None, "rate_source": None}]
             if "data_audit_log" in sql:
@@ -160,12 +169,12 @@ class AuditRulebookCompilerTests(unittest.TestCase):
                                       amount_min=None, amount_max=None, sunday_only=False,
                                       data_quality=None, document_id=12, perf=True)
 
-        self.assertEqual(result["rows"][0]["row_data"], {"Vendor": "Acme"})
+        self.assertEqual(result["rows"][0]["row_data"], {"Vendor": "Acme", "Internal Note": "memo"})
         self.assertIn("_perf", result)
         self.assertIn("db_calls", result["_perf"])
         data_call = next((item for item in captured if "SELECT cd.id" in item[0]), None)
         self.assertIsNotNone(data_call)
-        self.assertEqual(data_call[1][0], ["Vendor"])
+        self.assertEqual(data_call[1][0], ["Vendor", "Internal Note"])
 
     def test_rulebook_config_version_survives_router_reload(self):
         first_version = get_audit_rules_config_version()
@@ -368,8 +377,13 @@ class AuditRulebookCompilerTests(unittest.TestCase):
                         name: 'Invoice',
                         template_id: 5,
                         document_type: 'linked_template',
-                        authority_roles: [{role_name: 'Approved by'}]
+                        authority_roles: [{role_name: 'Approved by'}],
+                        verification_fields: [{column_name: 'Amount', data_type: 'Numeric'}],
+                        signatories: [{role_name: 'Approved by', expected_signatory_name: 'A. Manager'}]
                     }],
+                    procedure_evidence: {checks: [{
+                        document_id: 10, condition: 'approved_by', selected_detail: 'A. Manager'
+                    }]},
                     cross_checks: [{
                         id: 30,
                         compare_field: 'Amount',
@@ -379,12 +393,73 @@ class AuditRulebookCompilerTests(unittest.TestCase):
                 })""")
                 self.assertEqual(result["documents"][0]["id"], 10)
                 self.assertEqual(result["documents"][0]["auth_roles"], ["Approved by"])
+                self.assertEqual(result["documents"][0]["verification_fields"][0]["column_name"], "Amount")
+                self.assertEqual(result["documents"][0]["procedure_checks"][0]["condition"], "approved_by")
+                self.assertTrue(result["documents"][0]["procedure_rules_configured"])
                 self.assertEqual(result["cross_checks"][0]["document_ids"], [10, 99])
                 self.assertEqual(result["cross_checks"][0]["documents"], ["Invoice", "Document 99"])
                 self.assertEqual(result["cross_checks"][0]["compare_field"], "Amount")
                 self.assertEqual(result["cross_checks"][0]["comparison_type"], "Exact")
             finally:
                 browser.close()
+
+    def test_rulebook_cross_check_adapter_preserves_matrix_rows(self):
+        rulebook = {
+            "categories": [{
+                "category_id": 7,
+                "cross_checks": [{
+                    "cross_check_id": 30,
+                    "name": "Order to receipt",
+                    "matrix": {
+                        "documents": [
+                            {"document_id": 10, "name": "Order", "sort_order": 0},
+                            {"document_id": 11, "name": "Receipt", "sort_order": 1},
+                        ],
+                        "fields": [{
+                            "id": 31, "cells": {"10": "Quantity", "11": "Quantity"},
+                            "operator": ">=", "tolerance": 0.5,
+                            "missing_data_behavior": "shortfall", "blocking": False, "risk": "High",
+                        }],
+                    },
+                }],
+            }]
+        }
+        configs = _rulebook_cross_check_configs(7, rulebook)
+        self.assertEqual(configs[0]["documents"][1]["document_id"], 11)
+        self.assertEqual(configs[0]["matrix_fields"][0]["cells"]["10"], "Quantity")
+        self.assertEqual(configs[0]["matrix_fields"][0]["operator"], ">=")
+
+    def test_matrix_cross_check_applies_operator_tolerance_and_blocking(self):
+        config = {
+            "id": 30,
+            "name": "Order to receipt",
+            "documents": [
+                {"document_id": 10, "document_name": "Order", "sort_order": 0},
+                {"document_id": 11, "document_name": "Receipt", "sort_order": 1},
+            ],
+            "matrix_fields": [{
+                "id": 31, "sort_order": 0,
+                "cells": {"10": "Quantity", "11": "Quantity"},
+                "operator": ">=", "tolerance": 0,
+                "missing_data_behavior": "not_configured", "blocking": True, "risk": "High",
+            }],
+        }
+
+        def values(ids, field_name):
+            return ({1001: (90, 1), 1002: (100, 1)}[ids[0]])
+
+        with patch("routers.verification._sum_document_field", side_effect=values):
+            result = _evaluate_matrix_cross_check(config, {10: [1001], 11: [1002]}, 90)
+
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(result["matrix_rows"][0]["status"], "fail")
+        self.assertEqual(result["risk"], "High")
+
+        config["matrix_fields"][0]["blocking"] = False
+        with patch("routers.verification._sum_document_field", side_effect=values):
+            result = _evaluate_matrix_cross_check(config, {10: [1001], 11: [1002]}, 90)
+        self.assertEqual(result["status"], "shortfall")
+        self.assertEqual(result["matrix_rows"][0]["status"], "shortfall")
 
     def test_warns_for_inactive_template_and_assignment_category(self):
         def query(sql, params=()):
@@ -1082,6 +1157,47 @@ class CrossCheckMatrixColumnAxisAndMetaTests(unittest.TestCase):
 
 
 class ProcedureModalPersistenceTests(unittest.TestCase):
+    def test_procedure_checklist_uses_category_rules_and_signatory_details(self):
+        procedure_modal_js = Path(__file__).resolve().parents[1] / "static" / "procedure_modal.js"
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            try:
+                page.set_content("<html><body></body></html>")
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};" )
+                page.add_script_tag(path=str(procedure_modal_js))
+                page.add_script_tag(content="hostAdapter = {escapeHtml: value => String(value ?? '')};")
+                result = page.evaluate("""() => getProcedureChecklistEntries({
+                    auth_roles: ['Prepared by', 'Checked by', 'Approved by'],
+                    signatories: [
+                        {role_name: 'Prepared by', expected_signatory_name: 'Aslam'},
+                        {role_name: 'Approved by', expected_signatory_name: 'Amjad'}
+                    ],
+                    procedure_rules_configured: true,
+                    procedure_checks: [
+                        {condition: 'prepared_by', selected_detail: 'Aslam'},
+                        {condition: 'approved_by', selected_detail: 'Amjad'}
+                    ]
+                })""")
+                self.assertEqual([entry["role"] for entry in result], ["Prepared by", "Approved by"])
+                self.assertIn("Aslam", result[0]["label"])
+                self.assertIn("Amjad", result[1]["label"])
+                display = page.evaluate("""() => {
+                    const rule = {
+                        name: 'Order to receipt', status: 'pass', matrix_rows: [{
+                            operator: '>=', tolerance: 0, status: 'pass',
+                            values: [{document_name: 'Order', field_name: 'Quantity', value: 10, linked: true},
+                                     {document_name: 'Receipt', field_name: 'Quantity', value: 10, linked: true}]
+                        }], chain: [], voucher_line_comparison: null
+                    };
+                    return {summary: summarizeCrossCheckRule(rule), detail: buildCrossCheckRuleDetail(rule)};
+                }""")
+                self.assertIn("Order to receipt passed", display["summary"]["text"])
+                self.assertIn("Order · Quantity", display["detail"])
+                self.assertIn("tolerance 0", display["detail"])
+            finally:
+                browser.close()
+
     def test_invalidated_inflight_modal_response_cannot_repopulate_cache(self):
         procedure_modal_js = Path(__file__).resolve().parents[1] / "static" / "procedure_modal.js"
         with sync_playwright() as playwright:

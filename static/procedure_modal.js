@@ -551,6 +551,16 @@ function getProcedureSearchDateEnd() {
     return new Date().toISOString().slice(0, 10);
 }
 
+function getDocumentVerificationColumns(doc) {
+    if (Array.isArray(doc?.verification_fields)) {
+        return doc.verification_fields.map(column => ({
+            column_name: column.column_name,
+            data_type: column.data_type
+        }));
+    }
+    return (doc && templateColumnsCache[doc.template_id]) || [];
+}
+
 function procedurePreviewPerfEnabled() {
     return (window.VerificationPerf && window.VerificationPerf.enabled) ||
         new URLSearchParams(window.location.search).get('perf') === '1';
@@ -830,7 +840,18 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // would mutate guidance.documents in place — that's the same object hostAdapter.fetchAuditGuidanceData()
     // just wrote into auditGuidanceCache, so mutating it would permanently pollute the shared
     // cache other callers (Supporting column, Guide popover) read from).
-    const documents = [{ id: VOUCHER_LINE_TAB_ID, name: 'Voucher Line', __voucherTab: true }, ...guidanceDocuments];
+    const categoryProcedureChecks = Array.isArray(guidance?.procedure_evidence?.checks)
+        ? guidance.procedure_evidence.checks : [];
+    const documents = [
+        { id: VOUCHER_LINE_TAB_ID, name: 'Voucher Line', __voucherTab: true },
+        ...guidanceDocuments.map(document => ({
+            ...document,
+            procedure_checks: categoryProcedureChecks.filter(check =>
+                String(check.document_id) === String(document.id ?? document.document_id)
+            ),
+            procedure_rules_configured: categoryProcedureChecks.length > 0
+        }))
+    ];
 
     // Confirmed fix: warm templateColumnsCache for every template_id among this Category's
     // Documents before the tabs render, so buildSelectedLinesTable() can look up each template's
@@ -1649,6 +1670,72 @@ async function toggleAllVoucherChecks(uid) {
     }
 }
 
+// Category Procedure / Evidence rules are the authoritative checklist when a compiled Rulebook
+// is available. Document roles remain the compatibility fallback for older sessions/categories
+// that have no saved Category procedure rules yet.
+function getProcedureChecklistEntries(doc) {
+    const roles = Array.isArray(doc?.auth_roles) ? doc.auth_roles : [];
+    if (!doc?.procedure_rules_configured) {
+        return roles.map(role => ({ role, label: role, rule: null }));
+    }
+
+    const conditionRoleMatchers = {
+        prepared_by: role => /prepar/i.test(role),
+        checked_by: role => /check/i.test(role),
+        approved_by: role => /approv/i.test(role)
+    };
+    const entries = new Map();
+    const signatories = Array.isArray(doc.signatories) ? doc.signatories : [];
+    const checks = Array.isArray(doc.procedure_checks) ? doc.procedure_checks : [];
+
+    checks.forEach(rule => {
+        const condition = String(rule.condition || '').toLowerCase();
+        const detail = rule.selected_detail || rule.sub_value || rule.detail || '';
+        let matchingRoles = roles.filter(role => {
+            const roleText = String(role);
+            if (conditionRoleMatchers[condition]) return conditionRoleMatchers[condition](roleText);
+            if (condition === 'signature' && detail) {
+                return signatories.some(specimen =>
+                    String(specimen.role_name || '').toLowerCase() === roleText.toLowerCase()
+                    && String(specimen.expected_signatory_name || '').toLowerCase() === String(detail).toLowerCase()
+                );
+            }
+            return false;
+        });
+
+        // Older saved rows may contain an explicit role instead of a condition-derived role.
+        const explicitRole = rule.role || rule.role_name || rule.signature;
+        if (!matchingRoles.length && explicitRole) {
+            matchingRoles = roles.filter(role => String(role).toLowerCase() === String(explicitRole).toLowerCase());
+        }
+        matchingRoles.forEach(role => {
+            const roleText = String(role);
+            const roleSignatories = signatories
+                .filter(specimen => String(specimen.role_name || '').toLowerCase() === roleText.toLowerCase())
+                .map(specimen => specimen.expected_signatory_name)
+                .filter(Boolean);
+            const configuredSignatories = (rule.configured_signatories || [])
+                .filter(specimen => !specimen.role_name || String(specimen.role_name).toLowerCase() === roleText.toLowerCase())
+                .map(specimen => specimen.expected_signatory_name)
+                .filter(Boolean);
+            const names = [...new Set((roleSignatories.length ? roleSignatories : configuredSignatories))];
+            const conditionLabel = {
+                required_document: 'Required document',
+                prepared_by: 'Prepared by',
+                checked_by: 'Checked by',
+                approved_by: 'Approved by',
+                signature: 'Signature'
+            }[condition] || condition || roleText;
+            const detailLabel = detail && String(detail).toLowerCase() !== roleText.toLowerCase()
+                ? ` — ${detail}` : '';
+            const signerLabel = names.length ? ` (${names.join(', ')})` : '';
+            const label = `${conditionLabel}${detailLabel}${signerLabel}`;
+            if (!entries.has(roleText)) entries.set(roleText, { role: roleText, label, rule });
+        });
+    });
+    return [...entries.values()];
+}
+
 // Shared completeness check for one document within one voucher line's modal — used both by the
 // rail's completion dot (below) and by openProcedureModal()'s default-tab selection. A no-template
 // document has no evidence table to link, so linked-evidence presence (assignedDocIds) is
@@ -1694,7 +1781,7 @@ function isProcedureDocumentComplete(uid, doc) {
         baseComplete = !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(String(doc.id)));
     } else {
         const tabState = getProcedureTabState(uid, doc.id);
-        const roles = doc.auth_roles || [];
+        const roles = getProcedureChecklistEntries(doc).map(entry => entry.role);
         baseComplete = roles.length > 0 && roles.every(role => tabState.checklist[role] && tabState.checklist[role].is_checked);
     }
     if (!baseComplete) return false;
@@ -1744,7 +1831,7 @@ function renderProcedureModalTabs(uid) {
 
         // "X/Y roles" subtext — same checklist state the completion dot itself reads.
         const tabState = getProcedureTabState(uid, doc.id);
-        const roles = doc.auth_roles || [];
+        const roles = getProcedureChecklistEntries(doc).map(entry => entry.role);
         const rolesDone = roles.filter(r => tabState.checklist[r] && tabState.checklist[r].is_checked).length;
         const subText = isPhysicalBill
             ? (tabState.physicalBillSaved ? 'Bill saved' : 'Bill pending')
@@ -2218,6 +2305,7 @@ function renderAccountHeadResultsButtonState(uid) {
 // evidence linked yet ("documents not linked yet") — see summarizeCrossCheckRule()/
 // buildCrossCheckEmptyStateDetail() below, both empty/no-data redesign, Phase 2.
 function isCrossCheckRuleUnconfigured(rule) {
+    if (Array.isArray(rule.matrix_rows)) return rule.matrix_rows.length === 0;
     if (rule.chain.length === 0) return true;
     return rule.chain.length < 2 && !rule.compare_to_voucher_line;
 }
@@ -2225,6 +2313,20 @@ function isCrossCheckRuleUnconfigured(rule) {
 // One compact line per rule. A shortfall gets its own distinct (amber) state — not folded into
 // fail — since Phase 7/8 already treat it differently (doesn't gate Cleared, only observed).
 function summarizeCrossCheckRule(rule) {
+    if (Array.isArray(rule.matrix_rows)) {
+        const name = hostAdapter.escapeHtml(rule.name || 'Cross-check');
+        if (rule.status === 'fail') {
+            return { icon: '✕', text: `${name} failed`, cssClass: 'cc-badge-fail' };
+        }
+        if (rule.status === 'shortfall') {
+            return { icon: '⚠', text: `${name} needs attention`, cssClass: 'cc-badge-shortfall' };
+        }
+        if (rule.status === 'not_evaluated') {
+            return { icon: '—', text: `${name} awaiting data`, cssClass: 'cc-badge-neutral' };
+        }
+        const count = rule.matrix_rows.length;
+        return { icon: '✓', text: `${name} passed · ${count} condition${count === 1 ? '' : 's'}`, cssClass: 'cc-badge-pass' };
+    }
     const field = hostAdapter.escapeHtml(rule.compare_field);
     if (rule.status === 'fail') {
         return { icon: '✗', text: `${field} mismatch`, cssClass: 'cc-badge-fail' };
@@ -2253,6 +2355,42 @@ function summarizeCrossCheckRule(rule) {
 function buildCrossCheckRuleDetail(rule) {
     if (rule.status === 'not_evaluated') {
         return buildCrossCheckEmptyStateDetail(rule);
+    }
+    if (Array.isArray(rule.matrix_rows)) {
+        let html = '<div class="cc-matrix-detail">';
+        rule.matrix_rows.forEach((row, index) => {
+            const rowStatus = row.status || 'not_evaluated';
+            const statusLabel = rowStatus === 'pass' ? 'Passed'
+                : rowStatus === 'fail' ? 'Failed'
+                    : rowStatus === 'shortfall' ? 'Shortfall' : 'Awaiting data';
+            const cells = Array.isArray(row.values) ? row.values : [];
+            html += `<div class="cc-matrix-row cc-matrix-row-${rowStatus}">
+                <div class="cc-matrix-row-header">
+                    <span>Condition ${index + 1}</span>
+                    <span class="cc-matrix-condition">${hostAdapter.escapeHtml(row.operator || '=')} · tolerance ${hostAdapter.escapeHtml(String(row.tolerance ?? 0))}</span>
+                    <span class="cc-matrix-row-status">${statusLabel}</span>
+                </div>
+                <div class="cc-matrix-cells">`;
+            cells.forEach(cell => {
+                const value = cell.value == null
+                    ? (cell.linked ? 'No usable value' : 'Not linked')
+                    : String(cell.value);
+                html += `<span class="cc-matrix-cell">
+                    <span class="cc-matrix-cell-label">${hostAdapter.escapeHtml(cell.document_name)} · ${hostAdapter.escapeHtml(cell.field_name)}</span>
+                    <strong>${hostAdapter.escapeHtml(value)}</strong>
+                </span>`;
+            });
+            html += '</div>';
+            if (row.message) html += `<div class="cc-rule-message cc-rule-message-${rowStatus}">${hostAdapter.escapeHtml(row.message)}</div>`;
+            html += '</div>';
+        });
+        if (rule.voucher_line_comparison) {
+            const vlc = rule.voucher_line_comparison;
+            const matchIcon = vlc.match === true ? '✓' : (vlc.match === false ? '✕' : '—');
+            html += `<div class="cc-matrix-voucher-line">${matchIcon} Voucher Line Amount: ${vlc.voucher_amount !== null ? hostAdapter.escapeHtml(String(vlc.voucher_amount)) : 'Awaiting value'}</div>`;
+        }
+        if (rule.message) html += `<div class="cc-rule-message cc-rule-message-${rule.status}">${hostAdapter.escapeHtml(rule.message)}</div>`;
+        return html + '</div>';
     }
     let html = '<ul class="cc-chain-list">';
     rule.chain.forEach(c => {
@@ -2377,10 +2515,12 @@ function renderProcedureModalPanel(uid, docId) {
 
     const tabState = getProcedureTabState(uid, docId);
     const hasTemplate = !!doc.template_id;
-    const hasRoles = !!(doc.auth_roles && doc.auth_roles.length);
+    const procedureEntries = getProcedureChecklistEntries(doc);
+    const hasRoles = procedureEntries.length > 0;
 
     // Segment-level hiding: a Document with no template_id has nothing to search Data Bank
-    // evidence against, and a Document with no configured auth_roles has no procedures to check —
+    // evidence against, and a Document with no applicable Category procedure rule has no
+    // procedures to check —
     // both segments are omitted entirely (header + body), not rendered as an empty placeholder.
     // Observation always renders. Order stays fixed (Data -> Procedures -> Observation) regardless
     // of which optional segments are present.
@@ -2411,9 +2551,11 @@ function renderProcedureModalPanel(uid, docId) {
         </div>
     ` : '';
 
-    // Select-all/clear-all icon: "all selected" means every configured role is currently ticked
+    // Select-all/clear-all icon: "all selected" means every applicable procedure role is ticked
     // (same roles.length>0 && every(...) rule isProcedureDocumentComplete() already uses).
-    const allRolesChecked = hasRoles && doc.auth_roles.every(r => tabState.checklist[r] && tabState.checklist[r].is_checked);
+    const allRolesChecked = hasRoles && procedureEntries.every(entry =>
+        tabState.checklist[entry.role] && tabState.checklist[entry.role].is_checked
+    );
     const proceduresSegmentHtml = hasRoles ? `
         <div class="procedure-segment procedure-segment-procedures ${allRolesChecked ? 'complete' : 'pending'}">
             <h4 class="procedure-segment-header procedure-segment-header-with-toggle">
@@ -2486,7 +2628,7 @@ function renderProcedureModalPanel(uid, docId) {
 async function toggleAllProcedureChecks(uid, docId) {
     const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
-    const roles = (doc && doc.auth_roles) || [];
+    const roles = getProcedureChecklistEntries(doc).map(entry => entry.role);
     if (!roles.length) return;
     const tabState = getProcedureTabState(uid, docId);
     const allChecked = roles.every(r => tabState.checklist[r] && tabState.checklist[r].is_checked);
@@ -3240,8 +3382,9 @@ function buildSelectedLinesTable(uid, docId) {
     // renders blank when a row happens to be missing that field.
     const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
-    let columns = (doc && templateColumnsCache[doc.template_id]) || [];
-    if (!columns.length) {
+    const hasRulebookFieldProjection = Array.isArray(doc?.verification_fields);
+    let columns = getDocumentVerificationColumns(doc);
+    if (!columns.length && !hasRulebookFieldProjection) {
         const unionKeys = [...new Set(selections.flatMap(sel => Object.keys(sel.row_data || {})))];
         columns = unionKeys.map(name => ({ column_name: name, data_type: null }));
     }
@@ -3319,18 +3462,18 @@ function buildProcedureChecklist(uid, docId) {
     const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     const tabState = getProcedureTabState(uid, docId);
-    const roles = (doc && doc.auth_roles) || [];
-    if (!roles.length) {
+    const entries = getProcedureChecklistEntries(doc);
+    if (!entries.length) {
         return '<p class="procedure-checklist-empty">No audit procedures configured for this document.</p>';
     }
 
-    const items = roles.map(role => {
-        const state = tabState.checklist[role] || {};
+    const items = entries.map(entry => {
+        const state = tabState.checklist[entry.role] || {};
         const checked = !!state.is_checked;
         return `
             <label class="procedure-checklist-item">
-                <input type="checkbox" class="procedure-checklist-checkbox" data-role="${hostAdapter.escapeHtml(role)}" ${checked ? 'checked' : ''}>
-                <span>${hostAdapter.escapeHtml(role)}</span>
+                <input type="checkbox" class="procedure-checklist-checkbox" data-role="${hostAdapter.escapeHtml(entry.role)}" ${checked ? 'checked' : ''}>
+                <span>${hostAdapter.escapeHtml(entry.label)}</span>
                 <span class="procedure-checklist-source">sourced from Audit Rules</span>
             </label>
         `;
@@ -3442,8 +3585,10 @@ function buildObservationSuggestion(uid, docId) {
         }
     }
 
-    const roles = (doc && doc.auth_roles) || [];
-    const unticked = roles.filter(role => !(tabState.checklist[role] && tabState.checklist[role].is_checked));
+    const entries = getProcedureChecklistEntries(doc);
+    const unticked = entries
+        .filter(entry => !(tabState.checklist[entry.role] && tabState.checklist[entry.role].is_checked))
+        .map(entry => entry.label);
     if (unticked.length) {
         lines.push(`Unticked procedures: ${unticked.join(', ')}.`);
     }
@@ -3732,8 +3877,9 @@ function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
     // nothing for this template.
     const lineState = hostAdapter.procedureModalState[uid];
     const activeDoc = lineState && (lineState.documents || []).find(d => d.id === activeDocId);
-    const templateColumns = (activeDoc && templateColumnsCache[activeDoc.template_id]) || [];
-    const columns = templateColumns.length
+    const hasRulebookFieldProjection = Array.isArray(activeDoc?.verification_fields);
+    const templateColumns = getDocumentVerificationColumns(activeDoc);
+    const columns = templateColumns.length || hasRulebookFieldProjection
         ? templateColumns.map(c => c.column_name)
         : Object.keys(rows[0].row_data || {});
 
@@ -3748,7 +3894,11 @@ function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
         const interactiveAttrs = isAssigned ? '' : ' role="button" tabindex="0"';
         html += `<tr data-id="${row.id}"${rowClass}${interactiveAttrs}>`;
         columns.forEach(col => {
-            html += `<td>${hostAdapter.escapeHtml(formatProcedureCellValue(row.row_data ? row.row_data[col] : ''))}</td>`;
+            // Template labels can differ from imported JSON keys only by case or surrounding
+            // whitespace (for example, "PD no" vs "PD No"). Use the same tolerant resolver as
+            // the linked-evidence table so configured Browse columns show their stored values.
+            const value = getRowFieldCaseInsensitive(row.row_data, col);
+            html += `<td>${hostAdapter.escapeHtml(formatProcedureCellValue(value))}</td>`;
         });
         const statusBadgeClass = isAssigned ? 'assigned' : 'unassigned';
         const statusLabel = isAssigned ? 'Assigned' : 'Unassigned';
