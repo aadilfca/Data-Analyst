@@ -12,7 +12,7 @@ lessons into CLAUDE.md's Conventions section) and delete the rest.
 
 ## Form document data model — Phase A — 2026-09-05
 
-**Status:** Implemented; manual database/API confirmation remains pending. **Files:** `database.py`,
+**Status:** Complete. **Files:** `database.py`,
 `routers/audit_rules.py`, `routers/verification.py`, `tests/test_audit_rulebook.py`.
 
 Phase A establishes `form` as a reusable Document Type while retaining `linked_template` and the

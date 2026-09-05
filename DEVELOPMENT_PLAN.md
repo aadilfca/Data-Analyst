@@ -33,7 +33,7 @@ configuration rather than remaining a special-purpose document type.
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| A | Form data model | Define Form documents, ordered fields, Text/Date/Numeric types, optional Linked Template, linked-column mapping, and repeating item rows; plan safe Physical Bill migration. | Implemented; manual database/API confirmation pending |
+| A | Form data model | Define Form documents, ordered fields, Text/Date/Numeric types, optional Linked Template, linked-column mapping, and repeating item rows; plan safe Physical Bill migration. | Complete |
 | B | Form authoring UI | Add Form to Document Type, Linked Template selection, and a three-column field editor: Column Name, Column Type, Linked Column. | Pending |
 | C | Form persistence | Validate and persist field definitions, ordering, types, linked columns, template changes, and invalid mappings. | Pending |
 | D | Form rendering | Show an assigned Form document as a normal Procedure-window tab with manual entry controls and clear field labels/types. | Pending |
