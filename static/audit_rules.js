@@ -1003,6 +1003,10 @@ async function ensureDocumentAuthorisationRole(documentId, roleName) {
         auth_roles: [...existingRoles, roleName],
         auth_role_authorities: currentDocumentRecord.auth_role_authorities || {},
         document_type: currentDocumentRecord.document_type,
+        // This endpoint updates the whole Document row. Carry the saved Form definition so
+        // adding a signatory cannot clear it as an unrelated side effect.
+        form_fields: currentDocumentRecord.document_type === 'form'
+            ? (currentDocumentRecord.form_fields || []) : [],
         verification_field_policy: templateId ? verificationPolicyPayload() : null
     };
     const res = await fetch(API_BASE + '/api/audit-rules/documents/' + documentId, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });

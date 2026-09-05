@@ -188,6 +188,22 @@
                         </select>
                     </div>
 
+                    <div class="ar-field ar-form-fields-field" id="arFormFieldsField" style="display:none;">
+                        <div class="ar-verification-fields-heading">
+                            <label>Form Fields</label>
+                            <span class="ar-policy-badge">Manual evidence</span>
+                        </div>
+                        <p class="ar-form-fields-help">Define the fields auditors will complete in Verification. A Linked Column is optional and is used only by “Copy from lines”.</p>
+                        <div class="ar-form-fields-table-wrap">
+                            <table class="ar-form-fields-table">
+                                <thead><tr><th>Column Name</th><th>Column Type</th><th>Scope</th><th>Linked Column</th><th></th></tr></thead>
+                                <tbody id="arFormFieldsBody"></tbody>
+                            </table>
+                        </div>
+                        <button type="button" id="arFormAddFieldBtn" class="ar-btn-chip-add">+ Add field</button>
+                        <div id="arFormFieldsHint" class="ar-field-warning"></div>
+                    </div>
+
                     <input type="hidden" id="arRiskRatingSelect" value="">
 
                     <!-- Phase 2: controlled Data Bank projection for Verification. Core fields
@@ -224,22 +240,6 @@
                         <div class="ar-authorisation-table-wrap"><table class="ar-authorisation-table"><thead><tr><th>Audit check</th><th>Signatories / authority</th><th>Action</th></tr></thead><tbody id="arAuthorisationTableBody"></tbody></table></div>
                         <div id="arAuthorisationSaveHint" class="ar-field-warning ar-save-first-hint">Save the document first to manage signatories.</div>
                         <div id="arRolesChipList" style="display:none"></div><input id="arRolesInput" type="hidden"><button id="arRolesAddBtn" type="button" style="display:none"></button>
-                    </div>
-
-                    <div class="ar-field ar-form-fields-field" id="arFormFieldsField" style="display:none;">
-                        <div class="ar-verification-fields-heading">
-                            <label>Form Fields</label>
-                            <span class="ar-policy-badge">Manual evidence</span>
-                        </div>
-                        <p class="ar-form-fields-help">Define the fields auditors will complete in Verification. A Linked Column is optional and is used only by “Copy from lines”.</p>
-                        <div class="ar-form-fields-table-wrap">
-                            <table class="ar-form-fields-table">
-                                <thead><tr><th>Column Name</th><th>Column Type</th><th>Scope</th><th>Linked Column</th><th></th></tr></thead>
-                                <tbody id="arFormFieldsBody"></tbody>
-                            </table>
-                        </div>
-                        <button type="button" id="arFormAddFieldBtn" class="ar-btn-chip-add">+ Add field</button>
-                        <div id="arFormFieldsHint" class="ar-field-warning"></div>
                     </div>
 
                     <!-- Signature Specimens (Soft-delete conversion, Phase 4 of 4, FINAL): moved
@@ -501,7 +501,7 @@
     <script src="/static/loading_ui.js"></script>
     <script src="/static/client_context.js?v=14"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/audit_rules.js?v=11"></script>
+    <script src="/static/audit_rules.js?v=12"></script>
 </body>
 
 </html>

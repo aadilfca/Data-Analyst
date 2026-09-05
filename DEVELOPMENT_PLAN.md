@@ -35,7 +35,7 @@ configuration rather than remaining a special-purpose document type.
 |---|---|---|---|
 | A | Form data model | Define Form documents, ordered fields, Text/Date/Numeric types, optional Linked Template, linked-column mapping, and repeating item rows; plan safe Physical Bill migration. | Complete |
 | B | Form authoring UI | Add Form to Document Type, Linked Template selection, and a three-column field editor: Column Name, Column Type, Linked Column. | Complete |
-| C | Form persistence | Validate and persist field definitions, ordering, types, linked columns, template changes, and invalid mappings. | Pending |
+| C | Form persistence | Validate and persist field definitions, ordering, types, linked columns, template changes, and invalid mappings. | Complete |
 | D | Form rendering | Show an assigned Form document as a normal Procedure-window tab with manual entry controls and clear field labels/types. | Pending |
 | E | Copy from lines | Add a visible Copy from lines action that reads the configured Linked Template evidence and populates mapped Form fields without preventing manual edits. | Pending |
 | F | Rule integration | Expose saved Form values to Procedure/Evidence completion and Cross-check matrix evaluation, including Quantity-only comparisons. | Pending |
@@ -71,8 +71,16 @@ configuration rather than remaining a special-purpose document type.
 
 ### Current next action
 
-**This phase: C — Form persistence.** Validate and persist field definitions, ordering, types, linked
-columns, template changes, and invalid mappings.
+**This phase: D — Form rendering.** Show an assigned Form document as a normal Procedure-window tab
+with manual entry controls and clear field labels/types.
+
+### Phase C implementation checkpoint — 2026-09-05
+
+Form Fields now appear directly after Linked Template. Document-side authorisation updates preserve
+saved Form definitions, while an explicit empty field list still clears them. Legacy Physical Bill
+records remain untouched for the controlled H/I migration. Focused tests (64) and the full suite
+(120) pass. Aadil confirmed the local browser correction and approved Git closeout. Phase D is now
+the next implementation phase.
 
 ### Approved target design
 

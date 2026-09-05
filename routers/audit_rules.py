@@ -652,7 +652,9 @@ class DocumentUpdate(BaseModel):
     auth_role_authorities: Dict[str, Optional[str]] = {}
     cross_check_fields: List[str] = []
     document_type: Optional[str] = None
-    form_fields: List[Dict[str, Any]] = []
+    # None means the caller did not manage Form fields; preserve the saved definition. An
+    # explicit [] remains the intentional way for the Audit Rules UI to clear all fields.
+    form_fields: Optional[List[Dict[str, Any]]] = None
     verification_field_policy: Optional[Dict[str, Any]] = None
 
 # ---------- HELPERS ----------
@@ -1347,7 +1349,12 @@ def update_document(document_id: int, document: DocumentUpdate):
     )
     validate_document_template_id(template_id)
     validate_document_risk_rating(document.risk_rating)
-    form_fields = normalize_form_fields(document_type, template_id, document.form_fields)
+    raw_form_fields = document.form_fields
+    if document_type == 'form' and raw_form_fields is None:
+        # Secondary document updates (for example adding a signatory) should not silently
+        # erase a Form definition merely because that action does not edit Form fields.
+        raw_form_fields = get_document_form_fields(document_id)
+    form_fields = normalize_form_fields(document_type, template_id, raw_form_fields or [])
 
     # Omitted policy means preserve the current policy for API compatibility. The Audit Rules
     # UI sends the field explicitly when the administrator changes it.

@@ -20,6 +20,7 @@ from routers.audit_rules import (
     build_verification_field_policy,
     validate_and_normalize_verification_field_policy,
     normalize_form_fields,
+    DocumentUpdate,
     invalidate_audit_rules_cache,
     invalidate_category_for_account_cache,
     load_client_account_category_index,
@@ -1291,6 +1292,24 @@ class FormDocumentSchemaTests(unittest.TestCase):
             normalize_form_fields("form", None, [{"field_name": "Amount"}, {"field_name": " amount "}])
         with self.assertRaises(Exception):
             normalize_form_fields("form", None, [{"field_name": "Amount", "field_type": "currency"}])
+
+    def test_document_update_omits_form_fields_without_requesting_a_clear(self):
+        payload = DocumentUpdate(name="Paper Vendor Bill")
+        self.assertIsNone(payload.form_fields)
+
+    def test_form_field_save_round_trip_preserves_ordered_typed_mapping(self):
+        fields = normalize_form_fields("form", None, [
+            {"field_name": "Bill No", "field_type": "text", "field_scope": "header"},
+            {"field_name": "Quantity", "field_type": "numeric", "field_scope": "item"},
+        ])
+        writes = []
+        with patch("routers.audit_rules.execute_write_pg", side_effect=lambda sql, params: writes.append((sql, params))):
+            from routers.audit_rules import save_document_form_fields
+            save_document_form_fields(17, fields)
+        inserts = [params for sql, params in writes if "INSERT INTO audit_rule_document_fields" in sql]
+        self.assertEqual([params[2] for params in inserts], [0, 1])
+        self.assertEqual([params[3] for params in inserts], ["text", "numeric"])
+        self.assertEqual([params[4] for params in inserts], ["header", "item"])
 
 
 if __name__ == "__main__":

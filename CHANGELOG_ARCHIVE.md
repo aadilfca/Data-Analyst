@@ -4758,3 +4758,20 @@ Verified with Python compilation, all 58 Audit Rules tests, the new unconfigured
 regression, and `git diff --check`. Manual confirmation requires restarting the server,
 hard-refreshing Verification, and checking the Purchase Demand preview response contains all
 seven selected Template columns.
+
+---
+
+## Form persistence and authoring correction — 2026-09-05
+
+Form Fields were moved directly below the Linked Template control so a Form document reads in the
+agreed order: optional prefill source, manual evidence fields, then Authorisation. The normal new
+Document flow continues to offer Linked Template and Form; existing Physical Bill records and
+their backend compatibility remain unchanged for the controlled Phase H/I migration.
+
+The Document update model now distinguishes an omitted `form_fields` value from an explicit empty
+list. Secondary whole-document updates, such as adding an authorisation role, preserve the saved
+Form definition instead of clearing it. The main Form save can still intentionally clear all fields.
+
+Verified with 64 focused Audit Rulebook tests, 120 full-suite tests, JavaScript syntax validation,
+Python compilation, and `git diff --check`. Aadil confirmed the local browser correction and approved
+Git closeout. Phase D is the next implementation phase.
