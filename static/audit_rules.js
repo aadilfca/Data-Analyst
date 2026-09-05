@@ -2033,11 +2033,20 @@ function escapeHtml(value) {
 }
 
 function templateDocuments() {
-    return allDocuments.filter(doc => doc.is_active !== false && (doc.document_type || 'linked_template') === 'linked_template' && doc.template_id);
+    // Procedure/Evidence may target either a Data Bank-backed document or the manually entered
+    // paper Physical Vendor Bill. Keeping both in one picker makes the two sources explicit in
+    // the Category rule authoring flow.
+    return allDocuments.filter(doc => doc.is_active !== false && (
+        ((doc.document_type || 'linked_template') === 'linked_template' && doc.template_id) ||
+        doc.document_type === 'physical_bill'
+    ));
 }
 
 function optionMarkup(items, selected, placeholder) {
-    return '<option value="">' + placeholder + '</option>' + items.map(item => '<option value="' + item.id + '"' + (String(item.id) === String(selected) ? ' selected' : '') + '>' + escapeHtml(item.name) + '</option>').join('');
+    return '<option value="">' + placeholder + '</option>' + items.map(item => {
+        const suffix = item.document_type === 'physical_bill' ? ' — Physical Vendor Bill' : '';
+        return '<option value="' + item.id + '"' + (String(item.id) === String(selected) ? ' selected' : '') + '>' + escapeHtml(item.name + suffix) + '</option>';
+    }).join('');
 }
 
 function fieldMarkup(documentId, selected, selectedFields = null) {

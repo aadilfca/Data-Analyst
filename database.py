@@ -1418,7 +1418,7 @@ def init_db():
                 template_id INTEGER,
                 is_active INTEGER DEFAULT 1,
                 document_type TEXT NOT NULL DEFAULT 'linked_template'
-                    CHECK (document_type IN ('linked_template', 'physical_bill')),
+                    CHECK (document_type IN ('linked_template', 'form', 'physical_bill')),
                 verification_field_policy TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (template_id) REFERENCES templates(id)
@@ -1528,6 +1528,50 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add document_type to audit_rule_documents:", e)
 
+        # Form document type migration: SQLite cannot alter an existing CHECK constraint. Rebuild
+        # only databases whose old constraint predates 'form', preserving every known document
+        # value and using safe defaults for columns introduced by earlier upgrades.
+        try:
+            table_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_rule_documents'"
+            ).fetchone()[0].lower()
+            if "'form'" not in table_sql:
+                conn.execute("ALTER TABLE audit_rule_documents RENAME TO audit_rule_documents_form_old")
+                conn.execute('''
+                    CREATE TABLE audit_rule_documents (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        kb_note TEXT,
+                        template_id INTEGER,
+                        is_active INTEGER DEFAULT 1,
+                        document_type TEXT NOT NULL DEFAULT 'linked_template'
+                            CHECK (document_type IN ('linked_template', 'form', 'physical_bill')),
+                        verification_field_policy TEXT,
+                        risk_rating TEXT,
+                        transaction_level_approval INTEGER DEFAULT 0,
+                        is_system INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (template_id) REFERENCES templates(id)
+                    )
+                ''')
+                old_columns = {row[1] for row in conn.execute("PRAGMA table_info(audit_rule_documents_form_old)").fetchall()}
+                target_columns = ['id', 'name', 'kb_note', 'template_id', 'is_active', 'document_type',
+                                  'verification_field_policy', 'risk_rating', 'transaction_level_approval',
+                                  'is_system', 'created_at']
+                expressions = [column if column in old_columns else {
+                    'is_active': '1', 'document_type': "'linked_template'", 'transaction_level_approval': '0',
+                    'is_system': '0', 'verification_field_policy': 'NULL', 'risk_rating': 'NULL',
+                    'created_at': 'CURRENT_TIMESTAMP'
+                }.get(column, 'NULL') for column in target_columns]
+                conn.execute(
+                    "INSERT INTO audit_rule_documents (" + ", ".join(target_columns) + ") SELECT " +
+                    ", ".join(expressions) + " FROM audit_rule_documents_form_old"
+                )
+                conn.execute("DROP TABLE audit_rule_documents_form_old")
+                print("✅ Upgraded audit_rule_documents CHECK constraint for Form documents")
+        except Exception as e:
+            print("⚠️ Could not upgrade audit_rule_documents for Form documents:", e)
+
         # Fields on a Document available for cross-checks (e.g. Quantity, Amount, Date) -
         # stored here so they're a controlled per-document list, not free-typed elsewhere.
         conn.execute('''
@@ -1536,10 +1580,56 @@ def init_db():
                 document_id INTEGER NOT NULL,
                 field_name TEXT NOT NULL,
                 sort_order INTEGER NOT NULL DEFAULT 0,
+                field_type TEXT NOT NULL DEFAULT 'text',
+                field_scope TEXT NOT NULL DEFAULT 'header',
+                linked_column TEXT,
                 FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
                 UNIQUE(document_id, field_name)
             )
         ''')
+        # Form document fields (Phase A): upgrade older databases additively. The existing
+        # document_fields table remains the stable store so legacy field rows are preserved.
+        for column_name, definition in {
+            'field_type': "TEXT NOT NULL DEFAULT 'text'",
+            'field_scope': "TEXT NOT NULL DEFAULT 'header'",
+            'linked_column': 'TEXT'
+        }.items():
+            try:
+                existing_field_columns = {row[1] for row in conn.execute("PRAGMA table_info(audit_rule_document_fields)").fetchall()}
+                if column_name not in existing_field_columns:
+                    conn.execute(f"ALTER TABLE audit_rule_document_fields ADD COLUMN {column_name} {definition}")
+            except Exception as e:
+                print(f"⚠️ Could not add Form field column {column_name}:", e)
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_line_form_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                voucher_line_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                row_scope TEXT NOT NULL DEFAULT 'header',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_line_form_values (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_id INTEGER NOT NULL,
+                field_id INTEGER NOT NULL,
+                value_text TEXT,
+                value_date TEXT,
+                value_numeric REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (entry_id) REFERENCES voucher_line_form_entries(id) ON DELETE CASCADE,
+                FOREIGN KEY (field_id) REFERENCES audit_rule_document_fields(id) ON DELETE CASCADE,
+                UNIQUE(entry_id, field_id)
+            )
+        ''')
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_voucher_line_form_entries_line ON voucher_line_form_entries (voucher_line_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_voucher_line_form_values_entry ON voucher_line_form_values (entry_id)")
 
         # ID-based Cross-check-eligible Fields, Phase 1 of 4: field_name stays free text (the
         # existing chip UI and Cross-check compare_field equality checks keep reading it
@@ -2943,7 +3033,7 @@ def init_db_postgres(conn):
             template_id INTEGER REFERENCES templates(id),
             is_active BOOLEAN DEFAULT TRUE,
             document_type TEXT NOT NULL DEFAULT 'linked_template'
-                CHECK (document_type IN ('linked_template', 'physical_bill')),
+                CHECK (document_type IN ('linked_template', 'form', 'physical_bill')),
             created_at TIMESTAMPTZ DEFAULT now(),
             risk_rating TEXT,
             transaction_level_approval BOOLEAN DEFAULT FALSE,
@@ -3276,10 +3366,46 @@ def init_db_postgres(conn):
             field_name TEXT NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0,
             master_column_id INTEGER,
+            field_type TEXT NOT NULL DEFAULT 'text',
+            field_scope TEXT NOT NULL DEFAULT 'header',
+            linked_column TEXT,
             UNIQUE(document_id, field_name)
         )
     ''', "audit_rule_document_fields")
+    run("ALTER TABLE audit_rule_document_fields ADD COLUMN IF NOT EXISTS field_type TEXT NOT NULL DEFAULT 'text'")
+    run("ALTER TABLE audit_rule_document_fields ADD COLUMN IF NOT EXISTS field_scope TEXT NOT NULL DEFAULT 'header'")
+    run("ALTER TABLE audit_rule_document_fields ADD COLUMN IF NOT EXISTS linked_column TEXT")
     run("CREATE INDEX IF NOT EXISTS idx_audit_rule_document_fields_document ON audit_rule_document_fields (document_id)")
+
+    # Form evidence values (Phase A): one header/item entry can carry one typed value per
+    # configured Form field. This generic model supersedes the Physical Bill-only value store
+    # in later migration phases; the old tables remain untouched until acceptance is complete.
+    run('''
+        CREATE TABLE IF NOT EXISTS voucher_line_form_entries (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            voucher_line_id INTEGER NOT NULL,
+            document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+            row_scope TEXT NOT NULL DEFAULT 'header',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "voucher_line_form_entries")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_line_form_entries_line ON voucher_line_form_entries (voucher_line_id)")
+    run('''
+        CREATE TABLE IF NOT EXISTS voucher_line_form_values (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            entry_id INTEGER NOT NULL REFERENCES voucher_line_form_entries(id) ON DELETE CASCADE,
+            field_id INTEGER NOT NULL REFERENCES audit_rule_document_fields(id) ON DELETE CASCADE,
+            value_text TEXT,
+            value_date DATE,
+            value_numeric NUMERIC,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(entry_id, field_id)
+        )
+    ''', "voucher_line_form_values")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_line_form_values_entry ON voucher_line_form_values (entry_id)")
 
     # ---------- 21. audit_rule_document_auth_roles ----------
     run('''

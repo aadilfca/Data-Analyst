@@ -19,6 +19,7 @@ from routers.audit_rules import (
     get_document_cross_check_fields,
     build_verification_field_policy,
     validate_and_normalize_verification_field_policy,
+    normalize_form_fields,
     invalidate_audit_rules_cache,
     invalidate_category_for_account_cache,
     load_client_account_category_index,
@@ -1228,6 +1229,68 @@ class ProcedureModalPersistenceTests(unittest.TestCase):
                 self.assertEqual(result["cached"], {"value": "fresh"})
             finally:
                 browser.close()
+
+class FormDocumentSchemaTests(unittest.TestCase):
+    """Phase A: generic Form document metadata and value storage contract."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        database.DB_NAME = os.path.join(self.tmpdir.name, "test.db")
+        init_db()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _columns(self, table):
+        conn = database.get_db()
+        try:
+            return {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        finally:
+            conn.close()
+
+    def test_form_schema_has_typed_fields_and_repeatable_values(self):
+        self.assertTrue({"field_type", "field_scope", "linked_column"}.issubset(
+            self._columns("audit_rule_document_fields")
+        ))
+        self.assertEqual(
+            self._columns("voucher_line_form_entries"),
+            {"id", "voucher_line_id", "document_id", "row_scope", "sort_order",
+             "created_at", "updated_at"},
+        )
+        self.assertEqual(
+            self._columns("voucher_line_form_values"),
+            {"id", "entry_id", "field_id", "value_text", "value_date", "value_numeric",
+             "created_at", "updated_at"},
+        )
+
+    def test_form_document_type_is_allowed_by_schema(self):
+        conn = database.get_db()
+        try:
+            conn.execute("INSERT INTO audit_rule_documents (name, document_type) VALUES (?, ?)",
+                         ("Paper Vendor Bill", "form"))
+            conn.commit()
+            self.assertEqual(conn.execute(
+                "SELECT document_type FROM audit_rule_documents WHERE name = ?",
+                ("Paper Vendor Bill",)
+            ).fetchone()[0], "form")
+        finally:
+            conn.close()
+
+    def test_form_fields_normalize_order_and_defaults(self):
+        result = normalize_form_fields("form", None, [
+            {"field_name": "Bill No", "field_type": "text"},
+            {"field_name": "Bill Date", "field_type": "date", "field_scope": "header"},
+            {"field_name": "Quantity", "field_type": "numeric", "field_scope": "item"},
+        ])
+        self.assertEqual([field["sort_order"] for field in result], [0, 1, 2])
+        self.assertEqual(result[0]["field_scope"], "header")
+        self.assertEqual(result[2]["field_scope"], "item")
+
+    def test_form_fields_reject_duplicate_names_and_invalid_types(self):
+        with self.assertRaises(Exception):
+            normalize_form_fields("form", None, [{"field_name": "Amount"}, {"field_name": " amount "}])
+        with self.assertRaises(Exception):
+            normalize_form_fields("form", None, [{"field_name": "Amount", "field_type": "currency"}])
 
 
 if __name__ == "__main__":

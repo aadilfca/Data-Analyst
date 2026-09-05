@@ -10,6 +10,24 @@ lessons into CLAUDE.md's Conventions section) and delete the rest.
 
 ## Revised Cross-check plan and Phase 0 reconciliation — 2026-09-03
 
+## Form document data model — Phase A — 2026-09-05
+
+**Status:** Implemented; manual database/API confirmation remains pending. **Files:** `database.py`,
+`routers/audit_rules.py`, `routers/verification.py`, `tests/test_audit_rulebook.py`.
+
+Phase A establishes `form` as a reusable Document Type while retaining `linked_template` and the
+legacy `physical_bill` type during migration. Form fields now carry a name, Text/Date/Numeric type,
+header/item scope, order, and optional Linked Template column. Generic
+`voucher_line_form_entries` and `voucher_line_form_values` tables provide typed header and repeating
+item-row storage for future Procedure-window entry and Cross-check consumption.
+
+The Audit Rules API validates unique field names, supported types/scopes, and linked columns against
+active Template mappings. SQLite upgrades rebuild the Document table only when its old CHECK
+constraint cannot accept `form`; existing document rows and Physical Bill tables remain preserved.
+Postgres receives additive field-column/table upgrades. No Form UI or runtime value endpoints were
+added in this phase; those belong to Phases B–F. Focused Audit Rules tests: 62 passed; Python
+compilation and `git diff --check` passed.
+
 The Cross-check matrix, field selection, persistence, and Verification result functionality are
 complete. Their development phases are retired from `DEVELOPMENT_PLAN.md`; only acceptance,
 correctness review, performance, safety, regression, and closeout phases remain active there. Phase

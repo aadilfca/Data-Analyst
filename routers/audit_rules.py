@@ -633,12 +633,12 @@ class DocumentCreate(BaseModel):
     # ever persisted for a role matching is_approval_role() below - see save_document_auth_roles().
     auth_role_authorities: Dict[str, Optional[str]] = {}
     cross_check_fields: List[str] = []
-    # Physical Bill evidence type (Phase 2 of 8): how this Document's evidence is satisfied -
-    # 'linked_template' (a linked Data Bank row, or ticked procedure roles when there's no
-    # template) or 'physical_bill' (manually-keyed Bill No/Date/Amount/Vendor name, captured
-    # per voucher line in Phase 5). Optional/None rather than a literal default here so
+    # Document evidence type: linked_template uses Data Bank rows, form uses a configured
+    # manual form, and physical_bill is retained only for the legacy migration path.
+    # Optional/None rather than a literal default here so
     # resolve_document_type() below stays the single place the default lives.
     document_type: Optional[str] = None
+    form_fields: List[Dict[str, Any]] = []
     # Phase 2: selected verification fields for the linked Template. The server validates this
     # against the active Template mapping before persisting it.
     verification_field_policy: Optional[Dict[str, Any]] = None
@@ -652,6 +652,7 @@ class DocumentUpdate(BaseModel):
     auth_role_authorities: Dict[str, Optional[str]] = {}
     cross_check_fields: List[str] = []
     document_type: Optional[str] = None
+    form_fields: List[Dict[str, Any]] = []
     verification_field_policy: Optional[Dict[str, Any]] = None
 
 # ---------- HELPERS ----------
@@ -678,6 +679,68 @@ def get_document_auth_role_authorities(document_id: int) -> dict:
         (document_id,)
     )
     return {r["role_name"]: r["required_authority"] for r in rows if r["required_authority"]}
+
+FORM_FIELD_TYPES = ('text', 'date', 'numeric')
+FORM_FIELD_SCOPES = ('header', 'item')
+
+def normalize_form_fields(document_type: str, template_id: Optional[int], raw_fields: List[Dict[str, Any]]) -> List[dict]:
+    """Validate the reusable Form field contract and return stable ordered rows."""
+    if document_type != 'form':
+        if raw_fields:
+            raise HTTPException(400, "form_fields are only valid for Form documents")
+        return []
+    fields = []
+    seen_names = set()
+    template_columns = set()
+    if template_id:
+        template_rows = execute_query_pg(
+            "SELECT mc.column_name FROM template_column_mappings tcm "
+            "JOIN master_columns mc ON mc.id = tcm.column_id "
+            "WHERE tcm.template_id = %s AND mc.is_active = TRUE",
+            (template_id,)
+        )
+        template_columns = {row['column_name'].strip().casefold() for row in template_rows}
+    for index, raw in enumerate(raw_fields or []):
+        name = str(raw.get('field_name') or raw.get('column_name') or '').strip()
+        field_type = str(raw.get('field_type') or raw.get('column_type') or 'text').strip().lower()
+        field_scope = str(raw.get('field_scope') or 'header').strip().lower()
+        linked_column = str(raw.get('linked_column') or '').strip() or None
+        if not name:
+            raise HTTPException(400, f"Form field {index + 1} needs a column name")
+        if name.casefold() in seen_names:
+            raise HTTPException(400, f"Form field names must be unique: '{name}'")
+        if field_type not in FORM_FIELD_TYPES:
+            raise HTTPException(400, f"Invalid Form field type '{field_type}'")
+        if field_scope not in FORM_FIELD_SCOPES:
+            raise HTTPException(400, f"Invalid Form field scope '{field_scope}'")
+        if linked_column and linked_column.casefold() not in template_columns:
+            raise HTTPException(400, f"Linked Column '{linked_column}' is not an active column on the selected Template")
+        seen_names.add(name.casefold())
+        fields.append({'field_name': name, 'field_type': field_type, 'field_scope': field_scope,
+                       'linked_column': linked_column, 'sort_order': index})
+    return fields
+
+def get_document_form_fields(document_id: int) -> List[dict]:
+    rows = execute_query_pg(
+        "SELECT id, field_name, field_type, field_scope, linked_column, sort_order "
+        "FROM audit_rule_document_fields WHERE document_id = %s ORDER BY sort_order, id",
+        (document_id,)
+    )
+    return [{
+        'id': row['id'], 'field_name': row['field_name'], 'field_type': row.get('field_type') or 'text',
+        'field_scope': row.get('field_scope') or 'header', 'linked_column': row.get('linked_column'),
+        'sort_order': row['sort_order']
+    } for row in rows]
+
+def save_document_form_fields(document_id: int, fields: List[dict]):
+    execute_write_pg("DELETE FROM audit_rule_document_fields WHERE document_id = %s", (document_id,))
+    for field in fields:
+        execute_write_pg(
+            "INSERT INTO audit_rule_document_fields (document_id, field_name, sort_order, field_type, field_scope, linked_column) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (document_id, field['field_name'], field['sort_order'], field['field_type'],
+             field['field_scope'], field['linked_column'])
+        )
 
 def get_document_auth_roles_batch(document_ids: List[int]) -> Dict[int, List[str]]:
     """Batched form of get_document_auth_roles() - one IN(...) query for many document_ids."""
@@ -991,8 +1054,8 @@ def build_verification_field_policy(template_id: Optional[int], stored_policy: A
 def get_document_cross_check_fields(document_id: int, document_type: Optional[str] = None) -> List[str]:
     """Return the current Master Columns mirror for a Document.
 
-    Physical Bills intentionally return no Data Bank fields because their evidence fields are
-    fixed by document type. For every other Document, the active Master Columns registry is the
+    Physical Bills expose their controlled paper-bill fields here so the matrix can compare the
+    saved manual bill values. For every other Document, the active Master Columns registry is the
     authority, so newly added columns appear without editing each Document.
     """
     if document_type is None:
@@ -1001,8 +1064,14 @@ def get_document_cross_check_fields(document_id: int, document_type: Optional[st
             (document_id,)
         )
         document_type = (rows[0].get("document_type") if rows else None) or "linked_template"
+    if document_type == "form":
+        rows = execute_query_pg(
+            "SELECT field_name FROM audit_rule_document_fields WHERE document_id = %s ORDER BY sort_order, id",
+            (document_id,)
+        )
+        return [row["field_name"] for row in rows]
     if document_type == "physical_bill":
-        return []
+        return ["Bill No", "Bill Date", "Vendor Name", "Quantity", "Rate", "Amount"]
     return [row["column_name"] for row in get_active_master_columns()]
 
 def get_document_used_by_count(document_id: int) -> int:
@@ -1027,6 +1096,8 @@ def row_to_document(row: dict) -> dict:
         "auth_roles": get_document_auth_roles(document_id),
         "auth_role_authorities": get_document_auth_role_authorities(document_id),
         "cross_check_fields": get_document_cross_check_fields(document_id, row.get("document_type")),
+        "form_fields": get_document_form_fields(document_id)
+            if (row.get("document_type") or 'linked_template') == 'form' else [],
         "verification_field_policy": build_verification_field_policy(
             row.get("template_id"), row.get("verification_field_policy")
         ),
@@ -1072,7 +1143,7 @@ def validate_document_risk_rating(risk_rating: Optional[str]):
 # could only attach a real CHECK to the CREATE TABLE, since a post-hoc ALTER can't retrofit one
 # without a full table rebuild - so on an already-initialized database this is the only
 # enforcement. Same accepted trade-off, and same code-level-validator shape, as RISK_RATINGS above.
-DOCUMENT_TYPES = ('linked_template', 'physical_bill')
+DOCUMENT_TYPES = ('linked_template', 'form', 'physical_bill')
 
 def resolve_document_type(document_type: Optional[str]) -> str:
     """
@@ -1242,6 +1313,7 @@ def create_document(document: DocumentCreate):
     )
     validate_document_template_id(template_id)
     validate_document_risk_rating(document.risk_rating)
+    form_fields = normalize_form_fields(document_type, template_id, document.form_fields)
     verification_field_policy = validate_and_normalize_verification_field_policy(
         template_id, document.verification_field_policy
     )
@@ -1253,6 +1325,7 @@ def create_document(document: DocumentCreate):
          Json(verification_field_policy) if verification_field_policy is not None else None)
     )
     save_document_auth_roles(document_id, document.auth_roles, document.auth_role_authorities)
+    save_document_form_fields(document_id, form_fields)
     save_document_cross_check_fields(document_id, cross_check_fields)
 
     log_audit("Admin", "Create", "AuditRules", f"Created Document: {document.name}")
@@ -1263,7 +1336,7 @@ def create_document(document: DocumentCreate):
 @router.put("/api/audit-rules/documents/{document_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
 def update_document(document_id: int, document: DocumentUpdate):
     existing = execute_query_pg(
-        "SELECT id, template_id, verification_field_policy FROM audit_rule_documents WHERE id = %s",
+        "SELECT id, template_id, document_type, verification_field_policy FROM audit_rule_documents WHERE id = %s",
         (document_id,)
     )
     if not existing:
@@ -1274,6 +1347,7 @@ def update_document(document_id: int, document: DocumentUpdate):
     )
     validate_document_template_id(template_id)
     validate_document_risk_rating(document.risk_rating)
+    form_fields = normalize_form_fields(document_type, template_id, document.form_fields)
 
     # Omitted policy means preserve the current policy for API compatibility. The Audit Rules
     # UI sends the field explicitly when the administrator changes it.
@@ -1297,6 +1371,7 @@ def update_document(document_id: int, document: DocumentUpdate):
          *policy_params, document_id)
     )
     save_document_auth_roles(document_id, document.auth_roles, document.auth_role_authorities)
+    save_document_form_fields(document_id, form_fields)
     # save_document_cross_check_fields() is still called unconditionally (one write path), but
     # receives an empty list for a physical_bill, so nothing is persisted for it.
     save_document_cross_check_fields(document_id, cross_check_fields)
@@ -2051,9 +2126,9 @@ def validate_category_validation_rules(rules: CategoryValidationRules):
     for index, rule in enumerate((rules.procedure_evidence or {}).get("checks", [])):
         if not rule.get("document_id") or rule.get("condition") not in allowed_conditions:
             raise HTTPException(400, f"Procedure/Evidence row {index + 1} needs a document and valid condition")
-        rows = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE AND document_type = 'linked_template'", (rule["document_id"],))
+        rows = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (rule["document_id"],))
         if not rows:
-            raise HTTPException(400, f"Procedure/Evidence row {index + 1} must use an active Template document")
+            raise HTTPException(400, f"Procedure/Evidence row {index + 1} must use an active document")
     # The current Category UI intentionally omits this legacy field. Pydantic represents the
     # omission as None, while the save endpoint separately preserves any older stored rules.
     for index, rule in enumerate(rules.mathematical_cross_checks or []):

@@ -5739,7 +5739,8 @@ def _get_linked_evidence_by_document(voucher_line_id: int, sibling_ids: Optional
     return linked
 
 
-def _sum_document_field(client_data_ids: List[int], field_name: str):
+def _sum_document_field(client_data_ids: List[int], field_name: str,
+                        physical_bill_values: Optional[dict] = None):
     """
     Sum one named field across every evidence row linked for a single Document, via Phase 2's
     get_document_field_value() (unchanged). Summing (rather than taking one row) matches the
@@ -5750,6 +5751,8 @@ def _sum_document_field(client_data_ids: List[int], field_name: str):
     value - the caller's "cannot evaluate this document" signal, deliberately distinct from a
     genuine total of 0.
     """
+    if physical_bill_values is not None:
+        return physical_bill_values.get(field_name), physical_bill_values.get('_row_count', 0)
     total = None
     count = 0
     for client_data_id in client_data_ids or []:
@@ -5780,7 +5783,8 @@ def _matrix_condition_matches(left: float, right: float, operator: str, toleranc
 
 
 def _evaluate_matrix_cross_check(config: dict, linked_by_document: Dict[int, List[int]],
-                                 voucher_amount: Optional[float]) -> dict:
+                                 voucher_amount: Optional[float],
+                                 physical_bill_values: Optional[Dict[int, dict]] = None) -> dict:
     """Evaluate the reusable Cross-check matrix while returning the legacy result shape."""
     documents = config.get('documents') or []
     matrix_fields = config.get('matrix_fields') or []
@@ -5806,9 +5810,17 @@ def _evaluate_matrix_cross_check(config: dict, linked_by_document: Dict[int, Lis
             column_name = cells.get(str(document['document_id']))
             if not column_name:
                 continue
-            value, row_count = _sum_document_field(
-                linked_by_document.get(document['document_id'], []), column_name
-            )
+            physical_values = (physical_bill_values or {}).get(document['document_id'])
+            if physical_values is None:
+                # Keep the original two-argument call shape for ordinary template documents;
+                # this also preserves compatibility with isolated unit-test doubles.
+                value, row_count = _sum_document_field(
+                    linked_by_document.get(document['document_id'], []), column_name
+                )
+            else:
+                value, row_count = _sum_document_field(
+                    linked_by_document.get(document['document_id'], []), column_name, physical_values
+                )
             cell = {
                 "document_id": document['document_id'],
                 "document_name": document['document_name'],
@@ -5938,7 +5950,8 @@ def _evaluate_matrix_cross_check(config: dict, linked_by_document: Dict[int, Lis
 
 
 def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, List[int]],
-                                 voucher_amount: Optional[float]) -> dict:
+                                 voucher_amount: Optional[float],
+                                 physical_bill_values: Optional[Dict[int, dict]] = None) -> dict:
     """
     Evaluate one Cross-check against one voucher line's linked evidence. Pure - reads no
     global state, writes nothing.
@@ -5948,7 +5961,7 @@ def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, Lis
     shortfall is a reportable observation (Phase 8) rather than a rejection.
     """
     if config.get('matrix_fields'):
-        return _evaluate_matrix_cross_check(config, linked_by_document, voucher_amount)
+        return _evaluate_matrix_cross_check(config, linked_by_document, voucher_amount, physical_bill_values)
 
     compare_field = config['compare_field']
     comparison_type = config['comparison_type']
@@ -6253,8 +6266,33 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
     if linked_by_document is None:
         linked_by_document = _get_linked_evidence_by_document(voucher_line_id, sibling_ids=sibling_ids)
 
+    # Physical Bills are manually entered evidence, not client_data rows, so they cannot be
+    # represented in linked_by_document. Expose their numeric paper-bill fields to the same
+    # matrix evaluator used by template-backed documents.
+    physical_bill_values = {}
+    physical_document_ids = {
+        document['document_id']
+        for config in configs
+        for document in (config.get('documents') or [])
+        if document.get('document_type') == 'physical_bill'
+    }
+    if physical_document_ids:
+        stored_bills = _get_voucher_line_physical_bills(voucher_line_id, sibling_ids=sibling_ids)
+        for document_id in physical_document_ids:
+            bills = [b for b in stored_bills.get('bills', [])
+                     if b.get('document_id') == document_id]
+            totals = {'Quantity': None, 'Rate': None, 'Amount': None, '_row_count': 0}
+            for bill in bills:
+                for item in bill.get('items') or []:
+                    for field, key in (('Quantity', 'quantity'), ('Rate', 'rate'), ('Amount', 'amount')):
+                        numeric = _cross_check_numeric(item.get(key))
+                        if numeric is not None:
+                            totals[field] = numeric if totals[field] is None else totals[field] + numeric
+                            totals['_row_count'] += 1
+            physical_bill_values[document_id] = totals
+
     results = [
-        _evaluate_single_cross_check(cfg, linked_by_document, voucher_amount)
+        _evaluate_single_cross_check(cfg, linked_by_document, voucher_amount, physical_bill_values)
         for cfg in configs
     ]
 

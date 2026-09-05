@@ -20,22 +20,59 @@ After each development, disclose only unresolved pendencies in a four-column tab
 each response. The next active item must be labelled **This phase**; completed work remains in the
 phase-status and decision-history sections.
 
-## Current stabilization roadmap
+## Current agreed roadmap
 
-#### Current pending phases
+The reusable Form document model must be completed before final acceptance. It changes how
+documents are authored, shown in Verification, populated from Client Data, and consumed by
+Procedure/Evidence and Cross-check rules. The former Physical Bill path becomes the first Form
+configuration rather than remaining a special-purpose document type.
+
+### Ordered pending phases
+
+#### Form foundation and implementation — complete before acceptance retest
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| 4 | **This phase - Unified Audit Rules architecture and UI** | Refine Category-first Procedure/Evidence and mathematical Cross-check authoring before Verification linkage | Work in process; UI implemented, manual review pending |
-| 5 | Inventory purchase Cross-check rules and runtime | Implement and evaluate the five approved amount, rate, and quantity assertions in Verification | Pending implementation |
-| 6 | Cross-check source and legacy-path review | Confirm Template-scoped active mappings and retire legacy paths only where runtime no longer depends on them | Pending correctness review |
-| 7 | Vendor Bill Copy from lines | Repair Store receiving to Physical Bill copying with clear mappings, conflict handling, preview, and persistence | Pending investigation |
-| 8 | Edit Template and guidance acceptance | Confirm explicit Save Template, popup close, Rulebook guidance, and visible Cross-check chains | Pending manual validation |
-| 9 | Procedure-save performance audit | Capture five cold and five warm runs with total time, DB calls, DB time, and component timings | Pending measurement |
-| 10 | Final procedure-save performance decision | Apply one measured batching/reuse improvement or document the Supabase/network limitation | Pending decision |
-| 11 | Safety and status acceptance | Test session locking, assignment release, presence expiry/resume, and Pending/Query/Cleared transitions | Pending manual validation |
-| 12 | Regression and lifecycle cleanup | Run focused regressions, resolve confirmed issues only, and decide whether Completed/Cancelled states are required | Pending |
-| 13 | Documentation and Git closeout | Update authoritative MD files, obtain manual confirmation, then perform the approved commit/push | Pending |
+| A | Form data model | Define Form documents, ordered fields, Text/Date/Numeric types, optional Linked Template, linked-column mapping, and repeating item rows; plan safe Physical Bill migration. | Implemented; manual database/API confirmation pending |
+| B | Form authoring UI | Add Form to Document Type, Linked Template selection, and a three-column field editor: Column Name, Column Type, Linked Column. | Pending |
+| C | Form persistence | Validate and persist field definitions, ordering, types, linked columns, template changes, and invalid mappings. | Pending |
+| D | Form rendering | Show an assigned Form document as a normal Procedure-window tab with manual entry controls and clear field labels/types. | Pending |
+| E | Copy from lines | Add a visible Copy from lines action that reads the configured Linked Template evidence and populates mapped Form fields without preventing manual edits. | Pending |
+| F | Rule integration | Expose saved Form values to Procedure/Evidence completion and Cross-check matrix evaluation, including Quantity-only comparisons. | Pending |
+| G | Form edge cases | Define and test clearing, save/reload, missing values, inactive/changed templates, deleted columns, duplicate fields, and numeric/date validation. | Pending |
+| H | Physical Bill migration | Recreate the paper Vendor Bill as a Form with header and repeatable item fields; keep ERP Vendor Bill as a separate Linked Template document. | Pending |
+| I | Legacy cleanup | Deprecate or remove the hardcoded Physical Bill path only after migration, regression coverage, and manual acceptance confirm no data loss. | Pending |
+
+#### Acceptance and release — retest after Phase I
+
+| Phase No | Phase/Pendency | Objective | Status |
+|---|---|---|---|
+| P1 | Verification smoke test | Confirm Procedure/Evidence, selected fields, signatories, and Applied Cross-checks in a real verification session using the Form model. | Pending manual testing |
+| P2 | Purchase Demand data validation | Confirm all seven selected Template columns appear correctly after restart and hard refresh. | Pending final browser confirmation |
+| P3 | Procedure/Evidence acceptance | Verify category-specific documents, conditions, roles, signatories, sub-values, risk, save/reload, and clearing behavior. | Pending |
+| P4 | Cross-check acceptance | Verify reusable matrix rules, document chains, operators, tolerance, missing data, blocking, risk, Quantity-only rows, Form values, and result display. | Pending |
+| P5 | Rulebook edge cases | Test inactive documents/templates, empty selections, changed templates, deleted signatories, deleted Form fields, and legacy configurations. | Pending |
+| P6 | Verification status integration | Confirm rule results affect Cleared, Query, shortfall, and blocking decisions correctly. | Pending |
+| P7 | UX refinement | Resolve remaining Procedure modal, Form editor, Copy from lines, rule-result, error, loading, and responsive-design issues. | Pending |
+| P8 | Performance review | Measure Form/Procedure loading and Verification Save/Verify performance with realistic data volume. | Pending |
+| P9 | Final release hardening | Remove test data, confirm backups, review logs, verify Task Scheduler/server operation, and prepare release notes. | Pending |
+
+### Phase gates and working rules
+
+- A–I are sequential where a later phase consumes an earlier data contract; no acceptance phase is
+  closed against the superseded Physical Bill design.
+- Each phase requires candidate-file confirmation, an approved approach, scoped implementation,
+  proportionate automated checks, and manual evidence where the phase is user-facing.
+- Form values are evidence entered by the auditor. Linked Columns provide optional prefill only;
+  they must not silently overwrite manual edits.
+- A Form may have one header and repeatable item rows so the paper Vendor Bill supports multiple
+  items. Quantity-only rules must not require Rate or Amount rows.
+- No commit or push occurs until the user confirms local-server testing for the completed phase.
+
+### Current next action
+
+**This phase: B — Form authoring UI.** Confirm Phase A's schema and migration contract before
+changing the Document editor or Verification UI.
 
 ### Approved target design
 
