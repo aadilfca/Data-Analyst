@@ -4825,3 +4825,43 @@ The Render error response identified this exact missing-column failure. Added re
 missing-column and no-op paths. The targeted suites pass 83 tests and the full suite passes 129
 tests, with only existing deprecation/cache warnings. Manual Render retest remains required before
 the next commit/push.
+
+---
+
+## Form Copy from lines - Phase E - 2026-09-06
+
+Verification now has a read-only `form_copy_sources` endpoint. It resolves active linked-template
+evidence rows for the current voucher line's stable `client_data_id`, limited to the Form's selected
+Template and active linked-template Documents. Audit Rules remains configuration-only; source data is
+not copied or stored there.
+
+The shared Procedure modal now shows `Copy from lines` for Forms with Linked Column mappings. It
+copies the first source row into blank Header fields and source rows into blank/repeated Item rows,
+preserving every non-empty auditor value. Date values are normalized for HTML date controls, item
+rows are created only as needed, and the editor remains dirty until the normal Form save/Verify path
+persists the reviewed values. Empty-source, no-mapping, no-change, and request-error feedback is
+shown in the Form panel. Shared modal cache versions were bumped in Verification and Audit Workbook.
+
+Added backend regression coverage for same-line/template source resolution and the no-mapping short
+path. JavaScript syntax, Python compilation, focused tests (76), and the full suite (131) pass; six
+existing warnings remain. Manual browser acceptance is required: link source rows, copy into a Form,
+confirm Header/Item mapping, confirm existing values are not overwritten, save/reopen, and retry with
+ no source rows. No commit/push until that test is confirmed.
+
+---
+
+## Category Applicable Documents - Phase D2 - 2026-09-06
+
+Category Applicable Documents is now the explicit document-membership source for Category authoring.
+The Category editor exposes the existing add/remove/required controls, and Procedure/Evidence choices
+are limited to active selected Documents, including Form Documents. Saving a Category sends only the
+selected Category document IDs; Procedure rows and Applied Cross-checks no longer expand that set.
+
+The validation-rules endpoint now verifies that every Procedure/Evidence Document ID belongs to the
+Category before checking that the Document is active. This preserves the existing reusable Cross-check
+model; dependency containment and activation behavior remain the approved D4 scope.
+
+Added focused regression coverage for accepted and rejected Procedure document membership. The user
+manually confirmed the Category selector, save behavior, and Procedure/Evidence eligibility. The
+remaining Physical Vendor Bill presentation issue is recorded for D6/H implementation and P7 UX
+refinement; it does not block D2.

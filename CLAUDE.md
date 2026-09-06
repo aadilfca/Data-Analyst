@@ -316,6 +316,9 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-06: Fixed Form documents with optional Linked Templates being blocked by linked-template Verification policy validation; Audit Rules frontend only. See CHANGELOG_ARCHIVE.md.
 - 2026-09-06: Migrated the existing Postgres document-type check to accept Forms and kept Form Template loading separate from Verification Data Fields; browser retest pending.
 - 2026-09-06: Added startup migration for missing Postgres Form field columns (`field_type`, `field_scope`, `linked_column`) found during Render Save testing. See CHANGELOG_ARCHIVE.md.
+- 2026-09-06: Form Copy from lines now resolves same-voucher linked-template rows in Verification and fills only blank mapped fields; manual acceptance pending.
+- 2026-09-06: Unified the active Form, Category document-governance, Evidence Type retirement, migration, and P1-P9 acceptance roadmap in DEVELOPMENT_PLAN.md.
+- 2026-09-06: D2 made Category Applicable Documents canonical for Procedure/Evidence eligibility and Category saves; manually confirmed.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

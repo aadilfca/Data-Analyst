@@ -22,12 +22,21 @@ phase-status and decision-history sections.
 
 ## Current agreed roadmap
 
-The reusable Form document model must be completed before final acceptance. It changes how
-documents are authored, shown in Verification, populated from Client Data, and consumed by
-Procedure/Evidence and Cross-check rules. The former Physical Bill path becomes the first Form
-configuration rather than remaining a special-purpose document type.
+The unified roadmap has three coordinated tracks: Form implementation (A-I), Category/document
+governance (D1-D9), and final acceptance/release (P1-P9). D1-D9 is separate from Form Phase D.
+The current document-selection ownership must be settled before Copy from lines, rule integration,
+and Physical Vendor Bill migration are accepted, preventing split configuration and hidden tabs.
 
-### Ordered pending phases
+### Unified execution order
+
+| Stage | Phases | Gate |
+|---|---|---|
+| 1 | A-D | Form foundation and rendering are built; D remains subject to browser confirmation. |
+| 2 | D1 | Read-only discovery resolves the current Category document-selection and Evidence Type ownership. |
+| 3 | D2-D7 | Canonical Category documents, Cross-check dependency rules, Form Vendor Bill integration, and safe Evidence Type retirement are implemented. |
+| 4 | E-I | Form prefill, rule integration, edge cases, Physical Vendor Bill migration, and legacy cleanup are completed against the approved document contract. |
+| 5 | D8-D9 | Data migration and configuration hardening are completed. |
+| 6 | P1-P9 | Final browser acceptance, status, UX, performance, and release hardening are completed. |
 
 #### Form foundation and implementation — complete before acceptance retest
 
@@ -37,11 +46,25 @@ configuration rather than remaining a special-purpose document type.
 | B | Form authoring UI | Add Form to Document Type, Linked Template selection, and a three-column field editor: Column Name, Column Type, Linked Column. | Complete |
 | C | Form persistence | Validate and persist field definitions, ordering, types, linked columns, template changes, and invalid mappings. | Complete |
 | D | Form rendering | Show an assigned Form document as a normal Procedure-window tab with manual entry controls and clear field labels/types. | Complete; pending manual browser confirmation |
-| E | Copy from lines | Add a visible Copy from lines action that reads the configured Linked Template evidence and populates mapped Form fields without preventing manual edits. | Pending |
+| E | Copy from lines | Add a visible Copy from lines action that reads the configured Linked Template evidence and populates mapped Form fields without preventing manual edits. | Implemented locally; pending governance/manual acceptance |
 | F | Rule integration | Expose saved Form values to Procedure/Evidence completion and Cross-check matrix evaluation, including Quantity-only comparisons. | Pending |
 | G | Form edge cases | Define and test clearing, save/reload, missing values, inactive/changed templates, deleted columns, duplicate fields, and numeric/date validation. | Pending |
 | H | Physical Bill migration | Recreate the paper Vendor Bill as a Form with header and repeatable item fields; keep ERP Vendor Bill as a separate Linked Template document. | Pending |
 | I | Legacy cleanup | Deprecate or remove the hardcoded Physical Bill path only after migration, regression coverage, and manual acceptance confirm no data loss. | Pending |
+
+#### Category/document governance track - D1-D9
+
+| Phase | Objective | Status |
+|---|---|---|
+| D1 | Trace Category document selection, Cross-check dependencies, Verification rendering, hardcoded inclusion, legacy Physical Bill, and Evidence Type consumers. | Complete; findings recorded |
+| D2 | Establish an explicit Category Applicable Documents selector as the single source of truth for document visibility and eligibility. | Complete; manually confirmed |
+| D3 | Make Procedure/Evidence the authoring owner for the selected Category document set; keep roles, signatories, conditions, and evidence risk there. | Pending |
+| D4 | Keep Applied Cross-checks rule-only. Validate every referenced document against the Category set and block incomplete dependencies instead of silently adding tabs. | Pending |
+| D5 | Make Verification render only active documents selected for the frozen Category; remove implicit unions and hardcoded document tabs. | Pending |
+| D6 | Connect the Form-based Physical Vendor Bill to the canonical Category document set and reuse the same Document IDs in procedures and Cross-checks. | Pending |
+| D7 | Retire Category Evidence Type safely: stop new writes, inventory consumers, preserve legacy values during transition, migrate or null deliberately, then remove the feature after acceptance. | Pending |
+| D8 | Migrate legacy Physical Bill/Vendor Bill references to the new Form configuration using explicit, reviewable mappings; retain compatibility until dependencies are clear. | Pending |
+| D9 | Harden duplicate prevention, inactive-document behavior, empty selections, missing dependencies, changed templates, and documentation/configuration consistency. | Pending |
 
 #### Acceptance and release — retest after Phase I
 
@@ -53,7 +76,7 @@ configuration rather than remaining a special-purpose document type.
 | P4 | Cross-check acceptance | Verify reusable matrix rules, document chains, operators, tolerance, missing data, blocking, risk, Quantity-only rows, Form values, and result display. | Pending |
 | P5 | Rulebook edge cases | Test inactive documents/templates, empty selections, changed templates, deleted signatories, deleted Form fields, and legacy configurations. | Pending |
 | P6 | Verification status integration | Confirm rule results affect Cleared, Query, shortfall, and blocking decisions correctly. | Pending |
-| P7 | UX refinement | Resolve remaining Procedure modal, Form editor, Copy from lines, rule-result, error, loading, and responsive-design issues. | Pending |
+| P7 | UX refinement | Resolve remaining Procedure modal, Form editor, Physical Vendor Bill, Copy from lines, rule-result, error, loading, and responsive-design issues. | Pending |
 | P8 | Performance review | Measure Form/Procedure loading and Verification Save/Verify performance with realistic data volume. | Pending |
 | P9 | Final release hardening | Remove test data, confirm backups, review logs, verify Task Scheduler/server operation, and prepare release notes. | Pending |
 
@@ -67,9 +90,13 @@ configuration rather than remaining a special-purpose document type.
   they must not silently overwrite manual edits.
 - A Form may have one header and repeatable item rows so the paper Vendor Bill supports multiple
   items. Quantity-only rules must not require Rate or Amount rows.
+- Category Applicable Documents is the only authorisation for a document tab in Verification;
+  Applied Cross-checks reference that set but never silently expand it.
+- Evidence Type removal is non-destructive: stop new writes, audit consumers, preserve legacy
+  values during transition, and remove storage only after migration, backup, and acceptance.
 - No commit or push occurs until the user confirms local-server testing for the completed phase.
 
-### Previous next action
+### Historical Phase D action
 
 **This phase: D — Form rendering.** Show an assigned Form document as a normal Procedure-window tab
 with manual entry controls and clear field labels/types.
@@ -82,11 +109,6 @@ records remain untouched for the controlled H/I migration. Focused tests (64) an
 (120) pass. Aadil confirmed the local browser correction and approved Git closeout. Phase D was the
 next implementation phase at that checkpoint.
 
-### Current next action
-
-Phase E - Copy from lines: populate mapped Form fields from configured Linked Template evidence
-without preventing manual edits.
-
 ### Phase D implementation checkpoint - 2026-09-06
 
 Form definitions now flow through live and compiled Rulebook guidance. Verification renders Form
@@ -96,12 +118,21 @@ later phases. An idempotent Postgres startup migration now upgrades existing doc
 accept `form`, and Form template loading keeps the separate Verification Data Fields panel hidden.
 The targeted suites (81) pass; manual browser confirmation is required before Git closeout.
 
+### Current next action
+
+**This phase: D3 - Category Procedure/Evidence ownership.** Make Procedure/Evidence the authoring
+owner for the selected Category document set and its roles, signatories, conditions, and evidence risk.
+
+The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
+is a planned D6/H implementation and P7 UX-refinement item, not a D2 defect.
+
 ### Approved target design
 
 - Documents retain Name, Document Type, Template, Authorisation, Authorisation Roles, Signature
   Specimens, and Used by Categories; duplicate metadata is removed only after dependency review.
-- Categories retain Name, Evidence Type, KB Overview, and Documents, and become the single policy
-  entry point through one Category Validation Rules section.
+- Categories retain Name, KB Overview, and one canonical Applicable Documents set, and become the
+  single policy entry point through one Category Validation Rules section. Evidence Type is retired
+  after a consumer audit and controlled legacy migration; it is not part of the new Form model.
 - Procedure/Evidence checks (Prepared by, Checked by, Approved by, required documents, roles, and
   signatures) remain separate from mathematical Cross-check comparisons.
 - Cross Checks use one configurable comparison table for operands, mapped fields, operators,

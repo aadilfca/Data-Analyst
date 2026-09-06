@@ -2115,6 +2115,9 @@ const arCategoryNameInput = document.getElementById('arCategoryNameInput');
 const arCategoryKbOverviewInput = document.getElementById('arCategoryKbOverviewInput');
 // Physical Bill evidence type (Phase 4 of 8): forced choice, no default - see saveCategory().
 const arCategoryEvidenceTypeSelect = document.getElementById('arCategoryEvidenceTypeSelect');
+const arCategoryDocsList = document.getElementById('arCategoryDocsList');
+const arCategoryAddDocumentSelect = document.getElementById('arCategoryAddDocumentSelect');
+const arCategoryAddDocumentBtn = document.getElementById('arCategoryAddDocumentBtn');
 const arCategoryDetailMeta = document.querySelector('.ar-category-detail-meta');
 
 // ---------- CATEGORY DETAIL: VALIDATION RULES SECTION SHELL ----------
@@ -2161,12 +2164,15 @@ function escapeHtml(value) {
 }
 
 function templateDocuments() {
-    // Procedure/Evidence may target either a Data Bank-backed document or the manually entered
-    // paper Physical Vendor Bill. Keeping both in one picker makes the two sources explicit in
-    // the Category rule authoring flow.
+    // Procedure/Evidence may target only a Document already selected in this Category's
+    // Applicable Documents list. Membership is deliberately not inferred from a rule row.
+    const applicableDocumentIds = new Set(categoryDocIds);
     return allDocuments.filter(doc => doc.is_active !== false && (
-        ((doc.document_type || 'linked_template') === 'linked_template' && doc.template_id) ||
-        doc.document_type === 'physical_bill'
+        applicableDocumentIds.has(doc.id) && (
+            ((doc.document_type || 'linked_template') === 'linked_template' && doc.template_id) ||
+            doc.document_type === 'form' ||
+            doc.document_type === 'physical_bill'
+        )
     ));
 }
 
@@ -3240,6 +3246,7 @@ async function selectCategory(id) {
             categoryDocMeta[d.document_id] = { name: d.name, is_active: !!d.is_active };
         });
         arCategoryMatrixVersion.textContent = String(cat.matrix_version || 1);
+        renderCategoryDocsList();
         await loadCategoryValidationRules(cat.id);
         await renderAppliedCrossChecks();
 
@@ -3277,6 +3284,7 @@ function startNewCategory() {
     categoryDocRequired = {};
     categoryDocMeta = {};
     arCategoryMatrixVersion.textContent = '1';
+    renderCategoryDocsList();
     document.getElementById('arProcedureRulesBody').innerHTML = '';
     categoryLegacyMathRuleCount = 0;
     renderAppliedCrossChecks();
@@ -3311,9 +3319,9 @@ async function saveCategory(triggerBtn) {
     }
 
     const validationRules = readCategoryValidationRules();
-    let appliedDefinitions;
+    /* D2: Category document membership is canonical; legacy derived-document expansion is retired.
     try {
-        appliedDefinitions = await Promise.all(categoryCrossCheckIds.map(getCategoryCrossCheckDefinition));
+        appliedDefinitions = [];
     } catch (error) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
         return;
@@ -3324,11 +3332,11 @@ async function saveCategory(triggerBtn) {
     const ruleDocumentIds = [
         ...validationRules.procedure_evidence.checks.map(rule => Number(rule.document_id)),
         ...appliedDocumentIds
-    ].filter(id => Number.isInteger(id) && id > 0);
+    ].filter(id => Number.isInteger(id) && id > 0); */
     const payload = {
         name: name,
         kb_overview: arCategoryKbOverviewInput.value.trim() || null,
-        document_ids: [...new Set(categoryDocIds.concat(ruleDocumentIds))],
+        document_ids: [...new Set(categoryDocIds)],
         cross_check_ids: categoryCrossCheckIds,
         evidence_type: evidenceType
     };
@@ -3419,6 +3427,10 @@ arCategoryShowInactiveCheckbox.addEventListener('change', loadCategories);
 arCategoryLoadMoreBtn.addEventListener('click', loadMoreCategories);
 
 arCategorySaveBtn.addEventListener('click', () => saveCategory(arCategorySaveBtn));
+arCategoryAddDocumentBtn?.addEventListener('click', addCategoryDocument);
+arCategoryAddDocumentSelect?.addEventListener('change', () => {
+    arCategoryAddDocumentBtn.style.display = arCategoryAddDocumentSelect.value ? 'inline-block' : 'none';
+});
 arCategoryDeleteBtn.addEventListener('click', deleteCategory);
 arCategoryRestoreBtn.addEventListener('click', restoreCategory);
 

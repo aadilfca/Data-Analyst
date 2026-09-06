@@ -136,6 +136,36 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         rules = CategoryValidationRules(procedure_evidence={"checks": []})
         validate_category_validation_rules(rules)
 
+    def test_category_validation_rules_rejects_document_outside_applicable_set(self):
+        rules = CategoryValidationRules(
+            procedure_evidence={"checks": [{"document_id": 20, "condition": "required_document"}]}
+        )
+
+        with patch(
+            "routers.audit_rules.execute_query_pg",
+            return_value=[{"document_id": 10}],
+        ):
+            with self.assertRaises(Exception) as raised:
+                validate_category_validation_rules(rules, category_id=7)
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("Applicable Documents", raised.exception.detail)
+
+    def test_category_validation_rules_accepts_document_in_applicable_set(self):
+        rules = CategoryValidationRules(
+            procedure_evidence={"checks": [{"document_id": 20, "condition": "required_document"}]}
+        )
+
+        def data_query(sql, params=()):
+            if "audit_rule_category_documents" in sql:
+                return [{"document_id": 20}]
+            if "audit_rule_documents" in sql:
+                return [{"id": 20}]
+            raise AssertionError("Unexpected validation query: " + sql)
+
+        with patch("routers.audit_rules.execute_query_pg", side_effect=data_query):
+            validate_category_validation_rules(rules, category_id=7)
+
     def test_preview_unconfigured_document_policy_projects_all_template_columns(self):
         from routers.data import get_preview_rows
 

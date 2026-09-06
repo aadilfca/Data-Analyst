@@ -2129,13 +2129,32 @@ def get_category_validation_rules(category_id: int) -> dict:
         value = {}
     return _parse_category_validation_rules(value)
 
-def validate_category_validation_rules(rules: CategoryValidationRules):
+def validate_category_validation_rules(rules: CategoryValidationRules, category_id: Optional[int] = None):
     allowed_missing = {"not_configured", "not_linked", "missing", "shortfall"}
     allowed_conditions = {"required_document", "prepared_by", "checked_by", "approved_by", "signature"}
+    category_document_ids = None
+    if category_id is not None:
+        category_document_ids = {
+            row["document_id"]
+            for row in execute_query_pg(
+                "SELECT document_id FROM audit_rule_category_documents WHERE category_id = %s",
+                (category_id,)
+            )
+        }
     for index, rule in enumerate((rules.procedure_evidence or {}).get("checks", [])):
         if not rule.get("document_id") or rule.get("condition") not in allowed_conditions:
             raise HTTPException(400, f"Procedure/Evidence row {index + 1} needs a document and valid condition")
-        rows = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (rule["document_id"],))
+        try:
+            document_id = int(rule["document_id"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"Procedure/Evidence row {index + 1} must use a valid Document ID")
+        if category_document_ids is not None and document_id not in category_document_ids:
+            raise HTTPException(
+                400,
+                f"Procedure/Evidence row {index + 1} uses Document ID {document_id}, "
+                "which is not included in this Category's Applicable Documents"
+            )
+        rows = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (document_id,))
         if not rows:
             raise HTTPException(400, f"Procedure/Evidence row {index + 1} must use an active document")
     # The current Category UI intentionally omits this legacy field. Pydantic represents the
@@ -2470,10 +2489,10 @@ def get_category_validation_rules_endpoint(category_id: int):
 
 @router.put("/api/audit-rules/categories/{category_id}/validation-rules", dependencies=[Depends(ensure_no_active_verification_sessions)])
 def update_category_validation_rules(category_id: int, rules: CategoryValidationRules):
-    validate_category_validation_rules(rules)
     existing = execute_query_pg("SELECT id FROM audit_rule_categories WHERE id = %s", (category_id,))
     if not existing:
         raise HTTPException(404, "Category not found")
+    validate_category_validation_rules(rules, category_id=category_id)
     payload_data = rules.dict(exclude_none=True)
     if rules.mathematical_cross_checks is None:
         # Do not erase pre-existing Category-owned comparisons merely because the new UI no
