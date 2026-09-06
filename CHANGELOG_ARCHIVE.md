@@ -4882,3 +4882,18 @@ Verification checklist matching now honors the Category-selected role or signato
 longer activates an unrelated role. Added backend, Rulebook, and browser regression coverage.
 Focused tests (74) and the full suite (134) pass. The user manually confirmed Document-role import,
 risk persistence, and the Verification Procedure checklist. D3 is complete; D4 is next.
+
+## Cross-check dependency validation - Phase D4 - 2026-09-06
+
+Applied Cross-checks now remain rule-only. The Cross-check list exposes ordered dependency summaries
+through one set-based query, so the Category picker disables rules whose Documents are missing from
+Applicable Documents or inactive. Existing invalid assignments are shown as blocked instead of
+pretending they are active.
+
+Category Rulebook compilation now excludes invalid attached Cross-checks and emits structured
+dependency warnings. The direct Verification evaluator applies the same containment and active-
+Document guard, so neither path creates hidden Procedure documents or evaluates an undeclared rule.
+
+Focused Rulebook tests (75), Cross-check performance tests (5), full suite (135), Python compilation,
+JavaScript syntax checks, and diff checks passed. Manual browser confirmation confirmed the expected
+block for the legacy inactive Vendor Bill dependency. D4 is complete; D5 is next.

@@ -2517,6 +2517,31 @@ function getCrossCheckById(id) {
     return allCrossChecks.find(cc => cc.id === id);
 }
 
+function getCategoryCrossCheckDependencyIssues(crossCheck) {
+    const categoryDocumentIds = new Set(categoryDocIds.map(Number));
+    const missing = [];
+    const inactive = [];
+    (crossCheck.documents || []).forEach(document => {
+        const documentId = Number(document.document_id);
+        if (!categoryDocumentIds.has(documentId)) {
+            missing.push(document.name || ('Document #' + documentId));
+            return;
+        }
+        const categoryDocument = categoryDocMeta[documentId];
+        if (document.is_active === false || (categoryDocument && categoryDocument.is_active === false)) {
+            inactive.push(document.name || ('Document #' + documentId));
+        }
+    });
+    return { missing, inactive };
+}
+
+function categoryCrossCheckDependencyMessage(issues) {
+    const parts = [];
+    if (issues.missing.length) parts.push('not in Applicable Documents: ' + issues.missing.join(', '));
+    if (issues.inactive.length) parts.push('inactive: ' + issues.inactive.join(', '));
+    return parts.join('; ');
+}
+
 // ---------- LOAD & RENDER LIST ----------
 // Fetch-once-per-toggle-state cache (Fast Data Handling, Phase 9), now pagination-aware (Phase
 // 10 of 13): each key holds {items, total} rather than a bare array -- items is everything
@@ -3197,13 +3222,19 @@ async function renderAppliedCrossChecks() {
     placeholder.textContent = available.length ? 'Select a reusable Cross-check' : 'No reusable Cross-checks available';
     placeholder.selected = true;
     picker.appendChild(placeholder);
+    let selectableCount = 0;
     available.forEach(cc => {
+        const issues = getCategoryCrossCheckDependencyIssues(cc);
         const option = document.createElement('option');
         option.value = cc.id;
-        option.textContent = cc.name;
+        option.disabled = issues.missing.length > 0 || issues.inactive.length > 0;
+        if (!option.disabled) selectableCount += 1;
+        option.textContent = option.disabled
+            ? cc.name + ' (blocked: ' + categoryCrossCheckDependencyMessage(issues) + ')'
+            : cc.name;
         picker.appendChild(option);
     });
-    addButton.disabled = available.length === 0;
+    addButton.disabled = selectableCount === 0;
 
     if (!categoryCrossCheckIds.length) {
         const empty = document.createElement('div');
@@ -3223,6 +3254,14 @@ async function renderAppliedCrossChecks() {
                 unavailable.className = 'ar-applied-cross-check-card ar-applied-cross-check-unavailable';
                 unavailable.textContent = 'Cross-check #' + ccId + ' is inactive or unavailable.';
                 container.appendChild(unavailable);
+                return;
+            }
+            const dependencyIssues = getCategoryCrossCheckDependencyIssues(known);
+            if (dependencyIssues.missing.length || dependencyIssues.inactive.length) {
+                const blocked = document.createElement('div');
+                blocked.className = 'ar-applied-cross-check-card ar-applied-cross-check-unavailable';
+                blocked.textContent = known.name + ' — blocked: ' + categoryCrossCheckDependencyMessage(dependencyIssues) + '. Add the required active Documents before this rule can be activated.';
+                container.appendChild(blocked);
                 return;
             }
             const loading = document.createElement('div');
@@ -3257,6 +3296,16 @@ function addCategoryCrossCheck() {
     const picker = document.getElementById('arCategoryAddCrossCheckSelect');
     if (!picker || !picker.value) return;
     const ccId = parseInt(picker.value, 10);
+    const crossCheck = getCrossCheckById(ccId);
+    if (!crossCheck) return;
+    const dependencyIssues = getCategoryCrossCheckDependencyIssues(crossCheck);
+    if (dependencyIssues.missing.length || dependencyIssues.inactive.length) {
+        showCategoryDetailStatus(
+            'Cannot apply this Cross-check: ' + categoryCrossCheckDependencyMessage(dependencyIssues) + '.',
+            'error'
+        );
+        return;
+    }
     if (!categoryCrossCheckIds.includes(ccId)) categoryCrossCheckIds.push(ccId);
     renderAppliedCrossChecks();
 }

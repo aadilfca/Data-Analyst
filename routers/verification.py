@@ -5855,11 +5855,23 @@ def _get_category_cross_check_configs(category_id: int, rulebook: Optional[dict]
         return cached
 
     rule_rows = execute_query_pg(
-        """
+        f"""
         SELECT c.id, c.name, c.compare_field, c.comparison_type, c.compare_to_voucher_line
         FROM audit_rule_category_cross_checks cc
         JOIN audit_rule_cross_checks c ON c.id = cc.cross_check_id
         WHERE cc.category_id = %s AND c.is_active = TRUE
+          AND NOT EXISTS (
+              SELECT 1
+              FROM
+                  audit_rule_cross_check_documents invalid_ccd
+              LEFT JOIN audit_rule_category_documents category_doc
+                ON category_doc.category_id = {int(category_id)}
+               AND category_doc.document_id = invalid_ccd.document_id
+              LEFT JOIN audit_rule_documents dependency_doc
+                ON dependency_doc.id = invalid_ccd.document_id
+              WHERE invalid_ccd.cross_check_id = c.id
+                AND (category_doc.document_id IS NULL OR dependency_doc.is_active IS NOT TRUE)
+          )
         ORDER BY cc.sort_order
         """,
         (category_id,)

@@ -404,6 +404,7 @@ def compile_verification_rulebook(client_id: int) -> dict:
     roles_by_document: Dict[int, List[dict]] = {doc_id: [] for doc_id in document_ids}
     fields_by_document: Dict[int, List[dict]] = {doc_id: [] for doc_id in document_ids}
     required_by_category: Dict[int, List[dict]] = {category_id: [] for category_id in category_ids}
+    category_document_ids: Dict[int, set] = {category_id: set() for category_id in category_ids}
     cross_docs_by_id: Dict[int, List[int]] = {check_id: [] for check_id in cross_check_ids}
     matrix_fields_by_check: Dict[int, List[dict]] = {check_id: [] for check_id in cross_check_ids}
     matrix_cells_by_field: Dict[int, Dict[str, Optional[str]]] = {}
@@ -426,6 +427,7 @@ def compile_verification_rulebook(client_id: int) -> dict:
     for row in requirements:
         if row["category_id"] in required_by_category:
             required_by_category[row["category_id"]].append(row)
+            category_document_ids[row["category_id"]].add(row["document_id"])
             if row["document_id"] not in document_by_id:
                 warnings.append({"code": "inactive_document_requirement", "category_id": row["category_id"], "document_id": row["document_id"]})
     for row in cross_check_documents:
@@ -504,6 +506,23 @@ def compile_verification_rulebook(client_id: int) -> dict:
         for check_id in checks_by_category[category_id]:
             check = cross_check_by_id[check_id]
             doc_ids = cross_docs_by_id.get(check_id, [])
+            missing_dependencies = [
+                document_id for document_id in doc_ids
+                if document_id not in category_document_ids[category_id]
+            ]
+            inactive_dependencies = [
+                document_id for document_id in doc_ids
+                if document_id not in document_by_id
+            ]
+            if missing_dependencies or inactive_dependencies:
+                warnings.append({
+                    "code": "cross_check_dependency_invalid",
+                    "category_id": category_id,
+                    "cross_check_id": check_id,
+                    "missing_document_ids": missing_dependencies,
+                    "inactive_document_ids": inactive_dependencies,
+                })
+                continue
             matrix = _build_cross_check_matrix_contract(
                 check_id, doc_ids, document_by_id, matrix_fields_by_check, matrix_cells_by_field
             )
@@ -1534,15 +1553,43 @@ def row_to_cross_check(row: dict) -> dict:
         "used_by_categories_count": get_cross_check_used_by_count(cross_check_id)
     }
 
-def row_to_cross_check_list(row: dict) -> dict:
+def row_to_cross_check_list(row: dict, documents: Optional[List[dict]] = None) -> dict:
     """
-    Lean shape for the Cross-checks LIST endpoint (Column trimming, Phase 4 of 13) -
-    renderCrossCheckList() (static/audit_rules.js) only reads id/name/is_active per row, so the
-    list endpoint no longer pays for row_to_cross_check()'s per-row documents JOIN +
-    used_by_categories_count query that only the detail view (selectCrossCheck(), via the
-    single-item GET) actually needs.
+    Lean shape for the Cross-checks LIST endpoint - it includes one set-based dependency summary
+    for the Category picker, while avoiding the detail view's per-row used-by count query.
     """
-    return {"id": row["id"], "name": row["name"], "is_active": bool(row["is_active"])}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "is_active": bool(row["is_active"]),
+        "documents": documents or [],
+    }
+
+def get_cross_check_document_summaries(cross_check_ids: List[int]) -> Dict[int, List[dict]]:
+    """Load ordered Cross-check dependencies for a paginated list in one query."""
+    documents_by_cross_check = {cross_check_id: [] for cross_check_id in cross_check_ids}
+    if not cross_check_ids:
+        return documents_by_cross_check
+
+    placeholders = ",".join("%s" for _ in cross_check_ids)
+    rows = execute_query_pg(
+        f"""
+        SELECT ccd.cross_check_id, d.id AS document_id, d.name, d.is_active, ccd.sort_order
+        FROM audit_rule_cross_check_documents ccd
+        JOIN audit_rule_documents d ON d.id = ccd.document_id
+        WHERE ccd.cross_check_id IN ({placeholders})
+        ORDER BY ccd.cross_check_id, ccd.sort_order
+        """,
+        tuple(cross_check_ids),
+    )
+    for row in rows:
+        documents_by_cross_check[row["cross_check_id"]].append({
+            "document_id": row["document_id"],
+            "name": row["name"],
+            "is_active": bool(row["is_active"]),
+            "sort_order": row["sort_order"],
+        })
+    return documents_by_cross_check
 
 def save_cross_check_documents(cross_check_id: int, document_ids: List[int],
                                document_fields: Optional[Dict[int, Optional[str]]] = None):
@@ -1612,7 +1659,7 @@ def get_cross_checks(response: Response, include_inactive: bool = False, limit: 
     (Fast Data Handling, Phase 10 of 13) - see fetch_paginated_rows() above. Read-side
     cache wiring (Modal Caching Phase 3, sub-phase 2) - see cache_get()/cache_set() above.
     """
-    cache_key = f"cross_checks:list:{include_inactive}:{limit}:{offset}"
+    cache_key = f"cross_checks:list:v2:{include_inactive}:{limit}:{offset}"
     cached = cache_get(cache_key)
     if cached is not None:
         result, total = cached
@@ -1626,7 +1673,8 @@ def get_cross_checks(response: Response, include_inactive: bool = False, limit: 
     rows, total = fetch_paginated_rows(base_query, count_query, "ORDER BY name", limit, offset)
     if total is not None:
         response.headers["X-Total-Count"] = str(total)
-    result = [row_to_cross_check_list(r) for r in rows]
+    documents_by_cross_check = get_cross_check_document_summaries([row["id"] for row in rows])
+    result = [row_to_cross_check_list(r, documents_by_cross_check.get(r["id"], [])) for r in rows]
     cache_set(cache_key, (result, total))
     return result
 

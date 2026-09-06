@@ -396,6 +396,51 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         }])
         self.assertEqual(rulebook["warnings"], [])
 
+    def test_compiler_blocks_attached_cross_check_with_unselected_dependency(self):
+        def query(sql, params=()):
+            if "FROM audit_rule_categories" in sql:
+                return [{
+                    "id": 1, "name": "Material", "kb_overview": None, "evidence_type": "billable",
+                    "matrix_version": 1, "validation_rules_json": None,
+                }]
+            if "FROM audit_rule_documents" in sql:
+                return [
+                    {"id": 10, "name": "Purchase Demand", "kb_note": None, "template_id": 5,
+                     "risk_rating": None, "transaction_level_approval": False,
+                     "document_type": "linked_template", "verification_field_policy": None},
+                    {"id": 11, "name": "Purchase Order", "kb_note": None, "template_id": 5,
+                     "risk_rating": None, "transaction_level_approval": False,
+                     "document_type": "linked_template", "verification_field_policy": None},
+                ]
+            if "FROM audit_rule_category_documents" in sql:
+                return [{"category_id": 1, "document_id": 10, "is_required": True, "sort_order": 0}]
+            if "FROM audit_rule_cross_checks" in sql:
+                return [{"id": 30, "name": "Demand to order", "compare_field": "Amount",
+                         "comparison_type": "Exact", "compare_to_voucher_line": False}]
+            if "FROM audit_rule_cross_check_documents" in sql:
+                return [{"cross_check_id": 30, "document_id": 10, "sort_order": 0},
+                        {"cross_check_id": 30, "document_id": 11, "sort_order": 1}]
+            if "FROM audit_rule_category_cross_checks" in sql:
+                return [{"category_id": 1, "cross_check_id": 30, "sort_order": 0}]
+            if "FROM audit_rule_document_auth_roles" in sql or "FROM audit_rule_document_fields" in sql \
+                    or "FROM master_columns" in sql or "FROM audit_rule_cross_check_fields" in sql \
+                    or "FROM audit_rule_cross_check_cells" in sql or "FROM audit_rule_voucher_checks" in sql \
+                    or "FROM templates" in sql or "FROM template_column_mappings" in sql \
+                    or "FROM signature_specimens" in sql or "FROM trial_balance_uploads" in sql \
+                    or "FROM account_category_assignments" in sql:
+                return []
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch("routers.audit_rules.execute_query_pg", side_effect=query):
+            rulebook = compile_verification_rulebook(7)
+
+        profile = rulebook["categories"][0]
+        self.assertEqual(profile["cross_checks"], [])
+        warning = next(item for item in rulebook["warnings"] if item["code"] == "cross_check_dependency_invalid")
+        self.assertEqual(warning["category_id"], 1)
+        self.assertEqual(warning["cross_check_id"], 30)
+        self.assertEqual(warning["missing_document_ids"], [11])
+
     def test_document_cross_check_fields_mirror_active_columns(self):
         def query(sql, params=()):
             if "SELECT document_type FROM audit_rule_documents" in sql:
