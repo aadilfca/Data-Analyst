@@ -138,7 +138,7 @@ class AuditRulebookCompilerTests(unittest.TestCase):
 
     def test_category_validation_rules_rejects_document_outside_applicable_set(self):
         rules = CategoryValidationRules(
-            procedure_evidence={"checks": [{"document_id": 20, "condition": "required_document"}]}
+            procedure_evidence={"checks": [{"document_id": 20, "condition": "required_document", "risk": "Medium"}]}
         )
 
         with patch(
@@ -153,7 +153,7 @@ class AuditRulebookCompilerTests(unittest.TestCase):
 
     def test_category_validation_rules_accepts_document_in_applicable_set(self):
         rules = CategoryValidationRules(
-            procedure_evidence={"checks": [{"document_id": 20, "condition": "required_document"}]}
+            procedure_evidence={"checks": [{"document_id": 20, "condition": "required_document", "risk": "Medium"}]}
         )
 
         def data_query(sql, params=()):
@@ -165,6 +165,34 @@ class AuditRulebookCompilerTests(unittest.TestCase):
 
         with patch("routers.audit_rules.execute_query_pg", side_effect=data_query):
             validate_category_validation_rules(rules, category_id=7)
+
+    def test_category_procedure_rule_requires_valid_risk_and_role_detail(self):
+        def data_query(sql, params=()):
+            if "audit_rule_category_documents" in sql:
+                return [{"document_id": 20}]
+            if "audit_rule_documents" in sql:
+                return [{"id": 20}]
+            raise AssertionError("Unexpected validation query: " + sql)
+
+        invalid_risk = CategoryValidationRules(
+            procedure_evidence={"checks": [{
+                "document_id": 20, "condition": "approved_by", "sub_value": "Approved by", "risk": "Critical"
+            }]}
+        )
+        with patch("routers.audit_rules.execute_query_pg", side_effect=data_query):
+            with self.assertRaises(Exception) as raised:
+                validate_category_validation_rules(invalid_risk, category_id=7)
+        self.assertIn("valid risk", raised.exception.detail)
+
+        missing_detail = CategoryValidationRules(
+            procedure_evidence={"checks": [{
+                "document_id": 20, "condition": "approved_by", "risk": "High"
+            }]}
+        )
+        with patch("routers.audit_rules.execute_query_pg", side_effect=data_query):
+            with self.assertRaises(Exception) as raised:
+                validate_category_validation_rules(missing_detail, category_id=7)
+        self.assertIn("role or signatory detail", raised.exception.detail)
 
     def test_preview_unconfigured_document_policy_projects_all_template_columns(self):
         from routers.data import get_preview_rows
@@ -352,6 +380,7 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertEqual(document["signatories"][0]["role_name"], "Approved by")
         procedure = rulebook["categories"][0]["procedure_evidence"]["checks"][0]
         self.assertEqual(procedure["document_name"], "Invoice")
+        self.assertEqual(procedure["role_name"], "Approved by")
         self.assertEqual(procedure["selected_detail"], "Approved by")
         self.assertEqual(procedure["configured_signatories"][0]["expected_signatory_name"], "A. Manager")
         self.assertEqual(rulebook["categories"][0]["cross_checks"][0]["document_ids"], [10])
@@ -1219,6 +1248,20 @@ class ProcedureModalPersistenceTests(unittest.TestCase):
                 self.assertEqual([entry["role"] for entry in result], ["Prepared by", "Approved by"])
                 self.assertIn("Aslam", result[0]["label"])
                 self.assertIn("Amjad", result[1]["label"])
+                unmatched = page.evaluate("""() => getProcedureChecklistEntries({
+                    auth_roles: ['Approved by'],
+                    signatories: [{role_name: 'Approved by', expected_signatory_name: 'Amjad'}],
+                    procedure_rules_configured: true,
+                    procedure_checks: [{condition: 'approved_by', selected_detail: 'Someone else'}]
+                })""")
+                self.assertEqual(unmatched, [])
+                role_only_signature = page.evaluate("""() => getProcedureChecklistEntries({
+                    auth_roles: ['Approved by'],
+                    signatories: [],
+                    procedure_rules_configured: true,
+                    procedure_checks: [{condition: 'signature', selected_detail: 'Approved by'}]
+                })""")
+                self.assertEqual([entry["role"] for entry in role_only_signature], ["Approved by"])
                 display = page.evaluate("""() => {
                     const rule = {
                         name: 'Order to receipt', status: 'pass', matrix_rows: [{

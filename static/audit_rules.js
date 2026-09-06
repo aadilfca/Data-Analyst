@@ -2136,8 +2136,9 @@ function buildCategoryValidationRulesSection() {
     const procedure = document.createElement('div');
     procedure.className = 'ar-validation-subsection';
     procedure.innerHTML = '<div class="ar-validation-subsection-title">Procedure / Evidence</div>' +
-        '<div class="ar-rule-table-wrap"><table class="ar-category-rule-table"><thead><tr><th>Document</th><th>Condition</th><th>Role / signature</th><th>Risk</th><th></th></tr></thead><tbody id="arProcedureRulesBody"></tbody></table></div>' +
-        '<button type="button" class="ar-btn-chip-add" id="arAddProcedureRuleBtn">Add procedure check</button>';
+        '<div class="ar-rule-table-wrap"><table class="ar-category-rule-table"><thead><tr><th>Document</th><th>Condition</th><th>Role</th><th>Risk</th><th></th></tr></thead><tbody id="arProcedureRulesBody"></tbody></table></div>' +
+        '<div class="ar-validation-actions"><button type="button" class="ar-btn-chip-add" id="arAddProcedureRuleBtn">Add procedure check</button>' +
+        '<button type="button" class="ar-btn-secondary" id="arImportDocumentProcedureRulesBtn">Import Document audit checks</button></div>';
     section.appendChild(procedure);
 
     const applied = document.createElement('div');
@@ -2157,6 +2158,7 @@ function buildCategoryValidationRulesSection() {
 }
 buildCategoryValidationRulesSection();
 document.getElementById('arAddProcedureRuleBtn')?.addEventListener('click', () => addProcedureRuleRow());
+document.getElementById('arImportDocumentProcedureRulesBtn')?.addEventListener('click', importDocumentProcedureChecks);
 document.getElementById('arCategoryAddCrossCheckBtn')?.addEventListener('click', addCategoryCrossCheck);
 
 function escapeHtml(value) {
@@ -2195,6 +2197,7 @@ function addProcedureRuleRow(rule = {}) {
     const row = document.createElement('tr');
     row.innerHTML = '<td><select data-rule="document_id">' + optionMarkup(templateDocuments(), rule.document_id, 'Select document') + '</select></td><td><select data-rule="condition"><option value="required_document">Required document</option><option value="prepared_by">Prepared by</option><option value="checked_by">Checked by</option><option value="approved_by">Approved by</option><option value="signature">Signature</option></select></td><td><select data-rule="sub_value"><option value="">Select after choosing a document</option></select></td><td><select data-rule="risk"><option value="Low">Low</option><option value="Medium" selected>Medium</option><option value="High">High</option></select></td><td><button type="button" class="ar-btn-delete">Remove</button></td>';
     row.querySelector('[data-rule="condition"]').value = rule.condition || 'required_document';
+    row.querySelector('[data-rule="risk"]').value = rule.risk || 'Medium';
     const docSelect = row.querySelector('[data-rule="document_id"]'); const condition = row.querySelector('[data-rule="condition"]'); const sub = row.querySelector('[data-rule="sub_value"]');
     let subValueRequestToken = 0;
     const renderSubValues = (values, selectedValue) => {
@@ -2228,6 +2231,55 @@ function addProcedureRuleRow(rule = {}) {
     condition.addEventListener('change', () => refreshSub(''));
     refreshSub(rule.sub_value || '');
     row.querySelector('button').addEventListener('click', () => row.remove()); body.appendChild(row);
+}
+
+function procedureConditionForRole(roleName) {
+    const role = String(roleName || '').toLowerCase();
+    if (role.includes('prepar')) return 'prepared_by';
+    if (role.includes('check')) return 'checked_by';
+    if (role.includes('approv')) return 'approved_by';
+    return 'signature';
+}
+
+async function importDocumentProcedureChecks() {
+    const documentIds = [...new Set(categoryDocIds)];
+    if (!documentIds.length) {
+        showCategoryDetailStatus('Select at least one Applicable Document first.', 'error');
+        return;
+    }
+
+    try {
+        const documents = await Promise.all(documentIds.map(async documentId => {
+            const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + documentId);
+            if (!res.ok) throw new Error('Failed to load Document authorisation checks');
+            return await res.json();
+        }));
+        const existing = new Set(readCategoryValidationRules().procedure_evidence.checks.map(rule => [
+            rule.document_id, rule.condition, rule.sub_value || rule.detail || rule.selected_detail || ''
+        ].join('|')));
+        let imported = 0;
+        documents.forEach(document => {
+            (document.auth_roles || []).forEach(roleName => {
+                const condition = procedureConditionForRole(roleName);
+                const key = [document.id, condition, roleName].join('|');
+                if (existing.has(key)) return;
+                existing.add(key);
+                addProcedureRuleRow({
+                    document_id: document.id,
+                    condition: condition,
+                    sub_value: roleName,
+                    risk: 'Medium'
+                });
+                imported += 1;
+            });
+        });
+        showCategoryDetailStatus(
+            imported ? 'Imported ' + imported + ' Document audit check' + (imported === 1 ? '' : 's') + '. Review and save the Category.' : 'All Document audit checks are already configured.',
+            'success'
+        );
+    } catch (error) {
+        showCategoryDetailStatus('Error: ' + error.message, 'error');
+    }
 }
 
 function readCategoryValidationRules() {
@@ -2394,16 +2446,11 @@ async function getCategoryDocumentAuthorisation(documentId) {
     if (categoryDocumentAuthorisationCache[documentId]) {
         return categoryDocumentAuthorisationCache[documentId];
     }
-    const clientId = getSelectedClientId();
     const result = (async () => {
-        const [documentRes, specimensRes] = await Promise.all([
-            window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + documentId),
-            window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/signature-specimens?client_id=' + clientId + '&document_id=' + documentId + '&include_inactive=false')
-        ]);
-        if (!documentRes.ok || !specimensRes.ok) throw new Error('Failed to load Document authorisation values');
+        const documentRes = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + documentId);
+        if (!documentRes.ok) throw new Error('Failed to load Document authorisation values');
         return {
-            roles: (await documentRes.json()).auth_roles || [],
-            specimens: await specimensRes.json()
+            roles: (await documentRes.json()).auth_roles || []
         };
     })();
     categoryDocumentAuthorisationCache[documentId] = result;
@@ -2418,11 +2465,7 @@ async function getCategoryDocumentAuthorisation(documentId) {
 async function getCategoryProcedureValues(documentId, condition) {
     const authorisation = await getCategoryDocumentAuthorisation(documentId);
     const matchingRoles = authorisation.roles.filter(role => procedureConditionMatchesRole(condition, role));
-    const matchingNames = authorisation.specimens
-        .filter(specimen => condition === 'signature' || procedureConditionMatchesRole(condition, specimen.role_name))
-        .map(specimen => specimen.expected_signatory_name);
-    const names = [...new Set(matchingNames.filter(Boolean))];
-    return names.length ? names : [...new Set(matchingRoles.filter(Boolean))];
+    return [...new Set(matchingRoles.filter(Boolean))];
 }
 
 async function getCategorySelectedFields(documentId) {

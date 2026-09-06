@@ -240,19 +240,37 @@ def _build_procedure_evidence_contract(
             (raw_check.get(key) for key in ("role", "role_name", "signature") if raw_check.get(key)),
             None,
         )
+        selected_detail = raw_check.get("sub_value") or raw_check.get("detail") or raw_check.get("selected_detail")
         if document is not None:
+            available_roles = roles_by_document.get(document_id, [])
+            if not role_name and selected_detail:
+                detail_text = str(selected_detail).casefold()
+                role_name = next(
+                    (
+                        role["role_name"]
+                        for role in available_roles
+                        if str(role["role_name"]).casefold() == detail_text
+                        or any(
+                            str(specimen.get("expected_signatory_name", "")).casefold() == detail_text
+                            for specimen in specimens_by_key.get((document_id, role["role_name"]), [])
+                        )
+                    ),
+                    None,
+                )
+            configured_signatories = []
+            if role_name:
+                configured_signatories = [
+                    specimen
+                    for specimen in specimens_by_key.get((document_id, role_name), [])
+                ]
             check.update({
                 "document_id": document_id,
                 "document_name": document.get("name"),
                 "document_type": document.get("document_type") or "linked_template",
                 "template_id": document.get("template_id"),
-                "available_roles": roles_by_document.get(document_id, []),
-                "configured_signatories": [
-                    specimen
-                    for role in roles_by_document.get(document_id, [])
-                    if not role_name or role["role_name"].casefold() == str(role_name).casefold()
-                    for specimen in specimens_by_key.get((document_id, role["role_name"]), [])
-                ],
+                "available_roles": available_roles,
+                "role_name": role_name,
+                "configured_signatories": configured_signatories,
             })
         else:
             check.update({
@@ -261,10 +279,11 @@ def _build_procedure_evidence_contract(
                 "document_type": None,
                 "template_id": None,
                 "available_roles": [],
+                "role_name": role_name,
                 "configured_signatories": [],
             })
-        check["selected_detail"] = raw_check.get("sub_value") or raw_check.get("detail")
-        check["risk"] = raw_check.get("risk") or raw_check.get("risk_rating")
+        check["selected_detail"] = selected_detail
+        check["risk"] = raw_check.get("risk") or raw_check.get("risk_rating") or "Medium"
         checks.append(check)
     return {**evidence, "checks": checks}
 
@@ -2132,6 +2151,7 @@ def get_category_validation_rules(category_id: int) -> dict:
 def validate_category_validation_rules(rules: CategoryValidationRules, category_id: Optional[int] = None):
     allowed_missing = {"not_configured", "not_linked", "missing", "shortfall"}
     allowed_conditions = {"required_document", "prepared_by", "checked_by", "approved_by", "signature"}
+    allowed_risks = {"Low", "Medium", "High"}
     category_document_ids = None
     if category_id is not None:
         category_document_ids = {
@@ -2142,8 +2162,13 @@ def validate_category_validation_rules(rules: CategoryValidationRules, category_
             )
         }
     for index, rule in enumerate((rules.procedure_evidence or {}).get("checks", [])):
-        if not rule.get("document_id") or rule.get("condition") not in allowed_conditions:
+        if not isinstance(rule, dict) or not rule.get("document_id") or rule.get("condition") not in allowed_conditions:
             raise HTTPException(400, f"Procedure/Evidence row {index + 1} needs a document and valid condition")
+        if rule.get("risk") not in allowed_risks:
+            raise HTTPException(400, f"Procedure/Evidence row {index + 1} needs a valid risk level")
+        detail = rule.get("sub_value") or rule.get("detail") or rule.get("selected_detail")
+        if rule.get("condition") != "required_document" and not detail:
+            raise HTTPException(400, f"Procedure/Evidence row {index + 1} needs a role or signatory detail")
         try:
             document_id = int(rule["document_id"])
         except (TypeError, ValueError):

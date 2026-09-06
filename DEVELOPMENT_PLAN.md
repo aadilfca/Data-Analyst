@@ -58,7 +58,7 @@ and Physical Vendor Bill migration are accepted, preventing split configuration 
 |---|---|---|
 | D1 | Trace Category document selection, Cross-check dependencies, Verification rendering, hardcoded inclusion, legacy Physical Bill, and Evidence Type consumers. | Complete; findings recorded |
 | D2 | Establish an explicit Category Applicable Documents selector as the single source of truth for document visibility and eligibility. | Complete; manually confirmed |
-| D3 | Make Procedure/Evidence the authoring owner for the selected Category document set; keep roles, signatories, conditions, and evidence risk there. | Pending |
+| D3 | Make Procedure/Evidence the authoring owner for the selected Category document set; keep roles, signatories, conditions, and evidence risk there. | Complete; manually confirmed |
 | D4 | Keep Applied Cross-checks rule-only. Validate every referenced document against the Category set and block incomplete dependencies instead of silently adding tabs. | Pending |
 | D5 | Make Verification render only active documents selected for the frozen Category; remove implicit unions and hardcoded document tabs. | Pending |
 | D6 | Connect the Form-based Physical Vendor Bill to the canonical Category document set and reuse the same Document IDs in procedures and Cross-checks. | Pending |
@@ -120,8 +120,9 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**This phase: D3 - Category Procedure/Evidence ownership.** Make Procedure/Evidence the authoring
-owner for the selected Category document set and its roles, signatories, conditions, and evidence risk.
+**This phase: D4 - Cross-check dependency validation.** Keep Applied Cross-checks rule-only and
+validate every referenced document against the Category Applicable Documents set without silently
+creating Procedure tabs or expanding Category membership.
 
 The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
 is a planned D6/H implementation and P7 UX-refinement item, not a D2 defect.

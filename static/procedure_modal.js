@@ -1717,11 +1717,19 @@ function getProcedureChecklistEntries(doc) {
     checks.forEach(rule => {
         const condition = String(rule.condition || '').toLowerCase();
         const detail = rule.selected_detail || rule.sub_value || rule.detail || '';
+        const normalizedDetail = String(detail).trim().toLowerCase();
         let matchingRoles = roles.filter(role => {
             const roleText = String(role);
-            if (conditionRoleMatchers[condition]) return conditionRoleMatchers[condition](roleText);
+            if (conditionRoleMatchers[condition]) {
+                if (!conditionRoleMatchers[condition](roleText)) return false;
+                if (!normalizedDetail) return true;
+                return roleText.toLowerCase() === normalizedDetail || signatories.some(specimen =>
+                    String(specimen.role_name || '').toLowerCase() === roleText.toLowerCase()
+                    && String(specimen.expected_signatory_name || '').trim().toLowerCase() === normalizedDetail
+                );
+            }
             if (condition === 'signature' && detail) {
-                return signatories.some(specimen =>
+                return roleText.toLowerCase() === normalizedDetail || signatories.some(specimen =>
                     String(specimen.role_name || '').toLowerCase() === roleText.toLowerCase()
                     && String(specimen.expected_signatory_name || '').toLowerCase() === String(detail).toLowerCase()
                 );

@@ -4865,3 +4865,20 @@ Added focused regression coverage for accepted and rejected Procedure document m
 manually confirmed the Category selector, save behavior, and Procedure/Evidence eligibility. The
 remaining Physical Vendor Bill presentation issue is recorded for D6/H implementation and P7 UX
 refinement; it does not block D2.
+
+---
+
+## Category Procedure/Evidence ownership - Phase D3 - 2026-09-06
+
+Procedure/Evidence rows now require a valid risk level and a role/signatory detail for all
+role-based conditions. The Category editor provides an explicit `Import Document audit checks`
+action that seeds Category-owned rows from the selected Documents' authorisation roles; it does not
+silently import or synchronize anything. The compiled Rulebook resolves the selected detail to its
+Document role and only exposes signatories for that role, while preserving client-scoped Signature
+Specimens as the reference source. The Audit Rules editor now restores saved risk values instead of
+defaulting every reopened row to Medium.
+
+Verification checklist matching now honors the Category-selected role or signatory detail and no
+longer activates an unrelated role. Added backend, Rulebook, and browser regression coverage.
+Focused tests (74) and the full suite (134) pass. The user manually confirmed Document-role import,
+risk persistence, and the Verification Procedure checklist. D3 is complete; D4 is next.
