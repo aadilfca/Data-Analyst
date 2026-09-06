@@ -4775,3 +4775,41 @@ Form definition instead of clearing it. The main Form save can still intentional
 Verified with 64 focused Audit Rulebook tests, 120 full-suite tests, JavaScript syntax validation,
 Python compilation, and `git diff --check`. Aadil confirmed the local browser correction and approved
 Git closeout. Phase D is the next implementation phase.
+
+---
+
+## Form Procedure-window rendering - Phase D - 2026-09-06
+
+Form field definitions are now included in both live category guidance and the compiled
+Verification Rulebook. The shared Procedure modal recognizes `document_type: form` and renders
+manual Header fields plus repeatable Item rows with Text, Date, and Numeric controls. Optional
+Linked Column mappings are displayed as prefill metadata only; Copy from lines remains Phase E.
+
+Form evidence uses the existing typed `voucher_line_form_entries` and
+`voucher_line_form_values` tables. A full-replace save endpoint validates document ownership,
+row scope, duplicate fields, dates, numeric values, and explicit clearing. Reads use the existing
+stable sibling-session convention so saved evidence reloads consistently. The Verification atomic
+Save/Verify bundle also accepts dirty Form entries; Physical Bill handling is unchanged.
+
+Updated the shared-modal cache version for Verification and Audit Workbook. Added focused Form
+contract tests; JavaScript syntax, Python compilation, `git diff --check`, and the full test suite
+(124 tests) pass. Manual browser confirmation is still required before Git commit/push. Phase E is next.
+
+Follow-up correction: Form documents with an optional Linked Template now use Template columns only
+for Linked Column mapping. They no longer enter the separate linked-template Verification Data
+Fields validation, which had incorrectly shown the reselect-Template error during Save. The Audit
+Rules asset version was bumped to `v=13`; 69 Audit Rulebook tests pass after the correction.
+
+Follow-up correction: Existing Postgres databases could still retain the pre-Form
+`audit_rule_documents_document_type_check` because the bootstrap marker intentionally skips the
+full schema pass after the first successful startup. The startup path now performs an idempotent
+constraint inspection and upgrades that check to allow `linked_template`, `form`, and
+`physical_bill` without changing document rows. Form template loading also keeps the separate
+Verification Data Fields policy panel hidden while it loads Linked Column choices, including on
+load failure. The Audit Rules asset version is now `v=14`.
+
+Verified with the focused Audit Rules and Postgres bootstrap suites (81 tests), JavaScript syntax
+validation, and `git diff --check`. The first full-suite run found and then covered one stale test
+expectation for the new migration query; a clean full-suite rerun remains required before Git
+closeout. Manual browser retest is required: restart the server, hard-refresh Audit Rules, save a
+Form with an optional Linked Template, and confirm the Linked Column list loads without the error.

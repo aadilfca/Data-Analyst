@@ -243,6 +243,7 @@ function getVoucherTickSaveState() {
     const observations = [];
     const accountHeadNotes = [];
     const physicalBills = [];
+    const formEntries = [];
     Object.entries(hostAdapter?.procedureModalState || {}).forEach(([uid, line]) => {
         Object.entries(line.tabs || {}).forEach(([docId, tab]) => {
             if (tab.observationDirty) observations.push({
@@ -262,6 +263,16 @@ function getVoucherTickSaveState() {
                     }))
                 }))
             });
+            if (tab.formDirty) formEntries.push({
+                voucher_line_id: parseInt(uid), document_id: parseInt(docId),
+                entries: (tab.formEntries || []).map(entry => ({
+                    row_scope: entry.row_scope,
+                    sort_order: entry.sort_order,
+                    values: Object.entries(entry.values || {}).map(([field_id, value]) => ({
+                        field_id: parseInt(field_id), value
+                    }))
+                }))
+            });
         });
         const accountHead = accountHeadCache[uid];
         if (accountHead && accountHead.mode === 'nomatch' && accountHead.noMatchDirty) {
@@ -273,7 +284,7 @@ function getVoucherTickSaveState() {
     // key, so a camelCase key here silently falls through to that param's None default instead
     // of erroring, which is what caused the endpoint's unconditional 400 on verify (root-caused
     // 2026-08-28: voucher_checks always arrived empty, so every active check read as untouched).
-    return { observations, account_head_notes: accountHeadNotes, physical_bills: physicalBills, procedure_checks: procedureChecks, voucher_checks: (voucherChecksCache[transactionRef] || []).map(check => ({
+    return { observations, account_head_notes: accountHeadNotes, physical_bills: physicalBills, form_entries: formEntries, procedure_checks: procedureChecks, voucher_checks: (voucherChecksCache[transactionRef] || []).map(check => ({
         check_id: check.id, state: check.state
     })) };
 }
@@ -700,7 +711,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!hostAdapter.procedureModalState[uid].tabs[docId]) {
-        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false };
+        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false };
     }
     return hostAdapter.procedureModalState[uid].tabs[docId];
 }
@@ -908,6 +919,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // Procedures-badge path no longer needs its own physical-bill fetch either - it reads
     // hostAdapter.loadVoucherSupportData() instead.
     const physicalBillEntries = (modalData.physical_bills && modalData.physical_bills.bills) || [];
+    const formDocumentEntries = (modalData.form_entries && modalData.form_entries.documents) || [];
 
     // This line's Cross-check evaluation results (already-computed structure, zero new
     // evaluation logic), for the Data Table segment's collapsible pass/fail rollup - re-fetched
@@ -1013,6 +1025,16 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
             tabState.physicalBillSaved = savedBills.length > 0;
             tabState.physicalBillDirty = false;
         }
+        if (doc.document_type === 'form') {
+            const savedForm = formDocumentEntries.find(entry => String(entry.document_id) === String(doc.id));
+            tabState.formEntries = (savedForm?.entries || []).map(entry => ({
+                row_scope: entry.row_scope || 'header',
+                sort_order: entry.sort_order || 0,
+                values: Object.fromEntries((entry.values || []).map(value => [String(value.field_id), value.value ?? '']))
+            }));
+            tabState.formSaved = !!savedForm;
+            tabState.formDirty = false;
+        }
     });
 
     // Rail default (Phase 1): an explicit target (a specific document link clicked in the
@@ -1090,7 +1112,7 @@ function updateProcedureModalSavedNote(uid) {
     if (!noteEl) return;
     const lineState = hostAdapter.procedureModalState[uid];
     const tabs = (lineState && lineState.tabs) || {};
-    const dirty = Object.values(tabs).some(t => t.observationDirty);
+    const dirty = Object.values(tabs).some(t => t.observationDirty || t.formDirty);
     noteEl.textContent = dirty ? 'Unsaved changes' : 'All changes saved';
     noteEl.classList.toggle('dirty', dirty);
 }
@@ -1129,8 +1151,10 @@ async function navigateProcedureModalLine(delta) {
     // the next line immediately. The host's in-flight save guard keeps this background save safe;
     // dirty state is retained automatically if the request fails.
     const savePromise = (async () => {
+        const formEntriesSaved = await flushFormEntries(uid);
         const physicalBillsSaved = await flushPhysicalBillEntries(uid);
         const result = await hostAdapter.saveLineItems(uid);
+        if (!formEntriesSaved) hostAdapter.markLineDirty(uid, 'form evidence save retry required');
         if (!physicalBillsSaved) hostAdapter.markLineDirty(uid, 'physical bill save retry required');
         if (result && result.ok) {
             hostAdapter.showStatus('✅ Audit procedures saved.', 'success');
@@ -1209,6 +1233,7 @@ async function closeProcedureModal() {
     if (currentProcedureModalUid) {
         if (window.LoadingUI) window.LoadingUI.showProgressBar(procedureModalClose, { mode: 'indeterminate', message: 'Saving…' });
         try {
+            const formEntriesSaved = await flushFormEntries(currentProcedureModalUid);
             const physicalBillsSaved = await flushPhysicalBillEntries(currentProcedureModalUid);
             // Verification supplies the grouped save path. Audit Workbook deliberately has a
             // lean adapter, so close must use its ordinary line save instead of calling a method
@@ -1232,6 +1257,7 @@ async function closeProcedureModal() {
             }).filter(Boolean);
             await Promise.all(refreshedLines);
             if (!physicalBillsSaved) hostAdapter.markLineDirty(currentProcedureModalUid, 'physical bill save retry required');
+            if (!formEntriesSaved) hostAdapter.markLineDirty(currentProcedureModalUid, 'form evidence save retry required');
         } finally {
             if (window.LoadingUI) window.LoadingUI.hideProgressBar(procedureModalClose);
         }
@@ -2022,6 +2048,119 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
     }
 }
 
+function makeEmptyFormEntry(rowScope, fields, sortOrder = 0) {
+    return {
+        row_scope: rowScope,
+        sort_order: sortOrder,
+        values: Object.fromEntries(fields.map(field => [String(field.id), '']))
+    };
+}
+
+function ensureFormHeaderEntry(tabState, fields) {
+    let entry = (tabState.formEntries || []).find(item => item.row_scope === 'header');
+    if (!entry && fields.length) {
+        entry = makeEmptyFormEntry('header', fields, 0);
+        tabState.formEntries = [entry, ...(tabState.formEntries || [])];
+    }
+    return entry;
+}
+
+function formFieldInputHtml(field, value, rowIndex, rowScope) {
+    const type = field.field_type === 'date' ? 'date' : 'text';
+    const inputMode = field.field_type === 'numeric' ? 'decimal' : undefined;
+    const mapping = field.linked_column
+        ? `<small class="procedure-form-linked-column">Prefill: ${hostAdapter.escapeHtml(field.linked_column)}</small>` : '';
+    return `<div class="procedure-form-field">
+        <label>${hostAdapter.escapeHtml(field.field_name)}${mapping}</label>
+        <input type="${type}"${inputMode ? ` inputmode="${inputMode}"` : ''}
+            class="procedure-form-input" data-row-index="${rowIndex}" data-row-scope="${rowScope}"
+            data-field-id="${field.id}" data-field-type="${field.field_type || 'text'}"
+            value="${hostAdapter.escapeHtml(value == null ? '' : String(value))}">
+    </div>`;
+}
+
+function renderFormDocumentPanel(uid, doc) {
+    const container = document.getElementById('procedureModalPanels');
+    if (!container) return;
+    const tabState = getProcedureTabState(uid, doc.id);
+    const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
+    const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
+    const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
+    const headerEntry = ensureFormHeaderEntry(tabState, headerFields);
+    const itemEntries = (tabState.formEntries || []).filter(entry => entry.row_scope === 'item');
+
+    const headerHtml = headerFields.length ? `
+        <div class="procedure-form-section">
+            <h4 class="procedure-form-section-title">Header fields</h4>
+            <div class="procedure-form-grid">${headerFields.map(field => formFieldInputHtml(
+                field, headerEntry.values[String(field.id)], 0, 'header'
+            )).join('')}</div>
+        </div>` : '';
+    const itemsHtml = itemFields.length ? `
+        <div class="procedure-form-section">
+            <div class="procedure-form-section-heading"><h4 class="procedure-form-section-title">Item fields</h4>
+                <button type="button" id="procedureFormAddItemBtn" class="procedure-form-add-btn">+ Add item row</button></div>
+            <div class="procedure-form-items">${itemEntries.length ? itemEntries.map((entry, index) => `
+                <div class="procedure-form-item-row" data-item-index="${index}">
+                    <div class="procedure-form-grid">${itemFields.map(field => formFieldInputHtml(
+                        field, entry.values[String(field.id)], index, 'item'
+                    )).join('')}</div>
+                    <button type="button" class="procedure-form-remove-item-btn" data-item-index="${index}">Remove row</button>
+                </div>`).join('') : '<div class="procedure-form-empty-items">No item rows added.</div>'}</div>
+        </div>` : '';
+    const emptyHtml = fields.length ? '' : '<div class="procedure-form-empty">This Form has no configured fields. Configure fields in Audit Rules before using it.</div>';
+
+    container.innerHTML = `
+        <div class="procedure-tab-panel" data-doc-id="${doc.id}">
+            <div class="procedure-segment procedure-segment-data procedure-form-segment">
+                <h4 class="procedure-segment-header">Manual evidence</h4>
+                <div class="procedure-segment-body">
+                    <p class="procedure-form-help">Enter evidence from the physical document. Linked columns are reserved for the later Copy from lines action.</p>
+                    ${emptyHtml}${headerHtml}${itemsHtml}
+                </div>
+            </div>
+            <div class="procedure-segment procedure-segment-observation">
+                <h4 class="procedure-segment-header">📝 Observation</h4>
+                <div class="procedure-segment-body">${buildObservationSection(uid, doc.id)}</div>
+            </div>
+        </div>`;
+
+    container.querySelectorAll('.procedure-form-input').forEach(input => {
+        input.addEventListener('input', function() {
+            const rowScope = this.dataset.rowScope;
+            const rowIndex = parseInt(this.dataset.rowIndex);
+            const entry = rowScope === 'header'
+                ? headerEntry
+                : itemEntries[rowIndex];
+            if (!entry) return;
+            entry.values[this.dataset.fieldId] = this.value;
+            tabState.formDirty = true;
+            hostAdapter.markLineDirty(uid, 'form evidence edited');
+            updateProcedureModalSavedNote(uid);
+        });
+    });
+    const addItemBtn = document.getElementById('procedureFormAddItemBtn');
+    if (addItemBtn) addItemBtn.addEventListener('click', function() {
+        tabState.formEntries = tabState.formEntries || [];
+        tabState.formEntries.push(makeEmptyFormEntry('item', itemFields, itemEntries.length));
+        tabState.formDirty = true;
+        hostAdapter.markLineDirty(uid, 'form item row added');
+        renderFormDocumentPanel(uid, doc);
+    });
+    container.querySelectorAll('.procedure-form-remove-item-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const rowIndex = parseInt(this.dataset.itemIndex);
+            const entry = itemEntries[rowIndex];
+            if (!entry) return;
+            tabState.formEntries.splice(tabState.formEntries.indexOf(entry), 1);
+            tabState.formDirty = true;
+            hostAdapter.markLineDirty(uid, 'form item row removed');
+            renderFormDocumentPanel(uid, doc);
+        });
+    });
+    wireProcedureChecklistAndObservation(container, uid, doc.id, tabState);
+}
+
 // Renders one tab's body. A document with a configured template_id gets the full panel: search
 // box + results dropdown, the linked-evidence table (Phase 4), the Audit Procedures checklist
 // (Phase 5), and the Observation section (Phase 6). A document with no template_id has nothing to
@@ -2512,6 +2651,10 @@ function renderProcedureModalPanel(uid, docId) {
         renderPhysicalBillDocumentPanel(uid, doc);
         return;
     }
+    if (doc.document_type === 'form') {
+        renderFormDocumentPanel(uid, doc);
+        return;
+    }
 
     const tabState = getProcedureTabState(uid, docId);
     const hasTemplate = !!doc.template_id;
@@ -2650,6 +2793,52 @@ async function toggleAllProcedureChecks(uid, docId) {
     // cache entry is stale — drop it. A later reopen re-fetches once the background per-line
     // save has run.
     invalidateProcedureModalData(uid);
+}
+
+async function saveFormEntry(uid, docId) {
+    const tabState = getProcedureTabState(uid, docId);
+    const entries = (tabState.formEntries || []).map(entry => ({
+        row_scope: entry.row_scope,
+        sort_order: entry.sort_order,
+        values: Object.entries(entry.values || {}).map(([fieldId, value]) => ({
+            field_id: parseInt(fieldId), value
+        }))
+    }));
+    try {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_form_entries`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ voucher_line_id: parseInt(uid), document_id: parseInt(docId), entries })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save Form evidence.');
+        }
+        tabState.formSaved = entries.length > 0;
+        tabState.formDirty = false;
+        invalidateProcedureModalData(uid);
+        return true;
+    } catch (e) {
+        console.error('Failed to save Form evidence:', e);
+        hostAdapter.showStatus('Form evidence could not be saved. Please retry.', 'error');
+        return false;
+    } finally {
+        updateProcedureModalSavedNote(uid);
+    }
+}
+
+async function flushFormEntries(uid) {
+    if (!hostAdapter) return true;
+    const lineState = hostAdapter.procedureModalState[uid];
+    if (!lineState || !lineState.documents) return true;
+    let allSaved = true;
+    for (const doc of lineState.documents) {
+        if (doc.document_type !== 'form') continue;
+        const tabState = getProcedureTabState(uid, doc.id);
+        if (!tabState.formDirty) continue;
+        if (!await saveFormEntry(uid, doc.id)) allSaved = false;
+    }
+    return allSaved;
 }
 
 // ---------- PHYSICAL BILL ENTRY (evidence type; Multi-Bill/Multi-Line, Phase 3 of 6) ----------

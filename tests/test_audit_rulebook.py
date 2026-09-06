@@ -5,6 +5,8 @@ import os
 import sqlite3
 import tempfile
 import importlib
+from unittest.mock import Mock
+from datetime import date
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -33,6 +35,9 @@ from routers.verification import (
     _build_working_paper_gates,
     _evaluate_matrix_cross_check,
     _rulebook_cross_check_configs,
+    _form_value_for_storage,
+    _shape_form_entries,
+    _replace_form_entries,
     get_verification_session_rulebook,
     rebase_verification_session_rulebook,
 )
@@ -1310,6 +1315,79 @@ class FormDocumentSchemaTests(unittest.TestCase):
         self.assertEqual([params[2] for params in inserts], [0, 1])
         self.assertEqual([params[3] for params in inserts], ["text", "numeric"])
         self.assertEqual([params[4] for params in inserts], ["header", "item"])
+
+
+class FormEvidenceContractTests(unittest.TestCase):
+    def test_form_linked_template_does_not_use_verification_policy_guard(self):
+        source = (Path(__file__).resolve().parents[1] / "static" / "audit_rules.js").read_text(encoding="utf-8")
+        self.assertIn("const usesVerificationPolicy = documentType === 'linked_template';", source)
+        self.assertIn("if (arDocumentTypeSelect.value === 'form')", source)
+        self.assertIn("arVerificationFieldsField.style.display = isFormDocument ? 'none' : '';", source)
+
+    def test_postgres_document_type_migration_adds_form_to_an_old_constraint(self):
+        cursor = Mock()
+        cursor.fetchone.return_value = ("CHECK ((document_type = ANY (ARRAY['linked_template'::text, 'physical_bill'::text])))",)
+        conn = Mock()
+        conn.cursor.return_value = cursor
+
+        self.assertTrue(database._ensure_postgres_audit_rule_document_type_constraint(conn))
+        executed_sql = "\n".join(call.args[0] for call in cursor.execute.call_args_list)
+        self.assertIn("DROP CONSTRAINT audit_rule_documents_document_type_check", executed_sql)
+        self.assertIn("'form'", executed_sql)
+        conn.rollback.assert_not_called()
+
+    def test_postgres_document_type_migration_is_idempotent_when_form_is_allowed(self):
+        cursor = Mock()
+        cursor.fetchone.return_value = ("CHECK ((document_type = ANY (ARRAY['linked_template'::text, 'form'::text, 'physical_bill'::text])))",)
+        conn = Mock()
+        conn.cursor.return_value = cursor
+
+        self.assertFalse(database._ensure_postgres_audit_rule_document_type_constraint(conn))
+        cursor.execute.assert_called_once()
+        conn.rollback.assert_not_called()
+
+    def test_form_values_are_normalized_to_the_declared_types(self):
+        self.assertEqual(_form_value_for_storage('text', '  Bill  ', 'Bill No'), ('Bill', None, None))
+        text, date_value, numeric = _form_value_for_storage('date', '2026-09-05', 'Bill Date')
+        self.assertEqual(date_value.isoformat(), '2026-09-05')
+        self.assertIsNone(text)
+        self.assertIsNone(numeric)
+        self.assertEqual(_form_value_for_storage('numeric', '1200.5', 'Quantity')[2], 1200.5)
+
+    def test_form_values_are_shaped_back_as_text_date_and_numeric(self):
+        rows = [
+            {'entry_id': 9, 'voucher_line_id': 4, 'document_id': 7, 'row_scope': 'header', 'sort_order': 0,
+             'field_id': 1, 'field_name': 'Bill No', 'field_type': 'text', 'value_text': 'PB-1',
+             'value_date': None, 'value_numeric': None},
+            {'entry_id': 10, 'voucher_line_id': 4, 'document_id': 7, 'row_scope': 'item', 'sort_order': 0,
+             'field_id': 2, 'field_name': 'Bill Date', 'field_type': 'date', 'value_text': None,
+             'value_date': date(2026, 9, 5), 'value_numeric': None},
+            {'entry_id': 10, 'voucher_line_id': 4, 'document_id': 7, 'row_scope': 'item', 'sort_order': 0,
+             'field_id': 3, 'field_name': 'Quantity', 'field_type': 'numeric', 'value_text': None,
+             'value_date': None, 'value_numeric': 3},
+        ]
+        result = _shape_form_entries(rows)
+        self.assertEqual(result[0]['values'][0]['value'], 'PB-1')
+        self.assertEqual(result[1]['values'][0]['value'], '2026-09-05')
+        self.assertEqual(result[1]['values'][1]['value'], 3.0)
+
+    def test_form_replace_rejects_a_field_from_another_document(self):
+        responses = [
+            [{'id': 4}], [{'id': 7}],
+            [{'id': 11, 'field_name': 'Bill No', 'field_type': 'text', 'field_scope': 'header'}],
+        ]
+        with patch('routers.verification.execute_query_pg', side_effect=responses):
+            with self.assertRaises(Exception) as raised:
+                _replace_form_entries(4, 7, [{'row_scope': 'header', 'values': [{'field_id': 99, 'value': 'x'}]}])
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_form_replace_clears_with_an_empty_entry_list(self):
+        responses = [[{'id': 4}], [{'id': 7}], []]
+        writes = []
+        with patch('routers.verification.execute_query_pg', side_effect=responses), \
+             patch('routers.verification.execute_write_pg', side_effect=lambda sql, params=None: writes.append((sql, params))):
+            self.assertEqual(_replace_form_entries(4, 7, []), 0)
+        self.assertIn('DELETE FROM voucher_line_form_entries', writes[0][0])
 
 
 if __name__ == "__main__":

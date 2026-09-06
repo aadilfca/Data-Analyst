@@ -36,7 +36,7 @@ configuration rather than remaining a special-purpose document type.
 | A | Form data model | Define Form documents, ordered fields, Text/Date/Numeric types, optional Linked Template, linked-column mapping, and repeating item rows; plan safe Physical Bill migration. | Complete |
 | B | Form authoring UI | Add Form to Document Type, Linked Template selection, and a three-column field editor: Column Name, Column Type, Linked Column. | Complete |
 | C | Form persistence | Validate and persist field definitions, ordering, types, linked columns, template changes, and invalid mappings. | Complete |
-| D | Form rendering | Show an assigned Form document as a normal Procedure-window tab with manual entry controls and clear field labels/types. | Pending |
+| D | Form rendering | Show an assigned Form document as a normal Procedure-window tab with manual entry controls and clear field labels/types. | Complete; pending manual browser confirmation |
 | E | Copy from lines | Add a visible Copy from lines action that reads the configured Linked Template evidence and populates mapped Form fields without preventing manual edits. | Pending |
 | F | Rule integration | Expose saved Form values to Procedure/Evidence completion and Cross-check matrix evaluation, including Quantity-only comparisons. | Pending |
 | G | Form edge cases | Define and test clearing, save/reload, missing values, inactive/changed templates, deleted columns, duplicate fields, and numeric/date validation. | Pending |
@@ -69,7 +69,7 @@ configuration rather than remaining a special-purpose document type.
   items. Quantity-only rules must not require Rate or Amount rows.
 - No commit or push occurs until the user confirms local-server testing for the completed phase.
 
-### Current next action
+### Previous next action
 
 **This phase: D — Form rendering.** Show an assigned Form document as a normal Procedure-window tab
 with manual entry controls and clear field labels/types.
@@ -79,8 +79,22 @@ with manual entry controls and clear field labels/types.
 Form Fields now appear directly after Linked Template. Document-side authorisation updates preserve
 saved Form definitions, while an explicit empty field list still clears them. Legacy Physical Bill
 records remain untouched for the controlled H/I migration. Focused tests (64) and the full suite
-(120) pass. Aadil confirmed the local browser correction and approved Git closeout. Phase D is now
-the next implementation phase.
+(120) pass. Aadil confirmed the local browser correction and approved Git closeout. Phase D was the
+next implementation phase at that checkpoint.
+
+### Current next action
+
+Phase E - Copy from lines: populate mapped Form fields from configured Linked Template evidence
+without preventing manual edits.
+
+### Phase D implementation checkpoint - 2026-09-06
+
+Form definitions now flow through live and compiled Rulebook guidance. Verification renders Form
+documents with typed Header/Item evidence controls, repeatable item rows, full-replace save/reload,
+and atomic Verify-bundle support. Physical Bill and Copy from lines behavior remain separate for
+later phases. An idempotent Postgres startup migration now upgrades existing document-type checks to
+accept `form`, and Form template loading keeps the separate Verification Data Fields panel hidden.
+The targeted suites (81) pass; manual browser confirmation is required before Git closeout.
 
 ### Approved target design
 

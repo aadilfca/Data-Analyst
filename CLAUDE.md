@@ -312,6 +312,9 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-05: Form authoring UI added with Linked Template, typed Header/Item fields, linked columns, ordering, and save payload integration; static/audit_rules.* and style.css.
 - 2026-09-05: New Documents now hide legacy Physical Bill while preserving existing records for migration; static/audit_rules.html and static/audit_rules.js.
 - 2026-09-05: Form field placement and secondary-update persistence corrected and manually confirmed; Phase D is next. See CHANGELOG_ARCHIVE.md.
+- 2026-09-06: Form documents now render with typed Header/Item evidence, persistence, Rulebook metadata, and atomic Verify support; Phase E is next. See CHANGELOG_ARCHIVE.md.
+- 2026-09-06: Fixed Form documents with optional Linked Templates being blocked by linked-template Verification policy validation; Audit Rules frontend only. See CHANGELOG_ARCHIVE.md.
+- 2026-09-06: Migrated the existing Postgres document-type check to accept Forms and kept Form Template loading separate from Verification Data Fields; browser retest pending.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

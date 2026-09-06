@@ -42,6 +42,8 @@ class FakeCursor:
         return list(self._conn.rows)
 
     def fetchone(self):
+        if self._conn.fetchone_rows is not None:
+            return self._conn.fetchone_rows.pop(0) if self._conn.fetchone_rows else None
         return self._conn.rows[0] if self._conn.rows else None
 
     def close(self):
@@ -53,8 +55,9 @@ class FakeCursor:
 
 
 class FakeConn:
-    def __init__(self, rows=None, execute_errors=None, closed=0, description=None):
+    def __init__(self, rows=None, execute_errors=None, closed=0, description=None, fetchone_rows=None):
         self.rows = [("ok",)] if rows is None else rows
+        self.fetchone_rows = list(fetchone_rows) if fetchone_rows is not None else None
         self._execute_errors = list(execute_errors or [])
         self.closed = closed
         self.description = description
@@ -233,7 +236,10 @@ class ExecuteQueryPgWiringTests(unittest.TestCase):
 
 class PostgresSchemaBootstrapTests(unittest.TestCase):
     def test_completed_schema_marker_skips_repeated_bootstrap(self):
-        conn = FakeConn(rows=[("audit_rules_config_state",)])
+        conn = FakeConn(fetchone_rows=[
+            ("audit_rules_config_state",),
+            ("CHECK ((document_type = ANY (ARRAY['linked_template'::text, 'form'::text, 'physical_bill'::text])))",),
+        ])
 
         with patch.object(database, "_POSTGRES_SCHEMA_READY", False):
             with patch("builtins.print") as printed:
@@ -241,7 +247,10 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
 
         self.assertEqual(
             conn.executed,
-            [("SELECT to_regclass('public.audit_rules_config_state')", None)],
+            [
+                ("SELECT to_regclass('public.audit_rules_config_state')", None),
+                ("\n            SELECT pg_get_constraintdef(oid)\n            FROM pg_constraint\n            WHERE conrelid = 'public.audit_rule_documents'::regclass\n              AND conname = 'audit_rule_documents_document_type_check'\n        ", None),
+            ],
         )
         self.assertEqual(conn.commits, 1)
         printed.assert_called_once_with(

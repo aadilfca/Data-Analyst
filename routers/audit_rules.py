@@ -456,6 +456,8 @@ def compile_verification_rulebook(client_id: int) -> dict:
             "required": bool(required), "transaction_level_approval": bool(row.get("transaction_level_approval")),
             "risk_rating": row.get("risk_rating"),
             "fields": fields_by_document.get(document_id, []),
+            "form_fields": get_document_form_fields(document_id)
+                if (row.get("document_type") or "linked_template") == "form" else [],
             "verification_field_policy": _parse_verification_field_policy(row.get("verification_field_policy")),
             "verification_fields": _build_selected_verification_fields(
                 template_id, row.get("verification_field_policy"), mappings_by_template
@@ -2283,7 +2285,9 @@ def get_category_guidance_documents(category_id: int) -> List[dict]:
             # procedure window's document rail - get_category_documents() above already exposes
             # this same field for the Category admin display; this is the guidance-endpoint
             # sibling Verification itself actually reads.
-            "document_type": r["document_type"] or 'linked_template'
+            "document_type": r["document_type"] or 'linked_template',
+            "form_fields": get_document_form_fields(r["document_id"])
+                if (r["document_type"] or 'linked_template') == 'form' else []
         }
         for r in rows
     ]

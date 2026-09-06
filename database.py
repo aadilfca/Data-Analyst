@@ -2956,6 +2956,45 @@ def init_db():
 #    data_quality_flag) - left as plain typed columns, matching today's
 #    actual (unenforced) behavior, since Phase 3-6 hasn't verified every
 #    app code path against a stricter constraint yet.
+def _ensure_postgres_audit_rule_document_type_constraint(conn):
+    """Upgrade the document-type check on an already-bootstrapped database.
+
+    The Form type was added to the declarative schema, but an existing Postgres
+    database does not rerun CREATE TABLE after the bootstrap marker is present.
+    Keep this migration idempotent so normal restarts are safe and old schemas
+    are upgraded without touching any document rows.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT pg_get_constraintdef(oid)
+            FROM pg_constraint
+            WHERE conrelid = 'public.audit_rule_documents'::regclass
+              AND conname = 'audit_rule_documents_document_type_check'
+        """)
+        row = cur.fetchone()
+        definition = str(row[0]).lower() if row else ""
+        if "'form'" in definition:
+            return False
+
+        if row:
+            cur.execute(
+                "ALTER TABLE audit_rule_documents "
+                "DROP CONSTRAINT audit_rule_documents_document_type_check"
+            )
+        cur.execute("""
+            ALTER TABLE audit_rule_documents
+            ADD CONSTRAINT audit_rule_documents_document_type_check
+            CHECK (document_type IN ('linked_template', 'form', 'physical_bill'))
+        """)
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
 
@@ -2968,10 +3007,14 @@ def init_db_postgres(conn):
     # marker is absent and the complete idempotent bootstrap below still runs.
     cur.execute("SELECT to_regclass('public.audit_rules_config_state')")
     if cur.fetchone()[0] is not None:
-        conn.commit()
-        print("[postgres] existing schema verified; skipped bootstrap")
-        _POSTGRES_SCHEMA_READY = True
         cur.close()
+        migrated = _ensure_postgres_audit_rule_document_type_constraint(conn)
+        conn.commit()
+        print(
+            "[postgres] existing schema verified; skipped bootstrap"
+            + (" (document type constraint upgraded)" if migrated else "")
+        )
+        _POSTGRES_SCHEMA_READY = True
         return
 
     def run(sql, label=None):

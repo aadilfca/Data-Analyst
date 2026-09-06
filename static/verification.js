@@ -4140,6 +4140,7 @@ async function doSaveLineItems(detailId) {
     // legacy save below — this is what lets the observation textarea skip a dedicated Save button
     // and still survive Prev/Next/Complete/Exit (see flushProcedureObservations()).
     await flushProcedureObservations(detailId);
+    if (typeof flushFormEntries === 'function') await flushFormEntries(detailId);
     // Voucher-level Checks simplified to name-only (Phase 3 of 4): the checks bar has no
     // local-first field anymore (tick/cross both save immediately) — no flush step needed here.
     // Account Head Recommendation follow-up: same "flush on save" treatment for a dirty no-match

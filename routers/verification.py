@@ -11,6 +11,7 @@ from database import start_db_metrics, get_db_metrics, stop_db_metrics
 from psycopg2.extras import Json
 from datetime import datetime, timezone
 import json
+import math
 import re
 import time
 from typing import List, Optional, Dict, Any
@@ -1894,6 +1895,7 @@ def save_and_verify_voucher_bundle(
     observations: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     account_head_notes: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     physical_bills: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
+    form_entries: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     procedure_checks: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     voucher_checks: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     perf: bool = Query(False),
@@ -1908,6 +1910,7 @@ def save_and_verify_voucher_bundle(
     observations = observations if isinstance(observations, list) else []
     account_head_notes = account_head_notes if isinstance(account_head_notes, list) else []
     physical_bills = physical_bills if isinstance(physical_bills, list) else []
+    form_entries = form_entries if isinstance(form_entries, list) else []
     if not lines:
         raise HTTPException(400, "At least one voucher line is required.")
     if str(current_detail_id) not in {str(line.get('detail_id')) for line in lines}:
@@ -2012,6 +2015,11 @@ def save_and_verify_voucher_bundle(
                         (bill_id, item_name, quantity, rate, amount, sort_order, updated_at)
                         VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
                         (bill_id, (item.get('item_name') or '').strip() or None, qty, rate, amount, item_order))
+        for entry in form_entries:
+            line_id = entry.get('voucher_line_id')
+            document_id = entry.get('document_id')
+            if line_id in eligible_line_ids:
+                _replace_form_entries(line_id, document_id, entry.get('entries') or [])
         if observations or account_head_notes:
             for line in lines:
                 sibling_ids = _resolve_sibling_voucher_line_ids(line['detail_id'])
@@ -5003,6 +5011,167 @@ def _fetch_physical_bills_for_document(voucher_line_id: int, document_id: int) -
     return {"voucher_line_id": voucher_line_id, "document_id": document_id, "bills": bills}
 
 
+def _form_value_for_storage(field_type: str, value: Any, field_name: str):
+    """Return one typed Form value as (text, date, numeric), or all None for blank input."""
+    if value is None or value == '':
+        return None, None, None
+    if field_type == 'text':
+        text = str(value).strip()
+        return (text, None, None) if text else (None, None, None)
+    if field_type == 'date':
+        raw = str(value).strip()
+        try:
+            parsed = datetime.strptime(raw, '%Y-%m-%d').date()
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"Form field '{field_name}' must be a valid date (YYYY-MM-DD).")
+        return None, parsed, None
+    if field_type == 'numeric':
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"Form field '{field_name}' must be numeric.")
+        if not math.isfinite(numeric):
+            raise HTTPException(400, f"Form field '{field_name}' must be numeric.")
+        return None, None, numeric
+    raise HTTPException(400, f"Unsupported Form field type '{field_type}'.")
+
+
+def _replace_form_entries(voucher_line_id: int, document_id: int, raw_entries: Any) -> int:
+    """Full-replace the manual evidence rows for one Form Document and voucher line."""
+    line = execute_query_pg("SELECT id FROM verification_details WHERE id = %s", (voucher_line_id,))
+    if not line:
+        raise HTTPException(404, "Voucher line not found.")
+    document = execute_query_pg(
+        "SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE AND document_type = 'form'",
+        (document_id,)
+    )
+    if not document:
+        raise HTTPException(404, "Form document not found or inactive.")
+    if not isinstance(raw_entries, list):
+        raise HTTPException(400, "entries must be a list.")
+
+    field_rows = execute_query_pg(
+        "SELECT id, field_name, field_type, field_scope FROM audit_rule_document_fields "
+        "WHERE document_id = %s ORDER BY sort_order, id",
+        (document_id,)
+    )
+    fields = {int(row['id']): row for row in field_rows}
+    clean_entries = []
+    for entry_index, raw_entry in enumerate(raw_entries):
+        if not isinstance(raw_entry, dict):
+            raise HTTPException(400, f"Form entry {entry_index + 1} must be an object.")
+        row_scope = raw_entry.get('row_scope') or 'header'
+        if row_scope not in ('header', 'item'):
+            raise HTTPException(400, f"Form entry {entry_index + 1} has an invalid row scope.")
+        try:
+            sort_order = int(raw_entry.get('sort_order', entry_index))
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"Form entry {entry_index + 1} has an invalid row order.")
+
+        raw_values = raw_entry.get('values') or []
+        if isinstance(raw_values, dict):
+            raw_values = [{'field_id': key, 'value': value} for key, value in raw_values.items()]
+        if not isinstance(raw_values, list):
+            raise HTTPException(400, f"Form entry {entry_index + 1} values must be a list.")
+        clean_values = []
+        seen_fields = set()
+        for value_index, raw_value in enumerate(raw_values):
+            if not isinstance(raw_value, dict):
+                raise HTTPException(400, f"Form entry {entry_index + 1}, value {value_index + 1} must be an object.")
+            try:
+                field_id = int(raw_value.get('field_id'))
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"Form entry {entry_index + 1} has an invalid field.")
+            field = fields.get(field_id)
+            if not field:
+                raise HTTPException(400, f"Field {field_id} does not belong to this Form document.")
+            if field_id in seen_fields:
+                raise HTTPException(400, f"Form field '{field['field_name']}' was supplied more than once.")
+            if (field.get('field_scope') or 'header') != row_scope:
+                raise HTTPException(400, f"Form field '{field['field_name']}' belongs to the {field.get('field_scope') or 'header'} section.")
+            seen_fields.add(field_id)
+            text_value, date_value, numeric_value = _form_value_for_storage(
+                field.get('field_type') or 'text', raw_value.get('value'), field['field_name']
+            )
+            if text_value is not None or date_value is not None or numeric_value is not None:
+                clean_values.append({
+                    'field_id': field_id, 'value_text': text_value,
+                    'value_date': date_value, 'value_numeric': numeric_value
+                })
+        if clean_values:
+            clean_entries.append({'row_scope': row_scope, 'sort_order': sort_order, 'values': clean_values})
+
+    execute_write_pg(
+        "DELETE FROM voucher_line_form_entries WHERE voucher_line_id = %s AND document_id = %s",
+        (voucher_line_id, document_id)
+    )
+    saved_count = 0
+    for entry in clean_entries:
+        entry_id = execute_write_pg(
+            "INSERT INTO voucher_line_form_entries "
+            "(voucher_line_id, document_id, row_scope, sort_order, updated_at) "
+            "VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP) RETURNING id",
+            (voucher_line_id, document_id, entry['row_scope'], entry['sort_order'])
+        )
+        for value in entry['values']:
+            execute_write_pg(
+                "INSERT INTO voucher_line_form_values "
+                "(entry_id, field_id, value_text, value_date, value_numeric, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)",
+                (entry_id, value['field_id'], value['value_text'], value['value_date'], value['value_numeric'])
+            )
+        saved_count += 1
+    return saved_count
+
+
+def _shape_form_entries(rows: List[dict]) -> List[dict]:
+    entries = {}
+    for row in rows:
+        entry_id = row['entry_id']
+        entry = entries.setdefault(entry_id, {
+            'id': entry_id, 'voucher_line_id': row['voucher_line_id'],
+            'document_id': row['document_id'], 'row_scope': row['row_scope'],
+            'sort_order': row['sort_order'], 'values': []
+        })
+        value = row['value_text']
+        if (row.get('field_type') or 'text') == 'date':
+            date_value = row.get('value_date')
+            value = date_value.isoformat() if hasattr(date_value, 'isoformat') else date_value
+        elif (row.get('field_type') or 'text') == 'numeric':
+            value = float(row['value_numeric']) if row.get('value_numeric') is not None else None
+        if value is not None:
+            entry['values'].append({'field_id': row['field_id'], 'field_name': row['field_name'], 'value': value})
+    return sorted(entries.values(), key=lambda entry: (entry['sort_order'], entry['id']))
+
+
+def _fetch_form_entries_for_line(voucher_line_id: int, document_id: int) -> dict:
+    rows = execute_query_pg(
+        """SELECT e.id AS entry_id, e.voucher_line_id, e.document_id, e.row_scope, e.sort_order,
+                  f.id AS field_id, f.field_name, f.field_type, v.value_text, v.value_date, v.value_numeric
+           FROM voucher_line_form_entries e
+           JOIN voucher_line_form_values v ON v.entry_id = e.id
+           JOIN audit_rule_document_fields f ON f.id = v.field_id
+           WHERE e.voucher_line_id = %s AND e.document_id = %s
+           ORDER BY e.sort_order, e.id, f.sort_order, f.id""",
+        (voucher_line_id, document_id)
+    )
+    return {'voucher_line_id': voucher_line_id, 'document_id': document_id,
+            'entries': _shape_form_entries(rows)}
+
+
+@router.post("/api/verification/save_form_entries")
+def save_form_entries(
+    voucher_line_id: int = Body(..., embed=True),
+    document_id: int = Body(..., embed=True),
+    entries: List[Dict[str, Any]] = Body(..., embed=True),
+):
+    """Full-replace manually entered Form evidence for one voucher line/document pair."""
+    with pg_transaction():
+        _replace_form_entries(voucher_line_id, document_id, entries)
+        saved = _fetch_form_entries_for_line(voucher_line_id, document_id)
+    return saved
+
+
 @router.post("/api/verification/save_physical_bill")
 def save_physical_bill(
     voucher_line_id: int = Body(..., embed=True, description="verification_details.id (the voucher line 'uid')"),
@@ -5293,6 +5462,17 @@ def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
             ORDER BY vpb.sort_order, vpb.id""", tuple(cd_ids)) if cd_ids else []
         bill_ids = [r['id'] for r in bills]
         items = execute_query_pg(f"SELECT id, bill_id, item_name, quantity, rate, amount, source_document_row_id, source_template, sort_order, created_at, updated_at FROM voucher_line_physical_bill_items WHERE bill_id IN ({','.join('%s' for _ in bill_ids)}) ORDER BY bill_id, sort_order, id", tuple(bill_ids)) if bill_ids else []
+        forms = execute_query_pg(f"""SELECT vd.client_data_id, e.id AS entry_id, e.voucher_line_id,
+            e.document_id, e.row_scope, e.sort_order, e.updated_at AS entry_updated_at,
+            f.id AS field_id, f.field_name, f.field_type, v.value_text, v.value_date, v.value_numeric,
+            ard.is_active AS document_is_active
+            FROM voucher_line_form_entries e
+            JOIN verification_details vd ON vd.id=e.voucher_line_id
+            JOIN voucher_line_form_values v ON v.entry_id=e.id
+            JOIN audit_rule_document_fields f ON f.id=v.field_id
+            LEFT JOIN audit_rule_documents ard ON ard.id=e.document_id
+            WHERE vd.client_data_id IN ({cph})
+            ORDER BY e.document_id, e.sort_order, e.id, f.sort_order, f.id""", tuple(cd_ids)) if cd_ids else []
 
         latest_check = {}
         for r in checks:
@@ -5309,7 +5489,7 @@ def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
         item_map={}
         for r in items:
             item_map.setdefault(r['bill_id'],[]).append({"id":r['id'],"item_name":r['item_name'],"quantity":r['quantity'],"rate":r['rate'],"amount":r['amount'],"source_document_row_id":r['source_document_row_id'],"source_template":r['source_template'],"sort_order":r['sort_order'],"created_at":r['created_at'],"updated_at":r['updated_at']})
-        link_map={}; check_map={}; obs_map={}; bill_map={}
+        link_map={}; check_map={}; obs_map={}; bill_map={}; form_map={}; form_winning={}
         for r in links:
             d=json.loads(r['row_data']) if isinstance(r['row_data'],str) else r['row_data']
             # Group by the voucher line's stable identity. client_data_id in the payload remains
@@ -5320,7 +5500,25 @@ def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
         for r in latest_obs.values(): obs_map.setdefault(r['client_data_id'],[]).append({"document_id":r['document_id'],"observation_text":r['observation_text'] or '',"synced":bool(r['synced']),"last_synced_text":r['last_synced_text'],"updated_by":r['updated_by'],"updated_at":r['updated_at'],"document_name":r['document_name'],"is_active":r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])})
         for r in bills:
             if (_ts_sort_key(r['updated_at']),r['voucher_line_id']) == winning[(r['client_data_id'],r['document_id'])]: bill_map.setdefault(r['client_data_id'],[]).append(_shape_physical_bill(r,item_map.get(r['id'],[])))
-        result={str(r['id']):{"linked_documents":{"voucher_line_id":r['id'],"documents":link_map.get(sibling_by_line[r['id']],[]),"count":len(link_map.get(sibling_by_line[r['id']],[]))},"procedure_checks":{"voucher_line_id":r['id'],"checks":check_map.get(sibling_by_line[r['id']],[])},"observations":{"voucher_line_id":r['id'],"entries":obs_map.get(sibling_by_line[r['id']],[])},"physical_bills":{"voucher_line_id":r['id'],"bills":bill_map.get(sibling_by_line[r['id']],[]),"count":len(bill_map.get(sibling_by_line[r['id']],[]))}} for r in lines_rows}
+        for r in forms:
+            key = (r['client_data_id'], r['document_id'])
+            candidate = (_ts_sort_key(r['entry_updated_at']), r['voucher_line_id'])
+            if key not in form_winning or candidate > form_winning[key]:
+                form_winning[key] = candidate
+        winning_form_rows = [
+            r for r in forms
+            if (_ts_sort_key(r['entry_updated_at']), r['voucher_line_id']) == form_winning[(r['client_data_id'], r['document_id'])]
+        ]
+        form_rows_by_line_doc = {}
+        for r in winning_form_rows:
+            form_rows_by_line_doc.setdefault((r['client_data_id'], r['document_id']), []).append(r)
+        for (client_data_id, document_id), rows in form_rows_by_line_doc.items():
+            form_map.setdefault(client_data_id, []).append({
+                'document_id': document_id,
+                'is_active': rows[0]['document_is_active'] if rows[0]['document_is_active'] is None else bool(rows[0]['document_is_active']),
+                'entries': _shape_form_entries(rows)
+            })
+        result={str(r['id']):{"linked_documents":{"voucher_line_id":r['id'],"documents":link_map.get(sibling_by_line[r['id']],[]),"count":len(link_map.get(sibling_by_line[r['id']],[]))},"procedure_checks":{"voucher_line_id":r['id'],"checks":check_map.get(sibling_by_line[r['id']],[])},"observations":{"voucher_line_id":r['id'],"entries":obs_map.get(sibling_by_line[r['id']],[])},"physical_bills":{"voucher_line_id":r['id'],"bills":bill_map.get(sibling_by_line[r['id']],[]),"count":len(bill_map.get(sibling_by_line[r['id']],[]))},"form_entries":{"voucher_line_id":r['id'],"documents":form_map.get(sibling_by_line[r['id']],[])}} for r in lines_rows}
         response={"voucher_line_id":voucher_line_id,"session_id":anchor[0]['session_id'],
                   "transaction_ref":anchor[0]['transaction_ref'],
                   "client_id":anchor[0].get('client_id'),"lines":result}

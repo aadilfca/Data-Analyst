@@ -357,9 +357,12 @@ async function loadVerificationFieldsForTemplate(templateId) {
     verificationPolicyState = null;
     verificationPolicyTemplateId = null;
     verificationPolicyView = null;
-    arVerificationFieldsField.style.display = '';
-    arVerificationPolicyStatus.textContent = 'Loading Template columns...';
-    arVerificationPolicyStatus.className = 'ar-verification-policy-status default';
+    const isFormDocument = arDocumentTypeSelect.value === 'form';
+    arVerificationFieldsField.style.display = isFormDocument ? 'none' : '';
+    if (!isFormDocument) {
+        arVerificationPolicyStatus.textContent = 'Loading Template columns...';
+        arVerificationPolicyStatus.className = 'ar-verification-policy-status default';
+    }
 
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/templates/' + parsedTemplateId + '/columns');
@@ -367,6 +370,15 @@ async function loadVerificationFieldsForTemplate(templateId) {
         const columns = await res.json();
         if (requestToken !== verificationTemplateLoadToken || String(arTemplateSelect.value) !== String(parsedTemplateId)) return;
         verificationTemplateLoading = false;
+
+        // Forms use this request only to populate their optional Linked Column dropdown. They
+        // do not use the separate Verification Data Fields policy that linked-template Documents
+        // use, so do not pass Form columns through that policy renderer.
+        if (arDocumentTypeSelect.value === 'form') {
+            formTemplateColumns = columns;
+            renderFormFields();
+            return;
+        }
 
         // A newly selected Template starts with every active mapped column selected. The
         // administrator can remove individual columns before saving the Document.
@@ -384,6 +396,12 @@ async function loadVerificationFieldsForTemplate(templateId) {
     } catch (error) {
         if (requestToken !== verificationTemplateLoadToken) return;
         verificationTemplateLoading = false;
+        if (isFormDocument) {
+            // Form templates only supply Linked Column choices; keep the separate
+            // linked-template verification policy panel hidden on load failure too.
+            renderFormFields();
+            return;
+        }
         arVerificationPolicyStatus.textContent = error.message;
         arVerificationPolicyStatus.className = 'ar-verification-policy-status error';
         arVerificationOptionalFields.innerHTML = '';
@@ -715,11 +733,12 @@ async function saveDocument(triggerBtn) {
 
     const isPhysicalBill = documentType === 'physical_bill';
 
-    if (!isPhysicalBill && arTemplateSelect.value && verificationTemplateLoading) {
+    const usesVerificationPolicy = documentType === 'linked_template';
+    if (usesVerificationPolicy && arTemplateSelect.value && verificationTemplateLoading) {
         showDetailStatus('Please wait for the Template columns to load.', 'error');
         return;
     }
-    if (!isPhysicalBill && arTemplateSelect.value && verificationPolicyTemplateId !== parseInt(arTemplateSelect.value, 10)) {
+    if (usesVerificationPolicy && arTemplateSelect.value && verificationPolicyTemplateId !== parseInt(arTemplateSelect.value, 10)) {
         showDetailStatus('Template columns could not be loaded. Please reselect the Template and try again.', 'error');
         return;
     }
@@ -754,7 +773,7 @@ async function saveDocument(triggerBtn) {
         auth_role_authorities: requiredAuthorityState,
         document_type: documentType,
         form_fields: documentType === 'form' ? formFieldsPayload() : [],
-        verification_field_policy: (!isPhysicalBill && arTemplateSelect.value &&
+        verification_field_policy: (usesVerificationPolicy && arTemplateSelect.value &&
             verificationPolicyTemplateId === parseInt(arTemplateSelect.value, 10))
             ? verificationPolicyPayload() : null
     };
