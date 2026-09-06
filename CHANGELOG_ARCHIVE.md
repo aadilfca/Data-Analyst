@@ -4897,3 +4897,17 @@ Document guard, so neither path creates hidden Procedure documents or evaluates 
 Focused Rulebook tests (75), Cross-check performance tests (5), full suite (135), Python compilation,
 JavaScript syntax checks, and diff checks passed. Manual browser confirmation confirmed the expected
 block for the legacy inactive Vendor Bill dependency. D4 is complete; D5 is next.
+
+## Verification document visibility - Phase D5 - 2026-09-06
+
+Verification now treats the frozen session Rulebook as authoritative: a missing Category profile no
+longer falls back to live Audit Rules guidance and silently changes the session. Compiled and live
+Category guidance now expose active-state metadata, while the shared Procedure modal filters to
+active, unique, explicitly selected Category Documents only. Cross-check dependencies and saved
+evidence references cannot create additional Procedure tabs.
+
+Added regression coverage for active/unique Procedure tab projection and frozen-session no-fallback
+behavior. Focused Rulebook tests (77), Cross-check performance tests (5), full suite (137), Python
+compilation, JavaScript syntax checks, and diff checks passed. The user manually confirmed the
+Category-only Procedure tabs, active-document behavior, and absence of hidden Cross-check tabs.
+D5 is complete; D6 is next.

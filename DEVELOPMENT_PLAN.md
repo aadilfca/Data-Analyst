@@ -20,6 +20,15 @@ After each development, disclose only unresolved pendencies in a four-column tab
 each response. The next active item must be labelled **This phase**; completed work remains in the
 phase-status and decision-history sections.
 
+### Manual-test timing
+
+- Backend-only or data-only work may skip browser testing when automated coverage proves the change;
+  provide a practical API/database check instead.
+- Any user-facing phase requires local-server manual testing immediately after implementation and
+  before commit/push; a later UI phase does not replace that gate.
+- If a phase is a prerequisite for the next UI phase, test the current phase first, then continue
+  only after confirmation. Current D5 must therefore be tested before D6 begins.
+
 ## Current agreed roadmap
 
 The unified roadmap has three coordinated tracks: Form implementation (A-I), Category/document
@@ -60,7 +69,7 @@ and Physical Vendor Bill migration are accepted, preventing split configuration 
 | D2 | Establish an explicit Category Applicable Documents selector as the single source of truth for document visibility and eligibility. | Complete; manually confirmed |
 | D3 | Make Procedure/Evidence the authoring owner for the selected Category document set; keep roles, signatories, conditions, and evidence risk there. | Complete; manually confirmed |
 | D4 | Keep Applied Cross-checks rule-only. Validate every referenced document against the Category set and block incomplete dependencies instead of silently adding tabs. | Complete; manually confirmed |
-| D5 | Make Verification render only active documents selected for the frozen Category; remove implicit unions and hardcoded document tabs. | Next |
+| D5 | Make Verification render only active documents selected for the frozen Category; remove implicit unions and hardcoded document tabs. | Complete; manually confirmed |
 | D6 | Connect the Form-based Physical Vendor Bill to the canonical Category document set and reuse the same Document IDs in procedures and Cross-checks. | Pending |
 | D7 | Retire Category Evidence Type safely: stop new writes, inventory consumers, preserve legacy values during transition, migrate or null deliberately, then remove the feature after acceptance. | Pending |
 | D8 | Migrate legacy Physical Bill/Vendor Bill references to the new Form configuration using explicit, reviewable mappings; retain compatibility until dependencies are clear. | Pending |
@@ -120,8 +129,12 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**Next phase: D5 - Verification document visibility.** Render only active Documents selected for the
-frozen Category; remove implicit unions and hardcoded document tabs.
+**This phase: D6 - Form Vendor Bill integration.** Connect the Form-based Physical Vendor Bill to
+the canonical Category Document set and make its mapped fields available to Cross-checks.
+
+D5 implementation is complete locally. Manual browser confirmation remains required before Git
+closeout and before D6 begins; the Physical Vendor Bill presentation remains planned for D6/H and
+P7 UX refinement.
 
 The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
 is a planned D6/H implementation and P7 UX-refinement item, not a D2 defect.

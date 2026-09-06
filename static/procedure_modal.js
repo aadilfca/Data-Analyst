@@ -724,6 +724,20 @@ const procedureModalDataCache = new Map();
 const procedureModalDataLoading = new Map();
 const procedureModalDataRevisions = new Map();
 
+// Procedure tabs are an explicit projection of the frozen/live Category guidance Documents.
+// Cross-check dependency documents, saved evidence documents, and duplicate references never
+// enter this list. A missing/invalid id is not renderable as a real Procedure tab.
+function filterProcedureGuidanceDocuments(documents) {
+    const seen = new Set();
+    return (Array.isArray(documents) ? documents : []).filter(document => {
+        if (!document || document.is_active === false) return false;
+        const documentId = document.id ?? document.document_id;
+        if (documentId == null || seen.has(String(documentId))) return false;
+        seen.add(String(documentId));
+        return true;
+    });
+}
+
 function invalidateProcedureModalData(uid) {
     const key = String(uid);
     procedureModalDataRevisions.set(key, (procedureModalDataRevisions.get(key) || 0) + 1);
@@ -839,7 +853,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
             console.error('Failed to load Supporting Documents modal data:', e);
             return;
         }
-        const guidanceDocuments = (guidance && guidance.documents) || [];
+        const guidanceDocuments = filterProcedureGuidanceDocuments(guidance && guidance.documents);
         if (!guidanceDocuments.length) return;
 
     // Validation Rules Phase 5: prepend a synthetic, non-document "Voucher Line" tab holding the

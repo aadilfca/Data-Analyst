@@ -335,7 +335,7 @@ def compile_verification_rulebook(client_id: int) -> dict:
     )
     documents = execute_query_pg(
         "SELECT id, name, kb_note, template_id, risk_rating, transaction_level_approval, "
-        "document_type, verification_field_policy FROM audit_rule_documents "
+        "document_type, verification_field_policy, is_active FROM audit_rule_documents "
         "WHERE is_active = TRUE ORDER BY id"
     )
     document_ids = [row["id"] for row in documents]
@@ -474,6 +474,7 @@ def compile_verification_rulebook(client_id: int) -> dict:
         return {
             "document_id": document_id, "name": row["name"], "kb_note": row.get("kb_note"),
             "document_type": row.get("document_type") or "linked_template", "template_id": template_id,
+            "is_active": bool(row.get("is_active", True)),
             "required": bool(required), "transaction_level_approval": bool(row.get("transaction_level_approval")),
             "risk_rating": row.get("risk_rating"),
             "fields": fields_by_document.get(document_id, []),
@@ -2354,7 +2355,7 @@ def get_category_active_cross_checks_count(category_id: int) -> int:
 def get_category_guidance_documents(category_id: int) -> List[dict]:
     rows = execute_query_pg(
         """
-        SELECT d.id as document_id, d.name, d.kb_note, d.template_id, d.risk_rating, d.transaction_level_approval, d.document_type
+        SELECT d.id as document_id, d.name, d.kb_note, d.template_id, d.risk_rating, d.transaction_level_approval, d.document_type, d.is_active
         FROM audit_rule_category_documents cd
         JOIN audit_rule_documents d ON cd.document_id = d.id
         WHERE cd.category_id = %s AND d.is_active = TRUE
@@ -2366,6 +2367,7 @@ def get_category_guidance_documents(category_id: int) -> List[dict]:
         {
             "id": r["document_id"],
             "name": r["name"],
+            "is_active": bool(r["is_active"]),
             "kb_note": r["kb_note"],
             "template_id": r["template_id"],
             "risk_rating": r["risk_rating"],

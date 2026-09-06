@@ -2005,11 +2005,12 @@ async function fetchAuditGuidanceData(type, forceRefresh = false) {
     const loadPromise = (async () => {
         if (sessionRulebook) {
             const profile = (sessionRulebook.categories || []).find(category => category.name === type);
-            if (profile) {
-                const guidance = normalizeSessionRulebookGuidance(profile);
-                auditGuidanceCache[type] = guidance;
-                return guidance;
-            }
+            // A live Verification session is governed by its frozen Rulebook. If the frozen
+            // packet has no matching Category profile, do not fall back to current live Audit
+            // Rules data and silently change the session's document set.
+            const guidance = profile ? normalizeSessionRulebookGuidance(profile) : null;
+            auditGuidanceCache[type] = guidance;
+            return guidance;
         }
         const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/audit_guidance?transaction_type=${encodeURIComponent(type)}`);
         if (res.status === 404) {

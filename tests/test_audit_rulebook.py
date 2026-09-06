@@ -370,6 +370,7 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertEqual(rulebook["client_id"], 7)
         self.assertEqual(rulebook["account_category_index"]["6000"]["category_name"], "Fuel")
         document = rulebook["categories"][0]["documents"][0]
+        self.assertTrue(document["is_active"])
         self.assertTrue(document["required"])
         self.assertEqual(document["fields"], [
             {"field_name": "Amount", "master_column_id": 20},
@@ -511,6 +512,31 @@ class AuditRulebookCompilerTests(unittest.TestCase):
                 self.assertEqual(result["cross_checks"][0]["documents"], ["Invoice", "Document 99"])
                 self.assertEqual(result["cross_checks"][0]["compare_field"], "Amount")
                 self.assertEqual(result["cross_checks"][0]["comparison_type"], "Exact")
+            finally:
+                browser.close()
+
+    def test_frozen_session_without_category_does_not_fall_back_to_live_guidance(self):
+        verification_js = Path(__file__).resolve().parents[1] / "static" / "verification.js"
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            try:
+                page.set_content("<html><body></body></html>")
+                page.add_script_tag(content="""
+                    var API_BASE = '';
+                    window.ApiUtils = { apiFetch: async () => {
+                        window.liveGuidanceFallbackCalled = true;
+                        return {status: 404};
+                    }};
+                """)
+                page.add_script_tag(path=str(verification_js))
+                result = page.evaluate("""async () => {
+                    sessionRulebook = {categories: []};
+                    const guidance = await fetchAuditGuidanceData('Missing category');
+                    return {guidance, fallbackCalled: Boolean(window.liveGuidanceFallbackCalled)};
+                }""")
+                self.assertIsNone(result["guidance"])
+                self.assertFalse(result["fallbackCalled"])
             finally:
                 browser.close()
 
@@ -1268,6 +1294,25 @@ class CrossCheckMatrixColumnAxisAndMetaTests(unittest.TestCase):
 
 
 class ProcedureModalPersistenceTests(unittest.TestCase):
+    def test_procedure_tabs_use_only_active_unique_guidance_documents(self):
+        procedure_modal_js = Path(__file__).resolve().parents[1] / "static" / "procedure_modal.js"
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            try:
+                page.set_content("<html><body></body></html>")
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};" )
+                page.add_script_tag(path=str(procedure_modal_js))
+                result = page.evaluate("""() => filterProcedureGuidanceDocuments([
+                    {id: 10, name: 'Purchase Demand'},
+                    {document_id: 10, name: 'Purchase Demand duplicate'},
+                    {id: 11, name: 'Inactive', is_active: false},
+                    {id: 12, name: 'Physical Bill', is_active: true}
+                ]).map(document => document.id ?? document.document_id)""")
+                self.assertEqual(result, [10, 12])
+            finally:
+                browser.close()
+
     def test_procedure_checklist_uses_category_rules_and_signatory_details(self):
         procedure_modal_js = Path(__file__).resolve().parents[1] / "static" / "procedure_modal.js"
         with sync_playwright() as playwright:
