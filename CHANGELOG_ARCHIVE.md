@@ -4813,3 +4813,15 @@ validation, and `git diff --check`. The first full-suite run found and then cove
 expectation for the new migration query; a clean full-suite rerun remains required before Git
 closeout. Manual browser retest is required: restart the server, hard-refresh Audit Rules, save a
 Form with an optional Linked Template, and confirm the Linked Column list loads without the error.
+
+Render acceptance then exposed a second legacy-schema gap: `audit_rule_document_fields` existed on
+the deployed Postgres database without the later `field_type`, `field_scope`, and `linked_column`
+columns. The Form payload and linked-column mapping were correct; the 500 occurred when the backend
+persisted those fields. The completed-schema startup path now inspects `information_schema` and adds
+only missing columns with safe defaults, preserving all existing definitions. The migration is
+transactional and idempotent.
+
+The Render error response identified this exact missing-column failure. Added regression coverage for
+missing-column and no-op paths. The targeted suites pass 83 tests and the full suite passes 129
+tests, with only existing deprecation/cache warnings. Manual Render retest remains required before
+the next commit/push.

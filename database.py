@@ -2995,6 +2995,44 @@ def _ensure_postgres_audit_rule_document_type_constraint(conn):
         cur.close()
 
 
+def _ensure_postgres_form_field_columns(conn):
+    """Add Form field columns to an already-bootstrapped Postgres database.
+
+    Form columns were added to the declarative schema after some databases had
+    already been marked ready. Add only the missing columns so old definitions
+    remain intact and existing rows receive safe typed defaults.
+    """
+    required_columns = {
+        "field_type": "TEXT NOT NULL DEFAULT 'text'",
+        "field_scope": "TEXT NOT NULL DEFAULT 'header'",
+        "linked_column": "TEXT",
+    }
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'audit_rule_document_fields'
+        """)
+        existing = {row[0] for row in cur.fetchall()}
+        missing = [name for name in required_columns if name not in existing]
+        if not missing:
+            return []
+
+        cur.execute(" ".join(
+            "ALTER TABLE audit_rule_document_fields ADD COLUMN IF NOT EXISTS "
+            + name + " " + required_columns[name] + ";"
+            for name in missing
+        ))
+        return missing
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
 
@@ -3008,11 +3046,17 @@ def init_db_postgres(conn):
     cur.execute("SELECT to_regclass('public.audit_rules_config_state')")
     if cur.fetchone()[0] is not None:
         cur.close()
-        migrated = _ensure_postgres_audit_rule_document_type_constraint(conn)
+        migrated_document_type = _ensure_postgres_audit_rule_document_type_constraint(conn)
+        migrated_form_columns = _ensure_postgres_form_field_columns(conn)
         conn.commit()
+        migration_notes = []
+        if migrated_document_type:
+            migration_notes.append("document type constraint upgraded")
+        if migrated_form_columns:
+            migration_notes.append("Form field columns upgraded")
         print(
             "[postgres] existing schema verified; skipped bootstrap"
-            + (" (document type constraint upgraded)" if migrated else "")
+            + (f" ({'; '.join(migration_notes)})" if migration_notes else "")
         )
         _POSTGRES_SCHEMA_READY = True
         return

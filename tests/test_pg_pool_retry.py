@@ -235,11 +235,35 @@ class ExecuteQueryPgWiringTests(unittest.TestCase):
 
 
 class PostgresSchemaBootstrapTests(unittest.TestCase):
-    def test_completed_schema_marker_skips_repeated_bootstrap(self):
-        conn = FakeConn(fetchone_rows=[
-            ("audit_rules_config_state",),
-            ("CHECK ((document_type = ANY (ARRAY['linked_template'::text, 'form'::text, 'physical_bill'::text])))",),
+    def test_form_field_column_migration_adds_missing_columns(self):
+        conn = FakeConn(rows=[("id",), ("document_id",), ("field_name",)])
+
+        migrated = database._ensure_postgres_form_field_columns(conn)
+
+        self.assertEqual(migrated, ["field_type", "field_scope", "linked_column"])
+        self.assertIn("ADD COLUMN IF NOT EXISTS field_type TEXT NOT NULL DEFAULT 'text'", conn.executed[-1][0])
+        self.assertIn("ADD COLUMN IF NOT EXISTS field_scope TEXT NOT NULL DEFAULT 'header'", conn.executed[-1][0])
+        self.assertIn("ADD COLUMN IF NOT EXISTS linked_column TEXT", conn.executed[-1][0])
+        self.assertEqual(conn.rollbacks, 0)
+
+    def test_form_field_column_migration_is_noop_when_columns_exist(self):
+        conn = FakeConn(rows=[
+            ("id",), ("document_id",), ("field_name",),
+            ("field_type",), ("field_scope",), ("linked_column",),
         ])
+
+        self.assertEqual(database._ensure_postgres_form_field_columns(conn), [])
+        self.assertEqual(len(conn.executed), 1)
+        self.assertEqual(conn.rollbacks, 0)
+
+    def test_completed_schema_marker_skips_repeated_bootstrap(self):
+        conn = FakeConn(
+            rows=[("field_type",), ("field_scope",), ("linked_column",)],
+            fetchone_rows=[
+                ("audit_rules_config_state",),
+                ("CHECK ((document_type = ANY (ARRAY['linked_template'::text, 'form'::text, 'physical_bill'::text])))",),
+            ],
+        )
 
         with patch.object(database, "_POSTGRES_SCHEMA_READY", False):
             with patch("builtins.print") as printed:
@@ -250,6 +274,7 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
             [
                 ("SELECT to_regclass('public.audit_rules_config_state')", None),
                 ("\n            SELECT pg_get_constraintdef(oid)\n            FROM pg_constraint\n            WHERE conrelid = 'public.audit_rule_documents'::regclass\n              AND conname = 'audit_rule_documents_document_type_check'\n        ", None),
+                ("\n            SELECT column_name\n            FROM information_schema.columns\n            WHERE table_schema = 'public'\n              AND table_name = 'audit_rule_document_fields'\n        ", None),
             ],
         )
         self.assertEqual(conn.commits, 1)
