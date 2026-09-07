@@ -21,6 +21,7 @@ from database import (
     bump_persisted_audit_rules_config_version,
     get_persisted_audit_rules_config_version,
     record_audit_rules_config_change,
+    pg_transaction,
 )
 
 router = APIRouter()
@@ -2240,9 +2241,23 @@ class PhysicalBillMigrationPreviewRequest(BaseModel):
     field_mapping: Dict[str, int] = {}
 
 
+class PhysicalBillMigrationApplyRequest(PhysicalBillMigrationPreviewRequest):
+    confirm: bool = False
+
+
 LEGACY_PHYSICAL_BILL_FIELDS = (
     "Bill No", "Bill Date", "Vendor Name", "Item Name", "Quantity", "Rate", "Amount"
 )
+
+LEGACY_PHYSICAL_BILL_FIELD_TYPES = {
+    "Bill No": "text",
+    "Bill Date": "date",
+    "Vendor Name": "text",
+    "Item Name": "text",
+    "Quantity": "numeric",
+    "Rate": "numeric",
+    "Amount": "numeric",
+}
 
 class CategoryValidationRules(BaseModel):
     procedure_evidence: Dict[str, Any] = {}
@@ -2417,6 +2432,143 @@ def physical_bill_migration_inventory():
     return get_physical_bill_migration_inventory()
 
 
+def _get_physical_bill_migration_reference_plan(source_document_id: int, target_document_id: int) -> dict:
+    """Return legacy references and any target collisions without changing data."""
+    categories = execute_query_pg(
+        """
+        SELECT source.id, source.category_id, source.is_required,
+               target.id AS target_id
+        FROM audit_rule_category_documents source
+        LEFT JOIN audit_rule_category_documents target
+          ON target.category_id = source.category_id
+         AND target.document_id = %s
+        WHERE source.document_id = %s
+        ORDER BY source.category_id, source.id
+        """,
+        (target_document_id, source_document_id),
+    )
+    cross_checks = execute_query_pg(
+        """
+        SELECT source.id, source.cross_check_id, source.sort_order, source.compare_field,
+               target.id AS target_id
+        FROM audit_rule_cross_check_documents source
+        LEFT JOIN audit_rule_cross_check_documents target
+          ON target.cross_check_id = source.cross_check_id
+         AND target.document_id = %s
+        WHERE source.document_id = %s
+        ORDER BY source.cross_check_id, source.id
+        """,
+        (target_document_id, source_document_id),
+    )
+    procedure_checks = execute_query_pg(
+        """
+        SELECT source.id, source.voucher_line_id, source.role_name,
+               target.id AS target_id
+        FROM voucher_line_procedure_checks source
+        LEFT JOIN voucher_line_procedure_checks target
+          ON target.voucher_line_id = source.voucher_line_id
+         AND target.document_id = %s
+         AND target.role_name = source.role_name
+        WHERE source.document_id = %s
+        ORDER BY source.voucher_line_id, source.id
+        """,
+        (target_document_id, source_document_id),
+    )
+    observations = execute_query_pg(
+        """
+        SELECT source.id, source.voucher_line_id, source.observation_text,
+               source.synced, source.last_synced_text, source.updated_by,
+               target.id AS target_id
+        FROM voucher_line_observations source
+        LEFT JOIN voucher_line_observations target
+          ON target.voucher_line_id = source.voucher_line_id
+         AND target.document_id = %s
+        WHERE source.document_id = %s
+        ORDER BY source.voucher_line_id, source.id
+        """,
+        (target_document_id, source_document_id),
+    )
+    return {
+        "categories": categories,
+        "cross_checks": cross_checks,
+        "procedure_checks": procedure_checks,
+        "observations": observations,
+    }
+
+
+def _physical_bill_migration_mapping(request: PhysicalBillMigrationPreviewRequest,
+                                      target_fields: List[dict], blockers: List[str]) -> dict:
+    """Validate the explicit legacy-field-to-Form-field mapping."""
+    fields_by_id = {int(row["id"]): row for row in target_fields}
+    field_mapping = request.field_mapping or {}
+    required_scopes = {
+        "Bill No": "header", "Bill Date": "header", "Vendor Name": "header",
+        "Item Name": "item", "Quantity": "item", "Rate": "item", "Amount": "item",
+    }
+    resolved_mapping = {}
+    used_field_ids = {}
+    for legacy_name in LEGACY_PHYSICAL_BILL_FIELDS:
+        field_id = field_mapping.get(legacy_name)
+        field = fields_by_id.get(field_id)
+        if not field:
+            blockers.append(f"Missing target Form field mapping for '{legacy_name}'.")
+            continue
+        expected_scope = required_scopes[legacy_name]
+        if (field.get("field_scope") or "header") != expected_scope:
+            blockers.append(
+                f"Target field '{field['field_name']}' for '{legacy_name}' must use "
+                f"{expected_scope} scope."
+            )
+        expected_type = LEGACY_PHYSICAL_BILL_FIELD_TYPES[legacy_name]
+        actual_type = field.get("field_type") or "text"
+        if actual_type != expected_type:
+            blockers.append(
+                f"Target field '{field['field_name']}' for '{legacy_name}' must use "
+                f"{expected_type} type."
+            )
+        if field_id in used_field_ids:
+            blockers.append(
+                f"Target Form field '{field['field_name']}' is mapped more than once "
+                f"('{used_field_ids[field_id]}' and '{legacy_name}')."
+            )
+        else:
+            used_field_ids[field_id] = legacy_name
+        resolved_mapping[legacy_name] = {
+            "field_id": field["id"],
+            "field_name": field["field_name"],
+            "field_type": actual_type,
+            "field_scope": field.get("field_scope") or "header",
+        }
+    return resolved_mapping
+
+
+def _add_physical_bill_reference_blockers(reference_plan: dict, blockers: List[str]):
+    """Reject ambiguous merges instead of silently combining existing target data."""
+    for row in reference_plan["categories"]:
+        if row.get("target_id") is not None:
+            blockers.append(
+                f"Category {row['category_id']} already contains the target Form; "
+                "remove the duplicate reference before migration."
+            )
+    for row in reference_plan["cross_checks"]:
+        if row.get("target_id") is not None:
+            blockers.append(
+                f"Cross-check {row['cross_check_id']} already contains the target Form; "
+                "remove the duplicate reference before migration."
+            )
+    for row in reference_plan["procedure_checks"]:
+        if row.get("target_id") is not None:
+            blockers.append(
+                f"Voucher line {row['voucher_line_id']} already has a target Form "
+                f"procedure check for role '{row['role_name']}'."
+            )
+    for row in reference_plan["observations"]:
+        if row.get("target_id") is not None:
+            blockers.append(
+                f"Voucher line {row['voucher_line_id']} already has a target Form observation."
+            )
+
+
 @router.post("/api/audit-rules/physical-bill-migration/preview")
 def preview_physical_bill_migration(request: PhysicalBillMigrationPreviewRequest):
     documents = execute_query_pg(
@@ -2449,30 +2601,7 @@ def preview_physical_bill_migration(request: PhysicalBillMigrationPreviewRequest
         """,
         (request.target_document_id,),
     )
-    fields_by_id = {row["id"]: row for row in target_fields}
-    field_mapping = request.field_mapping or {}
-    required_scopes = {
-        "Bill No": "header", "Bill Date": "header", "Vendor Name": "header",
-        "Item Name": "item", "Quantity": "item", "Rate": "item", "Amount": "item",
-    }
-    resolved_mapping = {}
-    for legacy_name in LEGACY_PHYSICAL_BILL_FIELDS:
-        field_id = field_mapping.get(legacy_name)
-        field = fields_by_id.get(field_id)
-        if not field:
-            blockers.append(f"Missing target Form field mapping for '{legacy_name}'.")
-            continue
-        if field["field_scope"] != required_scopes[legacy_name]:
-            blockers.append(
-                f"Target field '{field['field_name']}' for '{legacy_name}' must use "
-                f"{required_scopes[legacy_name]} scope."
-            )
-        resolved_mapping[legacy_name] = {
-            "field_id": field["id"],
-            "field_name": field["field_name"],
-            "field_type": field["field_type"],
-            "field_scope": field["field_scope"],
-        }
+    resolved_mapping = _physical_bill_migration_mapping(request, target_fields, blockers)
 
     bill_count_rows = execute_query_pg(
         "SELECT COUNT(*) AS bill_count FROM voucher_line_physical_bills WHERE document_id = %s",
@@ -2482,15 +2611,181 @@ def preview_physical_bill_migration(request: PhysicalBillMigrationPreviewRequest
         "SELECT COUNT(*) AS entry_count FROM voucher_line_form_entries WHERE document_id = %s",
         (request.target_document_id,),
     )
+    existing_target_entry_count = int((existing_form_rows or [{"entry_count": 0}])[0]["entry_count"])
+    if existing_target_entry_count:
+        blockers.append(
+            "Target Form already contains evidence entries; migration will not merge or overwrite them."
+        )
+    reference_plan = _get_physical_bill_migration_reference_plan(
+        request.source_document_id, request.target_document_id
+    )
+    _add_physical_bill_reference_blockers(reference_plan, blockers)
     return {
         "ready": not blockers,
         "source_document": source,
         "target_document": target,
         "field_mapping": resolved_mapping,
         "legacy_bill_count": int((bill_count_rows or [{"bill_count": 0}])[0]["bill_count"]),
-        "existing_target_entry_count": int((existing_form_rows or [{"entry_count": 0}])[0]["entry_count"]),
+        "existing_target_entry_count": existing_target_entry_count,
+        "reference_counts": {key: len(rows) for key, rows in reference_plan.items()},
+        "reference_plan": reference_plan,
         "blockers": blockers,
         "writes_performed": False,
+    }
+
+
+def _insert_migrated_form_value(entry_id: int, field: dict, value: Any):
+    """Insert one legacy value using the target Form field's typed storage column."""
+    if value in (None, ""):
+        return
+    field_type = field["field_type"]
+    value_text = value if field_type == "text" else None
+    value_date = value if field_type == "date" else None
+    value_numeric = value if field_type == "numeric" else None
+    execute_write_pg(
+        "INSERT INTO voucher_line_form_values "
+        "(entry_id, field_id, value_text, value_date, value_numeric, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)",
+        (entry_id, field["field_id"], value_text, value_date, value_numeric),
+    )
+
+
+def _insert_migrated_form_entry(voucher_line_id: int, document_id: int, row_scope: str,
+                                sort_order: int, values: List[tuple]):
+    """Insert one Form entry and its already-validated field/value pairs."""
+    entry_id = execute_write_pg(
+        "INSERT INTO voucher_line_form_entries "
+        "(voucher_line_id, document_id, row_scope, sort_order, updated_at) "
+        "VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP) RETURNING id",
+        (voucher_line_id, document_id, row_scope, sort_order),
+    )
+    for field, value in values:
+        _insert_migrated_form_value(entry_id, field, value)
+    return entry_id
+
+
+def _apply_physical_bill_migration(request: PhysicalBillMigrationApplyRequest, plan: dict) -> dict:
+    """Copy legacy bills and retarget references inside the caller's transaction."""
+    field_map = plan["field_mapping"]
+    bill_rows = execute_query_pg(
+        """
+        SELECT id, voucher_line_id, bill_no, bill_date, vendor_name, sort_order
+        FROM voucher_line_physical_bills
+        WHERE document_id = %s
+        ORDER BY voucher_line_id, sort_order, id
+        """,
+        (request.source_document_id,),
+    )
+    bill_ids = [row["id"] for row in bill_rows]
+    item_rows = []
+    if bill_ids:
+        placeholders = ",".join("%s" for _ in bill_ids)
+        item_rows = execute_query_pg(
+            f"""
+            SELECT bill_id, item_name, quantity, rate, amount, sort_order
+            FROM voucher_line_physical_bill_items
+            WHERE bill_id IN ({placeholders})
+            ORDER BY bill_id, sort_order, id
+            """,
+            tuple(bill_ids),
+        )
+    items_by_bill = {}
+    for row in item_rows:
+        items_by_bill.setdefault(row["bill_id"], []).append(row)
+
+    migrated_entry_count = 0
+    for bill in bill_rows:
+        _insert_migrated_form_entry(
+            bill["voucher_line_id"], request.target_document_id, "header",
+            int(bill.get("sort_order") or 0),
+            [
+                (field_map["Bill No"], bill.get("bill_no")),
+                (field_map["Bill Date"], bill.get("bill_date")),
+                (field_map["Vendor Name"], bill.get("vendor_name")),
+            ],
+        )
+        migrated_entry_count += 1
+        for item in items_by_bill.get(bill["id"], []):
+            _insert_migrated_form_entry(
+                bill["voucher_line_id"], request.target_document_id, "item",
+                int(item.get("sort_order") or 0),
+                [
+                    (field_map["Item Name"], item.get("item_name")),
+                    (field_map["Quantity"], item.get("quantity")),
+                    (field_map["Rate"], item.get("rate")),
+                    (field_map["Amount"], item.get("amount")),
+                ],
+            )
+            migrated_entry_count += 1
+
+    references = plan["reference_plan"]
+    for row in references["categories"]:
+        execute_write_pg(
+            "UPDATE audit_rule_category_documents SET document_id = %s WHERE id = %s",
+            (request.target_document_id, row["id"]),
+        )
+    for row in references["cross_checks"]:
+        execute_write_pg(
+            "UPDATE audit_rule_cross_check_cells SET document_id = %s "
+            "WHERE document_id = %s AND field_id IN "
+            "(SELECT id FROM audit_rule_cross_check_fields WHERE cross_check_id = %s)",
+            (request.target_document_id, request.source_document_id, row["cross_check_id"]),
+        )
+        execute_write_pg(
+            "UPDATE audit_rule_cross_check_documents SET document_id = %s WHERE id = %s",
+            (request.target_document_id, row["id"]),
+        )
+    for row in references["procedure_checks"]:
+        execute_write_pg(
+            "UPDATE voucher_line_procedure_checks SET document_id = %s WHERE id = %s",
+            (request.target_document_id, row["id"]),
+        )
+    for row in references["observations"]:
+        execute_write_pg(
+            "UPDATE voucher_line_observations SET document_id = %s WHERE id = %s",
+            (request.target_document_id, row["id"]),
+        )
+    return {
+        "migrated_bill_count": len(bill_rows),
+        "migrated_form_entry_count": migrated_entry_count,
+        "migrated_reference_counts": {key: len(rows) for key, rows in references.items()},
+    }
+
+
+@router.post(
+    "/api/audit-rules/physical-bill-migration/apply",
+    dependencies=[Depends(ensure_no_active_verification_sessions)],
+)
+def apply_physical_bill_migration(request: PhysicalBillMigrationApplyRequest):
+    if not request.confirm:
+        raise HTTPException(400, "Set confirm=true only after reviewing the migration preview.")
+
+    with pg_transaction():
+        plan = preview_physical_bill_migration(request)
+        if not plan["ready"]:
+            raise HTTPException(409, {
+                "message": "Physical Bill migration is blocked; no writes were performed.",
+                "preview": plan,
+            })
+        result = _apply_physical_bill_migration(request, plan)
+
+    invalidate_audit_rules_cache({
+        "entity_type": "Document",
+        "entity_id": request.target_document_id,
+        "action": "Physical Bill migration applied",
+    })
+    log_audit(
+        "Admin", "Migrate", "AuditRules",
+        f"Migrated legacy Physical Bill Document {request.source_document_id} "
+        f"to Form Document {request.target_document_id}.",
+    )
+    return {
+        "message": "Physical Bill migration applied successfully.",
+        "source_document_id": request.source_document_id,
+        "target_document_id": request.target_document_id,
+        "legacy_rows_preserved": True,
+        "writes_performed": True,
+        **result,
     }
 
 

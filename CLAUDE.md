@@ -326,7 +326,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-07: Added and manually confirmed Postgres Form-table repair and modal cache/exit safeguards; D7 is next. See CHANGELOG_ARCHIVE.md.
 - 2026-09-07: D7 stopped new Category Evidence Type writes and removed its authoring surface while preserving legacy values for migration. See CHANGELOG_ARCHIVE.md.
 - 2026-09-07: D7 Evidence Type retirement was manually confirmed; D8 Physical Bill/Vendor Bill migration is next. See CHANGELOG_ARCHIVE.md.
-- 2026-09-07: D8 inventory/preview completed as backend-only; controlled migration apply remains gated by explicit mappings. See CHANGELOG_ARCHIVE.md.
+- 2026-09-07: D8 inventory/preview and guarded apply endpoint committed as backend-only; live execution remains mapping-gated and D9 is next. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

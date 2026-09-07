@@ -72,7 +72,7 @@ and Physical Vendor Bill migration are accepted, preventing split configuration 
 | D5 | Make Verification render only active documents selected for the frozen Category; remove implicit unions and hardcoded document tabs. | Complete; manually confirmed |
 | D6 | Connect the Form-based Physical Vendor Bill to the canonical Category document set and reuse the same Document IDs in procedures and Cross-checks. | Complete; manually confirmed |
 | D7 | Retire Category Evidence Type safely: stop new writes, inventory consumers, preserve legacy values during transition, migrate or null deliberately, then remove the feature after acceptance. | Complete; manually confirmed |
-| D8 | Migrate legacy Physical Bill/Vendor Bill references to the new Form configuration using explicit, reviewable mappings; retain compatibility until dependencies are clear. | Inventory/preview complete; apply pending mapping |
+| D8 | Migrate legacy Physical Bill/Vendor Bill references to the new Form configuration using explicit, reviewable mappings; retain compatibility until dependencies are clear. | Backend apply complete; live execution gated by mapping |
 | D9 | Harden duplicate prevention, inactive-document behavior, empty selections, missing dependencies, changed templates, and documentation/configuration consistency. | Pending |
 
 #### Acceptance and release — retest after Phase I
@@ -129,8 +129,8 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**This phase: D8 - Physical Bill/Vendor Bill migration apply.** Approve explicit source-to-Form
-mappings before enabling controlled data and Category-reference migration.
+**This phase: D9 - configuration hardening.** D8's guarded backend apply capability is committed;
+live execution remains separately gated by explicit source-to-Form mappings.
 
 D6 and D7 are complete and manually confirmed. D9 remains the later configuration-hardening phase.
 
@@ -157,6 +157,17 @@ writes and reports blockers. Focused Audit Rules tests (86) and the full suite (
 
 This is backend-only; automated coverage is sufficient and an API smoke test is optional. The apply
 migration remains paused until explicit mappings are reviewed and approved.
+
+### Phase D8 apply checkpoint - 2026-09-07
+
+Added a guarded apply endpoint that revalidates the explicit seven-field mapping, blocks existing
+target Form data and ambiguous Category/Cross-check/procedure/observation references, copies legacy
+bill headers and items into typed Form entries, retargets compatible references, and preserves every
+legacy row/document. All writes run in one transaction and require `confirm: true`; no browser UI
+changed. Focused Audit Rules tests (90) and the full suite (155) pass.
+
+Manual testing: no browser test is required for this backend implementation. Live D8 execution should
+be tested separately when the real source, target, and field mappings are approved.
 
 ### Phase D6 implementation checkpoint - 2026-09-06
 

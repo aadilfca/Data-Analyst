@@ -60,6 +60,23 @@ Focused Audit Rules coverage passed 86 tests and 3 subtests; the full suite pass
 3 subtests. No separate browser test was required; controlled data/configuration migration remains
 pending explicit mapping review.
 
+## Physical Bill/Vendor Bill migration apply guard - D8 - 2026-09-07
+
+**Status:** Backend implementation complete; live execution remains operationally gated. **Files:**
+`routers/audit_rules.py`, `tests/test_audit_rulebook.py`.
+
+The migration preview now validates the seven explicit mappings by Form field type and Header/Item
+scope, rejects duplicate target fields, existing target entries, and ambiguous Category, Cross-check,
+procedure-check, or observation references. The guarded apply endpoint requires `confirm: true`,
+revalidates the preview inside one Postgres transaction, copies legacy Physical Bill headers/items
+into typed Form entries, retargets compatible references including matrix cells, and preserves the
+legacy rows and source Document for rollback/audit. A failed write propagates through the transaction
+boundary so the database can roll back the complete operation.
+
+Focused Audit Rules coverage passed 90 tests and 3 subtests; the full suite passed 155 tests and
+3 subtests. Python compilation, JavaScript syntax, and `git diff --check` passed. This is backend-only;
+no browser test is required. Live execution must still use reviewed source, target, and field mappings.
+
 ## Revised Cross-check plan and Phase 0 reconciliation — 2026-09-03
 
 ## Form document data model — Phase A — 2026-09-05

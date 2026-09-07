@@ -6,9 +6,11 @@ import sqlite3
 import tempfile
 import importlib
 from unittest.mock import Mock
+from contextlib import nullcontext
 from datetime import date
 from pathlib import Path
 
+from fastapi import HTTPException
 from playwright.sync_api import sync_playwright
 
 import database
@@ -28,8 +30,10 @@ from routers.audit_rules import (
     create_category,
     update_category,
     PhysicalBillMigrationPreviewRequest,
+    PhysicalBillMigrationApplyRequest,
     get_physical_bill_migration_inventory,
     preview_physical_bill_migration,
+    apply_physical_bill_migration,
     DocumentUpdate,
     invalidate_audit_rules_cache,
     invalidate_category_for_account_cache,
@@ -163,6 +167,10 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             [{"id": 31, "field_name": "Bill No", "field_type": "text", "field_scope": "header", "sort_order": 0}],
             [{"bill_count": 3}],
             [{"entry_count": 0}],
+            [],
+            [],
+            [],
+            [],
         ]
         request = PhysicalBillMigrationPreviewRequest(
             source_document_id=11,
@@ -176,6 +184,134 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertEqual(result["legacy_bill_count"], 3)
         self.assertFalse(result["writes_performed"])
         self.assertTrue(any("Bill Date" in blocker for blocker in result["blockers"]))
+
+    def _physical_bill_form_fields(self):
+        return [
+            {"id": 101, "field_name": "Bill No", "field_type": "text", "field_scope": "header", "sort_order": 0},
+            {"id": 102, "field_name": "Bill Date", "field_type": "date", "field_scope": "header", "sort_order": 1},
+            {"id": 103, "field_name": "Vendor Name", "field_type": "text", "field_scope": "header", "sort_order": 2},
+            {"id": 104, "field_name": "Item Name", "field_type": "text", "field_scope": "item", "sort_order": 3},
+            {"id": 105, "field_name": "Quantity", "field_type": "numeric", "field_scope": "item", "sort_order": 4},
+            {"id": 106, "field_name": "Rate", "field_type": "numeric", "field_scope": "item", "sort_order": 5},
+            {"id": 107, "field_name": "Amount", "field_type": "numeric", "field_scope": "item", "sort_order": 6},
+        ]
+
+    def _physical_bill_mapping(self):
+        return {
+            "Bill No": 101, "Bill Date": 102, "Vendor Name": 103,
+            "Item Name": 104, "Quantity": 105, "Rate": 106, "Amount": 107,
+        }
+
+    def _physical_bill_preview_responses(self, target_entry_count=0):
+        return [
+            [
+                {"id": 11, "name": "Legacy Physical Bill", "document_type": "physical_bill", "is_active": True},
+                {"id": 21, "name": "Physical Vendor Bill", "document_type": "form", "is_active": True},
+            ],
+            self._physical_bill_form_fields(),
+            [{"bill_count": 1}],
+            [{"entry_count": target_entry_count}],
+            [{"id": 501, "category_id": 7, "is_required": True, "target_id": None}],
+            [{"id": 601, "cross_check_id": 8, "sort_order": 2, "compare_field": "Amount", "target_id": None}],
+            [{"id": 701, "voucher_line_id": 42, "role_name": "Prepared by", "target_id": None}],
+            [{"id": 801, "voucher_line_id": 42, "observation_text": "Legacy note", "synced": False, "last_synced_text": None, "updated_by": "Analyst", "target_id": None}],
+        ]
+
+    def test_physical_bill_migration_apply_copies_entries_and_retargets_references(self):
+        responses = self._physical_bill_preview_responses() + [
+            [{"id": 901, "voucher_line_id": 42, "bill_no": "B-1", "bill_date": date(2026, 8, 1), "vendor_name": "Acme", "sort_order": 0}],
+            [{"bill_id": 901, "item_name": "Paper", "quantity": 2, "rate": 5, "amount": 10, "sort_order": 0}],
+        ]
+        writes = []
+        write_results = iter([1001, None, None, None, 1002, None, None, None, None, None, None, None, None, None])
+        request = PhysicalBillMigrationApplyRequest(
+            source_document_id=11,
+            target_document_id=21,
+            field_mapping=self._physical_bill_mapping(),
+            confirm=True,
+        )
+        with patch("routers.audit_rules.execute_query_pg", side_effect=responses), \
+             patch("routers.audit_rules.execute_write_pg", side_effect=lambda sql, params=None: (writes.append((sql, params)), next(write_results))[1]), \
+             patch("routers.audit_rules.pg_transaction", return_value=nullcontext()), \
+             patch("routers.audit_rules.invalidate_audit_rules_cache"), \
+             patch("routers.audit_rules.log_audit"):
+            result = apply_physical_bill_migration(request)
+
+        self.assertTrue(result["writes_performed"])
+        self.assertTrue(result["legacy_rows_preserved"])
+        self.assertEqual(result["migrated_bill_count"], 1)
+        self.assertEqual(result["migrated_form_entry_count"], 2)
+        self.assertEqual(result["migrated_reference_counts"], {
+            "categories": 1, "cross_checks": 1, "procedure_checks": 1, "observations": 1,
+        })
+        sql_text = "\n".join(sql for sql, _ in writes)
+        self.assertIn("INSERT INTO voucher_line_form_entries", sql_text)
+        self.assertIn("UPDATE audit_rule_category_documents", sql_text)
+        self.assertIn("UPDATE audit_rule_cross_check_documents", sql_text)
+        self.assertNotIn("DELETE FROM voucher_line_physical_bills", sql_text)
+
+    def test_physical_bill_migration_apply_blocks_existing_target_data_without_writes(self):
+        request = PhysicalBillMigrationApplyRequest(
+            source_document_id=11,
+            target_document_id=21,
+            field_mapping=self._physical_bill_mapping(),
+            confirm=True,
+        )
+        with patch("routers.audit_rules.execute_query_pg", side_effect=self._physical_bill_preview_responses(target_entry_count=2)), \
+             patch("routers.audit_rules.execute_write_pg") as write, \
+             patch("routers.audit_rules.pg_transaction", return_value=nullcontext()):
+            with self.assertRaises(HTTPException) as raised:
+                apply_physical_bill_migration(request)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("will not merge or overwrite", str(raised.exception.detail))
+        write.assert_not_called()
+
+    def test_physical_bill_migration_apply_requires_explicit_confirmation(self):
+        request = PhysicalBillMigrationApplyRequest(
+            source_document_id=11,
+            target_document_id=21,
+            field_mapping=self._physical_bill_mapping(),
+        )
+        with patch("routers.audit_rules.pg_transaction") as transaction:
+            with self.assertRaises(HTTPException) as raised:
+                apply_physical_bill_migration(request)
+
+        self.assertEqual(raised.exception.status_code, 400)
+        transaction.assert_not_called()
+
+    def test_physical_bill_migration_apply_propagates_failure_for_transaction_rollback(self):
+        class TrackingTransaction:
+            def __init__(self):
+                self.exception_type = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exception_type, exception, traceback):
+                self.exception_type = exception_type
+                return False
+
+        transaction = TrackingTransaction()
+        responses = self._physical_bill_preview_responses() + [
+            [{"id": 901, "voucher_line_id": 42, "bill_no": "B-1", "bill_date": date(2026, 8, 1), "vendor_name": "Acme", "sort_order": 0}],
+            [{"bill_id": 901, "item_name": "Paper", "quantity": 2, "rate": 5, "amount": 10, "sort_order": 0}],
+        ]
+        request = PhysicalBillMigrationApplyRequest(
+            source_document_id=11,
+            target_document_id=21,
+            field_mapping=self._physical_bill_mapping(),
+            confirm=True,
+        )
+        with patch("routers.audit_rules.execute_query_pg", side_effect=responses), \
+             patch("routers.audit_rules.execute_write_pg", side_effect=RuntimeError("simulated migration failure")), \
+             patch("routers.audit_rules.pg_transaction", return_value=transaction), \
+             patch("routers.audit_rules.invalidate_audit_rules_cache"), \
+             patch("routers.audit_rules.log_audit"):
+            with self.assertRaisesRegex(RuntimeError, "simulated migration failure"):
+                apply_physical_bill_migration(request)
+
+        self.assertIs(transaction.exception_type, RuntimeError)
 
     def test_session_schema_has_nullable_rulebook_version(self):
         conn = sqlite3.connect(database.DB_NAME)
