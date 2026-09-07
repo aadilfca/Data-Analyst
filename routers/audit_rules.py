@@ -1250,9 +1250,8 @@ def resolve_document_type(document_type: Optional[str]) -> str:
 
     'linked_template' is the safe default: it's what all existing Documents already are, so an
     API caller that doesn't know about this field yet (static/audit_rules.js until Phase 4)
-    keeps working unchanged. Confirmed with the user - forcing an explicit choice at create time
-    belongs in Phase 4, alongside the picker that makes the choice possible; the "no silent
-    assumption" rule stays on Categories' evidence_type, which is what actually drives the gate.
+    keeps working unchanged. Category Evidence Type is now legacy read-only metadata; the active
+    document and Procedure/Evidence configuration supplies the verification policy.
     """
     if document_type is None:
         return 'linked_template'
@@ -2227,23 +2226,12 @@ class CategoryCreate(BaseModel):
     kb_overview: Optional[str] = None
     document_ids: List[int] = []
     cross_check_ids: List[int] = []
-    # Physical Bill evidence type (Phase 3 of 8): what kind of evidence this Category requires -
-    # 'billable' (a Physical Bill document, whose Amount Phase 6 hard-matches against the voucher
-    # line amount) or 'non_billable' (today's procedure-role gate). MANDATORY - see
-    # validate_category_evidence_type() below for why there's no default here.
-    #
-    # Typed Optional even though it's required, deliberately: declaring it `str` would make
-    # Pydantic reject a missing value with a 422 and a schema-shaped error body, whereas every
-    # other validation failure in this file is an explicit HTTPException(400) carrying a plain
-    # sentence. The validator produces that clean 400 instead.
-    evidence_type: Optional[str] = None
 
 class CategoryUpdate(BaseModel):
     name: str
     kb_overview: Optional[str] = None
     document_ids: List[int] = []
     cross_check_ids: List[int] = []
-    evidence_type: Optional[str] = None
 
 class CategoryValidationRules(BaseModel):
     procedure_evidence: Dict[str, Any] = {}
@@ -2312,31 +2300,6 @@ def validate_category_validation_rules(rules: CategoryValidationRules, category_
                 raise HTTPException(400, f"Mathematical Cross-check row {index + 1} must use active Template documents")
         if rule.get("missing_data_behavior") and rule["missing_data_behavior"] not in allowed_missing:
             raise HTTPException(400, f"Mathematical Cross-check row {index + 1} has an invalid missing-data behavior")
-
-# Physical Bill evidence type (Phase 3 of 8). Validated in code for the same reason as
-# DOCUMENT_TYPES above - Phase 1 could only attach a real CHECK to the CREATE TABLE, so on an
-# already-initialized database this is the only enforcement.
-EVIDENCE_TYPES = ('billable', 'non_billable')
-
-def validate_category_evidence_type(evidence_type: Optional[str]):
-    """
-    Raises HTTPException(400) if evidence_type is missing OR unrecognised.
-
-    Deliberately a validator, not a resolver - the opposite of resolve_document_type() above,
-    which defaults a missing value to 'linked_template'. There is no safe default here:
-    evidence_type is what drives Phase 6's Cleared/Query gate, so a Category that reached that
-    gate unclassified would misclassify real vouchers. document_type could default safely only
-    because it affects no gate yet. Confirmed with the user, including that this applies on
-    UPDATE as well as CREATE - a half-enforced rule would leave exactly the hole this exists to
-    close, and requiring the choice on edit doubles as the backfill route for the existing
-    unclassified Categories.
-
-    Two distinct messages so a caller can tell "you forgot it" from "that isn't a valid value".
-    """
-    if evidence_type is None:
-        raise HTTPException(400, f"evidence_type is required. Must be one of: {', '.join(EVIDENCE_TYPES)}")
-    if evidence_type not in EVIDENCE_TYPES:
-        raise HTTPException(400, f"Invalid evidence type '{evidence_type}'. Must be one of: {', '.join(EVIDENCE_TYPES)}")
 
 # ---------- HELPERS ----------
 def get_category_documents(category_id: int) -> List[dict]:
@@ -2502,9 +2465,8 @@ def row_to_category(row: dict) -> dict:
         "name": row["name"],
         "kb_overview": row.get("kb_overview"),
         "is_active": bool(row["is_active"]),
-        # Physical Bill evidence type (Phase 3 of 8). Returned raw, NULL included - an existing
-        # Category predating this field stays visibly unclassified rather than being silently
-        # presented as one of the two values.
+        # Legacy Category Evidence Type is returned raw, including NULL, for migration/audit
+        # visibility only. It is no longer authored or used as an active policy.
         "evidence_type": row.get("evidence_type"),
         # Validation Rules (Phase 2 of 7): bumped by bump_category_matrix_version() whenever
         # this Category's document list or is_required flags change.
@@ -2652,12 +2614,11 @@ def update_category_validation_rules(category_id: int, rules: CategoryValidation
 
 @router.post("/api/audit-rules/categories", dependencies=[Depends(ensure_no_active_verification_sessions)])
 def create_category(category: CategoryCreate):
-    validate_category_evidence_type(category.evidence_type)
     validate_category_payload(category.document_ids, category.cross_check_ids)
 
     category_id = execute_write_pg(
-        "INSERT INTO audit_rule_categories (name, kb_overview, evidence_type) VALUES (%s, %s, %s) RETURNING id",
-        (category.name, category.kb_overview, category.evidence_type)
+        "INSERT INTO audit_rule_categories (name, kb_overview) VALUES (%s, %s) RETURNING id",
+        (category.name, category.kb_overview)
     )
     save_category_documents(category_id, category.document_ids)
     save_category_cross_checks(category_id, category.cross_check_ids)
@@ -2673,10 +2634,6 @@ def update_category(category_id: int, category: CategoryUpdate):
     if not existing:
         raise HTTPException(404, "Category not found")
 
-    # Enforced on update as well as create (confirmed with the user) - see
-    # validate_category_evidence_type(). An existing Category still carrying NULL therefore can't
-    # be edited until an evidence type is chosen, which is the intended backfill route.
-    validate_category_evidence_type(category.evidence_type)
     validate_category_payload(category.document_ids, category.cross_check_ids)
 
     # Validation Rules (Phase 2 of 7): capture the document set before it's replaced, so a
@@ -2685,8 +2642,8 @@ def update_category(category_id: int, category: CategoryUpdate):
     old_document_ids = set(get_category_document_requireds(category_id).keys())
 
     execute_write_pg(
-        "UPDATE audit_rule_categories SET name = %s, kb_overview = %s, evidence_type = %s WHERE id = %s",
-        (category.name, category.kb_overview, category.evidence_type, category_id)
+        "UPDATE audit_rule_categories SET name = %s, kb_overview = %s WHERE id = %s",
+        (category.name, category.kb_overview, category_id)
     )
     save_category_documents(category_id, category.document_ids)
     save_category_cross_checks(category_id, category.cross_check_ids)
@@ -2743,16 +2700,10 @@ def get_category_cleared_requirements(category_id: int):
     if cached is not None:
         return cached
 
-    existing = execute_query_pg("SELECT id, evidence_type FROM audit_rule_categories WHERE id = %s", (category_id,))
+    existing = execute_query_pg("SELECT id FROM audit_rule_categories WHERE id = %s", (category_id,))
     if not existing:
         raise HTTPException(404, "Category not found")
 
-    # Physical Bill evidence type (Phase 3 of 8): report-only, confirmed with the user. This
-    # echoes the Category's evidence_type and labels each required document with its own
-    # document_type, but does NOT change which documents are reported as required - that's
-    # Phase 6's gate logic. This endpoint's contract is to mirror what the gate actually reads;
-    # deriving its own requirement rule ahead of the gate is how a summary and the real gate end
-    # up disagreeing.
     required_documents = [
         {
             "document_id": d["document_id"],
@@ -2766,7 +2717,6 @@ def get_category_cleared_requirements(category_id: int):
 
     result = {
         "category_id": category_id,
-        "evidence_type": existing[0]["evidence_type"],
         "voucher_level_checks_required": True,
         "account_head_required": True,
         "cross_checks_required": get_category_active_cross_checks_count(category_id) > 0,

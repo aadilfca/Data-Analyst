@@ -476,8 +476,8 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         for doc in (category_profile or {}).get("documents", [])
     ]
     required_doc_ids = {d['document_id'] for d in required_docs if d['is_active']}
-    # Physical Bill evidence type, Phase 6 of 8: per-document type, keyed off the Document's own
-    # document_type - NOT the Category's evidence_type. This intercepts a physical_bill Document
+    # Legacy Category Evidence Type is not consulted here. Physical Bill handling is keyed off the
+    # Document's own document_type. This intercepts a physical_bill Document
     # unconditionally, before it can fall into the no-template role-tick branch below (the trap
     # flagged since Phase 2/3: a physical_bill Document has no template_id, so without this it
     # would silently resolve "satisfied" via role ticks alone, with no bill data ever checked).
@@ -4770,8 +4770,8 @@ def save_line_observation(
 
 # ==============================================
 # VOUCHER LINE PHYSICAL BILLS
-# Physical Bill evidence type, Phase 5 of 8: save/read the manually-keyed Bill No/Date/
-# Amount/Vendor name captured against a voucher line for a Billable Category's "physical_bill"
+# Legacy Physical Bill compatibility: save/read the manually-keyed Bill No/Date/Amount/Vendor
+# name captured against a voucher line for a legacy physical_bill Document.
 # Document(s). Plain CRUD only - no Amount-vs-voucher-line matching/gate logic here, that's
 # Phase 6's job. Mirrors the voucher_line_observations endpoints directly above exactly:
 # same Body(..., embed=True) param style (no Pydantic model - none exist anywhere in this

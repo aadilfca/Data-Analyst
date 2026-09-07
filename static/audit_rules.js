@@ -2140,8 +2140,6 @@ const arCategoryDetailForm = document.getElementById('arCategoryDetailForm');
 const arCategoryEditingIdInput = document.getElementById('arCategoryEditingId');
 const arCategoryNameInput = document.getElementById('arCategoryNameInput');
 const arCategoryKbOverviewInput = document.getElementById('arCategoryKbOverviewInput');
-// Physical Bill evidence type (Phase 4 of 8): forced choice, no default - see saveCategory().
-const arCategoryEvidenceTypeSelect = document.getElementById('arCategoryEvidenceTypeSelect');
 const arCategoryDocsList = document.getElementById('arCategoryDocsList');
 const arCategoryAddDocumentSelect = document.getElementById('arCategoryAddDocumentSelect');
 const arCategoryAddDocumentBtn = document.getElementById('arCategoryAddDocumentBtn');
@@ -2390,12 +2388,6 @@ function renderClearedRequirementsBullets(data) {
         li.textContent = text;
         ul.appendChild(li);
     };
-
-    // Physical Bill evidence type (Phase 4 of 8): surfaced first, since it's what decides which
-    // kind of evidence the rest of the list means. "not set" is shown plainly rather than hidden —
-    // an unclassified Category is exactly what Phase 6's gate won't be able to classify.
-    const EVIDENCE_TYPE_LABELS = { billable: 'Billable', non_billable: 'Non-billable' };
-    addBullet('Evidence type — ' + (EVIDENCE_TYPE_LABELS[data.evidence_type] || 'not set'));
 
     addBullet('Voucher-level checks — always required');
     addBullet('Account Head — always required');
@@ -3352,10 +3344,6 @@ async function selectCategory(id) {
         arCategoryEditingIdInput.value = cat.id;
         arCategoryNameInput.value = cat.name;
         arCategoryKbOverviewInput.value = cat.kb_overview || '';
-        // Physical Bill evidence type (Phase 4 of 8): the `|| ''` is the backfill mechanism - a
-        // Category predating this field opens with the picker genuinely UNSET rather than
-        // defaulted to either value, and saveCategory() then blocks until one is chosen.
-        arCategoryEvidenceTypeSelect.value = cat.evidence_type || '';
         categoryDocIds = (cat.documents || []).map(d => d.document_id);
         categoryCrossCheckIds = (cat.cross_checks || []).map(c => c.cross_check_id);
         categoryDocRequired = {};
@@ -3397,7 +3385,6 @@ function startNewCategory() {
     arCategoryEditingIdInput.value = '';
     arCategoryNameInput.value = '';
     arCategoryKbOverviewInput.value = '';
-    arCategoryEvidenceTypeSelect.value = '';
     categoryDocIds = [];
     categoryCrossCheckIds = [];
     categoryDocRequired = {};
@@ -3427,16 +3414,6 @@ async function saveCategory(triggerBtn) {
         return;
     }
 
-    // Physical Bill evidence type (Phase 4 of 8): mirrors the backend's own reject-if-missing rule
-    // (validate_category_evidence_type(), routers/audit_rules.py) on both create AND edit, so the
-    // user gets an inline message here rather than a bare 400 from the server. Sending this field
-    // is also what un-breaks Category saving, which has been 400ing since Phase 3.
-    const evidenceType = arCategoryEvidenceTypeSelect.value;
-    if (!evidenceType) {
-        showCategoryDetailStatus('❌ Evidence type is required — choose Billable or Non-billable.', 'error');
-        return;
-    }
-
     const validationRules = readCategoryValidationRules();
     /* D2: Category document membership is canonical; legacy derived-document expansion is retired.
     try {
@@ -3456,8 +3433,7 @@ async function saveCategory(triggerBtn) {
         name: name,
         kb_overview: arCategoryKbOverviewInput.value.trim() || null,
         document_ids: [...new Set(categoryDocIds)],
-        cross_check_ids: categoryCrossCheckIds,
-        evidence_type: evidenceType
+        cross_check_ids: categoryCrossCheckIds
     };
 
     try {

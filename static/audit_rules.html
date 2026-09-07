@@ -366,22 +366,6 @@
                         <input type="text" id="arCategoryNameInput" required>
                     </div>
 
-                    <!-- Physical Bill evidence type (Phase 4 of 8): what kind of evidence this
-                         Category requires. Forced choice with NO default — the placeholder is
-                         disabled+selected, and saveCategory() blocks on an empty value, mirroring
-                         the backend's own reject-if-missing rule (validate_category_evidence_type(),
-                         routers/audit_rules.py) on both create AND edit. An existing Category that
-                         predates this field opens with the picker genuinely unset, which is the
-                         confirmed backfill mechanism — not a separate migration screen. -->
-                    <div class="ar-field">
-                        <label for="arCategoryEvidenceTypeSelect">Evidence Type</label>
-                        <select id="arCategoryEvidenceTypeSelect">
-                            <option value="" disabled selected>-- Select an evidence type --</option>
-                            <option value="billable">Billable</option>
-                            <option value="non_billable">Non-billable</option>
-                        </select>
-                    </div>
-
                     <div class="ar-field">
                         <label for="arCategoryKbOverviewInput">KB Overview</label>
                         <textarea id="arCategoryKbOverviewInput" rows="3"></textarea>
@@ -511,7 +495,7 @@
     <script src="/static/loading_ui.js"></script>
     <script src="/static/client_context.js?v=14"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/audit_rules.js?v=14"></script>
+    <script src="/static/audit_rules.js?v=15"></script>
 </body>
 
 </html>

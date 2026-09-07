@@ -1951,13 +1951,9 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add matrix_version to audit_rule_categories:", e)
 
-        # Physical Bill evidence type (Phase 1 of 8): evidence_type says WHAT kind of evidence
-        # this Category requires - 'billable' requires a Physical Bill Document (whose Amount
-        # is later hard-matched against the voucher line's own amount), 'non_billable' keeps
-        # today's procedure-role gate. Deliberately nullable with NO default: every existing
-        # Category stays NULL, i.e. "not yet classified", and needs a manual backfill before
-        # Phase 6 turns the gate on - silently defaulting historic Categories to either value
-        # would hide that decision rather than surface it.
+        # Legacy Category Evidence Type remains nullable and constrained for historical data
+        # visibility. New Category writes no longer populate it; active policy comes from the
+        # canonical document and Procedure/Evidence configuration.
         #
         # NULL always passes a SQL CHECK in SQLite, so nullable and CHECK-constrained coexist
         # correctly in the CREATE TABLE above. On an already-initialized database this ALTER

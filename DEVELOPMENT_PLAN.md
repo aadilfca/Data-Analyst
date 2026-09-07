@@ -71,7 +71,7 @@ and Physical Vendor Bill migration are accepted, preventing split configuration 
 | D4 | Keep Applied Cross-checks rule-only. Validate every referenced document against the Category set and block incomplete dependencies instead of silently adding tabs. | Complete; manually confirmed |
 | D5 | Make Verification render only active documents selected for the frozen Category; remove implicit unions and hardcoded document tabs. | Complete; manually confirmed |
 | D6 | Connect the Form-based Physical Vendor Bill to the canonical Category document set and reuse the same Document IDs in procedures and Cross-checks. | Complete; manually confirmed |
-| D7 | Retire Category Evidence Type safely: stop new writes, inventory consumers, preserve legacy values during transition, migrate or null deliberately, then remove the feature after acceptance. | Pending |
+| D7 | Retire Category Evidence Type safely: stop new writes, inventory consumers, preserve legacy values during transition, migrate or null deliberately, then remove the feature after acceptance. | Complete; manually confirmed |
 | D8 | Migrate legacy Physical Bill/Vendor Bill references to the new Form configuration using explicit, reviewable mappings; retain compatibility until dependencies are clear. | Pending |
 | D9 | Harden duplicate prevention, inactive-document behavior, empty selections, missing dependencies, changed templates, and documentation/configuration consistency. | Pending |
 
@@ -129,14 +129,24 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**This phase: D7 - Evidence Type retirement.** Safely retire obsolete Category Evidence Type values
-after auditing consumers and preserving legacy data during migration.
+**This phase: D8 - Physical Bill/Vendor Bill migration.** Map legacy Physical Bill and Vendor Bill
+references to the new Form configuration with explicit, reviewable compatibility mappings.
 
-D6 and its modal/schema follow-up are complete and manually confirmed. D8 remains the later explicit
-legacy Vendor Bill migration phase.
+D6 and D7 are complete and manually confirmed. D9 remains the later configuration-hardening phase.
 
 The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
 is included in this D6 implementation; final visual refinement remains a D6/H and P7 UX item.
+
+### Phase D7 implementation checkpoint - 2026-09-07
+
+Category Evidence Type is now legacy read-only metadata: new Category create/update writes omit it,
+the authoring selector and cleared-requirements bullet are removed, and existing database values stay
+readable for migration/audit. Active policy remains the Category's Applicable Documents and
+Procedure/Evidence configuration. Focused Audit Rules tests (84) and the full suite (149) pass;
+manual browser confirmation completed successfully.
+
+Manual testing confirmed the Evidence Type selector is absent, new and existing Category saves work,
+and legacy Category values remain preserved. Git closeout may proceed; D8 starts next.
 
 ### Phase D6 implementation checkpoint - 2026-09-06
 

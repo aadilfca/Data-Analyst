@@ -23,6 +23,10 @@ from routers.audit_rules import (
     build_verification_field_policy,
     validate_and_normalize_verification_field_policy,
     normalize_form_fields,
+    CategoryCreate,
+    CategoryUpdate,
+    create_category,
+    update_category,
     DocumentUpdate,
     invalidate_audit_rules_cache,
     invalidate_category_for_account_cache,
@@ -84,6 +88,47 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertEqual(changes[0]["entity_type"], "Voucher-level Check")
         self.assertEqual(changes[0]["entity_name"], "Test check")
         self.assertEqual(changes[0]["action"], "Deleted")
+
+    def test_category_create_ignores_legacy_evidence_type_and_does_not_write_it(self):
+        category = CategoryCreate(name="Material", evidence_type="billable")
+        with patch("routers.audit_rules.validate_category_payload"), \
+             patch("routers.audit_rules.execute_write_pg", return_value=9) as write, \
+             patch("routers.audit_rules.save_category_documents"), \
+             patch("routers.audit_rules.save_category_cross_checks"), \
+             patch("routers.audit_rules.log_audit"), \
+             patch("routers.audit_rules.invalidate_audit_rules_cache"):
+            result = create_category(category)
+
+        sql, params = write.call_args.args
+        self.assertEqual(result["category_id"], 9)
+        self.assertNotIn("evidence_type", sql)
+        self.assertEqual(params, ("Material", None))
+
+    def test_category_update_preserves_existing_legacy_evidence_type(self):
+        category = CategoryUpdate(name="Material Revised", kb_overview="Updated")
+        with patch("routers.audit_rules.execute_query_pg", return_value=[{"id": 9}]), \
+             patch("routers.audit_rules.validate_category_payload"), \
+             patch("routers.audit_rules.get_category_document_requireds", return_value={}), \
+             patch("routers.audit_rules.execute_write_pg") as write, \
+             patch("routers.audit_rules.save_category_documents"), \
+             patch("routers.audit_rules.save_category_cross_checks"), \
+             patch("routers.audit_rules.log_audit"), \
+             patch("routers.audit_rules.invalidate_audit_rules_cache"):
+            result = update_category(9, category)
+
+        sql, params = write.call_args.args
+        self.assertEqual(result["message"], "Category updated successfully")
+        self.assertNotIn("evidence_type", sql)
+        self.assertEqual(params, ("Material Revised", "Updated", 9))
+
+    def test_category_evidence_type_authoring_surface_is_retired(self):
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "static" / "audit_rules.html").read_text(encoding="utf-8")
+        script = (root / "static" / "audit_rules.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("arCategoryEvidenceTypeSelect", html)
+        self.assertNotIn("arCategoryEvidenceTypeSelect", script)
+        self.assertNotIn("evidence_type", script)
 
     def test_session_schema_has_nullable_rulebook_version(self):
         conn = sqlite3.connect(database.DB_NAME)

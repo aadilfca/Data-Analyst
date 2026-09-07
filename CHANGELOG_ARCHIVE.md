@@ -31,6 +31,20 @@ JavaScript syntax checks, `git diff --check`, and the focused 34-test set passed
 146 tests and 3 subtests. Manual local-server testing confirmed all four footer actions, failure
 recovery, clean-exit behavior, and the restarted-server schema repair.
 
+## Category Evidence Type retirement - D7 - 2026-09-07
+
+**Status:** Complete; manual local-server confirmation passed. **Files:**
+`routers/audit_rules.py`, `routers/verification.py`, `database.py`, `static/audit_rules.html`,
+`static/audit_rules.js`, `tests/test_audit_rulebook.py`.
+
+Category Evidence Type is no longer an authoring field or an active validation/clearing input.
+Category create/update payloads omit it, while the existing nullable database column and read-side
+metadata remain intact for migration and audit. The cleared-requirements response no longer reports
+Evidence Type; active requirements come from Applicable Documents and Procedure/Evidence.
+
+Focused Audit Rules coverage passed 84 tests and 3 subtests; the full suite passed 149 tests and
+3 subtests. Manual testing confirmed new/edit Category saves and preservation of legacy values.
+
 ## Revised Cross-check plan and Phase 0 reconciliation — 2026-09-03
 
 ## Form document data model — Phase A — 2026-09-05
