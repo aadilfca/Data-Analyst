@@ -8,6 +8,24 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## Procedure mismatch-chip correction - P7 - 2026-09-07
+
+**Status:** Complete; manual local-server confirmation passed. **Files:**
+`static/procedure_modal.js`, `tests/test_audit_rulebook.py`, `DEVELOPMENT_PLAN.md`, `CLAUDE.md`.
+
+The Procedure window previously compared every linked template Document's extracted amount with
+the voucher amount. That incorrectly produced a mismatch for quantity-only Documents such as
+Purchase Demand and Gate receiving, whose validity is governed by Cross-check Quantity rules.
+Amount reconciliation, the rail mismatch chip, and mismatch observation suggestions now activate
+only when the Document's configured Verification fields include `Amount`. Existing Amount-based
+Documents retain their mismatch behavior.
+
+The browser regression covers both a quantity-only Document and an Amount-configured Document:
+167 full-suite tests passed, with 6 existing warnings and 3 subtests; JavaScript syntax and
+`git diff --check` passed. Manual testing confirmed the false mismatch is removed from
+quantity-only Procedure tabs while configured Amount behavior remains available. Git closeout is
+authorized.
+
 ## Procedure modal action responsiveness follow-up - 2026-09-07
 
 **Status:** Complete; manual local-server confirmation passed. **Files:**

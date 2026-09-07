@@ -1938,13 +1938,16 @@ function renderProcedureModalTabs(uid) {
                 ? (tabState.formSaved ? 'Form saved' : 'Form pending')
             : `${rolesDone}/${roles.length} roles`;
 
-        // Mismatch tag — has-template documents only, and only once evidence is actually linked
-        // (same gating buildSelectedLinesTable()'s own summary line uses, so the rail never
-        // disagrees with the panel about a document with nothing linked yet).
+        // Amount mismatch is meaningful only when this Document explicitly exposes an Amount
+        // field. Quantity-only Documents (for example Purchase Demand and Gate receiving) are
+        // validated by their Cross-check rules, not by the generic evidence-total comparison.
+        // Keep the rail aligned with buildSelectedLinesTable() and never show a false mismatch.
         let mismatchTagHtml = '';
         if (doc.template_id) {
-            const { count, mismatch } = getSelectedLinesSummary(uid, doc.id);
-            if (count > 0 && mismatch) mismatchTagHtml = '<span class="procedure-tab-mismatch">mismatch</span>';
+            const { count, hasAmountField, mismatch } = getSelectedLinesSummary(uid, doc.id);
+            if (count > 0 && hasAmountField && mismatch) {
+                mismatchTagHtml = '<span class="procedure-tab-mismatch">mismatch</span>';
+            }
         }
 
         return `
@@ -3848,16 +3851,23 @@ async function unassignSupportingDocument(uid, docId, assignmentId, target = nul
 // gets a ✕ unlink button (Unassign requirement) wired up by renderProcedureModalPanel() below,
 // calling unassignSupportingDocument() — removing a selection here and re-rendering reuses this
 // same summary/table logic, so the total/badge always recompute correctly with no separate code path.
-// Shared by buildSelectedLinesTable() and buildObservationSuggestion() (Phase 6) so both read
-// the exact same total/mismatch computation — never recomputed independently.
+// Shared by buildSelectedLinesTable(), renderProcedureModalTabs(), and
+// buildObservationSuggestion() so all amount-reconciliation UI uses one computation. A generic
+// amount comparison is valid only when this Document's configured fields contain Amount;
+// quantity-only Documents are evaluated by Cross-check rules instead.
 function getSelectedLinesSummary(uid, docId) {
     const lineState = hostAdapter.procedureModalState[uid];
     const tabState = getProcedureTabState(uid, docId);
     const selections = tabState.selections || [];
+    const doc = lineState && (lineState.documents || []).find(d => String(d.id) === String(docId));
+    const columns = getDocumentVerificationColumns(doc);
+    const hasAmountField = columns.some(column =>
+        String(column.column_name || '').trim().toLowerCase() === 'amount'
+    );
     const total = selections.reduce((sum, sel) => sum + (parseFloat(sel.extract_amount) || 0), 0);
     const voucherAmount = (lineState && lineState.voucherLineAmount) || 0;
-    const mismatch = Math.abs(total - voucherAmount) > 0.01;
-    return { total, voucherAmount, mismatch, count: selections.length };
+    const mismatch = hasAmountField && Math.abs(total - voucherAmount) > 0.01;
+    return { total, voucherAmount, mismatch, hasAmountField, count: selections.length };
 }
 
 // Finds a key in row_data matching fieldName case-insensitively (trimmed) - same matching
@@ -3946,16 +3956,18 @@ function buildSelectedLinesTable(uid, docId) {
 
     html += '</tbody></table></div>';
 
-    const { total, voucherAmount, mismatch, count } = getSelectedLinesSummary(uid, docId);
-    html += `
-        <div class="procedure-total-summary">
-            <span>Voucher line amount: <strong>${voucherAmount.toFixed(2)}</strong></span>
-            <span>Evidence total (${count} line${count === 1 ? '' : 's'}): <strong>${total.toFixed(2)}</strong></span>
-            ${mismatch
-                ? '<span class="procedure-mismatch-badge">⚠️ Mismatch</span>'
-                : '<span class="procedure-match-badge">✅ Matches</span>'}
-        </div>
-    `;
+    const { total, voucherAmount, mismatch, hasAmountField, count } = getSelectedLinesSummary(uid, docId);
+    if (hasAmountField) {
+        html += `
+            <div class="procedure-total-summary">
+                <span>Voucher line amount: <strong>${voucherAmount.toFixed(2)}</strong></span>
+                <span>Evidence total (${count} line${count === 1 ? '' : 's'}): <strong>${total.toFixed(2)}</strong></span>
+                ${mismatch
+                    ? '<span class="procedure-mismatch-badge">⚠️ Mismatch</span>'
+                    : '<span class="procedure-match-badge">✅ Matches</span>'}
+            </div>
+        `;
+    }
     return html;
 }
 
@@ -4086,8 +4098,8 @@ function buildObservationSuggestion(uid, docId) {
     const lines = [];
 
     if (hasTemplate) {
-        const { total, voucherAmount, mismatch } = getSelectedLinesSummary(uid, docId);
-        if (mismatch) {
+        const { total, voucherAmount, hasAmountField, mismatch } = getSelectedLinesSummary(uid, docId);
+        if (hasAmountField && mismatch) {
             const diff = total - voucherAmount;
             lines.push(`Amount mismatch: evidence total ${total.toFixed(2)} vs voucher line amount ${voucherAmount.toFixed(2)} (diff ${diff.toFixed(2)}).`);
         }

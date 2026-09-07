@@ -85,7 +85,7 @@ and Physical Vendor Bill migration are accepted, preventing split configuration 
 | P4 | Cross-check acceptance | Verify reusable matrix rules, document chains, operators, tolerance, missing data, blocking, risk, Quantity-only rows, Form values, and result display. | Pending |
 | P5 | Rulebook edge cases | Test inactive documents/templates, empty selections, changed templates, deleted signatories, deleted Form fields, and legacy configurations. | Pending |
 | P6 | Verification status integration | Confirm rule results affect Cleared, Query, shortfall, and blocking decisions correctly. | Pending |
-| P7 | UX refinement | Resolve remaining Procedure modal, Form editor, Physical Vendor Bill, Copy from lines, rule-result, error, loading, and responsive-design issues. | Pending |
+| P7 | UX refinement | Resolve remaining Procedure modal, Form editor, Physical Vendor Bill, Copy from lines, rule-result, error, loading, and responsive-design issues. | Mismatch correction complete; manually confirmed |
 | P8 | Performance review | Measure Form/Procedure loading and Verification Save/Verify performance with realistic data volume. | Pending |
 | P9 | Final release hardening | Remove test data, confirm backups, review logs, verify Task Scheduler/server operation, and prepare release notes. | Pending |
 
@@ -129,12 +129,13 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**This phase: P7 - Procedure-window mismatch-chip correction.** Remove the misleading mismatch
-indicator for quantity-only Documents while preserving genuine mismatch indicators for configured
-fields. D8's live migration execution remains separately gated by explicit source-to-Form mappings.
+**This phase: P7 - Procedure-window mismatch-chip correction.** The misleading mismatch indicator
+for quantity-only Documents is removed while genuine configured-Amount comparisons remain active.
+Manual local-server testing is complete for this correction. D8's live migration execution remains
+separately gated by explicit source-to-Form mappings.
 
-D6, D7, D9, and Form rule integration are complete and manually confirmed. One Procedure-window
-UX correction remains before P1/P7 acceptance continues.
+D6, D7, D9, Form rule integration, and the P7 mismatch correction are manually confirmed.
+**Next phase: P1 - Verification smoke test.**
 
 The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
 is included in this D6 implementation; final visual refinement remains a D6/H and P7 UX item.

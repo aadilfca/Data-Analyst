@@ -1774,6 +1774,95 @@ class ProcedureModalPersistenceTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_quantity_only_document_does_not_show_amount_mismatch(self):
+        procedure_modal_js = Path(__file__).resolve().parents[1] / "static" / "procedure_modal.js"
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            page = browser.new_page()
+            try:
+                page.set_content("<html><body></body></html>")
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};" )
+                page.add_script_tag(path=str(procedure_modal_js))
+                result = page.evaluate("""() => {
+                    hostAdapter = {
+                        escapeHtml: value => String(value ?? ''),
+                        procedureModalState: {
+                            1: {
+                                activeDocId: 10,
+                                assignedDocIds: new Set(['10', '12']),
+                                voucherLineAmount: 9320,
+                                documents: [
+                                    {
+                                        id: 10,
+                                        name: 'Purchase Demand',
+                                        template_id: 5,
+                                        verification_fields: [
+                                            {column_name: 'Quantity', data_type: 'Numeric'}
+                                        ],
+                                        auth_roles: []
+                                    },
+                                    {
+                                        id: 12,
+                                        name: 'Purchase Order',
+                                        template_id: 6,
+                                        verification_fields: [
+                                            {column_name: 'Amount', data_type: 'Numeric'}
+                                        ],
+                                        auth_roles: []
+                                    }
+                                ],
+                                tabs: {
+                                    10: {
+                                        selections: [{
+                                            extract_amount: 0,
+                                            row_data: {Quantity: '1'}
+                                        }],
+                                        checklist: {}
+                                    },
+                                    12: {
+                                        selections: [{
+                                            extract_amount: 100,
+                                            row_data: {Amount: '100'}
+                                        }],
+                                        checklist: {}
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    const quantitySummary = getSelectedLinesSummary(1, 10);
+                    const quantityTable = buildSelectedLinesTable(1, 10);
+                    const amountSummary = getSelectedLinesSummary(1, 12);
+                    renderProcedureModalTabs(1);
+                    const rail = [...document.querySelectorAll('.procedure-tab-btn')]
+                        .map(button => ({
+                            label: button.querySelector('.procedure-tab-label')?.textContent || '',
+                            mismatch: !!button.querySelector('.procedure-tab-mismatch')
+                        }));
+                    return {
+                        quantitySummary,
+                        quantityHasMismatchText: /Mismatch/i.test(quantityTable),
+                        quantityObservation: buildObservationSuggestion(1, 10),
+                        amountSummary,
+                        rail
+                    };
+                }""")
+                self.assertFalse(result["quantitySummary"]["hasAmountField"])
+                self.assertFalse(result["quantitySummary"]["mismatch"])
+                self.assertFalse(result["quantityHasMismatchText"])
+                self.assertEqual(result["quantityObservation"], "")
+                self.assertTrue(result["amountSummary"]["hasAmountField"])
+                self.assertTrue(result["amountSummary"]["mismatch"])
+                self.assertEqual(
+                    result["rail"],
+                    [
+                        {"label": "Purchase Demand", "mismatch": False},
+                        {"label": "Purchase Order", "mismatch": True}
+                    ]
+                )
+            finally:
+                browser.close()
+
     def test_procedure_checklist_uses_category_rules_and_signatory_details(self):
         procedure_modal_js = Path(__file__).resolve().parents[1] / "static" / "procedure_modal.js"
         with sync_playwright() as playwright:
