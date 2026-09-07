@@ -45,6 +45,21 @@ Evidence Type; active requirements come from Applicable Documents and Procedure/
 Focused Audit Rules coverage passed 84 tests and 3 subtests; the full suite passed 149 tests and
 3 subtests. Manual testing confirmed new/edit Category saves and preservation of legacy values.
 
+## Physical Bill/Vendor Bill migration inventory - D8 - 2026-09-07
+
+**Status:** Complete backend-only subphase. **Files:**
+`routers/audit_rules.py`, `tests/test_audit_rulebook.py`.
+
+Added read-only inventory and non-writing preview endpoints for legacy `physical_bill` Documents,
+Category and Cross-check references, stored legacy bill counts, and target Form fields. The preview
+requires explicit source/target Document IDs and mappings for Bill No, Bill Date, Vendor Name, Item
+Name, Quantity, Rate, and Amount, including the required Header/Item scope. It reports blockers and
+`writes_performed: false`; no legacy rows or configuration references are changed.
+
+Focused Audit Rules coverage passed 86 tests and 3 subtests; the full suite passed 151 tests and
+3 subtests. No separate browser test was required; controlled data/configuration migration remains
+pending explicit mapping review.
+
 ## Revised Cross-check plan and Phase 0 reconciliation — 2026-09-03
 
 ## Form document data model — Phase A — 2026-09-05

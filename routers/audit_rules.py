@@ -2233,6 +2233,17 @@ class CategoryUpdate(BaseModel):
     document_ids: List[int] = []
     cross_check_ids: List[int] = []
 
+
+class PhysicalBillMigrationPreviewRequest(BaseModel):
+    source_document_id: int
+    target_document_id: int
+    field_mapping: Dict[str, int] = {}
+
+
+LEGACY_PHYSICAL_BILL_FIELDS = (
+    "Bill No", "Bill Date", "Vendor Name", "Item Name", "Quantity", "Rate", "Amount"
+)
+
 class CategoryValidationRules(BaseModel):
     procedure_evidence: Dict[str, Any] = {}
     # Legacy Category-owned comparisons are retained for compatibility while Cross-checks are
@@ -2302,6 +2313,187 @@ def validate_category_validation_rules(rules: CategoryValidationRules, category_
             raise HTTPException(400, f"Mathematical Cross-check row {index + 1} has an invalid missing-data behavior")
 
 # ---------- HELPERS ----------
+def get_physical_bill_migration_inventory() -> dict:
+    """Return a read-only inventory for the controlled Physical Bill-to-Form migration."""
+    documents = execute_query_pg(
+        """
+        SELECT id, name, document_type, is_active
+        FROM audit_rule_documents
+        WHERE document_type IN ('physical_bill', 'form')
+        ORDER BY document_type, name, id
+        """
+    )
+    category_rows = execute_query_pg(
+        """
+        SELECT cd.document_id, cd.category_id, c.name AS category_name, cd.is_required
+        FROM audit_rule_category_documents cd
+        JOIN audit_rule_categories c ON c.id = cd.category_id
+        JOIN audit_rule_documents d ON d.id = cd.document_id
+        WHERE d.document_type = 'physical_bill'
+        ORDER BY cd.document_id, c.name, c.id
+        """
+    )
+    bill_rows = execute_query_pg(
+        """
+        SELECT document_id, COUNT(*) AS bill_count,
+               COUNT(DISTINCT voucher_line_id) AS line_count
+        FROM voucher_line_physical_bills
+        GROUP BY document_id
+        """
+    )
+    cross_check_rows = execute_query_pg(
+        """
+        SELECT ccd.document_id, COUNT(DISTINCT ccd.cross_check_id) AS cross_check_count
+        FROM audit_rule_cross_check_documents ccd
+        JOIN audit_rule_documents d ON d.id = ccd.document_id
+        WHERE d.document_type = 'physical_bill'
+        GROUP BY ccd.document_id
+        """
+    )
+    form_field_rows = execute_query_pg(
+        """
+        SELECT f.document_id, f.id, f.field_name, f.field_type, f.field_scope, f.sort_order
+        FROM audit_rule_document_fields f
+        JOIN audit_rule_documents d ON d.id = f.document_id
+        WHERE d.document_type = 'form'
+        ORDER BY f.document_id, f.sort_order, f.id
+        """
+    )
+
+    categories_by_document = {}
+    for row in category_rows:
+        categories_by_document.setdefault(row["document_id"], []).append({
+            "category_id": row["category_id"],
+            "category_name": row["category_name"],
+            "is_required": bool(row["is_required"]),
+        })
+    bills_by_document = {
+        row["document_id"]: {
+            "bill_count": int(row["bill_count"]),
+            "line_count": int(row["line_count"]),
+        }
+        for row in bill_rows
+    }
+    cross_checks_by_document = {
+        row["document_id"]: int(row["cross_check_count"])
+        for row in cross_check_rows
+    }
+    fields_by_document = {}
+    for row in form_field_rows:
+        fields_by_document.setdefault(row["document_id"], []).append({
+            "field_id": row["id"],
+            "field_name": row["field_name"],
+            "field_type": row["field_type"],
+            "field_scope": row["field_scope"],
+            "sort_order": row["sort_order"],
+        })
+
+    inventory = []
+    for document in documents:
+        document_id = document["id"]
+        inventory.append({
+            "document_id": document_id,
+            "name": document["name"],
+            "document_type": document["document_type"],
+            "is_active": bool(document["is_active"]),
+            "categories": categories_by_document.get(document_id, []),
+            "legacy_data": bills_by_document.get(document_id, {"bill_count": 0, "line_count": 0}),
+            "cross_check_count": cross_checks_by_document.get(document_id, 0),
+            "fields": fields_by_document.get(document_id, []),
+        })
+
+    return {
+        "legacy_fields": list(LEGACY_PHYSICAL_BILL_FIELDS),
+        "documents": inventory,
+        "warnings": [
+            "This inventory is read-only. No legacy rows or Category references are changed.",
+            "A migration requires an explicit source Document, target Form, and field mapping.",
+        ],
+    }
+
+
+@router.get("/api/audit-rules/physical-bill-migration/inventory")
+def physical_bill_migration_inventory():
+    return get_physical_bill_migration_inventory()
+
+
+@router.post("/api/audit-rules/physical-bill-migration/preview")
+def preview_physical_bill_migration(request: PhysicalBillMigrationPreviewRequest):
+    documents = execute_query_pg(
+        """
+        SELECT id, name, document_type, is_active
+        FROM audit_rule_documents
+        WHERE id IN (%s, %s)
+        """,
+        (request.source_document_id, request.target_document_id),
+    )
+    by_id = {row["id"]: row for row in documents}
+    source = by_id.get(request.source_document_id)
+    target = by_id.get(request.target_document_id)
+    blockers = []
+    if not source or source["document_type"] != "physical_bill":
+        blockers.append("Source Document must be an active legacy Physical Bill Document.")
+    elif not source["is_active"]:
+        blockers.append("Source Physical Bill Document is inactive.")
+    if not target or target["document_type"] != "form":
+        blockers.append("Target Document must be an active Form Document.")
+    elif not target["is_active"]:
+        blockers.append("Target Form Document is inactive.")
+
+    target_fields = execute_query_pg(
+        """
+        SELECT id, field_name, field_type, field_scope, sort_order
+        FROM audit_rule_document_fields
+        WHERE document_id = %s
+        ORDER BY sort_order, id
+        """,
+        (request.target_document_id,),
+    )
+    fields_by_id = {row["id"]: row for row in target_fields}
+    field_mapping = request.field_mapping or {}
+    required_scopes = {
+        "Bill No": "header", "Bill Date": "header", "Vendor Name": "header",
+        "Item Name": "item", "Quantity": "item", "Rate": "item", "Amount": "item",
+    }
+    resolved_mapping = {}
+    for legacy_name in LEGACY_PHYSICAL_BILL_FIELDS:
+        field_id = field_mapping.get(legacy_name)
+        field = fields_by_id.get(field_id)
+        if not field:
+            blockers.append(f"Missing target Form field mapping for '{legacy_name}'.")
+            continue
+        if field["field_scope"] != required_scopes[legacy_name]:
+            blockers.append(
+                f"Target field '{field['field_name']}' for '{legacy_name}' must use "
+                f"{required_scopes[legacy_name]} scope."
+            )
+        resolved_mapping[legacy_name] = {
+            "field_id": field["id"],
+            "field_name": field["field_name"],
+            "field_type": field["field_type"],
+            "field_scope": field["field_scope"],
+        }
+
+    bill_count_rows = execute_query_pg(
+        "SELECT COUNT(*) AS bill_count FROM voucher_line_physical_bills WHERE document_id = %s",
+        (request.source_document_id,),
+    )
+    existing_form_rows = execute_query_pg(
+        "SELECT COUNT(*) AS entry_count FROM voucher_line_form_entries WHERE document_id = %s",
+        (request.target_document_id,),
+    )
+    return {
+        "ready": not blockers,
+        "source_document": source,
+        "target_document": target,
+        "field_mapping": resolved_mapping,
+        "legacy_bill_count": int((bill_count_rows or [{"bill_count": 0}])[0]["bill_count"]),
+        "existing_target_entry_count": int((existing_form_rows or [{"entry_count": 0}])[0]["entry_count"]),
+        "blockers": blockers,
+        "writes_performed": False,
+    }
+
+
 def get_category_documents(category_id: int) -> List[dict]:
     rows = execute_query_pg(
         """

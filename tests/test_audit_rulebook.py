@@ -27,6 +27,9 @@ from routers.audit_rules import (
     CategoryUpdate,
     create_category,
     update_category,
+    PhysicalBillMigrationPreviewRequest,
+    get_physical_bill_migration_inventory,
+    preview_physical_bill_migration,
     DocumentUpdate,
     invalidate_audit_rules_cache,
     invalidate_category_for_account_cache,
@@ -129,6 +132,50 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertNotIn("arCategoryEvidenceTypeSelect", html)
         self.assertNotIn("arCategoryEvidenceTypeSelect", script)
         self.assertNotIn("evidence_type", script)
+
+    def test_physical_bill_migration_inventory_is_read_only_and_complete(self):
+        responses = [
+            [
+                {"id": 11, "name": "Legacy Physical Bill", "document_type": "physical_bill", "is_active": True},
+                {"id": 21, "name": "Physical Vendor Bill", "document_type": "form", "is_active": True},
+            ],
+            [{"document_id": 11, "category_id": 7, "category_name": "Material", "is_required": True}],
+            [{"document_id": 11, "bill_count": 3, "line_count": 2}],
+            [{"document_id": 11, "cross_check_count": 1}],
+            [{"document_id": 21, "id": 31, "field_name": "Bill No", "field_type": "text", "field_scope": "header", "sort_order": 0}],
+        ]
+        with patch("routers.audit_rules.execute_query_pg", side_effect=responses) as query:
+            result = get_physical_bill_migration_inventory()
+
+        self.assertEqual(query.call_count, 5)
+        legacy = next(d for d in result["documents"] if d["document_id"] == 11)
+        self.assertEqual(legacy["legacy_data"], {"bill_count": 3, "line_count": 2})
+        self.assertEqual(legacy["categories"][0]["category_name"], "Material")
+        self.assertEqual(result["legacy_fields"][-1], "Amount")
+        self.assertTrue(any("read-only" in warning for warning in result["warnings"]))
+
+    def test_physical_bill_migration_preview_requires_explicit_scoped_mapping(self):
+        responses = [
+            [
+                {"id": 11, "name": "Legacy Physical Bill", "document_type": "physical_bill", "is_active": True},
+                {"id": 21, "name": "Physical Vendor Bill", "document_type": "form", "is_active": True},
+            ],
+            [{"id": 31, "field_name": "Bill No", "field_type": "text", "field_scope": "header", "sort_order": 0}],
+            [{"bill_count": 3}],
+            [{"entry_count": 0}],
+        ]
+        request = PhysicalBillMigrationPreviewRequest(
+            source_document_id=11,
+            target_document_id=21,
+            field_mapping={"Bill No": 31},
+        )
+        with patch("routers.audit_rules.execute_query_pg", side_effect=responses):
+            result = preview_physical_bill_migration(request)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["legacy_bill_count"], 3)
+        self.assertFalse(result["writes_performed"])
+        self.assertTrue(any("Bill Date" in blocker for blocker in result["blockers"]))
 
     def test_session_schema_has_nullable_rulebook_version(self):
         conn = sqlite3.connect(database.DB_NAME)
