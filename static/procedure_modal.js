@@ -226,9 +226,8 @@ const ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1;
 // that same voucher within one modal session.
 let voucherChecksCache = {};
 
-// Supplies the currently cached tick state to Verification's voucher-level atomic save.
-// Modal observations and Physical Bills are deliberately excluded until 4B-2 serializes their
-// pending editor state as part of the same transaction.
+// Supplies the currently cached procedure, observation, Physical Bill, and Form state to
+// Verification's voucher-level atomic save.
 function getVoucherTickSaveState() {
     const procedureChecks = [];
     Object.entries(hostAdapter?.procedureModalState || {}).forEach(([uid, line]) => {
@@ -711,7 +710,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!hostAdapter.procedureModalState[uid].tabs[docId]) {
-        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false, formCopyStatus: '' };
+        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false, formCopyStatus: '', formSourceRows: [], formAutoPrefillAttempted: false, formAutoPrefillLoading: false };
     }
     return hostAdapter.procedureModalState[uid].tabs[docId];
 }
@@ -1246,6 +1245,18 @@ function findNextUnverifiedLineIndex(fromIdx) {
 // actually leaving, captured before currentProcedureModalUid is cleared below — covers all of
 // them with one change. Fire-and-forget, matching the existing convention at this function's own
 // two other call sites (applyCategoryToTypeCell/toggleColumnsExpanded never await it either).
+async function refreshProcedureModalHostBadges() {
+    const tasks = [];
+    (hostAdapter.currentVoucherLines || []).forEach(line => {
+        const lineState = hostAdapter.voucherLineState[line.detail_id];
+        const type = lineState && lineState.transactionType;
+        if (!type) return;
+        tasks.push(hostAdapter.updateProceduresCellForLine(line.detail_id, type));
+        tasks.push(hostAdapter.updateObservationsCellForLine(line.detail_id, type));
+    });
+    await Promise.all(tasks);
+}
+
 function hideProcedureModalOnly(refreshBadges = true) {
     if (procedureModal) procedureModal.style.display = 'none';
     // Defensive — the browse modal is nested on top of this one, so it should never remain open
@@ -1293,12 +1304,7 @@ async function closeProcedureModal() {
             // The Procedures cells are rendered asynchronously and are not rebuilt when the
             // modal closes. Refresh every line because the grouped save includes voucher-wide
             // procedure state; this makes the count/ring/color reflect the just-saved checks.
-            const refreshedLines = (hostAdapter.currentVoucherLines || []).map(line => {
-                const lineState = hostAdapter.voucherLineState[line.detail_id];
-                const type = lineState && lineState.transactionType;
-                return type ? hostAdapter.updateProceduresCellForLine(line.detail_id, type) : null;
-            }).filter(Boolean);
-            await Promise.all(refreshedLines);
+            await refreshProcedureModalHostBadges();
             if (!physicalBillsSaved) hostAdapter.markLineDirty(uid, 'physical bill save retry required');
             if (!formEntriesSaved) hostAdapter.markLineDirty(uid, 'form evidence save retry required');
         } catch (e) {
@@ -1427,6 +1433,7 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
         // currentVoucherLines; the fallback saves the current line) — invalidate every line's
         // cached modal payload so reopening any of them shows the saved ticks, not stale cache.
         invalidateProcedureModalDataForVoucher();
+        await refreshProcedureModalHostBadges();
         const data = combinedResult.data;
         if (!data) return null;
         if (window.VerificationPerf) {
@@ -1862,6 +1869,9 @@ function isProcedureDocumentComplete(uid, doc) {
         } else {
             baseComplete = false;
         }
+    } else if (doc.document_type === 'form') {
+        const tabState = getProcedureTabState(uid, doc.id);
+        baseComplete = !!tabState.formSaved && isFormDraftComplete(uid, doc);
     } else if (doc.template_id) {
         const lineState = hostAdapter.procedureModalState[uid];
         baseComplete = !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(String(doc.id)));
@@ -1909,8 +1919,11 @@ function renderProcedureModalTabs(uid) {
         // first since doc.template_id is always null for a physical_bill Document (same
         // document_type-first branch order as isProcedureDocumentComplete() above).
         const isPhysicalBill = doc.document_type === 'physical_bill';
+        const isForm = doc.document_type === 'form';
         const dotTitle = isPhysicalBill
             ? (isComplete ? 'Bill entered' : 'Bill not yet entered')
+            : isForm
+                ? (isComplete ? 'Form evidence matches mapped values' : 'Form evidence pending or mismatched')
             : doc.template_id
                 ? (isComplete ? 'Evidence linked' : 'No evidence linked yet')
                 : (isComplete ? 'All procedures confirmed' : 'Procedures pending');
@@ -1921,6 +1934,8 @@ function renderProcedureModalTabs(uid) {
         const rolesDone = roles.filter(r => tabState.checklist[r] && tabState.checklist[r].is_checked).length;
         const subText = isPhysicalBill
             ? (tabState.physicalBillSaved ? 'Bill saved' : 'Bill pending')
+            : isForm
+                ? (tabState.formSaved ? 'Form saved' : 'Form pending')
             : `${rolesDone}/${roles.length} roles`;
 
         // Mismatch tag — has-template documents only, and only once evidence is actually linked
@@ -2157,75 +2172,187 @@ function normalizeFormCopyValue(field, rawValue) {
     return value;
 }
 
-async function copyFormDocumentFromLines(uid, doc) {
+function formValueIsBlank(value) {
+    return value === null || value === undefined || String(value).trim() === '';
+}
+
+function formFieldValuesMatch(field, actualValue, expectedValue) {
+    if (formValueIsBlank(actualValue) || formValueIsBlank(expectedValue)) return false;
+    if (field.field_type === 'numeric') {
+        const actual = Number(actualValue);
+        const expected = Number(expectedValue);
+        return Number.isFinite(actual) && Number.isFinite(expected)
+            && Math.abs(actual - expected) <= PB_FLOAT_EPSILON;
+    }
+    const actual = normalizeFormCopyValue(field, actualValue);
+    const expected = normalizeFormCopyValue(field, expectedValue);
+    return actual.toLowerCase() === expected.toLowerCase();
+}
+
+function formEntryHasValues(entry, fields) {
+    return !!entry && fields.every(field => !formValueIsBlank(entry.values[String(field.id)]));
+}
+
+function hasSavedFormValues(tabState) {
+    return (tabState.formEntries || []).some(entry =>
+        Object.values(entry.values || {}).some(value => !formValueIsBlank(value))
+    );
+}
+
+function markFormTabsSavedAfterBundle(revisionsAtStart) {
+    Object.entries(hostAdapter?.procedureModalState || {}).forEach(([uid, lineState]) => {
+        const currentRevision = typeof voucherLineDirtyRevisions === 'object'
+            ? (voucherLineDirtyRevisions[String(uid)] || 0) : (revisionsAtStart[String(uid)] || 0);
+        if (currentRevision !== (revisionsAtStart[String(uid)] || 0)) return;
+        Object.values(lineState.tabs || {}).forEach(tabState => {
+            if (!tabState.formDirty) return;
+            tabState.formSaved = hasSavedFormValues(tabState);
+            tabState.formDirty = false;
+        });
+    });
+}
+
+function isFormDraftComplete(uid, doc) {
     const tabState = getProcedureTabState(uid, doc.id);
+    const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
+    if (!fields.length) return false;
+    const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
+    const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
+    const headerEntry = (tabState.formEntries || []).find(entry => entry.row_scope === 'header');
+    const itemEntries = (tabState.formEntries || []).filter(entry => entry.row_scope === 'item');
+    if (headerFields.length && !formEntryHasValues(headerEntry, headerFields)) return false;
+    if (itemFields.length && (!itemEntries.length || itemEntries.some(entry => !formEntryHasValues(entry, itemFields)))) return false;
+
+    const mappedFields = fields.filter(field => field.linked_column);
+    const sources = tabState.formSourceRows || [];
+    if (!mappedFields.length) return true;
+    if (!sources.length) return false;
+    const mappedHeaderFields = mappedFields.filter(field => (field.field_scope || 'header') === 'header');
+    if (mappedHeaderFields.length && (!headerEntry || mappedHeaderFields.some(field =>
+        !formFieldValuesMatch(field, headerEntry.values[String(field.id)],
+            getFormCopyRowValue(sources[0].row_data, field.linked_column))
+    ))) return false;
+    const mappedItemFields = mappedFields.filter(field => (field.field_scope || 'header') === 'item');
+    if (mappedItemFields.length && sources.some((source, index) => {
+        const entry = itemEntries[index];
+        return !entry || mappedItemFields.some(field => !formFieldValuesMatch(
+            field, entry.values[String(field.id)], getFormCopyRowValue(source.row_data, field.linked_column)
+        ));
+    })) return false;
+    return true;
+}
+
+async function autoSaveCompleteForm(uid, doc) {
+    const tabState = getProcedureTabState(uid, doc.id);
+    if (!tabState.formDirty || tabState.formSavePromise || !isFormDraftComplete(uid, doc)) return;
+    tabState.formSavePromise = saveFormEntry(uid, doc.id);
+    try {
+        await tabState.formSavePromise;
+    } finally {
+        tabState.formSavePromise = null;
+        renderProcedureModalTabs(uid);
+    }
+}
+
+async function fetchFormCopySources(uid, doc) {
+    const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/form_copy_sources/${encodeURIComponent(uid)}/${encodeURIComponent(doc.id)}`);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || body.error?.user_message || 'Linked source lines could not be loaded.');
+    return Array.isArray(body.sources) ? body.sources : [];
+}
+
+function applyMappedFormValues(tabState, fields, sources) {
+    const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
+    const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
+    const headerEntry = ensureFormHeaderEntry(tabState, headerFields);
+    const itemEntries = (tabState.formEntries || []).filter(entry => entry.row_scope === 'item');
+    let changed = false;
+
+    const copyIntoBlankFields = (entry, entryFields, source) => {
+        if (!entry) return false;
+        let entryChanged = false;
+        entryFields.forEach(field => {
+            if (entry.values[String(field.id)] !== undefined && String(entry.values[String(field.id)]).trim() !== '') return;
+            const value = normalizeFormCopyValue(field, getFormCopyRowValue(source.row_data, field.linked_column));
+            if (!value) return;
+            entry.values[String(field.id)] = value;
+            entryChanged = true;
+        });
+        return entryChanged;
+    };
+
+    sources.forEach((source, sourceIndex) => {
+        if (sourceIndex === 0) changed = copyIntoBlankFields(headerEntry, headerFields, source) || changed;
+        if (!itemFields.length) return;
+        let itemEntry = itemEntries[sourceIndex];
+        if (!itemEntry) {
+            itemEntry = makeEmptyFormEntry('item', itemFields, itemEntries.length);
+            tabState.formEntries.push(itemEntry);
+            itemEntries.push(itemEntry);
+        }
+        if (copyIntoBlankFields(itemEntry, itemFields, source)) changed = true;
+    });
+    return changed;
+}
+
+async function copyFormDocumentFromLines(uid, doc, options = {}) {
+    const tabState = getProcedureTabState(uid, doc.id);
+    const automatic = options.automatic === true;
+    if (automatic) {
+        if (tabState.formAutoPrefillAttempted || tabState.formAutoPrefillLoading) return;
+        tabState.formAutoPrefillAttempted = true;
+        tabState.formAutoPrefillLoading = true;
+    }
     const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
     const mappedFields = fields.filter(field => field.linked_column);
     if (!mappedFields.length) {
-        tabState.formCopyStatus = 'No linked columns are configured for this Form.';
-        renderFormDocumentPanel(uid, doc);
+        if (!automatic) {
+            tabState.formCopyStatus = 'No linked columns are configured for this Form.';
+            renderFormDocumentPanel(uid, doc);
+        }
+        tabState.formAutoPrefillLoading = false;
         return;
     }
     const copyBtn = document.getElementById('procedureFormCopyBtn');
-    if (copyBtn) {
+    if (copyBtn && !automatic) {
         copyBtn.disabled = true;
         copyBtn.textContent = 'Loading lines…';
     }
     try {
-        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/form_copy_sources/${encodeURIComponent(uid)}/${encodeURIComponent(doc.id)}`);
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(body.detail || body.error?.user_message || 'Linked source lines could not be loaded.');
-        const sources = Array.isArray(body.sources) ? body.sources : [];
+        const sources = await fetchFormCopySources(uid, doc);
+        tabState.formSourceRows = sources;
         if (!sources.length) {
-            tabState.formCopyStatus = 'No active linked lines were found for this Form’s Template.';
-            renderFormDocumentPanel(uid, doc);
+            if (!automatic) {
+                tabState.formCopyStatus = 'No active linked lines were found for this Form’s Template.';
+                renderFormDocumentPanel(uid, doc);
+            }
             return;
         }
-
-        const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
-        const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
-        const headerEntry = ensureFormHeaderEntry(tabState, headerFields);
-        const itemEntries = (tabState.formEntries || []).filter(entry => entry.row_scope === 'item');
-        let changed = false;
-        const copyIntoBlankFields = (entry, entryFields, source) => {
-            if (!entry) return false;
-            let entryChanged = false;
-            entryFields.forEach(field => {
-                if (entry.values[String(field.id)] !== undefined && String(entry.values[String(field.id)]).trim() !== '') return;
-                const value = normalizeFormCopyValue(field, getFormCopyRowValue(source.row_data, field.linked_column));
-                if (!value) return;
-                entry.values[String(field.id)] = value;
-                entryChanged = true;
-            });
-            return entryChanged;
-        };
-
-        sources.forEach((source, sourceIndex) => {
-            if (sourceIndex === 0) changed = copyIntoBlankFields(headerEntry, headerFields, source) || changed;
-            if (!itemFields.length) return;
-            let itemEntry = itemEntries[sourceIndex];
-            if (!itemEntry) {
-                itemEntry = makeEmptyFormEntry('item', itemFields, itemEntries.length);
-                tabState.formEntries.push(itemEntry);
-                itemEntries.push(itemEntry);
-            }
-            const itemChanged = copyIntoBlankFields(itemEntry, itemFields, source);
-            if (itemChanged) changed = true;
-        });
+        const changed = applyMappedFormValues(tabState, fields, sources);
 
         if (changed) {
             tabState.formDirty = true;
-            tabState.formCopyStatus = `Copied mapped values from ${sources.length} linked line${sources.length === 1 ? '' : 's'}. Review before saving.`;
+            tabState.formCopyStatus = automatic
+                ? `Mapped values loaded from ${sources.length} linked line${sources.length === 1 ? '' : 's'}.`
+                : `Copied mapped values from ${sources.length} linked line${sources.length === 1 ? '' : 's'}. Review before saving.`;
             hostAdapter.markLineDirty(uid, 'Form values copied from lines');
         } else {
-            tabState.formCopyStatus = 'No blank mapped fields were available to fill.';
+            tabState.formCopyStatus = automatic
+                ? 'Mapped values are already current.'
+                : 'No blank mapped fields were available to fill.';
         }
         renderFormDocumentPanel(uid, doc);
+        renderProcedureModalTabs(uid);
+        autoSaveCompleteForm(uid, doc);
         updateProcedureModalSavedNote(uid);
     } catch (error) {
         console.error('Failed to copy Form values from lines:', error);
-        tabState.formCopyStatus = error.message || 'Linked source lines could not be loaded.';
-        renderFormDocumentPanel(uid, doc);
+        if (!automatic) {
+            tabState.formCopyStatus = error.message || 'Linked source lines could not be loaded.';
+            renderFormDocumentPanel(uid, doc);
+        }
+    } finally {
+        tabState.formAutoPrefillLoading = false;
     }
 }
 
@@ -2291,6 +2418,8 @@ function renderFormDocumentPanel(uid, doc) {
             entry.values[this.dataset.fieldId] = this.value;
             tabState.formDirty = true;
             hostAdapter.markLineDirty(uid, 'form evidence edited');
+            renderProcedureModalTabs(uid);
+            autoSaveCompleteForm(uid, doc);
             updateProcedureModalSavedNote(uid);
         });
     });
@@ -2318,6 +2447,9 @@ function renderFormDocumentPanel(uid, doc) {
         copyFormDocumentFromLines(uid, doc);
     });
     wireProcedureChecklistAndObservation(container, uid, doc.id, tabState);
+    if (mappedFields.length && !tabState.formAutoPrefillAttempted) {
+        copyFormDocumentFromLines(uid, doc, { automatic: true });
+    }
 }
 
 // Renders one tab's body. A document with a configured template_id gets the full panel: search
@@ -2973,9 +3105,19 @@ async function saveFormEntry(uid, docId) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.detail || 'Failed to save Form evidence.');
         }
-        tabState.formSaved = entries.length > 0;
+        const data = await res.json();
+        const savedEntries = data && Array.isArray(data.entries) ? data.entries : [];
+        tabState.formSaved = savedEntries.length > 0;
         tabState.formDirty = false;
         invalidateProcedureModalData(uid);
+        if (typeof invalidateVoucherSupportCache === 'function') {
+            invalidateVoucherSupportCache();
+        }
+        await refreshProcedureCrossCheckResults(uid);
+        const lineType = hostAdapter.voucherLineState[uid] && hostAdapter.voucherLineState[uid].transactionType;
+        if (lineType && typeof hostAdapter.updateProceduresCellForLine === 'function') {
+            await hostAdapter.updateProceduresCellForLine(uid, lineType);
+        }
         return true;
     } catch (e) {
         console.error('Failed to save Form evidence:', e);
@@ -2983,6 +3125,23 @@ async function saveFormEntry(uid, docId) {
         return false;
     } finally {
         updateProcedureModalSavedNote(uid);
+    }
+}
+
+async function refreshProcedureCrossCheckResults(uid) {
+    try {
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/cross_check_results/${encodeURIComponent(uid)}`);
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        const lineState = hostAdapter.procedureModalState[uid];
+        if (!lineState) return;
+        lineState.crossCheckResults = Array.isArray(data.results) ? data.results : [];
+        if (currentProcedureModalUid === uid && lineState.activeDocId !== null) {
+            renderProcedureModalPanel(uid, lineState.activeDocId);
+            renderProcedureModalTabs(uid);
+        }
+    } catch (e) {
+        console.error('Failed to refresh Form Cross-check results:', e);
     }
 }
 
@@ -2994,6 +3153,7 @@ async function flushFormEntries(uid) {
     for (const doc of lineState.documents) {
         if (doc.document_type !== 'form') continue;
         const tabState = getProcedureTabState(uid, doc.id);
+        if (tabState.formSavePromise) await tabState.formSavePromise;
         if (!tabState.formDirty) continue;
         if (!await saveFormEntry(uid, doc.id)) allSaved = false;
     }

@@ -510,6 +510,27 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         )
         required_template_ids = {r['id']: r['template_id'] for r in template_rows}
 
+    # Form evidence is stored in voucher_line_form_entries, even when the Form has a Linked
+    # Template configured as an optional prefill source. It must not be mistaken for ordinary
+    # linked-template evidence in the required-document gate below.
+    form_required_ids = {
+        did for did, document_type in required_doc_types.items() if document_type == 'form'
+    }
+    form_entry_doc_ids = set()
+    if form_required_ids:
+        form_line_ph = ",".join("%s" for _ in sibling_ids)
+        form_doc_ph = ",".join("%s" for _ in form_required_ids)
+        form_entry_rows = execute_query_pg(
+            f"""
+            SELECT DISTINCT document_id
+            FROM voucher_line_form_entries
+            WHERE voucher_line_id IN ({form_line_ph})
+              AND document_id IN ({form_doc_ph})
+            """,
+            tuple(sibling_ids) + tuple(form_required_ids)
+        )
+        form_entry_doc_ids = {row['document_id'] for row in form_entry_rows}
+
     # Physical Bill evidence type, Phase 6 of 8: a physical_bill Document never goes through the
     # role-tick path (its own dedicated check below handles it), regardless of what its auth_roles
     # happen to be configured as.
@@ -587,6 +608,9 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         if required_doc_types.get(did) == 'physical_bill':
             if _physical_bill_satisfied(did):
                 satisfied_doc_ids.add(did)
+        elif required_doc_types.get(did) == 'form':
+            if did in form_entry_doc_ids:
+                satisfied_doc_ids.add(did)
         elif required_template_ids.get(did):
             if did in linked_doc_ids:
                 satisfied_doc_ids.add(did)
@@ -618,6 +642,8 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
                         f"{d['name']} (physical bill grand total {grand_total} does not match "
                         f"voucher amount {row['extract_amount']})"
                     )
+            elif required_doc_types.get(did) == 'form':
+                outstanding_parts.append(f"{d['name']} (Form evidence not saved)")
             elif required_template_ids.get(did):
                 outstanding_parts.append(f"{d['name']} (not linked)")
             else:
@@ -1926,7 +1952,7 @@ def save_and_verify_voucher_bundle(
     if line_statuses.get(current_detail_id) != 'Pending':
         raise HTTPException(400, "The current voucher line is already verified or skipped.")
     eligible_line_ids = {
-        line_id for line_id, status in line_statuses.items() if status == 'Pending'
+        str(line_id) for line_id, status in line_statuses.items() if status == 'Pending'
     }
     if verify:
         session = execute_query_pg(
@@ -1950,13 +1976,13 @@ def save_and_verify_voucher_bundle(
         sibling_ids_by_line = {}
         for line in lines:
             line_id = line.get('detail_id')
-            if line_id in eligible_line_ids:
+            if str(line_id) in eligible_line_ids:
                 sibling_ids_by_line[line_id] = (
                     _resolve_sibling_voucher_line_ids(line_id) or [line_id]
                 )
         for line in lines:
             line_id = line.get('detail_id')
-            if line_id not in eligible_line_ids:
+            if str(line_id) not in eligible_line_ids:
                 continue
             line_timings = {} if perf else None
             _save_line_items_impl(
@@ -2018,7 +2044,7 @@ def save_and_verify_voucher_bundle(
         for entry in form_entries:
             line_id = entry.get('voucher_line_id')
             document_id = entry.get('document_id')
-            if line_id in eligible_line_ids:
+            if str(line_id) in eligible_line_ids:
                 _replace_form_entries(line_id, document_id, entry.get('entries') or [])
         if observations or account_head_notes:
             for line in lines:
@@ -2049,7 +2075,7 @@ def save_and_verify_voucher_bundle(
         status_started = time.perf_counter()
         for line in lines:
             line_id = line.get('detail_id')
-            if line_id not in eligible_line_ids:
+            if str(line_id) not in eligible_line_ids:
                 continue
             status_result = compute_and_persist_cleared_status(
                 line_id, sibling_ids=sibling_ids_by_line[line_id], rulebook=session_rulebook
@@ -6624,6 +6650,11 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
         category_name = name_rows[0]['name']
 
     configs = _get_category_cross_check_configs(category_id, rulebook=rulebook)
+    # Form evidence is stored against voucher-line/session rows, not in the linked-document
+    # table. Resolve the stable sibling identity here even when the caller supplied only a line
+    # id; otherwise _get_form_cross_check_values() has no scope and silently returns no Form data.
+    if sibling_ids is None:
+        sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id) or [voucher_line_id]
     if linked_by_document is None:
         linked_by_document = _get_linked_evidence_by_document(voucher_line_id, sibling_ids=sibling_ids)
 

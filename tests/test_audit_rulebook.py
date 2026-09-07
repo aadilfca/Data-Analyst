@@ -41,12 +41,17 @@ from routers.audit_rules import (
     load_client_verification_rulebook,
     row_to_document_list,
     validate_cross_check_cell,
+    validate_cross_check_payload,
+    validate_category_payload,
+    set_cross_check_documents,
+    validate_document_cross_check_dependencies,
 )
 from routers.audit_rules import compile_verification_rulebook
 from routers.audit_rules import CategoryValidationRules, validate_category_validation_rules
 from routers.verification import (
     _build_working_paper_gates,
     _evaluate_matrix_cross_check,
+    evaluate_cross_checks_for_line,
     _get_form_cross_check_values,
     _rulebook_cross_check_configs,
     _form_value_for_storage,
@@ -928,6 +933,40 @@ class AuditRulebookCompilerTests(unittest.TestCase):
 
         self.assertEqual(result, {42: {"_row_count": 1, "Quantity": 10.0}})
 
+    def test_cross_check_evaluation_resolves_sibling_ids_for_saved_form_values(self):
+        config = {
+            "id": 30,
+            "name": "Order to Form Bill",
+            "documents": [
+                {"document_id": 10, "document_name": "Purchase Order", "sort_order": 0},
+                {"document_id": 42, "document_name": "Physical Bill", "document_type": "form", "sort_order": 1},
+            ],
+            "matrix_fields": [{
+                "id": 31, "sort_order": 0,
+                "cells": {"10": "Quantity", "42": "Quantity"},
+                "operator": "=", "tolerance": 0,
+                "missing_data_behavior": "not_configured", "blocking": True, "risk": "High",
+            }],
+        }
+        resolved = []
+
+        with patch("routers.verification._get_category_cross_check_configs", return_value=[config]), \
+             patch("routers.verification._resolve_sibling_voucher_line_ids",
+                   side_effect=lambda line_id: resolved.append(line_id) or [101, 102]), \
+             patch("routers.verification._get_linked_evidence_by_document",
+                   return_value={10: [9001]}) as linked, \
+             patch("routers.verification._sum_document_field",
+                   return_value=(10, 1)), \
+             patch("routers.verification._get_form_cross_check_values",
+                   return_value={42: {"Quantity": 10, "_row_count": 1}}):
+            with patch("routers.verification.execute_query_pg", return_value=[{"name": "Material Purchased"}]):
+                result = evaluate_cross_checks_for_line(102, category_id=1, voucher_amount=10)
+
+        self.assertEqual(resolved, [102])
+        linked.assert_called_once_with(102, sibling_ids=[101, 102])
+        self.assertTrue(result["results"][0]["matrix_rows"][0]["values"][1]["linked"])
+        self.assertEqual(result["results"][0]["matrix_rows"][0]["values"][1]["value"], 10)
+
     def test_warns_for_inactive_template_and_assignment_category(self):
         def query(sql, params=()):
             if "FROM audit_rule_categories" in sql:
@@ -1117,6 +1156,94 @@ class CrossCheckPerDocumentFieldBackendTests(unittest.TestCase):
         self.assertEqual(docs[10]["effective_compare_field"], "Quantity")
         self.assertEqual(docs[11]["compare_field"], "Quantity Received")
         self.assertEqual(docs[11]["effective_compare_field"], "Quantity Received")
+
+
+class D9GovernanceHardeningTests(unittest.TestCase):
+    """D9: duplicate, inactive, empty-dependency, and changed-template safeguards."""
+
+    def test_category_payload_rejects_duplicate_ids_without_database_writes(self):
+        with self.assertRaises(HTTPException) as raised:
+            validate_category_payload([10, 10], [])
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("Category Documents cannot be duplicated", raised.exception.detail)
+
+    def test_category_payload_rejects_new_inactive_document(self):
+        with patch("routers.audit_rules.execute_query_pg", return_value=[{
+            "id": 10, "name": "Retired Bill", "is_active": False
+        }]):
+            with self.assertRaises(HTTPException) as raised:
+                validate_category_payload([10], [])
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("inactive and cannot be attached", raised.exception.detail)
+
+    def test_category_payload_rejects_active_cross_check_without_documents(self):
+        with patch("routers.audit_rules.execute_query_pg", side_effect=[
+            [{"id": 10, "name": "Purchase Demand", "is_active": True}],
+            [{"name": "Empty rule", "is_active": True}],
+            [],
+        ]):
+            with self.assertRaises(HTTPException) as raised:
+                validate_category_payload([10], [20])
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("has no Document dependencies", raised.exception.detail)
+
+    def test_category_payload_rejects_inactive_cross_check_dependency(self):
+        with patch("routers.audit_rules.execute_query_pg", side_effect=[
+            [{"id": 10, "name": "Purchase Demand", "is_active": True}],
+            [{"name": "Purchase comparison", "is_active": True}],
+            [{"document_id": 10, "name": "Purchase Demand", "is_active": False}],
+        ]):
+            with self.assertRaises(HTTPException) as raised:
+                validate_category_payload([10], [20])
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("has inactive dependencies", raised.exception.detail)
+
+    def test_existing_inactive_cross_check_can_remain_for_cleanup(self):
+        with patch("routers.audit_rules.execute_query_pg", side_effect=[
+            [{"document_id": 10}],
+            [{"cross_check_id": 20}],
+            [{"id": 10, "name": "Purchase Demand", "is_active": True}],
+            [{"name": "Retired comparison", "is_active": False}],
+            [{"document_id": 99, "name": "Removed document", "is_active": False}],
+        ]):
+            validate_category_payload([10], [20], category_id=7)
+
+    def test_cross_check_document_set_rejects_duplicate_ids(self):
+        with patch("routers.audit_rules.execute_query_pg", return_value=[{"name": "Quantity chain"}]), \
+             patch("routers.audit_rules.execute_write_pg") as write:
+            with self.assertRaises(HTTPException) as raised:
+                set_cross_check_documents(20, type("Payload", (), {"document_ids": [10, 10]})())
+        self.assertEqual(raised.exception.status_code, 400)
+        write.assert_not_called()
+
+    def test_cross_check_payload_rejects_inactive_document(self):
+        with patch("routers.audit_rules.execute_query_pg", return_value=[{
+            "name": "Retired Bill", "document_type": "form", "is_active": False
+        }]):
+            with self.assertRaises(HTTPException) as raised:
+                validate_cross_check_payload("Amount", "All equal", [10], False, {})
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("Document 'Retired Bill' is inactive", raised.exception.detail)
+
+    def test_document_change_rejects_active_cross_check_field_that_would_become_invalid(self):
+        with patch("routers.audit_rules.execute_query_pg", side_effect=[
+            [{"cross_check_id": 20, "cross_check_name": "Amount chain",
+              "shared_compare_field": "Amount", "document_compare_field": None}],
+            [],
+        ]), patch("routers.templates.get_cached_template_columns", return_value=[
+            {"column_name": "Quantity"}
+        ]):
+            with self.assertRaises(HTTPException) as raised:
+                validate_document_cross_check_dependencies(10, "linked_template", 30)
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("Amount chain", raised.exception.detail)
+        self.assertIn("Amount", raised.exception.detail)
+
+    def test_category_ui_keeps_inactive_documents_visible_and_removable(self):
+        source = (Path(__file__).resolve().parents[1] / "static" / "audit_rules.js").read_text(encoding="utf-8")
+        self.assertIn("const visibleDocIds = categoryDocIds.slice();", source)
+        self.assertIn("Inactive — remove or restore", source)
+        self.assertIn("appendCategoryCrossCheckRemoveButton", source)
 
 
 class CrossCheckMatrixSchemaTests(unittest.TestCase):

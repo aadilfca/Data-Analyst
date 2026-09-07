@@ -1234,6 +1234,68 @@ def validate_document_risk_rating(risk_rating: Optional[str]):
     if risk_rating not in RISK_RATINGS:
         raise HTTPException(400, f"Invalid risk rating '{risk_rating}'. Must be one of: {', '.join(RISK_RATINGS)}")
 
+def validate_document_cross_check_dependencies(document_id: int, document_type: str,
+                                               template_id: Optional[int],
+                                               form_fields: Optional[List[dict]] = None):
+    """Prevent a Document/template change from leaving active Cross-check fields stale."""
+    references = execute_query_pg(
+        """
+        SELECT ccd.cross_check_id, c.name AS cross_check_name,
+               c.compare_field AS shared_compare_field,
+               ccd.compare_field AS document_compare_field
+        FROM audit_rule_cross_check_documents ccd
+        JOIN audit_rule_cross_checks c ON c.id = ccd.cross_check_id
+        WHERE ccd.document_id = %s AND c.is_active = TRUE
+        """,
+        (document_id,),
+    )
+    if not references:
+        return
+
+    if document_type == "form":
+        available_fields = {field["field_name"] for field in (form_fields or [])}
+    elif document_type == "physical_bill":
+        available_fields = set(LEGACY_PHYSICAL_BILL_FIELDS)
+    elif template_id is not None:
+        from routers.templates import get_cached_template_columns
+        available_fields = {
+            column["column_name"] for column in get_cached_template_columns(template_id)
+        }
+    else:
+        available_fields = set()
+
+    invalid = []
+    for row in references:
+        effective_field = (
+            normalize_compare_field(row.get("document_compare_field"))
+            or normalize_compare_field(row.get("shared_compare_field"))
+        )
+        if effective_field and effective_field != "(matrix)" and effective_field not in available_fields:
+            invalid.append(f"{row['cross_check_name']} uses '{effective_field}'")
+
+    cell_rows = execute_query_pg(
+        """
+        SELECT f.cross_check_id, c.name AS cross_check_name, cell.column_name
+        FROM audit_rule_cross_check_cells cell
+        JOIN audit_rule_cross_check_fields f ON f.id = cell.field_id
+        JOIN audit_rule_cross_checks c ON c.id = f.cross_check_id
+        WHERE cell.document_id = %s AND c.is_active = TRUE
+          AND cell.column_name IS NOT NULL
+        """,
+        (document_id,),
+    )
+    for row in cell_rows:
+        if row["column_name"] not in available_fields:
+            invalid.append(f"{row['cross_check_name']} uses '{row['column_name']}'")
+    if invalid:
+        raise HTTPException(
+            400,
+            "Cannot change this Document because active Cross-check fields would become invalid: "
+            + "; ".join(dict.fromkeys(invalid))
+            + ". Update those Cross-checks first."
+        )
+
+
 # Physical Bill evidence type (Phase 2 of 8). Validated here rather than by a DB CHECK: Phase 1
 # could only attach a real CHECK to the CREATE TABLE, since a post-hoc ALTER can't retrofit one
 # without a full table rebuild - so on an already-initialized database this is the only
@@ -1447,6 +1509,13 @@ def update_document(document_id: int, document: DocumentUpdate):
         # erase a Form definition merely because that action does not edit Form fields.
         raw_form_fields = get_document_form_fields(document_id)
     form_fields = normalize_form_fields(document_type, template_id, raw_form_fields or [])
+    if (
+        template_id != existing[0].get("template_id")
+        or document_type != existing[0].get("document_type")
+    ):
+        validate_document_cross_check_dependencies(
+            document_id, document_type, template_id, form_fields
+        )
 
     # Omitted policy means preserve the current policy for API compatibility. The Audit Rules
     # UI sends the field explicitly when the administrator changes it.
@@ -1685,14 +1754,19 @@ def validate_cross_check_payload(compare_field: str, comparison_type: str, docum
     if compare_to_voucher_line and not document_ids:
         raise HTTPException(400, "compare_to_voucher_line requires at least one Document (used as the anchor)")
 
+    if len(document_ids) != len(set(document_ids)):
+        raise HTTPException(400, "Cross-check Documents cannot be duplicated")
+
     field_map = document_fields or {}
     for document_id in document_ids:
         doc_rows = execute_query_pg(
-            "SELECT name, document_type FROM audit_rule_documents WHERE id = %s",
+            "SELECT name, document_type, is_active FROM audit_rule_documents WHERE id = %s",
             (document_id,)
         )
         if not doc_rows:
             raise HTTPException(400, f"Document ID {document_id} not found")
+        if doc_rows[0].get("is_active", True) is False:
+            raise HTTPException(400, f"Document '{doc_rows[0]['name']}' is inactive")
         effective_field = normalize_compare_field(field_map.get(document_id)) or compare_field
         doc_fields = get_document_cross_check_fields(document_id, doc_rows[0].get("document_type"))
         if effective_field not in doc_fields:
@@ -2184,10 +2258,17 @@ def set_cross_check_documents(cross_check_id: int, payload: CrossCheckDocuments)
     existing = execute_query_pg("SELECT name FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
     if not existing:
         raise HTTPException(404, "Cross-check not found")
+    if len(payload.document_ids) != len(set(payload.document_ids)):
+        raise HTTPException(400, "Cross-check Documents cannot be duplicated")
     for document_id in payload.document_ids:
-        doc = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s", (document_id,))
+        doc = execute_query_pg(
+            "SELECT id, name, is_active FROM audit_rule_documents WHERE id = %s",
+            (document_id,)
+        )
         if not doc:
             raise HTTPException(400, f"Document ID {document_id} not found")
+        if doc[0].get("is_active", True) is False:
+            raise HTTPException(400, f"Document '{doc[0]['name']}' is inactive")
     save_cross_check_column_axis(cross_check_id, payload.document_ids)
     log_audit("Admin", "Update", "AuditRules", f"Set Cross-check document columns (Cross-check ID {cross_check_id})")
     invalidate_audit_rules_cache({"entity_type": "Cross-check", "entity_id": cross_check_id,
@@ -2973,6 +3054,8 @@ def save_category_documents(category_id: int, document_ids: List[int]):
     anything optional. (approval_required's own carry-forward, Validation Rules Phase 2 of
     7, was removed alongside the column - confirmed requirement, 2026-08-02.)
     """
+    if len(document_ids) != len(set(document_ids)):
+        raise HTTPException(400, "Category Documents cannot be duplicated")
     existing_requireds = get_category_document_requireds(category_id)
     execute_write_pg("DELETE FROM audit_rule_category_documents WHERE category_id = %s", (category_id,))
     for idx, document_id in enumerate(document_ids):
@@ -2996,6 +3079,8 @@ def bump_category_matrix_version(category_id: int):
 
 def save_category_cross_checks(category_id: int, cross_check_ids: List[int]):
     """Replace a Category's Cross-check list (delete-then-reinsert)."""
+    if len(cross_check_ids) != len(set(cross_check_ids)):
+        raise HTTPException(400, "Category Cross-checks cannot be duplicated")
     execute_write_pg("DELETE FROM audit_rule_category_cross_checks WHERE category_id = %s", (category_id,))
     for idx, cross_check_id in enumerate(cross_check_ids):
         execute_write_pg(
@@ -3003,35 +3088,96 @@ def save_category_cross_checks(category_id: int, cross_check_ids: List[int]):
             (category_id, cross_check_id, idx)
         )
 
-def validate_category_payload(document_ids: List[int], cross_check_ids: List[int]):
+def validate_category_payload(document_ids: List[int], cross_check_ids: List[int],
+                              category_id: Optional[int] = None):
     """
     Raises HTTPException(400) if any document_id/cross_check_id doesn't exist (SQLite
     foreign keys aren't enforced on this app's connections, see get_db()), or if any
     selected Cross-check references a Document that isn't also in this Category's own
-    document_ids list.
+    document_ids list. Existing inactive attachments may remain for safe cleanup, but
+    inactive Documents/Cross-checks cannot be newly attached.
     """
+    if len(document_ids) != len(set(document_ids)):
+        raise HTTPException(400, "Category Documents cannot be duplicated")
+    if len(cross_check_ids) != len(set(cross_check_ids)):
+        raise HTTPException(400, "Category Cross-checks cannot be duplicated")
+
+    existing_document_ids = set()
+    existing_cross_check_ids = set()
+    if category_id is not None:
+        existing_document_ids = {
+            row["document_id"] for row in execute_query_pg(
+                "SELECT document_id FROM audit_rule_category_documents WHERE category_id = %s",
+                (category_id,)
+            )
+        }
+        existing_cross_check_ids = {
+            row["cross_check_id"] for row in execute_query_pg(
+                "SELECT cross_check_id FROM audit_rule_category_cross_checks WHERE category_id = %s",
+                (category_id,)
+            )
+        }
+
     doc_id_set = set()
     for document_id in document_ids:
-        rows = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s", (document_id,))
+        rows = execute_query_pg(
+            "SELECT id, name, is_active FROM audit_rule_documents WHERE id = %s",
+            (document_id,)
+        )
         if not rows:
             raise HTTPException(400, f"Document ID {document_id} not found")
+        if rows[0].get("is_active", True) is False and document_id not in existing_document_ids:
+            raise HTTPException(400, f"Document '{rows[0]['name']}' is inactive and cannot be attached")
         doc_id_set.add(document_id)
 
     for cross_check_id in cross_check_ids:
-        cc_rows = execute_query_pg("SELECT name FROM audit_rule_cross_checks WHERE id = %s", (cross_check_id,))
+        cc_rows = execute_query_pg(
+            "SELECT name, is_active FROM audit_rule_cross_checks WHERE id = %s",
+            (cross_check_id,)
+        )
         if not cc_rows:
             raise HTTPException(400, f"Cross-check ID {cross_check_id} not found")
+        if cc_rows[0].get("is_active", True) is False and cross_check_id not in existing_cross_check_ids:
+            raise HTTPException(
+                400,
+                f"Cross-check '{cc_rows[0]['name']}' is inactive and cannot be attached"
+            )
         cc_doc_rows = execute_query_pg(
-            "SELECT document_id FROM audit_rule_cross_check_documents WHERE cross_check_id = %s",
+            """
+            SELECT d.id AS document_id, d.name, d.is_active
+            FROM audit_rule_cross_check_documents ccd
+            JOIN audit_rule_documents d ON d.id = ccd.document_id
+            WHERE ccd.cross_check_id = %s
+            ORDER BY ccd.sort_order
+            """,
             (cross_check_id,)
         )
         cc_doc_ids = [r["document_id"] for r in cc_doc_rows]
+        # An inactive rule may remain attached only as a cleanup target. Do not let its
+        # historical dependencies prevent the administrator from saving it away.
+        if cc_rows[0].get("is_active", True) is False:
+            continue
         missing = [d for d in cc_doc_ids if d not in doc_id_set]
         if missing:
             raise HTTPException(
                 400,
                 f"Cross-check '{cc_rows[0]['name']}' (ID {cross_check_id}) references Document ID(s) "
                 f"{missing} that are not included in this Category's Document list"
+            )
+        if not cc_doc_rows:
+            raise HTTPException(
+                400,
+                f"Cross-check '{cc_rows[0]['name']}' has no Document dependencies and cannot be attached"
+            )
+        inactive_dependencies = [
+            f"{row['name']} (ID {row['document_id']})"
+            for row in cc_doc_rows if row.get("is_active", True) is False
+        ]
+        if inactive_dependencies:
+            raise HTTPException(
+                400,
+                f"Cross-check '{cc_rows[0]['name']}' has inactive dependencies: "
+                + ", ".join(inactive_dependencies)
             )
 
 # ---------- ENDPOINTS ----------
@@ -3121,7 +3267,7 @@ def update_category(category_id: int, category: CategoryUpdate):
     if not existing:
         raise HTTPException(404, "Category not found")
 
-    validate_category_payload(category.document_ids, category.cross_check_ids)
+    validate_category_payload(category.document_ids, category.cross_check_ids, category_id=category_id)
 
     # Validation Rules (Phase 2 of 7): capture the document set before it's replaced, so a
     # real membership change (add/remove - reordering alone doesn't count) can trigger a

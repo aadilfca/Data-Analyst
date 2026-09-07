@@ -2551,11 +2551,12 @@ function getCategoryCrossCheckDependencyIssues(crossCheck) {
             inactive.push(document.name || ('Document #' + documentId));
         }
     });
-    return { missing, inactive };
+    return { missing, inactive, crossCheckInactive: crossCheck.is_active === false };
 }
 
 function categoryCrossCheckDependencyMessage(issues) {
     const parts = [];
+    if (issues.crossCheckInactive) parts.push('Cross-check itself is inactive');
     if (issues.missing.length) parts.push('not in Applicable Documents: ' + issues.missing.join(', '));
     if (issues.inactive.length) parts.push('inactive: ' + issues.inactive.join(', '));
     return parts.join('; ');
@@ -2722,7 +2723,9 @@ function renderCategoryDocsList() {
     // "--No Document--" placeholder either. Still attached in categoryDocIds/on the server
     // either way — this is display-only, never auto-detached. Computed up front so an
     // all-inactive attachment set still shows the empty state rather than an empty table.
-    const visibleDocIds = categoryDocIds.filter(docId => getCategoryDocDisplayInfo(docId).is_active);
+    // Keep inactive attached Documents visible so administrators can identify and remove
+    // stale references; they remain excluded from the active add-picker and Verification.
+    const visibleDocIds = categoryDocIds.slice();
 
     if (visibleDocIds.length === 0) {
         const empty = document.createElement('div');
@@ -2749,12 +2752,17 @@ function renderCategoryDocsList() {
             const displayInfo = getCategoryDocDisplayInfo(docId);
             const isPersisted = Object.prototype.hasOwnProperty.call(categoryDocRequired, docId);
 
+            const isActive = displayInfo.is_active !== false;
             const row = document.createElement('tr');
-            if (!isPersisted) row.className = 'ar-category-doc-row-unsaved';
+            row.className = [
+                !isPersisted ? 'ar-category-doc-row-unsaved' : '',
+                !isActive ? 'ar-category-doc-row-inactive ar-list-row-inactive' : ''
+            ].filter(Boolean).join(' ');
 
             const nameCell = document.createElement('td');
             nameCell.className = 'ar-category-doc-name';
             nameCell.textContent = displayInfo.name +
+                (isActive ? '' : ' (Inactive — remove or restore)') +
                 (isPersisted ? '' : ' (save the category first)');
             row.appendChild(nameCell);
 
@@ -2766,13 +2774,13 @@ function renderCategoryDocsList() {
             const requiredCheckbox = document.createElement('input');
             requiredCheckbox.type = 'checkbox';
             requiredCheckbox.checked = isPersisted ? !!categoryDocRequired[docId] : true;
-            requiredCheckbox.disabled = !isPersisted;
+            requiredCheckbox.disabled = !isPersisted || !isActive;
             requiredCheckbox.addEventListener('change', () => toggleCategoryDocumentRequired(docId, requiredCheckbox.checked));
 
             const requiredLabel = document.createElement('label');
             requiredLabel.className = 'ar-category-doc-required' +
                 (requiredCheckbox.checked ? ' checked' : '') +
-                (isPersisted ? '' : ' disabled');
+                (isPersisted && isActive ? '' : ' disabled');
             requiredLabel.appendChild(requiredCheckbox);
             requiredLabel.appendChild(document.createTextNode('Required'));
             requiredCell.appendChild(requiredLabel);
@@ -2855,7 +2863,9 @@ async function toggleCategoryDocumentRequired(docId, checked) {
 function addCategoryDocument() {
     const value = arCategoryAddDocumentSelect.value;
     if (!value) return;
-    categoryDocIds.push(parseInt(value, 10));
+    const documentId = parseInt(value, 10);
+    if (!Number.isInteger(documentId) || categoryDocIds.includes(documentId)) return;
+    categoryDocIds.push(documentId);
     renderCategoryDocsList();
     // A newly-added document may make a previously-ineligible cross-check selectable.
     renderCategoryCrossCheckChips();
@@ -3271,15 +3281,20 @@ async function renderAppliedCrossChecks() {
             if (!known) {
                 const unavailable = document.createElement('div');
                 unavailable.className = 'ar-applied-cross-check-card ar-applied-cross-check-unavailable';
-                unavailable.textContent = 'Cross-check #' + ccId + ' is inactive or unavailable.';
+                unavailable.textContent = 'Cross-check #' + ccId + ' is inactive or unavailable. ';
+                appendCategoryCrossCheckRemoveButton(unavailable, ccId);
                 container.appendChild(unavailable);
                 return;
             }
             const dependencyIssues = getCategoryCrossCheckDependencyIssues(known);
-            if (dependencyIssues.missing.length || dependencyIssues.inactive.length) {
+            if (dependencyIssues.crossCheckInactive || dependencyIssues.missing.length || dependencyIssues.inactive.length) {
                 const blocked = document.createElement('div');
                 blocked.className = 'ar-applied-cross-check-card ar-applied-cross-check-unavailable';
-                blocked.textContent = known.name + ' — blocked: ' + categoryCrossCheckDependencyMessage(dependencyIssues) + '. Add the required active Documents before this rule can be activated.';
+                blocked.textContent = known.name + ' — blocked: ' + categoryCrossCheckDependencyMessage(dependencyIssues) + '. ' +
+                    (dependencyIssues.crossCheckInactive
+                        ? 'Restore or remove this Cross-check.'
+                        : 'Add the required active Documents before this rule can be activated.');
+                appendCategoryCrossCheckRemoveButton(blocked, ccId);
                 container.appendChild(blocked);
                 return;
             }
@@ -3311,14 +3326,24 @@ async function renderAppliedCrossChecks() {
 // Cross-check surface.
 function renderCategoryCrossCheckChainPreview() { renderAppliedCrossChecks(); }
 function renderCategoryCrossCheckChips() { renderAppliedCrossChecks(); }
+function appendCategoryCrossCheckRemoveButton(container, ccId) {
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'ar-btn-secondary';
+    removeButton.textContent = 'Remove';
+    removeButton.title = 'Remove this Cross-check from the Category';
+    removeButton.addEventListener('click', () => removeCategoryCrossCheck(ccId));
+    container.appendChild(removeButton);
+}
 function addCategoryCrossCheck() {
     const picker = document.getElementById('arCategoryAddCrossCheckSelect');
     if (!picker || !picker.value) return;
     const ccId = parseInt(picker.value, 10);
+    if (!Number.isInteger(ccId) || categoryCrossCheckIds.includes(ccId)) return;
     const crossCheck = getCrossCheckById(ccId);
-    if (!crossCheck) return;
+    if (!crossCheck || crossCheck.is_active === false) return;
     const dependencyIssues = getCategoryCrossCheckDependencyIssues(crossCheck);
-    if (dependencyIssues.missing.length || dependencyIssues.inactive.length) {
+    if (dependencyIssues.crossCheckInactive || dependencyIssues.missing.length || dependencyIssues.inactive.length) {
         showCategoryDetailStatus(
             'Cannot apply this Cross-check: ' + categoryCrossCheckDependencyMessage(dependencyIssues) + '.',
             'error'

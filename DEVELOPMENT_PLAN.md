@@ -56,7 +56,7 @@ and Physical Vendor Bill migration are accepted, preventing split configuration 
 | C | Form persistence | Validate and persist field definitions, ordering, types, linked columns, template changes, and invalid mappings. | Complete |
 | D | Form rendering | Show an assigned Form document as a normal Procedure-window tab with manual entry controls and clear field labels/types. | Complete; pending manual browser confirmation |
 | E | Copy from lines | Add a visible Copy from lines action that reads the configured Linked Template evidence and populates mapped Form fields without preventing manual edits. | Implemented locally; pending governance/manual acceptance |
-| F | Rule integration | Expose saved Form values to Procedure/Evidence completion and Cross-check matrix evaluation, including Quantity-only comparisons. | Pending |
+| F | Rule integration | Expose saved Form values to Procedure/Evidence completion and Cross-check matrix evaluation, including Quantity-only comparisons. | Complete; manually confirmed |
 | G | Form edge cases | Define and test clearing, save/reload, missing values, inactive/changed templates, deleted columns, duplicate fields, and numeric/date validation. | Pending |
 | H | Physical Bill migration | Recreate the paper Vendor Bill as a Form with header and repeatable item fields; keep ERP Vendor Bill as a separate Linked Template document. | Pending |
 | I | Legacy cleanup | Deprecate or remove the hardcoded Physical Bill path only after migration, regression coverage, and manual acceptance confirm no data loss. | Pending |
@@ -73,7 +73,7 @@ and Physical Vendor Bill migration are accepted, preventing split configuration 
 | D6 | Connect the Form-based Physical Vendor Bill to the canonical Category document set and reuse the same Document IDs in procedures and Cross-checks. | Complete; manually confirmed |
 | D7 | Retire Category Evidence Type safely: stop new writes, inventory consumers, preserve legacy values during transition, migrate or null deliberately, then remove the feature after acceptance. | Complete; manually confirmed |
 | D8 | Migrate legacy Physical Bill/Vendor Bill references to the new Form configuration using explicit, reviewable mappings; retain compatibility until dependencies are clear. | Backend apply complete; live execution gated by mapping |
-| D9 | Harden duplicate prevention, inactive-document behavior, empty selections, missing dependencies, changed templates, and documentation/configuration consistency. | Pending |
+| D9 | Harden duplicate prevention, inactive-document behavior, empty selections, missing dependencies, changed templates, and documentation/configuration consistency. | Complete; manually confirmed |
 
 #### Acceptance and release — retest after Phase I
 
@@ -129,13 +129,41 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**This phase: D9 - configuration hardening.** D8's guarded backend apply capability is committed;
-live execution remains separately gated by explicit source-to-Form mappings.
+**This phase: P7 - Procedure-window mismatch-chip correction.** Remove the misleading mismatch
+indicator for quantity-only Documents while preserving genuine mismatch indicators for configured
+fields. D8's live migration execution remains separately gated by explicit source-to-Form mappings.
 
-D6 and D7 are complete and manually confirmed. D9 remains the later configuration-hardening phase.
+D6, D7, D9, and Form rule integration are complete and manually confirmed. One Procedure-window
+UX correction remains before P1/P7 acceptance continues.
 
 The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
 is included in this D6 implementation; final visual refinement remains a D6/H and P7 UX item.
+
+### Phase D9 implementation checkpoint - 2026-09-07
+
+Category and Cross-check saves now reject duplicate IDs, inactive new attachments, empty active
+Cross-check dependencies, inactive dependencies, and duplicate Cross-check document columns. Existing
+inactive attachments remain visible and removable for safe cleanup. Changing a Document's Template or
+type is blocked when active Cross-check fields would become invalid. The Categories UI now exposes
+blocked/inactive Cross-check assignments with removal actions instead of hiding them.
+
+Focused Audit Rules tests (99) pass; the full suite, Python/JavaScript syntax, and diff checks now
+pass. Manual Audit Rules and Verification confirmation is complete; the remaining mismatch-chip UX
+correction is tracked separately under P7.
+
+### Form Verification integration follow-up - 2026-09-07
+
+Form entries now persist through atomic Verify even when JSON line IDs are strings; a Form with a
+Linked Template uses mapped source rows for automatic blank-field prefill, completion matching, and
+auto-save. Cross-check evaluation now resolves sibling-session Form rows, and the Procedure badge
+counts saved Form fields as completion instead of requiring a linked-template assignment. Modal
+Cross-check results and the voucher-support cache refresh after Form save.
+
+Full suite: 166 passed, 6 existing warnings, 3 subtests; focused regression tests: 118 passed;
+Python compilation, JavaScript syntax, and diff checks passed. This is user-facing: manually test
+the mapped Physical Vendor Bill, saved/reloaded values, Cross-check chain, Procedure count, and
+Observation badge; these checks were confirmed. The remaining mismatch-chip correction is tracked as
+P7.
 
 ### Phase D7 implementation checkpoint - 2026-09-07
 

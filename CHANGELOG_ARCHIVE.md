@@ -5008,3 +5008,44 @@ Physical Bills use fixed fields, and linked-template Documents use only their te
 The regression reproduced the reported 400 before the fix; it now covers saving `Quantity` and
 rejecting template-only/unknown Form operands. Full suite: 141 tests and 3 subtests passed; Python
 compilation and diff checks passed. The user manually confirmed Quantity selection, save, and reopen.
+
+## Category/document governance hardening - Phase D9 - 2026-09-07
+
+Category and Cross-check persistence now rejects duplicate IDs and new inactive attachments. Active
+Cross-checks must have at least one Document dependency, and every dependency must be active and
+already present in the Category's Applicable Documents. Existing inactive assignments remain readable
+so administrators can remove them safely. Cross-check Document columns also reject duplicate or
+inactive Documents.
+
+Document Template/type changes now preflight active Cross-check shared, per-Document, and matrix cell
+fields against the proposed field contract; invalid changes are blocked with the affected rule and
+field named. The Categories UI keeps inactive attached Documents visible for removal and adds removal
+actions for unavailable or blocked Cross-check assignments. Active add-pickers remain active-only.
+
+Changed files: `routers/audit_rules.py`, `static/audit_rules.js`, `tests/test_audit_rulebook.py`,
+`DEVELOPMENT_PLAN.md`, and `CLAUDE.md`. Focused Audit Rules tests: 99 passed, 1 existing cache
+warning, 3 subtests. Full-suite, syntax, and diff checks remain before closeout; manual Audit Rules
+confirmation is required because the Categories behavior is user-facing. P1 follows confirmation.
+
+## Form Verification integration follow-up - 2026-09-07
+
+The Verification Form path now persists Form entries inside the atomic voucher Save/Verify bundle
+with normalized string/integer line IDs. Required Form Documents are recognized from saved Form
+entries instead of being incorrectly treated as linked-template evidence. A Linked Template is now
+used as an optional source: mapped blank fields are prefetched without overwriting auditor values,
+mapped values are compared with numeric tolerance/text normalization, and a complete Form is
+auto-saved. Cross-check evaluation consequently reads the same saved Form Document ID.
+
+The follow-up correction resolves sibling-session IDs before loading Form values, so a Cross-check
+called without an explicit sibling list can recognize the saved Form in its configured chain. The
+Verification Procedure badge now reads saved Form field entries as its own completion source, and
+Form save invalidates voucher-support data before refreshing both the modal Cross-check result and
+the table badge.
+
+Close, Verify, and Verify & Next now refresh both Procedures and Observations badges after the
+support cache is invalidated. Added a regression test for string line IDs in Form bundle persistence.
+Focused regression tests: 118 passed; full suite: 166 passed, 6 existing warnings, 3 subtests;
+Python compilation, JavaScript syntax, and diff checks passed. Manual local-server testing remains
+required for mapped Physical Vendor Bill save/reload, green completion dot, Cross-check chain,
+Procedure count, and live Observation badge refresh before Git closeout. The user confirmed these
+checks; one separate Procedure-window mismatch-chip correction remains.

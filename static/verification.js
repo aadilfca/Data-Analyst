@@ -2138,6 +2138,7 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
     const voucherDataPromise = loadVoucherSupportData();
     const assignedPromise = voucherDataPromise.then(all => all[String(uid)]?.linked_documents?.documents || (cachedModalData?.assignedRecords || []));
     const checksListPromise = voucherDataPromise.then(all => all[String(uid)]?.procedure_checks?.checks || (cachedModalData?.procedureChecks || []));
+    const formEntriesPromise = voucherDataPromise.then(all => all[String(uid)]?.form_entries?.documents || []);
     let data = null;
     try {
         data = await (guidancePromise || fetchAuditGuidanceData(type));
@@ -2159,13 +2160,17 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
     // unflagged case. Warms the same voucherChecksCache openProcedureModal() reads, via the shared
     // ensureVoucherChecksLoaded(). Physical Bill evidence type: same lazy-fetch pattern for the
     // saved bill entries, only when at least one of this Category's Documents is physical_bill.
+    // Form evidence uses the same voucher support response, so a saved Form can complete the
+    // standalone Procedure badge without pretending it is a linked-template assignment.
     const needsVoucherChecks = documents.some(doc => doc.transaction_level_approval);
     const needsPhysicalBills = documents.some(doc => doc.document_type === 'physical_bill');
-    const [assignedRecords, procedureChecks, checks, physicalBills] = await Promise.all([
+    const needsForms = documents.some(doc => doc.document_type === 'form');
+    const [assignedRecords, procedureChecks, checks, physicalBills, formDocuments] = await Promise.all([
         assignedPromise,
         checksListPromise,
         needsVoucherChecks ? ensureVoucherChecksLoaded(getClientId(), currentVoucherId) : Promise.resolve(null),
-        needsPhysicalBills ? voucherDataPromise.then(all => all[String(uid)]?.physical_bills?.bills || (cachedModalData?.physicalBillEntries || [])) : Promise.resolve([])
+        needsPhysicalBills ? voucherDataPromise.then(all => all[String(uid)]?.physical_bills?.bills || (cachedModalData?.physicalBillEntries || [])) : Promise.resolve([]),
+        needsForms ? formEntriesPromise : Promise.resolve([])
     ]);
     // Re-check the stale guard after these awaits, same reason as above.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
@@ -2196,6 +2201,15 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
                 (bill.bill_no || '').trim() && (bill.bill_date || '').trim() && (bill.vendor_name || '').trim() && bill.bill_total != null
             );
             base = headersComplete && Math.abs(docBills.reduce((sum, bill) => sum + bill.bill_total, 0) - voucherLineAmount) <= 0.005;
+        } else if (doc.document_type === 'form') {
+            const savedForm = formDocuments.find(entry => String(entry.document_id) === String(doc.id));
+            const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
+            const savedFieldIds = new Set((savedForm?.entries || []).flatMap(entry =>
+                (entry.values || [])
+                    .filter(value => value.value !== null && value.value !== undefined && String(value.value).trim() !== '')
+                    .map(value => String(value.field_id))
+            ));
+            base = fields.length > 0 && fields.every(field => savedFieldIds.has(String(field.id)));
         } else if (doc.template_id) {
             base = assignedDocIds.has(String(doc.id));
         } else {
@@ -4289,6 +4303,9 @@ async function saveAndVerifyVoucher(detailId, verify = true) {
     });
     if (!res.ok) return { ok: false, error: await res.json().catch(() => ({})) };
     const data = await res.json();
+    if (typeof markFormTabsSavedAfterBundle === 'function') {
+        markFormTabsSavedAfterBundle(revisionsAtStart);
+    }
     const statusById = data.line_statuses || {};
     Object.entries(statusById).forEach(([id, status]) => {
         const line = currentVoucherLines.find(l => String(l.detail_id) === String(id));

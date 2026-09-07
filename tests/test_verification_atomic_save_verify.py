@@ -308,6 +308,39 @@ def test_voucher_bundle_accepts_modal_state(monkeypatch):
     assert calls == ["begin", "save_without_status", "verify", "commit"]
 
 
+def test_voucher_bundle_persists_form_entries_with_string_line_ids(monkeypatch):
+    calls = _patch_atomic_dependencies(monkeypatch)
+    replaced = []
+    monkeypatch.setattr(verification, "execute_query_pg", lambda query, params=None: (
+        [{"id": 7, "status": "Pending"}] if "SELECT id, status" in query else []
+    ))
+    monkeypatch.setattr(verification, "_replace_form_entries",
+                        lambda line_id, document_id, entries: replaced.append(
+                            (line_id, document_id, entries)
+                        ))
+    monkeypatch.setattr(
+        verification,
+        "compute_and_persist_cleared_status",
+        lambda *args, **kwargs: {"cleared_status": "Query", "matrix_version_applied": 1},
+    )
+
+    result = verification.save_and_verify_voucher_bundle(
+        session_id=10,
+        current_detail_id=7,
+        lines=[{"detail_id": 7, "line_items": [], "procedure_data": {}}],
+        verify=False,
+        form_entries=[{
+            "voucher_line_id": "7",
+            "document_id": 42,
+            "entries": [{"row_scope": "header", "sort_order": 0, "values": []}],
+        }],
+    )
+
+    assert result["saved"] is True
+    assert replaced == [("7", 42, [{"row_scope": "header", "sort_order": 0, "values": []}])]
+    assert calls == ["begin", "save_without_status", "commit"]
+
+
 def test_status_engine_uses_session_rulebook_loader_when_not_preloaded(monkeypatch):
     loaded_sessions = []
 
