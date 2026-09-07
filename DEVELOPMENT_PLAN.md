@@ -27,7 +27,7 @@ phase-status and decision-history sections.
 - Any user-facing phase requires local-server manual testing immediately after implementation and
   before commit/push; a later UI phase does not replace that gate.
 - If a phase is a prerequisite for the next UI phase, test the current phase first, then continue
-  only after confirmation. Current D5 must therefore be tested before D6 begins.
+  only after confirmation. Current D6 must therefore be tested before D7/D8 begins.
 
 ## Current agreed roadmap
 
@@ -70,7 +70,7 @@ and Physical Vendor Bill migration are accepted, preventing split configuration 
 | D3 | Make Procedure/Evidence the authoring owner for the selected Category document set; keep roles, signatories, conditions, and evidence risk there. | Complete; manually confirmed |
 | D4 | Keep Applied Cross-checks rule-only. Validate every referenced document against the Category set and block incomplete dependencies instead of silently adding tabs. | Complete; manually confirmed |
 | D5 | Make Verification render only active documents selected for the frozen Category; remove implicit unions and hardcoded document tabs. | Complete; manually confirmed |
-| D6 | Connect the Form-based Physical Vendor Bill to the canonical Category document set and reuse the same Document IDs in procedures and Cross-checks. | Pending |
+| D6 | Connect the Form-based Physical Vendor Bill to the canonical Category document set and reuse the same Document IDs in procedures and Cross-checks. | Complete; manually confirmed |
 | D7 | Retire Category Evidence Type safely: stop new writes, inventory consumers, preserve legacy values during transition, migrate or null deliberately, then remove the feature after acceptance. | Pending |
 | D8 | Migrate legacy Physical Bill/Vendor Bill references to the new Form configuration using explicit, reviewable mappings; retain compatibility until dependencies are clear. | Pending |
 | D9 | Harden duplicate prevention, inactive-document behavior, empty selections, missing dependencies, changed templates, and documentation/configuration consistency. | Pending |
@@ -129,15 +129,27 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**This phase: D6 - Form Vendor Bill integration.** Connect the Form-based Physical Vendor Bill to
-the canonical Category Document set and make its mapped fields available to Cross-checks.
+**This phase: D7 - Evidence Type retirement.** Safely retire obsolete Category Evidence Type values
+after auditing consumers and preserving legacy data during migration.
 
-D5 implementation is complete locally. Manual browser confirmation remains required before Git
-closeout and before D6 begins; the Physical Vendor Bill presentation remains planned for D6/H and
-P7 UX refinement.
+D6 is complete and manually confirmed. The next work is D7; D8 remains the later explicit legacy
+Vendor Bill migration phase.
 
 The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
-is a planned D6/H implementation and P7 UX-refinement item, not a D2 defect.
+is included in this D6 implementation; final visual refinement remains a D6/H and P7 UX item.
+
+### Phase D6 implementation checkpoint - 2026-09-06
+
+Form field names and types are now the Cross-check field contract for Form Documents; linked-column
+names remain source metadata and do not replace the saved Form field name. Matrix authoring exposes
+Form options, validation accepts Form fields, and Verification evaluates saved numeric Form values
+using the same Document ID as Procedure/Evidence. The Procedure window now presents the Form
+evidence area with typed fields, mapped-column context, Copy from lines feedback, item-row controls,
+and responsive styling. Legacy Vendor Bill dependencies remain explicitly blocked until D8 mapping.
+
+September 7 retest correction: Form matrix validation now uses Form fields even with a linked
+template (Quantity mapped to Receive Quantity). Quantity selection, save, and reopen were manually
+confirmed; D6 is complete and ready for Git closeout.
 
 ### Approved target design
 

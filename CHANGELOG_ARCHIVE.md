@@ -4911,3 +4911,31 @@ behavior. Focused Rulebook tests (77), Cross-check performance tests (5), full s
 compilation, JavaScript syntax checks, and diff checks passed. The user manually confirmed the
 Category-only Procedure tabs, active-document behavior, and absence of hidden Cross-check tabs.
 D5 is complete; D6 is next.
+
+## Form Vendor Bill integration - Phase D6 - 2026-09-06
+
+Form Documents now expose one stable Cross-check field contract: the saved Form field name and type
+are authoritative, while `linked_column` remains source metadata for prefill and display. Matrix
+authoring and cell validation expose/accept Form fields, and compiled Rulebook documents carry the
+Form field options needed by the Audit Rules UI. Legacy linked-template and Physical Bill field
+behavior remains compatible.
+
+Verification now reads saved numeric Form values by `(client_data_id, document_id)`, selecting the
+latest sibling-session entry, and evaluates them through the existing matrix/single-rule engine.
+This reuses the same Document ID as Procedure/Evidence and never creates hidden tabs or silently
+remaps the legacy Vendor Bill Document. A legacy Vendor Bill dependency therefore remains visibly
+blocked until the explicit D8 migration.
+
+The Form Procedure panel received scoped presentation styling for typed Header/Item fields, mapped
+column context, item-row actions, Copy from lines feedback, focus states, empty configuration, and
+responsive layout. Added regression coverage for Form field metadata, validation, latest-value
+selection, and Document-ID matrix evaluation. Focused Rulebook tests (81) pass; manual browser
+confirmation was completed before D6 closeout; D7 is next and D8 remains the later migration phase.
+
+September 7 correction: live Document 42 defines Form field `Quantity`, mapped to template 5's
+`Receive Quantity`. Matrix validation incorrectly preferred nonempty template columns, rejecting
+the valid Form field. Validation now branches by Document Type: Forms use their fields, legacy
+Physical Bills use fixed fields, and linked-template Documents use only their template columns.
+The regression reproduced the reported 400 before the fix; it now covers saving `Quantity` and
+rejecting template-only/unknown Form operands. Full suite: 141 tests and 3 subtests passed; Python
+compilation and diff checks passed. The user manually confirmed Quantity selection, save, and reopen.

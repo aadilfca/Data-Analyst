@@ -711,7 +711,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!hostAdapter.procedureModalState[uid].tabs[docId]) {
-        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false };
+        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false, formCopyStatus: '' };
     }
     return hostAdapter.procedureModalState[uid].tabs[docId];
 }
@@ -2101,6 +2101,96 @@ function formFieldInputHtml(field, value, rowIndex, rowScope) {
     </div>`;
 }
 
+function getFormCopyRowValue(rowData, linkedColumn) {
+    if (!rowData || !linkedColumn) return null;
+    const wanted = String(linkedColumn).trim().toLowerCase();
+    const key = Object.keys(rowData).find(candidate => String(candidate).trim().toLowerCase() === wanted);
+    return key === undefined ? null : rowData[key];
+}
+
+function normalizeFormCopyValue(field, rawValue) {
+    if (rawValue === null || rawValue === undefined || rawValue === '') return '';
+    let value = String(rawValue).trim();
+    if (!value) return '';
+    if (field.field_type === 'date') {
+        // HTML date inputs accept the date portion of an ISO/timestamp value.
+        value = value.split('T')[0].split(' ')[0];
+    }
+    return value;
+}
+
+async function copyFormDocumentFromLines(uid, doc) {
+    const tabState = getProcedureTabState(uid, doc.id);
+    const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
+    const mappedFields = fields.filter(field => field.linked_column);
+    if (!mappedFields.length) {
+        tabState.formCopyStatus = 'No linked columns are configured for this Form.';
+        renderFormDocumentPanel(uid, doc);
+        return;
+    }
+    const copyBtn = document.getElementById('procedureFormCopyBtn');
+    if (copyBtn) {
+        copyBtn.disabled = true;
+        copyBtn.textContent = 'Loading lines…';
+    }
+    try {
+        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/form_copy_sources/${encodeURIComponent(uid)}/${encodeURIComponent(doc.id)}`);
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.detail || body.error?.user_message || 'Linked source lines could not be loaded.');
+        const sources = Array.isArray(body.sources) ? body.sources : [];
+        if (!sources.length) {
+            tabState.formCopyStatus = 'No active linked lines were found for this Form’s Template.';
+            renderFormDocumentPanel(uid, doc);
+            return;
+        }
+
+        const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
+        const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
+        const headerEntry = ensureFormHeaderEntry(tabState, headerFields);
+        const itemEntries = (tabState.formEntries || []).filter(entry => entry.row_scope === 'item');
+        let changed = false;
+        const copyIntoBlankFields = (entry, entryFields, source) => {
+            if (!entry) return false;
+            let entryChanged = false;
+            entryFields.forEach(field => {
+                if (entry.values[String(field.id)] !== undefined && String(entry.values[String(field.id)]).trim() !== '') return;
+                const value = normalizeFormCopyValue(field, getFormCopyRowValue(source.row_data, field.linked_column));
+                if (!value) return;
+                entry.values[String(field.id)] = value;
+                entryChanged = true;
+            });
+            return entryChanged;
+        };
+
+        sources.forEach((source, sourceIndex) => {
+            if (sourceIndex === 0) changed = copyIntoBlankFields(headerEntry, headerFields, source) || changed;
+            if (!itemFields.length) return;
+            let itemEntry = itemEntries[sourceIndex];
+            if (!itemEntry) {
+                itemEntry = makeEmptyFormEntry('item', itemFields, itemEntries.length);
+                tabState.formEntries.push(itemEntry);
+                itemEntries.push(itemEntry);
+            }
+            const itemChanged = copyIntoBlankFields(itemEntry, itemFields, source);
+            if (itemChanged) changed = true;
+        });
+
+        if (changed) {
+            tabState.formDirty = true;
+            tabState.formCopyStatus = `Copied mapped values from ${sources.length} linked line${sources.length === 1 ? '' : 's'}. Review before saving.`;
+            hostAdapter.markLineDirty(uid, 'Form values copied from lines');
+        } else {
+            tabState.formCopyStatus = 'No blank mapped fields were available to fill.';
+        }
+        renderFormDocumentPanel(uid, doc);
+        updateProcedureModalSavedNote(uid);
+    } catch (error) {
+        console.error('Failed to copy Form values from lines:', error);
+        tabState.formCopyStatus = error.message || 'Linked source lines could not be loaded.';
+        renderFormDocumentPanel(uid, doc);
+    }
+}
+
 function renderFormDocumentPanel(uid, doc) {
     const container = document.getElementById('procedureModalPanels');
     if (!container) return;
@@ -2108,6 +2198,7 @@ function renderFormDocumentPanel(uid, doc) {
     const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
     const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
     const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
+    const mappedFields = fields.filter(field => field.linked_column);
     const headerEntry = ensureFormHeaderEntry(tabState, headerFields);
     const itemEntries = (tabState.formEntries || []).filter(entry => entry.row_scope === 'item');
 
@@ -2137,7 +2228,11 @@ function renderFormDocumentPanel(uid, doc) {
             <div class="procedure-segment procedure-segment-data procedure-form-segment">
                 <h4 class="procedure-segment-header">Manual evidence</h4>
                 <div class="procedure-segment-body">
-                    <p class="procedure-form-help">Enter evidence from the physical document. Linked columns are reserved for the later Copy from lines action.</p>
+                    <p class="procedure-form-help">Enter evidence from the physical document, or copy mapped values from linked lines. Copy from lines fills blank fields only.</p>
+                    ${mappedFields.length ? `<div class="procedure-form-copy-row">
+                        <button type="button" id="procedureFormCopyBtn" class="procedure-form-add-btn">📋 Copy from lines</button>
+                        <span class="procedure-form-copy-status">${hostAdapter.escapeHtml(tabState.formCopyStatus || '')}</span>
+                    </div>` : ''}
                     ${emptyHtml}${headerHtml}${itemsHtml}
                 </div>
             </div>
@@ -2179,6 +2274,10 @@ function renderFormDocumentPanel(uid, doc) {
             hostAdapter.markLineDirty(uid, 'form item row removed');
             renderFormDocumentPanel(uid, doc);
         });
+    });
+    const copyBtn = document.getElementById('procedureFormCopyBtn');
+    if (copyBtn) copyBtn.addEventListener('click', function() {
+        copyFormDocumentFromLines(uid, doc);
     });
     wireProcedureChecklistAndObservation(container, uid, doc.id, tabState);
 }

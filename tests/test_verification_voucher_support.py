@@ -3,10 +3,54 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from routers.verification import get_voucher_support_data
+from routers.verification import get_form_copy_sources, get_voucher_support_data
 
 
 class VoucherSupportBatchingTests(unittest.TestCase):
+    def test_form_copy_sources_resolve_active_linked_template_rows_for_same_line(self):
+        responses = [
+            [{"client_data_id": 9001}],
+            [{"id": 15, "template_id": 5, "document_type": "form"}],
+            [{"id": 101, "field_name": "Vendor Bill", "field_type": "text", "field_scope": "header", "linked_column": "Vendor"}],
+            [{
+                "source_client_data_id": 8001,
+                "source_document_id": 20,
+                "source_document_name": "Store receiving",
+                "row_data": '{"Vendor": "Acme", "Quantity": 4}',
+            }],
+        ]
+
+        def fake_query(*args, **kwargs):
+            return responses.pop(0)
+
+        with patch("routers.verification.execute_query_pg", side_effect=fake_query) as query:
+            result = get_form_copy_sources(42, 15)
+
+        self.assertEqual(result["template_id"], 5)
+        self.assertEqual(result["sources"][0]["row_data"]["Vendor"], "Acme")
+        self.assertEqual(query.call_count, 4)
+        source_sql, source_params = query.call_args_list[-1].args[:2]
+        self.assertIn("vd.client_data_id = %s", source_sql)
+        self.assertIn("ard.document_type = 'linked_template'", source_sql)
+        self.assertIn("ard.template_id = %s", source_sql)
+        self.assertEqual(source_params, (9001, 5))
+
+    def test_form_copy_sources_skip_source_query_without_linked_mapping(self):
+        responses = [
+            [{"client_data_id": 9001}],
+            [{"id": 15, "template_id": 5, "document_type": "form"}],
+            [{"id": 101, "field_name": "Manual note", "field_type": "text", "field_scope": "header", "linked_column": None}],
+        ]
+
+        def fake_query(*args, **kwargs):
+            return responses.pop(0)
+
+        with patch("routers.verification.execute_query_pg", side_effect=fake_query) as query:
+            result = get_form_copy_sources(42, 15)
+
+        self.assertEqual(result["sources"], [])
+        self.assertEqual(query.call_count, 3)
+
     def test_unknown_line_returns_404_without_fanout(self):
         with patch("routers.verification.execute_query_pg", return_value=[]) as query:
             with self.assertRaises(HTTPException) as error:

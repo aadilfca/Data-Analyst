@@ -5159,6 +5159,90 @@ def _fetch_form_entries_for_line(voucher_line_id: int, document_id: int) -> dict
             'entries': _shape_form_entries(rows)}
 
 
+@router.get("/api/verification/form_copy_sources/{voucher_line_id}/{document_id}")
+def get_form_copy_sources(voucher_line_id: int, document_id: int):
+    """Return active linked-template rows that can prefill a Form on this voucher line.
+
+    This endpoint deliberately reads the source row data only. Form values remain local to the
+    Verification editor until the normal Form evidence save path persists them.
+    """
+    anchor = execute_query_pg(
+        "SELECT vd.client_data_id FROM verification_details vd WHERE vd.id = %s",
+        (voucher_line_id,)
+    )
+    if not anchor:
+        raise HTTPException(404, "Voucher line not found.")
+
+    document = execute_query_pg(
+        """SELECT id, template_id, document_type
+           FROM audit_rule_documents
+           WHERE id = %s AND is_active = TRUE AND document_type = 'form'""",
+        (document_id,)
+    )
+    if not document:
+        raise HTTPException(404, "Form document not found or inactive.")
+
+    form_fields = execute_query_pg(
+        """SELECT id, field_name, field_type, field_scope, linked_column
+           FROM audit_rule_document_fields
+           WHERE document_id = %s
+           ORDER BY sort_order, id""",
+        (document_id,)
+    )
+    fields = [{
+        'id': row['id'],
+        'field_name': row['field_name'],
+        'field_type': row.get('field_type') or 'text',
+        'field_scope': row.get('field_scope') or 'header',
+        'linked_column': row.get('linked_column') or None,
+    } for row in form_fields]
+    template_id = document[0].get('template_id')
+    mapped_fields = [field for field in fields if field['linked_column'] and template_id]
+    source_rows = []
+    if mapped_fields:
+        source_rows = execute_query_pg(
+            """SELECT vld.client_data_id AS source_client_data_id,
+                      vld.document_id AS source_document_id,
+                      ard.name AS source_document_name,
+                      cd.row_data
+               FROM voucher_line_documents vld
+               JOIN verification_details vd ON vd.id = vld.voucher_line_id
+               JOIN audit_rule_documents ard ON ard.id = vld.document_id
+               JOIN client_data cd ON cd.id = vld.client_data_id
+               WHERE vd.client_data_id = %s
+                 AND vld.status = 'active'
+                 AND ard.is_active = TRUE
+                 AND ard.document_type = 'linked_template'
+                 AND ard.template_id = %s
+               ORDER BY vld.linked_at ASC, vld.id ASC""",
+            (anchor[0]['client_data_id'], template_id)
+        )
+
+    sources = []
+    for row in source_rows:
+        row_data = row.get('row_data') or {}
+        if isinstance(row_data, str):
+            try:
+                row_data = json.loads(row_data)
+            except (TypeError, ValueError):
+                row_data = {}
+        if not isinstance(row_data, dict):
+            row_data = {}
+        sources.append({
+            'source_client_data_id': row['source_client_data_id'],
+            'source_document_id': row['source_document_id'],
+            'source_document_name': row['source_document_name'],
+            'row_data': row_data,
+        })
+    return {
+        'voucher_line_id': voucher_line_id,
+        'document_id': document_id,
+        'template_id': template_id,
+        'fields': fields,
+        'sources': sources,
+    }
+
+
 @router.post("/api/verification/save_form_entries")
 def save_form_entries(
     voucher_line_id: int = Body(..., embed=True),
@@ -5820,6 +5904,7 @@ def _rulebook_cross_check_configs(category_id: int, rulebook: dict) -> Optional[
                 {
                     "document_id": document.get('document_id'),
                     "document_name": document.get('name') or document.get('document_name'),
+                    "document_type": document.get('document_type') or 'linked_template',
                     "sort_order": document.get('sort_order', index),
                 }
                 for index, document in enumerate(matrix_documents)
@@ -5883,7 +5968,8 @@ def _get_category_cross_check_configs(category_id: int, rulebook: Optional[dict]
         placeholders = ",".join("%s" for _ in cross_check_ids)
         doc_rows = execute_query_pg(
             f"""
-            SELECT ccd.cross_check_id, ccd.document_id, ccd.sort_order, d.name AS document_name
+            SELECT ccd.cross_check_id, ccd.document_id, ccd.sort_order, d.name AS document_name,
+                   d.document_type
             FROM audit_rule_cross_check_documents ccd
             JOIN audit_rule_documents d ON d.id = ccd.document_id
             WHERE ccd.cross_check_id IN ({placeholders})
@@ -5907,6 +5993,7 @@ def _get_category_cross_check_configs(category_id: int, rulebook: Optional[dict]
                 {
                     "document_id": d['document_id'],
                     "document_name": d['document_name'],
+                    "document_type": d.get('document_type') or 'linked_template',
                     "sort_order": d['sort_order'],
                 }
                 for d in doc_rows
@@ -5947,6 +6034,57 @@ def _get_linked_evidence_by_document(voucher_line_id: int, sibling_ids: Optional
     for r in rows:
         linked.setdefault(r['document_id'], []).append(r['client_data_id'])
     return linked
+
+
+def _get_form_cross_check_values(
+    voucher_line_id: int, sibling_ids: Optional[List[int]], document_ids: List[int]
+) -> Dict[int, dict]:
+    """Aggregate saved numeric Form evidence by the same stable Document ID used by the matrix."""
+    if not sibling_ids or not document_ids:
+        return {}
+    line_placeholders = ",".join("%s" for _ in sibling_ids)
+    document_placeholders = ",".join("%s" for _ in document_ids)
+    rows = execute_query_pg(
+        f"""
+        SELECT e.voucher_line_id, vd.client_data_id, e.document_id, e.updated_at,
+               f.field_name, f.field_type, v.value_text, v.value_date, v.value_numeric
+        FROM voucher_line_form_entries e
+        JOIN verification_details vd ON vd.id = e.voucher_line_id
+        JOIN voucher_line_form_values v ON v.entry_id = e.id
+        JOIN audit_rule_document_fields f ON f.id = v.field_id
+        JOIN audit_rule_documents d ON d.id = e.document_id
+        WHERE e.voucher_line_id IN ({line_placeholders})
+          AND e.document_id IN ({document_placeholders})
+          AND d.is_active = TRUE AND d.document_type = 'form'
+        ORDER BY e.document_id, e.updated_at DESC, e.voucher_line_id DESC, f.sort_order, f.id
+        """,
+        tuple(sibling_ids) + tuple(document_ids),
+    )
+    winning: Dict[tuple, tuple] = {}
+    for row in rows:
+        key = (row['client_data_id'], row['document_id'])
+        candidate = (_ts_sort_key(row.get('updated_at')), row['voucher_line_id'])
+        if key not in winning or candidate > winning[key]:
+            winning[key] = candidate
+
+    values_by_document: Dict[int, dict] = {}
+    for row in rows:
+        key = (row['client_data_id'], row['document_id'])
+        candidate = (_ts_sort_key(row.get('updated_at')), row['voucher_line_id'])
+        if winning.get(key) != candidate:
+            continue
+        raw_value = row.get('value_numeric') if row.get('field_type') == 'numeric' else row.get('value_text')
+        numeric = _cross_check_numeric(raw_value)
+        if numeric is None:
+            continue
+        document_values = values_by_document.setdefault(row['document_id'], {'_row_count': 0})
+        field_name = row['field_name']
+        document_values[field_name] = (
+            numeric if document_values.get(field_name) is None
+            else document_values[field_name] + numeric
+        )
+        document_values['_row_count'] += 1
+    return values_by_document
 
 
 def _sum_document_field(client_data_ids: List[int], field_name: str,
@@ -5994,15 +6132,20 @@ def _matrix_condition_matches(left: float, right: float, operator: str, toleranc
 
 def _evaluate_matrix_cross_check(config: dict, linked_by_document: Dict[int, List[int]],
                                  voucher_amount: Optional[float],
-                                 physical_bill_values: Optional[Dict[int, dict]] = None) -> dict:
+                                 physical_bill_values: Optional[Dict[int, dict]] = None,
+                                 form_values: Optional[Dict[int, dict]] = None) -> dict:
     """Evaluate the reusable Cross-check matrix while returning the legacy result shape."""
     documents = config.get('documents') or []
     matrix_fields = config.get('matrix_fields') or []
+    manual_values = {}
+    manual_values.update(physical_bill_values or {})
+    manual_values.update(form_values or {})
     chain = [{
         "document_id": document['document_id'],
         "document_name": document['document_name'],
         "sort_order": document['sort_order'],
-        "linked": bool(linked_by_document.get(document['document_id'])),
+        "linked": bool(linked_by_document.get(document['document_id']))
+            or bool((manual_values.get(document['document_id']) or {}).get('_row_count')),
         "value": None,
         "row_count": 0,
     } for document in documents]
@@ -6020,8 +6163,8 @@ def _evaluate_matrix_cross_check(config: dict, linked_by_document: Dict[int, Lis
             column_name = cells.get(str(document['document_id']))
             if not column_name:
                 continue
-            physical_values = (physical_bill_values or {}).get(document['document_id'])
-            if physical_values is None:
+            manual_document_values = manual_values.get(document['document_id'])
+            if manual_document_values is None:
                 # Keep the original two-argument call shape for ordinary template documents;
                 # this also preserves compatibility with isolated unit-test doubles.
                 value, row_count = _sum_document_field(
@@ -6029,7 +6172,7 @@ def _evaluate_matrix_cross_check(config: dict, linked_by_document: Dict[int, Lis
                 )
             else:
                 value, row_count = _sum_document_field(
-                    linked_by_document.get(document['document_id'], []), column_name, physical_values
+                    linked_by_document.get(document['document_id'], []), column_name, manual_document_values
                 )
             cell = {
                 "document_id": document['document_id'],
@@ -6037,7 +6180,8 @@ def _evaluate_matrix_cross_check(config: dict, linked_by_document: Dict[int, Lis
                 "field_name": column_name,
                 "value": value,
                 "row_count": row_count,
-                "linked": bool(linked_by_document.get(document['document_id'])),
+                "linked": bool(linked_by_document.get(document['document_id']))
+                    or bool(row_count),
             }
             configured_cells.append(cell)
             if value is None:
@@ -6161,7 +6305,8 @@ def _evaluate_matrix_cross_check(config: dict, linked_by_document: Dict[int, Lis
 
 def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, List[int]],
                                  voucher_amount: Optional[float],
-                                 physical_bill_values: Optional[Dict[int, dict]] = None) -> dict:
+                                 physical_bill_values: Optional[Dict[int, dict]] = None,
+                                 form_values: Optional[Dict[int, dict]] = None) -> dict:
     """
     Evaluate one Cross-check against one voucher line's linked evidence. Pure - reads no
     global state, writes nothing.
@@ -6171,19 +6316,25 @@ def _evaluate_single_cross_check(config: dict, linked_by_document: Dict[int, Lis
     shortfall is a reportable observation (Phase 8) rather than a rejection.
     """
     if config.get('matrix_fields'):
-        return _evaluate_matrix_cross_check(config, linked_by_document, voucher_amount, physical_bill_values)
+        return _evaluate_matrix_cross_check(
+            config, linked_by_document, voucher_amount, physical_bill_values, form_values
+        )
 
     compare_field = config['compare_field']
     comparison_type = config['comparison_type']
 
     # --- Build the chain: every configured document in order, linked ones carrying values. ---
     chain = []
+    manual_values = {}
+    manual_values.update(physical_bill_values or {})
+    manual_values.update(form_values or {})
     for doc in config['documents']:
         evidence_ids = linked_by_document.get(doc['document_id'], [])
-        is_linked = len(evidence_ids) > 0
+        document_values = manual_values.get(doc['document_id'])
+        is_linked = len(evidence_ids) > 0 or bool((document_values or {}).get('_row_count'))
         value, row_count = (None, 0)
         if is_linked:
-            value, row_count = _sum_document_field(evidence_ids, compare_field)
+            value, row_count = _sum_document_field(evidence_ids, compare_field, document_values)
         chain.append({
             "document_id": doc['document_id'],
             "document_name": doc['document_name'],
@@ -6501,8 +6652,18 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
                             totals['_row_count'] += 1
             physical_bill_values[document_id] = totals
 
+    form_document_ids = {
+        document['document_id']
+        for config in configs
+        for document in (config.get('documents') or [])
+        if document.get('document_type') == 'form'
+    }
+    form_values = _get_form_cross_check_values(voucher_line_id, sibling_ids, list(form_document_ids))
+
     results = [
-        _evaluate_single_cross_check(cfg, linked_by_document, voucher_amount, physical_bill_values)
+        _evaluate_single_cross_check(
+            cfg, linked_by_document, voucher_amount, physical_bill_values, form_values
+        )
         for cfg in configs
     ]
 

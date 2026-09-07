@@ -300,6 +300,8 @@ def _build_cross_check_matrix_contract(
             "document_id": document_id,
             "name": document_by_id[document_id].get("name") if document_id in document_by_id else None,
             "template_id": document_by_id[document_id].get("template_id") if document_id in document_by_id else None,
+            "document_type": document_by_id[document_id].get("document_type") or "linked_template" if document_id in document_by_id else "linked_template",
+            "field_options": _cross_check_field_specs_from_document_row({"id": document_id, **document_by_id[document_id]}) if document_id in document_by_id else [],
             "sort_order": sort_order,
         }
         for sort_order, document_id in enumerate(document_ids)
@@ -461,6 +463,10 @@ def compile_verification_rulebook(client_id: int) -> dict:
     def build_document(document_id: int, required: bool) -> dict:
         row = document_by_id[document_id]
         template_id = row.get("template_id")
+        form_fields = get_document_form_fields(document_id) \
+            if (row.get("document_type") or "linked_template") == "form" else []
+        if form_fields:
+            row["form_fields"] = form_fields
         if template_id is not None and template_id not in template_ids:
             warnings.append({"code": "inactive_template", "document_id": document_id, "template_id": template_id})
         signature_requirements = []
@@ -478,8 +484,7 @@ def compile_verification_rulebook(client_id: int) -> dict:
             "required": bool(required), "transaction_level_approval": bool(row.get("transaction_level_approval")),
             "risk_rating": row.get("risk_rating"),
             "fields": fields_by_document.get(document_id, []),
-            "form_fields": get_document_form_fields(document_id)
-                if (row.get("document_type") or "linked_template") == "form" else [],
+            "form_fields": form_fields,
             "verification_field_policy": _parse_verification_field_policy(row.get("verification_field_policy")),
             "verification_fields": _build_selected_verification_fields(
                 template_id, row.get("verification_field_policy"), mappings_by_template
@@ -1095,11 +1100,23 @@ def build_verification_field_policy(template_id: Optional[int], stored_policy: A
 
 
 def get_document_cross_check_fields(document_id: int, document_type: Optional[str] = None) -> List[str]:
-    """Return the current Master Columns mirror for a Document.
+    """Return the field names that Cross-checks may use for a Document.
 
-    Physical Bills expose their controlled paper-bill fields here so the matrix can compare the
-    saved manual bill values. For every other Document, the active Master Columns registry is the
-    authority, so newly added columns appear without editing each Document.
+    Form fields are the authority for Form Documents; legacy Physical Bills expose their fixed
+    manual fields. Linked-template Documents retain the active Master Columns mirror for the
+    older flat Cross-check contract.
+    """
+    return [field["field_name"] for field in get_document_cross_check_field_specs(document_id, document_type)]
+
+
+def get_document_cross_check_field_specs(
+    document_id: int, document_type: Optional[str] = None
+) -> List[dict]:
+    """Return stable Cross-check field metadata for a Document.
+
+    A Form field keeps its saved Form name as the Cross-check value and exposes ``linked_column``
+    only as source metadata. The evaluator reads the saved Form value by field name; it never
+    substitutes the linked-template source row for auditor-entered Form evidence.
     """
     if document_type is None:
         rows = execute_query_pg(
@@ -1109,13 +1126,45 @@ def get_document_cross_check_fields(document_id: int, document_type: Optional[st
         document_type = (rows[0].get("document_type") if rows else None) or "linked_template"
     if document_type == "form":
         rows = execute_query_pg(
-            "SELECT field_name FROM audit_rule_document_fields WHERE document_id = %s ORDER BY sort_order, id",
+            "SELECT field_name, field_type, linked_column FROM audit_rule_document_fields "
+            "WHERE document_id = %s ORDER BY sort_order, id",
             (document_id,)
         )
-        return [row["field_name"] for row in rows]
+        return [
+            {
+                "field_name": row["field_name"],
+                "data_type": row.get("field_type") or "text",
+                "linked_column": row.get("linked_column"),
+                "source": "form",
+            }
+            for row in rows
+        ]
     if document_type == "physical_bill":
-        return ["Bill No", "Bill Date", "Vendor Name", "Quantity", "Rate", "Amount"]
-    return [row["column_name"] for row in get_active_master_columns()]
+        return [
+            {"field_name": field_name, "data_type": "numeric" if field_name in ("Quantity", "Rate", "Amount") else "text", "linked_column": None, "source": "legacy_physical_bill"}
+            for field_name in ("Bill No", "Bill Date", "Vendor Name", "Quantity", "Rate", "Amount")
+        ]
+    return [
+        {"field_name": row["column_name"], "data_type": row.get("data_type") or "text", "linked_column": None, "source": "master_column"}
+        for row in get_active_master_columns()
+    ]
+
+
+def _cross_check_field_specs_from_document_row(row: dict) -> List[dict]:
+    document_type = row.get("document_type") or "linked_template"
+    if document_type == "form":
+        return [
+            {
+                "field_name": field["field_name"],
+                "data_type": field.get("field_type") or "text",
+                "linked_column": field.get("linked_column"),
+                "source": "form",
+            }
+            for field in row.get("form_fields") or []
+        ]
+    if document_type == "physical_bill":
+        return get_document_cross_check_field_specs(row["id"], document_type)
+    return []
 
 def get_document_used_by_count(document_id: int) -> int:
     rows = execute_query_pg(
@@ -1126,6 +1175,8 @@ def get_document_used_by_count(document_id: int) -> int:
 
 def row_to_document(row: dict) -> dict:
     document_id = row["id"]
+    document_type = row.get("document_type") or 'linked_template'
+    form_fields = get_document_form_fields(document_id) if document_type == 'form' else []
     return {
         "id": document_id,
         "name": row["name"],
@@ -1134,13 +1185,13 @@ def row_to_document(row: dict) -> dict:
         "risk_rating": row.get("risk_rating"),
         # Physical Bill evidence type (Phase 2 of 8). The `or` fallback is defensive only -
         # Phase 1's ALTER backfilled every existing row to 'linked_template'.
-        "document_type": row.get("document_type") or 'linked_template',
+        "document_type": document_type,
         "is_active": bool(row["is_active"]),
         "auth_roles": get_document_auth_roles(document_id),
         "auth_role_authorities": get_document_auth_role_authorities(document_id),
-        "cross_check_fields": get_document_cross_check_fields(document_id, row.get("document_type")),
-        "form_fields": get_document_form_fields(document_id)
-            if (row.get("document_type") or 'linked_template') == 'form' else [],
+        "cross_check_fields": get_document_cross_check_fields(document_id, document_type),
+        "cross_check_field_specs": get_document_cross_check_field_specs(document_id, document_type),
+        "form_fields": form_fields,
         "verification_field_policy": build_verification_field_policy(
             row.get("template_id"), row.get("verification_field_policy")
         ),
@@ -1832,7 +1883,7 @@ def get_cross_check_matrix(cross_check_id: int) -> dict:
 
     documents = execute_query_pg(
         """
-        SELECT ccd.document_id, d.name, d.template_id, ccd.sort_order
+        SELECT ccd.document_id, d.name, d.template_id, d.document_type, ccd.sort_order
         FROM audit_rule_cross_check_documents ccd
         JOIN audit_rule_documents d ON d.id = ccd.document_id
         WHERE ccd.cross_check_id = %s
@@ -1865,6 +1916,14 @@ def get_cross_check_matrix(cross_check_id: int) -> dict:
                 "document_id": d["document_id"],
                 "name": d["name"],
                 "template_id": d.get("template_id"),
+                "document_type": d.get("document_type") or "linked_template",
+                "field_options": (
+                    get_document_cross_check_field_specs(d["document_id"], "form")
+                    if d.get("document_type") == "form"
+                    else get_document_cross_check_field_specs(d["document_id"], "physical_bill")
+                    if d.get("document_type") == "physical_bill"
+                    else []
+                ),
                 "sort_order": d["sort_order"],
             }
             for d in documents
@@ -1898,8 +1957,7 @@ def validate_cross_check_condition(condition: CrossCheckConditionUpdate):
 
 def validate_cross_check_cell(field_id: int, document_id: int, column_name: Optional[str]):
     """Raises HTTPException if the field row is unknown, the Document isn't a column of the field
-    row's parent Cross-check, or (for a non-empty column_name) the name isn't a real column on
-    that Document's linked template."""
+    row's parent Cross-check, or the selected field isn't available for that Document's type."""
     field_rows = execute_query_pg(
         "SELECT cross_check_id FROM audit_rule_cross_check_fields WHERE id = %s", (field_id,)
     )
@@ -1919,15 +1977,26 @@ def validate_cross_check_cell(field_id: int, document_id: int, column_name: Opti
     normalized = normalize_compare_field(column_name)
     if normalized is None:
         return
-    columns = get_document_template_columns(document_id)
-    if not columns:
+    document_rows = execute_query_pg(
+        "SELECT document_type FROM audit_rule_documents WHERE id = %s",
+        (document_id,),
+    )
+    document_type = (document_rows[0].get("document_type") if document_rows else None) or "linked_template"
+    # A Form's optional template supplies prefill values; its own fields remain the matrix operands.
+    if document_type in ("form", "physical_bill"):
+        valid_names = {
+            field["field_name"]
+            for field in get_document_cross_check_field_specs(document_id, document_type)
+        }
+    else:
+        valid_names = {c["column_name"] for c in get_document_template_columns(document_id)}
+    if not valid_names:
         raise HTTPException(
-            400, f"Document {document_id} has no linked template, so it has no columns to pick"
+            400, f"Document {document_id} has no configured Cross-check fields"
         )
-    valid_names = {c["column_name"] for c in columns}
     if normalized not in valid_names:
         raise HTTPException(
-            400, f"Column '{normalized}' is not on Document {document_id}'s linked template"
+            400, f"Field '{normalized}' is not available on Document {document_id}"
         )
 
 # ---------- ENDPOINTS ----------
@@ -2014,8 +2083,7 @@ def reorder_cross_check_fields(cross_check_id: int, order: CrossCheckFieldOrder)
 @router.put("/api/audit-rules/cross-check-fields/{field_id}/cells/{document_id}",
             dependencies=[Depends(ensure_no_active_verification_sessions)])
 def set_cross_check_cell(field_id: int, document_id: int, cell: CrossCheckCellUpdate):
-    """Set or clear one matrix cell. A non-empty column_name must exist on the Document's linked
-    template; an empty/None column_name clears the cell (= not applicable)."""
+    """Set a field available for the Document's type, or clear an empty/None cell."""
     validate_cross_check_cell(field_id, document_id, cell.column_name)
     normalized = normalize_compare_field(cell.column_name)
     if normalized is None:

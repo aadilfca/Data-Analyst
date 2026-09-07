@@ -322,6 +322,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-06: D3 made Category Procedure/Evidence role/detail and risk requirements authoritative in the Rulebook and runtime; manually confirmed.
 - 2026-09-06: D4 blocks Cross-checks with missing or inactive Category dependencies in the picker, Rulebook, and runtime; manually confirmed. See CHANGELOG_ARCHIVE.md.
 - 2026-09-06: D5 keeps Procedure tabs limited to active unique frozen-Category Documents and blocks live fallback; manually confirmed. See CHANGELOG_ARCHIVE.md.
+- 2026-09-07: D6 Form Cross-check integration now validates Form fields before linked-template columns; Quantity selection was manually confirmed. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

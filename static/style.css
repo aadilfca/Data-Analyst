@@ -7836,3 +7836,146 @@ body {
         flex-basis: 100%;
     }
 }
+
+/* ----- Form-based Physical Vendor Bill evidence (D6) -----
+   The Form Document uses the same calm grouped-card language as the legacy bill editor, while
+   keeping the field definitions and saved values owned by the reusable Form contract. */
+#procedureModal .procedure-form-segment {
+    background: #f8fafc;
+}
+#procedureModal .procedure-form-segment .procedure-segment-body {
+    padding: 16px;
+}
+#procedureModal .procedure-form-help {
+    margin: 0 0 14px;
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.5;
+}
+#procedureModal .procedure-form-section {
+    margin-top: 14px;
+    padding: 14px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #ffffff;
+}
+#procedureModal .procedure-form-section:first-of-type {
+    margin-top: 0;
+}
+#procedureModal .procedure-form-section-title {
+    margin: 0;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+#procedureModal .procedure-form-section-heading,
+#procedureModal .procedure-form-copy-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+#procedureModal .procedure-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 14px;
+    margin-top: 12px;
+}
+#procedureModal .procedure-form-field {
+    min-width: 0;
+}
+#procedureModal .procedure-form-field label {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 650;
+}
+#procedureModal .procedure-form-linked-column {
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 500;
+}
+#procedureModal .procedure-form-input {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 5px;
+    padding: 9px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #0f172a;
+    font-size: 13px;
+    transition: border-color .15s, box-shadow .15s;
+}
+#procedureModal .procedure-form-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, .12);
+}
+#procedureModal .procedure-form-items {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+}
+#procedureModal .procedure-form-item-row {
+    padding: 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #f8fafc;
+}
+#procedureModal .procedure-form-add-btn,
+#procedureModal .procedure-form-remove-item-btn {
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 650;
+}
+#procedureModal .procedure-form-add-btn {
+    padding: 7px 10px;
+    border: 1px solid #bfdbfe;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+#procedureModal .procedure-form-add-btn:hover {
+    background: #dbeafe;
+}
+#procedureModal .procedure-form-remove-item-btn {
+    margin-top: 10px;
+    padding: 5px 9px;
+    border: 1px solid #fecaca;
+    background: #ffffff;
+    color: #b91c1c;
+}
+#procedureModal .procedure-form-remove-item-btn:hover {
+    background: #fef2f2;
+}
+#procedureModal .procedure-form-copy-row {
+    justify-content: flex-start;
+    margin: 0 0 12px;
+}
+#procedureModal .procedure-form-copy-status {
+    color: #64748b;
+    font-size: 11px;
+    line-height: 1.4;
+}
+#procedureModal .procedure-form-empty,
+#procedureModal .procedure-form-empty-items {
+    padding: 12px;
+    color: #64748b;
+    font-size: 12px;
+    text-align: center;
+}
+@media (max-width: 700px) {
+    #procedureModal .procedure-form-grid {
+        grid-template-columns: 1fr;
+    }
+    #procedureModal .procedure-form-section-heading,
+    #procedureModal .procedure-form-copy-row {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}

@@ -19,6 +19,7 @@ from routers.audit_rules import (
     cache_set,
     get_audit_rules_config_version,
     get_document_cross_check_fields,
+    get_document_cross_check_field_specs,
     build_verification_field_policy,
     validate_and_normalize_verification_field_policy,
     normalize_form_fields,
@@ -28,12 +29,14 @@ from routers.audit_rules import (
     load_client_account_category_index,
     load_client_verification_rulebook,
     row_to_document_list,
+    validate_cross_check_cell,
 )
 from routers.audit_rules import compile_verification_rulebook
 from routers.audit_rules import CategoryValidationRules, validate_category_validation_rules
 from routers.verification import (
     _build_working_paper_gates,
     _evaluate_matrix_cross_check,
+    _get_form_cross_check_values,
     _rulebook_cross_check_configs,
     _form_value_for_storage,
     _shape_form_entries,
@@ -463,9 +466,55 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             row_to_document_list(
                 {"id": 11, "name": "Physical Bill", "is_active": True, "document_type": "physical_bill"},
                 ["Amount", "Vendor"],
-            )["cross_check_fields"],
+        )["cross_check_fields"],
             [],
         )
+
+    def test_form_cross_check_field_specs_keep_form_name_and_linked_column(self):
+        with patch("routers.audit_rules.execute_query_pg", return_value=[
+            {"field_name": "Quantity", "field_type": "numeric", "linked_column": "Receive Quantity"},
+            {"field_name": "Rate", "field_type": "numeric", "linked_column": "Rate"},
+        ]):
+            specs = get_document_cross_check_field_specs(42, "form")
+            field_names = get_document_cross_check_fields(42, "form")
+
+        self.assertEqual(specs[0], {
+            "field_name": "Quantity",
+            "data_type": "numeric",
+            "linked_column": "Receive Quantity",
+            "source": "form",
+        })
+        self.assertEqual(field_names, ["Quantity", "Rate"])
+
+    def test_form_cross_check_cell_validation_uses_form_fields_with_linked_template(self):
+        from fastapi import HTTPException
+        from routers import audit_rules
+
+        def query(sql, params=()):
+            if "FROM audit_rule_cross_check_fields WHERE id" in sql:
+                return [{"cross_check_id": 30}]
+            if "FROM audit_rule_cross_check_documents WHERE cross_check_id" in sql:
+                return [{"exists": 1}]
+            if "SELECT document_type FROM audit_rule_documents" in sql:
+                return [{"document_type": "form"}]
+            if "FROM audit_rule_document_fields" in sql:
+                return [{"field_name": "Quantity", "field_type": "numeric", "linked_column": "Receive Quantity"}]
+            self.fail(f"Unhandled query: {sql}")
+
+        with patch("routers.audit_rules.execute_query_pg", side_effect=query), \
+             patch("routers.audit_rules.get_document_template_columns",
+                   return_value=[{"column_name": "Receive Quantity"}, {"column_name": "Rate"}]), \
+             patch.object(audit_rules, "execute_write_pg") as write, \
+             patch.object(audit_rules, "invalidate_audit_rules_cache"), \
+             patch.object(audit_rules, "log_audit"):
+            audit_rules.set_cross_check_cell(5, 42, audit_rules.CrossCheckCellUpdate(column_name="Quantity"))
+            self.assertEqual(write.call_args.args[1], (5, 42, "Quantity"))
+            write.reset_mock()
+            for invalid_name in ("Receive Quantity", "Rate", "Unknown"):
+                with self.subTest(field=invalid_name), self.assertRaises(HTTPException) as raised:
+                    audit_rules.set_cross_check_cell(5, 42, audit_rules.CrossCheckCellUpdate(column_name=invalid_name))
+                self.assertEqual(raised.exception.status_code, 400)
+            write.assert_not_called()
 
     def test_session_guidance_normalizer_maps_cross_check_ids_to_names(self):
         with sync_playwright() as playwright:
@@ -597,6 +646,59 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             result = _evaluate_matrix_cross_check(config, {10: [1001], 11: [1002]}, 90)
         self.assertEqual(result["status"], "shortfall")
         self.assertEqual(result["matrix_rows"][0]["status"], "shortfall")
+
+    def test_matrix_cross_check_reads_saved_form_values_by_document_id(self):
+        config = {
+            "id": 30,
+            "name": "Order to Form Bill",
+            "documents": [
+                {"document_id": 10, "document_name": "Purchase Order", "sort_order": 0},
+                {"document_id": 42, "document_name": "Physical Bill", "document_type": "form", "sort_order": 1},
+            ],
+            "matrix_fields": [{
+                "id": 31, "sort_order": 0,
+                "cells": {"10": "Quantity", "42": "Quantity"},
+                "operator": "=", "tolerance": 0,
+                "missing_data_behavior": "not_configured", "blocking": True, "risk": "High",
+            }],
+        }
+
+        def values(ids, field_name, manual=None):
+            if manual is not None:
+                return manual.get(field_name), manual.get("_row_count", 0)
+            return 10, 1
+
+        with patch("routers.verification._sum_document_field", side_effect=values):
+            result = _evaluate_matrix_cross_check(
+                config,
+                {10: [1001]},
+                90,
+                form_values={42: {"Quantity": 10, "_row_count": 1}},
+            )
+
+        self.assertEqual(result["status"], "pass")
+        self.assertTrue(result["matrix_rows"][0]["values"][1]["linked"])
+        self.assertEqual(result["matrix_rows"][0]["values"][1]["value"], 10)
+
+    def test_form_cross_check_values_use_latest_saved_entry_per_document(self):
+        rows = [
+            {
+                "voucher_line_id": 101, "client_data_id": 9001, "document_id": 42,
+                "updated_at": "2026-09-01T09:00:00", "field_name": "Quantity",
+                "field_type": "numeric", "value_text": None, "value_date": None,
+                "value_numeric": 4,
+            },
+            {
+                "voucher_line_id": 102, "client_data_id": 9001, "document_id": 42,
+                "updated_at": "2026-09-02T09:00:00", "field_name": "Quantity",
+                "field_type": "numeric", "value_text": None, "value_date": None,
+                "value_numeric": 10,
+            },
+        ]
+        with patch("routers.verification.execute_query_pg", return_value=rows):
+            result = _get_form_cross_check_values(102, [101, 102], [42])
+
+        self.assertEqual(result, {42: {"_row_count": 1, "Quantity": 10.0}})
 
     def test_warns_for_inactive_template_and_assignment_category(self):
         def query(sql, params=()):
@@ -992,6 +1094,8 @@ class CrossCheckMatrixEndpointTests(unittest.TestCase):
         from routers import audit_rules
 
         def query(sql, params=()):
+            if "SELECT document_type FROM audit_rule_documents" in sql:
+                return [{"document_type": "linked_template"}]
             if "FROM audit_rule_cross_check_fields WHERE id" in sql:
                 return [{"cross_check_id": 30}]
             if "FROM audit_rule_cross_check_documents WHERE cross_check_id" in sql:
@@ -1026,6 +1130,8 @@ class CrossCheckMatrixEndpointTests(unittest.TestCase):
         writes = []
 
         def query(sql, params=()):
+            if "SELECT document_type FROM audit_rule_documents" in sql:
+                return [{"document_type": "linked_template"}]
             if "FROM audit_rule_cross_check_fields WHERE id" in sql:
                 return [{"cross_check_id": 30}]
             if "FROM audit_rule_cross_check_documents WHERE cross_check_id" in sql:

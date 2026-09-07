@@ -1256,6 +1256,7 @@ let matrixState = { columns: [], rows: [] };
 // by fetchMatrixColumnsForDoc(); reused so adding several rows against the same document doesn't
 // re-fetch. Never invalidated in-session (page reload only).
 let matrixColumnsByDoc = {};
+let matrixColumnOptionsByDoc = {};
 // Cache of all active Documents ({id, name, ...}), used to resolve column names and populate the
 // "Add document" picker. Refreshed each time the Cross-checks view is opened (switchEntityType()).
 let allDocuments = [];
@@ -1378,10 +1379,8 @@ function appendCrossCheckRows(crossChecks) {
 // the one in-flight request rather than each spawning a duplicate.
 let matrixColumnsInFlight = {};
 
-// documentId -> [columnName, ...] for that document's linked template. Resolves the document's
-// template_id (GET /api/audit-rules/documents/{id}), then the template's columns
-// (GET /api/templates/{template_id}/columns, Phase 2). Cached in matrixColumnsByDoc; a document
-// with no linked template caches [].
+// documentId -> [fieldName, ...] for the Document's linked-template or Form field contract.
+// Form fields remain the saved evidence names; linked_column is display metadata only.
 function fetchMatrixColumnsForDoc(documentId) {
     if (Object.prototype.hasOwnProperty.call(matrixColumnsByDoc, documentId)) {
         return Promise.resolve(matrixColumnsByDoc[documentId]);
@@ -1394,16 +1393,42 @@ function fetchMatrixColumnsForDoc(documentId) {
             const docRes = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + documentId);
             if (!docRes.ok) throw new Error('document lookup failed');
             const doc = await docRes.json();
+            if (doc.document_type === 'form') {
+                const fields = (doc.cross_check_field_specs || doc.form_fields || []).map(field => ({
+                    field_name: field.field_name,
+                    label: field.linked_column
+                        ? field.field_name + ' — linked: ' + field.linked_column
+                        : field.field_name,
+                }));
+                matrixColumnOptionsByDoc[documentId] = fields;
+                matrixColumnsByDoc[documentId] = fields.map(field => field.field_name);
+                return matrixColumnsByDoc[documentId];
+            }
+            if (doc.document_type === 'physical_bill') {
+                const fields = (doc.cross_check_field_specs || []).map(field => ({
+                    field_name: field.field_name,
+                    label: field.field_name,
+                }));
+                matrixColumnOptionsByDoc[documentId] = fields;
+                matrixColumnsByDoc[documentId] = fields.map(field => field.field_name);
+                return matrixColumnsByDoc[documentId];
+            }
             if (!doc.template_id) {
+                matrixColumnOptionsByDoc[documentId] = [];
                 matrixColumnsByDoc[documentId] = [];
                 return [];
             }
             const colRes = await window.ApiUtils.apiFetch(API_BASE + '/api/templates/' + doc.template_id + '/columns');
             if (!colRes.ok) throw new Error('template columns lookup failed');
             const cols = await colRes.json();
-            matrixColumnsByDoc[documentId] = cols.map(c => c.column_name);
+            matrixColumnOptionsByDoc[documentId] = cols.map(c => ({
+                field_name: c.column_name,
+                label: c.column_name,
+            }));
+            matrixColumnsByDoc[documentId] = matrixColumnOptionsByDoc[documentId].map(field => field.field_name);
         } catch (error) {
             console.error('Failed to load matrix columns for document ' + documentId + ':', error);
+            matrixColumnOptionsByDoc[documentId] = [];
             matrixColumnsByDoc[documentId] = [];
         } finally {
             delete matrixColumnsInFlight[documentId];
@@ -1564,6 +1589,8 @@ function renderMatrix() {
             select.appendChild(naOpt);
 
             const cached = matrixColumnsByDoc[col.documentId];
+            const cachedOptions = matrixColumnOptionsByDoc[col.documentId] ||
+                (cached || []).map(fieldName => ({field_name: fieldName, label: fieldName}));
             if (cached === undefined) {
                 const loadingOpt = document.createElement('option');
                 loadingOpt.textContent = 'Loading…';
@@ -1576,10 +1603,10 @@ function renderMatrix() {
                 noneOpt.disabled = true;
                 select.appendChild(noneOpt);
             } else {
-                cached.forEach(colName => {
+                cachedOptions.forEach(option => {
                     const opt = document.createElement('option');
-                    opt.value = colName;
-                    opt.textContent = colName;
+                    opt.value = option.field_name;
+                    opt.textContent = option.label;
                     select.appendChild(opt);
                 });
             }
