@@ -961,7 +961,13 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // written straight into the same voucherChecksCache ensureVoucherChecksLoaded() and
     // hostAdapter.updateProceduresCellForLine() both read from, instead of a separate fetch.
     // ensureVoucherChecksLoaded() itself is left in place, still used by that other call site.
-    if (hostAdapter.currentVoucherId) {
+    // A failed composite read must not replace a successfully warmed voucher-check cache with an
+    // empty array. That false empty state enables Verify in the UI while the session Rulebook still
+    // contains active checks, producing the backend's "not marked" 400. Only a successful modal
+    // payload is authoritative for this cache; a failed payload leaves any standalone check read
+    // intact so the verify gate can still use it.
+    if (hostAdapter.currentVoucherId && modalDataResolved !== null
+        && Array.isArray(modalDataResolved.voucher_checks)) {
         voucherChecksCache[hostAdapter.currentVoucherId] = (modalData.voucher_checks || []).map(c => ({
             id: c.id,
             name: c.name,
@@ -1115,20 +1121,36 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     }
 }
 
-// Reflects whether any tab for this line has an unsaved (typed-but-not-yet-flushed) observation —
-// checklist ticks, the signature-exception tick, and (as of Voucher-level Checks simplified to
-// name-only) the voucher-checks tick/cross pills all save immediately now, so only observation
-// text can ever be "unsaved" here. Called on modal open, on every keystroke in the observation
-// textarea (wireProcedureChecklistAndObservation()), and after flushProcedureObservations()
-// resolves.
+// Reflects whether this line has any unsaved modal-owned evidence or host-owned line edits. Called
+// on modal open, on every keystroke in the observation textarea, and after any evidence flush.
 function updateProcedureModalSavedNote(uid) {
     const noteEl = document.getElementById('procedureModalSavedNote');
     if (!noteEl) return;
     const lineState = hostAdapter.procedureModalState[uid];
     const tabs = (lineState && lineState.tabs) || {};
-    const dirty = Object.values(tabs).some(t => t.observationDirty || t.formDirty);
+    const dirty = Object.values(tabs).some(t => (
+        t.observationDirty || t.formDirty || t.physicalBillDirty
+    )) || (
+        typeof hostAdapter.isLineDirty === 'function' && hostAdapter.isLineDirty(uid)
+    );
     noteEl.textContent = dirty ? 'Unsaved changes' : 'All changes saved';
     noteEl.classList.toggle('dirty', dirty);
+}
+
+// One shared dirty-state query for modal exit actions. The line revision covers edits owned by
+// Verification (line data and immediately-saved procedure ticks); tab flags cover evidence that
+// is still waiting to be flushed by this modal. Keeping both here prevents the close path from
+// issuing a voucher-wide save request when the auditor only opened the modal to look.
+function isProcedureModalDirty(uid) {
+    if (!uid || !hostAdapter) return false;
+    const lineState = hostAdapter.procedureModalState[uid];
+    const tabs = (lineState && lineState.tabs) || {};
+    const tabDirty = Object.values(tabs).some(t => (
+        t.observationDirty || t.formDirty || t.physicalBillDirty
+    ));
+    const lineDirty = typeof hostAdapter.isLineDirty === 'function'
+        && hostAdapter.isLineDirty(uid);
+    return tabDirty || lineDirty;
 }
 
 // Moves the open modal to the adjacent voucher line without closing it — distinct from
@@ -1164,7 +1186,7 @@ async function navigateProcedureModalLine(delta) {
     // Navigation is independent from persistence: begin saving the line being left, then open
     // the next line immediately. The host's in-flight save guard keeps this background save safe;
     // dirty state is retained automatically if the request fails.
-    const savePromise = (async () => {
+    const savePromise = !isProcedureModalDirty(uid) ? Promise.resolve() : (async () => {
         const formEntriesSaved = await flushFormEntries(uid);
         const physicalBillsSaved = await flushPhysicalBillEntries(uid);
         const result = await hostAdapter.saveLineItems(uid);
@@ -1239,22 +1261,29 @@ function hideProcedureModalOnly(refreshBadges = true) {
 }
 
 async function closeProcedureModal() {
+    const uid = currentProcedureModalUid;
+    // A read-only open must be a local UI action. In particular, do not invoke the grouped
+    // save-and-verify endpoint merely because the auditor pressed ✕ after inspecting a line.
+    if (!uid || !isProcedureModalDirty(uid)) {
+        hideProcedureModalOnly(false);
+        return;
+    }
     // Flush any unsaved observation text/voucher-approval edits before hiding — closing via ✕ or
     // outside-click persists the same way Prev/Next/Complete/Exit does, per the confirmed
     // requirement (there is no longer a Save button to rely on instead). hostAdapter.saveLineItems() also
     // recomputes cleared_status (Validation Rules Phase 5) so the main table's badge is caught up
     // by the time the modal is gone.
-    if (currentProcedureModalUid) {
+    if (uid) {
         if (window.LoadingUI) window.LoadingUI.showProgressBar(procedureModalClose, { mode: 'indeterminate', message: 'Saving…' });
         try {
-            const formEntriesSaved = await flushFormEntries(currentProcedureModalUid);
-            const physicalBillsSaved = await flushPhysicalBillEntries(currentProcedureModalUid);
+            const formEntriesSaved = await flushFormEntries(uid);
+            const physicalBillsSaved = await flushPhysicalBillEntries(uid);
             // Verification supplies the grouped save path. Audit Workbook deliberately has a
             // lean adapter, so close must use its ordinary line save instead of calling a method
             // that host does not provide. Both paths return the same {ok, data/error} contract.
             const result = typeof hostAdapter.saveAndVerifyVoucher === 'function'
-                ? await hostAdapter.saveAndVerifyVoucher(currentProcedureModalUid, false)
-                : await hostAdapter.saveLineItems(currentProcedureModalUid, { force: true });
+                ? await hostAdapter.saveAndVerifyVoucher(uid, false)
+                : await hostAdapter.saveLineItems(uid, { force: true });
             if (!result || !result.ok) {
                 throw new Error(result?.error?.detail || result?.error?.message || 'Save failed.');
             }
@@ -1270,13 +1299,22 @@ async function closeProcedureModal() {
                 return type ? hostAdapter.updateProceduresCellForLine(line.detail_id, type) : null;
             }).filter(Boolean);
             await Promise.all(refreshedLines);
-            if (!physicalBillsSaved) hostAdapter.markLineDirty(currentProcedureModalUid, 'physical bill save retry required');
-            if (!formEntriesSaved) hostAdapter.markLineDirty(currentProcedureModalUid, 'form evidence save retry required');
+            if (!physicalBillsSaved) hostAdapter.markLineDirty(uid, 'physical bill save retry required');
+            if (!formEntriesSaved) hostAdapter.markLineDirty(uid, 'form evidence save retry required');
+        } catch (e) {
+            console.error('Failed to close procedure modal after saving:', e);
+            hostAdapter.showStatus(
+                e && e.message ? e.message : 'Audit procedures could not be saved. Please retry.',
+                'error'
+            );
+            return;
         } finally {
             if (window.LoadingUI) window.LoadingUI.hideProgressBar(procedureModalClose);
         }
     }
-    hideProcedureModalOnly();
+    // The changed path already refreshed every line above. Avoid a second current-line refresh,
+    // which would otherwise start another support-data read on close.
+    hideProcedureModalOnly(false);
 }
 
 // Sets the footer's "Verify & Next/Close" button label and disabled state. The label has three
@@ -4332,11 +4370,29 @@ if (procedureModalClose) {
 // closeProcedureModal() when e.target === procedureModal was removed. The × button above
 // remains the only way to close this modal.
 document.getElementById('procedureModalBackBtn')?.addEventListener('click', function() {
-    navigateProcedureModalLine(-1);
+    navigateProcedureModalLine(-1).catch(e => {
+        console.error('Failed to move to the previous procedure line:', e);
+        if (hostAdapter) hostAdapter.showStatus(
+            e && e.message ? e.message : 'The previous procedure line could not be opened.',
+            'error'
+        );
+    });
 });
 document.getElementById('procedureModalVerifyOnlyBtn')?.addEventListener('click', function() {
-    verifyAndStay();
+    verifyAndStay().catch(e => {
+        console.error('Failed to complete Verify:', e);
+        if (hostAdapter) hostAdapter.showStatus(
+            e && e.message ? e.message : 'Verify could not be completed. Please retry.',
+            'error'
+        );
+    });
 });
 document.getElementById('procedureModalVerifyBtn')?.addEventListener('click', function() {
-    verifyAndAdvanceVoucher();
+    verifyAndAdvanceVoucher().catch(e => {
+        console.error('Failed to complete Verify & Next:', e);
+        if (hostAdapter) hostAdapter.showStatus(
+            e && e.message ? e.message : 'Verify & Next could not be completed. Please retry.',
+            'error'
+        );
+    });
 });

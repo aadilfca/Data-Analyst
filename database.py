@@ -3033,6 +3033,68 @@ def _ensure_postgres_form_field_columns(conn):
         cur.close()
 
 
+def _ensure_postgres_form_tables(conn):
+    """Create Form evidence tables missing from an already-marked Postgres schema.
+
+    The bootstrap marker lets normal startups skip the full declarative schema pass. Form
+    evidence tables were added after some databases received that marker, so they need the same
+    additive, idempotent repair path as the Form field columns above.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT to_regclass('public.voucher_line_form_entries'), "
+            "to_regclass('public.voucher_line_form_values')"
+        )
+        existing = cur.fetchone() or (None, None)
+        missing = []
+        if existing[0] is None:
+            missing.append("voucher_line_form_entries")
+        if existing[1] is None:
+            missing.append("voucher_line_form_values")
+        if not missing:
+            return []
+
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_line_form_entries (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                voucher_line_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
+                row_scope TEXT NOT NULL DEFAULT 'header',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        ''')
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voucher_line_form_entries_line "
+            "ON voucher_line_form_entries (voucher_line_id)"
+        )
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS voucher_line_form_values (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                entry_id INTEGER NOT NULL REFERENCES voucher_line_form_entries(id) ON DELETE CASCADE,
+                field_id INTEGER NOT NULL REFERENCES audit_rule_document_fields(id) ON DELETE CASCADE,
+                value_text TEXT,
+                value_date DATE,
+                value_numeric NUMERIC,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(entry_id, field_id)
+            )
+        ''')
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voucher_line_form_values_entry "
+            "ON voucher_line_form_values (entry_id)"
+        )
+        return missing
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
 
@@ -3048,12 +3110,15 @@ def init_db_postgres(conn):
         cur.close()
         migrated_document_type = _ensure_postgres_audit_rule_document_type_constraint(conn)
         migrated_form_columns = _ensure_postgres_form_field_columns(conn)
+        migrated_form_tables = _ensure_postgres_form_tables(conn)
         conn.commit()
         migration_notes = []
         if migrated_document_type:
             migration_notes.append("document type constraint upgraded")
         if migrated_form_columns:
             migration_notes.append("Form field columns upgraded")
+        if migrated_form_tables:
+            migration_notes.append("Form evidence tables upgraded")
         print(
             "[postgres] existing schema verified; skipped bootstrap"
             + (f" ({'; '.join(migration_notes)})" if migration_notes else "")

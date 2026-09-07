@@ -224,6 +224,7 @@ function buildProcedureModalAdapter() {
         saveAllVoucherLines,
         markLineDirty: markVoucherLineDirty,
         markAllLinesDirty: markAllVoucherLinesDirty,
+        isLineDirty: isVoucherLineDirty,
         escapeHtml,
         getVoucherLineAlias,
         getVoucherLineAmount,

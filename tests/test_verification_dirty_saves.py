@@ -8,6 +8,7 @@ from routers.verification import _evaluate_physical_bill_completion
 
 
 VERIFICATION_JS = Path(__file__).resolve().parents[1] / "static" / "verification.js"
+PROCEDURE_MODAL_JS = Path(__file__).resolve().parents[1] / "static" / "procedure_modal.js"
 
 
 def test_physical_bill_completion_accepts_postgres_date_value():
@@ -46,6 +47,37 @@ def dirty_page():
                 {detail_id: 2, transaction_type: 'Purchases', line_items: []},
                 {detail_id: 3, transaction_type: 'Purchases', line_items: []}
             ]);
+        """)
+        yield page
+        browser.close()
+
+
+@pytest.fixture()
+def procedure_modal_page():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.set_content("<html><body></body></html>")
+        page.add_script_tag(content="var API_BASE = ''; ")
+        page.add_script_tag(path=str(PROCEDURE_MODAL_JS))
+        page.evaluate("""
+            window.modalSaveCalls = 0;
+            window.modalStatusMessages = [];
+            hostAdapter = {
+                procedureModalState: {1: {tabs: {}}},
+                voucherLineState: {1: {transactionType: 'Purchases'}},
+                currentVoucherLines: [],
+                isLineDirty: () => false,
+                saveAndVerifyVoucher: async () => {
+                    window.modalSaveCalls += 1;
+                    return {ok: true};
+                },
+                showStatus: (message, kind) => window.modalStatusMessages.push({message, kind}),
+                updateProceduresCellForLine: () => Promise.resolve(),
+                updateObservationsCellForLine: () => Promise.resolve()
+            };
+            currentProcedureModalUid = 1;
+            procedureModal.style.display = 'flex';
         """)
         yield page
         browser.close()
@@ -159,6 +191,53 @@ def test_save_and_verify_failure_is_reported_without_extra_request(dirty_page):
 
     assert not result["saveResult"]["ok"]
     assert len(result["calls"]) == 1
+
+
+def test_clean_procedure_modal_close_is_immediate_and_does_not_save(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        await closeProcedureModal();
+        return {
+            display: procedureModal.style.display,
+            currentUid: currentProcedureModalUid,
+            saveCalls: window.modalSaveCalls
+        };
+    }""")
+
+    assert result == {"display": "none", "currentUid": None, "saveCalls": 0}
+
+
+def test_dirty_procedure_modal_close_saves_before_hiding(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        hostAdapter.isLineDirty = () => true;
+        await closeProcedureModal();
+        return {
+            display: procedureModal.style.display,
+            currentUid: currentProcedureModalUid,
+            saveCalls: window.modalSaveCalls
+        };
+    }""")
+
+    assert result == {"display": "none", "currentUid": None, "saveCalls": 1}
+
+
+def test_failed_dirty_procedure_modal_close_stays_open_and_reports_error(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        hostAdapter.isLineDirty = () => true;
+        hostAdapter.saveAndVerifyVoucher = async () => ({
+            ok: false,
+            error: {detail: 'save failed'}
+        });
+        await closeProcedureModal();
+        return {
+            display: procedureModal.style.display,
+            currentUid: currentProcedureModalUid,
+            messages: window.modalStatusMessages
+        };
+    }""")
+
+    assert result["display"] == "flex"
+    assert result["currentUid"] == 1
+    assert result["messages"][-1] == {"message": "save failed", "kind": "error"}
 
 
 def test_rulebook_change_alert_shows_change_and_returns_user_choice(dirty_page):

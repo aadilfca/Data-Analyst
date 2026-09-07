@@ -8,6 +8,29 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## Procedure modal action responsiveness follow-up - 2026-09-07
+
+**Status:** Complete; manual local-server confirmation passed. **Files:**
+`database.py`, `static/procedure_modal.js`, `static/verification.html`, `static/verification.js`,
+`tests/test_pg_pool_retry.py`, `tests/test_verification_dirty_saves.py`.
+
+The Verification Procedure modal now checks both host line revisions and pending tab evidence
+before performing exit persistence. A clean `×` closes immediately without the voucher-wide
+save-and-verify request, while Back avoids an unnecessary save before loading the adjacent line.
+Changed observations, Forms, Physical Bills, and line edits retain the existing save behavior.
+Close failures are caught, shown through the existing status surface, and leave the modal open for
+retry instead of appearing unresponsive. The Verification adapter now exposes its line-dirty query.
+
+The server log identified the repeated 500s as missing `voucher_line_form_entries` and
+`voucher_line_form_values` tables in an already-marked Postgres schema. Startup now creates those
+tables and indexes idempotently. A failed composite modal read also leaves a valid standalone
+voucher-check cache untouched, so Verify cannot send a false-empty `voucher_checks` array to the
+session Rulebook gate. Script cache versions were bumped to force the corrected frontend to load.
+
+JavaScript syntax checks, `git diff --check`, and the focused 34-test set passed. The full suite passed
+146 tests and 3 subtests. Manual local-server testing confirmed all four footer actions, failure
+recovery, clean-exit behavior, and the restarted-server schema repair.
+
 ## Revised Cross-check plan and Phase 0 reconciliation — 2026-09-03
 
 ## Form document data model — Phase A — 2026-09-05

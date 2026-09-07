@@ -256,12 +256,41 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
         self.assertEqual(len(conn.executed), 1)
         self.assertEqual(conn.rollbacks, 0)
 
+    def test_form_table_migration_creates_missing_tables(self):
+        conn = FakeConn(fetchone_rows=[(None, None)])
+
+        migrated = database._ensure_postgres_form_tables(conn)
+
+        self.assertEqual(
+            migrated,
+            ["voucher_line_form_entries", "voucher_line_form_values"],
+        )
+        self.assertIn(
+            "CREATE TABLE IF NOT EXISTS voucher_line_form_entries",
+            conn.executed[1][0],
+        )
+        self.assertIn(
+            "CREATE TABLE IF NOT EXISTS voucher_line_form_values",
+            conn.executed[3][0],
+        )
+        self.assertEqual(conn.rollbacks, 0)
+
+    def test_form_table_migration_is_noop_when_tables_exist(self):
+        conn = FakeConn(fetchone_rows=[
+            ("voucher_line_form_entries", "voucher_line_form_values"),
+        ])
+
+        self.assertEqual(database._ensure_postgres_form_tables(conn), [])
+        self.assertEqual(len(conn.executed), 1)
+        self.assertEqual(conn.rollbacks, 0)
+
     def test_completed_schema_marker_skips_repeated_bootstrap(self):
         conn = FakeConn(
             rows=[("field_type",), ("field_scope",), ("linked_column",)],
             fetchone_rows=[
                 ("audit_rules_config_state",),
                 ("CHECK ((document_type = ANY (ARRAY['linked_template'::text, 'form'::text, 'physical_bill'::text])))",),
+                ("voucher_line_form_entries", "voucher_line_form_values"),
             ],
         )
 
@@ -275,6 +304,7 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
                 ("SELECT to_regclass('public.audit_rules_config_state')", None),
                 ("\n            SELECT pg_get_constraintdef(oid)\n            FROM pg_constraint\n            WHERE conrelid = 'public.audit_rule_documents'::regclass\n              AND conname = 'audit_rule_documents_document_type_check'\n        ", None),
                 ("\n            SELECT column_name\n            FROM information_schema.columns\n            WHERE table_schema = 'public'\n              AND table_name = 'audit_rule_document_fields'\n        ", None),
+                ("SELECT to_regclass('public.voucher_line_form_entries'), to_regclass('public.voucher_line_form_values')", None),
             ],
         )
         self.assertEqual(conn.commits, 1)

@@ -132,8 +132,8 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 **This phase: D7 - Evidence Type retirement.** Safely retire obsolete Category Evidence Type values
 after auditing consumers and preserving legacy data during migration.
 
-D6 is complete and manually confirmed. The next work is D7; D8 remains the later explicit legacy
-Vendor Bill migration phase.
+D6 and its modal/schema follow-up are complete and manually confirmed. D8 remains the later explicit
+legacy Vendor Bill migration phase.
 
 The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
 is included in this D6 implementation; final visual refinement remains a D6/H and P7 UX item.
@@ -150,6 +150,19 @@ and responsive styling. Legacy Vendor Bill dependencies remain explicitly blocke
 September 7 retest correction: Form matrix validation now uses Form fields even with a linked
 template (Quantity mapped to Receive Quantity). Quantity selection, save, and reopen were manually
 confirmed; D6 is complete and ready for Git closeout.
+
+### Phase D6 follow-up checkpoint - 2026-09-07
+
+The Procedure modal now detects clean versus changed state before exit. A clean Close hides locally
+without the voucher-wide save request; Back skips unnecessary persistence; changed evidence keeps the
+existing save path. Save failures remain visible and leave the modal open for retry. JavaScript syntax
+checks and 34 focused regression tests pass. Existing
+Postgres schemas now receive the missing Form evidence tables through an idempotent startup migration.
+Failed composite modal reads no longer overwrite a valid voucher-check cache, preventing false-empty
+Verify state and repeated 5xx retry delays.
+
+Manual local-server testing confirmed clean and changed exits, Back, Verify, Verify & Next, forced-save
+failure recovery, and the restarted-server schema repair. Git closeout is complete; D7 starts next.
 
 ### Approved target design
 
