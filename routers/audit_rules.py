@@ -715,9 +715,8 @@ def get_document_auth_roles(document_id: int) -> List[str]:
 def is_approval_role(role_name: str) -> bool:
     """
     Matches an "Approved by"-type role by substring, not an exact string - role names are
-    free text (e.g. "Approved By:", "Approved by"). Mirrors routers/verification.py's
-    compute_and_persist_cleared_status() approval-role check ('approv' in role_name.lower()),
-    duplicated here per this codebase's established per-router cross-cutting-check convention.
+    free text (e.g. "Approved By:", "Approved by"). Used when Required Authority metadata is
+    configured for an approval role; this metadata is informational and does not block status.
     """
     return 'approv' in (role_name or '').lower()
 
@@ -805,108 +804,6 @@ def get_document_auth_roles_batch(document_ids: List[int]) -> Dict[int, List[str
     for r in rows:
         result[r["document_id"]].append(r["role_name"])
     return result
-
-def get_document_auth_role_authorities_batch(document_ids: List[int]) -> Dict[int, dict]:
-    """Batched form of get_document_auth_role_authorities() - one IN(...) query for many document_ids."""
-    if not document_ids:
-        return {}
-    ph = ",".join("%s" for _ in document_ids)
-    rows = execute_query_pg(
-        f"SELECT document_id, role_name, required_authority FROM audit_rule_document_auth_roles "
-        f"WHERE document_id IN ({ph}) ORDER BY document_id, sort_order",
-        tuple(document_ids)
-    )
-    result: Dict[int, dict] = {did: {} for did in document_ids}
-    for r in rows:
-        if r["required_authority"]:
-            result[r["document_id"]][r["role_name"]] = r["required_authority"]
-    return result
-
-def get_required_documents_with_authority(category_id: int) -> List[dict]:
-    """
-    Category's documents flagged is_required=1 (Automated cross-document validation engine,
-    Phase 4 of 10), each with its Approved-by-role(s)' Required Authority (only ever set for a
-    role matching is_approval_role() - see save_document_auth_roles()). Used by
-    routers/verification.py's compute_and_persist_cleared_status() for the Document-level
-    Approved-by authority gate (new, confirmed requirement).
-    """
-    rows = execute_query_pg(
-        """
-        SELECT d.id as document_id, d.name
-        FROM audit_rule_category_documents cd
-        JOIN audit_rule_documents d ON cd.document_id = d.id
-        WHERE cd.category_id = %s AND cd.is_required = TRUE AND d.is_active = TRUE
-        """,
-        (category_id,)
-    )
-    doc_ids = [r["document_id"] for r in rows]
-    authorities_by_doc = get_document_auth_role_authorities_batch(doc_ids)
-    result = []
-    for r in rows:
-        authorities = authorities_by_doc.get(r["document_id"], {})
-        if authorities:
-            result.append({"document_id": r["document_id"], "name": r["name"], "required_authorities": authorities})
-    return result
-
-def has_matching_active_specimen(client_id: int, document_id: int, role_name: str, required_authority: str) -> bool:
-    """
-    True if an ACTIVE Signature Specimen exists for this client+document+role whose Authority
-    exactly matches (case/whitespace-insensitive) required_authority.
-    """
-    rows = execute_query_pg(
-        """
-        SELECT id FROM signature_specimens
-        WHERE client_id = %s AND document_id = %s AND role_name = %s AND is_active = TRUE
-          AND TRIM(LOWER(authority)) = TRIM(LOWER(%s))
-        """,
-        (client_id, document_id, role_name, required_authority)
-    )
-    return bool(rows)
-
-def check_approved_by_authority_gate(client_id: int, category_id: int) -> bool:
-    """
-    Document-level Approved-by authority gate (new, confirmed requirement) for Cleared/Query
-    computation - replaces the retired Category-level approval_required substring-match gate.
-    For every Document required by this Category whose Approved-by role has a Required
-    Authority set, requires at least one ACTIVE Signature Specimen on file for that
-    client+document+role whose Authority exactly matches. This is an existence check ("a
-    qualified signatory is on file"), not a match against a specific recorded signer - nothing
-    in this app records who actually signed a particular voucher line's document (confirmed
-    with the user). A Document/role with no Required Authority set imposes no requirement;
-    vacuously True if no required Document has any Required Authority configured at all.
-    """
-    docs = get_required_documents_with_authority(category_id)
-    required_pairs = [
-        (doc["document_id"], role_name, required_authority)
-        for doc in docs
-        for role_name, required_authority in doc["required_authorities"].items()
-    ]
-    if not required_pairs:
-        return True
-
-    # Batched: one query for every required document's active specimens instead of one
-    # has_matching_active_specimen() query per (document x role) pair - this gate runs on every
-    # save_line_items() call, so the per-pair query loop was a direct contributor to that call's
-    # total DB round-trip count. .strip().lower() reproduces the original per-pair query's
-    # TRIM(LOWER(...)) = TRIM(LOWER(...)) comparison exactly.
-    doc_ids = list({pair[0] for pair in required_pairs})
-    placeholders = ",".join("%s" for _ in doc_ids)
-    specimens = execute_query_pg(
-        f"""
-        SELECT document_id, role_name, authority
-        FROM signature_specimens
-        WHERE client_id = %s AND document_id IN ({placeholders}) AND is_active = TRUE
-        """,
-        (client_id, *doc_ids)
-    )
-    specimen_keys = {
-        (s["document_id"], s["role_name"], (s["authority"] or "").strip().lower())
-        for s in specimens
-    }
-    for document_id, role_name, required_authority in required_pairs:
-        if (document_id, role_name, (required_authority or "").strip().lower()) not in specimen_keys:
-            return False
-    return True
 
 def get_active_master_columns() -> List[dict]:
     """Return the live Master Columns registry used by cross-check field mirrors."""
@@ -3320,15 +3217,18 @@ def restore_category(category_id: int):
 @router.get("/api/audit-rules/categories/{category_id}/cleared-requirements")
 def get_category_cleared_requirements(category_id: int):
     """
-    Read-only 'what does Cleared require for this Category' summary (new, confirmed
-    requirement) - reflects live backend state, no manual toggles. Reuses
+    Read-only 'what does Cleared require for this Category' summary - reflects live backend
+    state, no manual toggles. Reuses
     get_category_documents() (already filters/exposes is_required + is_active per document,
     the same data compute_and_persist_cleared_status()'s check #1 in routers/verification.py
-    reads) and get_category_active_cross_checks_count() above. Voucher-level checks and
-    Account Head are global gates (not category-specific), always required.
+    reads) and get_category_active_cross_checks_count() above. The returned status policy is
+    the plain-language contract for the five blocking status conditions; Required Authority is
+    retained as audit metadata but is not a Cleared/Query gate.
     """
     # Read-side cache wiring (Modal Caching Phase 3, sub-phase 2) - see cache_get()/cache_set() above.
-    cache_key = f"categories:{category_id}:cleared-requirements"
+    # Version the key because this response now includes the explicit status policy; an older
+    # process cache entry must never hide the new Pending/Query/Cleared explanation.
+    cache_key = f"categories:{category_id}:cleared-requirements:v2"
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
@@ -3353,6 +3253,27 @@ def get_category_cleared_requirements(category_id: int):
         "voucher_level_checks_required": True,
         "account_head_required": True,
         "cross_checks_required": get_category_active_cross_checks_count(category_id) > 0,
+        "status_policy": {
+            "pending_conditions": [
+                "Account code is missing",
+                "No active Category is assigned",
+            ],
+            "query_conditions": [
+                "A required Document is incomplete",
+                "An active voucher-level check is not marked done",
+                "Linked evidence has a signature exception",
+                "A Cross-check has a hard failure",
+                "A pending Account Head note exists",
+            ],
+            "cleared_condition": (
+                "The Category is resolved and every applicable Query condition passes. "
+                "Cross-check shortfalls and not-evaluated results do not block Cleared."
+            ),
+            "authority_note": (
+                "Document Required Authority and Signature Specimens are informational "
+                "audit metadata and do not block Cleared/Query status."
+            ),
+        },
         "required_documents": required_documents,
     }
     cache_set(cache_key, result)

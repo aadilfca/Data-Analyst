@@ -327,6 +327,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-07: D7 stopped new Category Evidence Type writes and removed its authoring surface while preserving legacy values for migration. See CHANGELOG_ARCHIVE.md.
 - 2026-09-07: D7 Evidence Type retirement was manually confirmed; D8 Physical Bill/Vendor Bill migration is next. See CHANGELOG_ARCHIVE.md.
 - 2026-09-07: P7 Procedure mismatch correction now limits amount comparisons to Documents with configured Amount fields; manually confirmed. See CHANGELOG_ARCHIVE.md.
+- 2026-09-07: P1 removed the non-required Approved-by authority status gate and documented the five real blocking conditions; manually confirmed. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

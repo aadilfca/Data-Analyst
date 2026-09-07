@@ -79,7 +79,7 @@ and Physical Vendor Bill migration are accepted, preventing split configuration 
 
 | Phase No | Phase/Pendency | Objective | Status |
 |---|---|---|---|
-| P1 | Verification smoke test | Confirm Procedure/Evidence, selected fields, signatories, and Applied Cross-checks in a real verification session using the Form model. | Pending manual testing |
+| P1 | Verification smoke test | Confirm Procedure/Evidence, selected fields, signatories, and Applied Cross-checks in a real verification session using the Form model. | Status-rule correction complete; broader smoke test pending |
 | P2 | Purchase Demand data validation | Confirm all seven selected Template columns appear correctly after restart and hard refresh. | Pending final browser confirmation |
 | P3 | Procedure/Evidence acceptance | Verify category-specific documents, conditions, roles, signatories, sub-values, risk, save/reload, and clearing behavior. | Pending |
 | P4 | Cross-check acceptance | Verify reusable matrix rules, document chains, operators, tolerance, missing data, blocking, risk, Quantity-only rows, Form values, and result display. | Pending |
@@ -129,13 +129,13 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**This phase: P7 - Procedure-window mismatch-chip correction.** The misleading mismatch indicator
-for quantity-only Documents is removed while genuine configured-Amount comparisons remain active.
-Manual local-server testing is complete for this correction. D8's live migration execution remains
-separately gated by explicit source-to-Form mappings.
+**This phase: P1 - Verification smoke test.** The non-required Approved-by authority gate is
+removed from status calculation and the real Pending, Query, and Cleared conditions are explicit
+in Audit Rules. This correction is manually confirmed; the broader P1 smoke test remains.
+D8's live migration execution remains separately gated by explicit source-to-Form mappings.
 
-D6, D7, D9, Form rule integration, and the P7 mismatch correction are manually confirmed.
-**Next phase: P1 - Verification smoke test.**
+D6, D7, D9, Form rule integration, P7 mismatch correction, and the P1 status-rule correction
+are manually confirmed. The remaining P1 smoke test is the current gate.
 
 The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
 is included in this D6 implementation; final visual refinement remains a D6/H and P7 UX item.

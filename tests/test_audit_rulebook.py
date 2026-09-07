@@ -39,6 +39,7 @@ from routers.audit_rules import (
     invalidate_category_for_account_cache,
     load_client_account_category_index,
     load_client_verification_rulebook,
+    get_category_cleared_requirements,
     row_to_document_list,
     validate_cross_check_cell,
     validate_cross_check_payload,
@@ -536,15 +537,37 @@ class AuditRulebookCompilerTests(unittest.TestCase):
     def test_working_paper_groups_preserve_detailed_gate_failures(self):
         detailed = [
             {"key": "voucher_checks", "label": "Voucher checks complete", "status": "pass", "detail": ""},
-            {"key": "approval_authority", "label": "Approved-by authority on file", "status": "fail", "detail": "Missing specimen"},
             {"key": "documents", "label": "Required documents linked", "status": "pass", "detail": ""},
             {"key": "account_head", "label": "No pending Account Head note", "status": "pass", "detail": ""},
         ]
         grouped = _build_working_paper_gates(detailed)
         self.assertEqual([gate["key"] for gate in grouped], ["approval", "supporting_documents", "account_head_classification", "observation"])
-        self.assertEqual(grouped[0]["status"], "fail")
+        self.assertEqual(grouped[0]["status"], "pass")
         self.assertEqual(grouped[0]["checks"][0]["key"], "voucher_checks")
         self.assertEqual(grouped[1]["status"], "pass")
+
+    def test_cleared_requirements_explain_pending_query_and_nonblocking_authority(self):
+        from routers import audit_rules
+
+        with (
+            patch.object(audit_rules, "cache_get", return_value=None),
+            patch.object(audit_rules, "cache_set"),
+            patch.object(audit_rules, "execute_query_pg", return_value=[{"id": 7}]),
+            patch.object(audit_rules, "get_category_documents", return_value=[{
+                "document_id": 20,
+                "name": "Purchase Demand",
+                "is_required": True,
+                "is_active": True,
+                "document_type": "linked_template",
+            }]),
+            patch.object(audit_rules, "get_category_active_cross_checks_count", return_value=True),
+        ):
+            result = get_category_cleared_requirements(7)
+
+        self.assertIn("Account code is missing", result["status_policy"]["pending_conditions"])
+        self.assertIn("A Cross-check has a hard failure", result["status_policy"]["query_conditions"])
+        self.assertIn("do not block Cleared/Query status", result["status_policy"]["authority_note"])
+        self.assertTrue(result["cross_checks_required"])
 
     def test_compiles_category_profile_and_client_specific_data(self):
         def query(sql, params=()):

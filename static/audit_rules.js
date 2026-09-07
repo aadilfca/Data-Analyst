@@ -2389,11 +2389,32 @@ function renderClearedRequirementsBullets(data) {
         ul.appendChild(li);
     };
 
-    addBullet('Voucher-level checks — always required');
-    addBullet('Account Head — always required');
+    const policy = data.status_policy || {};
+    const pendingConditions = policy.pending_conditions || [
+        'Account code is missing',
+        'No active Category is assigned'
+    ];
+    const queryConditions = policy.query_conditions || [
+        'A required Document is incomplete',
+        'An active voucher-level check is not marked done',
+        'Linked evidence has a signature exception',
+        'A Cross-check has a hard failure',
+        'A pending Account Head note exists'
+    ];
+    addBullet('Pending — ' + pendingConditions.join('; '));
+    addBullet('Query when any of these applies — ' + queryConditions.join('; '));
+    addBullet(
+        'Cleared — ' + (policy.cleared_condition ||
+            'The Category is resolved and every applicable Query condition passes.')
+    );
+    addBullet(policy.authority_note ||
+        'Document Required Authority and Signature Specimens are informational and do not block status.'
+    );
+    addBullet('Voucher-level checks — all active checks must be marked done');
+    addBullet('Account Head — no pending Account Head note');
     addBullet(
         data.cross_checks_required
-            ? 'Cross-checks — required (active cross-check attached)'
+            ? 'Cross-checks — hard failures block; shortfalls and not-evaluated results do not'
             : 'Cross-checks — not required (no active cross-check attached)'
     );
 

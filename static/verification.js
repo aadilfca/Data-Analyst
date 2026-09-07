@@ -2599,7 +2599,7 @@ function updateClearedStatusBadgeForLine(uid, clearedStatus) {
 }
 
 // ---------- "Why is this line Cleared/Query?" popover ----------
-// The engine (compute_and_persist_cleared_status(), routers/verification.py) ANDs six independent
+// The engine (compute_and_persist_cleared_status(), routers/verification.py) ANDs five independent
 // gates into a bare Cleared/Query string; this popover asks the read-only
 // GET /api/verification/line_status_reason/{id} endpoint which gate actually failed and shows the
 // breakdown. Anchored to the whole .voucher-line-status-cell rather than the Cleared/Query badge,

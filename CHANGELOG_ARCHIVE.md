@@ -8,6 +8,27 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## Cleared/Query status-rule correction - P1 - 2026-09-07
+
+**Status:** Complete; manual local-server confirmation passed. **Files:**
+`routers/audit_rules.py`, `routers/verification.py`, `static/audit_rules.js`,
+`static/verification.js`, `tests/test_audit_rulebook.py`, `DEVELOPMENT_PLAN.md`, `CLAUDE.md`.
+
+The Document-level Approved-by authority/signature-specimen existence check no longer blocks a
+voucher line's Cleared status and is no longer returned to the Validate panel. Required Authority
+and Signature Specimen metadata remain available for audit authorisation information.
+
+The status contract is now explicit in Audit Rules: Pending means no account code or active
+Category; Query means incomplete required evidence, unfinished active voucher checks, a signature
+exception, a hard-fail Cross-check, or a pending Account Head note; Cleared means the Category is
+resolved and all applicable blocking conditions pass. Cross-check shortfalls and not-evaluated
+results remain non-blocking.
+
+Focused Audit Rules coverage passed 102 tests; the full suite passed 168 tests, with 6 existing
+warnings and 3 subtests. JavaScript syntax, Python compilation, and `git diff --check` passed.
+Manual local-server testing confirmed the removed authority gate and the remaining status conditions.
+Git closeout is authorized; the broader P1 smoke test remains pending.
+
 ## Procedure mismatch-chip correction - P7 - 2026-09-07
 
 **Status:** Complete; manual local-server confirmation passed. **Files:**

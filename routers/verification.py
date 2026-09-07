@@ -39,17 +39,12 @@ from routers.import_export import (
 # through the same process-level cache audit_rules.py's own GET endpoints use — guidance
 # content is keyed by Category name/id, not client_id, since Categories aren't client-scoped
 # (see cache_get()/cache_set()'s own docstring in audit_rules.py for why).
-from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, check_approved_by_authority_gate, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key, get_audit_rules_config_version, load_client_account_category_index, load_client_verification_rulebook
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key, get_audit_rules_config_version, load_client_account_category_index, load_client_verification_rulebook
 from database import get_audit_rules_config_changes_since
 from routers.auth import get_current_user
-# "Why is this line Query?" gate breakdown only (see compute_and_persist_cleared_status()'s
-# detail mode) — the pass/fail answer itself still comes from check_approved_by_authority_gate()
-# above, so the explanation can never disagree with the real gate.
-from routers.audit_rules import get_required_documents_with_authority, has_matching_active_specimen
 # Check #1's no-template-Document satisfaction rule (2026-08-08 fix) needs a Document's full
-# role list, not just the ones with a Required Authority set (get_document_auth_role_authorities
-# above only returns the latter) - already used identically by static/verification.js's own
-# isProcedureDocumentComplete() no-template branch.
+# role list - already used identically by static/verification.js's own isProcedureDocumentComplete()
+# no-template branch.
 from routers.audit_rules import get_document_auth_roles
 
 router = APIRouter()
@@ -310,9 +305,9 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
                                        sibling_ids: Optional[List[int]] = None,
                                        rulebook: Optional[dict] = None) -> Optional[dict]:
     """
-    Validation Rules Phase 4: compute this line's Cleared/Query status. Automated
-    cross-document validation engine Phase 7 added a 5th (cross-document evaluation) and 6th
-    (Account Head note) condition - see those sections below. Persists to
+    Validation Rules: compute this line's Cleared/Query status from five blocking conditions:
+    required evidence, voucher-level checks, signature exceptions, hard-fail Cross-checks, and
+    pending Account Head notes. Persists to
     verification_details.cleared_status/matrix_version_applied. Called from save_line_items() -
     the same chokepoint every Save/Next/Prev/Validate/Complete/Exit path already runs per line
     (mirrors sync_line_observations_to_voucher()).
@@ -783,44 +778,9 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
                         "line — clear it once a proper account head is assigned."
         ))
 
-    # (Check #2 used to be a per-document approval-required gate reading Category-level
-    # approval_required + a substring-match on ticked procedure-check role names - hard-removed
-    # alongside the audit_rule_category_documents.approval_required column, confirmed
-    # requirement, 2026-08-02. Approval requirement now lives solely at Document level via the
-    # "Approved by" role's Required Authority field (audit_rule_document_auth_roles.
-    # required_authority) - stripped entirely here since it was built on the substring-match
-    # heuristic being retired; now replaced by check #6 below.)
-
-    # 6. Document-level Approved-by authority gate (new, confirmed requirement): replaces the
-    # retired Category-level approval_required substring-match gate. See
-    # check_approved_by_authority_gate()'s own docstring - this is an existence check ("a
-    # qualified signatory is on file"), not a match against a specific recorded signer, since
-    # nothing in this app records who actually signed a particular voucher's document.
-    approval_authority_ok = check_approved_by_authority_gate(client_id, category_id)
-
-    if detail:
-        # Re-walks the same data check_approved_by_authority_gate() walks, purely to name WHICH
-        # document/role is missing a specimen. The pass/fail answer above is NOT recomputed from
-        # this - it still comes from the gate function itself, so the two can't drift apart.
-        auth_docs = get_required_documents_with_authority(category_id)
-        missing_auth = []
-        for doc in auth_docs:
-            for role_name, required_authority in doc['required_authorities'].items():
-                if not has_matching_active_specimen(client_id, doc['document_id'], role_name, required_authority):
-                    missing_auth.append(f"{doc['name']} / {role_name} (needs '{required_authority}')")
-        gates.append(_clear_status_gate(
-            "approval_authority", "Approved-by authority on file", approval_authority_ok,
-            detail=("No active signature specimen on file for: " + "; ".join(missing_auth))
-                   if missing_auth
-                   else ("A qualified signatory is on file for every required document."
-                         if auth_docs
-                         else "No required document has a Required Authority configured."),
-            not_applicable=(not auth_docs)
-        ))
-
     all_ok = (
         doc_requirement_met and voucher_checks_ok and signature_ok
-        and cross_checks_ok and account_head_ok and approval_authority_ok
+        and cross_checks_ok and account_head_ok
     )
     cleared_status = "Cleared" if all_ok else "Query"
 
@@ -2782,9 +2742,9 @@ def _audit_workbook_resolve_categories(client_id: int, account_codes: set) -> Di
 
 
 def _build_working_paper_gates(gates: List[dict]) -> List[dict]:
-    """Group detailed status checks into the four auditor-facing workpaper gates."""
+    """Group the five blocking status checks into the auditor-facing workpaper gates."""
     groups = [
-        ("approval", "Approval", {"voucher_checks", "approval_authority"}),
+        ("approval", "Approval", {"voucher_checks"}),
         ("supporting_documents", "Supporting Documents", {"documents", "signature", "cross_checks"}),
         ("account_head_classification", "Account-head Classification", {"account_head"}),
     ]
@@ -6858,7 +6818,7 @@ def get_line_status_reason(voucher_line_id: int):
     Read-only "why is this line Cleared/Query?" breakdown ("Why is this line Query?" fix).
 
     Runs compute_and_persist_cleared_status() in detail mode with persistence OFF, so this GET
-    computes the same six gates the real status engine does but writes nothing at all - no
+    computes the same five gates the real status engine does but writes nothing at all - no
     cleared_status/matrix_version_applied UPDATE, no shortfall-observation re-stamp. The gate
     values themselves are produced by the unchanged engine code, so this can never report a
     different verdict from the one that actually gated the line.
