@@ -8,6 +8,18 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## D8 Physical Bill to Form migration - 2026-09-08
+
+Created target Form **Physical Bill - Legacy Migration** (Document 44) with seven approved fields:
+Bill No, Bill Date, Vendor Name, Item Name, Quantity, Rate, and Amount, using the required scopes
+and types. The read-only preview found 43 legacy bills across 42 voucher lines, five Category
+references, and 27 observations with no target collisions.
+
+After explicit source, target, and mapping approval, the guarded migration copied all legacy bills
+into Form 44 and retargeted the five Category references and 27 observations. The target now has
+86 Form entries (43 headers plus migrated item rows) and five Category users. Source Vendor Bill
+19 remains active temporarily for H/I acceptance; no source rows were deleted.
+
 ## Form G blank handling and regression checks
 
 2026-09-08: `_form_value_for_storage` now treats whitespace-only input consistently as blank for

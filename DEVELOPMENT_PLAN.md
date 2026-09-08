@@ -129,7 +129,7 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**This phase: D8 migration mapping review.** Form G fixes passed isolated regression checks
+**Next phase: H / I migration acceptance.** Form G fixes passed isolated regression checks
 and Aadil confirmed local testing; Git closeout is authorized. See `CHANGELOG_ARCHIVE.md`,
 "Form G blank handling and regression checks". Category Control Center, Verification smoke checks,
 and Audit Workbook Form counts passed manually. Workbook initial-load and post-save counts now
@@ -148,13 +148,12 @@ is included in this D6 implementation; final visual refinement remains a D6/H an
 
 | Order | Phase/task | Remaining work | Required gate |
 |---|---|---|---|
-| This phase | D8 live execution | Review and approve real legacy Physical Bill source/target Documents and all seven field mappings, then run the guarded migration. | Explicit mapping approval and migration audit |
-| Migration | H / I | Complete Physical Vendor Bill migration acceptance and safely retire the legacy hardcoded Physical Bill path after no-data-loss checks. | Migration and regression acceptance |
+| This phase | H / I | Accept migrated Physical Vendor Bill evidence and safely retire the legacy hardcoded path after no-data-loss checks. | Migration and regression acceptance |
 | Acceptance | P2-P6 | Validate Purchase Demand fields, Procedure/Evidence, Cross-check results, Rulebook edge cases, and Cleared/Query integration. | Sequential browser acceptance |
 | Release | P8-P9 | Measure realistic performance, remove test data, confirm backups/logs/server operation, and prepare release hardening. | Release checklist |
 
 Fresh-chat starting point: Category Control Center, Verification smoke checks, Audit Workbook Form
-counts, Rulebook recovery, and Form D/E are accepted. Form G is user-accepted; D8 mapping remains gated.
+counts, Rulebook recovery, Form D/E, Form G, and D8 migration are accepted. H/I is next.
 
 ### Phase D9 implementation checkpoint - 2026-09-07
 
