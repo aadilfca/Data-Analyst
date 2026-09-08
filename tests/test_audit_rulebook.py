@@ -7,7 +7,7 @@ import tempfile
 import importlib
 from unittest.mock import Mock
 from contextlib import closing, nullcontext
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -503,6 +503,30 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertEqual(raised.exception.detail["code"], "RULEBOOK_VERSION_MISMATCH")
         self.assertEqual(raised.exception.detail["changes"][0]["entity_name"], "Test check")
         self.assertTrue(raised.exception.detail["recovery"]["preserves_work"])
+
+    def test_session_rulebook_mismatch_serializes_change_timestamp(self):
+        changed_at = datetime(2026, 9, 8, 12, 30, tzinfo=timezone.utc)
+        with patch(
+            "routers.verification.execute_query_pg",
+            return_value=[{"client_id": 7, "rulebook_version": 1}],
+        ), patch("routers.verification.get_audit_rules_config_version", return_value=2), patch(
+            "routers.verification.get_audit_rules_config_changes_since",
+            return_value=[{
+                "entity_type": "Document",
+                "entity_name": "Cash acknowledgement",
+                "action": "Updated",
+                "changed_at": changed_at,
+            }],
+        ):
+            with self.assertRaises(Exception) as raised:
+                get_verification_session_rulebook(12)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(
+            raised.exception.detail["changes"][0]["changed_at"],
+            "2026-09-08T12:30:00+00:00",
+        )
+        json.dumps(raised.exception.detail)
 
     def test_explicit_session_rebase_preserves_work_contract(self):
         with patch(
@@ -2089,6 +2113,105 @@ class FormEvidenceContractTests(unittest.TestCase):
         self.assertIsNone(text)
         self.assertIsNone(numeric)
         self.assertEqual(_form_value_for_storage('numeric', '1200.5', 'Quantity')[2], 1200.5)
+
+    def test_form_blank_and_invalid_typed_values(self):
+        for kind in ('text', 'numeric', 'date'):
+            for blank in (None, '', '   '):
+                with self.subTest(kind=kind, blank=blank):
+                    self.assertEqual(_form_value_for_storage(kind, blank, 'Evidence'), (None, None, None))
+        for kind, value in [('numeric', 'NaN'), ('numeric', 'Infinity'),
+                            ('numeric', 'abc'), ('date', '2026-02-30'), ('date', 'invalid')]:
+            with self.subTest(kind=kind, value=value):
+                with self.assertRaises(HTTPException) as raised:
+                    _form_value_for_storage(kind, value, 'Evidence')
+                self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(_form_value_for_storage('numeric', 0, 'Quantity')[2], 0)
+        self.assertEqual(_form_value_for_storage('numeric', '-1.25', 'Quantity')[2], -1.25)
+
+    def test_form_rejected_drafts_never_delete_saved_evidence(self):
+        fields = [{'id': 11, 'field_name': 'Quantity', 'field_type': 'numeric', 'field_scope': 'header'}]
+        cases = [
+            [{'row_scope': 'header', 'values': [{'field_id': 11, 'value': 'bad'}]}],
+            [{'row_scope': 'header', 'values': [{'field_id': 11, 'value': 1}, {'field_id': 11, 'value': 2}]}],
+            [{'row_scope': 'item', 'values': [{'field_id': 11, 'value': 1}]}],
+            [{'row_scope': 'header', 'values': [{'field_id': 99, 'value': 1}]}],
+        ]
+        for entries in cases:
+            with self.subTest(entries=entries), patch(
+                'routers.verification.execute_query_pg', side_effect=[[{'id': 4}], [{'id': 7}], fields]
+            ), patch('routers.verification.execute_write_pg') as write:
+                with self.assertRaises(HTTPException) as raised:
+                    _replace_form_entries(4, 7, entries)
+                self.assertEqual(raised.exception.status_code, 400)
+                write.assert_not_called()
+
+    def test_form_copy_preserves_manual_values_and_fills_null_blanks(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''() => {
+                    const fields = [
+                        {id: 1, field_scope: 'header', field_type: 'text', linked_column: 'Vendor'},
+                        {id: 2, field_scope: 'item', field_type: 'numeric', linked_column: 'Quantity'},
+                        {id: 3, field_scope: 'item', field_type: 'date', linked_column: 'Date'}
+                    ];
+                    const state = {formEntries: [
+                        {row_scope: 'header', values: {'1': 'Manual vendor'}},
+                        {row_scope: 'item', values: {'2': null, '3': ''}}
+                    ]};
+                    const sources = [{row_data: {Vendor: 'Source vendor', Quantity: 0, Date: '2026-09-08T12:00:00'}}];
+                    const changed = applyMappedFormValues(state, fields, sources);
+                    const repeated = applyMappedFormValues(state, fields, sources);
+                    const entries = structuredClone(state.formEntries);
+                    // Missing/deleted source columns and an unavailable template supply no values.
+                    const missing = applyMappedFormValues(state, fields, [{row_data: {}}]);
+                    const unavailable = applyMappedFormValues(state, fields, []);
+                    const preserved = JSON.stringify(entries) === JSON.stringify(state.formEntries);
+                    return {changed, repeated, entries, missing, unavailable, preserved};
+                }''')
+                self.assertTrue(result['changed'])
+                self.assertFalse(result['repeated'])
+                self.assertEqual(result['entries'][0]['values']['1'], 'Manual vendor')
+                self.assertEqual(result['entries'][1]['values']['2'], '0')
+                self.assertEqual(result['entries'][1]['values']['3'], '2026-09-08')
+                self.assertEqual(len(result['entries']), 2)
+                self.assertFalse(result['missing'])
+                self.assertFalse(result['unavailable'])
+                self.assertTrue(result['preserved'])
+            finally:
+                browser.close()
+
+    def test_form_failed_save_keeps_draft_for_retry(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''async () => {
+                    const draft = {formEntries: [{row_scope: 'header', values: {'11': 'Manual'}}],
+                        formDirty: true, formSaved: false};
+                    const messages = [];
+                    hostAdapter = {procedureModalState: {4: {tabs: {7: draft}}},
+                        showStatus: message => messages.push(message)};
+                    window.ApiUtils.apiFetchMutate = async () => ({ok: false,
+                        json: async () => ({detail: 'Field removed from definition'})});
+                    const saved = await saveFormEntry(4, 7);
+                    return {saved, dirty: draft.formDirty, value: draft.formEntries[0].values['11'], messages};
+                }''')
+                self.assertFalse(result['saved'])
+                self.assertTrue(result['dirty'])
+                self.assertEqual(result['value'], 'Manual')
+                self.assertTrue(result['messages'])
+            finally:
+                browser.close()
 
     def test_form_values_are_shaped_back_as_text_date_and_numeric(self):
         rows = [

@@ -2609,6 +2609,21 @@ def load_verification_rulebook_for_session(session_id: int) -> dict:
     current_version = get_audit_rules_config_version()
     if session_version is not None and session_version != current_version:
         changes = get_audit_rules_config_changes_since(session_version)
+        # PostgreSQL returns ``changed_at`` as a datetime.  This payload is raised through
+        # HTTPException and must already be JSON-safe; otherwise a normal version mismatch
+        # becomes an HTTP 500 during FastAPI's error serialization (especially after restart).
+        changes = [
+            {
+                **change,
+                "changed_at": (
+                    change.get("changed_at").isoformat()
+                    if change.get("changed_at") is not None
+                    and hasattr(change.get("changed_at"), "isoformat")
+                    else change.get("changed_at")
+                ),
+            }
+            for change in changes
+        ]
         if not changes:
             changes = [{
                 "config_version": current_version,
@@ -5048,7 +5063,8 @@ def _fetch_physical_bills_for_document(voucher_line_id: int, document_id: int) -
 
 def _form_value_for_storage(field_type: str, value: Any, field_name: str):
     """Return one typed Form value as (text, date, numeric), or all None for blank input."""
-    if value is None or value == '':
+    # Match the editor's whitespace-aware blank check for every field type.
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None, None, None
     if field_type == 'text':
         text = str(value).strip()

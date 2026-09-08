@@ -15,6 +15,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 
 | Date | Module | Finding | Severity |
 |------|--------|---------|----------|
+| 2026-09-08 | Form G | RESOLVED: whitespace-only numeric/date input and null Copy from lines blanks now behave consistently; regression checks passed and Aadil confirmed local testing. | Fix |
 | 2026-08-20 | Global Header Nav | Verification's Cashbook/Client Data Links and Trial Balance's Available Trial Balances view have no addressable URL, so they can't be added to NAV_MANIFEST as real destinations | Feature |
 | 2026-08-22 | Upload / Audit Rules / Template Viewer | Same client-context load-order race fixed this date in trial_balance.js/databank.js/verification.js: `window.onload` reads `getSelectedClientId()` before `client_context.js`'s async session fetch resolves. Fix is to `await window.clientContextReady` first — deliberately scoped out of that phase | Fix |
 | 2026-08-22 | Upload | `static/upload.js` still falls back to `localStorage.getItem('selectedClientId')` in two places (~line 475 and ~line 1748). Nothing writes that key since session-backed client selection landed, so the branch can only return null or a stale pre-migration value. Equivalent fallback already removed from verification.js | Fix |
@@ -67,7 +68,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 
 | 2026-08-31 | Audit Workbook Physical Bill completion validation | RESOLVED by live validation: the current `awRefreshLineProcedures()` already uses multi-bill filtering, complete headers, server `bill_total`, and the established amount tolerance, matching Verification. No code change was required. | Fix |
 | 2026-08-31 | Audit Rules | Review correction: the reported permanent lock from `a09258a` does not apply to current `HEAD`; `d7a7c6f` replaced the old session-status guard with an expiring, ended-aware `verification_presence` lease. | Defer |
-| 2026-08-31 | Verification / Rulebook recovery | A process-local Rulebook version resets on restart while sessions retain their captured version; template invalidation can also advance it. A mismatch returns HTTP 409 with no controlled recovery path for resumable sessions. | Fix |
+| 2026-08-31 | Verification / Rulebook recovery | RESOLVED 2026-09-08: version-mismatch recovery now converts PostgreSQL `changed_at` timestamps before raising HTTP 409, so restart/re-entry reaches the existing recovery workflow instead of failing with HTTP 500. | Fix |
 | 2026-08-31 | Verification / Procedure Modal | Voucher-level check toggles currently write immediately for both hosts while Verification's grouped close path can submit the same state again. Persistence must be host-gated to preserve Verification's local-first path and Audit Workbook's direct-save requirement. | Fix |
 | 2026-08-31 | Verification guidance | Session Rulebook guidance maps cross-check definitions without converting `document_ids` to document names or carrying document-level comparison fields, so the Verification popover can omit the visible document chain. | Fix |
 | 2026-08-31 | Verification performance | The sibling-ID ContextVar is not propagated into ThreadPoolExecutor workers, so concurrent modal helpers can repeat sibling resolution and consume additional pooled connections. | Defer |

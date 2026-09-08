@@ -129,10 +129,17 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**Next phase: Form D/E browser acceptance.** Category Control Center, Verification smoke checks,
+**This phase: D8 migration mapping review.** Form G fixes passed isolated regression checks
+and Aadil confirmed local testing; Git closeout is authorized. See `CHANGELOG_ARCHIVE.md`,
+"Form G blank handling and regression checks". Category Control Center, Verification smoke checks,
 and Audit Workbook Form counts passed manually. Workbook initial-load and post-save counts now
 include saved Form fields. Detailed evidence:
 `CHANGELOG_ARCHIVE.md`, "Audit Workbook Form completion counts - P1 follow-up - 2026-09-08".
+
+The Rulebook version-mismatch response now serializes PostgreSQL change timestamps correctly, so
+restart/re-entry uses the existing controlled recovery path. Live Form D/E acceptance passed on the
+Postgres-backed server: mapped fields rendered, Copy from lines preserved values, close/reopen
+retained entries, and the modal fit a 390px viewport without page errors.
 
 The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
 is included in this D6 implementation; final visual refinement remains a D6/H and P7 UX item.
@@ -141,17 +148,13 @@ is included in this D6 implementation; final visual refinement remains a D6/H an
 
 | Order | Phase/task | Remaining work | Required gate |
 |---|---|---|---|
-| This phase | Form D/E acceptance | Confirm Form Procedure-window rendering and Copy from lines against the approved document governance. | Candidate-file confirmation, approach approval, then browser acceptance |
-| Next | Form G | Test Form save/reload, blank values, inactive or changed templates, deleted columns, duplicate fields, and numeric/date validation. | Regression and browser acceptance |
-| Form | D / E | Confirm Form Procedure-window rendering and Copy from lines against the approved document-governance configuration. | Local browser/manual acceptance |
-| Form | G | Test Form save/reload, blank values, inactive or changed templates, deleted columns, duplicate fields, and numeric/date validation. | Regression and browser acceptance |
-| Migration | D8 live execution | Review and approve real legacy Physical Bill source/target Documents and all seven field mappings, then run the guarded migration. | Explicit mapping approval and migration audit |
+| This phase | D8 live execution | Review and approve real legacy Physical Bill source/target Documents and all seven field mappings, then run the guarded migration. | Explicit mapping approval and migration audit |
 | Migration | H / I | Complete Physical Vendor Bill migration acceptance and safely retire the legacy hardcoded Physical Bill path after no-data-loss checks. | Migration and regression acceptance |
 | Acceptance | P2-P6 | Validate Purchase Demand fields, Procedure/Evidence, Cross-check results, Rulebook edge cases, and Cleared/Query integration. | Sequential browser acceptance |
 | Release | P8-P9 | Measure realistic performance, remove test data, confirm backups/logs/server operation, and prepare release hardening. | Release checklist |
 
-Fresh-chat starting point: Category Control Center and Verification smoke checks are accepted;
-the Workbook Form-count fix awaits manual confirmation and Git approval. D8 mapping remains gated.
+Fresh-chat starting point: Category Control Center, Verification smoke checks, Audit Workbook Form
+counts, Rulebook recovery, and Form D/E are accepted. Form G is user-accepted; D8 mapping remains gated.
 
 ### Phase D9 implementation checkpoint - 2026-09-07
 

@@ -2275,7 +2275,8 @@ function applyMappedFormValues(tabState, fields, sources) {
         if (!entry) return false;
         let entryChanged = false;
         entryFields.forEach(field => {
-            if (entry.values[String(field.id)] !== undefined && String(entry.values[String(field.id)]).trim() !== '') return;
+            // Null is also blank; preserve zero and every non-empty auditor value.
+            if (!formValueIsBlank(entry.values[String(field.id)])) return;
             const value = normalizeFormCopyValue(field, getFormCopyRowValue(source.row_data, field.linked_column));
             if (!value) return;
             entry.values[String(field.id)] = value;

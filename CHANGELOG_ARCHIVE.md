@@ -8,6 +8,36 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## Form G blank handling and regression checks
+
+2026-09-08: `_form_value_for_storage` now treats whitespace-only input consistently as blank for
+all field types. `applyMappedFormValues` uses the existing blank helper so null fields receive
+mapped values while zero and manual entries remain protected. Both defects were reproduced by tests.
+
+Added isolated checks in `tests/test_audit_rulebook.py` for invalid numeric/date values, zero,
+decimals, duplicate/removed fields, wrong sections, rejection before evidence deletion, browser
+copy idempotence, missing source values, and retention of drafts after failed saves.
+Focused suite: 113 tests and 26 subtests passed (one pytest-cache permission warning).
+JavaScript syntax, Python compilation, and whitespace checks passed.
+Aadil confirmed local testing and authorized commit/push. Automated checks used isolated data;
+no live configuration or audit data was changed by the agent in this phase.
+Git closeout includes the previously tested Rulebook recovery fix.
+
+## Rulebook recovery timestamp serialization - D/E prerequisite - 2026-09-08
+
+**Status:** Implemented; focused regression passed. **Files:** `routers/verification.py`,
+`tests/test_audit_rulebook.py`, `KNOWN_ISSUES.md`, `DEVELOPMENT_PLAN.md`, this archive.
+
+After a server restart, an older Verification session could not reach the controlled Rulebook
+recovery flow: PostgreSQL `changed_at` values remained datetime objects inside the HTTP 409 detail,
+which FastAPI could not serialize and returned as HTTP 500. Recovery changes now convert timestamp
+values to ISO strings while preserving the captured-work and explicit rebase contract.
+
+Focused Audit Rules tests passed (109 tests, 8 subtests). Live browser re-entry and Form D/E
+acceptance passed after the local Postgres server loaded this change: recovery returned HTTP 409,
+the modal rendered five mapped fields, Copy from lines preserved values, and close/reopen retained
+entries at a 390px viewport with no page errors.
+
 ## Audit Workbook Form completion counts - P1 follow-up - 2026-09-08
 
 **Status:** Implemented; local Workbook acceptance passed and Git closeout approved.
