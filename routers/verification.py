@@ -2854,7 +2854,7 @@ def get_audit_workbook(session_id: int):
     - procedures: {"done", "total"} over the line's resolved Category's active attached
       Documents, using the SAME per-document-type "done" rule static/verification.js's
       isDocDone() applies for the main grid's Procedures badge (physical_bill exact-amount
-      match / template-linked evidence presence / no-template role ticks, each additionally
+      match / saved Form fields / template-linked evidence presence / no-template role ticks, each additionally
       gated on voucher-level checks when transaction_level_approval is set) - so this column
       can never disagree with what the auditor already sees for the same line in Verification.
       {"done": 0, "total": 0} for a line with no resolved Category.
@@ -2949,6 +2949,51 @@ def get_audit_workbook(session_id: int):
     category_name_by_id = _audit_workbook_resolve_category_names(distinct_category_ids)
 
     cd_placeholders = ",".join("%s" for _ in client_data_ids)
+
+    # Forms use saved field values, even when a Template is configured for optional prefill.
+    # Batch across the session and select the same latest sibling evidence as voucher_support_data.
+    form_doc_ids = {
+        doc['id'] for docs in guidance_docs_by_category.values() for doc in docs
+        if doc['document_type'] == 'form'
+    }
+    form_field_ids_by_doc: Dict[int, set] = {}
+    saved_form_field_ids_by_cd: Dict[int, Dict[int, set]] = {}
+    if form_doc_ids:
+        form_placeholders = ",".join("%s" for _ in form_doc_ids)
+        field_rows = execute_query_pg(
+            f"SELECT id, document_id FROM audit_rule_document_fields "
+            f"WHERE document_id IN ({form_placeholders})",
+            tuple(form_doc_ids)
+        )
+        for field in field_rows:
+            form_field_ids_by_doc.setdefault(field['document_id'], set()).add(field['id'])
+        form_rows = execute_query_pg(
+            f"""SELECT vd.client_data_id, e.voucher_line_id, e.document_id,
+                       e.updated_at AS entry_updated_at, v.field_id, f.field_type,
+                       v.value_text, v.value_date, v.value_numeric
+                FROM voucher_line_form_entries e
+                JOIN verification_details vd ON vd.id = e.voucher_line_id
+                JOIN voucher_line_form_values v ON v.entry_id = e.id
+                JOIN audit_rule_document_fields f ON f.id = v.field_id
+                WHERE vd.client_data_id IN ({cd_placeholders})
+                  AND e.document_id IN ({form_placeholders})""",
+            tuple(client_data_ids) + tuple(form_doc_ids)
+        )
+        form_winning = {}
+        for row in form_rows:
+            key = (row['client_data_id'], row['document_id'])
+            candidate = (_ts_sort_key(row['entry_updated_at']), row['voucher_line_id'])
+            if key not in form_winning or candidate > form_winning[key]:
+                form_winning[key] = candidate
+        for row in form_rows:
+            key = (row['client_data_id'], row['document_id'])
+            if (_ts_sort_key(row['entry_updated_at']), row['voucher_line_id']) != form_winning[key]:
+                continue
+            value = row.get({'numeric': 'value_numeric', 'date': 'value_date'}.get(
+                row['field_type'], 'value_text'))
+            # Numeric zero is evidence; None, empty text, and whitespace are not.
+            if value is not None and str(value).strip():
+                saved_form_field_ids_by_cd.setdefault(key[0], {}).setdefault(key[1], set()).add(row['field_id'])
 
     # Linked evidence: {client_data_id: {document_id, ...}}
     linked_doc_ids_by_cd: Dict[int, set] = {}
@@ -3106,6 +3151,10 @@ def get_audit_workbook(session_id: int):
         for doc in docs:
             if doc['document_type'] == 'physical_bill':
                 base = _evaluate_physical_bill_completion(bills.get(doc['id'], []), voucher_amount)
+            elif doc['document_type'] == 'form':
+                fields = form_field_ids_by_doc.get(doc['id'], set())
+                saved_fields = saved_form_field_ids_by_cd.get(client_data_id, {}).get(doc['id'], set())
+                base = bool(fields) and fields.issubset(saved_fields)
             elif doc['template_id']:
                 base = doc['id'] in linked
             else:

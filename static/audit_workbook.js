@@ -829,7 +829,7 @@ async function awSaveVoucherChecksBatch({ transactionRef, checks }) {
 // The "row/pill refreshes after save" mechanism — called by procedure_modal.js's
 // hideProcedureModalOnly() unconditionally on every close path (✕, Verify & Next/Close, plain
 // Verify). Duplicates the same isDocDone()-style completion rule verification.js's own
-// updateProceduresCellForLine() applies (physical_bill exact-amount match / template-linked
+// updateProceduresCellForLine() applies (physical_bill exact-amount match / saved Form fields / template-linked
 // evidence presence / no-template role ticks, gated on voucher-level checks when
 // transaction_level_approval is set) — the exact rule the backend's own _compute_line_procedures()
 // documents itself as matching, so this refresh can never disagree with a later full page reload.
@@ -878,6 +878,7 @@ async function awRefreshLineProcedures(uid, type) {
     const assignedRecords = (lineSupport.linked_documents && lineSupport.linked_documents.documents) || [];
     const procedureChecks = (lineSupport.procedure_checks && lineSupport.procedure_checks.checks) || [];
     const physicalBills = (lineSupport.physical_bills && lineSupport.physical_bills.bills) || [];
+    const formDocuments = (lineSupport.form_entries && lineSupport.form_entries.documents) || [];
     const assignedDocIds = new Set(assignedRecords.map(r => r.document_id));
     const voucherLineAmount = parseAwVoucherAmount(line.amount);
     const isDocDone = doc => {
@@ -894,6 +895,17 @@ async function awRefreshLineProcedures(uid, type) {
                 && (bill.vendor_name || '').trim() && bill.bill_total != null
             );
             base = headersComplete && Math.abs(docBills.reduce((sum, bill) => sum + bill.bill_total, 0) - voucherLineAmount) <= 0.005;
+        } else if (doc.document_type === 'form') {
+            // Match Verification: a Form's optional Template is a prefill source, while
+            // its completion comes from nonblank saved values for every configured field.
+            const savedForm = formDocuments.find(entry => String(entry.document_id) === String(doc.id));
+            const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
+            const savedFieldIds = new Set((savedForm?.entries || []).flatMap(entry =>
+                (entry.values || [])
+                    .filter(value => value.value !== null && value.value !== undefined && String(value.value).trim() !== '')
+                    .map(value => String(value.field_id))
+            ));
+            base = fields.length > 0 && fields.every(field => savedFieldIds.has(String(field.id)));
         } else if (doc.template_id) {
             base = assignedDocIds.has(doc.id);
         } else {

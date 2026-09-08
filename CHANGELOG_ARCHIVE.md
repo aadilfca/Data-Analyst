@@ -8,9 +8,31 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## Audit Workbook Form completion counts - P1 follow-up - 2026-09-08
+
+**Status:** Implemented; local Workbook acceptance passed and Git closeout approved.
+**Files:** `routers/verification.py`, `static/audit_workbook.js`, `static/audit_workbook.html`,
+`tests/test_audit_rulebook.py`, `DEVELOPMENT_PLAN.md`, `CLAUDE.md`, this archive.
+
+Aadil accepted Category Control Center and the Verification smoke checklist, then reported
+CPV-0826-478's two Workbook rows as 4/5 despite completed Physical Vendor Bill Forms and Cleared
+status. Both Workbook count paths omitted Forms. Initial-load counts now batch field definitions
+and saved values using existing sibling evidence selection; post-save badges reuse Form entries
+already returned by voucher support. Completion matches Verification's nonblank configured-field
+rule, including numeric zero and optional Linked Templates. Workbook script version is 7.
+
+Six isolated SQL/Chromium regressions pass: initial/post-save counts, repeating items, earlier
+sessions, incomplete/empty definitions, zero values, legacy bills, and voucher-check gating.
+The browser fixture shows 5/5 on both rows, 4/5 only on a row made incomplete, then 5/5 after
+restoration, with no page errors. Live voucher data was not accessed or changed. Status rules and
+D8 migration remain unchanged. Approved Status-log consolidation reduced it below 80 lines.
+Full suite: 174 tests and 8 subtests passed, with 6 existing warnings; JavaScript syntax,
+Python compilation, and diff checks passed. Aadil manually confirmed both CPV-0826-478 rows
+show 5/5 after reload and save/refresh behavior is correct.
+
 ## Category Control Center redesign - P7 - 2026-09-08
 
-**Status:** Implemented; Git closeout authorized; local browser review remains the next gate. **Files:**
+**Status:** Implemented and pushed; Aadil confirmed local browser review on 2026-09-08. **Files:**
 `static/audit_rules.js`, `static/style.css`, `DEVELOPMENT_PLAN.md`, `CLAUDE.md`.
 
 The Category detail view now presents a single Control Center with Category identity, Pending /
@@ -23,7 +45,7 @@ comparison only and is not connected to the application.
 
 The full test suite passed 168 tests, with 6 existing warnings and 3 subtests. JavaScript syntax,
 `git diff --check`, and a Playwright browser smoke test with representative Category/API data
-passed. This is user-facing; local manual Categories review remains required before the next phase.
+passed. Local manual Categories review subsequently passed; P1 Verification smoke testing followed.
 
 ## Cleared/Query status-rule correction - P1 - 2026-09-07
 
@@ -44,7 +66,8 @@ results remain non-blocking.
 Focused Audit Rules coverage passed 102 tests; the full suite passed 168 tests, with 6 existing
 warnings and 3 subtests. JavaScript syntax, Python compilation, and `git diff --check` passed.
 Manual local-server testing confirmed the removed authority gate and the remaining status conditions.
-Git closeout is authorized; the broader P1 smoke test remains pending.
+Git closeout was authorized; broader P1 Verification smoke checks passed on 2026-09-08, with the
+Workbook Form-count omission tracked above as a follow-up.
 
 ## Procedure mismatch-chip correction - P7 - 2026-09-07
 

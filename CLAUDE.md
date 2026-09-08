@@ -28,13 +28,13 @@ One line per file group: what it is now. Full build history for every entry live
 - static/login.html, static/login.js → standalone login page posting to `/api/auth/login`, generic auth error; does not load `client_context.js`.
 - static/client_select.html, static/client_select.js → standalone post-login Client Cards page; guards session, stores chosen client, resolves whitelisted `?next=`, admin Settings gear. See CHANGELOG_ARCHIVE.md.
 - static/procedure_modal.js → reusable Supporting Documents modal shared by Verification and Audit Workbook (evidence, procedures, observations, Physical Bills, voucher checks); host adapter. See CHANGELOG_ARCHIVE.md.
-- static/audit_workbook.js, static/audit_workbook.html → session-scoped Audit Workbook list; status filtering, running totals, Verification deep links, shared procedure modal, cached `voucher_support_data` badge refresh. See CHANGELOG_ARCHIVE.md.
+- static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, mapping suggestions, period-conflict checks, classification/override, upload history, category assignment, deletion; scoped cache invalidation. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
 - routers/audit_rules.py → Audit Rules APIs: Documents, Cross-checks, Category policies, Signature Specimens, ordered Voucher-level Checks; soft-delete/restore, scoped caching. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → three-pane Audit Rules UI with Category-first Validation Rules authoring, embedded Signature Specimens, Assign Categories, and Verification deep links. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
-- routers/verification.py + static/verification.* → Cash/Bank Verification: sessions, voucher navigation, category freezing, evidence/procedures/observations/cross-checks/voucher checks, Cleared/Query rollup, revision-based dirty save, `?perf=1` timings. See CHANGELOG_ARCHIVE.md.
+- routers/verification.py + static/verification.* → Cash/Bank Verification: sessions, frozen Categories, evidence/Forms, checks, status, saves, timings, and Audit Workbook rows with Form completion. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives (skeletons, spinners, field overlays, progress bars, persistent badges); wired app-wide. See CHANGELOG_ARCHIVE.md.
@@ -190,25 +190,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 ## Status log
 
-- 2026-08-30: Compiled client Rulebook loader now uses versioned caching and Trial Balance-first account/category resolution.
-- 2026-08-30: Verification now retrieves a version-checked Rulebook packet per session; legacy sessions remain compatible.
-- 2026-08-30: Verification now resolves session Rulebook Categories and procedure roles locally while keeping evidence and status data fresh.
-- 2026-08-30: Verification status and voucher-check evaluation now reuse the session Rulebook outside atomic transactions; live support data remains fresh.
-
-- 2026-08-29: Verification startup payload reduction and opt-in grouped Save/Verify diagnostics completed; local timing improved for latest cashbook lookup.
-- 2026-08-29: Fresh Vouchers entry now defaults to today-only discovery; restored views and manually persisted ranges remain unchanged.
-- 2026-08-29: Save/Verify opt-in diagnostics now expose component timings for measured bottleneck isolation; normal behavior is unchanged.
-- 2026-08-29: Verify and Verify & Next now show busy cursor/modal feedback through completion; save-before-verify behavior remains unchanged.
-- 2026-08-29: Roadmap reconciled through commit 2d13ba0; Save/Verify work split into separate logical-verification and persistence mini-phases.
-
-**Full detail for every entry below lives in `CHANGELOG_ARCHIVE.md`**, under the matching heading —
-these lines are pointers, not the record. Multi-phase requirements get one line each, not one per
-phase — roll a finished requirement up into its single line as soon as it completes, don't wait for
-a later pass. Compressed six times now (2026-08-22, -23, -24 twice, -26 twice), each time because
-per-phase lines from an in-flight project accumulated past the ~80-line trigger before being rolled
-up — treat the drift-trigger check as mandatory at the START of every session touching this file,
-not just when reminded. Brief overshoot above 80 during an active multi-phase project is expected
-drift, not a regression — it collapses once that project finishes.
+Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
 
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.
@@ -246,90 +228,32 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-08-22: Header client area redesigned with clickable client display, JS-owned greeting, icon-only Logout, and coordinated cache-busting.
 - 2026-08-22: Admin role/guard, Manage Users, Settings tabs, gated clients, firm-level header, exemptions, and Client Cards gear completed.
 - 2026-08-22: Client Settings gained safe entry/return stamps and URL-aware context; client-context races and related null/render/header issues were fixed.
-- 2026-08-23: Supabase/Render migration completed with pooled Postgres, full router cutover, verified data migration, entry-aware Client Settings, and assignment-flag fix.
-- 2026-08-23: Shared Loading UI utility, 6 phases (+4a/4b/5a/5b/6a/6b sub-phases) - loading_ui.js built and wired across login/Data Bank/Upload/save actions/Audit Rules/Verification.
-- 2026-08-23: Added standing git workflow rule to Workflow rules - auto-commit+push after phase, only post user confirmation.
-- 2026-08-24: Fast Data Handling completed with gzip, index audit, GET retries, column trimming, debounce, caching, pagination, and retry wiring.
-- 2026-08-24/25: Performance investigation ranked region mismatch and sequential round-trips as root causes and distinguished free-tier limits from code gaps. See PERFORMANCE_INVESTIGATION.md.
-- 2026-08-24: Verification save/check reliability — save_line_items concurrency guard (in-flight promise map), batched N+1 loops, deactivated 6 contaminating test voucher-checks, fixed verify_voucher_checks 400 reachability gap.
-- 2026-08-25: Verification/save performance fixes - verify_voucher_checks batched, procedure-modal fetches parallelized, get_availability pool exhaustion fixed (PG_POOL_MAX 10→15), procedure-badge spinner capped.
-- 2026-08-25: Shared Loading UI (Procedure Modal Wiring) + Processing/Loading UI for Verification, 10 phases total (COMPLETE) - progress bars/skeletons/spinners wired across Verification.
-- 2026-08-25: render.yaml service name fixed; dashboard stats endpoints fixed to query Postgres; start_session hang logged in KNOWN_ISSUES.md, standing approval-checkpoint rule added.
-- 2026-08-26: Fast Modal-Open Data, 4 phases (COMPLETE) - batch procedure_modal_data endpoint, session-level ref-data caching, cache-bust + in-flight-request-race follow-up fixes.
-- 2026-08-26: Verification/save write performance - execute_values batch insert, sibling-id memoization, batched auth-role IN queries (Phase B), duplicate cross-check fetch removed (Phase C, final).
-- 2026-08-26: Misc reliability fixes - blocking SQLite calls wrapped in threadpool (main.py); overdue-uploads date/datetime mismatch and false-success error state both fixed.
-- 2026-08-26: Modal Caching Phase 3, 3 sub-phases (COMPLETE) - TTL cache for Categories/Documents/guidance built, wired to reads, verified live end-to-end; global (not per-client) keys.
-- 2026-08-26: Per-client category lookup caching completed with scoped invalidation on Trial Balance upload, assignment, and last-upload deletion.
-- 2026-08-26: Freeze Category on voucher lines, 3 phases (COMPLETE) - `category_id_applied` schema, backend freeze/read on first save, frontend lock icon.
-- 2026-08-26: Trial Balance upload gained batching/progress; category assignments were reset for development and the Assign Categories context race was fixed.
-- 2026-08-27: Verification navigation/UX fixes completed: skeleton recovery, processing feedback, hub lock, cache-hit optimization, note correction, and cold-start guard recovery.
-- 2026-08-27: Client Data availability now shows a prominent fetch/render progress popup that closes only after every template reaches 100%.
-- 2026-08-27: Verification performance diagnostics added opt-in modal/save timings, database-call counts, and sequential-save inventory without changing verification behavior.
-- 2026-08-27: Verification dirty tracking now skips unchanged saves, preserves failed/concurrent edits, and avoids duplicate current-line saves after Verify.
-- 2026-08-27: Verification Phase 3e reduced Verify/modal duplicate reads by reusing sibling IDs and modal-loaded data.
-- 2026-08-27: Verification Verify actions now share one in-flight request, preventing duplicate saves and verification posts.
-- 2026-08-28: Verify performance diagnostics now return backend component timings and database metrics when `perf=1` is enabled.
-- 2026-08-28: Verification supporting data now uses voucher-level caching and concurrent per-line batching while preserving sequential line groups.
-- 2026-08-28: Voucher support batching now uses set-based SQL reads while preserving sibling-session and Physical Bill rules; Render confirmation pending.
-- 2026-08-28: Verification grid reuses voucher support observations; Physical Bill date validation now handles Postgres date values.
-- 2026-08-28: Verification modal clears Verify progress states, tracks overlapping retries, and deduplicates modal-data/account-category lookups; Render confirmation pending.
-- 2026-08-28: Verify observation synchronization now uses voucher-level set reads and batch writes; Render confirmation pending.
-- 2026-08-28: Procedure and voucher-level check saves now invalidate affected modal-data cache entries.
-- 2026-08-28: Procedure line navigation opens immediately while its prior save continues safely in the background; Render confirmation pending.
-- 2026-08-28: Verification modal uses atomic Save + Verify and batch tick paths with transaction-aware Postgres helpers; Render confirmation pending.
-- 2026-08-28: Procedure window now saves local procedure/check/modal state through grouped actions; upper X uses save-only mode; Render confirmation pending.
-- 2026-08-27: Verification speed opt. Phase 3a/3c — parallelized procedure-modal fetches, opt-in per-request sibling-id memo (17→11 DB calls), lazy TB-accounts; see INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
-- 2026-08-28: Fixed camelCase/snake_case payload key mismatch in save_and_verify_voucher_bundle causing unconditional 400 on Verify; static/procedure_modal.js + verification.js.
-- 2026-08-28: Invalidate procedure modal cache after bundle save and restore skipped invalidation on toggleAllProcedureChecks, fixing stale unticked procedures on reopen; static/procedure_modal.js.
-- 2026-08-28: Added HTTP-level tests for save_and_verify_voucher_bundle (success/400-gate/wrong-key); removed dead network-save path in toggleAllProcedureChecks; procedure_modal.js v9→10.
-- 2026-08-28: Investigated repeated physical_bills/{id} calls (no code change); findings logged. See KNOWN_ISSUES.md.
-- 2026-08-28: Invalidate voucherSupportCache after save/Verify so Procedures/Observations badges refresh from saved state; removed dead fetchPhysicalBillsForLine + adapter entry; verification.js/procedure_modal.js.
-- 2026-08-28: Audit Workbook badge refresh uses one cached voucher_support_data batch (invalidated on save) not 4 per-line fetches; fixed physical_bill completion drift, removed dead helpers; audit_workbook.js.
-- 2026-08-29: Investigated verification_details.status — confirmed legacy, superseded by cleared_status, no live dependency. Logged KNOWN_ISSUES (Defer).
-
-
-- 2026-09-02: Rebuilt tray controller and VBS launcher with stable server lifecycle and a default Start/Stop toggle; Windows restart cleared stale runtime state.
-
-- 2026-08-31: Fixed the standalone Verification line-save Rulebook loader name mismatch; focused backend tests and the latest manual network trace are clean.
-- 2026-08-31: Added a required concise pendencies/objectives table to every development handoff.
-- 2026-09-01: Cross-check per-document field names — Phases 1–3 shipped, Phase 4 discarded (superseded by the matrix redesign below); database.py, routers/audit_rules.py, static/audit_rules.*.
-- 2026-09-01: Doc compression — Architecture bullets rewritten as one-liners, Status log trimmed, cross-agent "keep every .md brief" rule added; CLAUDE.md, AGENTS.md.
-- 2026-09-01: Cross-check matrix redesign, 5 phases (COMPLETE) — cross-checks rebuilt as a document×field matrix: fields/cells schema, matrix CRUD + /documents + /meta + template-column endpoints, Documents-tab fields section removed, UI wired to live save/load; compare_field drop + engine migration deferred. See CHANGELOG_ARCHIVE.md.
-- 2026-09-02: Data Table cross-check empty state redesign (COMPLETE, 2 phases) — chip-style not-configured/not-linked states, no backend change needed; procedure_modal.js/style.css. See CHANGELOG_ARCHIVE.md.
-- 2026-09-02: Fixed cross-check shortfall note-save invalid placeholder document ID crashing Save-and-Verify; real hidden sentinel Document seeded lazily per cross-check. See CHANGELOG_ARCHIVE.md.
-- 2026-09-02: Investigated procedure-window fetch slowness (no code change) — confirmed same cross-region tax, new nuance: cold-pool connection overhead. See INVESTIGATION_VERIFICATION_PERF_PHASE3.md.
-- 2026-09-02: Postgres pool reliability (2 phases, COMPLETE) — retry-once on a stale pooled connection (`_run_pooled_pg`/`_getconn_pg_checked`; `_PooledConnection`/`get_db_pg` removed) + `PG_POOL_MIN` 1→3 warm-start; `database.py`, `.env.example`, new `tests/test_pg_pool_retry.py`. See CHANGELOG_ARCHIVE.md.
-- 2026-09-04: Compiled Rulebook contract completed and manually checked; Verification runtime linkage is the next phase. See CHANGELOG_ARCHIVE.md.
-- 2026-09-03: Configurable Verification Data Fields completed with Template-scoped persistence, server projection, Audit Rules UI, and Procedure Modal wiring. See CHANGELOG_ARCHIVE.md.
-- 2026-09-04: Category Procedure/Evidence now loads Document-specific authorisation roles and active signatories; Verification runtime linkage remains pending. See CHANGELOG_ARCHIVE.md.
-- 2026-09-04: Cross-checks became the reusable comparison source; Categories now attach read-only Applied Cross-checks. Verification runtime linkage remains pending. See CHANGELOG_ARCHIVE.md.
-- 2026-09-04: Applied Cross-checks received a structured, responsive review layout; Verification runtime linkage remains pending. See CHANGELOG_ARCHIVE.md.
-- 2026-09-04: Local tray launcher now prevents duplicate controllers and keeps lifecycle actions responsive during slow startup. See CHANGELOG_ARCHIVE.md.
-- 2026-09-04: Postgres startup waits are now bounded and `/healthz` reports application/database state for local control. See CHANGELOG_ARCHIVE.md.
-- 2026-09-04: Verification now consumes compiled Category Procedure/Evidence and reusable Cross-check Rulebook data; runtime linkage is ready for local acceptance testing. See CHANGELOG_ARCHIVE.md.
-- 2026-09-04: Fixed Category Procedure/Evidence-only saves returning HTTP 500 when legacy mathematical rules are omitted; routers/audit_rules.py + regression test. See CHANGELOG_ARCHIVE.md.
-- 2026-09-05: Verification previews now return all active Template columns for unconfigured Documents; regression covered. See CHANGELOG_ARCHIVE.md.
-- 2026-09-05: Form document data model added with typed fields, linked columns, repeating values, and safe Physical Bill compatibility; database.py, routers/audit_rules.py, routers/verification.py, tests.
-- 2026-09-05: Form authoring UI added with Linked Template, typed Header/Item fields, linked columns, ordering, and save payload integration; static/audit_rules.* and style.css.
-- 2026-09-05: New Documents now hide legacy Physical Bill while preserving existing records for migration; static/audit_rules.html and static/audit_rules.js.
-- 2026-09-05: Form field placement and secondary-update persistence corrected and manually confirmed; Phase D is next. See CHANGELOG_ARCHIVE.md.
-- 2026-09-06: Form documents now render with typed Header/Item evidence, persistence, Rulebook metadata, and atomic Verify support; Phase E is next. See CHANGELOG_ARCHIVE.md.
-- 2026-09-06: Fixed Form documents with optional Linked Templates being blocked by linked-template Verification policy validation; Audit Rules frontend only. See CHANGELOG_ARCHIVE.md.
-- 2026-09-06: Migrated the existing Postgres document-type check to accept Forms and kept Form Template loading separate from Verification Data Fields; browser retest pending.
-- 2026-09-06: Added startup migration for missing Postgres Form field columns (`field_type`, `field_scope`, `linked_column`) found during Render Save testing. See CHANGELOG_ARCHIVE.md.
-- 2026-09-06: Form Copy from lines now resolves same-voucher linked-template rows in Verification and fills only blank mapped fields; manual acceptance pending.
-- 2026-09-06: Unified the active Form, Category document-governance, Evidence Type retirement, migration, and P1-P9 acceptance roadmap in DEVELOPMENT_PLAN.md.
-- 2026-09-06: D2 made Category Applicable Documents canonical for Procedure/Evidence eligibility and Category saves; manually confirmed.
-- 2026-09-06: D3 made Category Procedure/Evidence role/detail and risk requirements authoritative in the Rulebook and runtime; manually confirmed.
-- 2026-09-06: D4 blocks Cross-checks with missing or inactive Category dependencies in the picker, Rulebook, and runtime; manually confirmed. See CHANGELOG_ARCHIVE.md.
-- 2026-09-06: D5 keeps Procedure tabs limited to active unique frozen-Category Documents and blocks live fallback; manually confirmed. See CHANGELOG_ARCHIVE.md.
-- 2026-09-07: D6 Form Cross-check integration now validates Form fields before linked-template columns; Quantity selection was manually confirmed. See CHANGELOG_ARCHIVE.md.
-- 2026-09-07: Added and manually confirmed Postgres Form-table repair and modal cache/exit safeguards; D7 is next. See CHANGELOG_ARCHIVE.md.
-- 2026-09-07: D7 stopped new Category Evidence Type writes and removed its authoring surface while preserving legacy values for migration. See CHANGELOG_ARCHIVE.md.
-- 2026-09-07: D7 Evidence Type retirement was manually confirmed; D8 Physical Bill/Vendor Bill migration is next. See CHANGELOG_ARCHIVE.md.
-- 2026-09-07: P7 Procedure mismatch correction now limits amount comparisons to Documents with configured Amount fields; manually confirmed. See CHANGELOG_ARCHIVE.md.
-- 2026-09-07: P1 removed the non-required Approved-by authority status gate and documented the five real blocking conditions; manually confirmed. See CHANGELOG_ARCHIVE.md.
-- 2026-09-08: Categories received the tabbed Category Control Center redesign with explicit status logic, evidence, procedures, and Cross-check views; Git closeout authorized. See CHANGELOG_ARCHIVE.md.
+- 2026-08-23: Supabase/Render migration completed with pooled Postgres, router cutover, verified data migration, and Client Settings corrections.
+- 2026-08-23/25: Shared Loading UI completed across login, Data Bank, Upload, Audit Rules, and Verification, including modal actions and processing feedback.
+- 2026-08-24: Fast Data Handling completed with gzip, indexes, retries, column trimming, debounce, caching, pagination, and retry wiring.
+- 2026-08-24/25: Performance investigation identified region latency, sequential reads, and free-tier limits. See PERFORMANCE_INVESTIGATION.md.
+- 2026-08-24/26: Verification gained save concurrency guards, batched writes/checks, parallel modal reads, sibling memoization, and duplicate-read removal; contaminating test checks were deactivated.
+- 2026-08-25/26: Dashboard/Postgres queries, Render naming, SQLite threadpool handling, and overdue-upload reporting were corrected; start-session findings remain in KNOWN_ISSUES.md.
+- 2026-08-26: Modal data and Category guidance gained batching/caching, request-race protection, and scoped invalidation; voucher Categories freeze on first save.
+- 2026-08-26/27: Trial Balance upload batching, Assign Categories context, Verification navigation/retry/loading recovery, and Data Bank availability progress were completed.
+- 2026-08-27/29: Verification gained opt-in timings, database metrics, dirty tracking, duplicate-save prevention, startup payload reduction, today-only discovery, and busy feedback.
+- 2026-08-28: Voucher support, observation synchronization, and line-navigation optimizations completed locally; related Render performance confirmation remains pending. See CHANGELOG_ARCHIVE.md.
+- 2026-08-28: Grouped and atomic Save/Verify, batch ticks, payload corrections, cache invalidation, and HTTP regression coverage completed; related Render confirmation remains pending.
+- 2026-08-28: Audit Workbook badge refresh adopted cached voucher support and corrected legacy Physical Bill completion; redundant fetch helpers were removed.
+- 2026-08-29: Legacy verification_details.status was confirmed inert; remaining findings live in KNOWN_ISSUES.md. Save/Verify roadmap separated logical verification from persistence.
+- 2026-08-30/31: Versioned client Rulebook completed with Trial Balance-first resolution, session retrieval, local guidance, status evaluation, and standalone line-save loader correction.
+- 2026-08-23/09-01: Workflow gained post-test Git gates, approval checkpoints, concise pendencies, documentation budgets, and cross-agent ownership; Architecture and Status were compressed.
+- 2026-09-01: Cross-check matrix redesign superseded per-document flat fields; schema, CRUD, authoring, and live persistence completed; legacy engine/drop work was deferred.
+- 2026-09-02: Procedure modal gained Cross-check empty-state chips and safe shortfall-note Documents; cold-pool latency was investigated. See CHANGELOG_ARCHIVE.md.
+- 2026-09-02/04: Tray/VBS lifecycle, duplicate-controller prevention, bounded Postgres startup, and health reporting completed; Postgres pool gained stale-connection retry and warm-start tuning.
+- 2026-09-03/04: Configurable Verification fields, Category roles/signatories, reusable Applied Cross-checks, and Rulebook runtime linkage completed; Category procedure-only saves were corrected.
+- 2026-09-05: Unconfigured Document previews now include active Template columns; Forms gained typed fields, linked columns, authoring, persistence, and legacy-safe Document creation.
+- 2026-09-06: Forms gained Header/Item rendering, atomic persistence, Rulebook metadata, optional-template handling, schema upgrades, and blank-only Copy from lines; detailed acceptance remains pending.
+- 2026-09-06: D2-D5 established canonical Category Documents, authoritative Procedure/Evidence requirements, Cross-check dependencies, and frozen-Category tab governance; manually confirmed.
+- 2026-09-07: D6 Form Quantity comparisons and modal schema/cache/exit safeguards were manually confirmed; D7 retired Evidence Type authoring while preserving legacy values.
+- 2026-09-07: D8 guarded migration implementation is complete; live source/target and seven-field mapping approval remains required. D9 configuration hardening is manually confirmed.
+- 2026-09-07: P7 amount mismatches now require configured Amount fields; P1 removed the non-required Approved-by authority gate; both corrections manually confirmed.
+- 2026-09-08: Category Control Center, Verification smoke checks, and Workbook Form counts passed manual acceptance; Workbook fix pushed. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

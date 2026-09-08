@@ -6,7 +6,7 @@ import sqlite3
 import tempfile
 import importlib
 from unittest.mock import Mock
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from datetime import date
 from pathlib import Path
 
@@ -2124,6 +2124,195 @@ class FormEvidenceContractTests(unittest.TestCase):
              patch('routers.verification.execute_write_pg', side_effect=lambda sql, params=None: writes.append((sql, params))):
             self.assertEqual(_replace_form_entries(4, 7, []), 0)
         self.assertIn('DELETE FROM voucher_line_form_entries', writes[0][0])
+
+
+class AuditWorkbookFormCompletionTests(unittest.TestCase):
+    """Exercise Workbook counts with isolated SQL data and the real browser renderer."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        db_patch = patch.object(database, 'DB_NAME', os.path.join(self.tmpdir.name, 'test.db'))
+        db_patch.start()
+        self.addCleanup(db_patch.stop)
+        init_db()
+        self.conn = database.get_db()
+        self.addCleanup(self.conn.close)
+        self.queries = []
+        self.documents = [
+            {'id': did, 'document_type': 'linked_template', 'template_id': 99,
+             'auth_roles': [], 'transaction_level_approval': False}
+            for did in (410, 411, 412)
+        ] + [
+            {'id': 413, 'document_type': 'physical_bill', 'template_id': None,
+             'auth_roles': [], 'transaction_level_approval': False},
+            {'id': 420, 'document_type': 'form', 'template_id': 99,
+             'auth_roles': ['Approved by'], 'transaction_level_approval': False,
+             'form_fields': [{'id': 4201}, {'id': 4202}, {'id': 4203}]},
+        ]
+        self.rows = []
+        for uid, cd_id, amount in ((101, 9001, 19000), (102, 9002, 11000)):
+            self.rows.append({
+                'detail_id': uid, 'client_data_id': cd_id, 'transaction_ref': 'CPV-0826-478',
+                'cleared_status': 'Cleared', 'category_id_applied': 999,
+                'category_name_applied': 'Local purchase', 'extract_amount': amount,
+                'extract_date': '2026-08-11', 'row_data': {'Account Code': '20-15-50-0001'},
+            })
+            self.conn.execute('INSERT INTO verification_details (id, session_id, client_data_id) VALUES (?, 87, ?)', (uid, cd_id))
+            for did in (410, 411, 412):
+                self.conn.execute('INSERT INTO voucher_line_documents (voucher_line_id, document_id, client_data_id) VALUES (?, ?, ?)', (uid, did, uid * 1000 + did))
+            self.conn.execute('INSERT INTO voucher_line_procedure_checks (voucher_line_id, document_id, role_name, is_checked) VALUES (?, 420, ?, 1)', (uid, 'Approved by'))
+            self.conn.execute('INSERT INTO voucher_line_physical_bills (id, voucher_line_id, document_id, bill_no, bill_date, vendor_name) VALUES (?, ?, 413, ?, ?, ?)',
+                              (uid, uid, 'Legacy bill', '2026-08-11', 'Vendor'))
+            self.conn.execute('INSERT INTO voucher_line_physical_bill_items (bill_id, item_name, amount) VALUES (?, ?, ?)', (uid, 'Item', amount))
+        # An earlier session refers to the same underlying accounting line.
+        self.conn.execute('INSERT INTO verification_details (id, session_id, client_data_id) VALUES (91, 86, 9001)')
+        self.conn.execute("INSERT INTO audit_rule_documents (id, name, document_type) VALUES (420, 'Paper bill', 'form')")
+        for field_id, name, field_type, scope in (
+            (4201, 'Bill No', 'text', 'header'), (4202, 'Bill Date', 'date', 'header'),
+            (4203, 'Quantity', 'numeric', 'item'),
+        ):
+            self.conn.execute('INSERT INTO audit_rule_document_fields (id, document_id, field_name, field_type, field_scope) VALUES (?, 420, ?, ?, ?)',
+                              (field_id, name, field_type, scope))
+        self._save_form(91)
+        self._save_form(102)
+
+    def _save_form(self, uid, bill_no='PB-478', quantity=0, timestamp='2026-09-08 10:00:00'):
+        self.conn.execute('DELETE FROM voucher_line_form_values WHERE entry_id IN (SELECT id FROM voucher_line_form_entries WHERE voucher_line_id = ?)', (uid,))
+        self.conn.execute('DELETE FROM voucher_line_form_entries WHERE voucher_line_id = ?', (uid,))
+        # Header and repeating items deliberately include a numeric zero.
+        for scope, order, values in (
+            ('header', 0, [(4201, bill_no, None, None), (4202, None, '2026-08-11', None)]),
+            ('item', 1, [(4203, None, None, quantity)]),
+            ('item', 2, [(4203, None, None, quantity)]),
+        ):
+            entry_id = self.conn.execute('INSERT INTO voucher_line_form_entries (voucher_line_id, document_id, row_scope, sort_order, updated_at) VALUES (?, 420, ?, ?, ?)',
+                                         (uid, scope, order, timestamp)).lastrowid
+            for field_id, text_value, date_value, numeric_value in values:
+                self.conn.execute('INSERT INTO voucher_line_form_values (entry_id, field_id, value_text, value_date, value_numeric) VALUES (?, ?, ?, ?, ?)',
+                                  (entry_id, field_id, text_value, date_value, numeric_value))
+        self.conn.commit()
+
+    def _query(self, sql, params=None):
+        self.queries.append(sql)
+        if 'SELECT id, client_id FROM verification_sessions' in sql:
+            return [{'id': 87, 'client_id': 1}]
+        if 'SELECT vd.id AS detail_id' in sql:
+            return self.rows
+        # Execute the real Workbook evidence SQL against the temporary SQLite schema.
+        return [dict(row) for row in self.conn.execute(sql.replace('%s', '?'), params or ())]
+
+    def _workbook(self):
+        from routers.verification import get_audit_workbook
+        with patch('routers.verification.execute_query_pg', side_effect=self._query), \
+             patch('routers.verification._audit_workbook_resolve_categories', return_value={'20-15-50-0001': 999}), \
+             patch('routers.verification._audit_workbook_resolve_account_names', return_value={}), \
+             patch('routers.verification._audit_workbook_resolve_category_names', return_value={999: 'Local purchase'}), \
+             patch('routers.verification.get_category_guidance_documents', return_value=self.documents):
+            return get_audit_workbook(87)
+
+    def test_initial_counts_include_saved_forms_and_legacy_bills_in_one_batch(self):
+        for template_id in (99, None):
+            with self.subTest(template_id=template_id):
+                self.documents[-1]['template_id'] = template_id
+                self.queries.clear()
+                lines = self._workbook()['vouchers'][0]['lines']
+                self.assertEqual([line['procedures'] for line in lines], [{'done': 5, 'total': 5}] * 2)
+                self.assertEqual([line['status'] for line in lines], ['Cleared', 'Cleared'])
+                self.assertEqual(sum('FROM voucher_line_form_entries e' in sql for sql in self.queries), 1)
+                self.assertEqual(sum('FROM audit_rule_document_fields' in sql for sql in self.queries), 1)
+
+    def test_incomplete_form_does_not_borrow_fields_from_older_session_or_other_line(self):
+        for missing_value in (None, '', '   '):
+            with self.subTest(missing_value=missing_value):
+                self._save_form(101, bill_no=missing_value, timestamp='2026-09-08 11:00:00')
+                lines = self._workbook()['vouchers'][0]['lines']
+                self.assertEqual(lines[0]['procedures'], {'done': 4, 'total': 5})
+                self.assertEqual(lines[1]['procedures'], {'done': 5, 'total': 5})
+                self.assertEqual(lines[0]['status'], 'Cleared')
+
+    def test_empty_form_definition_or_missing_saved_fields_stays_incomplete(self):
+        self.conn.execute('DELETE FROM audit_rule_document_fields WHERE document_id = 420')
+        self.assertEqual(self._workbook()['vouchers'][0]['lines'][0]['procedures'], {'done': 4, 'total': 5})
+        self.conn.execute("INSERT INTO audit_rule_document_fields (id, document_id, field_name) VALUES (4299, 420, 'New field')")
+        self.assertEqual(self._workbook()['vouchers'][0]['lines'][0]['procedures'], {'done': 4, 'total': 5})
+
+    def test_form_completion_preserves_voucher_check_gate(self):
+        self.documents[-1]['transaction_level_approval'] = True
+        self.conn.execute("INSERT INTO audit_rule_voucher_checks (id, name, is_active) VALUES (500, 'Check', 1)")
+        lines = self._workbook()['vouchers'][0]['lines']
+        self.assertEqual([line['procedures'] for line in lines], [{'done': 4, 'total': 5}] * 2)
+
+    def test_session_without_forms_skips_form_queries(self):
+        self.documents.pop()
+        lines = self._workbook()['vouchers'][0]['lines']
+        self.assertEqual([line['procedures'] for line in lines], [{'done': 4, 'total': 4}] * 2)
+        self.assertFalse(any('voucher_line_form_entries' in sql for sql in self.queries))
+
+    def test_browser_refresh_matches_initial_count_and_updates_after_form_save(self):
+        from routers.verification import _fetch_form_entries_for_line
+        workbook = self._workbook()
+        support = {}
+        for uid, saved_uid, amount in ((101, 91, 19000), (102, 102, 11000)):
+            with patch('routers.verification.execute_query_pg', side_effect=self._query):
+                entries = _fetch_form_entries_for_line(saved_uid, 420)['entries']
+            support[str(uid)] = {
+                'linked_documents': {'documents': [{'document_id': did} for did in (410, 411, 412)]},
+                'procedure_checks': {'checks': [{'document_id': 420, 'role_name': 'Approved by', 'is_checked': True}]},
+                'physical_bills': {'bills': [{'document_id': 413, 'bill_no': 'Legacy bill', 'bill_date': '2026-08-11', 'vendor_name': 'Vendor', 'bill_total': amount}]},
+                'form_entries': {'documents': [{'document_id': '420', 'entries': entries}]},
+            }
+        with sync_playwright() as playwright, closing(playwright.chromium.launch(headless=True)) as browser:
+            page = browser.new_page()
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            page.set_content('''<div id="awSubtitle"></div><span id="awTotalAmount"></span>
+                <button id="awFilterAll"></button><button id="awFilterCleared"></button>
+                <button id="awFilterQuery"></button><button id="awFilterPending"></button>
+                <table><tbody id="awTableBody"></tbody></table>''')
+            page.add_script_tag(content="var API_BASE = ''; function formatDate(value) { return value; }")
+            page.add_script_tag(path=str(VERIFICATION_JS.parent / 'audit_workbook.js'))
+            result = page.evaluate('''async ({workbook, support, docs}) => {
+                allVouchers = workbook.vouchers;
+                sessionClientId = workbook.client_id;
+                currentSessionId = 87;
+                awAuditGuidanceCache['Local purchase'] = {documents: docs};
+                let requests = 0;
+                window.ApiUtils = {apiFetch: async () => {
+                    requests++;
+                    return {ok: true, json: async () => ({voucher_line_id: 101, lines: structuredClone(support)})};
+                }};
+                const badges = () => Array.from(document.querySelectorAll('.voucher-line-procedures-badge')).map(el => el.textContent.trim());
+                applyFilterAndRender();
+                const initial = badges();
+                await awRefreshLineProcedures(101, 'Local purchase');
+                await awRefreshLineProcedures(102, 'Local purchase');
+                const complete = badges();
+                const initialRequests = requests;
+                support['101'].form_entries.documents[0].entries[0].values[0].value = '   ';
+                awInvalidateVoucherSupportCache();
+                await awRefreshLineProcedures(101, 'Local purchase');
+                const incomplete = badges();
+                // A new save supplies fresh data through the existing invalidation path.
+                support['101'].form_entries.documents[0].entries[0].values[0].value = 'PB-restored';
+                docs[4].template_id = null;
+                awInvalidateVoucherSupportCache();
+                await awRefreshLineProcedures(101, 'Local purchase');
+                const restored = badges();
+                docs[4].form_fields = [];
+                await awRefreshLineProcedures(101, 'Local purchase');
+                return {initial, complete, incomplete, restored, empty: badges(), initialRequests, requests,
+                    statuses: allVouchers[0].lines.map(line => line.status)};
+            }''', {'workbook': workbook, 'support': support, 'docs': self.documents})
+            self.assertEqual(result['initial'], ['5/5', '5/5'])
+            self.assertEqual(result['complete'], result['initial'])
+            self.assertEqual(result['incomplete'], ['4/5', '5/5'])
+            self.assertEqual(result['restored'], ['5/5', '5/5'])
+            self.assertEqual(result['empty'], ['4/5', '5/5'])
+            self.assertEqual(result['initialRequests'], 1)
+            self.assertEqual(result['requests'], 3)
+            self.assertEqual(result['statuses'], ['Cleared', 'Cleared'])
+            self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":
