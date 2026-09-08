@@ -18,7 +18,14 @@ references, and 27 observations with no target collisions.
 After explicit source, target, and mapping approval, the guarded migration copied all legacy bills
 into Form 44 and retargeted the five Category references and 27 observations. The target now has
 86 Form entries (43 headers plus migrated item rows) and five Category users. Source Vendor Bill
-19 remains active temporarily for H/I acceptance; no source rows were deleted.
+19 was retained during acceptance; no source rows were deleted.
+
+## H/I legacy Physical Bill retirement - 2026-09-08
+
+After migrated-voucher acceptance, Form 44 was restored as the active destination and legacy
+Vendor Bill 19 was soft-deleted. Its 43 source bills remain retained for audit history and
+rollback; Form 44 remains active and is used by five Categories. Permanent row deletion was not
+performed.
 
 ## Form G blank handling and regression checks
 

@@ -129,7 +129,7 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**Next phase: H / I migration acceptance.** Form G fixes passed isolated regression checks
+**Next phase: P2-P6 sequential acceptance.** Form G fixes passed isolated regression checks
 and Aadil confirmed local testing; Git closeout is authorized. See `CHANGELOG_ARCHIVE.md`,
 "Form G blank handling and regression checks". Category Control Center, Verification smoke checks,
 and Audit Workbook Form counts passed manually. Workbook initial-load and post-save counts now
@@ -141,19 +141,20 @@ restart/re-entry uses the existing controlled recovery path. Live Form D/E accep
 Postgres-backed server: mapped fields rendered, Copy from lines preserved values, close/reopen
 retained entries, and the modal fit a 390px viewport without page errors.
 
-The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
-is included in this D6 implementation; final visual refinement remains a D6/H and P7 UX item.
+The D8 migration and H/I retirement are complete: Form 44 is active, Vendor Bill 19 is
+soft-deleted, and its source rows remain retained. The current Physical Vendor Bill
+Procedure-window presentation is included in this D6 implementation; final visual refinement
+remains a D6/H and P7 UX item.
 
 ### Pending work / fresh-chat handoff
 
 | Order | Phase/task | Remaining work | Required gate |
 |---|---|---|---|
-| This phase | H / I | Accept migrated Physical Vendor Bill evidence and safely retire the legacy hardcoded path after no-data-loss checks. | Migration and regression acceptance |
-| Acceptance | P2-P6 | Validate Purchase Demand fields, Procedure/Evidence, Cross-check results, Rulebook edge cases, and Cleared/Query integration. | Sequential browser acceptance |
+| This phase | P2-P6 | Validate Purchase Demand fields, Procedure/Evidence, Cross-check results, Rulebook edge cases, and Cleared/Query integration. | Sequential browser acceptance |
 | Release | P8-P9 | Measure realistic performance, remove test data, confirm backups/logs/server operation, and prepare release hardening. | Release checklist |
 
 Fresh-chat starting point: Category Control Center, Verification smoke checks, Audit Workbook Form
-counts, Rulebook recovery, Form D/E, Form G, and D8 migration are accepted. H/I is next.
+counts, Rulebook recovery, Form D/E, Form G, D8 migration, and H/I retirement are accepted. P2-P6 is next.
 
 ### Phase D9 implementation checkpoint - 2026-09-07
 
