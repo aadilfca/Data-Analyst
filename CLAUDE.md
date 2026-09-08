@@ -33,6 +33,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
 - routers/audit_rules.py → Audit Rules APIs: Documents, Cross-checks, Category policies, Signature Specimens, ordered Voucher-level Checks; soft-delete/restore, scoped caching. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → three-pane Audit Rules UI with Category-first Validation Rules authoring, embedded Signature Specimens, Assign Categories, and Verification deep links. See CHANGELOG_ARCHIVE.md.
+- category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
 - routers/verification.py + static/verification.* → Cash/Bank Verification: sessions, voucher navigation, category freezing, evidence/procedures/observations/cross-checks/voucher checks, Cleared/Query rollup, revision-based dirty save, `?perf=1` timings. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
@@ -328,6 +329,7 @@ drift, not a regression — it collapses once that project finishes.
 - 2026-09-07: D7 Evidence Type retirement was manually confirmed; D8 Physical Bill/Vendor Bill migration is next. See CHANGELOG_ARCHIVE.md.
 - 2026-09-07: P7 Procedure mismatch correction now limits amount comparisons to Documents with configured Amount fields; manually confirmed. See CHANGELOG_ARCHIVE.md.
 - 2026-09-07: P1 removed the non-required Approved-by authority status gate and documented the five real blocking conditions; manually confirmed. See CHANGELOG_ARCHIVE.md.
+- 2026-09-08: Categories received the tabbed Category Control Center redesign with explicit status logic, evidence, procedures, and Cross-check views; Git closeout authorized. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

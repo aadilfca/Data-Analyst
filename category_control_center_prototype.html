@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Category Control Center Prototype</title>
+  <style>
+    :root {
+      --ink: #152238;
+      --muted: #66758a;
+      --line: #dbe3ee;
+      --surface: #ffffff;
+      --canvas: #f4f7fb;
+      --navy: #102b4e;
+      --blue: #2468d8;
+      --blue-soft: #edf4ff;
+      --green: #17845b;
+      --green-soft: #eaf8f1;
+      --amber: #b46b12;
+      --amber-soft: #fff6e5;
+      --shadow: 0 12px 32px rgba(26, 46, 77, .08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--canvas); line-height: 1.45; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    .prototype-note { padding: 8px 24px; color: #dce9fa; background: #0b1f38; font-size: 12px; text-align: center; letter-spacing: .02em; }
+    .topbar { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 12px 28px; color: #fff; background: var(--navy); }
+    .brand { display: flex; align-items: center; gap: 11px; font-weight: 750; letter-spacing: .01em; }
+    .brand-mark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: #2e7ce4; color: white; font-size: 17px; }
+    .topbar-right { display: flex; align-items: center; gap: 16px; color: #bbcee5; font-size: 13px; }
+    .topbar-right strong { color: #fff; font-weight: 650; }
+    .app { max-width: 1500px; margin: 0 auto; padding: 24px; }
+    .shell { display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 24px; align-items: start; }
+    .sidebar, .card, .status-card, .metric, .modal-card { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
+    .sidebar { position: sticky; top: 18px; padding: 18px 12px; }
+    .eyebrow { margin: 0 0 6px; color: var(--muted); font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .11em; }
+    .sidebar h2 { margin: 0 8px 16px; font-size: 17px; }
+    .sidebar-search { width: 100%; margin-bottom: 16px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: #f8fafc; outline: none; }
+    .sidebar-search:focus { border-color: #80a9e9; box-shadow: 0 0 0 3px #e6efff; }
+    .category-list { display: grid; gap: 3px; }
+    .category-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 10px 9px; border: 0; border-radius: 9px; color: #44556b; background: transparent; text-align: left; font-size: 13px; }
+    .category-item:hover { background: #f1f5fb; }
+    .category-item.active { color: var(--blue); background: var(--blue-soft); font-weight: 700; }
+    .category-count { min-width: 20px; padding: 2px 5px; border-radius: 999px; color: #718198; background: #eef2f7; font-size: 10px; text-align: center; }
+    .workspace { min-width: 0; }
+    .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; margin-bottom: 18px; }
+    .breadcrumb { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; color: var(--muted); font-size: 12px; }
+    .breadcrumb span:last-child { color: var(--ink); font-weight: 650; }
+    h1 { margin: 0; font-size: clamp(24px, 3vw, 33px); letter-spacing: -.035em; }
+    .page-subtitle { max-width: 720px; margin: 7px 0 0; color: var(--muted); font-size: 14px; }
+    .head-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 9px 13px; border: 1px solid var(--line); border-radius: 9px; color: #41536b; background: #fff; font-size: 13px; font-weight: 650; }
+    .button:hover { border-color: #aabbd1; background: #f8fbff; }
+    .button.primary { border-color: var(--blue); color: #fff; background: var(--blue); }
+    .button.primary:hover { background: #1b58ba; }
+    .status-card { overflow: hidden; margin-bottom: 18px; border-color: #c6d5e8; }
+    .status-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 22px 15px; background: linear-gradient(120deg, #f8fbff, #eef5ff); }
+    .status-head h2 { margin: 0; font-size: 18px; }
+    .status-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    .state-pill { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border-radius: 999px; color: var(--amber); background: var(--amber-soft); font-size: 12px; font-weight: 750; white-space: nowrap; }
+    .state-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid #d8e4f2; }
+    .status-rule { min-height: 116px; padding: 17px 20px; border-right: 1px solid var(--line); }
+    .status-rule:last-child { border-right: 0; }
+    .status-rule.active { background: #fffaf0; }
+    .status-label { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 13px; font-weight: 750; }
+    .status-icon { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 8px; color: #fff; font-size: 12px; font-weight: 800; }
+    .pending .status-icon { background: #7a8797; }
+    .query .status-icon { background: var(--amber); }
+    .cleared .status-icon { background: var(--green); }
+    .status-rule p { margin: 0; color: var(--muted); font-size: 12px; }
+    .status-rule a { display: inline-block; margin-top: 9px; color: var(--blue); font-size: 12px; font-weight: 700; text-decoration: none; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .metric { padding: 15px 17px; box-shadow: none; }
+    .metric strong { display: block; font-size: 24px; letter-spacing: -.03em; }
+    .metric span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .metric.blue strong { color: var(--blue); }
+    .metric.green strong { color: var(--green); }
+    .metric.amber strong { color: var(--amber); }
+    .tabs { display: flex; align-items: center; gap: 4px; margin-bottom: 16px; padding: 5px; border: 1px solid var(--line); border-radius: 11px; background: #eaf0f7; }
+    .tab { flex: 1; padding: 9px 12px; border: 0; border-radius: 8px; color: #607188; background: transparent; font-size: 13px; font-weight: 700; }
+    .tab:hover { color: var(--ink); }
+    .tab.active { color: var(--navy); background: #fff; box-shadow: 0 2px 6px rgba(45, 67, 96, .09); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; margin: 0 0 12px; }
+    .section-heading h2 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+    .section-heading p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+    .section-heading .button { flex: 0 0 auto; }
+    .card { padding: 18px; box-shadow: none; }
+    .overview-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 15px; }
+    .overview-card h3, .card h3 { margin: 0 0 10px; font-size: 15px; }
+    .overview-card p { margin: 0; color: #52647a; font-size: 13px; }
+    .overview-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+    .overview-list li { display: flex; gap: 9px; color: #52647a; font-size: 13px; }
+    .overview-list li::before { content: ""; width: 7px; height: 7px; flex: 0 0 auto; margin-top: 7px; border-radius: 50%; background: #79a5e5; }
+    .evidence-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .evidence-card { position: relative; padding: 16px; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
+    .evidence-card.required { border-left: 4px solid var(--amber); }
+    .evidence-card h3 { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin: 0 0 4px; font-size: 14px; }
+    .evidence-card p { min-height: 38px; margin: 0 0 13px; color: var(--muted); font-size: 12px; }
+    .tag { display: inline-flex; align-items: center; padding: 4px 7px; border-radius: 5px; font-size: 10px; font-weight: 750; letter-spacing: .02em; }
+    .tag.required { color: var(--amber); background: var(--amber-soft); }
+    .tag.info { color: var(--blue); background: var(--blue-soft); }
+    .tag.good { color: var(--green); background: var(--green-soft); }
+    .tag.neutral { color: #63748a; background: #eef2f7; }
+    .evidence-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding-top: 11px; border-top: 1px solid #edf1f6; color: var(--muted); font-size: 11px; }
+    .text-button { padding: 0; border: 0; color: var(--blue); background: transparent; font-size: 12px; font-weight: 750; }
+    .procedure-groups { display: grid; gap: 11px; }
+    .procedure-group { overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
+    .procedure-group summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; cursor: pointer; list-style: none; }
+    .procedure-group summary::-webkit-details-marker { display: none; }
+    .procedure-group summary::after { content: "+"; color: #7890ab; font-size: 20px; font-weight: 350; }
+    .procedure-group[open] summary::after { content: "−"; }
+    .procedure-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .doc-icon { width: 29px; height: 29px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 9px; color: var(--blue); background: var(--blue-soft); font-size: 11px; font-weight: 800; }
+    .procedure-title strong { display: block; font-size: 14px; }
+    .procedure-title span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .procedure-rows { padding: 0 16px 14px; }
+    .procedure-row { display: grid; grid-template-columns: 1.1fr 1fr auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid #edf1f6; font-size: 12px; }
+    .procedure-row strong { font-weight: 650; }
+    .procedure-row span { color: var(--muted); }
+    .crosscheck-card { display: grid; grid-template-columns: 1fr .9fr; gap: 18px; }
+    .crosscheck-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .crosscheck-header h3 { margin: 0; font-size: 15px; }
+    .crosscheck-header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .flow { display: flex; align-items: center; gap: 5px; margin: 16px 0; overflow-x: auto; padding-bottom: 2px; }
+    .flow-step { flex: 0 0 auto; padding: 7px 9px; border: 1px solid #cedcf0; border-radius: 7px; color: #35547c; background: #f3f7fd; font-size: 11px; font-weight: 700; }
+    .flow-arrow { color: #9aabc0; }
+    .condition-list { display: grid; gap: 7px; margin-top: 12px; }
+    .condition { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid #e4eaf2; border-radius: 8px; color: #52647a; background: #fafcff; font-size: 12px; }
+    .condition strong { color: var(--ink); }
+    .crosscheck-side { padding: 15px; border: 1px solid #dfe8f3; border-radius: 12px; background: #f8fbff; }
+    .crosscheck-side h4 { margin: 0 0 9px; font-size: 13px; }
+    .crosscheck-side p { margin: 0; color: var(--muted); font-size: 12px; }
+    .callout { display: flex; gap: 10px; margin-top: 14px; padding: 11px; border-radius: 9px; color: #76551e; background: var(--amber-soft); font-size: 12px; }
+    .callout strong { display: block; color: #69450d; }
+    .empty-note { padding: 22px; border: 1px dashed #bbc9da; border-radius: 12px; color: var(--muted); background: #fbfdff; text-align: center; font-size: 13px; }
+    .modal-backdrop { position: fixed; inset: 0; z-index: 5; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(13, 28, 49, .56); }
+    .modal-backdrop.open { display: flex; }
+    .modal-card { width: min(660px, 100%); max-height: min(700px, 90vh); overflow: auto; padding: 22px; }
+    .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 17px; }
+    .modal-head h2 { margin: 0; font-size: 19px; letter-spacing: -.02em; }
+    .modal-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .modal-close { width: 30px; height: 30px; border: 0; border-radius: 8px; color: #667890; background: #f0f4f8; font-size: 20px; line-height: 1; }
+    .modal-close:hover { background: #e5ebf3; }
+    .modal-body h3 { margin: 17px 0 8px; font-size: 14px; }
+    .modal-body h3:first-child { margin-top: 0; }
+    .modal-body p { margin: 0; color: #53657c; font-size: 13px; }
+    .logic-row { display: grid; grid-template-columns: 82px 1fr; gap: 12px; align-items: start; padding: 11px 0; border-top: 1px solid #edf1f6; }
+    .logic-row:first-child { border-top: 0; }
+    .logic-row strong { font-size: 12px; }
+    .logic-row span { color: #53657c; font-size: 12px; }
+    .toast { position: fixed; right: 22px; bottom: 22px; z-index: 8; display: none; padding: 11px 14px; border: 1px solid #b8cfe9; border-radius: 9px; color: #234e87; background: #eff6ff; box-shadow: var(--shadow); font-size: 12px; font-weight: 650; }
+    .toast.show { display: block; }
+    @media (max-width: 1050px) { .shell { grid-template-columns: 190px minmax(0, 1fr); } .evidence-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .crosscheck-card, .overview-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 760px) { .topbar { padding: 12px 17px; } .topbar-right { display: none; } .app { padding: 16px; } .shell { display: block; } .sidebar { position: static; margin-bottom: 17px; } .category-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } .page-head { display: block; } .head-actions { justify-content: flex-start; margin-top: 14px; } .status-grid, .metrics { grid-template-columns: 1fr 1fr; } .status-rule:nth-child(2) { border-right: 0; } .status-rule:last-child { grid-column: span 2; border-top: 1px solid var(--line); } .tabs { overflow-x: auto; } .tab { flex: 0 0 auto; } }
+    @media (max-width: 480px) { .metrics, .evidence-grid, .status-grid { grid-template-columns: 1fr; } .status-rule, .status-rule:nth-child(2), .status-rule:last-child { grid-column: auto; border-right: 0; border-top: 1px solid var(--line); } .status-rule:first-child { border-top: 0; } .procedure-row { grid-template-columns: 1fr auto; } .procedure-row span { grid-column: 1 / -1; } }
+  </style>
+</head>
+<body>
+  <div class="prototype-note">Prototype only · sample data · no changes are saved to the application</div>
+  <header class="topbar"><div class="brand"><span class="brand-mark">✓</span><span>Audit Rules</span></div><div class="topbar-right"><span>Client: <strong>Leather Crop</strong></span><span>AREA: <strong>Category governance</strong></span><span>System Analyst</span></div></header>
+  <main class="app"><div class="shell">
+    <aside class="sidebar" aria-label="Category navigation"><p class="eyebrow">Configuration</p><h2>Categories</h2><input class="sidebar-search" type="search" placeholder="Search categories" aria-label="Search categories"><div class="category-list">
+      <button class="category-item active" type="button"><span>Material Purchased</span><span class="category-count">1</span></button><button class="category-item" type="button"><span>Fixed Asset Purchased</span><span class="category-count">0</span></button><button class="category-item" type="button"><span>General admin expenses</span><span class="category-count">0</span></button><button class="category-item" type="button"><span>Kitchen Expenses</span><span class="category-count">0</span></button><button class="category-item" type="button"><span>Payment to Contractors</span><span class="category-count">0</span></button><button class="category-item" type="button"><span>Repair &amp; Maintenance</span><span class="category-count">0</span></button>
+    </div></aside>
+    <section class="workspace">
+      <div class="page-head"><div><div class="breadcrumb"><span>Audit Rules</span><span>/</span><span>Categories</span><span>/</span><span>Material Purchased</span></div><h1>Material Purchased</h1><p class="page-subtitle">Define the evidence, procedures, and comparison tests that determine whether a voucher line can be cleared.</p></div><div class="head-actions"><button class="button" type="button" data-modal="logic">View status logic</button><button class="button primary" type="button" id="saveButton">Save category</button></div></div>
+      <section class="status-card" aria-labelledby="status-title"><div class="status-head"><div><h2 id="status-title">How this category affects voucher status</h2><p>Only the conditions below can block a voucher line from becoming <strong>Cleared</strong>.</p></div><span class="state-pill"><span class="state-dot"></span>Policy configured</span></div><div class="status-grid"><div class="status-rule pending"><div class="status-label"><span class="status-icon">1</span>Pending</div><p>Account code is missing or no active category is assigned.</p><a href="#" data-modal="logic">View conditions</a></div><div class="status-rule query active"><div class="status-label"><span class="status-icon">2</span>Query</div><p>Required evidence, active checks, exceptions, hard-fail cross-checks, or Account Head notes remain unresolved.</p><a href="#" data-modal="logic">View conditions</a></div><div class="status-rule cleared"><div class="status-label"><span class="status-icon">3</span>Cleared</div><p>Category is resolved and every applicable Query condition has passed or is not applicable.</p><a href="#" data-modal="logic">View conditions</a></div></div></section>
+      <div class="metrics" aria-label="Category summary"><div class="metric blue"><strong>5</strong><span>Required documents</span></div><div class="metric"><strong>13</strong><span>Procedure checks</span></div><div class="metric amber"><strong>1</strong><span>Applied cross-check</span></div><div class="metric green"><strong>0</strong><span>Known configuration issues</span></div></div>
+      <nav class="tabs" aria-label="Category sections"><button class="tab active" type="button" data-tab="overview">Overview</button><button class="tab" type="button" data-tab="evidence">Evidence</button><button class="tab" type="button" data-tab="procedures">Procedures</button><button class="tab" type="button" data-tab="crosschecks">Cross-checks</button></nav>
+      <section class="tab-panel active" data-panel="overview"><div class="overview-grid"><article class="card overview-card"><h3>Knowledge base overview</h3><p>This category covers purchases that require an authorised demand, approved order, receiving evidence, and a vendor bill before the voucher line can be cleared.</p><div class="callout"><span>!</span><div><strong>Configuration principle</strong>Evidence defines what must be present; procedures and cross-checks explain how it is reviewed.</div></div></article><article class="card overview-card"><h3>Audit focus</h3><ul class="overview-list"><li>Prevent unauthorised or unsupported purchases.</li><li>Compare quantities and rates across the document chain.</li><li>Keep document selection explicit and visible to the reviewer.</li><li>Keep informational authority metadata separate from status gates.</li></ul></article></div><div class="section-heading" style="margin-top: 22px"><div><h2>Configuration at a glance</h2><p>Open a section to review the detailed setup.</p></div><button class="button" type="button" data-tab-target="evidence">Review evidence</button></div><div class="evidence-grid"><article class="evidence-card required"><h3>Required evidence <span class="tag required">5 documents</span></h3><p>Purchase Demand, Purchase Order, Gate receiving, Store receiving, and Physical Bill.</p><div class="evidence-meta"><span>Blocks Cleared when incomplete</span><button class="text-button" type="button" data-tab-target="evidence">Open</button></div></article><article class="evidence-card"><h3>Procedure checks <span class="tag info">13 checks</span></h3><p>Document-level signatures and preparation checks grouped by document.</p><div class="evidence-meta"><span>Unfinished checks create Query</span><button class="text-button" type="button" data-tab-target="procedures">Open</button></div></article><article class="evidence-card"><h3>Comparison test <span class="tag neutral">1 rule</span></h3><p>Quantity chain plus rate comparison through Physical Bill.</p><div class="evidence-meta"><span>Hard-fail only</span><button class="text-button" type="button" data-tab-target="crosschecks">Open</button></div></article></div></section>
+      <section class="tab-panel" data-panel="evidence"><div class="section-heading"><div><h2>Required evidence</h2><p>These are the only documents that may appear in the category procedure and verification windows.</p></div><button class="button" type="button" data-modal="document">Document policy</button></div><div class="evidence-grid"><article class="evidence-card required"><h3>Purchase Demand <span class="tag required">Required</span></h3><p>Linked template: Purchase Demand. Used for demand number, date, quantity, store, and authorisation.</p><div class="evidence-meta"><span>Blocks Cleared</span><button class="text-button" type="button" data-modal="document">Details</button></div></article><article class="evidence-card required"><h3>Purchase Order <span class="tag required">Required</span></h3><p>Linked template: Purchase Order. Used for approval, quantity, and rate comparison.</p><div class="evidence-meta"><span>Blocks Cleared</span><button class="text-button" type="button" data-modal="document">Details</button></div></article><article class="evidence-card required"><h3>Gate receiving <span class="tag required">Required</span></h3><p>Linked template: Gate receiving. Quantity-only receiving evidence; rate is not evaluated here.</p><div class="evidence-meta"><span>Blocks Cleared</span><button class="text-button" type="button" data-modal="document">Details</button></div></article><article class="evidence-card required"><h3>Store receiving <span class="tag required">Required</span></h3><p>Linked template: Store receiving. Receive quantity and rate source for the Physical Bill prefill.</p><div class="evidence-meta"><span>Blocks Cleared</span><button class="text-button" type="button" data-modal="document">Details</button></div></article><article class="evidence-card required"><h3>Physical Bill <span class="tag required">Required</span></h3><p>Form-based document. Its fields use the same Document ID and are compared to Store receiving.</p><div class="evidence-meta"><span>Blocks Cleared</span><button class="text-button" type="button" data-modal="document">Details</button></div></article><article class="evidence-card"><h3>Document ownership <span class="tag good">Explicit</span></h3><p>Category Applicable Documents is the single source of truth for visibility and membership.</p><div class="evidence-meta"><span>No hidden document tabs</span><button class="text-button" type="button" data-modal="logic">Policy</button></div></article></div></section>
+      <section class="tab-panel" data-panel="procedures"><div class="section-heading"><div><h2>Procedure checks</h2><p>Checks are grouped by document so the author can see exactly what the reviewer must complete.</p></div><button class="button primary" type="button" id="addProcedure">+ Add procedure</button></div><div class="procedure-groups">
+        <details class="procedure-group" open><summary><div class="procedure-title"><span class="doc-icon">PD</span><div><strong>Purchase Demand</strong><span>3 checks · required document</span></div></div><span class="tag required">Incomplete → Query</span></summary><div class="procedure-rows"><div class="procedure-row"><strong>Prepared by</strong><span>Prepared By:</span><span class="tag neutral">Medium risk</span></div><div class="procedure-row"><strong>Approved by</strong><span>Approved by:</span><span class="tag neutral">Medium risk</span></div><div class="procedure-row"><strong>Checked by</strong><span>Checked by:</span><span class="tag neutral">Medium risk</span></div></div></details>
+        <details class="procedure-group"><summary><div class="procedure-title"><span class="doc-icon">PO</span><div><strong>Purchase Order</strong><span>3 checks · required document</span></div></div><span class="tag required">Incomplete → Query</span></summary><div class="procedure-rows"><div class="procedure-row"><strong>Prepared by</strong><span>Prepared by:</span><span class="tag neutral">Medium risk</span></div><div class="procedure-row"><strong>Checked by</strong><span>Checked by:</span><span class="tag neutral">Medium risk</span></div><div class="procedure-row"><strong>Approved by</strong><span>Approved by:</span><span class="tag neutral">Medium risk</span></div></div></details>
+        <details class="procedure-group"><summary><div class="procedure-title"><span class="doc-icon">GR</span><div><strong>Gate receiving</strong><span>4 checks · required document</span></div></div><span class="tag required">Incomplete → Query</span></summary><div class="procedure-rows"><div class="procedure-row"><strong>Prepared by</strong><span>Prepared by:</span><span class="tag neutral">Medium risk</span></div><div class="procedure-row"><strong>Checked by</strong><span>Checked by:</span><span class="tag neutral">Medium risk</span></div><div class="procedure-row"><strong>Approved by</strong><span>Approved by:</span><span class="tag neutral">Medium risk</span></div><div class="procedure-row"><strong>Signature</strong><span>Reviewed by:</span><span class="tag neutral">Medium risk</span></div></div></details>
+        <details class="procedure-group"><summary><div class="procedure-title"><span class="doc-icon">SR</span><div><strong>Store receiving</strong><span>1 check · required document</span></div></div><span class="tag required">Incomplete → Query</span></summary><div class="procedure-rows"><div class="procedure-row"><strong>Prepared by</strong><span>Prepared by:</span><span class="tag neutral">Medium risk</span></div></div></details>
+        <details class="procedure-group"><summary><div class="procedure-title"><span class="doc-icon">PB</span><div><strong>Physical Bill</strong><span>3 checks · form-based document</span></div></div><span class="tag required">Incomplete → Query</span></summary><div class="procedure-rows"><div class="procedure-row"><strong>Prepared by</strong><span>Prepared by:</span><span class="tag neutral">Medium risk</span></div><div class="procedure-row"><strong>Checked by</strong><span>Checked by:</span><span class="tag neutral">Medium risk</span></div><div class="procedure-row"><strong>Approved by</strong><span>Approved by:</span><span class="tag neutral">Medium risk</span></div></div></details>
+      </div></section>
+      <section class="tab-panel" data-panel="crosschecks"><div class="section-heading"><div><h2>Applied cross-checks</h2><p>Reusable comparison rules stay defined centrally; this category only selects which rules apply.</p></div><button class="button" type="button" data-modal="matrix">View comparison matrix</button></div><article class="card crosscheck-card"><div><div class="crosscheck-header"><div><h3>Purchase demand vs Purchase order</h3><p>Reusable comparison rule · Matrix version 8</p></div><span class="tag good">Active</span></div><div class="flow"><span class="flow-step">Purchase Demand</span><span class="flow-arrow">→</span><span class="flow-step">Purchase Order</span><span class="flow-arrow">→</span><span class="flow-step">Gate receiving</span><span class="flow-arrow">→</span><span class="flow-step">Store receiving</span><span class="flow-arrow">→</span><span class="flow-step">Physical Bill</span></div><div class="condition-list"><div class="condition"><span><strong>Quantity</strong> across the document chain</span><span class="tag neutral">Tolerance 0</span></div><div class="condition"><span><strong>Rate</strong> from Store receiving to Physical Bill</span><span class="tag neutral">Tolerance 0</span></div></div></div><div class="crosscheck-side"><h4>Dependency policy</h4><p>Every dependency must already be an active Applicable Document for this category. A cross-check never creates a hidden Procedure or Verification document.</p><div class="callout"><span>!</span><div><strong>Hard-fail only</strong>A failed comparison can create Query. A shortfall or not-evaluated comparison remains visible but does not silently add documents.</div></div><button class="button" style="margin-top: 15px; width: 100%" type="button" data-modal="matrix">Open full matrix</button></div></article><div class="section-heading" style="margin-top: 22px"><div><h2>Rule selection</h2><p>Choose from saved reusable rules that have valid active dependencies.</p></div></div><div class="empty-note">No additional reusable Cross-checks are available for this category.</div></section>
+    </section>
+  </div></main>
+  <div class="modal-backdrop" id="modalRoot" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-card"><div class="modal-head"><div><h2 id="modalTitle">Details</h2><p id="modalSubtitle"></p></div><button class="modal-close" type="button" aria-label="Close dialog">×</button></div><div class="modal-body" id="modalBody"></div></div></div>
+  <div class="toast" id="toast" role="status">Prototype only — no data was saved.</div>
+  <script>
+    (() => {
+      const modalRoot = document.querySelector('#modalRoot');
+      const modalTitle = document.querySelector('#modalTitle');
+      const modalSubtitle = document.querySelector('#modalSubtitle');
+      const modalBody = document.querySelector('#modalBody');
+      const toast = document.querySelector('#toast');
+      let toastTimer;
+      const modalContent = {
+        logic: { title: 'Status logic', subtitle: 'The five conditions that can create Query, plus the Pending gate.', body: `<div class="logic-row"><strong>Pending</strong><span>Account code is missing, or no active Category is assigned to the voucher line.</span></div><div class="logic-row"><strong>Query</strong><span>Required evidence is incomplete; an active voucher-level check is unfinished; a signature exception exists; a hard-fail Cross-check exists; or an Account Head note is pending.</span></div><div class="logic-row"><strong>Cleared</strong><span>The Category is resolved and all applicable Query conditions have passed. Shortfalls and not-evaluated comparisons do not block by themselves.</span></div><h3>Informational metadata</h3><p>Required Authority and Signature Specimen settings help organise review evidence, but they do not independently block Cleared status.</p>` },
+        document: { title: 'Document ownership policy', subtitle: 'Why the category document list is the controlling list.', body: `<h3>Category Applicable Documents</h3><p>This is the single source of truth for which documents can appear in this category’s Procedure/Evidence and Verification configuration.</p><h3>Cross-check dependency rule</h3><p>A reusable Cross-check may reference only active documents already selected here. If a dependency is missing or inactive, the rule is warned or blocked; the application never creates a hidden document tab.</p><h3>Physical Bill</h3><p>Physical Bill is a normal Form Document with the same Document ID used by the Cross-check and Verification flow. Its Store receiving link is a prefill source, not a second document owner.</p>` },
+        matrix: { title: 'Comparison matrix', subtitle: 'Purchase demand vs Purchase order · Matrix version 8', body: `<h3>Document flow</h3><div class="flow"><span class="flow-step">Purchase Demand</span><span class="flow-arrow">→</span><span class="flow-step">Purchase Order</span><span class="flow-arrow">→</span><span class="flow-step">Gate receiving</span><span class="flow-arrow">→</span><span class="flow-step">Store receiving</span><span class="flow-arrow">→</span><span class="flow-step">Physical Bill</span></div><h3>Configured conditions</h3><div class="condition-list"><div class="condition"><span>Purchase Demand Quantity = Purchase Order Quantity = Gate receiving Quantity = Store receiving Receive Quantity = Physical Bill Quantity</span><span class="tag neutral">0</span></div><div class="condition"><span>Purchase Order Rate = Store receiving Rate = Physical Bill Rate</span><span class="tag neutral">0</span></div></div><h3>Evaluation policy</h3><p>Quantity-only documents are evaluated only for their configured quantity fields. Rate is not inferred for Gate receiving or Purchase Demand, preventing false mismatch indicators.</p>` }
+      };
+      function openModal(key) { const content = modalContent[key]; if (!content) return; modalTitle.textContent = content.title; modalSubtitle.textContent = content.subtitle; modalBody.innerHTML = content.body; modalRoot.classList.add('open'); document.body.style.overflow = 'hidden'; }
+      function closeModal() { modalRoot.classList.remove('open'); document.body.style.overflow = ''; }
+      function selectTab(name) { document.querySelectorAll('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === name)); document.querySelectorAll('[data-panel]').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === name)); }
+      document.addEventListener('click', (event) => {
+        const modalTrigger = event.target.closest('[data-modal]');
+        if (modalTrigger) { event.preventDefault(); openModal(modalTrigger.dataset.modal); return; }
+        const tabTrigger = event.target.closest('[data-tab], [data-tab-target]');
+        if (tabTrigger) { event.preventDefault(); selectTab(tabTrigger.dataset.tab || tabTrigger.dataset.tabTarget); return; }
+        if (event.target === modalRoot || event.target.closest('.modal-close')) closeModal();
+        if (event.target.closest('#saveButton')) { toast.classList.add('show'); window.clearTimeout(toastTimer); toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2400); }
+        if (event.target.closest('#addProcedure')) { toast.textContent = 'Prototype only — the add flow is not connected.'; toast.classList.add('show'); window.clearTimeout(toastTimer); toastTimer = window.setTimeout(() => { toast.textContent = 'Prototype only — no data was saved.'; toast.classList.remove('show'); }, 2400); }
+      });
+      document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && modalRoot.classList.contains('open')) closeModal(); });
+    })();
+  </script>
+</body>
+</html>

@@ -8,6 +8,23 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## Category Control Center redesign - P7 - 2026-09-08
+
+**Status:** Implemented; Git closeout authorized; local browser review remains the next gate. **Files:**
+`static/audit_rules.js`, `static/style.css`, `DEVELOPMENT_PLAN.md`, `CLAUDE.md`.
+
+The Category detail view now presents a single Control Center with Category identity, Pending /
+Query / Cleared status logic, live configuration metrics, and tabs for Overview, Evidence,
+Procedures, and Cross-checks. Existing field IDs, API payloads, save behavior, document membership,
+procedure rows, Cross-check dependency validation, and delete/restore actions remain unchanged.
+The status-logic detail is now a modal-style popup, and the layout is responsive for narrower
+screens. The standalone `category_control_center_prototype.html` remains available for design
+comparison only and is not connected to the application.
+
+The full test suite passed 168 tests, with 6 existing warnings and 3 subtests. JavaScript syntax,
+`git diff --check`, and a Playwright browser smoke test with representative Category/API data
+passed. This is user-facing; local manual Categories review remains required before the next phase.
+
 ## Cleared/Query status-rule correction - P1 - 2026-09-07
 
 **Status:** Complete; manual local-server confirmation passed. **Files:**

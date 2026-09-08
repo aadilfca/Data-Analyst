@@ -2182,6 +2182,141 @@ function buildCategoryValidationRulesSection() {
     arCategoryDetailMeta.parentNode.insertBefore(section, arCategoryDetailMeta);
 }
 buildCategoryValidationRulesSection();
+
+// Replace the original stacked Category section with the approved Control Center layout.
+// This is a DOM-only presentation upgrade: the existing field ids, row builders, and save
+// handlers remain the source of truth for all persisted Category data.
+function upgradeCategoryControlCenter() {
+    const section = document.getElementById('arCategoryValidationRulesSection');
+    if (!section) return;
+    section.className = 'ar-category-control-center';
+    section.innerHTML = '';
+
+    const moveField = (input, fallbackId) => {
+        const element = input || document.getElementById(fallbackId);
+        return element && (element.closest('.ar-field') || element.parentElement);
+    };
+
+    const hero = document.createElement('div');
+    hero.className = 'ar-category-control-hero';
+    hero.innerHTML = '<div><p class="ar-category-eyebrow">Category control center</p>' +
+        '<h2>How this category affects voucher status</h2>' +
+        '<p>Define the evidence, procedures, and comparison tests that determine whether a voucher line can be cleared.</p></div>' +
+        '<div class="ar-category-hero-actions"><span class="ar-category-policy-pill"><span class="ar-category-policy-dot"></span>Policy configured</span>' +
+        '<button type="button" class="ar-btn-secondary ar-category-status-logic-btn">View exact status logic</button></div>';
+    hero.querySelector('.ar-category-status-logic-btn').addEventListener('click', showClearingRules);
+    section.appendChild(hero);
+
+    const identity = document.createElement('div');
+    identity.className = 'ar-category-identity-card';
+    identity.innerHTML = '<div class="ar-category-card-heading"><div><h3>Category identity</h3><p>Name this policy and keep its audit intent visible to the reviewer.</p></div></div>';
+    const identityFields = document.createElement('div');
+    identityFields.className = 'ar-category-identity-fields';
+    [moveField(arCategoryNameInput, 'arCategoryNameInput'), moveField(arCategoryKbOverviewInput, 'arCategoryKbOverviewInput')].forEach(field => {
+        if (field) identityFields.appendChild(field);
+    });
+    identity.appendChild(identityFields);
+    section.appendChild(identity);
+
+    const statusGrid = document.createElement('div');
+    statusGrid.className = 'ar-category-status-grid';
+    statusGrid.innerHTML = '<article class="ar-category-status-card ar-status-pending" data-status-card="pending"><div class="ar-category-status-title"><span class="ar-category-status-icon">1</span><strong>Pending</strong></div><p>Account code is missing or no active Category is assigned.</p><button type="button" class="ar-category-status-link">View conditions</button></article>' +
+        '<article class="ar-category-status-card ar-status-query" data-status-card="query"><div class="ar-category-status-title"><span class="ar-category-status-icon">2</span><strong>Query</strong></div><p>Required evidence, active checks, exceptions, hard-fail Cross-checks, or Account Head notes remain unresolved.</p><button type="button" class="ar-category-status-link">View conditions</button></article>' +
+        '<article class="ar-category-status-card ar-status-cleared" data-status-card="cleared"><div class="ar-category-status-title"><span class="ar-category-status-icon">3</span><strong>Cleared</strong></div><p>Category is resolved and every applicable Query condition has passed or is not applicable.</p><button type="button" class="ar-category-status-link">View conditions</button></article>';
+    statusGrid.querySelectorAll('.ar-category-status-link').forEach(button => button.addEventListener('click', showClearingRules));
+    section.appendChild(statusGrid);
+
+    const metrics = document.createElement('div');
+    metrics.className = 'ar-category-metrics';
+    metrics.innerHTML = '<div class="ar-category-metric metric-blue"><strong id="arCategoryMetricDocuments">0</strong><span>Required documents</span></div>' +
+        '<div class="ar-category-metric"><strong id="arCategoryMetricProcedures">0</strong><span>Procedure checks</span></div>' +
+        '<div class="ar-category-metric metric-amber"><strong id="arCategoryMetricCrossChecks">0</strong><span>Applied Cross-checks</span></div>' +
+        '<div class="ar-category-metric metric-green"><strong id="arCategoryMetricIssues">0</strong><span>Configuration issues</span></div>';
+    section.appendChild(metrics);
+
+    const tabs = document.createElement('nav');
+    tabs.className = 'ar-category-tabs';
+    tabs.setAttribute('aria-label', 'Category configuration sections');
+    [['overview', 'Overview'], ['evidence', 'Evidence'], ['procedures', 'Procedures'], ['crosschecks', 'Cross-checks']].forEach(([key, label], index) => {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'ar-category-tab' + (index === 0 ? ' active' : '');
+        button.dataset.categoryTab = key; button.textContent = label;
+        button.addEventListener('click', () => selectCategoryControlTab(key));
+        tabs.appendChild(button);
+    });
+    section.appendChild(tabs);
+
+    const panel = (key, active = false) => {
+        const value = document.createElement('section');
+        value.className = 'ar-category-tab-panel' + (active ? ' active' : '');
+        value.dataset.categoryPanel = key;
+        return value;
+    };
+
+    const overview = panel('overview', true);
+    overview.innerHTML = '<div class="ar-category-overview-grid"><article class="ar-category-info-card"><h3>What this policy controls</h3><p>Required evidence identifies what must be present. Procedure checks explain what the reviewer must complete. Cross-checks compare configured document fields.</p><div class="ar-category-callout"><span>!</span><div><strong>Status rule</strong>Only the conditions shown above can block a voucher line from becoming Cleared.</div></div></article><article class="ar-category-info-card"><h3>Audit focus</h3><ul><li>Prevent unauthorised or unsupported purchases.</li><li>Compare quantities and rates across the document chain.</li><li>Keep document selection explicit and visible.</li><li>Keep authority metadata separate from status gates.</li></ul></article></div>';
+    const requirements = document.createElement('article');
+    requirements.className = 'ar-category-policy-summary ar-category-info-card';
+    requirements.innerHTML = '<h3>Live status requirements</h3><div id="arCategoryClearedRequirementsList"></div>';
+    overview.appendChild(requirements);
+    section.appendChild(overview);
+
+    const evidence = panel('evidence');
+    evidence.innerHTML = '<div class="ar-category-section-heading"><div><h3>Required evidence</h3><p>Only these documents can appear in this Category\'s Procedure/Evidence and Verification configuration.</p></div><span class="ar-category-section-badge">Blocks Cleared when incomplete</span></div>';
+    const documentsField = document.getElementById('arCategoryDocumentsField') || moveField(arCategoryDocsList, 'arCategoryDocsList');
+    if (documentsField) evidence.appendChild(documentsField);
+    const ownership = document.createElement('div');
+    ownership.className = 'ar-category-info-card ar-category-document-ownership';
+    ownership.innerHTML = '<h3>Document ownership policy</h3><p>Category Applicable Documents is the single source of truth. A Cross-check dependency must already be selected here; it never creates a hidden document tab.</p>';
+    evidence.appendChild(ownership);
+    section.appendChild(evidence);
+
+    const procedure = panel('procedures');
+    procedure.innerHTML = '<div class="ar-category-section-heading"><div><h3>Procedure / Evidence</h3><p>Checks are grouped by document so the author can see exactly what the reviewer must complete.</p></div><span class="ar-category-section-badge">Incomplete -&gt; Query</span></div>' +
+        '<div class="ar-rule-table-wrap"><table class="ar-category-rule-table"><thead><tr><th>Document</th><th>Condition</th><th>Role</th><th>Risk</th><th></th></tr></thead><tbody id="arProcedureRulesBody"></tbody></table></div>' +
+        '<div class="ar-validation-actions"><button type="button" class="ar-btn-chip-add" id="arAddProcedureRuleBtn">Add procedure check</button>' +
+        '<button type="button" class="ar-btn-secondary" id="arImportDocumentProcedureRulesBtn">Import Document audit checks</button></div>';
+    section.appendChild(procedure);
+
+    const applied = panel('crosschecks');
+    applied.innerHTML = '<div class="ar-category-section-heading"><div><h3>Applied Cross-checks</h3><p>Reusable comparison rules stay defined centrally; this Category only selects which rules apply.</p></div><span class="ar-category-section-badge">Hard-fail only</span></div>' +
+        '<div id="arAppliedCrossChecksList" class="ar-applied-cross-checks-list"></div>' +
+        '<div class="ar-applied-cross-check-picker"><div class="ar-applied-cross-check-picker-copy"><span class="ar-applied-cross-check-picker-label">Reusable rule</span><span class="ar-applied-cross-check-picker-help">Choose a rule to apply to this Category.</span></div><div class="ar-applied-cross-check-picker-controls"><select id="arCategoryAddCrossCheckSelect"></select>' +
+        '<button type="button" class="ar-btn-chip-add" id="arCategoryAddCrossCheckBtn">Add rule</button></div></div>' +
+        '<div id="arCategoryLegacyMathNotice" class="ar-legacy-rule-notice" style="display:none;"></div>';
+    const matrixHint = document.createElement('div');
+    matrixHint.className = 'ar-category-crosscheck-policy';
+    matrixHint.innerHTML = '<strong>Dependency policy</strong><span>Missing dependencies warn or block rule activation. They never silently create Procedure or Verification tabs.</span>';
+    applied.appendChild(matrixHint);
+    section.appendChild(applied);
+
+    arCategoryDetailForm.classList.add('ar-category-control-form');
+    arCategoryDetailMeta.parentNode.insertBefore(section, arCategoryDetailMeta);
+}
+
+function selectCategoryControlTab(name) {
+    document.querySelectorAll('#arCategoryValidationRulesSection [data-category-tab]').forEach(button => {
+        button.classList.toggle('active', button.dataset.categoryTab === name);
+    });
+    document.querySelectorAll('#arCategoryValidationRulesSection [data-category-panel]').forEach(panel => {
+        panel.classList.toggle('active', panel.dataset.categoryPanel === name);
+    });
+}
+
+function updateCategoryControlMetrics() {
+    const setMetric = (id, value) => { const target = document.getElementById(id); if (target) target.textContent = String(value); };
+    const procedureCount = document.querySelectorAll('#arProcedureRulesBody > tr').length;
+    const issues = categoryDocIds.filter(id => {
+        const info = getCategoryDocDisplayInfo(id);
+        return info && info.is_active === false;
+    }).length + (categoryLegacyMathRuleCount || 0);
+    setMetric('arCategoryMetricDocuments', categoryDocIds.length);
+    setMetric('arCategoryMetricProcedures', procedureCount);
+    setMetric('arCategoryMetricCrossChecks', categoryCrossCheckIds.length);
+    setMetric('arCategoryMetricIssues', issues);
+}
+
+upgradeCategoryControlCenter();
 document.getElementById('arAddProcedureRuleBtn')?.addEventListener('click', () => addProcedureRuleRow());
 document.getElementById('arImportDocumentProcedureRulesBtn')?.addEventListener('click', importDocumentProcedureChecks);
 document.getElementById('arCategoryAddCrossCheckBtn')?.addEventListener('click', addCategoryCrossCheck);
@@ -2255,7 +2390,8 @@ function addProcedureRuleRow(rule = {}) {
     docSelect.addEventListener('change', () => refreshSub(''));
     condition.addEventListener('change', () => refreshSub(''));
     refreshSub(rule.sub_value || '');
-    row.querySelector('button').addEventListener('click', () => row.remove()); body.appendChild(row);
+    row.querySelector('button').addEventListener('click', () => { row.remove(); updateCategoryControlMetrics(); }); body.appendChild(row);
+    updateCategoryControlMetrics();
 }
 
 function procedureConditionForRole(roleName) {
@@ -2314,7 +2450,7 @@ function readCategoryValidationRules() {
     return { procedure_evidence: { checks: rows('#arProcedureRulesBody') } };
 }
 
-function showClearingRules() {
+function showClearingRulesLegacy() {
     const rules = readCategoryValidationRules();
     const popover = document.createElement('div');
     popover.className = 'ar-clearing-rules-popover';
@@ -2332,12 +2468,52 @@ function showClearingRules() {
     document.body.appendChild(popover);
 }
 
+function showClearingRules() {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'ar-category-modal-backdrop';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.innerHTML = '<div class="ar-category-modal" role="document"><div class="ar-category-modal-header"><div><h2>Clearing Rules</h2><p>The exact conditions that can leave a voucher line Pending, Query, or Cleared.</p></div><button type="button" class="ar-category-modal-close" aria-label="Close">&times;</button></div><div class="ar-category-modal-body"></div></div>';
+
+    const body = backdrop.querySelector('.ar-category-modal-body');
+    const addSection = (heading, points, empty, className) => {
+        const section = document.createElement('section');
+        section.className = 'ar-category-modal-section ' + (className || '');
+        const title = document.createElement('h3'); title.textContent = heading; section.appendChild(title);
+        const list = document.createElement('ul');
+        (points.length ? points : [empty]).forEach(point => { const item = document.createElement('li'); item.textContent = point; list.appendChild(item); });
+        section.appendChild(list); body.appendChild(section);
+    };
+    const policy = window.arCategoryStatusPolicy || {};
+    addSection('Pending', policy.pending_conditions || ['Account code is missing', 'No active Category is assigned'], '', 'is-pending');
+    addSection('Query', policy.query_conditions || ['A required Document is incomplete', 'An active voucher-level check is not marked done', 'Linked evidence has a signature exception', 'A Cross-check has a hard failure', 'A pending Account Head note exists'], '', 'is-query');
+    addSection('Cleared', [policy.cleared_condition || 'The Category is resolved and every applicable Query condition passes.'], '', 'is-cleared');
+    addSection('Informational metadata', [policy.authority_note || 'Document Required Authority and Signature Specimens are informational and do not block status.'], '', 'is-info');
+
+    const procedurePoints = readCategoryValidationRules().procedure_evidence.checks.map(rule => {
+        const doc = templateDocuments().find(item => String(item.id) === String(rule.document_id));
+        return [doc ? doc.name : 'Selected document', ': ', rule.condition || 'condition', rule.sub_value ? ' - ' + rule.sub_value : '', rule.risk ? ' (' + rule.risk + ' risk)' : ''].join('');
+    });
+    const crossCheckPoints = categoryCrossCheckIds.map(ccId => {
+        const cc = getCrossCheckById(ccId);
+        return cc ? cc.name + ' - reusable definition from Cross-checks' : 'Cross-check #' + ccId + ' - unavailable';
+    });
+    addSection('Configured checks', procedurePoints.concat(crossCheckPoints), 'No procedure or evidence conditions configured.', 'is-configured');
+
+    const close = () => { backdrop.remove(); document.body.style.overflow = ''; };
+    backdrop.querySelector('.ar-category-modal-close').addEventListener('click', close);
+    backdrop.addEventListener('click', event => { if (event.target === backdrop) close(); });
+    document.body.appendChild(backdrop);
+    document.body.style.overflow = 'hidden';
+}
+
 async function loadCategoryValidationRules(categoryId) {
     const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories/' + categoryId + '/validation-rules');
     if (!res.ok) throw new Error('Failed to load validation rules');
     const rules = await res.json(); const p = rules.procedure_evidence || {};
     document.getElementById('arProcedureRulesBody').innerHTML = ''; (p.checks || []).forEach(addProcedureRuleRow);
     categoryLegacyMathRuleCount = (rules.mathematical_cross_checks || []).length;
+    updateCategoryControlMetrics();
 }
 
 const arCategoryClearedRequirementsList = document.getElementById('arCategoryClearedRequirementsList');
@@ -2352,6 +2528,7 @@ async function renderCategoryClearedRequirements(categoryId) {
     if (!arCategoryClearedRequirementsList) return;
 
     if (!categoryId) {
+        window.arCategoryStatusPolicy = {};
         arCategoryClearedRequirementsList.innerHTML = '';
         const hint = document.createElement('div');
         hint.className = 'ar-cleared-requirements-hint';
@@ -2390,6 +2567,7 @@ function renderClearedRequirementsBullets(data) {
     };
 
     const policy = data.status_policy || {};
+    window.arCategoryStatusPolicy = policy;
     const pendingConditions = policy.pending_conditions || [
         'Account code is missing',
         'No active Category is assigned'
@@ -2847,6 +3025,7 @@ function renderCategoryDocsList() {
     });
 
     arCategoryAddDocumentBtn.style.display = 'none';
+    updateCategoryControlMetrics();
 }
 
 async function toggleCategoryDocumentRequired(docId, checked) {
@@ -3262,6 +3441,7 @@ async function renderAppliedCrossChecks() {
     const addButton = document.getElementById('arCategoryAddCrossCheckBtn');
     const legacyNotice = document.getElementById('arCategoryLegacyMathNotice');
     if (!container || !picker || !addButton) return;
+    updateCategoryControlMetrics();
     const renderToken = ++appliedCrossChecksRenderToken;
 
     container.innerHTML = '';
@@ -3341,6 +3521,7 @@ async function renderAppliedCrossChecks() {
             ? categoryLegacyMathRuleCount + ' legacy Category comparison(s) are preserved but not editable. Recreate them as reusable Cross-checks above.'
             : '';
     }
+    updateCategoryControlMetrics();
 }
 
 // Keep old internal callers harmless while ensuring there is only one visible Category

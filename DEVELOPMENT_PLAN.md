@@ -85,7 +85,7 @@ and Physical Vendor Bill migration are accepted, preventing split configuration 
 | P4 | Cross-check acceptance | Verify reusable matrix rules, document chains, operators, tolerance, missing data, blocking, risk, Quantity-only rows, Form values, and result display. | Pending |
 | P5 | Rulebook edge cases | Test inactive documents/templates, empty selections, changed templates, deleted signatories, deleted Form fields, and legacy configurations. | Pending |
 | P6 | Verification status integration | Confirm rule results affect Cleared, Query, shortfall, and blocking decisions correctly. | Pending |
-| P7 | UX refinement | Resolve remaining Procedure modal, Form editor, Physical Vendor Bill, Copy from lines, rule-result, error, loading, and responsive-design issues. | Mismatch correction complete; manually confirmed |
+| P7 | UX refinement | Resolve remaining Procedure modal, Form editor, Physical Vendor Bill, Copy from lines, rule-result, error, loading, and responsive-design issues. | Category Control Center redesign implemented; manual browser confirmation pending |
 | P8 | Performance review | Measure Form/Procedure loading and Verification Save/Verify performance with realistic data volume. | Pending |
 | P9 | Final release hardening | Remove test data, confirm backups, review logs, verify Task Scheduler/server operation, and prepare release notes. | Pending |
 
@@ -129,16 +129,34 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**This phase: P1 - Verification smoke test.** The non-required Approved-by authority gate is
-removed from status calculation and the real Pending, Query, and Cleared conditions are explicit
-in Audit Rules. This correction is manually confirmed; the broader P1 smoke test remains.
-D8's live migration execution remains separately gated by explicit source-to-Form mappings.
+**This phase: P7 - Category Control Center browser review.** The Categories page now presents
+status logic, evidence, procedures, and Cross-checks in one tabbed workspace. Local browser
+confirmation is required before closeout; the broader P1 smoke test and D8 live migration remain
+separately gated.
 
 D6, D7, D9, Form rule integration, P7 mismatch correction, and the P1 status-rule correction
-are manually confirmed. The remaining P1 smoke test is the current gate.
+are manually confirmed. P7 Category Control Center browser review is the current gate; the
+broader P1 smoke test remains pending.
 
 The current Physical Vendor Bill Procedure-window presentation (including technical prefill labels)
 is included in this D6 implementation; final visual refinement remains a D6/H and P7 UX item.
+
+### Pending work / fresh-chat handoff
+
+| Order | Phase/task | Remaining work | Required gate |
+|---|---|---|---|
+| This phase | P7 Category Control Center | Manually review the redesigned Categories page, tabs, popup, responsive layout, and existing save/edit behavior. | Local browser confirmation |
+| Next | P1 Verification smoke test | Run the broader real-voucher Procedure/Evidence, Form fields, signatories, Cross-check, and status smoke test. | Local browser confirmation |
+| Form | D / E | Confirm Form Procedure-window rendering and Copy from lines against the approved document-governance configuration. | Local browser/manual acceptance |
+| Form | G | Test Form save/reload, blank values, inactive or changed templates, deleted columns, duplicate fields, and numeric/date validation. | Regression and browser acceptance |
+| Migration | D8 live execution | Review and approve real legacy Physical Bill source/target Documents and all seven field mappings, then run the guarded migration. | Explicit mapping approval and migration audit |
+| Migration | H / I | Complete Physical Vendor Bill migration acceptance and safely retire the legacy hardcoded Physical Bill path after no-data-loss checks. | Migration and regression acceptance |
+| Acceptance | P2-P6 | Validate Purchase Demand fields, Procedure/Evidence, Cross-check results, Rulebook edge cases, and Cleared/Query integration. | Sequential browser acceptance |
+| Release | P8-P9 | Measure realistic performance, remove test data, confirm backups/logs/server operation, and prepare release hardening. | Release checklist |
+
+Fresh-chat starting point: the Category Control Center redesign is implemented and committed/pushed;
+begin with P7 local browser review, then continue through the pending table without changing the
+approved Category Applicable Documents, Form field, or status-policy contracts.
 
 ### Phase D9 implementation checkpoint - 2026-09-07
 

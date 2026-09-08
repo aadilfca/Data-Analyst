@@ -7837,6 +7837,110 @@ body {
     }
 }
 
+/* ----- Category Control Center redesign -----
+   Category-only styling for the approved policy workspace. Existing field ids and backend
+   interactions remain unchanged; these rules only improve grouping, hierarchy, and responsive
+   behavior for the Categories detail panel. */
+#arCategoryDetailForm.ar-category-control-form { max-width: none; }
+.ar-category-control-center { display: flex; flex-direction: column; gap: 16px; color: #152238; }
+.ar-category-control-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; padding: 20px 22px; border: 1px solid #c6d5e8; border-radius: 14px; background: linear-gradient(120deg, #f8fbff, #eef5ff); }
+.ar-category-eyebrow { margin: 0 0 5px; color: #5d7390; font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.ar-category-control-hero h2 { margin: 0; color: #152238; font-size: 19px; letter-spacing: -.02em; }
+.ar-category-control-hero p:not(.ar-category-eyebrow) { max-width: 660px; margin: 4px 0 0; color: #66758a; font-size: 13px; }
+.ar-category-hero-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 9px; }
+.ar-category-policy-pill { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 999px; color: #17845b; background: #eaf8f1; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.ar-category-policy-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.ar-category-identity-card, .ar-category-info-card { border: 1px solid #dbe3ee; border-radius: 13px; background: #fff; }
+.ar-category-identity-card { padding: 16px 18px; }
+.ar-category-card-heading, .ar-category-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.ar-category-card-heading h3, .ar-category-section-heading h3, .ar-category-info-card h3 { margin: 0; color: #152238; font-size: 15px; }
+.ar-category-card-heading p, .ar-category-section-heading p { margin: 3px 0 0; color: #66758a; font-size: 12px; }
+.ar-category-identity-fields { display: grid; grid-template-columns: minmax(190px, .75fr) minmax(260px, 1.25fr); gap: 14px; margin-top: 13px; }
+.ar-category-identity-fields .ar-field { margin: 0; }
+.ar-category-identity-fields .ar-field label { color: #52647a; font-size: 12px; }
+.ar-category-identity-fields input[type="text"], .ar-category-identity-fields textarea { width: 100%; border: 1px solid #d1dce9; border-radius: 8px; background: #fbfdff; }
+.ar-category-status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border: 1px solid #dbe3ee; border-radius: 14px; background: #fff; }
+.ar-category-status-card { min-height: 130px; padding: 16px 18px; border-right: 1px solid #dbe3ee; }
+.ar-category-status-card:last-child { border-right: 0; }
+.ar-category-status-card.ar-status-query { background: #fffaf0; }
+.ar-category-status-title { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 13px; }
+.ar-category-status-icon { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 8px; color: #fff; font-size: 12px; font-weight: 800; }
+.ar-status-pending .ar-category-status-icon { background: #7a8797; }
+.ar-status-query .ar-category-status-icon { background: #b46b12; }
+.ar-status-cleared .ar-category-status-icon { background: #17845b; }
+.ar-category-status-card p { margin: 0; color: #66758a; font-size: 12px; }
+.ar-category-status-link { margin-top: 9px; padding: 0; border: 0; color: #2468d8; background: transparent; font-size: 12px; font-weight: 750; }
+.ar-category-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.ar-category-metric { padding: 13px 15px; border: 1px solid #dbe3ee; border-radius: 12px; background: #fff; }
+.ar-category-metric strong { display: block; color: #152238; font-size: 23px; letter-spacing: -.03em; }
+.ar-category-metric span { display: block; margin-top: 2px; color: #66758a; font-size: 11px; }
+.ar-category-metric.metric-blue strong { color: #2468d8; }
+.ar-category-metric.metric-amber strong { color: #b46b12; }
+.ar-category-metric.metric-green strong { color: #17845b; }
+.ar-category-tabs { display: flex; align-items: center; gap: 4px; padding: 5px; border: 1px solid #dbe3ee; border-radius: 11px; background: #eaf0f7; }
+.ar-category-tab { flex: 1; padding: 9px 12px; border: 0; border-radius: 8px; color: #607188; background: transparent; font-size: 13px; font-weight: 700; }
+.ar-category-tab:hover { color: #152238; }
+.ar-category-tab.active { color: #102b4e; background: #fff; box-shadow: 0 2px 6px rgba(45, 67, 96, .09); }
+.ar-category-tab-panel { display: none; padding: 1px; }
+.ar-category-tab-panel.active { display: block; }
+.ar-category-overview-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 13px; margin-bottom: 13px; }
+.ar-category-info-card { padding: 16px; }
+.ar-category-info-card p { margin: 0; color: #52647a; font-size: 13px; }
+.ar-category-info-card ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.ar-category-info-card li { display: flex; gap: 8px; color: #52647a; font-size: 13px; }
+.ar-category-info-card li::before { content: ""; width: 7px; height: 7px; flex: 0 0 auto; margin-top: 7px; border-radius: 50%; background: #79a5e5; }
+.ar-category-callout, .ar-category-crosscheck-policy { display: flex; gap: 9px; margin-top: 13px; padding: 10px 11px; border-radius: 9px; color: #76551e; background: #fff6e5; font-size: 12px; }
+.ar-category-callout strong, .ar-category-crosscheck-policy strong { display: block; color: #69450d; }
+.ar-category-policy-summary { margin-top: 13px; border-left: 4px solid #2468d8; background: #eff6ff; }
+.ar-category-policy-summary .ar-cleared-requirements-bullets { margin-top: 10px; }
+.ar-category-section-heading { margin-bottom: 12px; }
+.ar-category-section-badge { flex: 0 0 auto; padding: 5px 8px; border-radius: 6px; color: #b46b12; background: #fff6e5; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.ar-category-document-ownership { margin-top: 12px; background: #f8fbff; }
+.ar-category-crosscheck-policy { margin-top: 15px; border: 1px solid #dfe8f3; color: #52647a; background: #f8fbff; }
+.ar-category-crosscheck-policy strong { color: #234e87; }
+.ar-category-crosscheck-policy span { display: block; }
+.ar-category-tab-panel #arCategoryDocumentsField { margin: 0; padding: 16px; border: 1px solid #dbe3ee; border-radius: 13px; background: #fff; }
+.ar-category-tab-panel #arCategoryDocumentsField > label { margin-bottom: 10px; color: #152238; font-size: 15px; }
+.ar-category-tab-panel .ar-category-doc-table th { background: #f8fafc; }
+.ar-category-tab-panel .ar-category-doc-table td, .ar-category-tab-panel .ar-category-doc-table th { padding-top: 10px; padding-bottom: 10px; }
+.ar-category-tab-panel .ar-rule-table-wrap { overflow-x: auto; padding: 1px; border: 1px solid #dbe3ee; border-radius: 12px; background: #fff; }
+.ar-category-tab-panel .ar-category-rule-table { min-width: 700px; }
+.ar-category-tab-panel .ar-validation-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
+
+/* Status-logic popup opened from the status panel. */
+.ar-category-modal-backdrop { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(13, 28, 49, .56); }
+.ar-category-modal { width: min(680px, 100%); max-height: min(720px, 90vh); overflow: auto; border: 1px solid #dbe3ee; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(13, 28, 49, .25); }
+.ar-category-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 20px 22px 15px; border-bottom: 1px solid #edf1f6; }
+.ar-category-modal-header h2 { margin: 0; color: #152238; font-size: 19px; }
+.ar-category-modal-header p { margin: 4px 0 0; color: #66758a; font-size: 12px; }
+.ar-category-modal-close { width: 30px; height: 30px; border: 0; border-radius: 8px; color: #667890; background: #f0f4f8; font-size: 20px; line-height: 1; }
+.ar-category-modal-body { padding: 17px 22px 22px; }
+.ar-category-modal-section { padding: 12px 0; border-top: 1px solid #edf1f6; }
+.ar-category-modal-section:first-child { padding-top: 0; border-top: 0; }
+.ar-category-modal-section h3 { margin: 0 0 7px; font-size: 14px; }
+.ar-category-modal-section ul { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: #53657c; font-size: 13px; }
+.ar-category-modal-section.is-pending h3 { color: #637184; }
+.ar-category-modal-section.is-query h3 { color: #b46b12; }
+.ar-category-modal-section.is-cleared h3 { color: #17845b; }
+.ar-category-modal-section.is-info h3 { color: #2468d8; }
+@media (max-width: 900px) {
+    .ar-category-status-grid, .ar-category-overview-grid { grid-template-columns: 1fr; }
+    .ar-category-status-card { border-right: 0; border-bottom: 1px solid #dbe3ee; }
+    .ar-category-status-card:last-child { border-bottom: 0; }
+}
+@media (max-width: 760px) {
+    .ar-category-control-hero { display: block; }
+    .ar-category-hero-actions { justify-content: flex-start; margin-top: 14px; }
+    .ar-category-identity-fields, .ar-category-metrics { grid-template-columns: 1fr 1fr; }
+    .ar-category-tabs { overflow-x: auto; }
+    .ar-category-tab { flex: 0 0 auto; }
+}
+@media (max-width: 480px) {
+    .ar-category-identity-fields, .ar-category-metrics { grid-template-columns: 1fr; }
+    .ar-category-section-heading { display: block; }
+    .ar-category-section-badge { display: inline-flex; margin-top: 9px; }
+}
+
 /* ----- Form-based Physical Vendor Bill evidence (D6) -----
    The Form Document uses the same calm grouped-card language as the legacy bill editor, while
    keeping the field definitions and saved values owned by the reusable Form contract. */

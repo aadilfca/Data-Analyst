@@ -10,6 +10,7 @@ This document lists all source files in the project, grouped by directory, with 
 
 | File | Purpose |
 |------|---------|
+| `category_control_center_prototype.html` | Standalone, review-only HTML/CSS/JavaScript prototype for the proposed Category Control Center redesign; sample data only, with no backend or database connection. |
 | `CLAUDE.md` | Project-level context for Claude Code: stack, architecture map, conventions, workflow rules, and a one-line-per-phase status log. Read automatically every session. |
 | `CHANGELOG_ARCHIVE.md` | Detailed forensic write-ups of past phases (verification steps, test output) — only consulted when a phase touches an already-logged file/pattern. |
 | `KNOWN_ISSUES.md` | Findings log for the Code Health Review protocol defined in `CLAUDE.md` — one row per finding (`Date \| Module \| Finding \| Severity`, severity being Fix / Feature / Defer). Append-only; kept out of `CLAUDE.md` because it grows on every review, same reasoning as `CHANGELOG_ARCHIVE.md`. Starts empty. |
