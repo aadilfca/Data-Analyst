@@ -15,6 +15,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 
 | Date | Module | Finding | Severity |
 |------|--------|---------|----------|
+| 2026-09-09 | Dashboard / Release | Render `/api/dashboard/db-size` reports `0 B` because the dashboard size query reads local SQLite while business data is in Postgres; release reporting needs a Postgres-backed size source or an explicit limitation. | Fix |
 | 2026-09-08 | Form G | RESOLVED: whitespace-only numeric/date input and null Copy from lines blanks now behave consistently; regression checks passed and Aadil confirmed local testing. | Fix |
 | 2026-08-20 | Global Header Nav | Verification's Cashbook/Client Data Links and Trial Balance's Available Trial Balances view have no addressable URL, so they can't be added to NAV_MANIFEST as real destinations | Feature |
 | 2026-08-22 | Upload / Audit Rules / Template Viewer | Same client-context load-order race fixed this date in trial_balance.js/databank.js/verification.js: `window.onload` reads `getSelectedClientId()` before `client_context.js`'s async session fetch resolves. Fix is to `await window.clientContextReady` first — deliberately scoped out of that phase | Fix |

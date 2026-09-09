@@ -129,7 +129,9 @@ The targeted suites (81) pass; manual browser confirmation is required before Gi
 
 ### Current next action
 
-**Next phase: P2-P6 sequential acceptance.** Form G fixes passed isolated regression checks
+**This phase: P8-P9 release review.** Render and local regression checks passed; one dashboard
+database-size discrepancy and a manual backup-readiness check remain. See `CHANGELOG_ARCHIVE.md`,
+"P8-P9 release review - 2026-09-09". Form G fixes passed isolated regression checks
 and Aadil confirmed local testing; Git closeout is authorized. See `CHANGELOG_ARCHIVE.md`,
 "Form G blank handling and regression checks". Category Control Center, Verification smoke checks,
 and Audit Workbook Form counts passed manually. Workbook initial-load and post-save counts now
@@ -150,7 +152,8 @@ remains a D6/H and P7 UX item.
 
 | Order | Phase/task | Remaining work | Required gate |
 |---|---|---|---|
-| This phase | P2-P6 | Validate Purchase Demand fields, Procedure/Evidence, Cross-check results, Rulebook edge cases, and Cleared/Query integration. | Sequential browser acceptance |
+| This phase | P8-P9 | Resolve the dashboard database-size discrepancy, complete backup readiness review, and close release checks. | Release checklist |
+| Acceptance | P2-P6 | Validate Purchase Demand fields, Procedure/Evidence, Cross-check results, Rulebook edge cases, and Cleared/Query integration. | Sequential browser acceptance |
 | Release | P8-P9 | Measure realistic performance, remove test data, confirm backups/logs/server operation, and prepare release hardening. | Release checklist |
 
 Fresh-chat starting point: Category Control Center, Verification smoke checks, Audit Workbook Form

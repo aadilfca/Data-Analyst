@@ -8,6 +8,20 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## P8-P9 release review - 2026-09-09
+
+Render health, authentication, clients, Categories, Documents, migration inventory, Verification,
+Audit Rules, and Audit Workbook pages all returned HTTP 200 with no browser errors or 5xx responses.
+Warm API timings ranged from about 0.1–0.7 seconds for ordinary reads and 1.9–4.3 seconds for the
+voucher-support read, consistent with the recorded cross-region latency. Error statistics reported
+zero logged errors. The full local suite passed 179 tests, 6 warnings, and 26 subtests.
+
+Release review found that Render `/api/dashboard/db-size` reports 0 B because the endpoint still
+reads local SQLite while business data is in Postgres; this is logged in `KNOWN_ISSUES.md`. The
+full backup export was not downloaded during unattended review because it contains organizational
+data; backup readiness remains a manual release-check item. No cleanup or live data mutation was
+performed.
+
 ## D8 Physical Bill to Form migration - 2026-09-08
 
 Created target Form **Physical Bill - Legacy Migration** (Document 44) with seven approved fields:
