@@ -18,7 +18,7 @@ historical; they must not reopen completed work. See `CHANGELOG_ARCHIVE.md`,
 | P2-P6 / Safety A-B | Combined regression completed | 183 tests and 33 subtests pass; includes isolated presence, status gates, Forms, Cross-checks, save ordering, and recovery. Live reads supplement prior user acceptance. |
 | P8 | Review completed | Existing measurements retained; further tuning requires a measured new issue. |
 | P9 | Release review completed with recovery limitation | Health, historical logs, manual startup, and fixture isolation checked; full PostgreSQL backup/restore evidence unavailable. |
-| Dashboard correction | User-tested; Git closeout included | Current code returns 33.9 MB / 87,943 active rows from PostgreSQL. |
+| Dashboard correction | User-tested, pushed, deployed | Render returns 33.9 MB / 87,943 active rows; PostgreSQL health ready. Implementation commit: `5373c72`. |
 
 ## Release assessment
 

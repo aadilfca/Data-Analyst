@@ -45,6 +45,11 @@ approval review because it downloads full organizational data; this closeout did
 Consequently development delivery and regression are complete, but full recovery/release sign-off
 is unverified. The recovery question stays within this closeout, not a new development phase.
 
+Git delivery: implementation/regression commit `5373c72` pushed to `main`. Post-push Render checks
+returned 33.9 MB / 87,943 rows and HTTP 200 `/healthz` with PostgreSQL ready, confirming the
+dashboard correction is deployed. Python/JavaScript syntax, diff whitespace, and documentation
+word-budget checks passed. The local process requires its normal restart to load the same code.
+
 ## P8-P9 dashboard database-size correction - 2026-09-09
 
 The Main Dashboard database-size endpoint now calls the Postgres estimator used by the live
