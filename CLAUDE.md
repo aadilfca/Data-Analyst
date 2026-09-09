@@ -13,7 +13,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
-- routers/dashboard.py + static/index.html, script.js → dashboard cards, PostgreSQL client-data size estimates, and live overview KPIs. See CHANGELOG_ARCHIVE.md.
+- routers/dashboard.py + static/index.html, script.js → dashboard cards, real DB size (Postgres/SQLite) in MB, and live overview KPIs. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Client Data Bank: availability, coverage calendar, overdue-upload detection, upload-frequency settings, preview/search/filter. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py + static/upload.* → Excel upload, mapping, date parsing, row/blank-field handling, validation, change detection, import/export, saved mappings, rate derivation. See CHANGELOG_ARCHIVE.md.
@@ -255,6 +255,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-07: P7 amount mismatches now require configured Amount fields; P1 removed the non-required Approved-by authority gate; both corrections manually confirmed.
 - 2026-09-08: Category Control Center, Verification smoke checks, and Workbook Form counts passed manual acceptance; Workbook fix pushed. See CHANGELOG_ARCHIVE.md.
 - 2026-09-09: Dashboard PostgreSQL sizing, combined regression, and final plan closeout completed; recovery limitation accepted. See CHANGELOG_ARCHIVE.md.
+- 2026-09-09: Dashboard Database Size stat now reads real DB size (Postgres pg_database_size/SQLite file) in MB, not client_data estimate.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

@@ -1,5 +1,7 @@
+import os
 from fastapi import APIRouter
 from datetime import datetime
+import database
 from database import execute_query, execute_query_pg, estimate_client_data_size_pg
 from routers.verification import _rollup_voucher_status
 from routers.data import compute_overdue_uploads
@@ -44,12 +46,25 @@ def get_dashboard_stats():
 @router.get("/api/dashboard/db-size")
 def get_dashboard_db_size():
     """
-    Database size visibility (Main Dashboard): estimated storage footprint
-    aggregated across every client's template data (client_data table only -
-    not error_log/app_settings/etc). See database.py's
-    estimate_client_data_size_pg() for the estimation formula/caveats.
+    Database size visibility (Main Dashboard): the real database size, in MB.
+    Production (DATABASE_URL set) reads Postgres's own pg_database_size() -
+    the whole database, not just client_data. Local dev (no DATABASE_URL)
+    falls back to the SQLite file's size on disk, same DB_NAME/abspath
+    resolution main.py uses at startup. Reads database.DB_NAME live (not a
+    `from database import DB_NAME` snapshot) so tests that monkeypatch it
+    onto a temp path are honored.
     """
-    return estimate_client_data_size_pg()
+    if os.environ.get("DATABASE_URL"):
+        size_bytes = execute_query_pg("SELECT pg_database_size(current_database()) as size_bytes")[0]["size_bytes"]
+    else:
+        db_path = os.path.abspath(database.DB_NAME)
+        size_bytes = os.path.getsize(db_path) if os.path.exists(db_path) else 0
+
+    size_mb = round(size_bytes / (1024 * 1024), 1)
+    return {
+        "total_bytes": size_bytes,
+        "formatted": f"{size_mb:.1f} MB"
+    }
 
 
 @router.get("/api/dashboard/kpi-stats")

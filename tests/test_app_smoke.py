@@ -42,15 +42,27 @@ class AppSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
 
-    def test_dashboard_db_size_uses_postgres_estimator(self):
+    def test_dashboard_db_size_uses_postgres_when_database_url_set(self):
         # The dashboard serves production data from Postgres; keep this smoke test
-        # hermetic while proving the route is wired to the Postgres estimator.
-        expected = {"total_bytes": 1234, "row_count": 5, "formatted": "1.2 KB"}
-        with patch("routers.dashboard.estimate_client_data_size_pg", return_value=expected) as estimator:
+        # hermetic while proving the route reads the real database size via
+        # pg_database_size() and converts it to MB, rather than SQLite's file size.
+        with patch("routers.dashboard.execute_query_pg", return_value=[{"size_bytes": 2 * 1024 * 1024}]) as pg_query, \
+             patch.dict(os.environ, {"DATABASE_URL": "postgres://example"}):
             response = self.client.get("/api/dashboard/db-size")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), expected)
-        estimator.assert_called_once_with()
+        self.assertEqual(response.json(), {"total_bytes": 2 * 1024 * 1024, "formatted": "2.0 MB"})
+        pg_query.assert_called_once()
+
+    def test_dashboard_db_size_falls_back_to_sqlite_file_when_no_database_url(self):
+        # Local dev has no DATABASE_URL - the route should read the SQLite file's own
+        # size on disk (the temp database this test suite already isolates onto).
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("DATABASE_URL", None)
+            response = self.client.get("/api/dashboard/db-size")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        expected_mb = round(os.path.getsize(database.DB_NAME) / (1024 * 1024), 1)
+        self.assertEqual(body["formatted"], f"{expected_mb:.1f} MB")
 
     def test_two_users_keep_independent_presence_until_leave_or_expiry(self):
         from fastapi import HTTPException
