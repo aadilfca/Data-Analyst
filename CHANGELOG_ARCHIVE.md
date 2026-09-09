@@ -42,8 +42,9 @@ matching scheduled task or Startup-folder entry was found; startup is manual. No
 The Export Backup endpoint omits Verification, audit-rule and Form tables; no recent full PostgreSQL
 backup or successful isolated restore was verified. Earlier export review was blocked by automatic
 approval review because it downloads full organizational data; this closeout did not retry it.
-Consequently development delivery and regression are complete, but full recovery/release sign-off
-is unverified. The recovery question stays within this closeout, not a new development phase.
+The user accepted the recovery limitation and closed the plan. Development delivery and regression
+are complete; no further implementation phase is scheduled. Full backup/restore verification can
+be handled as a separate future operational decision if required.
 
 Git delivery: implementation/regression commit `5373c72` pushed to `main`. Post-push Render checks
 returned 33.9 MB / 87,943 rows and HTTP 200 `/healthz` with PostgreSQL ready, confirming the

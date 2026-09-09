@@ -254,7 +254,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-07/08: D8 migration and legacy retirement completed with source records retained; D9 configuration hardening manually confirmed. See CHANGELOG_ARCHIVE.md.
 - 2026-09-07: P7 amount mismatches now require configured Amount fields; P1 removed the non-required Approved-by authority gate; both corrections manually confirmed.
 - 2026-09-08: Category Control Center, Verification smoke checks, and Workbook Form counts passed manual acceptance; Workbook fix pushed. See CHANGELOG_ARCHIVE.md.
-- 2026-09-09: Dashboard PostgreSQL sizing and combined regression completed; roadmap reconciled. Recovery evidence remains unverified. See CHANGELOG_ARCHIVE.md, "Final combined closeout - 2026-09-09".
+- 2026-09-09: Dashboard PostgreSQL sizing, combined regression, and final plan closeout completed; recovery limitation accepted. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
