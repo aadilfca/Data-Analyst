@@ -8,6 +8,50 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## Final combined closeout - 2026-09-09
+
+Aadil accepted the dashboard correction and requested a single final closeout with no further
+implementation phases. The roadmap now contains one current status register; its previous extended
+narrative remains in Git at `e6bfe11:DEVELOPMENT_PLAN.md`. Historical pending labels are not current gates.
+
+Validation: `venv/Scripts/python.exe -m pytest tests -q -p no:cacheprovider` passed **183 tests,
+33 subtests**, with five existing FastAPI/Starlette deprecation warnings, in 225.57 seconds.
+New smoke coverage executes presence SQL against disposable SQLite tables (driver/interval syntax
+adapted): independent users, leave, heartbeat, expiry, resume, and cancelled/missing sessions.
+Status regression covers saved/missing Form evidence, voucher checks, signatures, blocking rules,
+nonblocking shortfalls, Account Head notes, no-write reason reads, and unclassified lines.
+The existing suite covers Form validation/prefill, matrix operators/tolerance, inactive dependencies,
+signatory rendering, failed-save retention, atomic write ordering, and Workbook badge refresh.
+
+Live local reads confirmed seven Purchase Demand columns; matching Rulebook session 950 loads,
+while session 947 correctly requests explicit recovery. Fresh dashboard code against PostgreSQL
+returns **35,521,246 bytes / 87,943 rows (33.9 MB)**. The existing local process still serves the
+old zero-size response until restarted. Form 44 has 86 entries; inactive Vendor Bill 19 retains
+43 bills across 42 lines. No live fixture data was created or deleted.
+
+Headless Chromium loaded Login, the 201-row Workbook for session 950, all four Category tabs,
+and the shared Procedure modal without page errors in those checks. The older-session recovery
+dialog also rendered. Client-context authentication was a browser fixture; mutations were blocked,
+so these are read-path checks, not authenticated multi-user production write acceptance. An early
+wait matched loading skeletons; the final Category check waited for actual category cards.
+At 390px, the overall Audit Rules page measured 850px wide; broad mobile layout remains a limitation.
+
+Release limits: local `/healthz` reports PostgreSQL ready; the 464 local error records are historical
+(latest 2026-09-08), not zero total errors. Tray/server processes and launch scripts exist, but no
+matching scheduled task or Startup-folder entry was found; startup is manual. No reboot test ran.
+The Export Backup endpoint omits Verification, audit-rule and Form tables; no recent full PostgreSQL
+backup or successful isolated restore was verified. Earlier export review was blocked by automatic
+approval review because it downloads full organizational data; this closeout did not retry it.
+Consequently development delivery and regression are complete, but full recovery/release sign-off
+is unverified. The recovery question stays within this closeout, not a new development phase.
+
+## P8-P9 dashboard database-size correction - 2026-09-09
+
+The Main Dashboard database-size endpoint now calls the Postgres estimator used by the live
+business-data routes. The response shape and estimate formula are unchanged. An HTTP smoke test
+proves the route uses the Postgres helper without requiring an external database. The prior
+release-review finding is resolved; backup readiness remains a manual check.
+
 ## P8-P9 release review - 2026-09-09
 
 Render health, authentication, clients, Categories, Documents, migration inventory, Verification,

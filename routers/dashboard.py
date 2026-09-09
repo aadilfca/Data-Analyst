@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from datetime import datetime
-from database import execute_query, execute_query_pg, estimate_client_data_size
+from database import execute_query, execute_query_pg, estimate_client_data_size_pg
 from routers.verification import _rollup_voucher_status
 from routers.data import compute_overdue_uploads
 
@@ -46,10 +46,10 @@ def get_dashboard_db_size():
     """
     Database size visibility (Main Dashboard): estimated storage footprint
     aggregated across every client's template data (client_data table only -
-    not error_log/app_settings/etc). See database.py's estimate_client_data_size()
-    for the estimation formula/caveats.
+    not error_log/app_settings/etc). See database.py's
+    estimate_client_data_size_pg() for the estimation formula/caveats.
     """
-    return estimate_client_data_size()
+    return estimate_client_data_size_pg()
 
 
 @router.get("/api/dashboard/kpi-stats")

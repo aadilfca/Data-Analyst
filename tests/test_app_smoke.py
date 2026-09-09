@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,6 +16,7 @@ class AppSmokeTests(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
+        self.original_db_name = database.DB_NAME
         database.DB_NAME = os.path.join(self.tmpdir.name, "test.db")
         init_db()
         # Imported here (not at module scope) so database.DB_NAME is already patched before
@@ -24,6 +26,8 @@ class AppSmokeTests(unittest.TestCase):
         self.client = TestClient(main.app)
 
     def tearDown(self):
+        self.client.close()
+        database.DB_NAME = self.original_db_name
         self.tmpdir.cleanup()
 
     def test_dashboard_page_serves(self):
@@ -37,6 +41,131 @@ class AppSmokeTests(unittest.TestCase):
             response = self.client.get("/api/clients")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
+
+    def test_dashboard_db_size_uses_postgres_estimator(self):
+        # The dashboard serves production data from Postgres; keep this smoke test
+        # hermetic while proving the route is wired to the Postgres estimator.
+        expected = {"total_bytes": 1234, "row_count": 5, "formatted": "1.2 KB"}
+        with patch("routers.dashboard.estimate_client_data_size_pg", return_value=expected) as estimator:
+            response = self.client.get("/api/dashboard/db-size")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), expected)
+        estimator.assert_called_once_with()
+
+    def test_two_users_keep_independent_presence_until_leave_or_expiry(self):
+        from fastapi import HTTPException
+        from routers import audit_rules, verification
+
+        # Execute the production presence SQL against disposable tables. Only the
+        # driver placeholders and interval syntax differ between SQLite and PG.
+        with sqlite3.connect(":memory:") as conn:
+            conn.row_factory = sqlite3.Row
+            conn.executescript("""
+                CREATE TABLE verification_sessions (id INTEGER PRIMARY KEY, status TEXT);
+                INSERT INTO verification_sessions VALUES (10, 'In Progress'), (20, 'In Progress'), (30, 'Cancelled');
+                CREATE TABLE verification_presence (
+                    verification_session_id INTEGER, session_token TEXT, user_id INTEGER,
+                    last_heartbeat TEXT, ended_at TEXT,
+                    UNIQUE (verification_session_id, session_token));
+            """)
+
+            def execute(sql, params=None):
+                sql = sql.replace("%s", "?").replace(
+                    "CURRENT_TIMESTAMP - INTERVAL '90 seconds'", "datetime('now', '-90 seconds')")
+                cur = conn.execute(sql, params or ())
+                return [dict(row) for row in cur.fetchall()] if cur.description else cur.rowcount
+
+            first = {"token": "fixture-one", "user_id": 1}
+            second = {"token": "fixture-two", "user_id": 2}
+            with patch.object(verification, "execute_write_pg", side_effect=execute), \
+                 patch.object(audit_rules, "execute_query_pg", side_effect=execute):
+                verification.enter_verification_presence(10, first)
+                verification.enter_verification_presence(20, second)
+                with self.assertRaises(HTTPException) as blocked:
+                    audit_rules.ensure_no_active_verification_sessions()
+                self.assertEqual(blocked.exception.status_code, 409)
+                verification.leave_verification_presence(10, first)
+                with self.assertRaises(HTTPException):
+                    audit_rules.ensure_no_active_verification_sessions()
+                self.assertTrue(verification.heartbeat_verification_presence(20, second)["active"])
+                conn.execute("UPDATE verification_presence SET last_heartbeat = datetime('now', '-100 seconds')")
+                audit_rules.ensure_no_active_verification_sessions()
+                verification.enter_verification_presence(10, first)
+                with self.assertRaises(HTTPException):
+                    audit_rules.ensure_no_active_verification_sessions()
+                verification.leave_verification_presence(10, first)
+                audit_rules.ensure_no_active_verification_sessions()
+                for session_id in (30, 999):
+                    with self.assertRaises(HTTPException) as missing:
+                        verification.enter_verification_presence(session_id, first)
+                    self.assertEqual(missing.exception.status_code, 404)
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM verification_presence").fetchone()[0], 2)
+
+    def test_status_gates_and_read_only_reasons_agree(self):
+        from contextlib import ExitStack
+        from routers import verification
+
+        profile = {"categories": [{"category_id": 3, "documents": [{
+            "document_id": 44, "name": "Fixture Form", "document_type": "form"}]}],
+            "voucher_checks": [{"id": 1, "name": "Fixture check"}]}
+        cases = [
+            ("complete", {}, "Cleared"),
+            ("missing Form", {"form": False}, "Query"),
+            ("unchecked voucher", {"check": False}, "Query"),
+            ("signature exception", {"signature": 1}, "Query"),
+            ("blocking Cross-check", {"cross": "fail"}, "Query"),
+            ("nonblocking shortfall", {"cross": "shortfall"}, "Cleared"),
+            ("account-head note", {"note": True}, "Query"),
+        ]
+        for name, changes, expected in cases:
+            with self.subTest(name=name), ExitStack() as stack:
+                state = {"form": True, "check": True, "signature": 0, "cross": "pass", "note": False, **changes}
+
+                def query(sql, params=None):
+                    if "SELECT vd.id, vd.session_id" in sql:
+                        return [{"id": 7, "session_id": 10, "transaction_ref": "FIXTURE-1",
+                                 "row_data": {"Account Code": "100"}, "extract_amount": 100,
+                                 "client_id": 1, "category_id_applied": 3, "category_name_applied": "Fixture"}]
+                    if "SELECT matrix_version" in sql:
+                        return [{"matrix_version": 1}]
+                    if "SELECT id, template_id" in sql:
+                        return [{"id": 44, "template_id": 2}]
+                    if "FROM voucher_line_form_entries" in sql:
+                        return [{"document_id": 44}] if state["form"] else []
+                    if "FROM voucher_check_status" in sql:
+                        return [{"check_id": 1}] if state["check"] else []
+                    if "COUNT(*) as cnt" in sql:
+                        return [{"cnt": state["signature"]}]
+                    if "SELECT DISTINCT document_id FROM voucher_line_documents" in sql:
+                        return []
+                    raise AssertionError(f"Unexpected fixture read: {sql}")
+
+                stack.enter_context(patch.object(verification, "execute_query_pg", side_effect=query))
+                stack.enter_context(patch.object(verification, "get_document_auth_roles_batch", return_value={}))
+                stack.enter_context(patch.object(verification, "evaluate_cross_checks_for_line", return_value={
+                    "results": [{"status": state["cross"], "name": "Fixture rule", "message": "Fixture result"}]}))
+                stack.enter_context(patch.object(verification, "_has_pending_account_head_note", return_value=state["note"]))
+                shortfalls = stack.enter_context(patch.object(verification, "_write_shortfall_observations", return_value=False))
+                write = stack.enter_context(patch.object(verification, "execute_write_pg"))
+                reason = verification.compute_and_persist_cleared_status(7, detail=True, persist=False, sibling_ids=[7], rulebook=profile)
+                self.assertEqual(reason["cleared_status"], expected)
+                write.assert_not_called()
+                shortfalls.assert_not_called()
+                saved = verification.compute_and_persist_cleared_status(7, sibling_ids=[7], rulebook=profile)
+                self.assertEqual(saved["cleared_status"], expected)
+                self.assertEqual(write.call_args.args[1], (expected, 1, 7))
+
+    def test_unclassified_line_is_not_written_as_cleared(self):
+        from routers import verification
+        with patch.object(verification, "execute_query_pg", return_value=[{
+            "id": 7, "session_id": 10, "transaction_ref": "FIXTURE-1", "row_data": {},
+            "extract_amount": 100, "client_id": 1,
+            "category_id_applied": None, "category_name_applied": None}]), \
+             patch.object(verification, "execute_write_pg") as write:
+            result = verification.compute_and_persist_cleared_status(
+                7, detail=True, sibling_ids=[7], rulebook={"categories": [], "voucher_checks": []})
+        self.assertIsNone(result["cleared_status"])
+        write.assert_not_called()
 
 
 if __name__ == "__main__":

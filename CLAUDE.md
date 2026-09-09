@@ -13,14 +13,14 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
-- routers/dashboard.py + static/index.html, script.js → dashboard cards and live overview KPIs (db size, open queries, verification progress, errors, overdue uploads). See CHANGELOG_ARCHIVE.md.
+- routers/dashboard.py + static/index.html, script.js → dashboard cards, PostgreSQL client-data size estimates, and live overview KPIs. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Client Data Bank: availability, coverage calendar, overdue-upload detection, upload-frequency settings, preview/search/filter. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py + static/upload.* → Excel upload, mapping, date parsing, row/blank-field handling, validation, change detection, import/export, saved mappings, rate derivation. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, column mapping/reordering, rate-source rules, subtotal default, backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js → per-client voucher-prefix category configuration; requires `?client_id=`, entry-aware header chrome. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → shared schema, DB access, app startup, router mounting, root redirects; SQLite for local logs/legacy, pooled Postgres for business modules when `DATABASE_URL` is set. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → schema, startup, routes, SQLite logs/legacy, and pooled PostgreSQL business data configured through `DATABASE_URL`. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
@@ -248,12 +248,13 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-02/04: Tray/VBS lifecycle, duplicate-controller prevention, bounded Postgres startup, and health reporting completed; Postgres pool gained stale-connection retry and warm-start tuning.
 - 2026-09-03/04: Configurable Verification fields, Category roles/signatories, reusable Applied Cross-checks, and Rulebook runtime linkage completed; Category procedure-only saves were corrected.
 - 2026-09-05: Unconfigured Document previews now include active Template columns; Forms gained typed fields, linked columns, authoring, persistence, and legacy-safe Document creation.
-- 2026-09-06: Forms gained Header/Item rendering, atomic persistence, Rulebook metadata, optional-template handling, schema upgrades, and blank-only Copy from lines; detailed acceptance remains pending.
+- 2026-09-06/08: Forms gained typed Header/Item rendering, atomic persistence, Rulebook metadata, optional templates, and blank-only Copy from lines; acceptance completed.
 - 2026-09-06: D2-D5 established canonical Category Documents, authoritative Procedure/Evidence requirements, Cross-check dependencies, and frozen-Category tab governance; manually confirmed.
 - 2026-09-07: D6 Form Quantity comparisons and modal schema/cache/exit safeguards were manually confirmed; D7 retired Evidence Type authoring while preserving legacy values.
-- 2026-09-07: D8 guarded migration implementation is complete; live source/target and seven-field mapping approval remains required. D9 configuration hardening is manually confirmed.
+- 2026-09-07/08: D8 migration and legacy retirement completed with source records retained; D9 configuration hardening manually confirmed. See CHANGELOG_ARCHIVE.md.
 - 2026-09-07: P7 amount mismatches now require configured Amount fields; P1 removed the non-required Approved-by authority gate; both corrections manually confirmed.
 - 2026-09-08: Category Control Center, Verification smoke checks, and Workbook Form counts passed manual acceptance; Workbook fix pushed. See CHANGELOG_ARCHIVE.md.
+- 2026-09-09: Dashboard PostgreSQL sizing and combined regression completed; roadmap reconciled. Recovery evidence remains unverified. See CHANGELOG_ARCHIVE.md, "Final combined closeout - 2026-09-09".
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
