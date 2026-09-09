@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Audit Rules - Internal Audit App</title>
-    <link rel="stylesheet" href="/static/style.css?v=13">
+    <link rel="stylesheet" href="/static/style.css?v=14">
 </head>
 
 <body data-nav-module="Audit Rules" data-nav-parent="index.html">
@@ -22,6 +22,13 @@
 
     <div class="main-container">
 
+        <!-- Shared Processing UI: Supabase reads can take several seconds on a free-tier wake-up.
+             This remains non-blocking so the selected rail is visible while its data arrives. -->
+        <div id="arProcessingStatus" class="ar-processing-status" role="status" aria-live="polite"
+            aria-atomic="true" hidden>
+            <div id="arProcessingProgress" class="ar-processing-progress" aria-hidden="true"></div>
+            <span id="arProcessingMessage">Loading Audit Rules…</span>
+        </div>
 
         <!-- Three-pane shell: entity rail | list panel | detail panel. Wrapped in an id
              (arShellContainer) so the Assign Categories full-page view below can hide it
@@ -495,7 +502,7 @@
     <script src="/static/loading_ui.js"></script>
     <script src="/static/client_context.js?v=14"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/audit_rules.js?v=15"></script>
+    <script src="/static/audit_rules.js?v=18"></script>
 </body>
 
 </html>

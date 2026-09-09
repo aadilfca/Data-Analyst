@@ -8,6 +8,31 @@ When a project has been stable in real use for a while, tell Claude Code to
 compress that project's section down to just the reusable lessons (move those
 lessons into CLAUDE.md's Conventions section) and delete the rest.
 
+## Audit Rules first-click rail restore race - 2026-09-09
+
+`static/audit_rules.js` now records an explicit rail click while startup is waiting for the
+Templates request. The later URL-restore pass yields to that choice, preventing Documents,
+Cross-checks, Categories, or Voucher-level Checks from being replaced after the first click.
+Choosing Documents during that window also starts its list load. `audit_rules.html` bumped the
+script cache version to `v=16`.
+
+JavaScript syntax and whitespace checks passed. Focused Audit Rules coverage passed 113 tests and
+26 subtests. A delayed-start Playwright check confirmed the first Cross-checks click remains
+active and visible; a second browser check confirmed all four rail buttons switch panels.
+
+## Audit Rules staged processing feedback - 2026-09-09
+
+`static/audit_rules.html` now has a non-blocking page-level status row. `static/audit_rules.js`
+keeps the existing `LoadingUI` simulated progress bar alive across parallel Documents,
+Cross-checks, Categories, Voucher-level Checks, and Template reads, with stage messages and a
+counter so one completed request cannot hide another still in progress. `static/style.css` adds
+the responsive status-row styling. The shared stylesheet cache marker moved from `v=13` to `v=14`
+on all 18 pages; Audit Rules JavaScript moved to `v=17`. `static/loading_ui.js` was reused unchanged.
+
+JavaScript syntax and whitespace checks passed. A delayed-response Playwright check confirmed the
+status row appears with a stage message and is hidden after all loads finish. The focused Audit
+Rules suite remains green at 113 tests and 26 subtests.
+
 ## Final combined closeout - 2026-09-09
 
 Aadil accepted the dashboard correction and requested a single final closeout with no further
@@ -5241,3 +5266,17 @@ Python compilation, JavaScript syntax, and diff checks passed. Manual local-serv
 required for mapped Physical Vendor Bill save/reload, green completion dot, Cross-check chain,
 Procedure count, and live Observation badge refresh before Git closeout. The user confirmed these
 checks; one separate Procedure-window mismatch-chip correction remains.
+## Audit Rules sub-component processing feedback - 2026-09-09
+
+Extended the existing Audit Rules processing banner to delayed Document, Cross-check, Category,
+Voucher-level Check, matrix, template-field, signature-specimen, applied-rule, and Assign Categories
+reads and writes. Each operation increments the shared counter and clears it in `finally`/equivalent
+cleanup, so parallel free-tier requests keep the indicator visible until all work completes.
+
+`static/audit_rules.js` cache version moved to v18. JavaScript syntax and diff checks passed; focused
+Audit Rules tests and browser checks remain required before Git closeout.
+
+The follow-up review found a misplaced processing increment in the signature-specimen delete path:
+Cross-check cache loading received the increment while signature deletion owned the cleanup. The
+increment now sits beside its matching `finally` cleanup, so the shared banner can hide after all
+operations finish.

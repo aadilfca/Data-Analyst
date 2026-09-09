@@ -5368,6 +5368,46 @@ body {
    AUDIT RULES MODULE (Phase 5 of 9 — frontend shell)
    ============================================= */
 
+/* Page-level processing feedback for slow Supabase reads. The shell remains visible and usable
+   while this non-blocking status row explains which Audit Rules data is being fetched. */
+.ar-processing-status {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 14px;
+    padding: 10px 14px;
+    border: 1px solid #bfdbfe;
+    border-radius: 10px;
+    background: #eff6ff;
+    color: #1e3a8a;
+    font-size: 13px;
+    font-weight: 600;
+}
+.ar-processing-status[hidden] {
+    display: none;
+}
+.ar-processing-progress {
+    flex: 0 1 260px;
+    min-width: 150px;
+}
+.ar-processing-progress .ui-progress-bar-wrapper {
+    min-width: 0;
+}
+.ar-processing-progress .ui-progress-bar-label {
+    display: none;
+}
+
+@media (max-width: 640px) {
+    .ar-processing-status {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 6px;
+    }
+    .ar-processing-progress {
+        width: 100%;
+    }
+}
+
 /* Three-pane shell: entity rail | list panel | detail panel. */
 .audit-rules-shell {
     display: flex;

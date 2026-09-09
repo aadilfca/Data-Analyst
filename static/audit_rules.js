@@ -94,6 +94,37 @@ const arSaveBtn = document.getElementById('arSaveBtn');
 const arDeleteBtn = document.getElementById('arDeleteBtn');
 const arRestoreBtn = document.getElementById('arRestoreBtn');
 
+// Shared Processing UI: Audit Rules can make several independent reads on a cold/free-tier
+// Supabase instance. Keep one page-level progress bar alive while any of those reads is active,
+// with a plain-language stage message beside it so a slow response is distinguishable from a
+// stalled page. The counter prevents one parallel read from hiding the indicator for another.
+const arProcessingStatus = document.getElementById('arProcessingStatus');
+const arProcessingProgress = document.getElementById('arProcessingProgress');
+const arProcessingMessage = document.getElementById('arProcessingMessage');
+let arProcessingOperations = 0;
+
+function beginAuditRulesProcessing(message) {
+    if (!arProcessingStatus || !arProcessingProgress) return;
+    arProcessingOperations += 1;
+    arProcessingStatus.hidden = false;
+    arProcessingStatus.classList.remove('is-error');
+    if (arProcessingMessage) arProcessingMessage.textContent = message || 'Loading Audit Rules…';
+    if (arProcessingOperations === 1 && window.LoadingUI) {
+        window.LoadingUI.showProgressBar(arProcessingProgress, {
+            mode: 'simulated',
+            message: 'Working…'
+        });
+    }
+}
+
+function endAuditRulesProcessing() {
+    if (!arProcessingStatus || !arProcessingProgress) return;
+    arProcessingOperations = Math.max(0, arProcessingOperations - 1);
+    if (arProcessingOperations > 0) return;
+    if (window.LoadingUI) window.LoadingUI.hideProgressBar(arProcessingProgress);
+    arProcessingStatus.hidden = true;
+}
+
 // ---------- STATUS MESSAGES ----------
 // Detail-panel-scoped status (save/delete/restore results) — same timeout-based
 // show/hide pattern as columns.js's showModalStatus().
@@ -113,6 +144,7 @@ function showDetailStatus(message, type) {
 // "fresh load" reset point below.
 async function loadDocuments() {
     const includeInactive = arShowInactiveCheckbox.checked;
+    beginAuditRulesProcessing('Loading Documents…');
     window.LoadingUI.showSkeleton(arListBody, 6);
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents?include_inactive=' + includeInactive + '&limit=' + DOCUMENTS_PAGE_SIZE + '&offset=0');
@@ -127,6 +159,8 @@ async function loadDocuments() {
         arListEmptyMessage.textContent = '❌ Error loading documents: ' + error.message;
         arListEmptyMessage.style.display = 'block';
         arLoadMoreBtn.style.display = 'none';
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -134,6 +168,7 @@ async function loadDocuments() {
 // so the currently-selected/highlighted row (if any) isn't disturbed.
 async function loadMoreDocuments() {
     const includeInactive = arShowInactiveCheckbox.checked;
+    beginAuditRulesProcessing('Loading more Documents...');
     window.LoadingUI.showSpinner(arLoadMoreBtn, 'Loading');
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents?include_inactive=' + includeInactive + '&limit=' + DOCUMENTS_PAGE_SIZE + '&offset=' + documentsOffset);
@@ -148,6 +183,7 @@ async function loadMoreDocuments() {
         showDetailStatus('❌ Error loading more documents: ' + error.message, 'error');
     } finally {
         window.LoadingUI.hideSpinner(arLoadMoreBtn);
+        endAuditRulesProcessing();
     }
 }
 
@@ -329,6 +365,7 @@ function removeRole(value) {
 // fetch. Only active templates are offered, matching how the rest of the app treats
 // is_active=0 templates as retired.
 async function loadTemplatesForDocuments() {
+    beginAuditRulesProcessing('Loading Templates…');
     if (arTemplateSelect) window.LoadingUI.showFieldLoading(arTemplateSelect);
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/templates');
@@ -341,6 +378,7 @@ async function loadTemplatesForDocuments() {
         console.error('Failed to load templates for Documents:', error);
     } finally {
         if (arTemplateSelect) window.LoadingUI.hideFieldLoading(arTemplateSelect);
+        endAuditRulesProcessing();
     }
 }
 
@@ -352,6 +390,8 @@ async function loadVerificationFieldsForTemplate(templateId) {
         resetVerificationFieldPolicy();
         return;
     }
+
+    beginAuditRulesProcessing('Loading Template fields...');
 
     verificationTemplateLoading = true;
     verificationPolicyState = null;
@@ -406,6 +446,8 @@ async function loadVerificationFieldsForTemplate(templateId) {
         arVerificationPolicyStatus.className = 'ar-verification-policy-status error';
         arVerificationOptionalFields.innerHTML = '';
         arVerificationOptionalSelect.innerHTML = '<option value="">Unable to load Template columns</option>';
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -598,6 +640,7 @@ function setLegacyPhysicalBillOptionVisible(visible) {
 async function toggleDocumentTransactionLevelApproval(checked) {
     if (!editingId) return;
 
+    beginAuditRulesProcessing('Saving approval setting...');
     try {
         const res = await fetch(
             API_BASE + '/api/audit-rules/documents/' + editingId + '/transaction-level-approval',
@@ -613,11 +656,14 @@ async function toggleDocumentTransactionLevelApproval(checked) {
         showDetailStatus('✅ Transaction level approval updated.', 'success');
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectDocument(id) {
+    beginAuditRulesProcessing('Loading Document details...');
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + id);
         if (!res.ok) throw new Error('Document not found');
@@ -672,6 +718,8 @@ async function selectDocument(id) {
         loadDocuments();
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -868,6 +916,7 @@ let currentSpecimensDoc = null;
 async function loadDocumentSignatureSpecimens(doc) {
     const requestToken = ++signatureSpecimenLoadToken;
     currentSpecimensDoc = doc;
+    beginAuditRulesProcessing('Loading signature specimens...');
     try {
         const res = await window.ApiUtils.apiFetch(
             API_BASE + '/api/audit-rules/signature-specimens?client_id=' + getSelectedClientId() +
@@ -882,6 +931,8 @@ async function loadDocumentSignatureSpecimens(doc) {
         if (requestToken !== signatureSpecimenLoadToken || currentDocumentRecord?.id !== doc.id) return;
         arDocSignatureSpecimensContainer.innerHTML =
             '<div class="ar-list-empty">❌ Error loading signature specimens: ' + error.message + '</div>';
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -1041,6 +1092,7 @@ async function addSignatureSpecimenPerson(documentId, roleName, inputEl, authori
     if (!name) return;
     const authority = authorityInputEl ? authorityInputEl.value.trim() : '';
 
+    beginAuditRulesProcessing('Saving signature specimen...');
     try {
         await ensureDocumentAuthorisationRole(documentId, roleName);
         const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens', {
@@ -1064,10 +1116,13 @@ async function addSignatureSpecimenPerson(documentId, roleName, inputEl, authori
         if (currentSpecimensDoc) await loadDocumentSignatureSpecimens(currentSpecimensDoc);
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
 async function toggleSignatureSpecimenActive(specimenId, activate) {
+    beginAuditRulesProcessing(activate ? 'Restoring signature specimen...' : 'Deactivating signature specimen...');
     try {
         const url = API_BASE + '/api/audit-rules/signature-specimens/' + specimenId + (activate ? '/restore' : '');
         const res = await fetch(url, { method: activate ? 'POST' : 'DELETE' });
@@ -1079,12 +1134,15 @@ async function toggleSignatureSpecimenActive(specimenId, activate) {
         if (currentSpecimensDoc) await loadDocumentSignatureSpecimens(currentSpecimensDoc);
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
 async function hardDeleteSignatureSpecimen(specimenId, name, role) {
     if (!confirm('Permanently delete the signature specimen for "' + name + '" (' + role + ')? This cannot be undone — use Deactivate instead for a normal personnel change.')) return;
 
+    beginAuditRulesProcessing('Deleting signature specimen...');
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/signature-specimens/' + specimenId + '/hard-delete', { method: 'DELETE' });
         const result = await res.json();
@@ -1095,6 +1153,8 @@ async function hardDeleteSignatureSpecimen(specimenId, name, role) {
         if (currentSpecimensDoc) await loadDocumentSignatureSpecimens(currentSpecimensDoc);
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -1142,6 +1202,12 @@ arRestoreBtn.addEventListener('click', restoreDocument);
 // own SAVE logic).
 let currentEntityType = 'documents';
 
+// A rail click can happen while window.onload is still waiting for the shared Template list.
+// Remember that explicit user choice so the later URL-restore pass cannot switch the page back
+// to the view that was present when the document first loaded. This is page-lifetime state only:
+// a fresh load starts with no user choice and restores the URL normally.
+let userSelectedEntityType = null;
+
 const arRailDocuments = document.getElementById('arRailDocuments');
 const arRailCrossChecks = document.getElementById('arRailCrossChecks');
 const arRailCategories = document.getElementById('arRailCategories');
@@ -1155,7 +1221,10 @@ const arRailVoucherChecks = document.getElementById('arRailVoucherChecks');
 const arVoucherChecksListSection = document.getElementById('arVoucherChecksListSection');
 const arVoucherChecksDetailSection = document.getElementById('arVoucherChecksDetailSection');
 
-function switchEntityType(type) {
+function switchEntityType(type, options) {
+    const userInitiated = Boolean(options && options.userInitiated);
+    if (userInitiated) userSelectedEntityType = type;
+
     currentEntityType = type;
 
     arRailDocuments.classList.toggle('active', type === 'documents');
@@ -1183,12 +1252,14 @@ function switchEntityType(type) {
     if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, type);
 
     if (type === 'cross-checks') {
+        beginAuditRulesProcessing('Loading Cross-checks…');
         // Refresh the Documents cache every time this view is opened, so the "add
         // document" picker and field-eligibility logic reflect any Documents-side
         // edits made since the last visit. Returned (not just fired) so the URL-restore
         // path in window.onload can await these caches before selecting a specific item.
-        return loadAllDocumentsForCrossChecks().then(loadCrossChecks);
+        return loadAllDocumentsForCrossChecks().then(loadCrossChecks).finally(endAuditRulesProcessing);
     } else if (type === 'categories') {
+        beginAuditRulesProcessing('Loading Categories and supporting rules…');
         // Refresh all three caches every time this view is opened, so the Documents/
         // Cross-checks pickers, the eligibility check, and the rule-count badge (Phase 3 of 3)
         // all reflect the latest state. loadVoucherChecks() is chained here (not fired in
@@ -1203,11 +1274,15 @@ function switchEntityType(type) {
             loadAllDocumentsForCrossChecks(),
             loadAllCrossChecksForCategories(),
             loadVoucherChecks()
-        ]).then(loadCategories);
+        ]).then(loadCategories).finally(endAuditRulesProcessing);
     } else if (type === 'voucher-checks') {
-        return loadVoucherChecks();
+        beginAuditRulesProcessing('Loading Voucher-level Checks…');
+        return loadVoucherChecks().finally(endAuditRulesProcessing);
     }
-    return Promise.resolve();
+    // Documents are the default view, so the initial URL restore loads them separately. A
+    // user click can pre-empt that restore while page-start work is still pending; reload the
+    // list here so choosing Documents first never leaves its panel empty.
+    return userInitiated ? loadDocuments() : Promise.resolve();
 }
 
 // ---------- DOM REFS ----------
@@ -1277,6 +1352,7 @@ function showCrossCheckDetailStatus(message, type) {
 
 // ---------- DOCUMENT CACHE (for the add-document picker + field eligibility) ----------
 async function loadAllDocumentsForCrossChecks() {
+    beginAuditRulesProcessing('Loading Documents for Cross-checks…');
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents?include_inactive=false');
         if (!res.ok) throw new Error('Failed to load documents');
@@ -1284,6 +1360,8 @@ async function loadAllDocumentsForCrossChecks() {
     } catch (error) {
         allDocuments = [];
         showCrossCheckDetailStatus('❌ Error loading documents: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -1294,6 +1372,7 @@ function getDocumentById(id) {
 // ---------- LOAD & RENDER LIST ----------
 async function loadCrossChecks() {
     const includeInactive = arCrossCheckShowInactiveCheckbox.checked;
+    beginAuditRulesProcessing('Loading Cross-checks…');
     window.LoadingUI.showSkeleton(arCrossCheckListBody, 6);
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=' + includeInactive + '&limit=' + CROSS_CHECKS_PAGE_SIZE + '&offset=0');
@@ -1308,11 +1387,14 @@ async function loadCrossChecks() {
         arCrossCheckListEmptyMessage.textContent = '❌ Error loading cross-checks: ' + error.message;
         arCrossCheckListEmptyMessage.style.display = 'block';
         arCrossCheckLoadMoreBtn.style.display = 'none';
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
 async function loadMoreCrossChecks() {
     const includeInactive = arCrossCheckShowInactiveCheckbox.checked;
+    beginAuditRulesProcessing('Loading more Cross-checks...');
     window.LoadingUI.showSpinner(arCrossCheckLoadMoreBtn, 'Loading');
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks?include_inactive=' + includeInactive + '&limit=' + CROSS_CHECKS_PAGE_SIZE + '&offset=' + crossChecksOffset);
@@ -1327,6 +1409,7 @@ async function loadMoreCrossChecks() {
         showCrossCheckDetailStatus('❌ Error loading more cross-checks: ' + error.message, 'error');
     } finally {
         window.LoadingUI.hideSpinner(arCrossCheckLoadMoreBtn);
+        endAuditRulesProcessing();
     }
 }
 
@@ -1389,6 +1472,7 @@ function fetchMatrixColumnsForDoc(documentId) {
         return matrixColumnsInFlight[documentId];
     }
     const promise = (async () => {
+        beginAuditRulesProcessing('Loading Cross-check fields...');
         try {
             const docRes = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + documentId);
             if (!docRes.ok) throw new Error('document lookup failed');
@@ -1432,6 +1516,7 @@ function fetchMatrixColumnsForDoc(documentId) {
             matrixColumnsByDoc[documentId] = [];
         } finally {
             delete matrixColumnsInFlight[documentId];
+            endAuditRulesProcessing();
         }
         return matrixColumnsByDoc[documentId];
     })();
@@ -1934,6 +2019,7 @@ function updateCompareToVoucherLineHint() {
 
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectCrossCheck(id) {
+    beginAuditRulesProcessing('Loading Cross-check details...');
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks/' + id);
         if (!res.ok) throw new Error('Cross-check not found');
@@ -1973,6 +2059,8 @@ async function selectCrossCheck(id) {
         loadCrossChecks();
     } catch (error) {
         showCrossCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -2100,10 +2188,10 @@ async function restoreCrossCheck() {
 }
 
 // ---------- WIRE UP EVENT LISTENERS ----------
-arRailDocuments.addEventListener('click', () => switchEntityType('documents'));
-arRailCrossChecks.addEventListener('click', () => switchEntityType('cross-checks'));
-arRailCategories.addEventListener('click', () => switchEntityType('categories'));
-arRailVoucherChecks.addEventListener('click', () => switchEntityType('voucher-checks'));
+arRailDocuments.addEventListener('click', () => switchEntityType('documents', { userInitiated: true }));
+arRailCrossChecks.addEventListener('click', () => switchEntityType('cross-checks', { userInitiated: true }));
+arRailCategories.addEventListener('click', () => switchEntityType('categories', { userInitiated: true }));
+arRailVoucherChecks.addEventListener('click', () => switchEntityType('voucher-checks', { userInitiated: true }));
 
 arCrossCheckAddNewBtn.addEventListener('click', startNewCrossCheck);
 arCrossCheckShowInactiveCheckbox.addEventListener('change', loadCrossChecks);
@@ -2508,12 +2596,17 @@ function showClearingRules() {
 }
 
 async function loadCategoryValidationRules(categoryId) {
+    beginAuditRulesProcessing('Loading Category checks...');
+    try {
     const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories/' + categoryId + '/validation-rules');
     if (!res.ok) throw new Error('Failed to load validation rules');
     const rules = await res.json(); const p = rules.procedure_evidence || {};
     document.getElementById('arProcedureRulesBody').innerHTML = ''; (p.checks || []).forEach(addProcedureRuleRow);
     categoryLegacyMathRuleCount = (rules.mathematical_cross_checks || []).length;
     updateCategoryControlMetrics();
+    } finally {
+        endAuditRulesProcessing();
+    }
 }
 
 const arCategoryClearedRequirementsList = document.getElementById('arCategoryClearedRequirementsList');
@@ -2537,6 +2630,7 @@ async function renderCategoryClearedRequirements(categoryId) {
         return;
     }
 
+    beginAuditRulesProcessing('Loading cleared requirements...');
     arCategoryClearedRequirementsList.innerHTML = '';
     const loading = document.createElement('div');
     loading.className = 'ar-cleared-requirements-hint';
@@ -2551,6 +2645,8 @@ async function renderCategoryClearedRequirements(categoryId) {
     } catch (error) {
         arCategoryClearedRequirementsList.innerHTML = '';
         console.warn('Failed to load cleared-requirements summary:', error);
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -2665,11 +2761,16 @@ async function getCategoryDocumentAuthorisation(documentId) {
         return categoryDocumentAuthorisationCache[documentId];
     }
     const result = (async () => {
+        beginAuditRulesProcessing('Loading Document authorisation...');
+        try {
         const documentRes = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + documentId);
         if (!documentRes.ok) throw new Error('Failed to load Document authorisation values');
         return {
             roles: (await documentRes.json()).auth_roles || []
         };
+        } finally {
+            endAuditRulesProcessing();
+        }
     })();
     categoryDocumentAuthorisationCache[documentId] = result;
     try {
@@ -2689,6 +2790,8 @@ async function getCategoryProcedureValues(documentId, condition) {
 async function getCategorySelectedFields(documentId) {
     const cached = categoryDocumentPolicyCache[documentId];
     if (cached) return cached.fields || cached;
+    beginAuditRulesProcessing('Loading Category document fields...');
+    try {
     const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/documents/' + documentId);
     if (!res.ok) throw new Error('Failed to load Template fields');
     const doc = await res.json();
@@ -2702,6 +2805,9 @@ async function getCategorySelectedFields(documentId) {
     const fields = columns.map(field => field.column_name).filter(Boolean);
     categoryDocumentPolicyCache[documentId] = { templateId: doc.template_id, fields };
     return fields;
+    } finally {
+        endAuditRulesProcessing();
+    }
 }
 
 // ---------- STATUS MESSAGES ----------
@@ -2719,6 +2825,7 @@ function showCategoryDetailStatus(message, type) {
 
 // ---------- CROSS-CHECK CACHE (for the add-cross-check picker + removal warning) ----------
 async function loadAllCrossChecksForCategories() {
+    beginAuditRulesProcessing('Loading Cross-check rules for Categories…');
     try {
         // Include inactive definitions so an existing Category can display and detach one
         // safely; the picker below still offers active definitions only.
@@ -2728,6 +2835,8 @@ async function loadAllCrossChecksForCategories() {
     } catch (error) {
         allCrossChecks = [];
         showCategoryDetailStatus('❌ Error loading cross-checks: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -2786,6 +2895,7 @@ async function loadCategories() {
         updateCategoriesLoadMoreVisibility();
         return;
     }
+    beginAuditRulesProcessing('Loading Categories…');
     window.LoadingUI.showSkeleton(arCategoryListBody, 6);
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive + '&limit=' + CATEGORIES_PAGE_SIZE + '&offset=0');
@@ -2800,6 +2910,8 @@ async function loadCategories() {
         arCategoryListEmptyMessage.textContent = '❌ Error loading categories: ' + error.message;
         arCategoryListEmptyMessage.style.display = 'block';
         arCategoryLoadMoreBtn.style.display = 'none';
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -2807,6 +2919,7 @@ async function loadMoreCategories() {
     const includeInactive = arCategoryShowInactiveCheckbox.checked;
     const cached = categoriesListCache[includeInactive];
     if (!cached) return;
+    beginAuditRulesProcessing('Loading more Categories...');
     window.LoadingUI.showSpinner(arCategoryLoadMoreBtn, 'Loading');
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories?include_inactive=' + includeInactive + '&limit=' + CATEGORIES_PAGE_SIZE + '&offset=' + cached.items.length);
@@ -2820,6 +2933,7 @@ async function loadMoreCategories() {
         showCategoryDetailStatus('❌ Error loading more categories: ' + error.message, 'error');
     } finally {
         window.LoadingUI.hideSpinner(arCategoryLoadMoreBtn);
+        endAuditRulesProcessing();
     }
 }
 
@@ -3271,12 +3385,18 @@ function removeCategoryCrossCheck(ccId) {
 async function getCategoryCrossCheckDefinition(ccId) {
     if (categoryCrossCheckDetailCache[ccId]) return categoryCrossCheckDetailCache[ccId];
     const promise = (async () => {
+        beginAuditRulesProcessing('Loading Category Cross-check details...');
+        try {
         const detailRes = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks/' + ccId);
         if (!detailRes.ok) throw new Error('Cross-check not found');
         const detail = await detailRes.json();
         const matrixRes = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/cross-checks/' + ccId + '/matrix');
         if (!matrixRes.ok) throw new Error('Cross-check matrix not found');
-        return { detail, matrix: await matrixRes.json() };
+        const result = { detail, matrix: await matrixRes.json() };
+        return result;
+        } finally {
+            endAuditRulesProcessing();
+        }
     })();
     categoryCrossCheckDetailCache[ccId] = promise;
     try {
@@ -3562,6 +3682,7 @@ function removeCategoryCrossCheck(ccId) {
 
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectCategory(id) {
+    beginAuditRulesProcessing('Loading Category details...');
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories/' + id);
         if (!res.ok) throw new Error('Category not found');
@@ -3604,6 +3725,8 @@ async function selectCategory(id) {
         loadCategories();
     } catch (error) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -3861,6 +3984,8 @@ function showAssignCategoriesToast(msg) {
 // existing in-app button click listener ignores the returned promise, so this is fully
 // backward-compatible with that call site.
 async function openAssignCategoriesView() {
+    beginAuditRulesProcessing('Opening Assign Categories...');
+    try {
     // Confirmed fix: window.onload firing doesn't guarantee client_context.js's async session
     // fetch has resolved yet - a fast click on the "Assign Categories" button right after page
     // load can fire before getSelectedClientId() has a real value, sending client_id=null to
@@ -3885,6 +4010,9 @@ async function openAssignCategoriesView() {
         await refreshAssignCategoriesCategoryOptions();
     } else {
         await loadAssignCategoriesData();
+    }
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -3918,6 +4046,7 @@ async function loadAssignCategoriesData() {
     arAssignCategoriesEmpty.style.display = 'none';
     arAssignCategoriesSubtitle.textContent = '';
 
+    beginAuditRulesProcessing('Loading Assign Categories data...');
     try {
         const [categoriesRes, accountsRes] = await Promise.all([
             window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories?include_inactive=false'),
@@ -3970,6 +4099,8 @@ async function loadAssignCategoriesData() {
         arAssignCategoriesEmpty.textContent = '❌ Error loading data: ' + error.message;
         arAssignCategoriesEmpty.style.display = 'block';
         updateAssignCategoriesUnassignedBadge();
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -3991,6 +4122,7 @@ function renderAssignCategoriesTable() {
 // per-row-swap technique applyCategoryToRows() already uses — this never touches the table's
 // scroll container itself, so scroll position is naturally preserved.
 async function refreshAssignCategoriesCategoryOptions() {
+    beginAuditRulesProcessing('Refreshing Category options...');
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories?include_inactive=false');
         if (!res.ok) throw new Error('Failed to load categories');
@@ -4003,6 +4135,8 @@ async function refreshAssignCategoriesCategoryOptions() {
         updateAssignCategoriesUnassignedBadge();
     } catch (error) {
         console.warn('Failed to refresh category options:', error);
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -4179,6 +4313,7 @@ async function assignCategory(accountId, categoryId, forceApply) {
     const targetAccount = getAssignCategoriesAccountById(accountId);
     const previousCategoryId = targetAccount ? targetAccount.category_id : null;
 
+    beginAuditRulesProcessing('Saving Category assignment...');
     try {
         const res = await fetch(API_BASE + '/api/trial-balance/assign-category', {
             method: 'PUT',
@@ -4220,6 +4355,8 @@ async function assignCategory(accountId, categoryId, forceApply) {
             oldRow.replaceWith(buildAssignCategoriesRow(targetAccount));
         }
         showAssignCategoriesStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -4262,6 +4399,7 @@ async function resetAssignCategories() {
     );
     if (!proceed) return;
 
+    beginAuditRulesProcessing('Resetting Category assignments...');
     try {
         const res = await fetch(API_BASE + '/api/trial-balance/reset-categories?client_id=' + clientId, {
             method: 'POST'
@@ -4273,7 +4411,9 @@ async function resetAssignCategories() {
         // Full reload rather than a local state patch — simplest way to guarantee the
         // table matches the server exactly after a bulk change touching every row.
         await loadAssignCategoriesData();
+        endAuditRulesProcessing();
     } catch (error) {
+        endAuditRulesProcessing();
         showAssignCategoriesStatus('❌ Error: ' + error.message, 'error');
     }
 }
@@ -4387,6 +4527,11 @@ const AR_VALID_ENTITY_TYPES = ['documents', 'cross-checks', 'categories', 'vouch
 // pushInPageNavEntry() always pushes AFTER updateAuditRulesUrl() has updated the URL to match the
 // view being entered). Mirrors verification.js's restoreVerificationViewFromUrl().
 async function restoreAuditRulesViewFromUrl() {
+    // If the user clicked a rail while page-start work was still pending, that click is the
+    // authoritative view choice for this page life. The click handler has already started the
+    // required list load, so replaying the URL here would only risk putting an older view back.
+    if (userSelectedEntityType) return;
+
     const restoreParams = new URLSearchParams(window.location.search);
     const viewParam = restoreParams.get('view');
 
@@ -4415,6 +4560,9 @@ async function restoreAuditRulesViewFromUrl() {
         // section above) so the relevant select*() call below only fires once the cache it
         // needs (allDocuments/allCrossChecks/etc.) is actually populated.
         await switchEntityType(restoredEntity);
+        // The user may have clicked a different rail while the restore loads were in flight.
+        // Do not select an item from the stale URL view after that newer choice took over.
+        if (userSelectedEntityType && userSelectedEntityType !== restoredEntity) return;
         if (idParam) {
             const id = parseInt(idParam, 10);
             if (restoredEntity === 'cross-checks') await selectCrossCheck(id);
@@ -4502,6 +4650,7 @@ function showVoucherCheckDetailStatus(message, type) {
 async function loadVoucherChecks() {
     initVoucherCheckSortable();
     const includeInactive = arVoucherCheckShowInactiveCheckbox.checked;
+    beginAuditRulesProcessing('Loading Voucher-level Checks…');
     window.LoadingUI.showSkeleton(arVoucherCheckListBody, 6);
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/voucher-checks?include_inactive=' + includeInactive);
@@ -4513,6 +4662,8 @@ async function loadVoucherChecks() {
         arVoucherCheckListBody.innerHTML = '';
         arVoucherCheckListEmptyMessage.textContent = '❌ Error loading voucher-level checks: ' + error.message;
         arVoucherCheckListEmptyMessage.style.display = 'block';
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -4624,6 +4775,7 @@ function initVoucherCheckSortable() {
 // above, shared across Documents/etc.) rather than duplicating it.
 // ---------- SELECT / NEW ----------
 async function selectVoucherCheck(id) {
+    beginAuditRulesProcessing('Loading Voucher-level Check details...');
     try {
         const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/voucher-checks/' + id);
         if (!res.ok) throw new Error('Voucher-level check not found');
@@ -4650,6 +4802,8 @@ async function selectVoucherCheck(id) {
         loadVoucherChecks(); // refresh selected-row highlight, same pattern as Documents
     } catch (error) {
         showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
