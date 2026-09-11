@@ -1,7 +1,7 @@
 """Application data adapter for the ledger reconciliation engine.
 
-This module translates stored Client Data Bank rows and Trial Balance category
-assignments into the canonical DataFrames consumed by
+This module translates stored Client Data Bank rows and report-scoped Trial
+Balance account assignments into the canonical DataFrames consumed by
 ``services.ledger_group_summary``.  It has no report calculations and never
 modifies application data.
 """
@@ -356,15 +356,16 @@ def build_report_source(
     )
 
 
-def _load_account_rows(client_id: int, query_fn: Callable[..., list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def _load_account_rows(
+    client_id: int,
+    query_fn: Callable[..., list[dict[str, Any]]],
+    diagnostics: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     latest_rows = query_fn(
         """
-        SELECT a.account_code, a.account_name, a.source_account_type,
-               c.name AS category_name
+        SELECT a.account_code, a.account_name, a.source_account_type
         FROM trial_balance_accounts a
         JOIN trial_balance_uploads u ON u.id = a.upload_id
-        LEFT JOIN audit_rule_categories c
-               ON c.id = a.category_id AND c.is_active = TRUE
         WHERE u.client_id = %s AND u.status = 'parsed'
           AND u.id = (
               SELECT id FROM trial_balance_uploads
@@ -376,16 +377,37 @@ def _load_account_rows(client_id: int, query_fn: Callable[..., list[dict[str, An
         """,
         (client_id, client_id),
     )
-    assignment_rows = query_fn(
+    category_set_rows = query_fn(
         """
-        SELECT aca.account_code, arc.name AS category_name
-        FROM account_category_assignments aca
-        LEFT JOIN audit_rule_categories arc
-               ON arc.id = aca.category_id AND arc.is_active = TRUE
-        WHERE aca.client_id = %s
+        SELECT id
+        FROM report_category_sets
+        WHERE client_id = %s AND purpose_key = 'ledger_summary' AND is_active = TRUE
+        ORDER BY id DESC
+        LIMIT 1
         """,
         (client_id,),
     )
+    assignment_rows = []
+    if category_set_rows:
+        assignment_rows = query_fn(
+            """
+            SELECT a.account_code, c.label AS category_name
+            FROM report_account_category_assignments a
+            JOIN report_category_sets s ON s.id = a.category_set_id
+            JOIN report_categories c ON c.id = a.category_id AND c.is_active = TRUE
+            WHERE a.client_id = %s AND a.category_set_id = %s
+              AND s.purpose_key = 'ledger_summary' AND s.is_active = TRUE
+            """,
+            (client_id, category_set_rows[0]["id"]),
+        )
+    else:
+        diagnostics.append(
+            _diagnostic(
+                "no_ledger_summary_category_set",
+                "warning",
+                "No active Ledger Summary category set is configured; unmapped accounts will require review.",
+            )
+        )
 
     merged: dict[str, dict[str, Any]] = {}
     for row in latest_rows:
@@ -395,7 +417,7 @@ def _load_account_rows(client_id: int, query_fn: Callable[..., list[dict[str, An
                 "account_code": code,
                 "account_title": row.get("account_name"),
                 "account_type": row.get("source_account_type"),
-                "category": row.get("category_name") or "",
+                "category": "",
             }
     for row in assignment_rows:
         code = _canonical_code(row.get("account_code"))
@@ -465,7 +487,8 @@ def load_ledger_report_source(
     metadata["source_row_count"] = len(rows)
     metadata["source_template_ids"] = sorted(template_ids)
     metadata["source_upload_ids"] = sorted(upload_ids)
-    account_rows = _load_account_rows(client_id, query_fn)
+    account_diagnostics: list[dict[str, Any]] = []
+    account_rows = _load_account_rows(client_id, query_fn, account_diagnostics)
     source = build_report_source(
         rows,
         account_rows,
@@ -473,6 +496,13 @@ def load_ledger_report_source(
         period_end=period_end,
         metadata=metadata,
     )
+    if account_diagnostics:
+        source = LedgerReportSource(
+            source.journal,
+            source.coa,
+            tuple([*source.diagnostics, *account_diagnostics]),
+            source.metadata,
+        )
     if metadata.get("selection_required"):
         diagnostics = list(source.diagnostics)
         diagnostics.append(

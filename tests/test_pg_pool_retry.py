@@ -298,15 +298,16 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
             with patch("builtins.print") as printed:
                 database.init_db_postgres(conn)
 
-        self.assertEqual(
-            conn.executed,
-            [
-                ("SELECT to_regclass('public.audit_rules_config_state')", None),
-                ("\n            SELECT pg_get_constraintdef(oid)\n            FROM pg_constraint\n            WHERE conrelid = 'public.audit_rule_documents'::regclass\n              AND conname = 'audit_rule_documents_document_type_check'\n        ", None),
-                ("\n            SELECT column_name\n            FROM information_schema.columns\n            WHERE table_schema = 'public'\n              AND table_name = 'audit_rule_document_fields'\n        ", None),
-                ("SELECT to_regclass('public.voucher_line_form_entries'), to_regclass('public.voucher_line_form_values')", None),
-            ],
-        )
+        self.assertEqual(conn.executed[:4], [
+            ("SELECT to_regclass('public.audit_rules_config_state')", None),
+            ("\n            SELECT pg_get_constraintdef(oid)\n            FROM pg_constraint\n            WHERE conrelid = 'public.audit_rule_documents'::regclass\n              AND conname = 'audit_rule_documents_document_type_check'\n        ", None),
+            ("\n            SELECT column_name\n            FROM information_schema.columns\n            WHERE table_schema = 'public'\n              AND table_name = 'audit_rule_document_fields'\n        ", None),
+            ("SELECT to_regclass('public.voucher_line_form_entries'), to_regclass('public.voucher_line_form_values')", None),
+        ])
+        self.assertEqual(len(conn.executed), 11)
+        self.assertTrue(any("CREATE TABLE IF NOT EXISTS report_category_sets" in sql for sql, _ in conn.executed))
+        self.assertTrue(any("CREATE TABLE IF NOT EXISTS report_categories" in sql for sql, _ in conn.executed))
+        self.assertTrue(any("CREATE TABLE IF NOT EXISTS report_account_category_assignments" in sql for sql, _ in conn.executed))
         self.assertEqual(conn.commits, 1)
         printed.assert_called_once_with(
             "[postgres] existing schema verified; skipped bootstrap"

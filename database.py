@@ -2437,6 +2437,52 @@ def init_db():
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_groups_client ON account_groups (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_groups_client_label ON account_groups (client_id, group_label)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS report_category_sets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                purpose_key TEXT NOT NULL,
+                set_name TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, purpose_key)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_report_category_sets_client ON report_category_sets (client_id)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS report_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_set_id INTEGER NOT NULL,
+                category_key TEXT NOT NULL,
+                label TEXT NOT NULL,
+                parent_category_key TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (category_set_id) REFERENCES report_category_sets(id) ON DELETE CASCADE,
+                UNIQUE(category_set_id, category_key)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_report_categories_set ON report_categories (category_set_id)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS report_account_category_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                category_set_id INTEGER NOT NULL,
+                account_code TEXT NOT NULL,
+                category_id INTEGER NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (category_set_id) REFERENCES report_category_sets(id) ON DELETE CASCADE,
+                FOREIGN KEY (category_id) REFERENCES report_categories(id) ON DELETE CASCADE,
+                UNIQUE(category_set_id, account_code)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_client ON report_account_category_assignments (client_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_set ON report_account_category_assignments (category_set_id)")
         print("✅ Created account_category_assignments table (Phase 1 of 5: schema foundation)")
 
         # ---------- VOUCHER LINE SUPPORTING DOCUMENTS (new 6-phase requirement, Phase 1 of 6: schema) ----------
@@ -3106,6 +3152,64 @@ def _ensure_postgres_form_tables(conn):
         cur.close()
 
 
+def _ensure_postgres_report_category_tables(conn):
+    """Add report-scoped category tables to an already-bootstrapped database."""
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS report_category_sets (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                purpose_key TEXT NOT NULL,
+                set_name TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, purpose_key)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_report_category_sets_client ON report_category_sets (client_id)")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS report_categories (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                category_set_id INTEGER NOT NULL REFERENCES report_category_sets(id) ON DELETE CASCADE,
+                category_key TEXT NOT NULL,
+                label TEXT NOT NULL,
+                parent_category_key TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(category_set_id, category_key)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_report_categories_set ON report_categories (category_set_id)")
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS report_account_category_assignments (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                category_set_id INTEGER NOT NULL REFERENCES report_category_sets(id) ON DELETE CASCADE,
+                account_code TEXT NOT NULL,
+                category_id INTEGER NOT NULL REFERENCES report_categories(id) ON DELETE CASCADE,
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(category_set_id, account_code)
+            )
+        ''')
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_client "
+            "ON report_account_category_assignments (client_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_set "
+            "ON report_account_category_assignments (category_set_id)"
+        )
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
 
@@ -3122,6 +3226,7 @@ def init_db_postgres(conn):
         migrated_document_type = _ensure_postgres_audit_rule_document_type_constraint(conn)
         migrated_form_columns = _ensure_postgres_form_field_columns(conn)
         migrated_form_tables = _ensure_postgres_form_tables(conn)
+        _ensure_postgres_report_category_tables(conn)
         conn.commit()
         migration_notes = []
         if migrated_document_type:
@@ -3820,7 +3925,56 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_account_groups_client ON account_groups (client_id)")
     run("CREATE INDEX IF NOT EXISTS idx_account_groups_client_label ON account_groups (client_id, group_label)")
 
-    # ---------- 32. voucher_line_documents ----------
+    # ---------- 32. report-scoped category dimension ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS report_category_sets (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            purpose_key TEXT NOT NULL,
+            set_name TEXT NOT NULL,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, purpose_key)
+        )
+    ''', "report_category_sets")
+    run("CREATE INDEX IF NOT EXISTS idx_report_category_sets_client ON report_category_sets (client_id)")
+    run('''
+        CREATE TABLE IF NOT EXISTS report_categories (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            category_set_id INTEGER NOT NULL REFERENCES report_category_sets(id) ON DELETE CASCADE,
+            category_key TEXT NOT NULL,
+            label TEXT NOT NULL,
+            parent_category_key TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(category_set_id, category_key)
+        )
+    ''', "report_categories")
+    run("CREATE INDEX IF NOT EXISTS idx_report_categories_set ON report_categories (category_set_id)")
+    run('''
+        CREATE TABLE IF NOT EXISTS report_account_category_assignments (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            category_set_id INTEGER NOT NULL REFERENCES report_category_sets(id) ON DELETE CASCADE,
+            account_code TEXT NOT NULL,
+            category_id INTEGER NOT NULL REFERENCES report_categories(id) ON DELETE CASCADE,
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(category_set_id, account_code)
+        )
+    ''', "report_account_category_assignments")
+    run(
+        "CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_client "
+        "ON report_account_category_assignments (client_id)"
+    )
+    run(
+        "CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_set "
+        "ON report_account_category_assignments (category_set_id)"
+    )
+
+    # ---------- 33. voucher_line_documents ----------
     run('''
         CREATE TABLE IF NOT EXISTS voucher_line_documents (
             id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

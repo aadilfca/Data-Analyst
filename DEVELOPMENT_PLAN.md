@@ -46,13 +46,23 @@ Provide group selection, searchable account-code membership, account title/type,
 
 Acceptance: an auditor can review and save Bank/Cash codes without editing code.
 
-### Required design decision — report category dimension (proposed before Phase 5)
+### Required design decision — report category dimension
 
 The existing Trial Balance `category_id` and `account_category_assignments` belong exclusively to Audit Verification's `audit_rule_categories`; they must not feed Ledger Summary or future Financial Statements.
 
 Recommendation: keep Trial Balance as the central account master, but add report-scoped category sets and account-code assignments. The first set is Ledger Summary; a later set is Financial Statements. Each set owns its category definitions and assignments while sharing the same account codes. Do not add another meaning-bearing category column to `trial_balance_accounts`.
 
-Decision status: awaiting confirmation. This category foundation must be designed before Excel export and report UI work.
+Decision status: confirmed and implemented in Phase 4A. This category foundation must remain separate from Audit Verification and is required before Excel export and report UI work.
+
+### Phase 4A — Report category dimension foundation
+
+Status: implemented and awaiting user acceptance (backend-only; automated verification).
+
+Files: `database.py`, `routers/reconciliation.py`, `services/ledger_report_source.py`, `tests/test_reconciliation.py`, `tests/test_ledger_report_source.py`, `tests/test_pg_pool_retry.py`, and documentation updates.
+
+Add aligned SQLite/PostgreSQL report category sets, definitions, and account-code assignments. Provide admin APIs for set/category/mapping replacement, validate codes against the latest parsed Trial Balance, and make Ledger Summary read only the `ledger_summary` set. Audit Verification tables remain untouched.
+
+Acceptance: the same account code can have independent Audit Verification, Ledger Summary, and future Financial Statements classifications; missing Ledger Summary mapping is visible as a review warning rather than silently inherited.
 
 ### Phase 5 — Excel export engine
 
@@ -84,7 +94,7 @@ Run Bank/Cash golden comparisons plus tests for account-name variation, unmapped
 
 Each phase requires: candidate-file confirmation, approach approval, implementation and proportional verification, then Aadil’s test confirmation before the next phase. No staging, commit, or push occurs before explicit approval.
 
-Expected file lists are planning candidates only; files for each phase must be reconfirmed before implementation. Phases 1 and 2 are implemented; Phase 3 is next.
+Expected file lists are planning candidates only; files for each phase must be reconfirmed before implementation. Phases 1–3 and 4A are implemented; user acceptance remains required for 4A before Git closeout.
 
 ## Previous final combined closeout - 2026-09-09
 

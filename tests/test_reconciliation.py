@@ -47,11 +47,22 @@ def test_sqlite_init_creates_account_groups_table_and_indexes():
             try:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(account_groups)")}
                 indexes = {row[1] for row in conn.execute("PRAGMA index_list(account_groups)")}
+                report_tables = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'report_%'"
+                    )
+                }
             finally:
                 conn.close()
             assert {"client_id", "group_label", "account_code", "is_active"}.issubset(columns)
             assert "idx_account_groups_client" in indexes
             assert "idx_account_groups_client_label" in indexes
+            assert report_tables == {
+                "report_category_sets",
+                "report_categories",
+                "report_account_category_assignments",
+            }
         finally:
             database.DB_NAME = original_db_name
 
@@ -152,3 +163,106 @@ def test_list_groups_returns_only_active_membership_as_grouped_codes():
         {"group_label": "Bank", "account_codes": ["B1", "B2"], "updated_at": None},
         {"group_label": "Cash", "account_codes": ["C1"], "updated_at": None},
     ]
+
+
+def test_report_category_set_creation_is_separate_from_audit_categories():
+    def query(sql, params=None):
+        if "FROM clients" in sql:
+            return [{"id": 7}]
+        if "FROM report_category_sets" in sql:
+            return []
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    with patch.object(reconciliation, "execute_query_pg", side_effect=query), \
+         patch.object(reconciliation, "execute_write_pg", return_value=31), \
+         patch.object(reconciliation, "log_audit"):
+        response = reconciliation.create_report_category_set(
+            7,
+            reconciliation.ReportCategorySetCreate(
+                purpose_key="Ledger Summary",
+                set_name="Ledger Summary Categories",
+            ),
+        )
+
+    assert response["id"] == 31
+    assert response["purpose_key"] == "ledger_summary"
+    assert response["category_count"] == 0
+
+
+def test_report_categories_validate_parent_and_replace_active_definitions():
+    writes = []
+
+    def query(sql, params=None):
+        if "FROM report_category_sets" in sql:
+            return [{"id": 31, "client_id": 7, "purpose_key": "ledger_summary", "set_name": "Ledger", "is_active": True}]
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    def write(sql, params=None):
+        writes.append((sql, params))
+
+    with patch.object(reconciliation, "execute_query_pg", side_effect=query), \
+         patch.object(reconciliation, "execute_write_pg", side_effect=write), \
+         patch.object(reconciliation, "pg_transaction", return_value=nullcontext()), \
+         patch.object(reconciliation, "log_audit"):
+        response = reconciliation.replace_report_categories(
+            31,
+            reconciliation.ReportCategoryDefinitionsUpdate(
+                categories=[
+                    reconciliation.ReportCategoryDefinition(category_key="Operating", label="Operating"),
+                    reconciliation.ReportCategoryDefinition(
+                        category_key="Operating Expense",
+                        label="Operating Expense",
+                        parent_category_key="Operating",
+                        sort_order=1,
+                    ),
+                ]
+            ),
+        )
+
+    assert response["count"] == 2
+    assert response["categories"][1]["parent_category_key"] == "operating"
+    assert sum("INSERT INTO report_categories" in sql for sql, _ in writes) == 2
+
+
+def test_report_assignments_validate_trial_balance_codes_and_category_keys():
+    writes = []
+
+    def query(sql, params=None):
+        if "FROM report_category_sets" in sql:
+            return [{"id": 31, "client_id": 7, "purpose_key": "ledger_summary", "set_name": "Ledger", "is_active": True}]
+        if "FROM trial_balance_accounts" in sql:
+            return _account_rows()
+        if "FROM report_categories" in sql:
+            return [{"id": 101, "category_key": "bank"}]
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    def write(sql, params=None):
+        writes.append((sql, params))
+
+    with patch.object(reconciliation, "execute_query_pg", side_effect=query), \
+         patch.object(reconciliation, "execute_write_pg", side_effect=write), \
+         patch.object(reconciliation, "pg_transaction", return_value=nullcontext()), \
+         patch.object(reconciliation, "log_audit"):
+        response = reconciliation.replace_report_category_assignments(
+            31,
+            reconciliation.ReportCategoryAssignmentsUpdate(
+                assignments=[
+                    reconciliation.ReportAccountCategoryAssignment(account_code="B1", category_key="Bank"),
+                ]
+            ),
+        )
+
+    assert response["count"] == 1
+    assert writes[0][0].startswith("DELETE FROM report_account_category_assignments")
+    assert writes[1][1] == (7, 31, "B1", 101)
+
+    with pytest.raises(HTTPException) as duplicate:
+        reconciliation._clean_report_assignments(
+            reconciliation.ReportCategoryAssignmentsUpdate(
+                assignments=[
+                    reconciliation.ReportAccountCategoryAssignment(account_code="B1", category_key="Bank"),
+                    reconciliation.ReportAccountCategoryAssignment(account_code="B1", category_key="Bank"),
+                ]
+            )
+        )
+    assert duplicate.value.status_code == 400

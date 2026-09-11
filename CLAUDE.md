@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py -> client-scoped exact account-code group configuration and Trial Balance-based advisory suggestions. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py -> client-scoped account groups plus report-scoped category sets and exact account-code assignments. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, real DB size (Postgres/SQLite) in MB, and live overview KPIs. See CHANGELOG_ARCHIVE.md.
@@ -41,7 +41,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives (skeletons, spinners, field overlays, progress bars, persistent badges); wired app-wide. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
-- services/ledger_group_summary.py + ledger_report_source.py → pure summary engine and stored Client Data/Trial Balance adapter. See CHANGELOG_ARCHIVE.md.
+- services/ledger_group_summary.py + ledger_report_source.py → pure summary engine and stored Client Data/report-category adapter. See CHANGELOG_ARCHIVE.md.
 
 
 ## Commands
@@ -265,6 +265,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-10: Ledger Reconciliation Phase 1 added the framework-independent account-group summary engine and unit tests; Excel export and UI remain future phases.
 - 2026-09-11: Ledger Reconciliation Phase 2 added the stored Client Data/Trial Balance source adapter and diagnostics; report API remains future work.
 - 2026-09-11: Ledger Reconciliation Phase 3 added SQLite/PostgreSQL account-group storage; report-category architecture remains a prerequisite to export/UI.
+- 2026-09-11: Ledger Reconciliation report-category foundation added separate category sets, definitions, assignments, and adapter isolation; export/UI remain future work.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

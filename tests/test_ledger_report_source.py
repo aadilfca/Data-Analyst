@@ -91,7 +91,7 @@ def test_build_report_source_warns_when_journal_account_is_not_in_coa():
     assert warning["count"] == 1
 
 
-def test_load_report_source_uses_selected_upload_and_assignment_fallback():
+def test_load_report_source_uses_selected_upload_and_report_category_assignment():
     calls = []
 
     def query(sql, params=None):
@@ -103,9 +103,10 @@ def test_load_report_source_uses_selected_upload_and_assignment_fallback():
                 "account_code": "B1",
                 "account_name": "Bank A",
                 "source_account_type": "Bank",
-                "category_name": None,
             }]
-        if "FROM account_category_assignments" in sql:
+        if "FROM report_category_sets" in sql:
+            return [{"id": 31}]
+        if "FROM report_account_category_assignments" in sql:
             return [{"account_code": "C1", "category_name": "Customers"}]
         raise AssertionError(f"Unexpected query: {sql}")
 
@@ -121,7 +122,27 @@ def test_load_report_source_uses_selected_upload_and_assignment_fallback():
     assert source.metadata["client_id"] == 7
     assert source.metadata["journal_upload_id"] == 12
     assert source.coa.set_index("account_code").loc["C1", "category"] == "Customers"
+    assert not any(
+        "audit_rule_categories" in sql or "FROM account_category_assignments" in sql
+        for sql, _ in calls
+    )
     assert calls[0][1] == (7, 12)
+
+
+def test_load_report_source_warns_when_ledger_summary_category_set_is_missing():
+    def query(sql, params=None):
+        if "FROM client_data" in sql:
+            return _journal_rows()
+        if "FROM trial_balance_accounts" in sql:
+            return []
+        if "FROM report_category_sets" in sql:
+            return []
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    source = load_ledger_report_source(7, journal_upload_id=12, query_fn=query)
+
+    assert source.ready
+    assert any(item["code"] == "no_ledger_summary_category_set" for item in source.diagnostics)
 
 
 def test_load_report_source_rejects_ambiguous_selector():
@@ -140,7 +161,7 @@ def test_load_report_source_blocks_multiple_datasets_without_selection():
     def query(sql, params=None):
         if "FROM client_data" in sql:
             return rows
-        if "FROM trial_balance_accounts" in sql or "FROM account_category_assignments" in sql:
+        if "FROM trial_balance_accounts" in sql or "FROM report_category_sets" in sql:
             return []
         raise AssertionError(f"Unexpected query: {sql}")
 

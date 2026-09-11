@@ -33,8 +33,8 @@ This document lists all source files in the project, grouped by directory, with 
 | File | Purpose |
 |------|---------|
 | `services/ledger_group_summary.py` | Pure pandas engine that selects complete vouchers by account code, validates balancing, builds category/month pivots, surfaces transfers and unmapped categories, and optionally derives reconciliation proofs. |
-| `services/ledger_report_source.py` | Read-only adapter that normalizes stored Client Data Bank journal rows and Trial Balance category assignments for the ledger summary engine. |
-| `routers/reconciliation.py` | Account-group backend: exact client-scoped Bank/Cash/custom membership, advisory Trial Balance suggestions, validation, and transactional replacement. |
+| `services/ledger_report_source.py` | Read-only adapter that normalizes stored Client Data Bank journal rows and report-scoped Ledger Summary category assignments. |
+| `routers/reconciliation.py` | Account groups plus report-category sets, definitions, exact account-code assignments, validation, and transactional replacement. |
 ## Routers (`routers/`)
 
 | File | Purpose |

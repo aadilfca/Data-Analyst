@@ -1,5 +1,9 @@
 # Changelog Archive
 
+## Ledger Reconciliation & Monthly Category Summary - Phase 4A - 2026-09-11
+
+Added separate report-category storage in SQLite and PostgreSQL: client-purpose sets, reusable definitions, optional parent keys, and exact account-code assignments. Added admin reconciliation endpoints for set/category/mapping replacement with Trial Balance code validation. Updated the source adapter to use only the active `ledger_summary` set; Audit Verification categories are no longer used for Ledger Summary. Added isolation, duplicate, validation, schema-migration, and adapter tests. Focused tests passed 30; full regression passed 206 tests and 33 subtests, with 6 existing warnings.
+
 ## Ledger Reconciliation & Monthly Category Summary — Phase 3 — 2026-09-11
 
 Added aligned SQLite/PostgreSQL `account_groups` storage and `routers/reconciliation.py`. The backend lists saved client groups, suggests accounts from the latest parsed Trial Balance `source_account_type` only, and transactionally replaces active membership using exact account codes. Blank/duplicate/unknown codes and missing parsed Trial Balances are rejected; selected accounts remain valid even with no journal transactions. Registered the router in `main.py` and added `tests/test_reconciliation.py`. Focused tests passed 16, full regression passed 202 tests and 33 subtests. No UI, Excel export, or report-generation endpoint was added.
