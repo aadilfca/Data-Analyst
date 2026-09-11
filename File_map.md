@@ -30,13 +30,12 @@ This document lists all source files in the project, grouped by directory, with 
 | `INVESTIGATION_VERIFICATION_PERF_PHASE3.md` | Investigation + fix log for the Verification Speed Optimization Phase 3 work (procedure-modal ~7.9s, Verify sequence ~21.7s). Phase 3a reconciles/extends `PERFORMANCE_INVESTIGATION.md` and maps the modal-open call pattern + Verify-sequence steps; Phase 3c records the modal-open fetch fix with before/after DB-call-count and wall-clock numbers. Later phases (3d/3e/3f) appended here. |
 | `deactivate_pw_test_voucher_checks.py` | Standalone, manually-run script (confirmed fix, 2026-08-24) — deactivates (`is_active = FALSE`, never deletes) 6 leftover Playwright test rows in `audit_rule_voucher_checks` (ids 16-21) that leaked into real client data (Leather Crop). Exports the 13 affected `voucher_check_status` rows to a durable CSV before deactivating, re-checks `compute_and_persist_cleared_status()` on the affected vouchers and flags any Cleared/Query flip, and diagnoses (read-only, no live mutating call) whether the leftover rows caused the `verify_voucher_checks` 400 on CRV-0126-104 (confirmed they did not — that voucher's real checks were also untouched). Not wired into any API endpoint. |
 | `pw_test_voucher_checks_audit_export_2026-08-24.csv` | Durable audit-trail export (git-tracked) of the 13 `voucher_check_status` rows against Leather Crop that referenced the deactivated PW-test check ids, captured immediately before deactivation by `deactivate_pw_test_voucher_checks.py`. |
-
 ---
 ## Services (`services/`)
 | File | Purpose |
 |------|---------|
 | `services/ledger_group_summary.py` | Pure pandas engine that selects complete vouchers by account code, validates balancing, builds category/month pivots, surfaces transfers and unmapped categories, and optionally derives reconciliation proofs. |
-
+| `services/ledger_report_source.py` | Read-only adapter that normalizes stored Client Data Bank journal rows and Trial Balance category assignments for the ledger summary engine. |
 ## Routers (`routers/`)
 
 | File | Purpose |
@@ -53,7 +52,6 @@ This document lists all source files in the project, grouped by directory, with 
 | `users.py` | Manage Users backend (Admin area, Phase 2 of 7). CRUD over the `users` table, every endpoint behind `Depends(require_admin)`: list (`GET /api/users`, active-only by default), create (`POST`, bcrypt-hashes the password, rejects a duplicate username), edit username/role (`PUT /api/users/{id}`), soft-deactivate/reactivate (`POST .../deactivate`\|`reactivate`), and admin-set password reset (`PUT .../reset-password`). No self-deactivation/last-admin safeguard yet (deliberately deferred). Runs on Postgres (Supabase migration, Phase 4 of 8). |
 | `audit_rules.py` | Audit Rules module backend: full CRUD (soft-delete/restore) for the three reusable rule-building entities — Documents (with auth roles, cross-check-eligible fields, and a `template_id` link to the Data Bank template their evidence is searched in), Cross-checks (rebuilt as a document×field matrix — label-less positional field rows + per-(row×Document) template-column cells; endpoints `GET .../{id}/matrix`, `POST .../{id}/fields`, `DELETE .../cross-check-fields/{id}`, `PUT .../{id}/field-order`, `PUT .../cross-check-fields/{id}/cells/{doc_id}`, `PUT .../{id}/documents`, `PUT .../{id}/meta`; the legacy flat `compare_field` model + its create/update endpoint stay only until the verification engine is migrated), and Categories (bundling Documents + Cross-checks, with a locked containment rule). Categories are what `verification.py`'s Transaction Type / audit guidance now sources from. Also hosts the Validation Rules module's backend (Phase 2 of 7): per-document `approval_required` toggle within a Category (`PUT /api/audit-rules/categories/{id}/documents/{doc_id}/approval`), automatic `matrix_version` bump (`bump_category_matrix_version()`, fired on document-membership change or an actual approval-flag change), and CRUD for `signature_specimens` (client+document+role → expected signatory name) — now soft-delete/restore like the other three entities (Soft-delete conversion, Phase 1 of 4 done): `is_active` column, `DELETE .../{id}` deactivates, `include_inactive` on the list GET, `POST .../{id}/restore`, plus a separate low-visibility `DELETE .../{id}/hard-delete` for genuine data-entry corrections only. Phase 2 of 4 done: the old DB-level `UNIQUE(client_id, document_id, role_name)` constraint is gone (table rebuild in `database.py`), replaced by app-level `validate_no_duplicate_active_signatory()` — blocks only a duplicate ACTIVE entry for the same person (name-matched); multiple different active people per role are allowed. |
 | `trial_balance.py` | Trial Balance module backend. `POST /api/trial-balance/upload` reads a client's TB Excel file via an explicit column-mapping payload (8 standard fields: Code/Name/Opening Dr/Cr/Period Dr/Cr/Closing Dr/Cr, plus optional Type), classifies every account as parent/leaf from its code hierarchy, supports period-dated uploads with overwrite-conflict detection, and auto-carries forward Category assignments by account code. Also provides mapping suggestions, a downloadable standard template, per-upload account listing/summary/manual leaf-parent override, a list of all uploads for a client (Available Trial Balances), and the Category-assignment endpoints (`latest-accounts`/`assign-category`, smart-fill or force-apply cascade) that back the Assign Categories screen. |
-
 ---
 
 ## Static Files (`static/`)
@@ -133,12 +131,12 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_verification_performance_metrics.py` | Verifies opt-in database metrics count reads/writes, preserve return values and exceptions, and restore request-local context after use. |
 | `test_verification_dirty_saves.py` | Playwright regression tests for Verification's revision-based dirty tracking: untouched/changed/voucher-wide lines, failed saves, edits during an in-flight save, and Verify-to-navigation duplicate prevention. |
 | `test_templates.py` | Playwright regression tests for Edit Template modal closure and draft-column persistence before explicit Save Template submission. |
+| `test_ledger_group_summary.py` | Unit tests for voucher selection, balancing, category pivots, transfers, review flags, reconciliation proofs, and cross-group checks. |
+| `test_ledger_report_source.py` | Unit tests for stored-row normalization, source diagnostics, account-category fallback, and dataset selection. |
 | `test_pg_pool_retry.py` | Unit tests for `database.py`'s stale-pooled-connection recovery — fake pool/connection/cursor (no live Postgres): `_run_pooled_pg` retries once and succeeds, propagates a non-stale error untouched, gives up after one retry; `_is_stale_pg_connection_error` type+message match; `_getconn_pg_checked` skips a closed connection; the recovery log line fires. |
 
 ---
-
 ## Notes
-
 - **Static files** are served under `/static/` and rely on `client_context.js` for global client selection and navbar behavior on every page.
 - **Routers** are mounted in `main.py`; each handles one domain (clients, verification, data, audit_rules, trial_balance, etc.).
 - **Database** is SQLite; schema is fully managed by `init_db()` in `database.py`, including idempotent migration/upgrade blocks for tables that gained columns after going live.

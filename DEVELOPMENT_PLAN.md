@@ -12,7 +12,7 @@ Lock the source contract, account-code-only group membership, category source, r
 
 ### Phase 1 — Core ledger summary engine
 
-Status: implemented provisionally; user acceptance pending.
+Status: implemented and accepted.
 
 Files: `services/ledger_group_summary.py`, `tests/test_ledger_group_summary.py`.
 
@@ -20,7 +20,9 @@ The pure pandas engine selects complete vouchers by explicit account code, separ
 
 ### Phase 2 — Existing-app data adapter
 
-Expected scope: `services/ledger_report_source.py` plus confirmed existing Data Bank/Trial Balance query files.
+Status: implemented and accepted.
+
+Files: `services/ledger_report_source.py`, `tests/test_ledger_report_source.py`, and documentation updates.
 
 Read the client’s complete journal from stored `client_data`, resolve the normalized voucher fields, read existing account-category assignments, reject incompatible source layouts clearly, and never filter by account name or voucher prefix.
 
@@ -72,7 +74,7 @@ Run Bank/Cash golden comparisons plus tests for account-name variation, unmapped
 
 Each phase requires: candidate-file confirmation, approach approval, implementation and proportional verification, then Aadil’s test confirmation before the next phase. No staging, commit, or push occurs before explicit approval.
 
-Expected file lists are planning candidates only; files for each phase must be reconfirmed before implementation. Phase 1 is the only phase currently implemented.
+Expected file lists are planning candidates only; files for each phase must be reconfirmed before implementation. Phases 1 and 2 are implemented; Phase 3 is next.
 
 ## Previous final combined closeout - 2026-09-09
 

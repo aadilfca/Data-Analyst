@@ -1,5 +1,9 @@
 # Changelog Archive
 
+## Ledger Reconciliation & Monthly Category Summary — Phase 2 — 2026-09-11
+
+Added `services/ledger_report_source.py`, a read-only adapter from stored `client_data` JSON rows and the latest parsed Trial Balance/persistent account-category assignments to the Phase 1 canonical journal and CoA DataFrames. It resolves the uploaded Jan–Jun field names by explicit aliases, filters the requested period, and reports blocking diagnostics for missing fields, invalid dates/amounts, blank journal identity, invalid JSON, ambiguous datasets, and duplicate/missing CoA codes. It never reads legacy Bank/Cash working tabs and does not depend on account names or voucher prefixes. Added focused tests in `tests/test_ledger_report_source.py`; the supplied Jan–Jun workbook shape normalized successfully (31,136 journal rows and 1,527 CoA rows, with two expected journal codes absent from the supplied CoA tab). No schema, route, UI, or report export changes were made.
+
 ## Ledger Reconciliation & Monthly Category Summary — Phase 1 — 2026-09-10
 
 Added `services/ledger_group_summary.py`, a framework-independent pandas engine for explicit account-code groups. It scopes complete vouchers, separates group and contra legs, validates each voucher and monthly balancing identity, normalizes category casing, preserves unmapped contra lines for review, and surfaces internal/related-group transfers. Optional combined and per-account reconciliation proofs are derived when opening and actual closing balances are supplied. `build_cross_group_check()` compares related summary categories with a configurable sign.
