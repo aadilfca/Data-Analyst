@@ -136,13 +136,13 @@ async function loadDbSize() {
 // ---------- MODULE CARD NAVIGATION ----------
 // Every navigating dashboard card is wired here by id (no inline onclick in index.html).
 // Verification deliberately has no ?type= param — the verification hub itself is the
-// Cash-vs-Bank chooser. "Coming Soon" cards are inert by design: no entry in this map,
-// no listener at all.
+// Cash-vs-Bank chooser and Reports are wired here. Genuinely unavailable cards have no entry.
 // A destination may be a plain URL string or a function returning one, for a card whose target can
 // only be resolved at click time — Client Settings needs the session's ?client_id= appended, so it
 // delegates to getClientSettingsUrl() (client_context.js), the same helper NAV_MANIFEST uses.
 const MODULE_CARD_DESTINATIONS = {
     verificationCard: '/static/verification.html',
+    reportsCard: '/static/reconciliation.html?view=reports',
     uploadCard: '/static/upload.html',
     dataBankCard: '/static/databank.html',
     trialBalanceCard: '/static/trial_balance.html',

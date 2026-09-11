@@ -156,7 +156,7 @@ const NAV_MANIFEST = [
                     { label: 'Store issuance vs article manufactured', url: null, state: 'coming-soon' },
                 ]
             },
-            { label: 'Reports', url: null, state: 'coming-soon' },
+            { label: 'Reports', url: '/static/reconciliation.html?view=reports', state: 'ready', module: 'Reports' },
             { label: 'Analysis', url: null, state: 'coming-soon' },
         ],
     },

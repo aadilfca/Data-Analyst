@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from datetime import date, datetime
+from io import BytesIO
 import math
 import re
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+import pandas as pd
 from pydantic import BaseModel, Field
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
 from routers.auth import require_admin
-from services.reconciliation_balance_source import normalize_balance_month
+from services.ledger_group_summary import LedgerBalanceError, build_cross_group_check, build_group_summary
+from services.ledger_report_source import load_ledger_report_source
+from services.reconciliation_balance_source import (
+    load_reconciliation_balance_source,
+    normalize_balance_month,
+)
+from services.reconciliation_xlsx import export_reconciliation_xlsx
 
 
 router = APIRouter()
@@ -276,6 +286,258 @@ def _stored_group_label(client_id: int, requested_label: str) -> str:
         (client_id, requested_label),
     )
     return rows[0]["group_label"] if rows else requested_label
+
+
+def _parse_report_period(period_start: Any, period_end: Any) -> tuple[pd.Timestamp, pd.Timestamp]:
+    try:
+        start = pd.Timestamp(period_start).normalize()
+        end = pd.Timestamp(period_end).normalize()
+    except (TypeError, ValueError) as error:
+        raise HTTPException(400, "Reporting period dates must be valid ISO dates") from error
+    if pd.isna(start) or pd.isna(end) or start > end:
+        raise HTTPException(400, "Reporting period must have a valid inclusive start and end")
+    return start, end
+
+
+def _report_diagnostic(code: str, severity: str, message: str, **extra: Any) -> dict[str, Any]:
+    item = {"code": code, "severity": severity, "message": message}
+    item.update(extra)
+    return item
+
+
+def _json_value(value: Any) -> Any:
+    """Convert pandas/numpy/date values into safe JSON response values."""
+    if value is None:
+        return None
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return value.isoformat()
+    if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+        try:
+            value = value.item()
+        except (ValueError, TypeError):
+            pass
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
+
+
+def _frame_records(frame: Any, limit: int = 200) -> list[dict[str, Any]]:
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    records = frame.head(limit).to_dict("records")
+    return [{str(key): _json_value(value) for key, value in row.items()} for row in records]
+
+
+def _category_total_records(frame: Any) -> list[dict[str, Any]]:
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    indexed = frame.reset_index()
+    first_column = indexed.columns[0]
+    if first_column != "category":
+        indexed = indexed.rename(columns={first_column: "category"})
+    return _frame_records(indexed)
+
+
+def _report_preview(summary: dict[str, Any] | None, cross_group_check: pd.DataFrame | None) -> dict[str, Any]:
+    if summary is None:
+        return {
+            "months": [],
+            "category_totals": [],
+            "monthly_balance_checks": [],
+            "categories_needing_review": [],
+            "reconciliation_proof": [],
+            "cross_group_check": _frame_records(cross_group_check),
+            "selected_voucher_count": 0,
+            "internal_transfer_count": 0,
+            "category_review_count": 0,
+        }
+    review = summary.get("categories_needing_review")
+    return {
+        "months": [str(month) for month in summary.get("months", [])],
+        "category_totals": _category_total_records(summary.get("category_totals")),
+        "monthly_balance_checks": _frame_records(summary.get("monthly_balance_checks")),
+        "categories_needing_review": _frame_records(review),
+        "reconciliation_proof": _frame_records(summary.get("reconciliation_proof")),
+        "cross_group_check": _frame_records(cross_group_check),
+        "selected_voucher_count": len(summary.get("selected_vouchers", [])),
+        "internal_transfer_count": len(summary.get("internal_transfers", [])),
+        "category_review_count": int(len(review)) if isinstance(review, pd.DataFrame) else 0,
+    }
+
+
+def _build_report_result(
+    client_id: int,
+    group_label: str,
+    period_start: Any,
+    period_end: Any,
+    *,
+    journal_upload_id: int | None = None,
+    journal_template_id: int | None = None,
+) -> dict[str, Any]:
+    """Build a report preview and retain private engine objects for download."""
+    _require_active_client(client_id)
+    requested_group = normalize_group_label(group_label)
+    if not requested_group:
+        raise HTTPException(400, "Reporting group is required")
+    start, end = _parse_report_period(period_start, period_end)
+    stored_group = _stored_group_label(client_id, requested_group)
+    group_codes = sorted(_saved_codes(client_id, stored_group))
+    if not group_codes:
+        raise HTTPException(409, "Save the account group before generating a report")
+
+    diagnostics: list[dict[str, Any]] = []
+    try:
+        source = load_ledger_report_source(
+            client_id,
+            journal_upload_id=journal_upload_id,
+            journal_template_id=journal_template_id,
+            period_start=start,
+            period_end=end,
+            query_fn=execute_query_pg,
+        )
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    diagnostics.extend(source.diagnostics)
+
+    balance_source = load_reconciliation_balance_source(
+        client_id,
+        stored_group,
+        group_codes,
+        start,
+        end,
+        query_fn=execute_query_pg,
+    )
+    diagnostics.extend(balance_source.diagnostics)
+
+    other_group = None
+    if stored_group.casefold() == "bank":
+        other_group = "Cash"
+    elif stored_group.casefold() == "cash":
+        other_group = "Bank"
+    related_codes = sorted(_saved_codes(client_id, other_group)) if other_group else []
+    summary: dict[str, Any] | None = None
+    cross_group_check: pd.DataFrame | None = None
+    controls: dict[str, dict[str, Any]] = {
+        "ledger_balance": {"status": "Blocked", "message": "The report has not been calculated."},
+        "categories": {"status": "Blocked", "count": 0, "message": "Category coverage is unavailable."},
+        "transfers": {"status": "Blocked", "count": 0, "message": "Transfer schedule is unavailable."},
+        "cross_group": {"status": "Not configured", "message": "No paired Bank/Cash group is configured."},
+        "reconciliation": {"status": "Blocked", "message": "Reconciliation proof is unavailable."},
+    }
+
+    if source.ready and balance_source.ready:
+        try:
+            summary = build_group_summary(
+                source.journal,
+                source.coa,
+                group_codes,
+                start,
+                end,
+                group_label=stored_group,
+                related_group_codes=related_codes,
+                related_group_label=other_group,
+                opening_balances=balance_source.opening_balances,
+                actual_closing_balances=balance_source.actual_closing_balances,
+            )
+        except LedgerBalanceError as error:
+            diagnostics.append(
+                _report_diagnostic(
+                    "unbalanced_vouchers",
+                    "error",
+                    str(error),
+                    checks=_frame_records(error.checks, limit=20),
+                )
+            )
+        except ValueError as error:
+            diagnostics.append(_report_diagnostic("report_input_error", "error", str(error)))
+
+    if summary is not None:
+        review_count = len(summary.get("categories_needing_review", []))
+        transfer_count = len(summary.get("internal_transfers", []))
+        controls["ledger_balance"] = {"status": "Balanced", "message": "All selected vouchers balance."}
+        controls["categories"] = {
+            "status": "Review" if review_count else "Clear",
+            "count": review_count,
+            "message": (
+                f"{review_count} contra account line(s) need category review."
+                if review_count
+                else "All contra account lines have report categories."
+            ),
+        }
+        controls["transfers"] = {
+            "status": "Ready",
+            "count": transfer_count,
+            "message": (
+                f"{transfer_count} internal transfer line(s) are shown separately."
+                if transfer_count
+                else "No internal transfers were detected."
+            ),
+        }
+        proof = summary.get("reconciliation_proof")
+        proof_matched = isinstance(proof, pd.DataFrame) and not proof.empty and bool(proof["status"].eq("Matched").all())
+        controls["reconciliation"] = {
+            "status": "Matched" if proof_matched else "Variance",
+            "message": "Opening balances plus movements agree to actual closing balances." if proof_matched else summary.get("reconciliation_message") or "Reconciliation has a variance.",
+        }
+
+        if related_codes and other_group:
+            try:
+                other_summary = build_group_summary(
+                    source.journal,
+                    source.coa,
+                    related_codes,
+                    start,
+                    end,
+                    group_label=other_group,
+                    related_group_codes=group_codes,
+                    related_group_label=stored_group,
+                )
+                current_category = f"Received/Paid to {other_group}"
+                other_category = f"Received/Paid to {stored_group}"
+                cross_group_check = build_cross_group_check(
+                    summary, other_summary, current_category, other_category, right_multiplier=-1
+                )
+                matched = not cross_group_check.empty and bool(cross_group_check["status"].eq("Matched").all())
+                controls["cross_group"] = {
+                    "status": "Matched" if matched else "Variance",
+                    "message": "Paired Bank/Cash movements agree." if matched else "Paired Bank/Cash movements have a variance.",
+                }
+            except LedgerBalanceError as error:
+                diagnostics.append(_report_diagnostic("cross_group_unbalanced", "error", str(error)))
+                controls["cross_group"] = {"status": "Blocked", "message": "The paired group contains an unbalanced voucher."}
+
+    blocking_reasons = [item["message"] for item in diagnostics if item.get("severity") == "error"]
+    if controls["categories"]["status"] == "Review":
+        blocking_reasons.append(controls["categories"]["message"])
+    if controls["cross_group"]["status"] == "Variance":
+        blocking_reasons.append(controls["cross_group"]["message"])
+    if controls["reconciliation"]["status"] != "Matched":
+        blocking_reasons.append(controls["reconciliation"]["message"])
+    can_download = summary is not None and not blocking_reasons
+
+    public = {
+        "client_id": client_id,
+        "group_label": stored_group,
+        "period_start": start.date().isoformat(),
+        "period_end": end.date().isoformat(),
+        "source": {
+            "metadata": dict(source.metadata),
+            "diagnostics": diagnostics,
+            "ready": source.ready and balance_source.ready,
+            "balance_months": balance_source.months,
+        },
+        "controls": controls,
+        "blocking_reasons": blocking_reasons,
+        "can_download": can_download,
+        "preview": _report_preview(summary, cross_group_check),
+    }
+    public["_summary"] = summary
+    public["_cross_group_check"] = cross_group_check
+    public["_opening_balances"] = balance_source.opening_balances
+    return public
 
 
 @router.get("/api/reconciliation/groups")
@@ -705,3 +967,74 @@ def replace_report_category_assignments(
         "assignments": assignments,
         "count": len(assignments),
     }
+
+
+def _public_report_result(result: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in result.items() if not key.startswith("_")}
+
+
+@router.get("/api/reconciliation/reports/preview")
+def preview_reconciliation_report(
+    client_id: int = Query(..., ge=1),
+    group_label: str = Query(..., min_length=1),
+    period_start: str = Query(...),
+    period_end: str = Query(...),
+    journal_upload_id: Optional[int] = Query(None, ge=1),
+    journal_template_id: Optional[int] = Query(None, ge=1),
+    session=Depends(require_admin),
+):
+    """Return report controls, diagnostics, and a compact preview without creating a file."""
+    result = _build_report_result(
+        client_id,
+        group_label,
+        period_start,
+        period_end,
+        journal_upload_id=journal_upload_id,
+        journal_template_id=journal_template_id,
+    )
+    return _public_report_result(result)
+
+
+@router.get("/api/reconciliation/reports/download")
+def download_reconciliation_report(
+    client_id: int = Query(..., ge=1),
+    group_label: str = Query(..., min_length=1),
+    period_start: str = Query(...),
+    period_end: str = Query(...),
+    journal_upload_id: Optional[int] = Query(None, ge=1),
+    journal_template_id: Optional[int] = Query(None, ge=1),
+    session=Depends(require_admin),
+):
+    """Generate the professional Excel report only when all accounting controls pass."""
+    result = _build_report_result(
+        client_id,
+        group_label,
+        period_start,
+        period_end,
+        journal_upload_id=journal_upload_id,
+        journal_template_id=journal_template_id,
+    )
+    if not result["can_download"]:
+        raise HTTPException(
+            409,
+            detail={
+                "message": "The report is not ready for download. Resolve the listed accounting controls first.",
+                "blocking_reasons": result["blocking_reasons"],
+            },
+        )
+
+    content = export_reconciliation_xlsx(
+        result["_summary"],
+        report_label=result["group_label"],
+        cross_group_check=result["_cross_group_check"],
+        opening_balances=result["_opening_balances"],
+    )
+    safe_group = re.sub(r"[^A-Za-z0-9_-]+", "_", result["group_label"]).strip("_") or "Ledger"
+    start_month = result["period_start"][:7]
+    end_month = result["period_end"][:7]
+    filename = f"{safe_group}_Monthly_Summary_{start_month}_to_{end_month}.xlsx"
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

@@ -3217,6 +3217,20 @@ def _ensure_postgres_report_category_tables(conn):
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS account_groups (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                group_label TEXT NOT NULL,
+                account_code TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, group_label, account_code)
+            );
+            CREATE INDEX IF NOT EXISTS idx_account_groups_client
+            ON account_groups (client_id);
+            CREATE INDEX IF NOT EXISTS idx_account_groups_client_label
+            ON account_groups (client_id, group_label);
             CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_set
             ON report_account_category_assignments (category_set_id);
             CREATE TABLE IF NOT EXISTS report_balance_inputs (

@@ -46,7 +46,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
 
 
-- static/reconciliation.html, static/reconciliation.js -> standalone Phase 4 account-group setup screen; direct client-ID access pending Phase 7 navigation. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js -> client-context Reports and account-group setup views with source diagnostics, previews, and Excel download. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -273,6 +273,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-11: Ledger Reconciliation Phase 4 added standalone exact-code account-group configuration UI with search, warnings, save feedback, and responsive styling.
 - 2026-09-11: Ledger Reconciliation Phase 5 added the source-backed Bank/Cash Excel export engine and golden workbook tests; report API/UI remain future work.
 - 2026-09-11: Ledger Reconciliation Phase 6 added standardized client/group balance inputs and completeness diagnostics; report UI remains future work.
+- 2026-09-11: Ledger Reconciliation Phase 7 added session-scoped Reports/setup, controls/navigation, existing-Postgres migration, and passed manual account-head loading.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

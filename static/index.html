@@ -28,8 +28,7 @@
              Reuses the .hub-group/.hub-group-title classes built for verification.html's hub —
              same "labelled groups of module cards" concept, shared styling in style.css.
              No inline handlers anywhere (Phase 3): navigating cards are wired by id in
-             script.js; "Coming Soon" cards are inert — no id, no handler, dimmed via the
-             .coming-soon class. -->
+             script.js; only genuinely unavailable cards remain inert via the .coming-soon class. -->
 
         <!-- Section 1: Audit work -->
         <div class="hub-group">
@@ -46,11 +45,11 @@
                 </div>
 
                 <!-- Reports -->
-                <div class="module-card coming-soon">
+                <div class="module-card" id="reportsCard">
                     <div class="module-icon">📊</div>
                     <h3>Reports</h3>
                     <p>Generate analysis reports</p>
-                    <span class="module-status coming">Coming Soon</span>
+                    <span class="module-status">Ready</span>
                 </div>
 
                 <!-- Analysis -->

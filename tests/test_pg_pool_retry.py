@@ -308,6 +308,9 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS report_category_sets" in sql for sql, _ in conn.executed))
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS report_categories" in sql for sql, _ in conn.executed))
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS report_account_category_assignments" in sql for sql, _ in conn.executed))
+        self.assertTrue(any("CREATE TABLE IF NOT EXISTS account_groups" in sql for sql, _ in conn.executed))
+        self.assertTrue(any("CREATE INDEX IF NOT EXISTS idx_account_groups_client" in sql for sql, _ in conn.executed))
+        self.assertTrue(any("CREATE INDEX IF NOT EXISTS idx_account_groups_client_label" in sql for sql, _ in conn.executed))
         self.assertEqual(conn.commits, 1)
         printed.assert_called_once_with(
             "[postgres] existing schema verified; skipped bootstrap"

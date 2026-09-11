@@ -88,11 +88,15 @@ Acceptance: 17 focused Phase 6 tests pass; combined and per-account proofs can c
 
 ### Phase 7 — Reports API and Reports screen
 
+Status: implemented and accepted (backend/UI integration; automated and manual verification). Existing PostgreSQL startup now creates account groups and indexes, correcting live Reports input loading on mature databases.
+
 Expected scope: `routers/reconciliation.py`, `main.py`, `static/reconciliation.html`, `static/reconciliation.js`, dashboard files, `static/client_context.js`, and styling as confirmed.
 
-Replace the Reports placeholder with client/period/group selection, source diagnostics, account-group review, report preview, visible control statuses, and Excel download. Register the module in `NAV_MANIFEST` and wire the dashboard Reports card using existing navigation conventions.
+Replaced the Reports placeholder with selected-client Client Data Bank dataset, period, and group selection; source diagnostics; account-group review access; report preview; visible control statuses; and guarded Excel download. Account setup uses only the selected session client, never a manual or URL Client ID. Registered the module in `NAV_MANIFEST` and wired the dashboard Reports card using existing navigation conventions. The existing summary, balance-source, and Excel-export engines remain unchanged.
 
 The UI must show ledger balance, review-category count, transfer status, cross-group status, and reconciliation status. Final download must be blocked when the accounting controls fail.
+
+Acceptance evidence: 17 focused Phase 7 tests and the full suite (224 tests, 33 subtests) pass; JavaScript/Python syntax checks pass. The existing-PostgreSQL migration is bootstrap-tested; manual acceptance confirmed selected-client Trial Balance heads load in Account setup. `main.py` required no change because the reconciliation router was already mounted.
 
 ### Phase 8 — Golden acceptance and hardening
 

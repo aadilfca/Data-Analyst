@@ -1,5 +1,17 @@
 # Changelog Archive
 
+## Ledger Reconciliation & Monthly Category Summary - Phase 7 - 2026-09-11
+
+Replaced the dashboard Reports placeholder with an integrated Reports and account-setup screen. Added report preview and guarded Excel-download APIs that load a selected Client Data Bank dataset, exact account group, Ledger Summary categories, and standardized balance inputs, then expose ledger, category, transfer, Bank/Cash cross-check, reconciliation, and source-diagnostic statuses. Downloads are blocked when required accounting controls fail.
+
+Registered Reports in the shared navigation manifest and dashboard card, preserved the existing setup workflow, and added focused report API/UI contract tests. Full regression passed with 224 tests and 33 subtests; temporary browser smoke confirmed the Reports view and dashboard entry without console/page errors. No new schema or production dependency was added.
+
+Corrected the existing-PostgreSQL deployment path: the idempotent startup upgrade now creates `account_groups` and its indexes, fixing Reports input loading on mature databases that predate that table.
+
+Account setup now derives its client exclusively from the selected application session; the manual Client ID field and URL override were removed.
+
+Manual acceptance confirmed that Account setup fetches Trial Balance heads for the selected client.
+
 ## Ledger Reconciliation & Monthly Category Summary - Phase 6 - 2026-09-11
 
 Added standardized `report_balance_inputs` storage in SQLite and PostgreSQL for client/group/account/month opening and actual closing balances, with client/group-period indexes and Postgres existing-schema upgrade support. Added `GET /api/reconciliation/balances` and transactional `PUT /api/reconciliation/balances/{client_id}`. The replacement endpoint validates parsed Trial Balance membership, saved account-group membership, month format, finite amounts, duplicate account-month keys, and preserves genuine zero balances.

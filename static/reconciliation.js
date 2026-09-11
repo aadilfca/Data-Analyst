@@ -14,17 +14,26 @@
         selectedCodes: new Set(),
         loadedGroupLabel: '',
         isBusy: false,
+        reportPayload: null,
     };
 
     const el = {};
 
     function cacheElements() {
         [
-            'sourceForm', 'clientId', 'groupLabel', 'loadButton', 'savedGroupSelect', 'globalMessage',
+            'sourceForm', 'groupLabel', 'loadButton', 'savedGroupSelect', 'globalMessage',
             'workspace', 'sourceStatus', 'activeGroupHeading', 'totalAccounts', 'selectedAccounts',
             'suggestedAccounts', 'reviewAccounts', 'accountSearch', 'accountFilter', 'selectVisibleButton',
             'clearVisibleButton', 'accountTableBody', 'tableMessage', 'visibleCount', 'selectionHint',
             'saveButton',
+            'reportsView', 'setupView', 'reportsViewButton', 'setupViewButton', 'reportForm', 'reportDataset',
+            'reportGroup', 'reportPeriodStart', 'reportPeriodEnd', 'previewReportButton', 'downloadReportButton',
+            'reportStatus', 'reportMessage', 'reportControls', 'reportDiagnosticsPanel', 'reportDiagnostics',
+            'reportBlockingReasons', 'reportPreviewPanel', 'reportPreviewMeta', 'reportPreviewEmpty',
+            'reportPreviewHead', 'reportPreviewBody',
+            'reportLedgerStatus', 'reportLedgerMessage', 'reportCategoryStatus', 'reportCategoryMessage',
+            'reportTransferStatus', 'reportTransferMessage', 'reportCrossStatus', 'reportCrossMessage',
+            'reportReconStatus', 'reportReconMessage',
         ].forEach((id) => { el[id] = document.getElementById(id); });
     }
 
@@ -41,11 +50,6 @@
         return String(value ?? '').trim();
     }
 
-    function getClientIdFromUrl() {
-        const value = new URLSearchParams(window.location.search).get('client_id');
-        return /^\d+$/.test(value || '') ? value : '';
-    }
-
     function setMessage(message, kind) {
         el.globalMessage.hidden = !message;
         el.globalMessage.className = `reconciliation-message${kind ? ` is-${kind}` : ''}`;
@@ -60,6 +64,17 @@
     function setStatus(text, kind) {
         el.sourceStatus.textContent = text;
         el.sourceStatus.className = `reconciliation-status-pill is-${kind || 'muted'}`;
+    }
+
+    function setReportMessage(message, kind) {
+        el.reportMessage.hidden = !message;
+        el.reportMessage.className = `reconciliation-message${kind ? ` is-${kind}` : ''}`;
+        el.reportMessage.textContent = message || '';
+    }
+
+    function setReportStatus(text, kind) {
+        el.reportStatus.textContent = text;
+        el.reportStatus.className = `reconciliation-status-pill is-${kind || 'muted'}`;
     }
 
     function setBusy(isBusy) {
@@ -191,6 +206,143 @@
         const payload = await apiFetch(`/api/reconciliation/groups?client_id=${encodeURIComponent(state.clientId)}`);
         state.groups = Array.isArray(payload.groups) ? payload.groups : [];
         populateSavedGroups();
+        populateReportGroups();
+    }
+
+    function populateReportGroups() {
+        if (!el.reportGroup) return;
+        const current = el.reportGroup.value;
+        el.reportGroup.innerHTML = '<option value="">Select a saved group</option>' + state.groups.map((group) => (
+            `<option value="${escapeHtml(group.group_label)}">${escapeHtml(group.group_label)} · ${group.account_codes.length} codes</option>`
+        )).join('');
+        if (state.groups.some((group) => group.group_label === current)) el.reportGroup.value = current;
+        if (!el.reportGroup.value && state.groups.length) {
+            const preferred = state.groups.find((group) => ['bank', 'cash'].includes(group.group_label.toLowerCase()));
+            el.reportGroup.value = (preferred || state.groups[0]).group_label;
+        }
+    }
+
+    async function loadReportDatasets() {
+        const datasets = await apiFetch(`/api/data/datasets?client_id=${encodeURIComponent(state.clientId)}`);
+        const usable = (Array.isArray(datasets) ? datasets : []).filter((item) => (
+            item.status !== 'Deleted' && Number(item.record_count || 0) > 0
+        ));
+        el.reportDataset.innerHTML = '<option value="">Select an imported dataset</option>' + usable.map((item) => (
+            `<option value="${escapeHtml(item.upload_id)}">${escapeHtml(item.file_name || item.template_name || `Upload ${item.upload_id}`)} · ${Number(item.record_count || 0).toLocaleString()} rows</option>`
+        )).join('');
+        if (usable.length) el.reportDataset.value = String(usable[0].upload_id);
+        if (!usable.length) setReportMessage('No imported Client Data Bank dataset is available for this client.', 'error');
+    }
+
+    function showView(view) {
+        const reports = view !== 'setup';
+        el.reportsView.hidden = !reports;
+        el.setupView.hidden = reports;
+        el.reportsViewButton.classList.toggle('is-active', reports);
+        el.setupViewButton.classList.toggle('is-active', !reports);
+        el.reportsViewButton.setAttribute('aria-selected', String(reports));
+        el.setupViewButton.setAttribute('aria-selected', String(!reports));
+        const params = new URLSearchParams(window.location.search);
+        params.set('view', reports ? 'reports' : 'setup');
+        window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`);
+    }
+
+    function reportQueryString() {
+        const params = new URLSearchParams({
+            client_id: String(state.clientId),
+            group_label: el.reportGroup.value,
+            period_start: el.reportPeriodStart.value,
+            period_end: el.reportPeriodEnd.value,
+            journal_upload_id: el.reportDataset.value,
+        });
+        return params.toString();
+    }
+
+    function setControlStatus(prefix, control) {
+        const status = control || { status: 'Blocked', message: 'Unavailable.' };
+        el[`report${prefix}Status`].textContent = status.status || 'Blocked';
+        el[`report${prefix}Message`].textContent = status.message || '';
+        el[`report${prefix}Status`].className = `reconciliation-control-value is-${String(status.status || 'blocked').toLowerCase().replace(/[^a-z]+/g, '-')}`;
+    }
+
+    function formatReportNumber(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+    }
+
+    function renderReportPreview(payload) {
+        state.reportPayload = payload;
+        const controls = payload.controls || {};
+        setControlStatus('Ledger', controls.ledger_balance);
+        setControlStatus('Category', controls.categories);
+        setControlStatus('Transfer', controls.transfers);
+        setControlStatus('Cross', controls.cross_group);
+        setControlStatus('Recon', controls.reconciliation);
+        el.reportControls.hidden = false;
+        el.reportDiagnosticsPanel.hidden = false;
+        el.reportPreviewPanel.hidden = false;
+
+        const diagnostics = (payload.source && payload.source.diagnostics) || [];
+        el.reportDiagnostics.innerHTML = diagnostics.length
+            ? diagnostics.map((item) => `<li class="is-${escapeHtml(item.severity || 'warning')}"><strong>${escapeHtml(item.code || 'Review')}</strong> ${escapeHtml(item.message || '')}</li>`).join('')
+            : '<li class="is-success">Source and accounting inputs passed the diagnostic checks.</li>';
+        const blocking = payload.blocking_reasons || [];
+        el.reportBlockingReasons.hidden = !blocking.length;
+        el.reportBlockingReasons.innerHTML = blocking.length
+            ? `<strong>Download blocked until resolved:</strong><ul>${blocking.map((reason) => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>`
+            : '';
+
+        const preview = payload.preview || {};
+        const months = preview.months || [];
+        const rows = preview.category_totals || [];
+        el.reportPreviewMeta.textContent = `${preview.selected_voucher_count || 0} vouchers · ${preview.internal_transfer_count || 0} internal transfers`;
+        el.reportPreviewHead.innerHTML = `<tr><th>Category</th>${months.map((month) => `<th>${escapeHtml(month)}</th>`).join('')}<th>Total</th></tr>`;
+        el.reportPreviewBody.innerHTML = rows.map((row) => `<tr><td><strong>${escapeHtml(row.category || '')}</strong></td>${months.map((month) => `<td>${formatReportNumber(row[month])}</td>`).join('')}<td>${formatReportNumber(row.Total)}</td></tr>`).join('');
+        el.reportPreviewEmpty.hidden = Boolean(rows.length);
+        el.reportPreviewEmpty.textContent = rows.length ? '' : 'No category movements were found for the selected period.';
+        el.downloadReportButton.disabled = !payload.can_download;
+        setReportStatus(payload.can_download ? 'Ready to download' : 'Review required', payload.can_download ? 'ready' : 'error');
+        setReportMessage(
+            payload.can_download ? 'All controls passed. The professional Excel report is ready.' : 'Preview is available, but Excel download is blocked until the listed controls are resolved.',
+            payload.can_download ? 'success' : 'info'
+        );
+    }
+
+    async function previewReport(event) {
+        if (event) event.preventDefault();
+        if (!el.reportDataset.value || !el.reportGroup.value || !el.reportPeriodStart.value || !el.reportPeriodEnd.value) {
+            setReportMessage('Select a dataset, reporting group, and complete period before previewing.', 'error');
+            return;
+        }
+        el.previewReportButton.disabled = true;
+        el.downloadReportButton.disabled = true;
+        setReportStatus('Checking controls…', 'loading');
+        try {
+            const payload = await apiFetch(`/api/reconciliation/reports/preview?${reportQueryString()}`);
+            renderReportPreview(payload);
+        } catch (error) {
+            setReportStatus('Preview failed', 'error');
+            setReportMessage(error.message || 'The report preview could not be generated.', 'error');
+        } finally {
+            el.previewReportButton.disabled = false;
+        }
+    }
+
+    function downloadReport() {
+        if (!state.reportPayload || !state.reportPayload.can_download) return;
+        window.location.href = `/api/reconciliation/reports/download?${reportQueryString()}`;
+    }
+
+    async function loadReportsWorkspace() {
+        setReportStatus('Loading inputs…', 'loading');
+        try {
+            await loadGroups();
+            await loadReportDatasets();
+            setReportStatus('Inputs ready', 'ready');
+        } catch (error) {
+            setReportStatus('Needs attention', 'error');
+            setReportMessage(error.message || 'Report inputs could not be loaded.', 'error');
+        }
     }
 
     async function loadAccounts() {
@@ -212,13 +364,10 @@
 
     async function loadWorkspace(event) {
         if (event) event.preventDefault();
-        const clientId = normaliseText(el.clientId.value);
-        if (!/^\d+$/.test(clientId) || Number(clientId) < 1) {
-            setMessage('Enter a valid positive Client ID.', 'error');
-            el.clientId.focus();
+        if (!state.clientId) {
+            setMessage('Select a client before configuring a reporting group.', 'error');
             return;
         }
-        state.clientId = clientId;
         setMessage('', '');
         setBusy(true);
         setStatus('Loading…', 'loading');
@@ -254,7 +403,7 @@
     async function saveGroup() {
         const groupLabel = currentGroupLabel();
         if (!state.clientId || !groupLabel) {
-            setMessage('Load a client and reporting group before saving.', 'error');
+            setMessage('Load a reporting group before saving.', 'error');
             return;
         }
         if (groupLabel.toLowerCase() !== state.loadedGroupLabel.toLowerCase()) {
@@ -306,17 +455,31 @@
             toggleAccount(checkbox.dataset.accountCode, checkbox.checked);
         });
         el.saveButton.addEventListener('click', saveGroup);
+        el.reportsViewButton.addEventListener('click', () => showView('reports'));
+        el.setupViewButton.addEventListener('click', () => showView('setup'));
+        el.reportForm.addEventListener('submit', previewReport);
+        el.downloadReportButton.addEventListener('click', downloadReport);
     }
 
-    function initialise() {
+    async function initialise() {
         cacheElements();
-        const clientId = getClientIdFromUrl();
+        if (window.clientContextReady) await window.clientContextReady;
+        const clientId = String(window.getSelectedClientId ? getSelectedClientId() : '');
         if (clientId) {
-            el.clientId.value = clientId;
+            state.clientId = clientId;
             el.groupLabel.value = 'Bank';
         }
         bindEvents();
-        if (clientId) loadWorkspace();
+        const view = new URLSearchParams(window.location.search).get('view') || 'reports';
+        showView(view);
+        if (clientId && view === 'setup') loadWorkspace();
+        if (clientId && view !== 'setup') loadReportsWorkspace();
+        if (!clientId) {
+            setStatus('Client required', 'error');
+            setReportStatus('Client required', 'error');
+            setMessage('Select a client before configuring a reporting group.', 'error');
+            setReportMessage('Select a client before preparing a report.', 'error');
+        }
     }
 
     document.addEventListener('DOMContentLoaded', initialise);
