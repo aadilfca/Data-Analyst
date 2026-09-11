@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reconciliation Setup | Internal Audit App</title>
+    <link rel="stylesheet" href="/static/style.css?v=14">
+</head>
+<body class="reconciliation-page">
+    <main class="reconciliation-shell">
+        <header class="reconciliation-hero">
+            <div>
+                <p class="reconciliation-eyebrow">Ledger Reconciliation</p>
+                <h1>Account-group setup</h1>
+                <p class="reconciliation-hero-copy">
+                    Select the exact Trial Balance account codes that belong to each reporting group.
+                    Suggestions are advisory; your saved code selection controls the report.
+                </p>
+            </div>
+            <div class="reconciliation-hero-mark" aria-hidden="true">↔</div>
+        </header>
+
+        <section class="reconciliation-panel reconciliation-source-panel" aria-labelledby="source-heading">
+            <div class="reconciliation-panel-heading">
+                <div>
+                    <p class="reconciliation-section-kicker">1 · Source</p>
+                    <h2 id="source-heading">Choose the client and group</h2>
+                </div>
+                <span id="sourceStatus" class="reconciliation-status-pill is-muted">Not loaded</span>
+            </div>
+            <form id="sourceForm" class="reconciliation-source-form">
+                <label class="reconciliation-field">
+                    <span>Client ID</span>
+                    <input id="clientId" name="client_id" type="number" min="1" step="1" placeholder="e.g. 1" required>
+                    <small>Use the client selected in the application. Phase 7 will connect this screen to the client picker.</small>
+                </label>
+                <label class="reconciliation-field">
+                    <span>Reporting group</span>
+                    <input id="groupLabel" name="group_label" type="text" maxlength="100" placeholder="e.g. Bank" required>
+                    <small>Bank and Cash suggestions use Trial Balance account type only. Custom groups are supported.</small>
+                </label>
+                <div class="reconciliation-source-actions">
+                    <button id="loadButton" class="reconciliation-btn reconciliation-btn-primary" type="submit">Load accounts</button>
+                    <select id="savedGroupSelect" class="reconciliation-select" aria-label="Saved reporting groups">
+                        <option value="">Saved groups</option>
+                    </select>
+                </div>
+            </form>
+            <div id="globalMessage" class="reconciliation-message" role="status" aria-live="polite" hidden></div>
+        </section>
+
+        <section id="workspace" class="reconciliation-workspace" hidden>
+            <div class="reconciliation-metrics" aria-label="Account selection summary">
+                <article class="reconciliation-metric-card">
+                    <span class="reconciliation-metric-label">Trial Balance accounts</span>
+                    <strong id="totalAccounts">0</strong>
+                    <small>Available for this client</small>
+                </article>
+                <article class="reconciliation-metric-card is-blue">
+                    <span class="reconciliation-metric-label">Selected codes</span>
+                    <strong id="selectedAccounts">0</strong>
+                    <small>Included in this group</small>
+                </article>
+                <article class="reconciliation-metric-card is-green">
+                    <span class="reconciliation-metric-label">Type suggestions</span>
+                    <strong id="suggestedAccounts">0</strong>
+                    <small>Advisory matches only</small>
+                </article>
+                <article class="reconciliation-metric-card is-amber">
+                    <span class="reconciliation-metric-label">Review flags</span>
+                    <strong id="reviewAccounts">0</strong>
+                    <small>Unusual selected types</small>
+                </article>
+            </div>
+
+            <section class="reconciliation-panel" aria-labelledby="accounts-heading">
+                <div class="reconciliation-panel-heading reconciliation-table-heading">
+                    <div>
+                        <p class="reconciliation-section-kicker">2 · Membership</p>
+                        <h2 id="accounts-heading"><span id="activeGroupHeading">Reporting</span> accounts</h2>
+                        <p class="reconciliation-help">Account names help review only. Membership is saved by exact account code.</p>
+                    </div>
+                    <div class="reconciliation-table-actions">
+                        <button id="selectVisibleButton" class="reconciliation-btn reconciliation-btn-secondary" type="button">Select visible</button>
+                        <button id="clearVisibleButton" class="reconciliation-btn reconciliation-btn-quiet" type="button">Clear visible</button>
+                    </div>
+                </div>
+
+                <div class="reconciliation-toolbar">
+                    <label class="reconciliation-search">
+                        <span class="reconciliation-sr-only">Search accounts</span>
+                        <span aria-hidden="true">⌕</span>
+                        <input id="accountSearch" type="search" placeholder="Search code, account name, or type">
+                    </label>
+                    <label class="reconciliation-filter">
+                        <span>Show</span>
+                        <select id="accountFilter" class="reconciliation-select">
+                            <option value="all">All accounts</option>
+                            <option value="selected">Selected only</option>
+                            <option value="suggested">Suggested only</option>
+                            <option value="review">Selected with review flag</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div id="tableMessage" class="reconciliation-empty" hidden></div>
+                <div class="reconciliation-table-wrap">
+                    <table class="reconciliation-account-table">
+                        <thead>
+                            <tr>
+                                <th class="reconciliation-check-column"><span class="reconciliation-sr-only">Include</span></th>
+                                <th>Account code</th>
+                                <th>Account title</th>
+                                <th>Type</th>
+                                <th>Suggestion</th>
+                                <th>Review note</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accountTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="reconciliation-table-footer">
+                    <span id="visibleCount">0 accounts shown</span>
+                    <span id="selectionHint">Select accounts to include them in this group.</span>
+                </div>
+            </section>
+
+            <section class="reconciliation-save-bar" aria-labelledby="save-heading">
+                <div>
+                    <p class="reconciliation-section-kicker">3 · Save</p>
+                    <h2 id="save-heading">Save this exact-code membership</h2>
+                    <p>Only the selected account codes will be active for this group. Accounts without journal activity remain valid selections.</p>
+                </div>
+                <button id="saveButton" class="reconciliation-btn reconciliation-btn-primary reconciliation-btn-large" type="button">Save group</button>
+            </section>
+        </section>
+
+        <footer class="reconciliation-footer">
+            <span>Audit Verification categories remain separate from report categories.</span>
+            <span>Ledger Reconciliation · Phase 4</span>
+        </footer>
+    </main>
+    <script src="/static/reconciliation.js?v=1"></script>
+</body>
+</html>

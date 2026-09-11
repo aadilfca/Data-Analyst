@@ -1,5 +1,9 @@
 # Changelog Archive
 
+## Ledger Reconciliation & Monthly Category Summary - Phase 4 - 2026-09-11
+
+Added a standalone account-group configuration screen with client/group selection, saved-group loading, searchable account-code membership, filters, select/clear-visible actions, account title/type context, advisory Bank/Cash classification warnings, selected-code metrics, save feedback, responsive styling, and no inline event handlers. The screen uses the existing reconciliation APIs and keeps membership controlled by exact Trial Balance account codes. Added frontend contract coverage; focused reconciliation tests passed 10 and the headless browser smoke check passed. The page remains directly addressable with `?client_id=` until the planned Phase 7 navigation wiring; Render smoke testing returned HTTP 503 while the service was loading.
+
 ## Ledger Reconciliation & Monthly Category Summary - Phase 4A - 2026-09-11
 
 Added separate report-category storage in SQLite and PostgreSQL: client-purpose sets, reusable definitions, optional parent keys, and exact account-code assignments. Added admin reconciliation endpoints for set/category/mapping replacement with Trial Balance code validation. Updated the source adapter to use only the active `ledger_summary` set; Audit Verification categories are no longer used for Ledger Summary. Added isolation, duplicate, validation, schema-migration, and adapter tests. Focused tests passed 30; full regression passed 206 tests and 33 subtests, with 6 existing warnings.

@@ -34,11 +34,11 @@ This document lists all source files in the project, grouped by directory, with 
 |------|---------|
 | `services/ledger_group_summary.py` | Pure pandas engine that selects complete vouchers by account code, validates balancing, builds category/month pivots, surfaces transfers and unmapped categories, and optionally derives reconciliation proofs. |
 | `services/ledger_report_source.py` | Read-only adapter that normalizes stored Client Data Bank journal rows and report-scoped Ledger Summary category assignments. |
-| `routers/reconciliation.py` | Account groups plus report-category sets, definitions, exact account-code assignments, validation, and transactional replacement. |
 ## Routers (`routers/`)
 
 | File | Purpose |
 |------|---------|
+| `reconciliation.py` | Account groups plus report-category sets, definitions, exact account-code assignments, validation, and transactional replacement. |
 | `clients.py` | Client CRUD (create/list/get/update/soft-delete/restore), unique `client_code` enforcement, and GET/PUT for a client's voucher-prefix configuration (5-way: Cash Payment/Cash Receipt/Bank Payment/Bank Receipt/Journal, `client_voucher_prefixes` table) — new clients are auto-seeded with the 5 defaults. Every route except the bare `GET /api/clients` list is behind `require_admin` (Admin area, Phase 5 of 8) — the list stays open for `client_select.js`. Runs on Postgres (Supabase migration, Phase 4 of 8). |
 | `dashboard.py` | Root/health endpoints and the main dashboard's stats (total uploads, pending verifications, total records, last upload). |
 | `data.py` | Client Data Bank backend: dataset listing, paginated row preview (`get_preview_rows` — search/amount/Sunday/data-quality filters, per-row voucher-line assignment flags, document grouping with subtotal rows), per-upload row listing, dataset/template soft-delete + restore, availability checklist, the per-day coverage calendar (`get_availability_calendar` — Sundays + firm-wide holidays), and the row revision history endpoint. Runs on Postgres (Supabase migration, Phase 5 of 8). |
@@ -77,6 +77,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `trial_balance.html` | Trial Balance module — client-context-driven upload form (Period Start/End/Type, file picker, column-mapping window with live preview and a downloadable standard-template escape hatch, overwrite-conflict confirmation), a summary tile + per-account Review Classifications table with manual leaf/parent override, and an Available Trial Balances view (dropdown of past uploads, read-only account table, delete). Reachable from the dashboard's Trial Balance card. |
 | `template-viewer.html` | Shared, reusable template-data viewer, parameterised by `?template=N` — date range + search toolbar over one template's Data Bank rows, reached from Verification's Client Data Links card strip. |
 | `audit_workbook.html` | Audit Workbook (5-phase requirement, complete) — read-only voucher-level list view of a session's verification results (Voucher No./Date/Description/Amount/Status), distinct from the existing Cashbook selection screen, parameterised by `?session=<id>` (same pattern as `template-viewer.html`'s `?template=N`). Fetch/render/filter logic lives in `audit_workbook.js`; status filter chips (All/Cleared/Query/Pending) are functional and the running-total footer reflects whatever's currently filtered/visible; a row click jumps straight to that voucher inside Verification. Peer nav bar (`#awVerificationBtn` + a static "you are here" Audit Workbook indicator) mirrors Verification's own `#cashbookBar` button pair. |
+| `reconciliation.html`, `reconciliation.js` | Standalone Phase 4 account-group setup screen: client/group selection, searchable exact-code membership, advisory type warnings, save feedback, and responsive layout. |
 
 ---
 

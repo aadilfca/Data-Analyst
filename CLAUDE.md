@@ -44,6 +44,8 @@ One line per file group: what it is now. Full build history for every entry live
 - services/ledger_group_summary.py + ledger_report_source.py → pure summary engine and stored Client Data/report-category adapter. See CHANGELOG_ARCHIVE.md.
 
 
+- static/reconciliation.html, static/reconciliation.js -> standalone Phase 4 account-group setup screen; direct client-ID access pending Phase 7 navigation. See CHANGELOG_ARCHIVE.md.
+
 ## Commands
 - Run app: [your actual run command]
 - Run tests: `./venv/Scripts/python.exe -m pytest tests/ -v`
@@ -266,6 +268,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-11: Ledger Reconciliation Phase 2 added the stored Client Data/Trial Balance source adapter and diagnostics; report API remains future work.
 - 2026-09-11: Ledger Reconciliation Phase 3 added SQLite/PostgreSQL account-group storage; report-category architecture remains a prerequisite to export/UI.
 - 2026-09-11: Ledger Reconciliation report-category foundation added separate category sets, definitions, assignments, and adapter isolation; export/UI remain future work.
+- 2026-09-11: Ledger Reconciliation Phase 4 added standalone exact-code account-group configuration UI with search, warnings, save feedback, and responsive styling.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

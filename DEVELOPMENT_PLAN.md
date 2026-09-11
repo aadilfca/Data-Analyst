@@ -40,6 +40,10 @@ Acceptance: Bank/Cash membership can be edited and reused across periods; names 
 
 ### Phase 4 — Account-group configuration interface
 
+Status: implemented and accepted (frontend-only; automated and browser smoke verification).
+
+Files: `static/reconciliation.html`, `static/reconciliation.js`, `static/style.css`, `tests/test_reconciliation.py`, and documentation updates.
+
 Expected scope: `static/reconciliation.html`, `static/reconciliation.js`, `static/style.css`.
 
 Provide group selection, searchable account-code membership, account title/type, transaction counts, include/exclude controls, warnings for unusual classifications, save feedback, and a visible selected-code summary.
@@ -56,7 +60,7 @@ Decision status: confirmed and implemented in Phase 4A. This category foundation
 
 ### Phase 4A — Report category dimension foundation
 
-Status: implemented and awaiting user acceptance (backend-only; automated verification).
+Status: implemented and accepted (backend-only; automated verification).
 
 Files: `database.py`, `routers/reconciliation.py`, `services/ledger_report_source.py`, `tests/test_reconciliation.py`, `tests/test_ledger_report_source.py`, `tests/test_pg_pool_retry.py`, and documentation updates.
 

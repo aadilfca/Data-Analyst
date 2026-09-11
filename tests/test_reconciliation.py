@@ -2,6 +2,7 @@ import os
 import sqlite3
 import tempfile
 from contextlib import nullcontext
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -266,3 +267,15 @@ def test_report_assignments_validate_trial_balance_codes_and_category_keys():
             )
         )
     assert duplicate.value.status_code == 400
+
+
+def test_reconciliation_configuration_screen_uses_delegated_actions_and_exact_code_controls():
+    html = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.html").read_text(encoding="utf-8")
+    javascript = Path(__file__).resolve().parents[1].joinpath("static", "reconciliation.js").read_text(encoding="utf-8")
+
+    assert 'id="accountTableBody"' in html
+    assert 'id="saveButton"' in html
+    assert "account-suggestions?client_id=" in javascript
+    assert "account_codes: Array.from(state.selectedCodes)" in javascript
+    assert "onclick=" not in html
+    assert "onchange=" not in html
