@@ -39,6 +39,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives (skeletons, spinners, field overlays, progress bars, persistent badges); wired app-wide. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
+- services/ledger_group_summary.py → framework-independent account-group voucher selection, balancing, category/month pivots, transfers, review flags, and optional reconciliation proof. See CHANGELOG_ARCHIVE.md.
 
 
 ## Commands
@@ -259,6 +260,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-09: Audit Rules rail clicks now take priority over delayed startup URL restore; first-click tab switching verified.
 - 2026-09-09: Audit Rules gained staged non-blocking processing feedback for slow Supabase reads; shared stylesheet cache version moved to v14.
 - 2026-09-09: Audit Rules processing feedback covers delayed row/detail, matrix, Category rule, Voucher-check, and Assign Categories operations; a counter pairing bug was corrected; audit_rules.js cache is v18.
+- 2026-09-10: Ledger Reconciliation Phase 1 added the framework-independent account-group summary engine and unit tests; Excel export and UI remain future phases.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Ledger Reconciliation & Monthly Category Summary — Phase 1 — 2026-09-10
+
+Added `services/ledger_group_summary.py`, a framework-independent pandas engine for explicit account-code groups. It scopes complete vouchers, separates group and contra legs, validates each voucher and monthly balancing identity, normalizes category casing, preserves unmapped contra lines for review, and surfaces internal/related-group transfers. Optional combined and per-account reconciliation proofs are derived when opening and actual closing balances are supplied. `build_cross_group_check()` compares related summary categories with a configurable sign.
+
+Added `tests/test_ledger_group_summary.py` covering full-voucher inclusion, category fallback, casing normalization, internal transfers, unbalanced-voucher rejection, reconciliation proofs, and cross-group checks. The engine replayed the uploaded Jan–Jun source workbook: Bank and Cash monthly movements matched the supplied reference summaries to floating-point tolerance, with zero balancing variance. No application routes, database tables, UI, or Excel export were changed in this phase.
+
 Detailed, per-phase write-ups live here — not in CLAUDE.md. This file is read by
 Claude Code only when a phase touches a file, module, or pattern already logged
 under one of the headings below. It is not read by default at session start.

@@ -32,6 +32,10 @@ This document lists all source files in the project, grouped by directory, with 
 | `pw_test_voucher_checks_audit_export_2026-08-24.csv` | Durable audit-trail export (git-tracked) of the 13 `voucher_check_status` rows against Leather Crop that referenced the deactivated PW-test check ids, captured immediately before deactivation by `deactivate_pw_test_voucher_checks.py`. |
 
 ---
+## Services (`services/`)
+| File | Purpose |
+|------|---------|
+| `services/ledger_group_summary.py` | Pure pandas engine that selects complete vouchers by account code, validates balancing, builds category/month pivots, surfaces transfers and unmapped categories, and optionally derives reconciliation proofs. |
 
 ## Routers (`routers/`)
 
