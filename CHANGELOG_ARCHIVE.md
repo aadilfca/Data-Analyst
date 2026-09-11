@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Ledger Reconciliation & Monthly Category Summary - Phase 5 - 2026-09-11
+
+Added `services/reconciliation_xlsx.py`, a source-backed OpenPyXL exporter that consumes the canonical Phase 1 summary dictionary without reimplementing voucher or category calculations. Bank and Cash workbooks now contain professional monthly summaries, internal/related transfer schedules, unmapped-category review schedules, optional cross-group checks, and combined/per-account reconciliation-proof tabs. The exporter uses typed numeric cells, `Jan-26` chronological headers, Arial typography, dark-blue headers, light-blue totals, green matched statuses, orange unavailable/variance statuses, freeze panes, safe text cleaning, and automatic Excel recalculation settings. Missing balance inputs remain visibly unavailable and are never converted to zero. Cash keeps the reference tab names `Inter company`, `Cross-check vs Bank Summary`, `Inter-Cashbook Transfers`, and `Reconciliation Proof - By Book`; Bank retains its reference summary/proof names and adds a transparent transfer/review schedule.
+
+Added `tests/test_reconciliation_xlsx.py` covering workbook structure, typed numeric round-trip, professional formatting, transfer/review/cross-check output, missing-balance handling, supplied-balance proofs, and the local golden Bank/Cash movement comparison. Focused Phase 5 tests passed 6. No Reports API, dashboard navigation, balance-input upload, or production dependency change was made.
+
 ## Ledger Reconciliation & Monthly Category Summary - Phase 4 - 2026-09-11
 
 Added a standalone account-group configuration screen with client/group selection, saved-group loading, searchable account-code membership, filters, select/clear-visible actions, account title/type context, advisory Bank/Cash classification warnings, selected-code metrics, save feedback, responsive styling, and no inline event handlers. The screen uses the existing reconciliation APIs and keeps membership controlled by exact Trial Balance account codes. Added frontend contract coverage; focused reconciliation tests passed 10 and the headless browser smoke check passed. The page remains directly addressable with `?client_id=` until the planned Phase 7 navigation wiring; Render smoke testing returned HTTP 503 while the service was loading.

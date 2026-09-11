@@ -34,6 +34,7 @@ This document lists all source files in the project, grouped by directory, with 
 |------|---------|
 | `services/ledger_group_summary.py` | Pure pandas engine that selects complete vouchers by account code, validates balancing, builds category/month pivots, surfaces transfers and unmapped categories, and optionally derives reconciliation proofs. |
 | `services/ledger_report_source.py` | Read-only adapter that normalizes stored Client Data Bank journal rows and report-scoped Ledger Summary category assignments. |
+| `services/reconciliation_xlsx.py` | OpenPyXL exporter for professional Bank/Cash monthly summaries, schedules, review controls, cross-checks, and reconciliation proofs. |
 ## Routers (`routers/`)
 
 | File | Purpose |
@@ -128,12 +129,11 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_upload_validation_counts.py` | Verifies `count_new_and_existing_rows` correctly distinguishes new vs. already-imported rows for the same client/template. |
 | `test_verification_indexes.py` | Verifies that `init_db()` creates the composite index needed for fast cashbook lookups on `client_data`. |
 | `test_verification_nav_skeleton.py` | Playwright regression tests for Verification's voucher navigation. Forces each `moveToAdjacentVoucher()` failure path (HTTP error, aborted request, empty response) plus the boundary case in headless Chromium, asserting the loading skeleton is always cleared and a working retry action is offered; also covers the Prev/Next processing UI — buttons disabled during a navigation, re-enabled per voucher position afterwards (including after a boundary or an error), and a second overlapping navigation dropped rather than duplicated. Fully hermetic: a local static file server plus stubbed `/api/` routes, so it needs no dev server, database or login. |
-| `test_verification_performance_metrics.py` | Verifies opt-in database metrics count reads/writes, preserve return values and exceptions, and restore request-local context after use. |
-| `test_verification_dirty_saves.py` | Playwright regression tests for Verification's revision-based dirty tracking: untouched/changed/voucher-wide lines, failed saves, edits during an in-flight save, and Verify-to-navigation duplicate prevention. |
+| `test_verification_performance_metrics.py`, `test_verification_dirty_saves.py` | Verify database metrics and Verification's revision-based dirty tracking, save failures, in-flight edits, and duplicate prevention. |
 | `test_templates.py` | Playwright regression tests for Edit Template modal closure and draft-column persistence before explicit Save Template submission. |
-| `test_ledger_group_summary.py` | Unit tests for voucher selection, balancing, category pivots, transfers, review flags, reconciliation proofs, and cross-group checks. |
-| `test_ledger_report_source.py` | Unit tests for stored-row normalization, source diagnostics, account-category fallback, and dataset selection. |
+| `test_ledger_group_summary.py`, `test_ledger_report_source.py` | Unit tests for canonical voucher/category summaries, transfers, proofs, source normalization, diagnostics, and dataset selection. |
 | `test_reconciliation.py` | Tests account-group schema creation, advisory suggestions, exact-code validation, transactional replacement, and grouped reads. |
+| `test_reconciliation_xlsx.py` | Tests report workbook structure, formatting, typed values, missing-balance handling, and local Bank/Cash golden movement matching. |
 | `test_pg_pool_retry.py` | Unit tests for `database.py`'s stale-pooled-connection recovery — fake pool/connection/cursor (no live Postgres): `_run_pooled_pg` retries once and succeeds, propagates a non-stale error untouched, gives up after one retry; `_is_stale_pg_connection_error` type+message match; `_getconn_pg_checked` skips a closed connection; the recovery log line fires. |
 
 ---

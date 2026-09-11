@@ -70,11 +70,13 @@ Acceptance: the same account code can have independent Audit Verification, Ledge
 
 ### Phase 5 — Excel export engine
 
+Status: implemented and ready for user acceptance (backend/export-only; automated verification).
+
 Expected scope: `services/reconciliation_xlsx.py`, exporter tests, and confirmed documentation.
 
-Generate the golden Bank and Cash workbook structures, including monthly summaries, transfer schedules, cross-checks, review schedules, combined proofs, and per-account proofs. Apply Arial, dark-blue headers, light-blue totals, green matched cells, orange variance cells, freeze panes, safe number formats, chronological months, and safe text-cell handling.
+Generate the golden Bank and Cash workbook structures through `services/reconciliation_xlsx.py`, including monthly summaries, transfer schedules, cross-checks, review schedules, combined proofs, and per-account proofs. Apply Arial, dark-blue headers, light-blue totals, green matched cells, orange variance cells, freeze panes, safe number formats, chronological months, and safe text-cell handling. Missing balance inputs remain unavailable rather than zero.
 
-Acceptance: generated figures match the reference workbooks to the agreed rupee/tolerance policy; no non-zero category is silently omitted.
+Acceptance: focused exporter tests pass; generated Bank/Cash movements match the supplied reference workbooks to floating-point tolerance; no non-zero category is silently omitted. No Reports API, dashboard navigation, or balance-upload UI is included in this phase.
 
 ### Phase 6 — Opening balances and reconciliation-proof input
 
