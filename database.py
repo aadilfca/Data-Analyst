@@ -2483,6 +2483,22 @@ def init_db():
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_client ON report_account_category_assignments (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_set ON report_account_category_assignments (category_set_id)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS report_balance_inputs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                group_label TEXT NOT NULL,
+                account_code TEXT NOT NULL,
+                period_month TEXT NOT NULL,
+                opening_balance REAL NOT NULL,
+                actual_closing_balance REAL NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, group_label, account_code, period_month)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_report_balance_inputs_client_group ON report_balance_inputs (client_id, group_label)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_report_balance_inputs_period ON report_balance_inputs (client_id, group_label, period_month)")
         print("✅ Created account_category_assignments table (Phase 1 of 5: schema foundation)")
 
         # ---------- VOUCHER LINE SUPPORTING DOCUMENTS (new 6-phase requirement, Phase 1 of 6: schema) ----------
@@ -3200,15 +3216,31 @@ def _ensure_postgres_report_category_tables(conn):
             "ON report_account_category_assignments (client_id)"
         )
         cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_set "
-            "ON report_account_category_assignments (category_set_id)"
+            """
+            CREATE INDEX IF NOT EXISTS idx_report_account_category_assignments_set
+            ON report_account_category_assignments (category_set_id);
+            CREATE TABLE IF NOT EXISTS report_balance_inputs (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                group_label TEXT NOT NULL,
+                account_code TEXT NOT NULL,
+                period_month TEXT NOT NULL,
+                opening_balance NUMERIC NOT NULL,
+                actual_closing_balance NUMERIC NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, group_label, account_code, period_month)
+            );
+            CREATE INDEX IF NOT EXISTS idx_report_balance_inputs_client_group
+            ON report_balance_inputs (client_id, group_label);
+            CREATE INDEX IF NOT EXISTS idx_report_balance_inputs_period
+            ON report_balance_inputs (client_id, group_label, period_month)
+            """
         )
     except Exception:
         conn.rollback()
         raise
     finally:
         cur.close()
-
 
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
@@ -3974,7 +4006,30 @@ def init_db_postgres(conn):
         "ON report_account_category_assignments (category_set_id)"
     )
 
-    # ---------- 33. voucher_line_documents ----------
+    # ---------- 33. standardized reconciliation balance inputs ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS report_balance_inputs (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            group_label TEXT NOT NULL,
+            account_code TEXT NOT NULL,
+            period_month TEXT NOT NULL,
+            opening_balance NUMERIC NOT NULL,
+            actual_closing_balance NUMERIC NOT NULL,
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, group_label, account_code, period_month)
+        )
+    ''', "report_balance_inputs")
+    run(
+        "CREATE INDEX IF NOT EXISTS idx_report_balance_inputs_client_group "
+        "ON report_balance_inputs (client_id, group_label)"
+    )
+    run(
+        "CREATE INDEX IF NOT EXISTS idx_report_balance_inputs_period "
+        "ON report_balance_inputs (client_id, group_label, period_month)"
+    )
+
+    # ---------- 34. voucher_line_documents ----------
     run('''
         CREATE TABLE IF NOT EXISTS voucher_line_documents (
             id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

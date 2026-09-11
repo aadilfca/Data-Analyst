@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- routers/reconciliation.py -> client-scoped account groups plus report-scoped category sets and exact account-code assignments. See CHANGELOG_ARCHIVE.md.
+- routers/reconciliation.py -> client-scoped account groups, report categories, and standardized opening/month-end balance inputs. See CHANGELOG_ARCHIVE.md.
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, real DB size (Postgres/SQLite) in MB, and live overview KPIs. See CHANGELOG_ARCHIVE.md.
@@ -43,6 +43,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
 - services/ledger_group_summary.py + ledger_report_source.py → pure summary engine and stored Client Data/report-category adapter. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
+- services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
 
 
 - static/reconciliation.html, static/reconciliation.js -> standalone Phase 4 account-group setup screen; direct client-ID access pending Phase 7 navigation. See CHANGELOG_ARCHIVE.md.
@@ -271,6 +272,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-11: Ledger Reconciliation report-category foundation added separate category sets, definitions, assignments, and adapter isolation; export/UI remain future work.
 - 2026-09-11: Ledger Reconciliation Phase 4 added standalone exact-code account-group configuration UI with search, warnings, save feedback, and responsive styling.
 - 2026-09-11: Ledger Reconciliation Phase 5 added the source-backed Bank/Cash Excel export engine and golden workbook tests; report API/UI remain future work.
+- 2026-09-11: Ledger Reconciliation Phase 6 added standardized client/group balance inputs and completeness diagnostics; report UI remains future work.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

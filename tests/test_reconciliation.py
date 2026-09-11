@@ -54,6 +54,8 @@ def test_sqlite_init_creates_account_groups_table_and_indexes():
                         "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'report_%'"
                     )
                 }
+                balance_columns = {row[1] for row in conn.execute("PRAGMA table_info(report_balance_inputs)")}
+                balance_indexes = {row[1] for row in conn.execute("PRAGMA index_list(report_balance_inputs)")}
             finally:
                 conn.close()
             assert {"client_id", "group_label", "account_code", "is_active"}.issubset(columns)
@@ -63,7 +65,11 @@ def test_sqlite_init_creates_account_groups_table_and_indexes():
                 "report_category_sets",
                 "report_categories",
                 "report_account_category_assignments",
+                "report_balance_inputs",
             }
+            assert {"group_label", "account_code", "period_month", "opening_balance", "actual_closing_balance"}.issubset(balance_columns)
+            assert "idx_report_balance_inputs_client_group" in balance_indexes
+            assert "idx_report_balance_inputs_period" in balance_indexes
         finally:
             database.DB_NAME = original_db_name
 
@@ -164,6 +170,94 @@ def test_list_groups_returns_only_active_membership_as_grouped_codes():
         {"group_label": "Bank", "account_codes": ["B1", "B2"], "updated_at": None},
         {"group_label": "Cash", "account_codes": ["C1"], "updated_at": None},
     ]
+
+
+def test_clean_balance_request_normalizes_months_and_rejects_duplicates():
+    payload = reconciliation.ReconciliationBalanceInputsUpdate(
+        group_label=" Bank ",
+        balances=[
+            reconciliation.ReconciliationBalanceInput(
+                account_code=" B1 ",
+                period_month="2026-01-31",
+                opening_balance=0,
+                actual_closing_balance=100,
+            )
+        ],
+    )
+    group_label, balances = reconciliation._clean_balance_request(payload)
+    assert group_label == "Bank"
+    assert balances[0]["account_code"] == "B1"
+    assert balances[0]["period_month"] == "2026-01"
+    assert balances[0]["opening_balance"] == 0
+
+    duplicate = reconciliation.ReconciliationBalanceInputsUpdate(
+        group_label="Bank",
+        balances=[
+            reconciliation.ReconciliationBalanceInput(account_code="B1", period_month="2026-01", opening_balance=0, actual_closing_balance=1),
+            reconciliation.ReconciliationBalanceInput(account_code="B1", period_month="2026-01-31", opening_balance=0, actual_closing_balance=1),
+        ],
+    )
+    with pytest.raises(HTTPException) as error:
+        reconciliation._clean_balance_request(duplicate)
+    assert error.value.status_code == 400
+
+
+def test_replace_balances_requires_group_membership_and_writes_complete_rows():
+    writes = []
+
+    def query(sql, params=None):
+        if "FROM clients" in sql:
+            return [{"id": 7}]
+        if "FROM trial_balance_accounts" in sql:
+            return _account_rows()
+        if "SELECT account_code FROM account_groups" in sql:
+            return [{"account_code": "B1"}]
+        if "SELECT group_label" in sql and "FROM account_groups" in sql:
+            return [{"group_label": "Bank"}]
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    def write(sql, params=None):
+        writes.append((sql, params))
+
+    payload = reconciliation.ReconciliationBalanceInputsUpdate(
+        group_label="Bank",
+        balances=[
+            reconciliation.ReconciliationBalanceInput(account_code="B1", period_month="2026-01", opening_balance=0, actual_closing_balance=100),
+            reconciliation.ReconciliationBalanceInput(account_code="B1", period_month="2026-02", opening_balance=0, actual_closing_balance=0),
+        ],
+    )
+    with patch.object(reconciliation, "execute_query_pg", side_effect=query), \
+         patch.object(reconciliation, "execute_write_pg", side_effect=write), \
+         patch.object(reconciliation, "pg_transaction", return_value=nullcontext()), \
+         patch.object(reconciliation, "log_audit"):
+        response = reconciliation.replace_reconciliation_balances(7, payload)
+
+    assert response["count"] == 2
+    assert writes[0][0].startswith("DELETE FROM report_balance_inputs")
+    assert writes[1][1] == (7, "Bank", "B1", "2026-01", 0.0, 100.0)
+
+
+def test_replace_balances_rejects_account_outside_saved_group():
+    def query(sql, params=None):
+        if "FROM clients" in sql:
+            return [{"id": 7}]
+        if "FROM trial_balance_accounts" in sql:
+            return _account_rows()
+        if "SELECT account_code FROM account_groups" in sql:
+            return [{"account_code": "B1"}]
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    payload = reconciliation.ReconciliationBalanceInputsUpdate(
+        group_label="Bank",
+        balances=[
+            reconciliation.ReconciliationBalanceInput(account_code="C1", period_month="2026-01", opening_balance=0, actual_closing_balance=1),
+        ],
+    )
+    with patch.object(reconciliation, "execute_query_pg", side_effect=query):
+        with pytest.raises(HTTPException) as error:
+            reconciliation.replace_reconciliation_balances(7, payload)
+    assert error.value.status_code == 400
+    assert error.value.detail["account_codes"] == ["C1"]
 
 
 def test_report_category_set_creation_is_separate_from_audit_categories():

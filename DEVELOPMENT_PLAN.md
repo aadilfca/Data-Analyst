@@ -80,9 +80,11 @@ Acceptance: focused exporter tests pass; generated Bank/Cash movements match the
 
 ### Phase 6 — Opening balances and reconciliation-proof input
 
-Choose and implement the balance-input method: recommended first version is a standardized table containing group, account code, opening balance, month, and actual closing balance; upload support can follow if needed.
+Status: implemented and ready for user acceptance (backend-only; automated verification).
 
-Acceptance: combined and per-account proofs show derived closing, actual closing, variance, and status; missing inputs are reported, not treated as zero; non-zero variance blocks a report from being marked reconciled.
+Implemented the recommended standardized `report_balance_inputs` table containing client, group, account code, reporting month, opening balance, and actual closing balance. Added aligned SQLite/PostgreSQL schema and indexes, transactional replacement/list APIs, exact Trial Balance and saved-group membership validation, and `services/reconciliation_balance_source.py` for completeness diagnostics and engine-map conversion. No upload workflow or UI is included yet.
+
+Acceptance: 17 focused Phase 6 tests pass; combined and per-account proofs can consume normalized inputs; missing accounts/months, duplicates, invalid values, and inconsistent openings are reported; zero balances remain valid. Report API/UI integration remains Phase 7 scope.
 
 ### Phase 7 — Reports API and Reports screen
 

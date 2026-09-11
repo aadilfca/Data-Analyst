@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import math
 import re
 from typing import Any, List, Optional
 
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
 from routers.auth import require_admin
+from services.reconciliation_balance_source import normalize_balance_month
 
 
 router = APIRouter()
@@ -19,6 +21,18 @@ router = APIRouter()
 class AccountGroupUpdate(BaseModel):
     group_label: str
     account_codes: List[str] = Field(default_factory=list)
+
+
+class ReconciliationBalanceInput(BaseModel):
+    account_code: str
+    period_month: str
+    opening_balance: float
+    actual_closing_balance: float
+
+
+class ReconciliationBalanceInputsUpdate(BaseModel):
+    group_label: str
+    balances: List[ReconciliationBalanceInput] = Field(default_factory=list)
 
 
 class ReportCategorySetCreate(BaseModel):
@@ -163,6 +177,40 @@ def _clean_group_request(payload: AccountGroupUpdate) -> tuple[str, list[str]]:
         seen.add(code)
         account_codes.append(code)
     return group_label, account_codes
+
+
+def _clean_balance_request(payload: ReconciliationBalanceInputsUpdate) -> tuple[str, list[dict[str, Any]]]:
+    group_label = normalize_group_label(payload.group_label)
+    if not group_label:
+        raise HTTPException(400, "Group label is required")
+    if len(group_label) > 100:
+        raise HTTPException(400, "Group label must be 100 characters or fewer")
+
+    cleaned: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in payload.balances:
+        account_code = normalize_account_code(item.account_code)
+        if not account_code:
+            raise HTTPException(400, "Balance account codes cannot be blank")
+        try:
+            period_month = normalize_balance_month(item.period_month)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        key = (account_code, period_month)
+        if key in seen:
+            raise HTTPException(400, f"Duplicate balance input for {account_code} in {period_month}")
+        seen.add(key)
+        if not math.isfinite(item.opening_balance) or not math.isfinite(item.actual_closing_balance):
+            raise HTTPException(400, "Balance amounts must be finite numbers")
+        cleaned.append(
+            {
+                "account_code": account_code,
+                "period_month": period_month,
+                "opening_balance": item.opening_balance,
+                "actual_closing_balance": item.actual_closing_balance,
+            }
+        )
+    return group_label, cleaned
 
 
 def _require_active_client(client_id: int) -> None:
@@ -339,6 +387,100 @@ def save_account_group(
         "group_label": group_label,
         "account_codes": account_codes,
         "count": len(account_codes),
+    }
+
+
+@router.get("/api/reconciliation/balances")
+def list_reconciliation_balances(
+    client_id: int = Query(..., ge=1),
+    group_label: Optional[str] = Query(None),
+    session=Depends(require_admin),
+):
+    """Return saved opening and actual closing balances for a client/group."""
+
+    _require_active_client(client_id)
+    filters = ["client_id = %s"]
+    params: list[Any] = [client_id]
+    if group_label:
+        filters.append("LOWER(group_label) = LOWER(%s)")
+        params.append(normalize_group_label(group_label))
+    rows = execute_query_pg(
+        """
+        SELECT group_label, account_code, period_month, opening_balance,
+               actual_closing_balance, updated_at
+        FROM report_balance_inputs
+        WHERE """ + " AND ".join(filters) + " ORDER BY LOWER(group_label), account_code, period_month",
+        tuple(params),
+    )
+    return {"client_id": client_id, "balances": rows}
+
+
+@router.put("/api/reconciliation/balances/{client_id}")
+def replace_reconciliation_balances(
+    client_id: int,
+    payload: ReconciliationBalanceInputsUpdate,
+    session=Depends(require_admin),
+):
+    """Replace one group's standardized balance-input table transactionally."""
+
+    _require_active_client(client_id)
+    group_label, balances = _clean_balance_request(payload)
+    accounts = _latest_trial_balance_accounts(client_id)
+    if not accounts:
+        raise HTTPException(409, "A parsed trial balance is required before saving balances")
+    valid_codes = {normalize_account_code(row["account_code"]) for row in accounts}
+    unknown_codes = [item["account_code"] for item in balances if item["account_code"] not in valid_codes]
+    if unknown_codes:
+        raise HTTPException(
+            400,
+            detail={
+                "message": "One or more balance account codes are not present in the latest parsed Trial Balance",
+                "account_codes": unknown_codes,
+            },
+        )
+    group_codes = _saved_codes(client_id, group_label)
+    if not group_codes:
+        raise HTTPException(409, "Save the account group before saving reconciliation balances")
+    outside_group = [item["account_code"] for item in balances if item["account_code"] not in group_codes]
+    if outside_group:
+        raise HTTPException(
+            400,
+            detail={
+                "message": "One or more balance account codes are not members of the selected account group",
+                "account_codes": outside_group,
+            },
+        )
+
+    group_label = _stored_group_label(client_id, group_label)
+    transaction = pg_transaction() if pg_transaction is not None else nullcontext()
+    with transaction:
+        execute_write_pg(
+            "DELETE FROM report_balance_inputs WHERE client_id = %s AND LOWER(group_label) = LOWER(%s)",
+            (client_id, group_label),
+        )
+        for item in balances:
+            execute_write_pg(
+                """
+                INSERT INTO report_balance_inputs
+                    (client_id, group_label, account_code, period_month, opening_balance, actual_closing_balance)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    client_id,
+                    group_label,
+                    item["account_code"],
+                    item["period_month"],
+                    item["opening_balance"],
+                    item["actual_closing_balance"],
+                ),
+            )
+
+    log_audit("Admin", "Update", "Reconciliation", f"Saved {group_label} balance inputs for client {client_id}")
+    return {
+        "client_id": client_id,
+        "group_label": group_label,
+        "balances": balances,
+        "count": len(balances),
     }
 
 

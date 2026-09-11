@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Ledger Reconciliation & Monthly Category Summary - Phase 6 - 2026-09-11
+
+Added standardized `report_balance_inputs` storage in SQLite and PostgreSQL for client/group/account/month opening and actual closing balances, with client/group-period indexes and Postgres existing-schema upgrade support. Added `GET /api/reconciliation/balances` and transactional `PUT /api/reconciliation/balances/{client_id}`. The replacement endpoint validates parsed Trial Balance membership, saved account-group membership, month format, finite amounts, duplicate account-month keys, and preserves genuine zero balances.
+
+Added `services/reconciliation_balance_source.py`, which converts stored rows into the existing summary engine's opening and month-end maps while exposing explicit diagnostics for missing inputs, duplicates, invalid rows, inconsistent openings, accounts outside the group, and missing account-month coverage. Added focused schema, API, normalization, loader, and completeness tests; 17 focused tests passed. No balance upload UI, Reports API, or dashboard navigation was added.
+
 ## Ledger Reconciliation & Monthly Category Summary - Phase 5 - 2026-09-11
 
 Added `services/reconciliation_xlsx.py`, a source-backed OpenPyXL exporter that consumes the canonical Phase 1 summary dictionary without reimplementing voucher or category calculations. Bank and Cash workbooks now contain professional monthly summaries, internal/related transfer schedules, unmapped-category review schedules, optional cross-group checks, and combined/per-account reconciliation-proof tabs. The exporter uses typed numeric cells, `Jan-26` chronological headers, Arial typography, dark-blue headers, light-blue totals, green matched statuses, orange unavailable/variance statuses, freeze panes, safe text cleaning, and automatic Excel recalculation settings. Missing balance inputs remain visibly unavailable and are never converted to zero. Cash keeps the reference tab names `Inter company`, `Cross-check vs Bank Summary`, `Inter-Cashbook Transfers`, and `Reconciliation Proof - By Book`; Bank retains its reference summary/proof names and adds a transparent transfer/review schedule.
