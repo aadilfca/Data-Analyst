@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Ledger Reconciliation & Monthly Category Summary — Phase 3 — 2026-09-11
+
+Added aligned SQLite/PostgreSQL `account_groups` storage and `routers/reconciliation.py`. The backend lists saved client groups, suggests accounts from the latest parsed Trial Balance `source_account_type` only, and transactionally replaces active membership using exact account codes. Blank/duplicate/unknown codes and missing parsed Trial Balances are rejected; selected accounts remain valid even with no journal transactions. Registered the router in `main.py` and added `tests/test_reconciliation.py`. Focused tests passed 16, full regression passed 202 tests and 33 subtests. No UI, Excel export, or report-generation endpoint was added.
+
+Design note: the existing Trial Balance category fields are Audit Verification categories, not Ledger Summary categories. They must remain separate; a report-scoped category-set/assignment foundation is required before export or report UI.
+
 ## Ledger Reconciliation & Monthly Category Summary — Phase 2 — 2026-09-11
 
 Added `services/ledger_report_source.py`, a read-only adapter from stored `client_data` JSON rows and the latest parsed Trial Balance/persistent account-category assignments to the Phase 1 canonical journal and CoA DataFrames. It resolves the uploaded Jan–Jun field names by explicit aliases, filters the requested period, and reports blocking diagnostics for missing fields, invalid dates/amounts, blank journal identity, invalid JSON, ambiguous datasets, and duplicate/missing CoA codes. It never reads legacy Bank/Cash working tabs and does not depend on account names or voucher prefixes. Added focused tests in `tests/test_ledger_report_source.py`; the supplied Jan–Jun workbook shape normalized successfully (31,136 journal rows and 1,527 CoA rows, with two expected journal codes absent from the supplied CoA tab). No schema, route, UI, or report export changes were made.

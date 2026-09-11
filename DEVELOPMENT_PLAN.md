@@ -30,7 +30,9 @@ Acceptance: the adapter produces the same normalized DataFrames used by Phase 1 
 
 ### Phase 3 — Configurable account-group backend
 
-Expected scope: `database.py`, `routers/reconciliation.py`, `main.py`, and required documentation.
+Status: implemented and accepted (backend-only; automated verification).
+
+Files: `database.py`, `routers/reconciliation.py`, `main.py`, `tests/test_reconciliation.py`, and documentation updates.
 
 Add client-scoped `account_groups` storage for group label and exact account code. Provide suggestions from account type without trusting them, support silent accounts, prevent duplicates, and allow Bank, Cash, and future groups without code changes. SQLite and PostgreSQL schema paths must remain aligned.
 
@@ -43,6 +45,14 @@ Expected scope: `static/reconciliation.html`, `static/reconciliation.js`, `stati
 Provide group selection, searchable account-code membership, account title/type, transaction counts, include/exclude controls, warnings for unusual classifications, save feedback, and a visible selected-code summary.
 
 Acceptance: an auditor can review and save Bank/Cash codes without editing code.
+
+### Required design decision — report category dimension (proposed before Phase 5)
+
+The existing Trial Balance `category_id` and `account_category_assignments` belong exclusively to Audit Verification's `audit_rule_categories`; they must not feed Ledger Summary or future Financial Statements.
+
+Recommendation: keep Trial Balance as the central account master, but add report-scoped category sets and account-code assignments. The first set is Ledger Summary; a later set is Financial Statements. Each set owns its category definitions and assignments while sharing the same account codes. Do not add another meaning-bearing category column to `trial_balance_accounts`.
+
+Decision status: awaiting confirmation. This category foundation must be designed before Excel export and report UI work.
 
 ### Phase 5 — Excel export engine
 

@@ -2422,6 +2422,21 @@ def init_db():
             )
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_category_assignments_client ON account_category_assignments (client_id)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                group_label TEXT NOT NULL,
+                account_code TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, group_label, account_code)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_groups_client ON account_groups (client_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_groups_client_label ON account_groups (client_id, group_label)")
         print("✅ Created account_category_assignments table (Phase 1 of 5: schema foundation)")
 
         # ---------- VOUCHER LINE SUPPORTING DOCUMENTS (new 6-phase requirement, Phase 1 of 6: schema) ----------
@@ -3790,6 +3805,20 @@ def init_db_postgres(conn):
         )
     ''', "account_category_assignments")
     run("CREATE INDEX IF NOT EXISTS idx_account_category_assignments_client ON account_category_assignments (client_id)")
+    run('''
+        CREATE TABLE IF NOT EXISTS account_groups (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            group_label TEXT NOT NULL,
+            account_code TEXT NOT NULL,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(client_id, group_label, account_code)
+        )
+    ''', "account_groups")
+    run("CREATE INDEX IF NOT EXISTS idx_account_groups_client ON account_groups (client_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_account_groups_client_label ON account_groups (client_id, group_label)")
 
     # ---------- 32. voucher_line_documents ----------
     run('''

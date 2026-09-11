@@ -2,8 +2,6 @@
 
 This document lists all source files in the project, grouped by directory, with a brief description of each file's *current* purpose and role. This is a snapshot of what exists today — it does not track build history or phase status; see `CHANGELOG_ARCHIVE.md` for that.
 
----
-
 ## Root Directory
 
 `DEVELOPMENT_PLAN.md` — active roadmap for evidence, phase decisions, discoveries, implementation scope, and next actions.
@@ -36,6 +34,7 @@ This document lists all source files in the project, grouped by directory, with 
 |------|---------|
 | `services/ledger_group_summary.py` | Pure pandas engine that selects complete vouchers by account code, validates balancing, builds category/month pivots, surfaces transfers and unmapped categories, and optionally derives reconciliation proofs. |
 | `services/ledger_report_source.py` | Read-only adapter that normalizes stored Client Data Bank journal rows and Trial Balance category assignments for the ledger summary engine. |
+| `routers/reconciliation.py` | Account-group backend: exact client-scoped Bank/Cash/custom membership, advisory Trial Balance suggestions, validation, and transactional replacement. |
 ## Routers (`routers/`)
 
 | File | Purpose |
@@ -133,6 +132,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_templates.py` | Playwright regression tests for Edit Template modal closure and draft-column persistence before explicit Save Template submission. |
 | `test_ledger_group_summary.py` | Unit tests for voucher selection, balancing, category pivots, transfers, review flags, reconciliation proofs, and cross-group checks. |
 | `test_ledger_report_source.py` | Unit tests for stored-row normalization, source diagnostics, account-category fallback, and dataset selection. |
+| `test_reconciliation.py` | Tests account-group schema creation, advisory suggestions, exact-code validation, transactional replacement, and grouped reads. |
 | `test_pg_pool_retry.py` | Unit tests for `database.py`'s stale-pooled-connection recovery — fake pool/connection/cursor (no live Postgres): `_run_pooled_pg` retries once and succeeds, propagates a non-stale error untouched, gives up after one retry; `_is_stale_pg_connection_error` type+message match; `_getconn_pg_checked` skips a closed connection; the recovery log line fires. |
 
 ---

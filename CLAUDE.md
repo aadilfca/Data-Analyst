@@ -12,6 +12,8 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
+- routers/reconciliation.py -> client-scoped exact account-code group configuration and Trial Balance-based advisory suggestions. See CHANGELOG_ARCHIVE.md.
+
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, real DB size (Postgres/SQLite) in MB, and live overview KPIs. See CHANGELOG_ARCHIVE.md.
 - routers/data.py + static/databank.* → Client Data Bank: availability, coverage calendar, overdue-upload detection, upload-frequency settings, preview/search/filter. See CHANGELOG_ARCHIVE.md.
@@ -262,6 +264,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-09: Audit Rules processing feedback covers delayed row/detail, matrix, Category rule, Voucher-check, and Assign Categories operations; a counter pairing bug was corrected; audit_rules.js cache is v18.
 - 2026-09-10: Ledger Reconciliation Phase 1 added the framework-independent account-group summary engine and unit tests; Excel export and UI remain future phases.
 - 2026-09-11: Ledger Reconciliation Phase 2 added the stored Client Data/Trial Balance source adapter and diagnostics; report API remains future work.
+- 2026-09-11: Ledger Reconciliation Phase 3 added SQLite/PostgreSQL account-group storage; report-category architecture remains a prerequisite to export/UI.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
