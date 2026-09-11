@@ -2020,8 +2020,12 @@ async function fetchAuditGuidanceData(type, forceRefresh = false) {
         }
         if (!res.ok) throw new Error('Failed to fetch audit guidance');
         const data = await res.json();
-        auditGuidanceCache[type] = data;
-        return data;
+        // Keep the live endpoint on the same normalized contract as a frozen session Rulebook.
+        // This attaches Category-owned Procedure/Evidence rows to their Documents so the shared
+        // modal can render the configured checklist even when no session Rulebook is present.
+        const guidance = normalizeSessionRulebookGuidance(data);
+        auditGuidanceCache[type] = guidance;
+        return guidance;
     })();
     auditGuidanceLoadingPromises[type] = loadPromise;
     try {
@@ -2209,7 +2213,14 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
                     .filter(value => value.value !== null && value.value !== undefined && String(value.value).trim() !== '')
                     .map(value => String(value.field_id))
             ));
-            base = fields.length > 0 && fields.every(field => savedFieldIds.has(String(field.id)));
+            base = (!fields.length) || fields.every(field => savedFieldIds.has(String(field.id)));
+            const procedureEntries = typeof getProcedureChecklistEntries === 'function'
+                ? getProcedureChecklistEntries(doc) : [];
+            base = base && (!procedureEntries.length || procedureEntries.every(entry =>
+                procedureChecks.some(check => String(check.document_id) === String(doc.id)
+                    && String(check.role_name || check.role) === String(entry.role)
+                    && check.is_checked)
+            ));
         } else if (doc.template_id) {
             base = assignedDocIds.has(String(doc.id));
         } else {

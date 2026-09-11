@@ -118,7 +118,8 @@ class AppSmokeTests(unittest.TestCase):
         from routers import verification
 
         profile = {"categories": [{"category_id": 3, "documents": [{
-            "document_id": 44, "name": "Fixture Form", "document_type": "form"}]}],
+            "document_id": 44, "name": "Fixture Form", "document_type": "form",
+            "form_fields": [{"id": 4401}]}]}],
             "voucher_checks": [{"id": 1, "name": "Fixture check"}]}
         cases = [
             ("complete", {}, "Cleared"),
@@ -178,6 +179,90 @@ class AppSmokeTests(unittest.TestCase):
                 7, detail=True, sibling_ids=[7], rulebook={"categories": [], "voucher_checks": []})
         self.assertIsNone(result["cleared_status"])
         write.assert_not_called()
+
+    def test_zero_field_form_is_non_blocking(self):
+        from routers import verification
+
+        profile = {"categories": [{"category_id": 3, "documents": [{
+            "document_id": 44, "name": "Fixture Form", "document_type": "form",
+            "form_fields": []}]}], "voucher_checks": [{"id": 1, "name": "Fixture check"}]}
+
+        def query(sql, params=None):
+            if "SELECT vd.id, vd.session_id" in sql:
+                return [{"id": 7, "session_id": 10, "transaction_ref": "FIXTURE-1",
+                         "row_data": {"Account Code": "100"}, "extract_amount": 100,
+                         "client_id": 1, "category_id_applied": 3,
+                         "category_name_applied": "Fixture"}]
+            if "SELECT matrix_version" in sql:
+                return [{"matrix_version": 1}]
+            if "SELECT id, template_id" in sql:
+                return [{"id": 44, "template_id": 2}]
+            if "FROM voucher_line_form_entries" in sql:
+                return []
+            if "FROM voucher_check_status" in sql:
+                return [{"check_id": 1}]
+            if "COUNT(*) as cnt" in sql:
+                return [{"cnt": 0}]
+            if "SELECT DISTINCT document_id FROM voucher_line_documents" in sql:
+                return []
+            raise AssertionError(f"Unexpected fixture read: {sql}")
+
+        with patch.object(verification, "execute_query_pg", side_effect=query), \
+             patch.object(verification, "get_document_auth_roles_batch", return_value={}), \
+             patch.object(verification, "evaluate_cross_checks_for_line", return_value={"results": []}), \
+             patch.object(verification, "_has_pending_account_head_note", return_value=False):
+            result = verification.compute_and_persist_cleared_status(
+                7, detail=True, persist=False, sibling_ids=[7], rulebook=profile
+            )
+        self.assertEqual(result["cleared_status"], "Cleared")
+
+    def test_zero_field_form_still_requires_imported_procedure_checks(self):
+        from routers import verification
+
+        profile = {"categories": [{"category_id": 3, "documents": [{
+            "document_id": 44, "name": "Fixture Form", "document_type": "form",
+            "form_fields": [], "authority_roles": [{"role_name": "Approved by"}]}],
+            "procedure_evidence": {"checks": [{
+                "document_id": 44, "condition": "approved_by", "role_name": "Approved by"
+            }]}}], "voucher_checks": [{"id": 1, "name": "Fixture check"}]}
+        state = {"procedure": False}
+
+        def query(sql, params=None):
+            if "SELECT vd.id, vd.session_id" in sql:
+                return [{"id": 7, "session_id": 10, "transaction_ref": "FIXTURE-1",
+                         "row_data": {"Account Code": "100"}, "extract_amount": 100,
+                         "client_id": 1, "category_id_applied": 3,
+                         "category_name_applied": "Fixture"}]
+            if "SELECT matrix_version" in sql:
+                return [{"matrix_version": 1}]
+            if "SELECT id, template_id" in sql:
+                return [{"id": 44, "template_id": 2}]
+            if "FROM voucher_line_form_entries" in sql:
+                return []
+            if "FROM voucher_line_procedure_checks" in sql:
+                return [{"document_id": 44, "role_name": "Approved by", "is_checked": True,
+                         "checked_at": None}] if state["procedure"] else []
+            if "FROM voucher_check_status" in sql:
+                return [{"check_id": 1}]
+            if "COUNT(*) as cnt" in sql:
+                return [{"cnt": 0}]
+            if "SELECT DISTINCT document_id FROM voucher_line_documents" in sql:
+                return []
+            raise AssertionError(f"Unexpected fixture read: {sql}")
+
+        with patch.object(verification, "execute_query_pg", side_effect=query), \
+             patch.object(verification, "get_document_auth_roles_batch", return_value={}), \
+             patch.object(verification, "evaluate_cross_checks_for_line", return_value={"results": []}), \
+             patch.object(verification, "_has_pending_account_head_note", return_value=False):
+            result = verification.compute_and_persist_cleared_status(
+                7, detail=True, persist=False, sibling_ids=[7], rulebook=profile
+            )
+            self.assertEqual(result["cleared_status"], "Query")
+            state["procedure"] = True
+            result = verification.compute_and_persist_cleared_status(
+                7, detail=True, persist=False, sibling_ids=[7], rulebook=profile
+            )
+        self.assertEqual(result["cleared_status"], "Cleared")
 
 
 if __name__ == "__main__":

@@ -646,11 +646,17 @@ async function awLoadSessionRulebook() {
 // audit_guidance endpoint. Convert only at this adapter boundary so procedure_modal.js and the
 // existing Audit Workbook badge logic continue to receive their established contract.
 function awRulebookCategoryToGuidance(profile) {
+    const procedureChecks = Array.isArray(profile.procedure_evidence?.checks)
+        ? profile.procedure_evidence.checks : [];
     const documents = (profile.documents || []).map(document => ({
         ...document,
         id: document.document_id,
-        auth_roles: (document.authority_roles || []).map(role => role.role_name || role),
-        cross_check_fields: (document.fields || []).map(field => field.field_name || field)
+        auth_roles: (document.authority_roles || document.auth_roles || []).map(role => role.role_name || role),
+        cross_check_fields: (document.fields || []).map(field => field.field_name || field),
+        procedure_checks: procedureChecks.filter(check =>
+            String(check.document_id) === String(document.document_id)
+        ),
+        procedure_rules_configured: procedureChecks.length > 0
     }));
     const documentNameById = {};
     documents.forEach(document => { documentNameById[document.id] = document.name; });
@@ -661,6 +667,14 @@ function awRulebookCategoryToGuidance(profile) {
         kb_overview: profile.kb_overview,
         matrix_version: profile.matrix_version,
         documents,
+        // The shared Procedure modal reads Category-owned checks from this contract. Keep the
+        // Workbook adapter aligned with Verification's frozen/live guidance shapes so a Workbook
+        // Procedures pill cannot lose checks that Verification displays.
+        procedure_evidence: profile.procedure_evidence || { checks: [] },
+        validation_rules: profile.validation_rules || {
+            procedure_evidence: profile.procedure_evidence || { checks: [] },
+            mathematical_cross_checks: []
+        },
         cross_checks: (profile.cross_checks || []).map(check => ({
             id: check.cross_check_id,
             name: check.name,
@@ -905,7 +919,14 @@ async function awRefreshLineProcedures(uid, type) {
                     .filter(value => value.value !== null && value.value !== undefined && String(value.value).trim() !== '')
                     .map(value => String(value.field_id))
             ));
-            base = fields.length > 0 && fields.every(field => savedFieldIds.has(String(field.id)));
+            base = (!fields.length) || fields.every(field => savedFieldIds.has(String(field.id)));
+            const procedureEntries = typeof getProcedureChecklistEntries === 'function'
+                ? getProcedureChecklistEntries(doc) : [];
+            base = base && (!procedureEntries.length || procedureEntries.every(entry =>
+                procedureChecks.some(check => String(check.document_id) === String(doc.id)
+                    && String(check.role_name || check.role) === String(entry.role)
+                    && check.is_checked)
+            ));
         } else if (doc.template_id) {
             base = assignedDocIds.has(doc.id);
         } else {

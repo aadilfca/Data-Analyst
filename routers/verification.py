@@ -39,7 +39,7 @@ from routers.import_export import (
 # through the same process-level cache audit_rules.py's own GET endpoints use — guidance
 # content is keyed by Category name/id, not client_id, since Categories aren't client-scoped
 # (see cache_get()/cache_set()'s own docstring in audit_rules.py for why).
-from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_documents, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key, get_audit_rules_config_version, load_client_account_category_index, load_client_verification_rulebook
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_validation_rules, get_category_documents, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key, get_audit_rules_config_version, load_client_account_category_index, load_client_verification_rulebook
 from database import get_audit_rules_config_changes_since
 from routers.auth import get_current_user
 # Check #1's no-template-Document satisfaction rule (2026-08-08 fix) needs a Document's full
@@ -64,6 +64,56 @@ _MIN_TS = datetime.min.replace(tzinfo=timezone.utc)
 
 def _ts_sort_key(value):
     return value if value is not None else _MIN_TS
+
+
+def _document_role_names(document: dict) -> List[str]:
+    """Return a Document's configured role names from either Rulebook shape."""
+    raw_roles = document.get("auth_roles") or document.get("authority_roles") or []
+    roles = []
+    for role in raw_roles:
+        name = role.get("role_name") if isinstance(role, dict) else role
+        if name and str(name) not in roles:
+            roles.append(str(name))
+    return roles
+
+
+def _procedure_roles_for_document(document: dict, checks: list, rules_configured: bool) -> List[str]:
+    """Resolve Category Procedure/Evidence checks to the Document roles they tick."""
+    roles = _document_role_names(document)
+    document_id = document.get("document_id", document.get("id"))
+    relevant = [
+        check for check in checks
+        if str(check.get("document_id")) == str(document_id)
+    ]
+    if not rules_configured:
+        return roles
+
+    resolved = []
+    for check in relevant:
+        explicit = check.get("role") or check.get("role_name") or check.get("signature")
+        detail = str(
+            check.get("selected_detail") or check.get("sub_value")
+            or check.get("detail") or ""
+        ).strip().casefold()
+        condition = str(check.get("condition") or "").casefold()
+        candidates = roles
+        if condition == "prepared_by":
+            candidates = [role for role in roles if re.search(r"prepar", role, re.I)]
+        elif condition == "checked_by":
+            candidates = [role for role in roles if re.search(r"check", role, re.I)]
+        elif condition == "approved_by":
+            candidates = [role for role in roles if re.search(r"approv", role, re.I)]
+        elif condition == "signature" and detail:
+            candidates = roles
+        if explicit:
+            candidates = [role for role in candidates
+                          if role.casefold() == str(explicit).casefold()]
+        elif detail:
+            candidates = [role for role in candidates if role.casefold() == detail]
+        for role in candidates:
+            if role not in resolved:
+                resolved.append(role)
+    return resolved
 
 def match_voucher_category(voucher_id: str, client_prefixes: dict) -> Optional[str]:
     """
@@ -477,6 +527,16 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # flagged since Phase 2/3: a physical_bill Document has no template_id, so without this it
     # would silently resolve "satisfied" via role ticks alone, with no bill data ever checked).
     required_doc_types = {d['document_id']: d['document_type'] for d in required_docs if d['is_active']}
+    category_procedure_evidence = (category_profile or {}).get("procedure_evidence") or {}
+    category_procedure_checks = category_procedure_evidence.get("checks") or []
+    category_procedures_configured = bool(category_procedure_checks)
+    form_procedure_roles_by_doc = {
+        d["document_id"]: _procedure_roles_for_document(
+            d, category_procedure_checks, category_procedures_configured
+        )
+        for d in required_docs
+        if d["is_active"] and d["document_type"] == "form"
+    }
 
     linked_rows = execute_query_pg(
         f"""
@@ -526,28 +586,52 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         )
         form_entry_doc_ids = {row['document_id'] for row in form_entry_rows}
 
+    # The compiled Rulebook carries form_fields, including an empty list. Older frozen
+    # Rulebooks may omit that key, so resolve the count from the live Document definition only
+    # for those rows. A zero-field Form intentionally has no manual evidence to enter.
+    form_field_counts = {
+        did: len(doc.get("form_fields") or [])
+        for did, doc in ((d["document_id"], d) for d in required_docs)
+        if required_doc_types.get(did) == "form" and "form_fields" in doc
+    }
+    missing_form_field_ids = form_required_ids - set(form_field_counts)
+    if missing_form_field_ids:
+        form_field_ph = ",".join("%s" for _ in missing_form_field_ids)
+        field_count_rows = execute_query_pg(
+            f"SELECT document_id, COUNT(*) AS field_count FROM audit_rule_document_fields "
+            f"WHERE document_id IN ({form_field_ph}) GROUP BY document_id",
+            tuple(missing_form_field_ids)
+        )
+        form_field_counts.update({row["document_id"]: int(row["field_count"]) for row in field_count_rows})
+        form_field_counts.update({did: 0 for did in missing_form_field_ids if did not in form_field_counts})
+
     # Physical Bill evidence type, Phase 6 of 8: a physical_bill Document never goes through the
     # role-tick path (its own dedicated check below handles it), regardless of what its auth_roles
     # happen to be configured as.
     no_template_required_ids = {
         did for did in required_doc_ids
-        if not required_template_ids.get(did) and required_doc_types.get(did) != 'physical_bill'
+        if not required_template_ids.get(did)
+        and required_doc_types.get(did) not in {'physical_bill', 'form'}
     }
+    form_procedure_ids = {
+        did for did, roles in form_procedure_roles_by_doc.items() if roles
+    }
+    procedure_tick_ids = no_template_required_ids | form_procedure_ids
 
     # role_ticks_by_doc: {document_id: {role_name: is_checked}} - only fetched when at least one
     # required document is template-less, and only for those documents' rows. Same "most
     # recently checked/unchecked sibling row wins" dedup get_procedure_checks() already uses, so
     # this can't disagree with what the Supporting Documents modal itself shows for the same line.
     role_ticks_by_doc: Dict[int, Dict[str, bool]] = {}
-    if no_template_required_ids:
-        nt_ph = ",".join("%s" for _ in no_template_required_ids)
+    if procedure_tick_ids:
+        nt_ph = ",".join("%s" for _ in procedure_tick_ids)
         tick_rows = execute_query_pg(
             f"""
             SELECT document_id, role_name, is_checked, checked_at
             FROM voucher_line_procedure_checks
             WHERE voucher_line_id IN ({placeholders}) AND document_id IN ({nt_ph})
             """,
-            tuple(sibling_ids) + tuple(no_template_required_ids)
+            tuple(sibling_ids) + tuple(procedure_tick_ids)
         )
         latest_tick: Dict[tuple, dict] = {}
         for r in tick_rows:
@@ -569,6 +653,13 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
             return False
         ticks = role_ticks_by_doc.get(document_id, {})
         return all(ticks.get(role) for role in roles)
+
+    def _form_doc_satisfied(document_id: int) -> bool:
+        evidence_complete = form_field_counts.get(document_id, 0) == 0 \
+            or document_id in form_entry_doc_ids
+        roles = form_procedure_roles_by_doc.get(document_id, [])
+        ticks = role_ticks_by_doc.get(document_id, {})
+        return evidence_complete and all(ticks.get(role) for role in roles)
 
     # Physical Bill evidence type, Phase 6 of 8 (generalized in Multi-Bill/Multi-Line Physical
     # Bill, Phase 2 of 6): fetch every physical bill recorded for this line (sibling-session-
@@ -604,7 +695,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
             if _physical_bill_satisfied(did):
                 satisfied_doc_ids.add(did)
         elif required_doc_types.get(did) == 'form':
-            if did in form_entry_doc_ids:
+            if _form_doc_satisfied(did):
                 satisfied_doc_ids.add(did)
         elif required_template_ids.get(did):
             if did in linked_doc_ids:
@@ -638,7 +729,16 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
                         f"voucher amount {row['extract_amount']})"
                     )
             elif required_doc_types.get(did) == 'form':
-                outstanding_parts.append(f"{d['name']} (Form evidence not saved)")
+                field_count = form_field_counts.get(did, 0)
+                roles = form_procedure_roles_by_doc.get(did, [])
+                ticks = role_ticks_by_doc.get(did, {})
+                if field_count and did not in form_entry_doc_ids:
+                    outstanding_parts.append(f"{d['name']} (Form evidence not saved)")
+                elif roles:
+                    done = sum(1 for role in roles if ticks.get(role))
+                    outstanding_parts.append(
+                        f"{d['name']} ({done} of {len(roles)} required roles ticked)"
+                    )
             elif required_template_ids.get(did):
                 outstanding_parts.append(f"{d['name']} (not linked)")
             else:
@@ -2961,6 +3061,17 @@ def get_audit_workbook(session_id: int):
     guidance_docs_by_category: Dict[int, list] = {
         cid: get_category_guidance_documents(cid) for cid in distinct_category_ids
     }
+    procedure_checks_by_category: Dict[int, list] = {}
+    procedure_rules_configured_by_category: Dict[int, bool] = {}
+    for cid in distinct_category_ids:
+        try:
+            validation_rules = get_category_validation_rules(cid)
+        except HTTPException:
+            validation_rules = {}
+        procedure_evidence = validation_rules.get("procedure_evidence") or {}
+        checks = procedure_evidence.get("checks") or []
+        procedure_checks_by_category[cid] = checks
+        procedure_rules_configured_by_category[cid] = bool(checks)
     category_name_by_id = _audit_workbook_resolve_category_names(distinct_category_ids)
 
     cd_placeholders = ",".join("%s" for _ in client_data_ids)
@@ -3161,6 +3272,8 @@ def get_audit_workbook(session_id: int):
         ticks = role_ticks_by_cd.get(client_data_id, {})
         bills = bills_by_cd.get(client_data_id, {})
         voucher_amount = _cross_check_numeric(line_amount)
+        category_checks = procedure_checks_by_category.get(category_id, [])
+        rules_configured = procedure_rules_configured_by_category.get(category_id, False)
 
         done = 0
         for doc in docs:
@@ -3169,7 +3282,10 @@ def get_audit_workbook(session_id: int):
             elif doc['document_type'] == 'form':
                 fields = form_field_ids_by_doc.get(doc['id'], set())
                 saved_fields = saved_form_field_ids_by_cd.get(client_data_id, {}).get(doc['id'], set())
-                base = bool(fields) and fields.issubset(saved_fields)
+                base = (not fields) or fields.issubset(saved_fields)
+                procedure_roles = _procedure_roles_for_document(doc, category_checks, rules_configured)
+                doc_ticks = ticks.get(doc['id'], {})
+                base = base and all(doc_ticks.get(role) for role in procedure_roles)
             elif doc['template_id']:
                 base = doc['id'] in linked
             else:
@@ -3650,6 +3766,7 @@ def get_audit_guidance(
     if not rows:
         raise HTTPException(404, f"No audit guidance found for category '{transaction_type}'.")
     category_id = rows[0]['id']
+    validation_rules = get_category_validation_rules(category_id)
     result = {
         "transaction_type": transaction_type,
         "category_id": category_id,
@@ -3659,7 +3776,13 @@ def get_audit_guidance(
         # its cached guidance - see that file's fetchAuditGuidanceData() for how it's used.
         "matrix_version": rows[0]['matrix_version'],
         "documents": get_category_guidance_documents(category_id),
-        "cross_checks": get_category_guidance_cross_checks(category_id)
+        "cross_checks": get_category_guidance_cross_checks(category_id),
+        # Keep the live guidance contract aligned with the frozen Verification Rulebook. The
+        # shared Procedure modal uses these Category-owned checks to project each Document's
+        # configured audit checklist; returning only Documents/Cross-checks silently dropped
+        # saved Procedure/Evidence rows whenever a caller had no session Rulebook loaded.
+        "procedure_evidence": validation_rules.get("procedure_evidence") or {},
+        "validation_rules": validation_rules,
     }
     cache_set(cache_key, result)
     return result

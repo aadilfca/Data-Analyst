@@ -1871,7 +1871,13 @@ function isProcedureDocumentComplete(uid, doc) {
         }
     } else if (doc.document_type === 'form') {
         const tabState = getProcedureTabState(uid, doc.id);
-        baseComplete = !!tabState.formSaved && isFormDraftComplete(uid, doc);
+        const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
+        const formEvidenceComplete = !fields.length || (!!tabState.formSaved && isFormDraftComplete(uid, doc));
+        const procedureEntries = getProcedureChecklistEntries(doc);
+        const proceduresComplete = !procedureEntries.length || procedureEntries.every(entry =>
+            tabState.checklist[entry.role] && tabState.checklist[entry.role].is_checked
+        );
+        baseComplete = formEvidenceComplete && proceduresComplete;
     } else if (doc.template_id) {
         const lineState = hostAdapter.procedureModalState[uid];
         baseComplete = !!(lineState && lineState.assignedDocIds && lineState.assignedDocIds.has(String(doc.id)));
@@ -2218,7 +2224,7 @@ function markFormTabsSavedAfterBundle(revisionsAtStart) {
 function isFormDraftComplete(uid, doc) {
     const tabState = getProcedureTabState(uid, doc.id);
     const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
-    if (!fields.length) return false;
+    if (!fields.length) return true;
     const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
     const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
     const headerEntry = (tabState.formEntries || []).find(entry => entry.row_scope === 'header');
@@ -2370,6 +2376,24 @@ function renderFormDocumentPanel(uid, doc) {
     const mappedFields = fields.filter(field => field.linked_column);
     const headerEntry = ensureFormHeaderEntry(tabState, headerFields);
     const itemEntries = (tabState.formEntries || []).filter(entry => entry.row_scope === 'item');
+    const procedureEntries = getProcedureChecklistEntries(doc);
+    const hasRoles = procedureEntries.length > 0;
+    const allRolesChecked = hasRoles && procedureEntries.every(entry =>
+        tabState.checklist[entry.role] && tabState.checklist[entry.role].is_checked
+    );
+    // Form documents use a dedicated panel branch, so include the same Category-owned
+    // Procedure/Evidence checklist that the linked-template branch renders below its evidence.
+    const proceduresSegmentHtml = hasRoles ? `
+        <div class="procedure-segment procedure-segment-procedures ${allRolesChecked ? 'complete' : 'pending'}">
+            <h4 class="procedure-segment-header procedure-segment-header-with-toggle">
+                <span>✅ Audit Procedures</span>
+                <button type="button" id="procedureChecklistSelectAllBtn"
+                    class="procedure-select-all-btn${allRolesChecked ? ' all-selected' : ''}"
+                    title="${allRolesChecked ? 'Untick all' : 'Tick all'}">${ICON_SELECT_ALL_SVG}</button>
+            </h4>
+            <div class="procedure-segment-body">${buildProcedureChecklist(uid, doc.id)}</div>
+        </div>
+    ` : '';
 
     const headerHtml = headerFields.length ? `
         <div class="procedure-form-section">
@@ -2405,6 +2429,7 @@ function renderFormDocumentPanel(uid, doc) {
                     ${emptyHtml}${headerHtml}${itemsHtml}
                 </div>
             </div>
+            ${proceduresSegmentHtml}
             <div class="procedure-segment procedure-segment-observation">
                 <h4 class="procedure-segment-header">📝 Observation</h4>
                 <div class="procedure-segment-body">${buildObservationSection(uid, doc.id)}</div>
@@ -3449,6 +3474,24 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
     const voucherLineAmount = (lineState && lineState.voucherLineAmount) || 0;
     const grandTotal = computePhysicalBillGrandTotal(bills);
     const recon = buildPhysicalBillReconciliationStatus(grandTotal, voucherLineAmount);
+    const procedureEntries = getProcedureChecklistEntries(doc);
+    const hasRoles = procedureEntries.length > 0;
+    const allRolesChecked = hasRoles && procedureEntries.every(entry =>
+        tabState.checklist[entry.role] && tabState.checklist[entry.role].is_checked
+    );
+    // Physical Bill has its own evidence form branch; keep Category Procedure/Evidence checks
+    // visible there as well instead of silently dropping them at the branch boundary.
+    const proceduresSegmentHtml = hasRoles ? `
+        <div class="procedure-segment procedure-segment-procedures ${allRolesChecked ? 'complete' : 'pending'}">
+            <h4 class="procedure-segment-header procedure-segment-header-with-toggle">
+                <span>✅ Audit Procedures</span>
+                <button type="button" id="procedureChecklistSelectAllBtn"
+                    class="procedure-select-all-btn${allRolesChecked ? ' all-selected' : ''}"
+                    title="${allRolesChecked ? 'Untick all' : 'Tick all'}">${ICON_SELECT_ALL_SVG}</button>
+            </h4>
+            <div class="procedure-segment-body">${buildProcedureChecklist(uid, doc.id)}</div>
+        </div>
+    ` : '';
 
     // Copy from lines (Phase 5 of 6): only offered while this Document has zero bills yet — a
     // one-time seed action, not a repeatable append (confirmed requirement) — and only when there
@@ -3477,6 +3520,7 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                     </div>
                 </div>
             </div>
+            ${proceduresSegmentHtml}
             <div class="procedure-segment procedure-segment-observation">
                 <h4 class="procedure-segment-header">📝 Observation</h4>
                 <div class="procedure-segment-body">${buildObservationSection(uid, doc.id)}</div>

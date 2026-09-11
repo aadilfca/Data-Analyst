@@ -2331,6 +2331,7 @@ class AuditWorkbookFormCompletionTests(unittest.TestCase):
              patch('routers.verification._audit_workbook_resolve_categories', return_value={'20-15-50-0001': 999}), \
              patch('routers.verification._audit_workbook_resolve_account_names', return_value={}), \
              patch('routers.verification._audit_workbook_resolve_category_names', return_value={999: 'Local purchase'}), \
+             patch('routers.verification.get_category_validation_rules', return_value={'procedure_evidence': {'checks': []}}), \
              patch('routers.verification.get_category_guidance_documents', return_value=self.documents):
             return get_audit_workbook(87)
 
@@ -2354,9 +2355,9 @@ class AuditWorkbookFormCompletionTests(unittest.TestCase):
                 self.assertEqual(lines[1]['procedures'], {'done': 5, 'total': 5})
                 self.assertEqual(lines[0]['status'], 'Cleared')
 
-    def test_empty_form_definition_or_missing_saved_fields_stays_incomplete(self):
+    def test_empty_form_definition_is_complete_but_missing_saved_fields_stays_incomplete(self):
         self.conn.execute('DELETE FROM audit_rule_document_fields WHERE document_id = 420')
-        self.assertEqual(self._workbook()['vouchers'][0]['lines'][0]['procedures'], {'done': 4, 'total': 5})
+        self.assertEqual(self._workbook()['vouchers'][0]['lines'][0]['procedures'], {'done': 5, 'total': 5})
         self.conn.execute("INSERT INTO audit_rule_document_fields (id, document_id, field_name) VALUES (4299, 420, 'New field')")
         self.assertEqual(self._workbook()['vouchers'][0]['lines'][0]['procedures'], {'done': 4, 'total': 5})
 
@@ -2431,7 +2432,7 @@ class AuditWorkbookFormCompletionTests(unittest.TestCase):
             self.assertEqual(result['complete'], result['initial'])
             self.assertEqual(result['incomplete'], ['4/5', '5/5'])
             self.assertEqual(result['restored'], ['5/5', '5/5'])
-            self.assertEqual(result['empty'], ['4/5', '5/5'])
+            self.assertEqual(result['empty'], ['5/5', '5/5'])
             self.assertEqual(result['initialRequests'], 1)
             self.assertEqual(result['requests'], 3)
             self.assertEqual(result['statuses'], ['Cleared', 'Cleared'])
