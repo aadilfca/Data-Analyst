@@ -111,7 +111,13 @@
         </section>
 
         <div id="setupView" hidden>
+            <div class="reconciliation-setup-tabs" role="tablist" aria-label="Account setup sections">
+                <button id="setupGroupsTab" class="reconciliation-setup-tab is-active" type="button" role="tab" aria-selected="true" data-setup-tab="groups">Account groups</button>
+                <button id="setupCategoriesTab" class="reconciliation-setup-tab" type="button" role="tab" aria-selected="false" data-setup-tab="categories">Ledger Summary categories</button>
+                <button id="setupBalancesTab" class="reconciliation-setup-tab" type="button" role="tab" aria-selected="false" data-setup-tab="balances">Reconciliation balances</button>
+            </div>
 
+        <div id="setupGroupsPanel">
         <section class="reconciliation-panel reconciliation-source-panel" aria-labelledby="source-heading">
             <div class="reconciliation-panel-heading">
                 <div>
@@ -224,12 +230,122 @@
 
         </div>
 
+        <section id="setupCategoriesPanel" class="reconciliation-setup-panel" hidden aria-labelledby="category-setup-heading">
+            <section class="reconciliation-panel reconciliation-source-panel">
+                <div class="reconciliation-panel-heading">
+                    <div>
+                        <p class="reconciliation-section-kicker">1 · Ledger Summary categories</p>
+                        <h2 id="category-setup-heading">Assign report categories by exact Trial Balance code</h2>
+                        <p class="reconciliation-help">These categories belong only to this client's Ledger Summary reports. They do not alter Audit Verification categories.</p>
+                    </div>
+                    <span id="categoryStatus" class="reconciliation-status-pill is-muted">Not loaded</span>
+                </div>
+                <div id="categorySetCreate" class="reconciliation-empty" hidden>
+                    <strong>Ledger Summary categories have not been created for this client.</strong>
+                    <p>Create the dedicated category set once, then define categories and assign account codes.</p>
+                    <div class="reconciliation-inline-form">
+                        <label class="reconciliation-field">
+                            <span>Category set name</span>
+                            <input id="categorySetNameInput" type="text" maxlength="120" value="Ledger Summary Categories">
+                        </label>
+                        <button id="createCategorySetButton" class="reconciliation-btn reconciliation-btn-primary" type="button">Create category set</button>
+                    </div>
+                </div>
+                <div id="categoryMessage" class="reconciliation-message" role="status" aria-live="polite" hidden></div>
+                <div id="categoryWorkspace" hidden>
+                    <div class="reconciliation-setup-summary">
+                        <span><strong id="categorySetName"></strong></span>
+                        <span id="categoryAssignmentSummary">0 account codes assigned</span>
+                    </div>
+                </div>
+            </section>
+
+            <section id="categoryDefinitionsPanel" class="reconciliation-panel" hidden aria-labelledby="category-definitions-heading">
+                <div class="reconciliation-panel-heading reconciliation-table-heading">
+                    <div>
+                        <p class="reconciliation-section-kicker">2 · Define categories</p>
+                        <h2 id="category-definitions-heading">Monthly summary categories</h2>
+                        <p class="reconciliation-help">Use clear report labels. Parent categories are optional and support future hierarchy.</p>
+                    </div>
+                    <div class="reconciliation-table-actions">
+                        <button id="addCategoryButton" class="reconciliation-btn reconciliation-btn-secondary" type="button">Add category</button>
+                        <button id="saveCategoriesButton" class="reconciliation-btn reconciliation-btn-primary" type="button">Save categories</button>
+                    </div>
+                </div>
+                <div id="categoryDefinitionsEmpty" class="reconciliation-empty" hidden>Add a category before assigning Trial Balance accounts.</div>
+                <div class="reconciliation-table-wrap">
+                    <table class="reconciliation-account-table reconciliation-category-table">
+                        <thead><tr><th>Category label</th><th>Parent category</th><th>Report order</th><th><span class="reconciliation-sr-only">Remove</span></th></tr></thead>
+                        <tbody id="categoryTableBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section id="categoryAssignmentsPanel" class="reconciliation-panel" hidden aria-labelledby="category-assignments-heading">
+                <div class="reconciliation-panel-heading reconciliation-table-heading">
+                    <div>
+                        <p class="reconciliation-section-kicker">3 · Assign account codes</p>
+                        <h2 id="category-assignments-heading">Trial Balance category mapping</h2>
+                        <p class="reconciliation-help">Account titles and type are review aids. The saved mapping uses exact account codes only.</p>
+                    </div>
+                    <button id="saveCategoryAssignmentsButton" class="reconciliation-btn reconciliation-btn-primary" type="button">Save assignments</button>
+                </div>
+                <div class="reconciliation-toolbar">
+                    <label class="reconciliation-search">
+                        <span class="reconciliation-sr-only">Search Trial Balance accounts</span><span aria-hidden="true">⌕</span>
+                        <input id="categoryAccountSearch" type="search" placeholder="Search code, account name, or type">
+                    </label>
+                    <label class="reconciliation-filter"><span>Show</span><select id="categoryAccountFilter" class="reconciliation-select"><option value="all">All accounts</option><option value="assigned">Assigned only</option><option value="unassigned">Unassigned only</option></select></label>
+                </div>
+                <div id="categoryAssignmentsEmpty" class="reconciliation-empty" hidden></div>
+                <div class="reconciliation-table-wrap">
+                    <table class="reconciliation-account-table reconciliation-category-table">
+                        <thead><tr><th>Account code</th><th>Account title</th><th>Trial Balance type</th><th>Ledger Summary category</th></tr></thead>
+                        <tbody id="categoryAssignmentsBody"></tbody>
+                    </table>
+                </div>
+                <div class="reconciliation-table-footer"><span id="categoryVisibleCount">0 accounts shown</span><span id="categoryAssignmentHint">Assign every relevant account before previewing the report.</span></div>
+            </section>
+        </section>
+
+        <section id="setupBalancesPanel" class="reconciliation-setup-panel" hidden aria-labelledby="balance-setup-heading">
+            <section class="reconciliation-panel reconciliation-source-panel">
+                <div class="reconciliation-panel-heading">
+                    <div>
+                        <p class="reconciliation-section-kicker">1 · Reconciliation balances</p>
+                        <h2 id="balance-setup-heading">Record opening and actual closing balances</h2>
+                        <p class="reconciliation-help">Later monthly openings are carried from the prior actual closing balance to keep the reconciliation proof consistent.</p>
+                    </div>
+                    <span id="balanceStatus" class="reconciliation-status-pill is-muted">Not loaded</span>
+                </div>
+                <form id="balanceForm" class="reconciliation-report-form">
+                    <label class="reconciliation-field"><span>Reporting group</span><select id="balanceGroup" class="reconciliation-select" required><option value="">Select a saved group</option></select></label>
+                    <label class="reconciliation-field"><span>First month</span><input id="balancePeriodStart" type="month" required></label>
+                    <label class="reconciliation-field"><span>Last month</span><input id="balancePeriodEnd" type="month" required></label>
+                    <div class="reconciliation-source-actions"><button id="loadBalancesButton" class="reconciliation-btn reconciliation-btn-primary" type="submit">Load balance grid</button></div>
+                </form>
+                <div id="balanceMessage" class="reconciliation-message" role="status" aria-live="polite" hidden></div>
+            </section>
+            <section id="balanceWorkspace" class="reconciliation-panel" hidden aria-labelledby="balance-grid-heading">
+                <div class="reconciliation-panel-heading reconciliation-table-heading">
+                    <div><p class="reconciliation-section-kicker">2 · Monthly balances</p><h2 id="balance-grid-heading">Balances by account and month</h2><p class="reconciliation-help">Zero is valid. Enter the first opening and every actual closing balance; later openings update automatically.</p></div>
+                    <button id="saveBalancesButton" class="reconciliation-btn reconciliation-btn-primary" type="button">Save balances</button>
+                </div>
+                <div class="reconciliation-table-wrap">
+                    <table class="reconciliation-account-table reconciliation-balance-table"><thead><tr><th>Account code</th><th>Account title</th><th>Month</th><th>Opening balance</th><th>Actual closing balance</th></tr></thead><tbody id="balanceTableBody"></tbody></table>
+                </div>
+                <div class="reconciliation-table-footer"><span id="balanceGridCount">0 balance rows</span><span>Saved months outside this grid are retained.</span></div>
+            </section>
+        </section>
+
+        </div>
+
         <footer class="reconciliation-footer">
             <span>Audit Verification categories remain separate from report categories.</span>
-            <span>Ledger Reconciliation · Phase 4</span>
+            <span>Ledger Reconciliation · Phase 8</span>
         </footer>
     </main>
     <script src="/static/client_context.js?v=14"></script>
-    <script src="/static/reconciliation.js?v=2"></script>
+    <script src="/static/reconciliation.js?v=3"></script>
 </body>
 </html>

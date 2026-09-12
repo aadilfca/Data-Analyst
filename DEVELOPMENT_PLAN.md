@@ -98,7 +98,15 @@ The UI must show ledger balance, review-category count, transfer status, cross-g
 
 Acceptance evidence: 17 focused Phase 7 tests and the full suite (224 tests, 33 subtests) pass; JavaScript/Python syntax checks pass. The existing-PostgreSQL migration is bootstrap-tested; manual acceptance confirmed selected-client Trial Balance heads load in Account setup. `main.py` required no change because the reconciliation router was already mounted.
 
-### Phase 8 — Golden acceptance and hardening
+### Phase 8 — Selected-client report configuration UI
+
+Status: implemented and ready for user acceptance (frontend integration; existing APIs/storage retained).
+
+Added client-context Account setup sections for Ledger Summary categories and reconciliation balances. The category section creates the client’s dedicated `ledger_summary` set, defines optional hierarchy, and maps exact Trial Balance codes without touching Audit Verification categories. The balance section loads saved groups, records first opening and each actual closing, carries later openings forward, and preserves valid saved months outside the edited range.
+
+Acceptance: configure a real Ledger Summary set, assign Trial Balance accounts, enter Bank/Cash balances, then preview a report. Existing category/balance API tests and JavaScript syntax checks pass; manual acceptance remains required.
+
+### Phase 9 — Golden acceptance and hardening
 
 Run Bank/Cash golden comparisons plus tests for account-name variation, unmapped accounts, internal transfers, cross-group transfers, missing balances, non-zero variance, unbalanced vouchers, silent accounts, case/whitespace category variants, multiple periods/clients, and large journals. Complete documentation and record only genuine deferred findings.
 
