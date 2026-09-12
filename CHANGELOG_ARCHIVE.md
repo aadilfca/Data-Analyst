@@ -1,5 +1,14 @@
 # Changelog Archive
 
+## Verification Form quick bill entry - 2026-09-12
+
+Added a spreadsheet-style Quick add bills popover beside the routine Add bill action. Vendor and
+Bill No are optional; each numeric Amount creates one separate bill group, sets Quantity to 1 and
+Rate to the punched amount, and leaves the derived Amount read-only. Blank rows are ignored,
+invalid amounts are rejected without partial writes, and Enter advances down the active column.
+Focused Verification coverage and the broader 137-test sweep passed. Manual local-server
+acceptance remains pending.
+
 ## Verification Form multi-bill cards - 2026-09-12
 
 Completed the routine multi-bill Form editor. Each bill has its own header and item rows, with Add

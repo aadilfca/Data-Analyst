@@ -8477,6 +8477,7 @@ body {
     margin: 0 0 12px;
 }
 #procedureModal .procedure-form-bills-toolbar {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -8492,6 +8493,151 @@ body {
     margin-top: 3px;
     color: #64748b;
     font-size: 11px;
+}
+#procedureModal .procedure-form-bills-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 7px;
+}
+#procedureModal .procedure-form-quick-btn,
+#procedureModal .procedure-form-quick-apply-btn,
+#procedureModal .procedure-form-quick-cancel-btn,
+#procedureModal .procedure-form-quick-add-row-btn,
+#procedureModal .procedure-form-quick-close-btn {
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 650;
+}
+#procedureModal .procedure-form-quick-btn {
+    padding: 7px 10px;
+    border: 1px solid #c7d2fe;
+    background: #eef2ff;
+    color: #4338ca;
+}
+#procedureModal .procedure-form-quick-btn:hover {
+    background: #e0e7ff;
+}
+#procedureModal .procedure-form-quick-popover {
+    position: absolute;
+    z-index: 5;
+    top: calc(100% + 8px);
+    right: 0;
+    width: min(620px, calc(100vw - 52px));
+    padding: 14px;
+    border: 1px solid #cbd5e1;
+    border-radius: 11px;
+    background: #ffffff;
+    box-shadow: 0 16px 40px rgba(15, 23, 42, .18);
+}
+#procedureModal .procedure-form-quick-popover[hidden] {
+    display: none;
+}
+#procedureModal .procedure-form-quick-popover-header,
+#procedureModal .procedure-form-quick-footer {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+#procedureModal .procedure-form-quick-popover-header strong {
+    display: block;
+    color: #1e293b;
+    font-size: 13px;
+}
+#procedureModal .procedure-form-quick-popover-header small {
+    display: block;
+    margin-top: 3px;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 500;
+}
+#procedureModal .procedure-form-quick-close-btn {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 18px;
+    line-height: 1;
+}
+#procedureModal .procedure-form-quick-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(110px, .7fr);
+    gap: 8px;
+}
+#procedureModal .procedure-form-quick-grid-head {
+    margin-top: 14px;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+#procedureModal .procedure-form-quick-rows {
+    display: grid;
+    gap: 7px;
+    max-height: 260px;
+    margin-top: 6px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+#procedureModal .procedure-form-quick-bill-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(110px, .7fr);
+    gap: 8px;
+}
+#procedureModal .procedure-form-quick-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 34px;
+    padding: 7px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    color: #0f172a;
+    font-size: 12px;
+}
+#procedureModal .procedure-form-quick-input:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, .12);
+}
+#procedureModal .procedure-form-quick-footer {
+    align-items: center;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid #e2e8f0;
+}
+#procedureModal .procedure-form-quick-add-row-btn,
+#procedureModal .procedure-form-quick-cancel-btn {
+    padding: 6px 9px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #475569;
+}
+#procedureModal .procedure-form-quick-add-row-btn:hover,
+#procedureModal .procedure-form-quick-cancel-btn:hover {
+    background: #f8fafc;
+}
+#procedureModal .procedure-form-quick-status {
+    flex: 1 1 auto;
+    color: #b91c1c;
+    font-size: 11px;
+}
+#procedureModal .procedure-form-quick-footer-actions {
+    display: flex;
+    gap: 7px;
+}
+#procedureModal .procedure-form-quick-apply-btn {
+    padding: 6px 10px;
+    border: 1px solid #4f46e5;
+    background: #4f46e5;
+    color: #ffffff;
+}
+#procedureModal .procedure-form-quick-apply-btn:hover {
+    background: #4338ca;
 }
 #procedureModal .procedure-form-bills {
     display: grid;
@@ -8655,5 +8801,26 @@ body {
     #procedureModal .procedure-form-bills-toolbar {
         align-items: flex-start;
         flex-direction: column;
+    }
+    #procedureModal .procedure-form-bills-actions {
+        justify-content: flex-start;
+    }
+    #procedureModal .procedure-form-quick-popover {
+        left: 0;
+        right: auto;
+    }
+    #procedureModal .procedure-form-quick-grid,
+    #procedureModal .procedure-form-quick-bill-row {
+        grid-template-columns: 1fr;
+    }
+    #procedureModal .procedure-form-quick-grid-head {
+        display: none;
+    }
+    #procedureModal .procedure-form-quick-footer {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+    #procedureModal .procedure-form-quick-status {
+        order: 3;
     }
 }

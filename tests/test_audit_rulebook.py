@@ -2334,6 +2334,97 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_quick_form_bill_rows_create_one_group_per_amount_and_ignore_blank_rows(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {}; ")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''() => {
+                    const fields = [
+                        {id: 1, field_name: 'Vendor Name', field_type: 'text', field_scope: 'header'},
+                        {id: 2, field_name: 'Bill No', field_type: 'text', field_scope: 'header'},
+                        {id: 3, field_name: 'Quantity', field_type: 'numeric', field_scope: 'item'},
+                        {id: 4, field_name: 'Rate', field_type: 'numeric', field_scope: 'item'},
+                        {id: 5, field_name: 'Amount', field_type: 'numeric', field_scope: 'item'}
+                    ];
+                    const state = {formEntries: []};
+                    const added = appendQuickFormBillRows(state, fields, [
+                        {vendor: 'Vendor A', billNo: 'A-1', amount: '100'},
+                        {vendor: '', billNo: '', amount: ''},
+                        {vendor: 'Vendor B', billNo: '', amount: '25.50'}
+                    ]);
+                    const invalidState = {formEntries: []};
+                    const invalid = appendQuickFormBillRows(invalidState, fields, [{amount: 'bad'}]);
+                    return {
+                        added,
+                        groups: getFormBillGroupIndexes(state),
+                        headers: getFormBillGroupIndexes(state).map(group =>
+                            getFormEntriesForGroup(state, group, 'header')[0]?.values || {}),
+                        items: getFormBillGroupIndexes(state).map(group =>
+                            getFormEntriesForGroup(state, group, 'item').map(entry => ({
+                                quantity: entry.values['3'], rate: entry.values['4'], amount: entry.values['5']
+                            }))),
+                        invalid,
+                        invalidEntryCount: invalidState.formEntries.length
+                    };
+                }''')
+                self.assertEqual(result['added'], {'added': 2, 'error': ''})
+                self.assertEqual(result['groups'], [0, 1])
+                self.assertEqual(result['headers'], [{'1': 'Vendor A', '2': 'A-1'}, {'1': 'Vendor B', '2': ''}])
+                self.assertEqual(result['items'], [[
+                    {'quantity': '1', 'rate': '100', 'amount': '100'}
+                ], [
+                    {'quantity': '1', 'rate': '25.50', 'amount': '25.50'}
+                ]])
+                self.assertEqual(result['invalid']['added'], 0)
+                self.assertTrue(result['invalid']['error'])
+                self.assertEqual(result['invalidEntryCount'], 0)
+            finally:
+                browser.close()
+
+    def test_form_amount_refreshes_in_place_from_quantity_and_rate(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('''<html><body><div class="procedure-form-item-row">
+                    <input class="procedure-form-input" data-field-id="3">
+                    <input class="procedure-form-input" data-field-id="4">
+                    <input class="procedure-form-input" data-field-id="5" readonly>
+                </div></body></html>''')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {}; ")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''() => {
+                    const fields = [
+                        {id: 3, field_name: 'Quantity', field_scope: 'item'},
+                        {id: 4, field_name: 'Rate', field_scope: 'item'},
+                        {id: 5, field_name: 'Amount', field_scope: 'item'}
+                    ];
+                    const entry = {values: {'3': '2', '4': '12.50', '5': ''}};
+                    const rateInput = document.querySelector('[data-field-id="4"]');
+                    syncDerivedFormAmount(entry, fields);
+                    updateDerivedFormAmountInput(rateInput, entry, fields);
+                    const multiplied = {
+                        state: entry.values['5'],
+                        visible: document.querySelector('[data-field-id="5"]').value
+                    };
+                    entry.values['3'] = '';
+                    syncDerivedFormAmount(entry, fields);
+                    updateDerivedFormAmountInput(rateInput, entry, fields);
+                    return {multiplied, blank: document.querySelector('[data-field-id="5"]').value};
+                }''')
+                self.assertEqual(result, {
+                    'multiplied': {'state': '25', 'visible': '25'},
+                    'blank': ''
+                })
+            finally:
+                browser.close()
+
     def test_form_failed_save_keeps_draft_for_retry(self):
         script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
         with sync_playwright() as playwright:
