@@ -2489,6 +2489,41 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_amount_matched_form_marks_the_modal_rail_complete_with_optional_particulars(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {}; ")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''() => {
+                    const doc = {
+                        id: 9, document_type: 'form', auth_roles: [], form_fields: [
+                            {id: 1, field_name: 'Bill No', field_scope: 'header'},
+                            {id: 2, field_name: 'Vendor Name', field_scope: 'header'},
+                            {id: 3, field_name: 'Quantity', field_scope: 'item'},
+                            {id: 4, field_name: 'Rate', field_scope: 'item'},
+                            {id: 5, field_name: 'Amount', field_scope: 'item'}
+                        ]
+                    };
+                    const tab = {formSaved: true, checklist: {}, formEntries: [{
+                        bill_group_index: 0, row_scope: 'item', sort_order: 0,
+                        values: {'3': '1', '4': '100', '5': '100'}
+                    }]};
+                    hostAdapter = {currentVoucherId: 'V-1', procedureModalState: {
+                        7: {voucherLineAmount: 100, tabs: {9: tab}}
+                    }};
+                    const matched = isProcedureDocumentComplete(7, doc);
+                    tab.formEntries[0].values['5'] = '99';
+                    const mismatched = isProcedureDocumentComplete(7, doc);
+                    return {matched, mismatched};
+                }''')
+                self.assertEqual(result, {'matched': True, 'mismatched': False})
+            finally:
+                browser.close()
+
     def test_quick_form_item_rows_stay_within_selected_bill_group(self):
         script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
         with sync_playwright() as playwright:
@@ -2601,6 +2636,32 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_form_save_syncs_the_returned_cleared_status_to_its_host(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {}; ")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''async () => {
+                    const synced = [];
+                    const draft = {formEntries: [], formDirty: true, formRevision: 1};
+                    hostAdapter = {
+                        procedureModalState: {4: {tabs: {7: draft}}}, voucherLineState: {},
+                        currentVoucherLines: [], showStatus: () => {},
+                        syncClearedStatusForLine: (uid, status) => synced.push({uid, status})
+                    };
+                    window.ApiUtils.apiFetchMutate = async () => ({ok: true,
+                        json: async () => ({entries: [], cleared_status: 'Cleared'})});
+                    const saved = await saveFormEntry(4, 7, 1);
+                    return {saved, synced};
+                }''')
+                self.assertEqual(result, {'saved': True, 'synced': [{'uid': 4, 'status': 'Cleared'}]})
+            finally:
+                browser.close()
+
     def test_form_draft_autosave_retries_the_latest_edit(self):
         script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
         with sync_playwright() as playwright:
@@ -2664,7 +2725,7 @@ class FormEvidenceContractTests(unittest.TestCase):
         self.assertEqual(result[1]['bill_group_index'], 1)
         self.assertEqual(result[1]['values'][0]['value'], 'PB-1')
 
-    def test_form_bill_completion_requires_complete_entries_and_a_matched_total(self):
+    def test_form_bill_completion_allows_optional_particulars_but_requires_a_matched_total(self):
         fields = [
             {'id': 1, 'field_name': 'Bill No', 'field_type': 'text', 'field_scope': 'header'},
             {'id': 2, 'field_name': 'Vendor Name', 'field_type': 'text', 'field_scope': 'header'},
@@ -2691,7 +2752,7 @@ class FormEvidenceContractTests(unittest.TestCase):
             {'bill_group_index': 1, 'row_scope': 'item', 'sort_order': 0, 'field_id': 5,
              'field_type': 'numeric', 'value_text': None, 'value_date': None, 'value_numeric': 50},
         ]
-        self.assertFalse(_evaluate_form_bill_completion(fields, partial, 100))
+        self.assertTrue(_evaluate_form_bill_completion(fields, partial, 100))
         self.assertFalse(_evaluate_form_bill_completion(fields, mismatched, 150))
         self.assertTrue(_evaluate_form_bill_completion(fields, matched, 150))
 

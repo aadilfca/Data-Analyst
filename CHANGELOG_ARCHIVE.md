@@ -10,7 +10,9 @@ Partial bill details remain saved but cannot clear a voucher. Complete Form bill
 combined Amount to the voucher line; the same rule now drives Verification and Audit Workbook counts.
 The Form panel shows a live Bill total and a compact green match tick. Its modal-open payload now
 also returns saved Form entries, so the Procedure window restores bill particulars after reopening.
-Focused checks (32) pass.
+For Amount-based bill Forms, vendor/bill particulars remain optional: at least one saved Amount must
+reconcile exactly. The modal rail, Verification Procedures badge, and live Cleared/Query status now
+share that rule. Focused checks (32) pass.
 
 ## Verification Form quick item rate default - 2026-09-12
 

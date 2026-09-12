@@ -2254,9 +2254,13 @@ function findQuickBillField(fields, exactLabels, fallback = null) {
 function getDerivedFormAmountFields(itemFields) {
     const quantityField = findQuickBillField(itemFields, ['quantity', 'qty']);
     const rateField = findQuickBillField(itemFields, ['rate', 'unit rate', 'price']);
-    const amountField = findQuickBillField(itemFields, ['amount', 'bill amount', 'total amount']);
+    const amountField = getFormBillAmountField(itemFields);
     if (!quantityField || !rateField || !amountField) return null;
     return {quantityField, rateField, amountField};
+}
+
+function getFormBillAmountField(itemFields) {
+    return findQuickBillField(itemFields, ['amount', 'bill amount', 'total amount']);
 }
 
 function isDerivedFormAmountField(field, itemFields) {
@@ -2292,12 +2296,12 @@ function updateDerivedFormAmountInput(sourceInput, entry, itemFields) {
 }
 
 function computeFormBillGrandTotal(tabState, itemFields) {
-    const derivedFields = getDerivedFormAmountFields(itemFields);
-    if (!derivedFields) return null;
+    const amountField = getFormBillAmountField(itemFields);
+    if (!amountField) return null;
     return (tabState.formEntries || [])
         .filter(entry => entry.row_scope === 'item')
         .reduce((total, entry) => {
-            const amount = Number(entry.values?.[String(derivedFields.amountField.id)]);
+            const amount = Number(entry.values?.[String(amountField.id)]);
             return Number.isFinite(amount) ? total + amount : total;
         }, 0);
 }
@@ -2543,6 +2547,19 @@ function isFormDraftComplete(uid, doc) {
     if (!fields.length) return true;
     const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
     const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
+    const formBillAmountField = getFormBillAmountField(itemFields);
+    // Bill particulars remain optional in the quick-bill workflow. A bill-style Form completes
+    // when one or more saved Amounts reconcile exactly to the voucher line.
+    if (formBillAmountField) {
+        const amounts = (tabState.formEntries || [])
+            .filter(entry => entry.row_scope === 'item')
+            .map(entry => entry.values?.[String(formBillAmountField.id)])
+            .filter(value => value !== null && value !== undefined && String(value).trim() !== '');
+        if (!amounts.length || amounts.some(value => !Number.isFinite(Number(value)))) return false;
+        const grandTotal = amounts.reduce((total, value) => total + Number(value), 0);
+        const voucherAmount = hostAdapter.procedureModalState[uid]?.voucherLineAmount;
+        return getFormBillTotalStatus(grandTotal, voucherAmount).matches;
+    }
     const billGroupIndexes = getFormBillGroupIndexes(tabState);
     const headerEntry = ensureFormHeaderEntry(tabState, headerFields, 0);
     const groupItems = billGroupIndexes.map(groupIndex =>
@@ -2572,11 +2589,6 @@ function isFormDraftComplete(uid, doc) {
             field, entry.values[String(field.id)], getFormCopyRowValue(source.row_data, field.linked_column)
         ));
     })) return false;
-    const grandTotal = computeFormBillGrandTotal(tabState, itemFields);
-    if (grandTotal !== null) {
-        const voucherAmount = hostAdapter.procedureModalState[uid]?.voucherLineAmount;
-        if (!getFormBillTotalStatus(grandTotal, voucherAmount).matches) return false;
-    }
     return true;
 }
 
@@ -3759,8 +3771,12 @@ async function saveFormEntry(uid, docId, revisionAtSave = null) {
         const savedEntries = data && Array.isArray(data.entries) ? data.entries : [];
         tabState.formSaved = savedEntries.length > 0;
         if (data && Object.prototype.hasOwnProperty.call(data, 'cleared_status')) {
-            const line = hostAdapter.currentVoucherLines?.find(item => String(item.detail_id) === String(uid));
-            if (line) line.cleared_status = data.cleared_status || 'Pending';
+            if (typeof hostAdapter.syncClearedStatusForLine === 'function') {
+                hostAdapter.syncClearedStatusForLine(uid, data.cleared_status);
+            } else {
+                const line = hostAdapter.currentVoucherLines?.find(item => String(item.detail_id) === String(uid));
+                if (line) line.cleared_status = data.cleared_status || 'Pending';
+            }
         }
         if (revisionAtSave === null || tabState.formRevision === revisionAtSave) {
             tabState.formEntries = formEntriesFromSavedEntries(savedEntries);

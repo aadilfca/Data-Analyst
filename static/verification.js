@@ -233,6 +233,7 @@ function buildProcedureModalAdapter() {
         fetchAuditGuidanceData,
         updateProceduresCellForLine,
         updateObservationsCellForLine,
+        syncClearedStatusForLine,
         parseVoucherAmount,
         computeLineRiskData,
         updateProgressDisplay,
@@ -2208,12 +2209,26 @@ async function updateProceduresCellForLine(uid, type, guidancePromise) {
         } else if (doc.document_type === 'form') {
             const savedForm = formDocuments.find(entry => String(entry.document_id) === String(doc.id));
             const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
-            const savedFieldIds = new Set((savedForm?.entries || []).flatMap(entry =>
-                (entry.values || [])
-                    .filter(value => value.value !== null && value.value !== undefined && String(value.value).trim() !== '')
-                    .map(value => String(value.field_id))
-            ));
-            base = (!fields.length) || fields.every(field => savedFieldIds.has(String(field.id)));
+            const amountField = fields.find(field => (field.field_scope || 'header') === 'item'
+                && ['amount', 'bill amount', 'total amount'].includes(
+                    String(field.field_name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+                ));
+            if (amountField) {
+                const amounts = (savedForm?.entries || [])
+                    .filter(entry => entry.row_scope === 'item')
+                    .map(entry => (entry.values || []).find(value => String(value.field_id) === String(amountField.id))?.value)
+                    .filter(value => value !== null && value !== undefined && String(value).trim() !== '');
+                const grandTotal = amounts.reduce((total, value) => total + Number(value), 0);
+                base = amounts.length > 0 && amounts.every(value => Number.isFinite(Number(value)))
+                    && Math.abs(grandTotal - voucherLineAmount) <= 0.005;
+            } else {
+                const savedFieldIds = new Set((savedForm?.entries || []).flatMap(entry =>
+                    (entry.values || [])
+                        .filter(value => value.value !== null && value.value !== undefined && String(value.value).trim() !== '')
+                        .map(value => String(value.field_id))
+                ));
+                base = (!fields.length) || fields.every(field => savedFieldIds.has(String(field.id)));
+            }
             const procedureEntries = typeof getProcedureChecklistEntries === 'function'
                 ? getProcedureChecklistEntries(doc) : [];
             base = base && (!procedureEntries.length || procedureEntries.every(entry =>
@@ -2651,6 +2666,18 @@ function renderGateRowHtml(g, showDetail = true) {
             ${g.detail && showDetail ? `<div class="lsr-gate-detail">${escapeHtml(g.detail)}</div>` : ''}
         </div>
     `;
+}
+
+// Applies a status returned by a narrow save (such as Form autosave) to both Verification
+// caches and the visible Status cell. The broader line-save path also carries extra metadata,
+// so it keeps its existing update logic below.
+function syncClearedStatusForLine(uid, clearedStatus) {
+    const status = clearedStatus || 'Pending';
+    const line = currentVoucherLines.find(item => String(item.detail_id) === String(uid));
+    if (line) line.cleared_status = status;
+    const transaction = sessionTransactions.find(item => String(item.detail_id) === String(uid));
+    if (transaction) transaction.cleared_status = status;
+    updateClearedStatusBadgeForLine(uid, status);
 }
 
 function renderWorkingPaperGatesHtml(data, showDetail = true) {

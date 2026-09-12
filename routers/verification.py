@@ -6099,7 +6099,7 @@ def _shape_form_entries_for_completion(rows: List[dict]) -> List[dict]:
 
 def _evaluate_form_bill_completion(fields: List[dict], value_rows: List[dict],
                                    voucher_amount: Optional[float]) -> bool:
-    """Require complete saved Form bills; Amount-based Forms must also reconcile exactly."""
+    """Amount-based bill Forms reconcile by grand total; ordinary Forms require every field."""
     if not fields:
         return True
     entries = _shape_form_entries_for_completion(value_rows)
@@ -6109,8 +6109,17 @@ def _evaluate_form_bill_completion(fields: List[dict], value_rows: List[dict],
     item_ids = {int(field['id']) for field in fields if (field.get('field_scope') or 'header') == 'item'}
     amount_ids = {int(field['id']) for field in fields
                   if (field.get('field_scope') or 'header') == 'item' and _form_field_is_amount(field)}
+    if amount_ids:
+        amounts = [
+            _cross_check_numeric(entry['values'].get(amount_id))
+            for entry in entries if entry['row_scope'] == 'item'
+            for amount_id in amount_ids
+            if amount_id in entry['values']
+        ]
+        return bool(amounts) and all(amount is not None for amount in amounts) \
+            and voucher_amount is not None and _cross_check_values_equal(sum(amounts), voucher_amount)
+
     groups = {entry['bill_group_index'] for entry in entries}
-    grand_total = 0.0
     for group_index in groups:
         group_entries = [entry for entry in entries if entry['bill_group_index'] == group_index]
         header_values = set().union(*(entry['values'] for entry in group_entries
@@ -6123,12 +6132,7 @@ def _evaluate_form_bill_completion(fields: List[dict], value_rows: List[dict],
         for entry in item_entries:
             if not item_ids.issubset(entry['values']):
                 return False
-            for amount_id in amount_ids:
-                amount = _cross_check_numeric(entry['values'].get(amount_id))
-                if amount is None:
-                    return False
-                grand_total += amount
-    return not amount_ids or (voucher_amount is not None and _cross_check_values_equal(grand_total, voucher_amount))
+    return True
 
 
 def _rulebook_cross_check_configs(category_id: int, rulebook: dict) -> Optional[List[dict]]:
