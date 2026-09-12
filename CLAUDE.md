@@ -46,7 +46,7 @@ One line per file group: what it is now. Full build history for every entry live
 - services/reconciliation_balance_source.py → validates stored opening/month-end balances and converts them to reconciliation-engine inputs. See CHANGELOG_ARCHIVE.md.
 
 
-- static/reconciliation.html, static/reconciliation.js -> client-context Reports and account-group setup views with source diagnostics, previews, and Excel download. See CHANGELOG_ARCHIVE.md.
+- static/reconciliation.html, static/reconciliation.js -> client-context Reports plus group, Ledger Summary category, and balance setup. See CHANGELOG_ARCHIVE.md.
 
 ## Commands
 - Run app: [your actual run command]
@@ -267,13 +267,16 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-09: Audit Rules gained staged non-blocking processing feedback for slow Supabase reads; shared stylesheet cache version moved to v14.
 - 2026-09-09: Audit Rules processing feedback covers delayed row/detail, matrix, Category rule, Voucher-check, and Assign Categories operations; a counter pairing bug was corrected; audit_rules.js cache is v18.
 - 2026-09-10: Ledger Reconciliation Phase 1 added the framework-independent account-group summary engine and unit tests; Excel export and UI remain future phases.
-- 2026-09-11: Ledger Reconciliation Phase 2 added the stored Client Data/Trial Balance source adapter and diagnostics; report API remains future work.
-- 2026-09-11: Ledger Reconciliation Phase 3 added SQLite/PostgreSQL account-group storage; report-category architecture remains a prerequisite to export/UI.
+- 2026-09-11: Ledger Reconciliation Phases 2–3 added source diagnostics, account-group storage, and report-category prerequisites; report API remains future work.
 - 2026-09-11: Ledger Reconciliation report-category foundation added separate category sets, definitions, assignments, and adapter isolation; export/UI remain future work.
 - 2026-09-11: Ledger Reconciliation Phase 4 added standalone exact-code account-group configuration UI with search, warnings, save feedback, and responsive styling.
 - 2026-09-11: Ledger Reconciliation Phase 5 added the source-backed Bank/Cash Excel export engine and golden workbook tests; report API/UI remain future work.
 - 2026-09-11: Ledger Reconciliation Phase 6 added standardized client/group balance inputs and completeness diagnostics; report UI remains future work.
 - 2026-09-11: Ledger Reconciliation Phase 7 added session-scoped Reports/setup, controls/navigation, existing-Postgres migration, and passed manual account-head loading.
+- 2026-09-12: Form bill-group persistence now preserves validated groups through save, fetch, and support data; automated checks passed.
+- 2026-09-12: Ledger Reconciliation Phase 8 added selected-client category assignment and reconciliation-balance entry UI; manual acceptance pending.
+- 2026-09-12: Physical Bill Split UI and Form bill-group schema foundation added; automated checks passed.
+- 2026-09-12: Routine multi-bill Form cards added with expandable summaries, Add/Remove/Split, and first-bill Copy from lines; automated checks passed.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

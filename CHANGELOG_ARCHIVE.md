@@ -1,5 +1,47 @@
 # Changelog Archive
 
+## Verification Form multi-bill cards - 2026-09-12
+
+Completed the routine multi-bill Form editor. Each bill has its own header and item rows, with Add
+bill, Remove bill, Split here, and Copy-from-lines limited to the initial bill. Bill cards now use
+expandable banners that summarize entered header values and item count while keeping detail editing
+compact. Focused Verification coverage and the broader 136-test sweep passed.
+
+## Form bill-group foundation - 2026-09-12
+
+Added an additive `bill_group_index` to Form evidence entries in SQLite and PostgreSQL. Existing
+entries default to group 0, preserving current Forms while creating the durable grouping needed for
+multiple vendor/bill cards. Startup migration is idempotent and indexed for grouped reads. Schema,
+legacy-migration, verification-index, Python compilation, and diff checks passed; no UI or API
+behavior changed in this phase.
+
+## Physical Bill split workflow - 2026-09-12
+
+Added a compact per-item `Split` action to the Procedure-window Physical Bill card. Copy from lines
+still creates one initial bill containing all eligible source items; splitting before a selected item
+moves that item and all following items into a new bill card, preserving values and order. The new
+card starts with blank bill-header fields because it represents a separate physical bill, and focus
+moves to its Bill No field for fast completion. Existing Add Bill, Add line, totals, reconciliation,
+and full-replace persistence remain unchanged; no schema or backend endpoint change was required.
+
+Added scoped styling and browser regression coverage. `node --check` passed; the focused split test
+and the Audit Rulebook/Form suite passed (114 tests, 26 subtests). Manual local-server confirmation
+remains the user checkpoint before Git staging or commit.
+
+## Ledger Reconciliation & Monthly Category Summary - Phase 8 - 2026-09-12
+
+Added selected-client Account setup sections for Ledger Summary categories and reconciliation balances. Category setup creates the dedicated `ledger_summary` set, manages labels/order/optional parent hierarchy, and assigns exact Trial Balance codes with mapped/unmapped search. It remains isolated from Audit Verification categories.
+
+Balance setup selects a saved group and month range, loads saved inputs, records the first opening and actual closings, carries later openings from the prior closing, and preserves valid saved months outside the edited grid. Existing category/balance APIs and storage were reused without schema changes. Focused reconciliation tests passed; manual acceptance is pending.
+
+## Form bill-group persistence - 2026-09-12
+
+Form evidence save, fetch, support-data, and atomic Save/Verify paths now preserve a validated
+`bill_group_index`. Omitted values remain group 0 for legacy payloads; invalid or negative groups
+are rejected before replacement. Grouped ordering is returned for the upcoming multi-bill Form UI.
+Focused Verification coverage and the broader 135-test Verification sweep passed; UI work remains
+in the next phase.
+
 ## Ledger Reconciliation & Monthly Category Summary - Phase 7 - 2026-09-11
 
 Replaced the dashboard Reports placeholder with an integrated Reports and account-setup screen. Added report preview and guarded Excel-download APIs that load a selected Client Data Bank dataset, exact account group, Ledger Summary categories, and standardized balance inputs, then expose ledger, category, transfer, Bank/Cash cross-check, reconciliation, and source-diagnostic statuses. Downloads are blocked when required accounting controls fail.
