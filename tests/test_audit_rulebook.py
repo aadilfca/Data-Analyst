@@ -2239,6 +2239,101 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_physical_bill_split_moves_selected_and_following_items_to_new_bill(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {}; ")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''() => {
+                    hostAdapter = {escapeHtml: value => String(value)};
+                    const state = {physicalBills: [{
+                        bill_no: 'B-1', bill_date: '2026-09-12', vendor_name: 'Vendor',
+                        items: [
+                            {item_name: 'First', quantity: '1', rate: '10', amount: 10},
+                            {item_name: 'Second', quantity: '2', rate: '20', amount: 40},
+                            {item_name: 'Third', quantity: '3', rate: '30', amount: 90}
+                        ]
+                    }]};
+                    const markupBefore = renderPhysicalBillCard(state.physicalBills[0], 0);
+                    const split = splitPhysicalBillAtItem(state, 0, 1);
+                    const invalid = splitPhysicalBillAtItem(state, 1, 0);
+                    return {
+                        split,
+                        invalid,
+                        billCount: state.physicalBills.length,
+                        firstHeader: [state.physicalBills[0].bill_no, state.physicalBills[0].vendor_name],
+                        firstItems: state.physicalBills[0].items.map(item => item.item_name),
+                        secondHeader: [state.physicalBills[1].bill_no, state.physicalBills[1].vendor_name],
+                        secondItems: state.physicalBills[1].items.map(item => item.item_name),
+                        splitButtons: (markupBefore.match(/procedure-bill-split-line-btn/g) || []).length
+                    };
+                }''')
+                self.assertEqual(result['split'], {'newBillIdx': 1, 'movedItemCount': 2})
+                self.assertIsNone(result['invalid'])
+                self.assertEqual(result['billCount'], 2)
+                self.assertEqual(result['firstHeader'], ['B-1', 'Vendor'])
+                self.assertEqual(result['firstItems'], ['First'])
+                self.assertEqual(result['secondHeader'], ['', ''])
+                self.assertEqual(result['secondItems'], ['Second', 'Third'])
+                self.assertEqual(result['splitButtons'], 2)
+            finally:
+                browser.close()
+
+    def test_form_bill_groups_support_additive_split_and_legacy_group_zero(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''() => {
+                    hostAdapter = {escapeHtml: value => String(value)};
+                    const fields = [
+                        {id: 1, field_name: 'Vendor Name', field_scope: 'header'},
+                        {id: 2, field_name: 'Item Name', field_scope: 'item'}
+                    ];
+                    const state = {formEntries: [
+                        {row_scope: 'header', values: {'1': 'Vendor A'}},
+                        {row_scope: 'item', sort_order: 0, values: {'2': 'First'}},
+                        {row_scope: 'item', sort_order: 1, values: {'2': 'Second'}},
+                        {row_scope: 'item', sort_order: 2, values: {'2': 'Third'}}
+                    ]};
+                    const before = getFormBillGroupIndexes(state);
+                    const split = splitFormBillAtItem(state, 0, 1, fields.filter(field => field.field_scope === 'header'));
+                    const after = getFormBillGroupIndexes(state);
+                    const collapsed = toggleFormBillCollapse(state, 1);
+                    const expanded = toggleFormBillCollapse(state, 1);
+                    const summary = formBillSummaryHtml(
+                        getFormEntriesForGroup(state, 0, 'header')[0], fields.filter(field => field.field_scope === 'header'),
+                        getFormEntriesForGroup(state, 0, 'item')
+                    );
+                    const groups = after.map(group => ({
+                        group,
+                        headers: getFormEntriesForGroup(state, group, 'header').length,
+                        items: getFormEntriesForGroup(state, group, 'item').map(entry => entry.values['2'])
+                    }));
+                    return {before, split, after, collapsed, expanded, summary, groups};
+                }''')
+                self.assertEqual(result['before'], [0])
+                self.assertEqual(result['split'], {'newBillGroupIndex': 1, 'movedItemCount': 2})
+                self.assertEqual(result['after'], [0, 1])
+                self.assertTrue(result['collapsed'])
+                self.assertFalse(result['expanded'])
+                self.assertIn('Vendor Name:', result['summary'])
+                self.assertIn('Items:</span><strong>1', result['summary'])
+                self.assertEqual(result['groups'], [
+                    {'group': 0, 'headers': 1, 'items': ['First']},
+                    {'group': 1, 'headers': 1, 'items': ['Second', 'Third']},
+                ])
+            finally:
+                browser.close()
+
     def test_form_failed_save_keeps_draft_for_retry(self):
         script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
         with sync_playwright() as playwright:

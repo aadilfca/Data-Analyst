@@ -265,6 +265,7 @@ function getVoucherTickSaveState() {
             if (tab.formDirty) formEntries.push({
                 voucher_line_id: parseInt(uid), document_id: parseInt(docId),
                 entries: (tab.formEntries || []).map(entry => ({
+                    bill_group_index: Number(entry.bill_group_index || 0),
                     row_scope: entry.row_scope,
                     sort_order: entry.sort_order,
                     values: Object.entries(entry.values || {}).map(([field_id, value]) => ({
@@ -710,7 +711,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!hostAdapter.procedureModalState[uid].tabs[docId]) {
-        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false, formCopyStatus: '', formSourceRows: [], formAutoPrefillAttempted: false, formAutoPrefillLoading: false };
+        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false, formCopyStatus: '', formSourceRows: [], formAutoPrefillAttempted: false, formAutoPrefillLoading: false, formCollapsedBills: {} };
     }
     return hostAdapter.procedureModalState[uid].tabs[docId];
 }
@@ -1047,6 +1048,9 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
         if (doc.document_type === 'form') {
             const savedForm = formDocumentEntries.find(entry => String(entry.document_id) === String(doc.id));
             tabState.formEntries = (savedForm?.entries || []).map(entry => ({
+                bill_group_index: Number.isInteger(Number.parseInt(entry.bill_group_index, 10))
+                    && Number.parseInt(entry.bill_group_index, 10) >= 0
+                    ? Number.parseInt(entry.bill_group_index, 10) : 0,
                 row_scope: entry.row_scope || 'header',
                 sort_order: entry.sort_order || 0,
                 values: Object.fromEntries((entry.values || []).map(value => [String(value.field_id), value.value ?? '']))
@@ -2132,24 +2136,109 @@ function wireProcedureChecklistAndObservation(container, uid, docId, tabState) {
     }
 }
 
-function makeEmptyFormEntry(rowScope, fields, sortOrder = 0) {
+function makeEmptyFormEntry(rowScope, fields, sortOrder = 0, billGroupIndex = 0) {
     return {
+        bill_group_index: billGroupIndex,
         row_scope: rowScope,
         sort_order: sortOrder,
         values: Object.fromEntries(fields.map(field => [String(field.id), '']))
     };
 }
 
-function ensureFormHeaderEntry(tabState, fields) {
-    let entry = (tabState.formEntries || []).find(item => item.row_scope === 'header');
+function ensureFormHeaderEntry(tabState, fields, billGroupIndex = 0) {
+    let entry = (tabState.formEntries || []).find(item =>
+        item.row_scope === 'header' && Number(item.bill_group_index || 0) === billGroupIndex
+    );
     if (!entry && fields.length) {
-        entry = makeEmptyFormEntry('header', fields, 0);
+        entry = makeEmptyFormEntry('header', fields, 0, billGroupIndex);
         tabState.formEntries = [entry, ...(tabState.formEntries || [])];
     }
     return entry;
 }
 
-function formFieldInputHtml(field, value, rowIndex, rowScope) {
+function getFormBillGroupIndexes(tabState) {
+    const groups = new Set((tabState.formEntries || []).map(entry => {
+        const value = Number.parseInt(entry.bill_group_index, 10);
+        return Number.isInteger(value) && value >= 0 ? value : 0;
+    }));
+    if (!groups.size) groups.add(0);
+    return Array.from(groups).sort((left, right) => left - right);
+}
+
+function getFormEntriesForGroup(tabState, billGroupIndex, rowScope = null) {
+    return (tabState.formEntries || []).filter(entry =>
+        Number(entry.bill_group_index || 0) === billGroupIndex
+        && (!rowScope || entry.row_scope === rowScope)
+    );
+}
+
+function renumberFormItemRows(tabState, billGroupIndex) {
+    getFormEntriesForGroup(tabState, billGroupIndex, 'item').forEach((entry, index) => {
+        entry.sort_order = index;
+    });
+}
+
+function splitFormBillAtItem(tabState, billGroupIndex, itemIndex, headerFields = []) {
+    const items = getFormEntriesForGroup(tabState, billGroupIndex, 'item');
+    if (!Number.isInteger(itemIndex) || itemIndex <= 0 || itemIndex >= items.length) return null;
+    const groupIndexes = getFormBillGroupIndexes(tabState);
+    const newBillGroupIndex = groupIndexes.length ? Math.max(...groupIndexes) + 1 : 0;
+    const movedItems = items.slice(itemIndex);
+    movedItems.forEach((entry, index) => {
+        entry.bill_group_index = newBillGroupIndex;
+        entry.sort_order = index;
+    });
+    if (headerFields.length) {
+        tabState.formEntries.push(makeEmptyFormEntry('header', headerFields, 0, newBillGroupIndex));
+    }
+    renumberFormItemRows(tabState, billGroupIndex);
+    return {newBillGroupIndex, movedItemCount: movedItems.length};
+}
+
+function removeFormBillGroup(tabState, billGroupIndex) {
+    if (billGroupIndex <= 0 || !getFormBillGroupIndexes(tabState).includes(billGroupIndex)) return false;
+    tabState.formEntries = (tabState.formEntries || [])
+        .filter(entry => Number(entry.bill_group_index || 0) !== billGroupIndex)
+        .map(entry => ({
+            ...entry,
+            bill_group_index: Number(entry.bill_group_index || 0) > billGroupIndex
+                ? Number(entry.bill_group_index || 0) - 1 : Number(entry.bill_group_index || 0)
+        }));
+    const collapsedBills = tabState.formCollapsedBills || {};
+    tabState.formCollapsedBills = Object.fromEntries(Object.entries(collapsedBills)
+        .filter(([group]) => Number(group) !== billGroupIndex)
+        .map(([group, collapsed]) => [
+            String(Number(group) > billGroupIndex ? Number(group) - 1 : Number(group)), collapsed
+        ]));
+    return true;
+}
+
+function toggleFormBillCollapse(tabState, billGroupIndex) {
+    tabState.formCollapsedBills = tabState.formCollapsedBills || {};
+    const key = String(billGroupIndex);
+    tabState.formCollapsedBills[key] = !tabState.formCollapsedBills[key];
+    return tabState.formCollapsedBills[key];
+}
+
+function formBillSummaryHtml(headerEntry, headerFields, itemEntries) {
+    const details = headerFields
+        .map(field => ({
+            label: field.field_name,
+            value: headerEntry?.values?.[String(field.id)]
+        }))
+        .filter(detail => !formValueIsBlank(detail.value))
+        .slice(0, 3)
+        .map(detail => `<span class="procedure-form-bill-summary-chip">
+            <span>${hostAdapter.escapeHtml(detail.label)}:</span>
+            <strong>${hostAdapter.escapeHtml(String(detail.value))}</strong>
+        </span>`).join('');
+    const itemCount = `<span class="procedure-form-bill-summary-chip procedure-form-bill-item-count">
+        <span>Items:</span><strong>${itemEntries.length}</strong>
+    </span>`;
+    return details + itemCount;
+}
+
+function formFieldInputHtml(field, value, rowIndex, rowScope, billGroupIndex = 0) {
     const type = field.field_type === 'date' ? 'date' : 'text';
     const inputMode = field.field_type === 'numeric' ? 'decimal' : undefined;
     const mapping = field.linked_column
@@ -2158,6 +2247,7 @@ function formFieldInputHtml(field, value, rowIndex, rowScope) {
         <label>${hostAdapter.escapeHtml(field.field_name)}${mapping}</label>
         <input type="${type}"${inputMode ? ` inputmode="${inputMode}"` : ''}
             class="procedure-form-input" data-row-index="${rowIndex}" data-row-scope="${rowScope}"
+            data-bill-group-index="${billGroupIndex}"
             data-field-id="${field.id}" data-field-type="${field.field_type || 'text'}"
             value="${hostAdapter.escapeHtml(value == null ? '' : String(value))}">
     </div>`;
@@ -2227,10 +2317,17 @@ function isFormDraftComplete(uid, doc) {
     if (!fields.length) return true;
     const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
     const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
-    const headerEntry = (tabState.formEntries || []).find(entry => entry.row_scope === 'header');
-    const itemEntries = (tabState.formEntries || []).filter(entry => entry.row_scope === 'item');
-    if (headerFields.length && !formEntryHasValues(headerEntry, headerFields)) return false;
-    if (itemFields.length && (!itemEntries.length || itemEntries.some(entry => !formEntryHasValues(entry, itemFields)))) return false;
+    const billGroupIndexes = getFormBillGroupIndexes(tabState);
+    const headerEntry = ensureFormHeaderEntry(tabState, headerFields, 0);
+    const groupItems = billGroupIndexes.map(groupIndex =>
+        getFormEntriesForGroup(tabState, groupIndex, 'item')
+    );
+    if (headerFields.length && billGroupIndexes.some(groupIndex =>
+        !formEntryHasValues(ensureFormHeaderEntry(tabState, headerFields, groupIndex), headerFields)
+    )) return false;
+    if (itemFields.length && groupItems.some(itemEntries =>
+        !itemEntries.length || itemEntries.some(entry => !formEntryHasValues(entry, itemFields))
+    )) return false;
 
     const mappedFields = fields.filter(field => field.linked_column);
     const sources = tabState.formSourceRows || [];
@@ -2242,8 +2339,9 @@ function isFormDraftComplete(uid, doc) {
             getFormCopyRowValue(sources[0].row_data, field.linked_column))
     ))) return false;
     const mappedItemFields = mappedFields.filter(field => (field.field_scope || 'header') === 'item');
+    const firstBillItems = getFormEntriesForGroup(tabState, 0, 'item');
     if (mappedItemFields.length && sources.some((source, index) => {
-        const entry = itemEntries[index];
+        const entry = firstBillItems[index];
         return !entry || mappedItemFields.some(field => !formFieldValuesMatch(
             field, entry.values[String(field.id)], getFormCopyRowValue(source.row_data, field.linked_column)
         ));
@@ -2274,7 +2372,7 @@ function applyMappedFormValues(tabState, fields, sources) {
     const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
     const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
     const headerEntry = ensureFormHeaderEntry(tabState, headerFields);
-    const itemEntries = (tabState.formEntries || []).filter(entry => entry.row_scope === 'item');
+    const itemEntries = getFormEntriesForGroup(tabState, 0, 'item');
     let changed = false;
 
     const copyIntoBlankFields = (entry, entryFields, source) => {
@@ -2296,7 +2394,7 @@ function applyMappedFormValues(tabState, fields, sources) {
         if (!itemFields.length) return;
         let itemEntry = itemEntries[sourceIndex];
         if (!itemEntry) {
-            itemEntry = makeEmptyFormEntry('item', itemFields, itemEntries.length);
+            itemEntry = makeEmptyFormEntry('item', itemFields, itemEntries.length, 0);
             tabState.formEntries.push(itemEntry);
             itemEntries.push(itemEntry);
         }
@@ -2374,8 +2472,7 @@ function renderFormDocumentPanel(uid, doc) {
     const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
     const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
     const mappedFields = fields.filter(field => field.linked_column);
-    const headerEntry = ensureFormHeaderEntry(tabState, headerFields);
-    const itemEntries = (tabState.formEntries || []).filter(entry => entry.row_scope === 'item');
+    const billGroupIndexes = getFormBillGroupIndexes(tabState);
     const procedureEntries = getProcedureChecklistEntries(doc);
     const hasRoles = procedureEntries.length > 0;
     const allRolesChecked = hasRoles && procedureEntries.every(entry =>
@@ -2395,25 +2492,55 @@ function renderFormDocumentPanel(uid, doc) {
         </div>
     ` : '';
 
-    const headerHtml = headerFields.length ? `
-        <div class="procedure-form-section">
-            <h4 class="procedure-form-section-title">Header fields</h4>
-            <div class="procedure-form-grid">${headerFields.map(field => formFieldInputHtml(
-                field, headerEntry.values[String(field.id)], 0, 'header'
-            )).join('')}</div>
-        </div>` : '';
-    const itemsHtml = itemFields.length ? `
-        <div class="procedure-form-section">
-            <div class="procedure-form-section-heading"><h4 class="procedure-form-section-title">Item fields</h4>
-                <button type="button" id="procedureFormAddItemBtn" class="procedure-form-add-btn">+ Add item row</button></div>
-            <div class="procedure-form-items">${itemEntries.length ? itemEntries.map((entry, index) => `
-                <div class="procedure-form-item-row" data-item-index="${index}">
-                    <div class="procedure-form-grid">${itemFields.map(field => formFieldInputHtml(
-                        field, entry.values[String(field.id)], index, 'item'
-                    )).join('')}</div>
-                    <button type="button" class="procedure-form-remove-item-btn" data-item-index="${index}">Remove row</button>
-                </div>`).join('') : '<div class="procedure-form-empty-items">No item rows added.</div>'}</div>
-        </div>` : '';
+    const billsHtml = billGroupIndexes.map((billGroupIndex, billIndex) => {
+        const headerEntry = ensureFormHeaderEntry(tabState, headerFields, billGroupIndex);
+        const itemEntries = getFormEntriesForGroup(tabState, billGroupIndex, 'item');
+        const isCollapsed = !!(tabState.formCollapsedBills || {})[String(billGroupIndex)];
+        const summaryHtml = formBillSummaryHtml(headerEntry, headerFields, itemEntries);
+        const headerHtml = headerFields.length ? `
+            <div class="procedure-form-section procedure-form-bill-header">
+                <h4 class="procedure-form-section-title">Header fields</h4>
+                <div class="procedure-form-grid">${headerFields.map(field => formFieldInputHtml(
+                    field, headerEntry.values[String(field.id)], 0, 'header', billGroupIndex
+                )).join('')}</div>
+            </div>` : '';
+        const itemsHtml = itemFields.length ? `
+            <div class="procedure-form-section procedure-form-bill-items">
+                <div class="procedure-form-section-heading"><h4 class="procedure-form-section-title">Item fields</h4>
+                    <button type="button" class="procedure-form-add-item-btn procedure-form-add-btn"
+                        data-bill-group-index="${billGroupIndex}">+ Add item row</button></div>
+                <div class="procedure-form-items">${itemEntries.length ? itemEntries.map((entry, index) => `
+                    <div class="procedure-form-item-row" data-item-index="${index}" data-bill-group-index="${billGroupIndex}">
+                        <div class="procedure-form-grid">${itemFields.map(field => formFieldInputHtml(
+                            field, entry.values[String(field.id)], index, 'item', billGroupIndex
+                        )).join('')}</div>
+                        <div class="procedure-form-item-actions">
+                            <button type="button" class="procedure-form-remove-item-btn"
+                                data-item-index="${index}" data-bill-group-index="${billGroupIndex}">Remove row</button>
+                            ${index > 0 ? `<button type="button" class="procedure-form-split-item-btn"
+                                data-item-index="${index}" data-bill-group-index="${billGroupIndex}">Split here</button>` : ''}
+                        </div>
+                    </div>`).join('') : '<div class="procedure-form-empty-items">No item rows added.</div>'}</div>
+            </div>` : '';
+        return `<section class="procedure-form-bill-card" data-bill-group-index="${billGroupIndex}">
+            <div class="procedure-form-bill-card-heading">
+                <button type="button" class="procedure-form-bill-toggle${isCollapsed ? ' is-collapsed' : ''}"
+                    data-bill-group-index="${billGroupIndex}" aria-expanded="${isCollapsed ? 'false' : 'true'}">
+                    <span class="procedure-form-bill-toggle-icon" aria-hidden="true">${isCollapsed ? '▸' : '▾'}</span>
+                    <span class="procedure-form-bill-heading-copy">
+                        <span class="procedure-form-bill-kicker">Physical bill</span>
+                        <span class="procedure-form-bill-title">Bill ${billIndex + 1}</span>
+                        <span class="procedure-form-bill-summary">${summaryHtml}</span>
+                    </span>
+                </button>
+                ${billIndex > 0 ? `<button type="button" class="procedure-form-remove-bill-btn"
+                    data-bill-group-index="${billGroupIndex}">Remove bill</button>` : ''}
+            </div>
+            <div class="procedure-form-bill-card-body${isCollapsed ? ' is-collapsed' : ''}">
+                ${headerHtml}${itemsHtml}
+            </div>
+        </section>`;
+    }).join('');
     const emptyHtml = fields.length ? '' : '<div class="procedure-form-empty">This Form has no configured fields. Configure fields in Audit Rules before using it.</div>';
 
     container.innerHTML = `
@@ -2426,7 +2553,12 @@ function renderFormDocumentPanel(uid, doc) {
                         <button type="button" id="procedureFormCopyBtn" class="procedure-form-add-btn">📋 Copy from lines</button>
                         <span class="procedure-form-copy-status">${hostAdapter.escapeHtml(tabState.formCopyStatus || '')}</span>
                     </div>` : ''}
-                    ${emptyHtml}${headerHtml}${itemsHtml}
+                    ${fields.length ? `<div class="procedure-form-bills-toolbar">
+                        <div><span class="procedure-form-section-title">Bill details</span>
+                            <small class="procedure-form-bills-hint">Add one card per physical bill or vendor.</small></div>
+                        <button type="button" id="procedureFormAddBillBtn" class="procedure-form-add-btn">+ Add bill</button>
+                    </div>` : ''}
+                    ${emptyHtml}<div class="procedure-form-bills">${billsHtml}</div>
                 </div>
             </div>
             ${proceduresSegmentHtml}
@@ -2440,9 +2572,9 @@ function renderFormDocumentPanel(uid, doc) {
         input.addEventListener('input', function() {
             const rowScope = this.dataset.rowScope;
             const rowIndex = parseInt(this.dataset.rowIndex);
-            const entry = rowScope === 'header'
-                ? headerEntry
-                : itemEntries[rowIndex];
+            const billGroupIndex = parseInt(this.dataset.billGroupIndex || '0');
+            const groupEntries = getFormEntriesForGroup(tabState, billGroupIndex, rowScope);
+            const entry = groupEntries[rowIndex];
             if (!entry) return;
             entry.values[this.dataset.fieldId] = this.value;
             tabState.formDirty = true;
@@ -2452,22 +2584,64 @@ function renderFormDocumentPanel(uid, doc) {
             updateProcedureModalSavedNote(uid);
         });
     });
-    const addItemBtn = document.getElementById('procedureFormAddItemBtn');
-    if (addItemBtn) addItemBtn.addEventListener('click', function() {
+    const addBillBtn = document.getElementById('procedureFormAddBillBtn');
+    if (addBillBtn) addBillBtn.addEventListener('click', function() {
+        const billGroupIndexes = getFormBillGroupIndexes(tabState);
+        const newBillGroupIndex = billGroupIndexes.length ? Math.max(...billGroupIndexes) + 1 : 0;
         tabState.formEntries = tabState.formEntries || [];
-        tabState.formEntries.push(makeEmptyFormEntry('item', itemFields, itemEntries.length));
+        if (headerFields.length) tabState.formEntries.push(
+            makeEmptyFormEntry('header', headerFields, 0, newBillGroupIndex)
+        );
+        tabState.formDirty = true;
+        hostAdapter.markLineDirty(uid, 'form bill added');
+        renderFormDocumentPanel(uid, doc);
+    });
+    container.querySelectorAll('.procedure-form-bill-toggle').forEach(toggle => {
+        toggle.addEventListener('click', function() {
+            toggleFormBillCollapse(tabState, parseInt(this.dataset.billGroupIndex || '0'));
+            renderFormDocumentPanel(uid, doc);
+        });
+    });
+    container.querySelectorAll('.procedure-form-add-item-btn').forEach(addItemBtn => addItemBtn.addEventListener('click', function() {
+        const billGroupIndex = parseInt(this.dataset.billGroupIndex || '0');
+        const itemEntries = getFormEntriesForGroup(tabState, billGroupIndex, 'item');
+        tabState.formEntries = tabState.formEntries || [];
+        tabState.formEntries.push(makeEmptyFormEntry('item', itemFields, itemEntries.length, billGroupIndex));
         tabState.formDirty = true;
         hostAdapter.markLineDirty(uid, 'form item row added');
         renderFormDocumentPanel(uid, doc);
-    });
+    }));
     container.querySelectorAll('.procedure-form-remove-item-btn').forEach(button => {
         button.addEventListener('click', function() {
             const rowIndex = parseInt(this.dataset.itemIndex);
+            const billGroupIndex = parseInt(this.dataset.billGroupIndex || '0');
+            const itemEntries = getFormEntriesForGroup(tabState, billGroupIndex, 'item');
             const entry = itemEntries[rowIndex];
             if (!entry) return;
             tabState.formEntries.splice(tabState.formEntries.indexOf(entry), 1);
+            renumberFormItemRows(tabState, billGroupIndex);
             tabState.formDirty = true;
             hostAdapter.markLineDirty(uid, 'form item row removed');
+            renderFormDocumentPanel(uid, doc);
+        });
+    });
+    container.querySelectorAll('.procedure-form-remove-bill-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const billGroupIndex = parseInt(this.dataset.billGroupIndex || '0');
+            if (!removeFormBillGroup(tabState, billGroupIndex)) return;
+            tabState.formDirty = true;
+            hostAdapter.markLineDirty(uid, 'form bill removed');
+            renderFormDocumentPanel(uid, doc);
+        });
+    });
+    container.querySelectorAll('.procedure-form-split-item-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const billGroupIndex = parseInt(this.dataset.billGroupIndex || '0');
+            const itemIndex = parseInt(this.dataset.itemIndex || '0');
+            const split = splitFormBillAtItem(tabState, billGroupIndex, itemIndex, headerFields);
+            if (!split) return;
+            tabState.formDirty = true;
+            hostAdapter.markLineDirty(uid, 'form bill split');
             renderFormDocumentPanel(uid, doc);
         });
     });
@@ -3118,6 +3292,7 @@ async function toggleAllProcedureChecks(uid, docId) {
 async function saveFormEntry(uid, docId) {
     const tabState = getProcedureTabState(uid, docId);
     const entries = (tabState.formEntries || []).map(entry => ({
+        bill_group_index: Number(entry.bill_group_index || 0),
         row_scope: entry.row_scope,
         sort_order: entry.sort_order,
         values: Object.entries(entry.values || {}).map(([fieldId, value]) => ({
@@ -3232,6 +3407,22 @@ function makeEmptyPhysicalBill() {
 
 function makeEmptyPhysicalBillItem() {
     return { item_name: '', quantity: '', rate: '', amount: null };
+}
+
+// Splits one bill before the selected item, moving that item and every following item into a
+// fresh bill card. The new header intentionally starts blank because it represents a separate
+// physical bill and must be completed from that bill's own document details.
+function splitPhysicalBillAtItem(tabState, billIdx, itemIdx) {
+    if (!tabState || !Array.isArray(tabState.physicalBills)) return null;
+    const bill = tabState.physicalBills[billIdx];
+    if (!bill || !Array.isArray(bill.items) || itemIdx <= 0 || itemIdx >= bill.items.length) return null;
+
+    const movedItems = bill.items.splice(itemIdx);
+    if (!movedItems.length) return null;
+    const newBill = makeEmptyPhysicalBill();
+    newBill.items = movedItems;
+    tabState.physicalBills.splice(billIdx + 1, 0, newBill);
+    return { newBillIdx: billIdx + 1, movedItemCount: movedItems.length };
 }
 
 // Recomputes one item's derived Amount (qty*rate, or null if either isn't currently a valid
@@ -3364,7 +3555,10 @@ function renderPhysicalBillCard(bill, billIdx) {
             <td><input type="text" inputmode="decimal" class="procedure-bill-input" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" data-field="rate" value="${hostAdapter.escapeHtml(item.rate)}" placeholder="0"></td>
             <td><input type="text" inputmode="decimal" class="procedure-bill-input" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" data-field="quantity" value="${hostAdapter.escapeHtml(item.quantity)}" placeholder="0"></td>
             <td class="procedure-bill-item-amount" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}">${formatBillTotalDisplay(item.amount)}</td>
-            <td><button type="button" class="procedure-bill-remove-line-btn" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" title="Remove line">${PB_ICON_REMOVE}</button></td>
+            <td class="procedure-bill-item-actions">
+                ${itemIdx > 0 ? `<button type="button" class="procedure-bill-split-line-btn" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" title="Start a new bill before this line">Split</button>` : ''}
+                <button type="button" class="procedure-bill-remove-line-btn" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" title="Remove line">${PB_ICON_REMOVE}</button>
+            </td>
         </tr>
     `).join('');
 
@@ -3387,7 +3581,7 @@ function renderPhysicalBillCard(bill, billIdx) {
             </div>
             <table class="procedure-bill-items-table">
                 <thead>
-                    <tr><th>Item</th><th>Rate</th><th>Qty</th><th>Amount</th><th></th></tr>
+                    <tr><th>Item</th><th>Rate</th><th>Qty</th><th>Amount</th><th>Action</th></tr>
                 </thead>
                 <tbody>${itemRows}</tbody>
             </table>
@@ -3578,6 +3772,25 @@ function renderPhysicalBillDocumentPanel(uid, doc) {
                 tabState.physicalBillDirty = true;
                 hostAdapter.markLineDirty(uid, 'physical bill line removed');
                 renderPhysicalBillDocumentPanel(uid, doc);
+            });
+        });
+
+        form.querySelectorAll('.procedure-bill-split-line-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const billIdx = parseInt(this.dataset.billIdx);
+                const itemIdx = parseInt(this.dataset.itemIdx);
+                const split = splitPhysicalBillAtItem(tabState, billIdx, itemIdx);
+                if (!split) return;
+                tabState.physicalBillDirty = true;
+                hostAdapter.markLineDirty(uid, 'physical bill split');
+                renderPhysicalBillDocumentPanel(uid, doc);
+                const newBillInput = document.querySelector(
+                    `#procedureBillForm input[data-field="bill_no"][data-bill-idx="${split.newBillIdx}"]`
+                );
+                if (newBillInput) {
+                    newBillInput.focus();
+                    newBillInput.scrollIntoView({ block: 'nearest' });
+                }
             });
         });
 

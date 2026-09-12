@@ -3859,10 +3859,18 @@ body {
     letter-spacing: 0.4px;
     border-bottom: 1px solid #e6e9ed;
 }
+#procedureModal .procedure-bill-items-table th:last-child {
+    text-align: right;
+}
 #procedureModal .procedure-bill-items-table td {
     padding: 6px 10px;
     border-bottom: 1px solid #f1f5f9;
     vertical-align: middle;
+}
+#procedureModal .procedure-bill-item-actions {
+    width: 1%;
+    white-space: nowrap;
+    text-align: right;
 }
 #procedureModal .procedure-bill-items-table tbody tr:last-child td {
     border-bottom: none;
@@ -3893,6 +3901,29 @@ body {
 #procedureModal .procedure-bill-remove-line-btn:hover {
     color: #dc2626;
     background: #fee2e2;
+}
+#procedureModal .procedure-bill-split-line-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 7px;
+    border: 1px solid #bfdbfe;
+    border-radius: 5px;
+    background: #eff6ff;
+    color: #2563eb;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+#procedureModal .procedure-bill-split-line-btn:hover {
+    background: #dbeafe;
+    border-color: #93c5fd;
+    color: #1d4ed8;
+}
+#procedureModal .procedure-bill-split-line-btn:focus-visible,
+#procedureModal .procedure-bill-remove-line-btn:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
 }
 
 #procedureModal .procedure-bill-add-line-btn {
@@ -8445,6 +8476,164 @@ body {
     justify-content: flex-start;
     margin: 0 0 12px;
 }
+#procedureModal .procedure-form-bills-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 12px 0 8px;
+    padding: 10px 12px;
+    border: 1px solid #dbe5f0;
+    border-radius: 9px;
+    background: #f8fafc;
+}
+#procedureModal .procedure-form-bills-hint {
+    display: block;
+    margin-top: 3px;
+    color: #64748b;
+    font-size: 11px;
+}
+#procedureModal .procedure-form-bills {
+    display: grid;
+    gap: 14px;
+}
+#procedureModal .procedure-form-bill-card {
+    overflow: hidden;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    background: #ffffff;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, .04);
+}
+#procedureModal .procedure-form-bill-card-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid #e2e8f0;
+    background: linear-gradient(90deg, #f8fafc, #ffffff);
+}
+#procedureModal .procedure-form-bill-toggle {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+#procedureModal .procedure-form-bill-toggle:focus-visible {
+    outline: 2px solid #60a5fa;
+    outline-offset: 3px;
+    border-radius: 5px;
+}
+#procedureModal .procedure-form-bill-toggle-icon {
+    width: 14px;
+    margin-top: 2px;
+    color: #2563eb;
+    font-size: 17px;
+    line-height: 1;
+}
+#procedureModal .procedure-form-bill-heading-copy {
+    display: block;
+    min-width: 0;
+}
+#procedureModal .procedure-form-bill-kicker {
+    display: block;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+#procedureModal .procedure-form-bill-title {
+    display: block;
+    margin: 2px 0 0;
+    color: #1e293b;
+    font-size: 14px;
+}
+#procedureModal .procedure-form-bill-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 7px;
+}
+#procedureModal .procedure-form-bill-summary-chip {
+    display: inline-flex;
+    max-width: 240px;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+    padding: 3px 7px;
+    border: 1px solid #dbe5f0;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #64748b;
+    font-size: 10px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#procedureModal .procedure-form-bill-summary-chip strong {
+    overflow: hidden;
+    color: #334155;
+    font-weight: 700;
+    text-overflow: ellipsis;
+}
+#procedureModal .procedure-form-bill-item-count {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+#procedureModal .procedure-form-bill-item-count strong {
+    color: #1d4ed8;
+}
+#procedureModal .procedure-form-bill-card-body.is-collapsed {
+    display: none;
+}
+#procedureModal .procedure-form-bill-card > .procedure-form-section {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+#procedureModal .procedure-form-bill-card > .procedure-form-section + .procedure-form-section {
+    border-top: 1px solid #e2e8f0;
+}
+#procedureModal .procedure-form-item-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+#procedureModal .procedure-form-split-item-btn,
+#procedureModal .procedure-form-remove-bill-btn {
+    margin-top: 10px;
+    padding: 5px 9px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #475569;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 650;
+}
+#procedureModal .procedure-form-split-item-btn:hover {
+    border-color: #93c5fd;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+#procedureModal .procedure-form-remove-bill-btn {
+    margin-top: 0;
+    border-color: #fecaca;
+    color: #b91c1c;
+}
+#procedureModal .procedure-form-remove-bill-btn:hover {
+    background: #fef2f2;
+}
 #procedureModal .procedure-form-copy-status {
     color: #64748b;
     font-size: 11px;
@@ -8462,7 +8651,8 @@ body {
         grid-template-columns: 1fr;
     }
     #procedureModal .procedure-form-section-heading,
-    #procedureModal .procedure-form-copy-row {
+    #procedureModal .procedure-form-copy-row,
+    #procedureModal .procedure-form-bills-toolbar {
         align-items: flex-start;
         flex-direction: column;
     }
