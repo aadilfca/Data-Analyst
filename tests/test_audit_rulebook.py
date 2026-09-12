@@ -2020,7 +2020,7 @@ class FormDocumentSchemaTests(unittest.TestCase):
         ))
         self.assertEqual(
             self._columns("voucher_line_form_entries"),
-            {"id", "voucher_line_id", "document_id", "row_scope", "sort_order",
+            {"id", "voucher_line_id", "document_id", "row_scope", "bill_group_index", "sort_order",
              "created_at", "updated_at"},
         )
         self.assertEqual(
@@ -2028,6 +2028,57 @@ class FormDocumentSchemaTests(unittest.TestCase):
             {"id", "entry_id", "field_id", "value_text", "value_date", "value_numeric",
              "created_at", "updated_at"},
         )
+
+    def test_form_entries_default_to_the_legacy_first_bill_group(self):
+        conn = database.get_db()
+        try:
+            conn.execute(
+                "INSERT INTO voucher_line_form_entries "
+                "(voucher_line_id, document_id, row_scope, sort_order) VALUES (?, ?, ?, ?)",
+                (1, 2, "header", 0),
+            )
+            conn.commit()
+            self.assertEqual(
+                conn.execute(
+                    "SELECT bill_group_index FROM voucher_line_form_entries WHERE voucher_line_id = ?",
+                    (1,),
+                ).fetchone()[0],
+                0,
+            )
+        finally:
+            conn.close()
+
+    def test_form_group_index_migration_upgrades_a_legacy_table(self):
+        conn = database.get_db()
+        try:
+            conn.execute("DROP TABLE voucher_line_form_values")
+            conn.execute("DROP TABLE voucher_line_form_entries")
+            conn.execute('''
+                CREATE TABLE voucher_line_form_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    voucher_line_id INTEGER NOT NULL,
+                    document_id INTEGER NOT NULL,
+                    row_scope TEXT NOT NULL DEFAULT 'header',
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            conn.commit()
+        finally:
+            conn.close()
+
+        init_db()
+        self.assertIn("bill_group_index", self._columns("voucher_line_form_entries"))
+        conn = database.get_db()
+        try:
+            defaults = {
+                row[1]: row[4]
+                for row in conn.execute("PRAGMA table_info(voucher_line_form_entries)").fetchall()
+            }
+        finally:
+            conn.close()
+        self.assertEqual(defaults["bill_group_index"], "0")
 
     def test_form_document_type_is_allowed_by_schema(self):
         conn = database.get_db()

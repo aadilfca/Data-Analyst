@@ -1607,12 +1607,21 @@ def init_db():
                 voucher_line_id INTEGER NOT NULL,
                 document_id INTEGER NOT NULL,
                 row_scope TEXT NOT NULL DEFAULT 'header',
+                bill_group_index INTEGER NOT NULL DEFAULT 0,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE
             )
         ''')
+        existing_form_entry_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(voucher_line_form_entries)").fetchall()
+        }
+        if 'bill_group_index' not in existing_form_entry_columns:
+            conn.execute(
+                "ALTER TABLE voucher_line_form_entries "
+                "ADD COLUMN bill_group_index INTEGER NOT NULL DEFAULT 0"
+            )
         conn.execute('''
             CREATE TABLE IF NOT EXISTS voucher_line_form_values (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1629,6 +1638,10 @@ def init_db():
             )
         ''')
         conn.execute("CREATE INDEX IF NOT EXISTS idx_voucher_line_form_entries_line ON voucher_line_form_entries (voucher_line_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voucher_line_form_entries_group "
+            "ON voucher_line_form_entries (voucher_line_id, document_id, bill_group_index, row_scope, sort_order)"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_voucher_line_form_values_entry ON voucher_line_form_values (entry_id)")
 
         # ID-based Cross-check-eligible Fields, Phase 1 of 4: field_name stays free text (the
@@ -3125,15 +3138,13 @@ def _ensure_postgres_form_tables(conn):
             missing.append("voucher_line_form_entries")
         if existing[1] is None:
             missing.append("voucher_line_form_values")
-        if not missing:
-            return []
-
         cur.execute('''
             CREATE TABLE IF NOT EXISTS voucher_line_form_entries (
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 voucher_line_id INTEGER NOT NULL,
                 document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
                 row_scope TEXT NOT NULL DEFAULT 'header',
+                bill_group_index INTEGER NOT NULL DEFAULT 0,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMPTZ DEFAULT now(),
                 updated_at TIMESTAMPTZ DEFAULT now()
@@ -3142,6 +3153,15 @@ def _ensure_postgres_form_tables(conn):
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_voucher_line_form_entries_line "
             "ON voucher_line_form_entries (voucher_line_id)"
+        )
+        cur.execute(
+            "ALTER TABLE voucher_line_form_entries "
+            "ADD COLUMN IF NOT EXISTS bill_group_index INTEGER NOT NULL DEFAULT 0"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_voucher_line_form_entries_group "
+            "ON voucher_line_form_entries "
+            "(voucher_line_id, document_id, bill_group_index, row_scope, sort_order)"
         )
         cur.execute('''
             CREATE TABLE IF NOT EXISTS voucher_line_form_values (
@@ -3700,12 +3720,15 @@ def init_db_postgres(conn):
             voucher_line_id INTEGER NOT NULL,
             document_id INTEGER NOT NULL REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
             row_scope TEXT NOT NULL DEFAULT 'header',
+            bill_group_index INTEGER NOT NULL DEFAULT 0,
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMPTZ DEFAULT now(),
             updated_at TIMESTAMPTZ DEFAULT now()
         )
     ''', "voucher_line_form_entries")
+    run("ALTER TABLE voucher_line_form_entries ADD COLUMN IF NOT EXISTS bill_group_index INTEGER NOT NULL DEFAULT 0")
     run("CREATE INDEX IF NOT EXISTS idx_voucher_line_form_entries_line ON voucher_line_form_entries (voucher_line_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_voucher_line_form_entries_group ON voucher_line_form_entries (voucher_line_id, document_id, bill_group_index, row_scope, sort_order)")
     run('''
         CREATE TABLE IF NOT EXISTS voucher_line_form_values (
             id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
