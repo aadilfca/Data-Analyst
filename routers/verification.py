@@ -7053,6 +7053,10 @@ def get_procedure_modal_data(voucher_line_id: int, perf: bool = Query(False)):
             "procedure_checks": procedure_checks,
             "observations": observations,
             "physical_bills": physical_bills,
+            # Form rows are already assembled by get_voucher_support_data().  The modal's
+            # open path rehydrates its Form fields from this key, so omitting it made saved
+            # bill particulars appear blank after every reopen.
+            "form_entries": current_support["form_entries"],
             "cross_check_results": cross_check_results,
             "voucher_checks": voucher_checks,
         }

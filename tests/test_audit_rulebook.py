@@ -59,6 +59,7 @@ from routers.verification import (
     _shape_form_entries,
     _evaluate_form_bill_completion,
     _replace_form_entries,
+    get_procedure_modal_data,
     get_verification_session_rulebook,
     rebase_verification_session_rulebook,
 )
@@ -1803,6 +1804,38 @@ class CrossCheckMatrixColumnAxisAndMetaTests(unittest.TestCase):
 
 
 class ProcedureModalPersistenceTests(unittest.TestCase):
+    def test_modal_open_payload_includes_saved_form_entries(self):
+        form_entries = {
+            'voucher_line_id': 101,
+            'documents': [{
+                'document_id': 420,
+                'is_active': True,
+                'entries': [{
+                    'bill_group_index': 0,
+                    'row_scope': 'header',
+                    'sort_order': 0,
+                    'values': [{'field_id': 4201, 'field_name': 'Bill No', 'value': 'PB-478'}],
+                }],
+            }],
+        }
+        support_data = {
+            'voucher_line_id': 101,
+            'lines': {
+                '101': {
+                    'linked_documents': {'voucher_line_id': 101, 'documents': [], 'count': 0},
+                    'procedure_checks': {'voucher_line_id': 101, 'checks': []},
+                    'observations': {'voucher_line_id': 101, 'entries': []},
+                    'physical_bills': {'voucher_line_id': 101, 'bills': [], 'count': 0},
+                    'form_entries': form_entries,
+                }
+            },
+        }
+        with patch('routers.verification.get_voucher_support_data', return_value=support_data), \
+             patch('routers.verification.execute_query_pg', return_value=[]), \
+             patch('routers.verification.evaluate_cross_checks_for_line', return_value={'results': []}):
+            result = get_procedure_modal_data(101)
+        self.assertEqual(result['form_entries'], form_entries)
+
     def test_procedure_tabs_use_only_active_unique_guidance_documents(self):
         procedure_modal_js = Path(__file__).resolve().parents[1] / "static" / "procedure_modal.js"
         with sync_playwright() as playwright:
