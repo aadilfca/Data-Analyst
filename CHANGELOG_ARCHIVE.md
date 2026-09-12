@@ -1,5 +1,12 @@
 # Changelog Archive
 
+## Verification Form typing stability - 2026-09-12
+
+Free typing in Form fields now waits briefly before saving, and a successful Form save refreshes
+completion indicators without rebuilding the active editor. This prevents Rate entry from losing
+focus or collapsing its bill card. Browser coverage confirms a multi-digit Rate remains focused,
+expanded, derived, and saved once after typing stops; the 24 Form-evidence tests pass.
+
 ## Verification Form persistence and reconciliation - 2026-09-12
 
 Form evidence saves after every manual or structural change, including Quick add bills/items,

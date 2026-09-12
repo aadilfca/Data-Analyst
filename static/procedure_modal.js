@@ -2594,6 +2594,10 @@ function isFormDraftComplete(uid, doc) {
 
 async function autoSaveFormDraft(uid, doc) {
     const tabState = getProcedureTabState(uid, doc.id);
+    if (tabState.formAutoSaveTimer) {
+        window.clearTimeout(tabState.formAutoSaveTimer);
+        tabState.formAutoSaveTimer = null;
+    }
     if (!tabState.formDirty) return true;
     if (tabState.formSavePromise) return tabState.formSavePromise;
     const savePromise = (async () => {
@@ -2610,6 +2614,19 @@ async function autoSaveFormDraft(uid, doc) {
         if (tabState.formSavePromise === savePromise) tabState.formSavePromise = null;
         renderProcedureModalTabs(uid);
     }
+}
+
+// Free typing should not let an earlier keystroke's save rebuild the Form panel beneath the
+// cursor. Structural actions still call autoSaveFormDraft() directly and save immediately.
+const FORM_INPUT_AUTOSAVE_DELAY_MS = 350;
+
+function scheduleFormDraftAutoSave(uid, doc) {
+    const tabState = getProcedureTabState(uid, doc.id);
+    if (tabState.formAutoSaveTimer) window.clearTimeout(tabState.formAutoSaveTimer);
+    tabState.formAutoSaveTimer = window.setTimeout(() => {
+        tabState.formAutoSaveTimer = null;
+        autoSaveFormDraft(uid, doc);
+    }, FORM_INPUT_AUTOSAVE_DELAY_MS);
 }
 
 async function fetchFormCopySources(uid, doc) {
@@ -2905,7 +2922,7 @@ function renderFormDocumentPanel(uid, doc) {
             }
             markFormEvidenceDirty(uid, tabState, 'form evidence edited');
             renderProcedureModalTabs(uid);
-            autoSaveFormDraft(uid, doc);
+            scheduleFormDraftAutoSave(uid, doc);
             updateProcedureModalSavedNote(uid);
         });
     });
@@ -3786,7 +3803,7 @@ async function saveFormEntry(uid, docId, revisionAtSave = null) {
         if (typeof invalidateVoucherSupportCache === 'function') {
             invalidateVoucherSupportCache();
         }
-        await refreshProcedureCrossCheckResults(uid);
+        await refreshProcedureCrossCheckResults(uid, { preserveActiveFormPanel: true });
         const lineType = hostAdapter.voucherLineState[uid] && hostAdapter.voucherLineState[uid].transactionType;
         if (lineType && typeof hostAdapter.updateProceduresCellForLine === 'function') {
             await hostAdapter.updateProceduresCellForLine(uid, lineType);
@@ -3801,7 +3818,7 @@ async function saveFormEntry(uid, docId, revisionAtSave = null) {
     }
 }
 
-async function refreshProcedureCrossCheckResults(uid) {
+async function refreshProcedureCrossCheckResults(uid, { preserveActiveFormPanel = false } = {}) {
     try {
         const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/cross_check_results/${encodeURIComponent(uid)}`);
         if (!res.ok) return;
@@ -3810,7 +3827,10 @@ async function refreshProcedureCrossCheckResults(uid) {
         if (!lineState) return;
         lineState.crossCheckResults = Array.isArray(data.results) ? data.results : [];
         if (currentProcedureModalUid === uid && lineState.activeDocId !== null) {
-            renderProcedureModalPanel(uid, lineState.activeDocId);
+            const activeDoc = (lineState.documents || []).find(doc => doc.id === lineState.activeDocId);
+            if (!(preserveActiveFormPanel && activeDoc?.document_type === 'form')) {
+                renderProcedureModalPanel(uid, lineState.activeDocId);
+            }
             renderProcedureModalTabs(uid);
         }
     } catch (e) {

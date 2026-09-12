@@ -2703,6 +2703,65 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_rate_typing_waits_for_a_pause_without_rebuilding_the_form_panel(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''async () => {
+                    const doc = {id: 7, document_type: 'form', form_fields: [
+                        {id: 1, field_name: 'Quantity', field_type: 'numeric', field_scope: 'item'},
+                        {id: 2, field_name: 'Rate', field_type: 'numeric', field_scope: 'item'},
+                        {id: 3, field_name: 'Amount', field_type: 'numeric', field_scope: 'item'}
+                    ]};
+                    const tab = {formEntries: [{bill_group_index: 0, row_scope: 'item', sort_order: 0,
+                        values: {'1': '1', '2': '', '3': ''}}], formDirty: false, formRevision: 0,
+                        checklist: {}, formCollapsedBills: {}};
+                    const requests = [];
+                    hostAdapter = {
+                        procedureModalState: {4: {activeDocId: 7, documents: [doc], voucherLineAmount: 123,
+                            crossCheckResults: [], tabs: {7: tab}}},
+                        voucherLineState: {}, currentVoucherLines: [], markLineDirty: () => {},
+                        showStatus: () => {}, escapeHtml: value => String(value ?? '')
+                    };
+                    currentProcedureModalUid = 4;
+                    window.ApiUtils.apiFetch = async () => ({ok: true, json: async () => ({results: []})});
+                    window.ApiUtils.apiFetchMutate = async (url, options) => {
+                        const payload = JSON.parse(options.body);
+                        requests.push(payload);
+                        return {ok: true, json: async () => ({entries: payload.entries, cleared_status: 'Pending'})};
+                    };
+                    renderFormDocumentPanel(4, doc);
+                    const rate = document.querySelector('.procedure-form-input[data-field-id="2"]');
+                    rate.focus();
+                    for (const digit of ['1', '2', '3']) {
+                        rate.value += digit;
+                        rate.dispatchEvent(new Event('input', {bubbles: true}));
+                        await new Promise(resolve => setTimeout(resolve, 40));
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 120));
+                    const beforeSave = {
+                        requests: requests.length,
+                        focusedRate: document.activeElement?.dataset?.fieldId === '2',
+                        rate: rate.value,
+                        amount: document.querySelector('.procedure-form-input[data-field-id="3"]').value,
+                        collapsed: document.querySelector('.procedure-form-bill-card-body').classList.contains('is-collapsed')
+                    };
+                    await new Promise(resolve => setTimeout(resolve, 400));
+                    return {...beforeSave, afterSaveRequests: requests.length,
+                        focusedAfterSave: document.activeElement?.dataset?.fieldId === '2'};
+                }''')
+                self.assertEqual(result, {
+                    'requests': 0, 'focusedRate': True, 'rate': '123', 'amount': '123', 'collapsed': False,
+                    'afterSaveRequests': 1, 'focusedAfterSave': True
+                })
+            finally:
+                browser.close()
+
     def test_form_values_are_shaped_back_as_text_date_and_numeric(self):
         rows = [
             {'entry_id': 9, 'voucher_line_id': 4, 'document_id': 7, 'bill_group_index': 1,
