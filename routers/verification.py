@@ -571,39 +571,40 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     form_required_ids = {
         did for did, document_type in required_doc_types.items() if document_type == 'form'
     }
-    form_entry_doc_ids = set()
+    form_fields_by_doc: Dict[int, List[dict]] = {}
+    form_value_rows_by_doc: Dict[int, List[dict]] = {}
     if form_required_ids:
-        form_line_ph = ",".join("%s" for _ in sibling_ids)
         form_doc_ph = ",".join("%s" for _ in form_required_ids)
-        form_entry_rows = execute_query_pg(
-            f"""
-            SELECT DISTINCT document_id
-            FROM voucher_line_form_entries
-            WHERE voucher_line_id IN ({form_line_ph})
-              AND document_id IN ({form_doc_ph})
-            """,
+        form_field_rows = execute_query_pg(
+            f"""SELECT id, document_id, field_name, field_type, field_scope
+                FROM audit_rule_document_fields WHERE document_id IN ({form_doc_ph})
+                ORDER BY document_id, sort_order, id""",
+            tuple(form_required_ids)
+        )
+        for field in form_field_rows:
+            form_fields_by_doc.setdefault(field['document_id'], []).append(field)
+        form_value_rows = execute_query_pg(
+            f"""SELECT e.voucher_line_id, e.document_id, e.bill_group_index, e.row_scope,
+                       e.sort_order, e.updated_at AS entry_updated_at, f.id AS field_id,
+                       f.field_type, v.value_text, v.value_date, v.value_numeric
+                FROM voucher_line_form_entries e
+                JOIN voucher_line_form_values v ON v.entry_id = e.id
+                JOIN audit_rule_document_fields f ON f.id = v.field_id
+                WHERE e.voucher_line_id IN ({placeholders}) AND e.document_id IN ({form_doc_ph})""",
             tuple(sibling_ids) + tuple(form_required_ids)
         )
-        form_entry_doc_ids = {row['document_id'] for row in form_entry_rows}
-
-    # The compiled Rulebook carries form_fields, including an empty list. Older frozen
-    # Rulebooks may omit that key, so resolve the count from the live Document definition only
-    # for those rows. A zero-field Form intentionally has no manual evidence to enter.
-    form_field_counts = {
-        did: len(doc.get("form_fields") or [])
-        for did, doc in ((d["document_id"], d) for d in required_docs)
-        if required_doc_types.get(did) == "form" and "form_fields" in doc
-    }
-    missing_form_field_ids = form_required_ids - set(form_field_counts)
-    if missing_form_field_ids:
-        form_field_ph = ",".join("%s" for _ in missing_form_field_ids)
-        field_count_rows = execute_query_pg(
-            f"SELECT document_id, COUNT(*) AS field_count FROM audit_rule_document_fields "
-            f"WHERE document_id IN ({form_field_ph}) GROUP BY document_id",
-            tuple(missing_form_field_ids)
-        )
-        form_field_counts.update({row["document_id"]: int(row["field_count"]) for row in field_count_rows})
-        form_field_counts.update({did: 0 for did in missing_form_field_ids if did not in form_field_counts})
+        form_winning = {}
+        for value_row in form_value_rows:
+            document_id = value_row['document_id']
+            candidate = (_ts_sort_key(value_row['entry_updated_at']), value_row['voucher_line_id'])
+            if document_id not in form_winning or candidate > form_winning[document_id]:
+                form_winning[document_id] = candidate
+        for value_row in form_value_rows:
+            document_id = value_row['document_id']
+            if (_ts_sort_key(value_row['entry_updated_at']), value_row['voucher_line_id']) == form_winning[document_id]:
+                form_value_rows_by_doc.setdefault(document_id, []).append(value_row)
+    form_field_counts = {document_id: len(form_fields_by_doc.get(document_id, []))
+                         for document_id in form_required_ids}
 
     # Physical Bill evidence type, Phase 6 of 8: a physical_bill Document never goes through the
     # role-tick path (its own dedicated check below handles it), regardless of what its auth_roles
@@ -655,8 +656,9 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         return all(ticks.get(role) for role in roles)
 
     def _form_doc_satisfied(document_id: int) -> bool:
-        evidence_complete = form_field_counts.get(document_id, 0) == 0 \
-            or document_id in form_entry_doc_ids
+        evidence_complete = _evaluate_form_bill_completion(
+            form_fields_by_doc.get(document_id, []), form_value_rows_by_doc.get(document_id, []), voucher_amount
+        )
         roles = form_procedure_roles_by_doc.get(document_id, [])
         ticks = role_ticks_by_doc.get(document_id, {})
         return evidence_complete and all(ticks.get(role) for role in roles)
@@ -732,8 +734,13 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
                 field_count = form_field_counts.get(did, 0)
                 roles = form_procedure_roles_by_doc.get(did, [])
                 ticks = role_ticks_by_doc.get(did, {})
-                if field_count and did not in form_entry_doc_ids:
+                if field_count and not form_value_rows_by_doc.get(did):
                     outstanding_parts.append(f"{d['name']} (Form evidence not saved)")
+                elif field_count:
+                    outstanding_parts.append(
+                        f"{d['name']} (Form bill details are incomplete or its total does not match "
+                        f"voucher amount {row['extract_amount']})"
+                    )
                 elif roles:
                     done = sum(1 for role in roles if ticks.get(role))
                     outstanding_parts.append(
@@ -3082,20 +3089,20 @@ def get_audit_workbook(session_id: int):
         doc['id'] for docs in guidance_docs_by_category.values() for doc in docs
         if doc['document_type'] == 'form'
     }
-    form_field_ids_by_doc: Dict[int, set] = {}
-    saved_form_field_ids_by_cd: Dict[int, Dict[int, set]] = {}
+    form_fields_by_doc: Dict[int, List[dict]] = {}
+    saved_form_value_rows_by_cd: Dict[int, Dict[int, List[dict]]] = {}
     if form_doc_ids:
         form_placeholders = ",".join("%s" for _ in form_doc_ids)
         field_rows = execute_query_pg(
-            f"SELECT id, document_id FROM audit_rule_document_fields "
+            f"SELECT id, document_id, field_name, field_type, field_scope FROM audit_rule_document_fields "
             f"WHERE document_id IN ({form_placeholders})",
             tuple(form_doc_ids)
         )
         for field in field_rows:
-            form_field_ids_by_doc.setdefault(field['document_id'], set()).add(field['id'])
+            form_fields_by_doc.setdefault(field['document_id'], []).append(field)
         form_rows = execute_query_pg(
-            f"""SELECT vd.client_data_id, e.voucher_line_id, e.document_id,
-                       e.updated_at AS entry_updated_at, v.field_id, f.field_type,
+            f"""SELECT vd.client_data_id, e.voucher_line_id, e.document_id, e.bill_group_index,
+                       e.row_scope, e.sort_order, e.updated_at AS entry_updated_at, v.field_id, f.field_type,
                        v.value_text, v.value_date, v.value_numeric
                 FROM voucher_line_form_entries e
                 JOIN verification_details vd ON vd.id = e.voucher_line_id
@@ -3115,11 +3122,7 @@ def get_audit_workbook(session_id: int):
             key = (row['client_data_id'], row['document_id'])
             if (_ts_sort_key(row['entry_updated_at']), row['voucher_line_id']) != form_winning[key]:
                 continue
-            value = row.get({'numeric': 'value_numeric', 'date': 'value_date'}.get(
-                row['field_type'], 'value_text'))
-            # Numeric zero is evidence; None, empty text, and whitespace are not.
-            if value is not None and str(value).strip():
-                saved_form_field_ids_by_cd.setdefault(key[0], {}).setdefault(key[1], set()).add(row['field_id'])
+            saved_form_value_rows_by_cd.setdefault(key[0], {}).setdefault(key[1], []).append(row)
 
     # Linked evidence: {client_data_id: {document_id, ...}}
     linked_doc_ids_by_cd: Dict[int, set] = {}
@@ -3280,9 +3283,10 @@ def get_audit_workbook(session_id: int):
             if doc['document_type'] == 'physical_bill':
                 base = _evaluate_physical_bill_completion(bills.get(doc['id'], []), voucher_amount)
             elif doc['document_type'] == 'form':
-                fields = form_field_ids_by_doc.get(doc['id'], set())
-                saved_fields = saved_form_field_ids_by_cd.get(client_data_id, {}).get(doc['id'], set())
-                base = (not fields) or fields.issubset(saved_fields)
+                base = _evaluate_form_bill_completion(
+                    form_fields_by_doc.get(doc['id'], []),
+                    saved_form_value_rows_by_cd.get(client_data_id, {}).get(doc['id'], []), voucher_amount
+                )
                 procedure_roles = _procedure_roles_for_document(doc, category_checks, rules_configured)
                 doc_ticks = ticks.get(doc['id'], {})
                 base = base and all(doc_ticks.get(role) for role in procedure_roles)
@@ -5441,7 +5445,9 @@ def save_form_entries(
     """Full-replace manually entered Form evidence for one voucher line/document pair."""
     with pg_transaction():
         _replace_form_entries(voucher_line_id, document_id, entries)
+        status = compute_and_persist_cleared_status(voucher_line_id)
         saved = _fetch_form_entries_for_line(voucher_line_id, document_id)
+    saved['cleared_status'] = status.get('cleared_status') if status else None
     return saved
 
 
@@ -6067,6 +6073,62 @@ def _evaluate_physical_bill_completion(bills: List[dict], voucher_amount: Option
                 return False
             grand_total += item_amount
     return _cross_check_values_equal(grand_total, voucher_amount)
+
+
+def _form_field_is_amount(field: dict) -> bool:
+    """Recognize the configured derived Amount field used by the physical-bill Form."""
+    label = re.sub(r'[^a-z0-9]+', ' ', str(field.get('field_name') or '').lower()).strip()
+    return label in {'amount', 'bill amount', 'total amount'}
+
+
+def _shape_form_entries_for_completion(rows: List[dict]) -> List[dict]:
+    """Group typed stored Form values into the editor's bill/header/item shape."""
+    entries: Dict[tuple, dict] = {}
+    for row in rows:
+        key = (int(row.get('bill_group_index') or 0), row.get('row_scope') or 'header',
+               int(row.get('sort_order') or 0))
+        entry = entries.setdefault(key, {
+            'bill_group_index': key[0], 'row_scope': key[1], 'sort_order': key[2], 'values': {}
+        })
+        field_type = row.get('field_type') or 'text'
+        value = row.get({'numeric': 'value_numeric', 'date': 'value_date'}.get(field_type, 'value_text'))
+        if value is not None and str(value).strip():
+            entry['values'][int(row['field_id'])] = value
+    return list(entries.values())
+
+
+def _evaluate_form_bill_completion(fields: List[dict], value_rows: List[dict],
+                                   voucher_amount: Optional[float]) -> bool:
+    """Require complete saved Form bills; Amount-based Forms must also reconcile exactly."""
+    if not fields:
+        return True
+    entries = _shape_form_entries_for_completion(value_rows)
+    if not entries:
+        return False
+    header_ids = {int(field['id']) for field in fields if (field.get('field_scope') or 'header') == 'header'}
+    item_ids = {int(field['id']) for field in fields if (field.get('field_scope') or 'header') == 'item'}
+    amount_ids = {int(field['id']) for field in fields
+                  if (field.get('field_scope') or 'header') == 'item' and _form_field_is_amount(field)}
+    groups = {entry['bill_group_index'] for entry in entries}
+    grand_total = 0.0
+    for group_index in groups:
+        group_entries = [entry for entry in entries if entry['bill_group_index'] == group_index]
+        header_values = set().union(*(entry['values'] for entry in group_entries
+                                      if entry['row_scope'] == 'header'), set())
+        if not header_ids.issubset(header_values):
+            return False
+        item_entries = [entry for entry in group_entries if entry['row_scope'] == 'item']
+        if item_ids and not item_entries:
+            return False
+        for entry in item_entries:
+            if not item_ids.issubset(entry['values']):
+                return False
+            for amount_id in amount_ids:
+                amount = _cross_check_numeric(entry['values'].get(amount_id))
+                if amount is None:
+                    return False
+                grand_total += amount
+    return not amount_ids or (voucher_amount is not None and _cross_check_values_equal(grand_total, voucher_amount))
 
 
 def _rulebook_cross_check_configs(category_id: int, rulebook: dict) -> Optional[List[dict]]:

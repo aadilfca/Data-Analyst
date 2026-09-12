@@ -57,6 +57,7 @@ from routers.verification import (
     _rulebook_cross_check_configs,
     _form_value_for_storage,
     _shape_form_entries,
+    _evaluate_form_bill_completion,
     _replace_form_entries,
     get_verification_session_rulebook,
     rebase_verification_session_rulebook,
@@ -2425,6 +2426,36 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_form_bill_total_uses_all_bill_groups_and_marks_only_an_exact_match(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {}; ")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''() => {
+                    const itemFields = [
+                        {id: 3, field_name: 'Quantity', field_scope: 'item'},
+                        {id: 4, field_name: 'Rate', field_scope: 'item'},
+                        {id: 5, field_name: 'Amount', field_scope: 'item'}
+                    ];
+                    const state = {formEntries: [
+                        {bill_group_index: 0, row_scope: 'item', sort_order: 0, values: {'5': '100'}},
+                        {bill_group_index: 1, row_scope: 'item', sort_order: 0, values: {'5': '50'}}
+                    ]};
+                    const total = computeFormBillGrandTotal(state, itemFields);
+                    return {total, matched: getFormBillTotalStatus(total, 150), short: getFormBillTotalStatus(total, 200)};
+                }''')
+                self.assertEqual(result['total'], 150)
+                self.assertTrue(result['matched']['matches'])
+                self.assertIn('150.00 matched', result['matched']['label'])
+                self.assertFalse(result['short']['matches'])
+                self.assertIn('50.00 remaining', result['short']['label'])
+            finally:
+                browser.close()
+
     def test_quick_form_item_rows_stay_within_selected_bill_group(self):
         script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
         with sync_playwright() as playwright:
@@ -2537,6 +2568,47 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_form_draft_autosave_retries_the_latest_edit(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''async () => {
+                    const draft = {formEntries: [{bill_group_index: 0, row_scope: 'header',
+                        sort_order: 0, values: {'11': 'First'}}], formDirty: false,
+                        formSaved: false, formRevision: 0};
+                    const requests = [];
+                    let releaseFirstSave;
+                    const firstSave = new Promise(resolve => { releaseFirstSave = resolve; });
+                    hostAdapter = {procedureModalState: {4: {tabs: {7: draft}}},
+                        voucherLineState: {4: {transactionType: 'cash'}},
+                        markLineDirty: () => {}, showStatus: () => {}};
+                    window.ApiUtils.apiFetchMutate = async (url, options) => {
+                        requests.push(JSON.parse(options.body));
+                        if (requests.length === 1) await firstSave;
+                        return {ok: true, json: async () => ({entries: [{row_scope: 'header'}]})};
+                    };
+                    markFormEvidenceDirty(4, draft, 'first edit');
+                    const saving = autoSaveFormDraft(4, {id: 7});
+                    await Promise.resolve();
+                    draft.formEntries[0].values['11'] = 'Second';
+                    markFormEvidenceDirty(4, draft, 'second edit');
+                    releaseFirstSave();
+                    const saved = await saving;
+                    return {saved, dirty: draft.formDirty, savedState: draft.formSaved,
+                        requests: requests.map(request => request.entries[0].values[0].value)};
+                }''')
+                self.assertEqual(result, {
+                    'saved': True, 'dirty': False, 'savedState': True,
+                    'requests': ['First', 'Second']
+                })
+            finally:
+                browser.close()
+
     def test_form_values_are_shaped_back_as_text_date_and_numeric(self):
         rows = [
             {'entry_id': 9, 'voucher_line_id': 4, 'document_id': 7, 'bill_group_index': 1,
@@ -2558,6 +2630,37 @@ class FormEvidenceContractTests(unittest.TestCase):
         self.assertEqual(result[0]['values'][1]['value'], 3.0)
         self.assertEqual(result[1]['bill_group_index'], 1)
         self.assertEqual(result[1]['values'][0]['value'], 'PB-1')
+
+    def test_form_bill_completion_requires_complete_entries_and_a_matched_total(self):
+        fields = [
+            {'id': 1, 'field_name': 'Bill No', 'field_type': 'text', 'field_scope': 'header'},
+            {'id': 2, 'field_name': 'Vendor Name', 'field_type': 'text', 'field_scope': 'header'},
+            {'id': 3, 'field_name': 'Quantity', 'field_type': 'numeric', 'field_scope': 'item'},
+            {'id': 4, 'field_name': 'Rate', 'field_type': 'numeric', 'field_scope': 'item'},
+            {'id': 5, 'field_name': 'Amount', 'field_type': 'numeric', 'field_scope': 'item'},
+        ]
+        def value(field_id, value_numeric=None, value_text=None):
+            return {'bill_group_index': 0, 'row_scope': 'item' if field_id >= 3 else 'header',
+                    'sort_order': 0, 'field_id': field_id, 'field_type': 'numeric' if field_id >= 3 else 'text',
+                    'value_text': value_text, 'value_date': None, 'value_numeric': value_numeric}
+        partial = [value(5, 100)]
+        mismatched = [value(1, value_text='PB-1'), value(2, value_text='Vendor'), value(3, 1),
+                      value(4, 100), value(5, 100)]
+        matched = mismatched + [
+            {'bill_group_index': 1, 'row_scope': 'header', 'sort_order': 0, 'field_id': 1,
+             'field_type': 'text', 'value_text': 'PB-2', 'value_date': None, 'value_numeric': None},
+            {'bill_group_index': 1, 'row_scope': 'header', 'sort_order': 0, 'field_id': 2,
+             'field_type': 'text', 'value_text': 'Vendor', 'value_date': None, 'value_numeric': None},
+            {'bill_group_index': 1, 'row_scope': 'item', 'sort_order': 0, 'field_id': 3,
+             'field_type': 'numeric', 'value_text': None, 'value_date': None, 'value_numeric': 1},
+            {'bill_group_index': 1, 'row_scope': 'item', 'sort_order': 0, 'field_id': 4,
+             'field_type': 'numeric', 'value_text': None, 'value_date': None, 'value_numeric': 50},
+            {'bill_group_index': 1, 'row_scope': 'item', 'sort_order': 0, 'field_id': 5,
+             'field_type': 'numeric', 'value_text': None, 'value_date': None, 'value_numeric': 50},
+        ]
+        self.assertFalse(_evaluate_form_bill_completion(fields, partial, 100))
+        self.assertFalse(_evaluate_form_bill_completion(fields, mismatched, 150))
+        self.assertTrue(_evaluate_form_bill_completion(fields, matched, 150))
 
     def test_form_replace_persists_bill_group_index_and_defaults_legacy_rows(self):
         fields = [{'id': 11, 'field_name': 'Bill No', 'field_type': 'text', 'field_scope': 'header'}]

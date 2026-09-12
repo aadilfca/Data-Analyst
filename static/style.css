@@ -8671,6 +8671,54 @@ body {
     display: grid;
     gap: 14px;
 }
+#procedureModal .procedure-form-bill-total {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border: 1px solid #dbe5f0;
+    border-radius: 9px;
+    background: linear-gradient(90deg, #f8fafc, #ffffff);
+}
+#procedureModal .procedure-form-bill-total-copy {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+#procedureModal .procedure-form-bill-total-copy > span {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+#procedureModal .procedure-form-bill-total-copy strong {
+    color: #1e293b;
+    font-size: 16px;
+}
+#procedureModal .procedure-form-bill-total-copy small {
+    color: #64748b;
+    font-size: 11px;
+}
+#procedureModal .procedure-form-bill-total-status {
+    flex: 0 0 auto;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 650;
+}
+#procedureModal .procedure-form-bill-total-status.is-matched {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: #dcfce7;
+    color: #166534;
+    font-weight: 700;
+}
 #procedureModal .procedure-form-bill-card {
     position: relative;
     overflow: visible;
@@ -8891,7 +8939,8 @@ body {
     }
     #procedureModal .procedure-form-section-heading,
     #procedureModal .procedure-form-copy-row,
-    #procedureModal .procedure-form-bills-toolbar {
+    #procedureModal .procedure-form-bills-toolbar,
+    #procedureModal .procedure-form-bill-total {
         align-items: flex-start;
         flex-direction: column;
     }

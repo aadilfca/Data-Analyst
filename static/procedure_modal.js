@@ -711,7 +711,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!hostAdapter.procedureModalState[uid].tabs[docId]) {
-        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false, formCopyStatus: '', formSourceRows: [], formAutoPrefillAttempted: false, formAutoPrefillLoading: false, formCollapsedBills: {} };
+        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false, formRevision: 0, formCopyStatus: '', formSourceRows: [], formAutoPrefillAttempted: false, formAutoPrefillLoading: false, formCollapsedBills: {} };
     }
     return hostAdapter.procedureModalState[uid].tabs[docId];
 }
@@ -1047,14 +1047,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
         }
         if (doc.document_type === 'form') {
             const savedForm = formDocumentEntries.find(entry => String(entry.document_id) === String(doc.id));
-            tabState.formEntries = (savedForm?.entries || []).map(entry => ({
-                bill_group_index: Number.isInteger(Number.parseInt(entry.bill_group_index, 10))
-                    && Number.parseInt(entry.bill_group_index, 10) >= 0
-                    ? Number.parseInt(entry.bill_group_index, 10) : 0,
-                row_scope: entry.row_scope || 'header',
-                sort_order: entry.sort_order || 0,
-                values: Object.fromEntries((entry.values || []).map(value => [String(value.field_id), value.value ?? '']))
-            }));
+            tabState.formEntries = formEntriesFromSavedEntries(savedForm?.entries || []);
             tabState.formSaved = !!savedForm;
             tabState.formDirty = false;
         }
@@ -2145,6 +2138,17 @@ function makeEmptyFormEntry(rowScope, fields, sortOrder = 0, billGroupIndex = 0)
     };
 }
 
+function formEntriesFromSavedEntries(entries) {
+    return (entries || []).map(entry => ({
+        bill_group_index: Number.isInteger(Number.parseInt(entry.bill_group_index, 10))
+            && Number.parseInt(entry.bill_group_index, 10) >= 0
+            ? Number.parseInt(entry.bill_group_index, 10) : 0,
+        row_scope: entry.row_scope || 'header',
+        sort_order: entry.sort_order || 0,
+        values: Object.fromEntries((entry.values || []).map(value => [String(value.field_id), value.value ?? '']))
+    }));
+}
+
 function ensureFormHeaderEntry(tabState, fields, billGroupIndex = 0) {
     let entry = (tabState.formEntries || []).find(item =>
         item.row_scope === 'header' && Number(item.bill_group_index || 0) === billGroupIndex
@@ -2285,6 +2289,53 @@ function updateDerivedFormAmountInput(sourceInput, entry, itemFields) {
         String(input.dataset.fieldId) === String(derivedFields.amountField.id)
     );
     if (amountInput) amountInput.value = entry.values[String(derivedFields.amountField.id)] || '';
+}
+
+function computeFormBillGrandTotal(tabState, itemFields) {
+    const derivedFields = getDerivedFormAmountFields(itemFields);
+    if (!derivedFields) return null;
+    return (tabState.formEntries || [])
+        .filter(entry => entry.row_scope === 'item')
+        .reduce((total, entry) => {
+            const amount = Number(entry.values?.[String(derivedFields.amountField.id)]);
+            return Number.isFinite(amount) ? total + amount : total;
+        }, 0);
+}
+
+function getFormBillTotalStatus(grandTotal, voucherLineAmount) {
+    const voucherAmount = Number(voucherLineAmount);
+    if (!Number.isFinite(grandTotal) || !Number.isFinite(voucherAmount)) {
+        return {matches: false, label: 'Voucher amount unavailable'};
+    }
+    const difference = grandTotal - voucherAmount;
+    if (Math.abs(difference) <= PB_FLOAT_EPSILON) {
+        return {matches: true, label: `${PB_ICON_CHECK} ${formatBillTotalDisplay(grandTotal)} matched`};
+    }
+    return {
+        matches: false,
+        label: difference < 0
+            ? `${formatBillTotalDisplay(-difference)} remaining`
+            : `${formatBillTotalDisplay(difference)} over`
+    };
+}
+
+function updateFormBillTotal(uid, doc, itemFields) {
+    const container = document.getElementById('procedureModalPanels');
+    const panel = container?.querySelector(`.procedure-tab-panel[data-doc-id="${doc.id}"]`);
+    if (!panel) return;
+    const tabState = getProcedureTabState(uid, doc.id);
+    const grandTotal = computeFormBillGrandTotal(tabState, itemFields);
+    if (grandTotal === null) return;
+    const lineState = hostAdapter.procedureModalState[uid];
+    const voucherAmount = lineState?.voucherLineAmount;
+    const totalValue = panel.querySelector('#procedureFormBillTotalValue');
+    if (totalValue) totalValue.textContent = formatBillTotalDisplay(grandTotal);
+    const status = getFormBillTotalStatus(grandTotal, voucherAmount);
+    const statusEl = panel.querySelector('#procedureFormBillTotalStatus');
+    if (statusEl) {
+        statusEl.className = `procedure-form-bill-total-status${status.matches ? ' is-matched' : ''}`;
+        statusEl.innerHTML = status.label;
+    }
 }
 
 function appendQuickFormBillRows(tabState, fields, rawRows) {
@@ -2467,6 +2518,12 @@ function hasSavedFormValues(tabState) {
     );
 }
 
+function markFormEvidenceDirty(uid, tabState, reason) {
+    tabState.formDirty = true;
+    tabState.formRevision = (tabState.formRevision || 0) + 1;
+    hostAdapter.markLineDirty(uid, reason);
+}
+
 function markFormTabsSavedAfterBundle(revisionsAtStart) {
     Object.entries(hostAdapter?.procedureModalState || {}).forEach(([uid, lineState]) => {
         const currentRevision = typeof voucherLineDirtyRevisions === 'object'
@@ -2515,17 +2572,30 @@ function isFormDraftComplete(uid, doc) {
             field, entry.values[String(field.id)], getFormCopyRowValue(source.row_data, field.linked_column)
         ));
     })) return false;
+    const grandTotal = computeFormBillGrandTotal(tabState, itemFields);
+    if (grandTotal !== null) {
+        const voucherAmount = hostAdapter.procedureModalState[uid]?.voucherLineAmount;
+        if (!getFormBillTotalStatus(grandTotal, voucherAmount).matches) return false;
+    }
     return true;
 }
 
-async function autoSaveCompleteForm(uid, doc) {
+async function autoSaveFormDraft(uid, doc) {
     const tabState = getProcedureTabState(uid, doc.id);
-    if (!tabState.formDirty || tabState.formSavePromise || !isFormDraftComplete(uid, doc)) return;
-    tabState.formSavePromise = saveFormEntry(uid, doc.id);
+    if (!tabState.formDirty) return true;
+    if (tabState.formSavePromise) return tabState.formSavePromise;
+    const savePromise = (async () => {
+        while (tabState.formDirty) {
+            const revisionAtSave = tabState.formRevision || 0;
+            if (!await saveFormEntry(uid, doc.id, revisionAtSave)) return false;
+        }
+        return true;
+    })();
+    tabState.formSavePromise = savePromise;
     try {
-        await tabState.formSavePromise;
+        return await savePromise;
     } finally {
-        tabState.formSavePromise = null;
+        if (tabState.formSavePromise === savePromise) tabState.formSavePromise = null;
         renderProcedureModalTabs(uid);
     }
 }
@@ -2620,11 +2690,10 @@ async function copyFormDocumentFromLines(uid, doc, options = {}) {
         const changed = applyMappedFormValues(tabState, fields, sources);
 
         if (changed) {
-            tabState.formDirty = true;
+            markFormEvidenceDirty(uid, tabState, 'Form values copied from lines');
             tabState.formCopyStatus = automatic
                 ? `Mapped values loaded from ${sources.length} linked line${sources.length === 1 ? '' : 's'}.`
-                : `Copied mapped values from ${sources.length} linked line${sources.length === 1 ? '' : 's'}. Review before saving.`;
-            hostAdapter.markLineDirty(uid, 'Form values copied from lines');
+                : `Copied mapped values from ${sources.length} linked line${sources.length === 1 ? '' : 's'}. Review the draft.`;
         } else {
             tabState.formCopyStatus = automatic
                 ? 'Mapped values are already current.'
@@ -2632,7 +2701,7 @@ async function copyFormDocumentFromLines(uid, doc, options = {}) {
         }
         renderFormDocumentPanel(uid, doc);
         renderProcedureModalTabs(uid);
-        autoSaveCompleteForm(uid, doc);
+        autoSaveFormDraft(uid, doc);
         updateProcedureModalSavedNote(uid);
     } catch (error) {
         console.error('Failed to copy Form values from lines:', error);
@@ -2654,6 +2723,10 @@ function renderFormDocumentPanel(uid, doc) {
     const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
     const mappedFields = fields.filter(field => field.linked_column);
     const billGroupIndexes = getFormBillGroupIndexes(tabState);
+    const formGrandTotal = computeFormBillGrandTotal(tabState, itemFields);
+    const voucherLineAmount = hostAdapter.procedureModalState[uid]?.voucherLineAmount;
+    const formBillTotalStatus = formGrandTotal === null
+        ? null : getFormBillTotalStatus(formGrandTotal, voucherLineAmount);
     const procedureEntries = getProcedureChecklistEntries(doc);
     const hasRoles = procedureEntries.length > 0;
     const allRolesChecked = hasRoles && procedureEntries.every(entry =>
@@ -2786,6 +2859,14 @@ function renderFormDocumentPanel(uid, doc) {
                             </div>
                         </div>
                     </div>` : ''}
+                    ${formBillTotalStatus ? `<div class="procedure-form-bill-total" aria-live="polite">
+                        <div class="procedure-form-bill-total-copy">
+                            <span>Bill total</span>
+                            <strong id="procedureFormBillTotalValue">${formatBillTotalDisplay(formGrandTotal)}</strong>
+                            <small>Voucher amount ${formatBillTotalDisplay(voucherLineAmount)}</small>
+                        </div>
+                        <span id="procedureFormBillTotalStatus" class="procedure-form-bill-total-status${formBillTotalStatus.matches ? ' is-matched' : ''}">${formBillTotalStatus.label}</span>
+                    </div>` : ''}
                     ${emptyHtml}<div class="procedure-form-bills">${billsHtml}</div>
                 </div>
             </div>
@@ -2808,11 +2889,11 @@ function renderFormDocumentPanel(uid, doc) {
             if (rowScope === 'item') {
                 syncDerivedFormAmount(entry, itemFields);
                 updateDerivedFormAmountInput(this, entry, itemFields);
+                updateFormBillTotal(uid, doc, itemFields);
             }
-            tabState.formDirty = true;
-            hostAdapter.markLineDirty(uid, 'form evidence edited');
+            markFormEvidenceDirty(uid, tabState, 'form evidence edited');
             renderProcedureModalTabs(uid);
-            autoSaveCompleteForm(uid, doc);
+            autoSaveFormDraft(uid, doc);
             updateProcedureModalSavedNote(uid);
         });
     });
@@ -2824,9 +2905,9 @@ function renderFormDocumentPanel(uid, doc) {
         if (headerFields.length) tabState.formEntries.push(
             makeEmptyFormEntry('header', headerFields, 0, newBillGroupIndex)
         );
-        tabState.formDirty = true;
-        hostAdapter.markLineDirty(uid, 'form bill added');
+        markFormEvidenceDirty(uid, tabState, 'form bill added');
         renderFormDocumentPanel(uid, doc);
+        autoSaveFormDraft(uid, doc);
     });
     const quickBillsBtn = document.getElementById('procedureFormQuickBillsBtn');
     const quickBillsPopover = document.getElementById('procedureFormQuickBillsPopover');
@@ -2886,9 +2967,9 @@ function renderFormDocumentPanel(uid, doc) {
                 if (quickStatus) quickStatus.textContent = result.error;
                 return;
             }
-            tabState.formDirty = true;
-            hostAdapter.markLineDirty(uid, `${result.added} quick bill${result.added === 1 ? '' : 's'} added`);
+            markFormEvidenceDirty(uid, tabState, `${result.added} quick bill${result.added === 1 ? '' : 's'} added`);
             renderFormDocumentPanel(uid, doc);
+            autoSaveFormDraft(uid, doc);
         });
     }
     container.querySelectorAll('.procedure-form-quick-items-btn').forEach(button => {
@@ -2956,9 +3037,9 @@ function renderFormDocumentPanel(uid, doc) {
                 if (quickStatus) quickStatus.textContent = result.error;
                 return;
             }
-            tabState.formDirty = true;
-            hostAdapter.markLineDirty(uid, `${result.added} item row${result.added === 1 ? '' : 's'} added`);
+            markFormEvidenceDirty(uid, tabState, `${result.added} item row${result.added === 1 ? '' : 's'} added`);
             renderFormDocumentPanel(uid, doc);
+            autoSaveFormDraft(uid, doc);
         });
     });
     container.querySelectorAll('.procedure-form-bill-toggle').forEach(toggle => {
@@ -2972,9 +3053,9 @@ function renderFormDocumentPanel(uid, doc) {
         const itemEntries = getFormEntriesForGroup(tabState, billGroupIndex, 'item');
         tabState.formEntries = tabState.formEntries || [];
         tabState.formEntries.push(makeEmptyFormEntry('item', itemFields, itemEntries.length, billGroupIndex));
-        tabState.formDirty = true;
-        hostAdapter.markLineDirty(uid, 'form item row added');
+        markFormEvidenceDirty(uid, tabState, 'form item row added');
         renderFormDocumentPanel(uid, doc);
+        autoSaveFormDraft(uid, doc);
     }));
     container.querySelectorAll('.procedure-form-remove-item-btn').forEach(button => {
         button.addEventListener('click', function() {
@@ -2985,18 +3066,18 @@ function renderFormDocumentPanel(uid, doc) {
             if (!entry) return;
             tabState.formEntries.splice(tabState.formEntries.indexOf(entry), 1);
             renumberFormItemRows(tabState, billGroupIndex);
-            tabState.formDirty = true;
-            hostAdapter.markLineDirty(uid, 'form item row removed');
+            markFormEvidenceDirty(uid, tabState, 'form item row removed');
             renderFormDocumentPanel(uid, doc);
+            autoSaveFormDraft(uid, doc);
         });
     });
     container.querySelectorAll('.procedure-form-remove-bill-btn').forEach(button => {
         button.addEventListener('click', function() {
             const billGroupIndex = parseInt(this.dataset.billGroupIndex || '0');
             if (!removeFormBillGroup(tabState, billGroupIndex)) return;
-            tabState.formDirty = true;
-            hostAdapter.markLineDirty(uid, 'form bill removed');
+            markFormEvidenceDirty(uid, tabState, 'form bill removed');
             renderFormDocumentPanel(uid, doc);
+            autoSaveFormDraft(uid, doc);
         });
     });
     container.querySelectorAll('.procedure-form-split-item-btn').forEach(button => {
@@ -3005,9 +3086,9 @@ function renderFormDocumentPanel(uid, doc) {
             const itemIndex = parseInt(this.dataset.itemIndex || '0');
             const split = splitFormBillAtItem(tabState, billGroupIndex, itemIndex, headerFields);
             if (!split) return;
-            tabState.formDirty = true;
-            hostAdapter.markLineDirty(uid, 'form bill split');
+            markFormEvidenceDirty(uid, tabState, 'form bill split');
             renderFormDocumentPanel(uid, doc);
+            autoSaveFormDraft(uid, doc);
         });
     });
     const copyBtn = document.getElementById('procedureFormCopyBtn');
@@ -3654,7 +3735,7 @@ async function toggleAllProcedureChecks(uid, docId) {
     invalidateProcedureModalData(uid);
 }
 
-async function saveFormEntry(uid, docId) {
+async function saveFormEntry(uid, docId, revisionAtSave = null) {
     const tabState = getProcedureTabState(uid, docId);
     const entries = (tabState.formEntries || []).map(entry => ({
         bill_group_index: Number(entry.bill_group_index || 0),
@@ -3677,7 +3758,14 @@ async function saveFormEntry(uid, docId) {
         const data = await res.json();
         const savedEntries = data && Array.isArray(data.entries) ? data.entries : [];
         tabState.formSaved = savedEntries.length > 0;
-        tabState.formDirty = false;
+        if (data && Object.prototype.hasOwnProperty.call(data, 'cleared_status')) {
+            const line = hostAdapter.currentVoucherLines?.find(item => String(item.detail_id) === String(uid));
+            if (line) line.cleared_status = data.cleared_status || 'Pending';
+        }
+        if (revisionAtSave === null || tabState.formRevision === revisionAtSave) {
+            tabState.formEntries = formEntriesFromSavedEntries(savedEntries);
+            tabState.formDirty = false;
+        }
         invalidateProcedureModalData(uid);
         if (typeof invalidateVoucherSupportCache === 'function') {
             invalidateVoucherSupportCache();
@@ -3722,9 +3810,11 @@ async function flushFormEntries(uid) {
     for (const doc of lineState.documents) {
         if (doc.document_type !== 'form') continue;
         const tabState = getProcedureTabState(uid, doc.id);
-        if (tabState.formSavePromise) await tabState.formSavePromise;
-        if (!tabState.formDirty) continue;
-        if (!await saveFormEntry(uid, doc.id)) allSaved = false;
+        if (tabState.formSavePromise) {
+            if (!await tabState.formSavePromise) allSaved = false;
+            continue;
+        }
+        if (tabState.formDirty && !await autoSaveFormDraft(uid, doc)) allSaved = false;
     }
     return allSaved;
 }

@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Verification Form persistence and reconciliation - 2026-09-12
+
+Form evidence saves after every manual or structural change, including Quick add bills/items,
+add/remove, and Split. The response rehydrates the saved values; a revision-aware queue preserves a
+newer edit made during an earlier save.
+
+Partial bill details remain saved but cannot clear a voucher. Complete Form bills must reconcile their
+combined Amount to the voucher line; the same rule now drives Verification and Audit Workbook counts.
+The Form panel shows a live Bill total and a compact green match tick. Focused checks (32) pass.
+
 ## Verification Form quick item rate default - 2026-09-12
 
 Quick add items now supplies Quantity `1` when a row has a Rate but no Quantity, so the actual
