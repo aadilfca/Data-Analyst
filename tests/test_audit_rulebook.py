@@ -2186,6 +2186,8 @@ class FormEvidenceContractTests(unittest.TestCase):
             [{'row_scope': 'header', 'values': [{'field_id': 11, 'value': 1}, {'field_id': 11, 'value': 2}]}],
             [{'row_scope': 'item', 'values': [{'field_id': 11, 'value': 1}]}],
             [{'row_scope': 'header', 'values': [{'field_id': 99, 'value': 1}]}],
+            [{'bill_group_index': -1, 'row_scope': 'header', 'values': [{'field_id': 11, 'value': 1}]}],
+            [{'bill_group_index': 'not-a-number', 'row_scope': 'header', 'values': [{'field_id': 11, 'value': 1}]}],
         ]
         for entries in cases:
             with self.subTest(entries=entries), patch(
@@ -2266,20 +2268,40 @@ class FormEvidenceContractTests(unittest.TestCase):
 
     def test_form_values_are_shaped_back_as_text_date_and_numeric(self):
         rows = [
-            {'entry_id': 9, 'voucher_line_id': 4, 'document_id': 7, 'row_scope': 'header', 'sort_order': 0,
+            {'entry_id': 9, 'voucher_line_id': 4, 'document_id': 7, 'bill_group_index': 1,
+             'row_scope': 'header', 'sort_order': 0,
              'field_id': 1, 'field_name': 'Bill No', 'field_type': 'text', 'value_text': 'PB-1',
              'value_date': None, 'value_numeric': None},
-            {'entry_id': 10, 'voucher_line_id': 4, 'document_id': 7, 'row_scope': 'item', 'sort_order': 0,
+            {'entry_id': 10, 'voucher_line_id': 4, 'document_id': 7, 'bill_group_index': 0,
+             'row_scope': 'item', 'sort_order': 0,
              'field_id': 2, 'field_name': 'Bill Date', 'field_type': 'date', 'value_text': None,
              'value_date': date(2026, 9, 5), 'value_numeric': None},
-            {'entry_id': 10, 'voucher_line_id': 4, 'document_id': 7, 'row_scope': 'item', 'sort_order': 0,
+            {'entry_id': 10, 'voucher_line_id': 4, 'document_id': 7, 'bill_group_index': 0,
+             'row_scope': 'item', 'sort_order': 0,
              'field_id': 3, 'field_name': 'Quantity', 'field_type': 'numeric', 'value_text': None,
              'value_date': None, 'value_numeric': 3},
         ]
         result = _shape_form_entries(rows)
-        self.assertEqual(result[0]['values'][0]['value'], 'PB-1')
-        self.assertEqual(result[1]['values'][0]['value'], '2026-09-05')
-        self.assertEqual(result[1]['values'][1]['value'], 3.0)
+        self.assertEqual(result[0]['bill_group_index'], 0)
+        self.assertEqual(result[0]['values'][0]['value'], '2026-09-05')
+        self.assertEqual(result[0]['values'][1]['value'], 3.0)
+        self.assertEqual(result[1]['bill_group_index'], 1)
+        self.assertEqual(result[1]['values'][0]['value'], 'PB-1')
+
+    def test_form_replace_persists_bill_group_index_and_defaults_legacy_rows(self):
+        fields = [{'id': 11, 'field_name': 'Bill No', 'field_type': 'text', 'field_scope': 'header'}]
+        responses = [[{'id': 4}], [{'id': 7}], fields]
+        writes = []
+        with patch('routers.verification.execute_query_pg', side_effect=responses), \
+             patch('routers.verification.execute_write_pg', side_effect=lambda sql, params=None: (
+                 writes.append((sql, params)) or (1 if 'RETURNING id' in sql else None)
+             )):
+            self.assertEqual(_replace_form_entries(4, 7, [
+                {'row_scope': 'header', 'values': [{'field_id': 11, 'value': 'Legacy'}]},
+                {'bill_group_index': 2, 'row_scope': 'header', 'values': [{'field_id': 11, 'value': 'Second'}]},
+            ]), 2)
+        inserts = [params for sql, params in writes if 'INSERT INTO voucher_line_form_entries' in sql]
+        self.assertEqual(inserts, [(4, 7, 0, 'header', 0), (4, 7, 2, 'header', 1)])
 
     def test_form_replace_rejects_a_field_from_another_document(self):
         responses = [

@@ -5238,6 +5238,12 @@ def _replace_form_entries(voucher_line_id: int, document_id: int, raw_entries: A
         if row_scope not in ('header', 'item'):
             raise HTTPException(400, f"Form entry {entry_index + 1} has an invalid row scope.")
         try:
+            bill_group_index = int(raw_entry.get('bill_group_index', 0))
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"Form entry {entry_index + 1} has an invalid bill group.")
+        if bill_group_index < 0:
+            raise HTTPException(400, f"Form entry {entry_index + 1} has an invalid bill group.")
+        try:
             sort_order = int(raw_entry.get('sort_order', entry_index))
         except (TypeError, ValueError):
             raise HTTPException(400, f"Form entry {entry_index + 1} has an invalid row order.")
@@ -5273,7 +5279,12 @@ def _replace_form_entries(voucher_line_id: int, document_id: int, raw_entries: A
                     'value_date': date_value, 'value_numeric': numeric_value
                 })
         if clean_values:
-            clean_entries.append({'row_scope': row_scope, 'sort_order': sort_order, 'values': clean_values})
+            clean_entries.append({
+                'bill_group_index': bill_group_index,
+                'row_scope': row_scope,
+                'sort_order': sort_order,
+                'values': clean_values,
+            })
 
     execute_write_pg(
         "DELETE FROM voucher_line_form_entries WHERE voucher_line_id = %s AND document_id = %s",
@@ -5283,9 +5294,9 @@ def _replace_form_entries(voucher_line_id: int, document_id: int, raw_entries: A
     for entry in clean_entries:
         entry_id = execute_write_pg(
             "INSERT INTO voucher_line_form_entries "
-            "(voucher_line_id, document_id, row_scope, sort_order, updated_at) "
-            "VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP) RETURNING id",
-            (voucher_line_id, document_id, entry['row_scope'], entry['sort_order'])
+            "(voucher_line_id, document_id, bill_group_index, row_scope, sort_order, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP) RETURNING id",
+            (voucher_line_id, document_id, entry['bill_group_index'], entry['row_scope'], entry['sort_order'])
         )
         for value in entry['values']:
             execute_write_pg(
@@ -5304,7 +5315,8 @@ def _shape_form_entries(rows: List[dict]) -> List[dict]:
         entry_id = row['entry_id']
         entry = entries.setdefault(entry_id, {
             'id': entry_id, 'voucher_line_id': row['voucher_line_id'],
-            'document_id': row['document_id'], 'row_scope': row['row_scope'],
+            'document_id': row['document_id'], 'bill_group_index': row.get('bill_group_index', 0),
+            'row_scope': row['row_scope'],
             'sort_order': row['sort_order'], 'values': []
         })
         value = row['value_text']
@@ -5315,18 +5327,21 @@ def _shape_form_entries(rows: List[dict]) -> List[dict]:
             value = float(row['value_numeric']) if row.get('value_numeric') is not None else None
         if value is not None:
             entry['values'].append({'field_id': row['field_id'], 'field_name': row['field_name'], 'value': value})
-    return sorted(entries.values(), key=lambda entry: (entry['sort_order'], entry['id']))
+    return sorted(entries.values(), key=lambda entry: (
+        entry['bill_group_index'], entry['sort_order'], entry['id']
+    ))
 
 
 def _fetch_form_entries_for_line(voucher_line_id: int, document_id: int) -> dict:
     rows = execute_query_pg(
-        """SELECT e.id AS entry_id, e.voucher_line_id, e.document_id, e.row_scope, e.sort_order,
+        """SELECT e.id AS entry_id, e.voucher_line_id, e.document_id, e.bill_group_index,
+                  e.row_scope, e.sort_order,
                   f.id AS field_id, f.field_name, f.field_type, v.value_text, v.value_date, v.value_numeric
            FROM voucher_line_form_entries e
            JOIN voucher_line_form_values v ON v.entry_id = e.id
            JOIN audit_rule_document_fields f ON f.id = v.field_id
            WHERE e.voucher_line_id = %s AND e.document_id = %s
-           ORDER BY e.sort_order, e.id, f.sort_order, f.id""",
+           ORDER BY e.bill_group_index, e.sort_order, e.id, f.sort_order, f.id""",
         (voucher_line_id, document_id)
     )
     return {'voucher_line_id': voucher_line_id, 'document_id': document_id,
@@ -5721,7 +5736,7 @@ def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
         bill_ids = [r['id'] for r in bills]
         items = execute_query_pg(f"SELECT id, bill_id, item_name, quantity, rate, amount, source_document_row_id, source_template, sort_order, created_at, updated_at FROM voucher_line_physical_bill_items WHERE bill_id IN ({','.join('%s' for _ in bill_ids)}) ORDER BY bill_id, sort_order, id", tuple(bill_ids)) if bill_ids else []
         forms = execute_query_pg(f"""SELECT vd.client_data_id, e.id AS entry_id, e.voucher_line_id,
-            e.document_id, e.row_scope, e.sort_order, e.updated_at AS entry_updated_at,
+            e.document_id, e.bill_group_index, e.row_scope, e.sort_order, e.updated_at AS entry_updated_at,
             f.id AS field_id, f.field_name, f.field_type, v.value_text, v.value_date, v.value_numeric,
             ard.is_active AS document_is_active
             FROM voucher_line_form_entries e
@@ -5730,7 +5745,7 @@ def get_voucher_support_data(voucher_line_id: int, perf: bool = Query(False)):
             JOIN audit_rule_document_fields f ON f.id=v.field_id
             LEFT JOIN audit_rule_documents ard ON ard.id=e.document_id
             WHERE vd.client_data_id IN ({cph})
-            ORDER BY e.document_id, e.sort_order, e.id, f.sort_order, f.id""", tuple(cd_ids)) if cd_ids else []
+            ORDER BY e.document_id, e.bill_group_index, e.sort_order, e.id, f.sort_order, f.id""", tuple(cd_ids)) if cd_ids else []
 
         latest_check = {}
         for r in checks:
