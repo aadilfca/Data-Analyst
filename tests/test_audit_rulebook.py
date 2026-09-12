@@ -2576,6 +2576,68 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_quick_item_popover_shows_existing_particulars_for_its_own_bill(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''() => {
+                    const itemFields = [
+                        {id: 1, field_name: 'Item Name', field_type: 'text', field_scope: 'item'},
+                        {id: 2, field_name: 'Quantity', field_type: 'numeric', field_scope: 'item'},
+                        {id: 3, field_name: 'Rate', field_type: 'numeric', field_scope: 'item'},
+                        {id: 4, field_name: 'Amount', field_type: 'numeric', field_scope: 'item'}
+                    ];
+                    const item = (group, sortOrder, values) => ({
+                        bill_group_index: group, row_scope: 'item', sort_order: sortOrder, values
+                    });
+                    const tab = {formEntries: [
+                        item(0, 0, {'1': 'Tea', '2': '2', '3': '50', '4': '100'}),
+                        item(1, 0, {'1': 'Rice', '2': '1', '3': '120', '4': '120'}),
+                        item(1, 1, {'1': 'Oil', '2': '3', '3': '40', '4': '120'})
+                    ], checklist: {}, formCollapsedBills: {}};
+                    const doc = {id: 7, document_type: 'form', form_fields: itemFields};
+                    hostAdapter = {
+                        procedureModalState: {4: {activeDocId: 7, documents: [doc], voucherLineAmount: 340,
+                            crossCheckResults: [], tabs: {7: tab}}},
+                        markLineDirty: () => {}, showStatus: () => {}, escapeHtml: value => String(value ?? '')
+                    };
+                    renderFormDocumentPanel(4, doc);
+                    const popovers = Array.from(document.querySelectorAll('.procedure-form-quick-items-popover'));
+                    const buttons = Array.from(document.querySelectorAll('.procedure-form-quick-items-btn'));
+                    buttons[1].click();
+                    const secondNewRows = popovers[1].querySelector('.procedure-form-quick-new-item-rows');
+                    const rate = secondNewRows.querySelector('[data-quick-item-field-id="3"]');
+                    const focusedRateOnOpen = document.activeElement === rate;
+                    rate.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+                    return popovers.map(popover => {
+                        const newRows = popover.querySelector('.procedure-form-quick-new-item-rows');
+                        return {
+                            existing: Array.from(popover.querySelectorAll('.procedure-form-quick-item-existing-row')).map(row =>
+                                Array.from(row.querySelectorAll('input')).map(input => input.value)),
+                            readOnly: Array.from(popover.querySelectorAll('.procedure-form-quick-item-existing-row input'))
+                                .every(input => input.readOnly),
+                            addRows: newRows.querySelectorAll('.procedure-form-quick-item-row').length,
+                            hasAddRowButton: !!popover.querySelector('.procedure-form-quick-item-add-row-btn'),
+                            focusedRateOnOpen: popover === popovers[1] ? focusedRateOnOpen : null,
+                            focusedNewRateAfterEnter: popover === popovers[1]
+                                ? document.activeElement?.closest('.procedure-form-quick-item-row')?.dataset.quickItemRowIndex : null
+                        };
+                    });
+                }''')
+                self.assertEqual(result, [
+                    {'existing': [['Tea', '2', '50', '100']], 'readOnly': True, 'addRows': 1,
+                     'hasAddRowButton': False, 'focusedRateOnOpen': None, 'focusedNewRateAfterEnter': None},
+                    {'existing': [['Rice', '1', '120', '120'], ['Oil', '3', '40', '120']], 'readOnly': True, 'addRows': 2,
+                     'hasAddRowButton': False, 'focusedRateOnOpen': True, 'focusedNewRateAfterEnter': '1'}
+                ])
+            finally:
+                browser.close()
+
     def test_quick_form_items_popover_layers_above_observation(self):
         stylesheet = Path(__file__).resolve().parents[1] / 'static' / 'style.css'
         with sync_playwright() as playwright:

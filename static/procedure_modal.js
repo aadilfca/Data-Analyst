@@ -2461,6 +2461,16 @@ function quickFormItemRowHtml(rowIndex, itemFields, values = {}) {
     </div>`;
 }
 
+// Existing bill items are intentionally read-only here: Quick add items remains an append-only
+// workflow, while the auditor can still review the particulars already captured for this bill.
+function quickFormExistingItemRowHtml(rowIndex, itemFields, values = {}) {
+    return `<div class="procedure-form-quick-item-row procedure-form-quick-item-existing-row"
+        data-existing-item-row-index="${rowIndex}">
+        ${itemFields.map(field => `<input type="text" class="procedure-form-quick-item-input"
+            readonly aria-readonly="true" value="${hostAdapter.escapeHtml(values[String(field.id)] || '')}">`).join('')}
+    </div>`;
+}
+
 function formFieldInputHtml(field, value, rowIndex, rowScope, billGroupIndex = 0, readOnly = false) {
     const type = field.field_type === 'date' ? 'date' : 'text';
     const inputMode = field.field_type === 'numeric' ? 'decimal' : undefined;
@@ -2831,12 +2841,20 @@ function renderFormDocumentPanel(uid, doc) {
                         <small>Enter values for several lines. Rows are added to this physical bill only.</small></div>
                     <button type="button" class="procedure-form-quick-close-btn" aria-label="Close quick add items">×</button>
                 </div>
+                ${itemEntries.length ? `<div class="procedure-form-quick-existing-items">
+                    <small>Already added items · read only</small>
+                    <div class="procedure-form-quick-item-grid procedure-form-quick-item-grid-head" aria-hidden="true">
+                        ${itemFields.map(field => `<span>${hostAdapter.escapeHtml(field.field_name)}</span>`).join('')}
+                    </div>
+                    <div class="procedure-form-quick-item-rows procedure-form-quick-existing-item-rows">${itemEntries.map((entry, index) =>
+                        quickFormExistingItemRowHtml(index, itemFields, entry.values)
+                    ).join('')}</div>
+                </div>` : ''}
                 <div class="procedure-form-quick-item-grid procedure-form-quick-item-grid-head" aria-hidden="true">
                     ${itemFields.map(field => `<span>${hostAdapter.escapeHtml(field.field_name)}</span>`).join('')}
                 </div>
-                <div class="procedure-form-quick-item-rows">${quickFormItemRowHtml(0, itemFields)}</div>
+                <div class="procedure-form-quick-item-rows procedure-form-quick-new-item-rows">${quickFormItemRowHtml(0, itemFields)}</div>
                 <div class="procedure-form-quick-footer">
-                    <button type="button" class="procedure-form-quick-item-add-row-btn procedure-form-quick-add-row-btn">+ Add row</button>
                     <span class="procedure-form-quick-item-status procedure-form-quick-status" role="status"></span>
                     <div class="procedure-form-quick-footer-actions">
                         <button type="button" class="procedure-form-quick-item-cancel-btn procedure-form-quick-cancel-btn">Cancel</button>
@@ -3005,9 +3023,10 @@ function renderFormDocumentPanel(uid, doc) {
         const billCard = button.closest('.procedure-form-bill-card');
         const quickItemsPopover = billCard?.querySelector('.procedure-form-quick-items-popover');
         if (!quickItemsPopover) return;
-        const quickRows = quickItemsPopover.querySelector('.procedure-form-quick-item-rows');
+        const quickRows = quickItemsPopover.querySelector('.procedure-form-quick-new-item-rows');
         const quickStatus = quickItemsPopover.querySelector('.procedure-form-quick-item-status');
         const billGroupIndex = parseInt(button.dataset.billGroupIndex || '0');
+        const derivedFields = getDerivedFormAmountFields(itemFields);
         const addQuickItemRow = () => {
             const rowIndex = quickRows.querySelectorAll('.procedure-form-quick-item-row').length;
             quickRows.insertAdjacentHTML('beforeend', quickFormItemRowHtml(rowIndex, itemFields));
@@ -3025,7 +3044,10 @@ function renderFormDocumentPanel(uid, doc) {
         button.addEventListener('click', () => {
             quickItemsPopover.hidden = !quickItemsPopover.hidden;
             if (!quickItemsPopover.hidden) {
-                const firstInput = quickRows.querySelector('.procedure-form-quick-item-input:not([readonly])');
+                const rateInput = derivedFields && quickRows.querySelector(
+                    `.procedure-form-quick-item-input[data-quick-item-field-id="${derivedFields.rateField.id}"]`
+                );
+                const firstInput = rateInput || quickRows.querySelector('.procedure-form-quick-item-input:not([readonly])');
                 if (firstInput) firstInput.focus();
             }
         });
@@ -3034,11 +3056,6 @@ function renderFormDocumentPanel(uid, doc) {
         });
         quickItemsPopover.querySelector('.procedure-form-quick-item-cancel-btn').addEventListener('click', () => {
             quickItemsPopover.hidden = true;
-        });
-        quickItemsPopover.querySelector('.procedure-form-quick-item-add-row-btn').addEventListener('click', () => {
-            addQuickItemRow();
-            const firstInput = quickRows.querySelector('.procedure-form-quick-item-row:last-child .procedure-form-quick-item-input:not([readonly])');
-            if (firstInput) firstInput.focus();
         });
         quickRows.addEventListener('keydown', event => {
             if (event.key !== 'Enter' || event.target.readOnly) return;

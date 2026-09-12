@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## Verification Form quick-item entry flow - 2026-09-12
+
+Quick add items again opens on Rate and uses Enter to create/focus the next Rate row, with no
+Add-row control. Existing bill items remain visible in a separate read-only list, so the quick
+grid stays append-only. Focused browser coverage passed.
+
 ## Verification Form typing stability - 2026-09-12
 
 Free typing in Form fields now waits briefly before saving, and a successful Form save refreshes

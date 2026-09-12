@@ -280,7 +280,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-12: Form Quick add bills popover added with optional vendor/bill number, amount grouping, and Enter navigation; manual acceptance pending.
 - 2026-09-12: Form per-bill Quick add items popover added with grouped item rows and derived Amount; manual acceptance pending.
 - 2026-09-12: Form Quick add items popover layering corrected above Observation; manual acceptance pending.
-- 2026-09-12: Form bills restore/reconcile, update Procedures and live status, and retain focus while item amounts are typed.
+- 2026-09-12: Form bills restore/reconcile, update Procedures/live status, and retain focused Enter-driven quick item entry.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
