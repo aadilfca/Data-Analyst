@@ -2345,6 +2345,7 @@ function quickFormItemRowValues(row) {
 
 function appendQuickFormItemRows(tabState, itemFields, billGroupIndex, rawRows) {
     if (!itemFields.length) return {added: 0, error: 'This bill has no configured Item fields.'};
+    const derivedFields = getDerivedFormAmountFields(itemFields);
     const cleanRows = [];
     for (let index = 0; index < (rawRows || []).length; index += 1) {
         const row = rawRows[index] || {};
@@ -2352,6 +2353,11 @@ function appendQuickFormItemRows(tabState, itemFields, billGroupIndex, rawRows) 
             String(field.id), String(row[String(field.id)] ?? '').trim()
         ]));
         if (!Object.values(values).some(value => !formValueIsBlank(value))) continue;
+        if (derivedFields
+            && formValueIsBlank(values[String(derivedFields.quantityField.id)])
+            && !formValueIsBlank(values[String(derivedFields.rateField.id)])) {
+            values[String(derivedFields.quantityField.id)] = '1';
+        }
         const invalidField = itemFields.find(field =>
             field.field_type === 'numeric'
             && values[String(field.id)]

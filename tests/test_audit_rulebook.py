@@ -2450,7 +2450,7 @@ class FormEvidenceContractTests(unittest.TestCase):
                     state.formEntries[2].values['2'] = 'Existing line';
                     const added = appendQuickFormItemRows(state, itemFields, 1, [
                         {'2': 'Rice', '3': '2', '4': '15', '5': ''},
-                        {'2': 'Oil', '3': '1', '4': '20', '5': ''},
+                        {'2': 'Oil', '3': '', '4': '20', '5': ''},
                         {'2': '', '3': '', '4': '', '5': ''}
                     ]);
                     const invalidState = {formEntries: [makeEmptyFormEntry('header', headers, 0, 1)]};

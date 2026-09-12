@@ -1,5 +1,10 @@
 # Changelog Archive
 
+## Verification Form quick item rate default - 2026-09-12
+
+Quick add items now supplies Quantity `1` when a row has a Rate but no Quantity, so the actual
+bill item derives Amount correctly. Explicit quantities and rows without a Rate are unchanged.
+
 ## Verification Form quick item popover layering - 2026-09-12
 
 Corrected the per-bill Quick add items popover so it is not clipped by the Form segment or painted
