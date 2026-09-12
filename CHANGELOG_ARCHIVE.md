@@ -1,5 +1,17 @@
 # Changelog Archive
 
+## Verification Form quick item popover layering - 2026-09-12
+
+Corrected the per-bill Quick add items popover so it is not clipped by the Form segment or painted
+under the Observation section. Added explicit stacking and overflow coverage for the modal layout.
+
+## Verification Form per-bill quick item entry - 2026-09-12
+
+Added a Quick add items popover to each physical-bill card. It accepts multiple Item-field rows,
+keeps them in the selected bill group, ignores blank rows, validates numeric fields without partial
+writes, and recalculates the read-only Amount from Quantity × Rate. Focused Verification coverage
+passed; manual local-server acceptance remains pending.
+
 ## Verification Form quick bill entry - 2026-09-12
 
 Added a spreadsheet-style Quick add bills popover beside the routine Add bill action. Vendor and

@@ -8381,7 +8381,14 @@ body {
    The Form Document uses the same calm grouped-card language as the legacy bill editor, while
    keeping the field definitions and saved values owned by the reusable Form contract. */
 #procedureModal .procedure-form-segment {
+    position: relative;
+    z-index: 2;
+    overflow: visible;
     background: #f8fafc;
+}
+#procedureModal .procedure-segment-observation {
+    position: relative;
+    z-index: 1;
 }
 #procedureModal .procedure-form-segment .procedure-segment-body {
     padding: 16px;
@@ -8665,7 +8672,8 @@ body {
     gap: 14px;
 }
 #procedureModal .procedure-form-bill-card {
-    overflow: hidden;
+    position: relative;
+    overflow: visible;
     border: 1px solid #cbd5e1;
     border-radius: 12px;
     background: #ffffff;
@@ -8679,6 +8687,70 @@ body {
     padding: 12px 14px;
     border-bottom: 1px solid #e2e8f0;
     background: linear-gradient(90deg, #f8fafc, #ffffff);
+}
+#procedureModal .procedure-form-bill-heading-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 7px;
+}
+#procedureModal .procedure-form-quick-items-popover {
+    position: absolute;
+    z-index: 6;
+    top: 58px;
+    right: 12px;
+    width: min(820px, calc(100% - 24px));
+    padding: 14px;
+    border: 1px solid #cbd5e1;
+    border-radius: 11px;
+    background: #ffffff;
+    box-shadow: 0 16px 40px rgba(15, 23, 42, .18);
+}
+#procedureModal .procedure-form-quick-items-popover[hidden] {
+    display: none;
+}
+#procedureModal .procedure-form-quick-item-grid,
+#procedureModal .procedure-form-quick-item-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+}
+#procedureModal .procedure-form-quick-item-grid-head {
+    margin-top: 14px;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+}
+#procedureModal .procedure-form-quick-item-rows {
+    display: grid;
+    gap: 7px;
+    max-height: 260px;
+    margin-top: 6px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+#procedureModal .procedure-form-quick-item-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 34px;
+    padding: 7px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    color: #0f172a;
+    font-size: 12px;
+}
+#procedureModal .procedure-form-quick-item-input:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, .12);
+}
+#procedureModal .procedure-form-quick-item-input[readonly] {
+    border-color: #dce5ef;
+    background: #f3f6f9;
+    color: #657891;
 }
 #procedureModal .procedure-form-bill-toggle {
     display: flex;
@@ -8829,6 +8901,18 @@ body {
     #procedureModal .procedure-form-quick-popover {
         left: 0;
         right: auto;
+    }
+    #procedureModal .procedure-form-quick-items-popover {
+        left: 12px;
+        right: 12px;
+        width: auto;
+    }
+    #procedureModal .procedure-form-quick-item-grid-head {
+        display: none;
+    }
+    #procedureModal .procedure-form-quick-item-grid,
+    #procedureModal .procedure-form-quick-item-row {
+        grid-template-columns: 1fr;
     }
     #procedureModal .procedure-form-quick-grid,
     #procedureModal .procedure-form-quick-bill-row {

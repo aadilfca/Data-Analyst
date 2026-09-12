@@ -2425,6 +2425,91 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_quick_form_item_rows_stay_within_selected_bill_group(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {}; ")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''() => {
+                    const headers = [{id: 1, field_name: 'Vendor Name', field_scope: 'header'}];
+                    const itemFields = [
+                        {id: 2, field_name: 'Description', field_type: 'text', field_scope: 'item'},
+                        {id: 3, field_name: 'Quantity', field_type: 'numeric', field_scope: 'item'},
+                        {id: 4, field_name: 'Rate', field_type: 'numeric', field_scope: 'item'},
+                        {id: 5, field_name: 'Amount', field_type: 'numeric', field_scope: 'item'}
+                    ];
+                    const state = {formEntries: [
+                        makeEmptyFormEntry('header', headers, 0, 0),
+                        makeEmptyFormEntry('header', headers, 0, 1),
+                        makeEmptyFormEntry('item', itemFields, 0, 0)
+                    ]};
+                    state.formEntries[2].values['2'] = 'Existing line';
+                    const added = appendQuickFormItemRows(state, itemFields, 1, [
+                        {'2': 'Rice', '3': '2', '4': '15', '5': ''},
+                        {'2': 'Oil', '3': '1', '4': '20', '5': ''},
+                        {'2': '', '3': '', '4': '', '5': ''}
+                    ]);
+                    const invalidState = {formEntries: [makeEmptyFormEntry('header', headers, 0, 1)]};
+                    const invalid = appendQuickFormItemRows(invalidState, itemFields, 1, [
+                        {'2': 'Bad', '3': 'not numeric', '4': '20', '5': ''}
+                    ]);
+                    return {
+                        added,
+                        groupZero: getFormEntriesForGroup(state, 0, 'item').map(entry => entry.values),
+                        groupOne: getFormEntriesForGroup(state, 1, 'item').map(entry => entry.values),
+                        invalid,
+                        invalidItemCount: getFormEntriesForGroup(invalidState, 1, 'item').length
+                    };
+                }''')
+                self.assertEqual(result['added'], {'added': 2, 'error': ''})
+                self.assertEqual(result['groupZero'], [{'2': 'Existing line', '3': '', '4': '', '5': ''}])
+                self.assertEqual(result['groupOne'], [
+                    {'2': 'Rice', '3': '2', '4': '15', '5': '30'},
+                    {'2': 'Oil', '3': '1', '4': '20', '5': '20'}
+                ])
+                self.assertEqual(result['invalid']['added'], 0)
+                self.assertTrue(result['invalid']['error'])
+                self.assertEqual(result['invalidItemCount'], 0)
+            finally:
+                browser.close()
+
+    def test_quick_form_items_popover_layers_above_observation(self):
+        stylesheet = Path(__file__).resolve().parents[1] / 'static' / 'style.css'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('''<div id="procedureModal">
+                    <section class="procedure-segment procedure-form-segment">
+                        <div class="procedure-form-bill-card">
+                            <div class="procedure-form-quick-items-popover"></div>
+                        </div>
+                    </section>
+                    <section class="procedure-segment procedure-segment-observation"></section>
+                </div>''')
+                page.add_style_tag(path=str(stylesheet))
+                result = page.evaluate('''() => {
+                    const styles = selector => {
+                        const element = document.querySelector(selector);
+                        const computed = getComputedStyle(element);
+                        return {position: computed.position, overflow: computed.overflow, zIndex: computed.zIndex};
+                    };
+                    return {
+                        form: styles('.procedure-form-segment'),
+                        popover: styles('.procedure-form-quick-items-popover'),
+                        observation: styles('.procedure-segment-observation')
+                    };
+                }''')
+                self.assertEqual(result['form'], {'position': 'relative', 'overflow': 'visible', 'zIndex': '2'})
+                self.assertEqual(result['popover'], {'position': 'absolute', 'overflow': 'visible', 'zIndex': '6'})
+                self.assertEqual(result['observation'], {'position': 'relative', 'overflow': 'hidden', 'zIndex': '1'})
+            finally:
+                browser.close()
+
     def test_form_failed_save_keeps_draft_for_retry(self):
         script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
         with sync_playwright() as playwright:

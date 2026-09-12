@@ -278,6 +278,8 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-12: Physical Bill Split UI and Form bill-group schema foundation added; automated checks passed.
 - 2026-09-12: Routine multi-bill Form cards added with expandable summaries, Add/Remove/Split, and first-bill Copy from lines; automated checks passed.
 - 2026-09-12: Form Quick add bills popover added with optional vendor/bill number, amount grouping, and Enter navigation; manual acceptance pending.
+- 2026-09-12: Form per-bill Quick add items popover added with grouped item rows and derived Amount; manual acceptance pending.
+- 2026-09-12: Form Quick add items popover layering corrected above Observation; manual acceptance pending.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
