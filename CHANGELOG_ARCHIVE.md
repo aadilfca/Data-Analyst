@@ -5580,6 +5580,13 @@ Confirmed the shared loading primitives retain clear non-motion feedback under
 progress-bar fill remain visible. The determinate progress-width transition is now disabled in
 that mode. JavaScript syntax and whitespace checks passed; no backend change was required.
 
+## Loading feedback hardening — Mini-phase 3 failure and concurrency audit - 2026-09-13
+
+Playwright route interception covered delayed success, GET 5xx retry, network failure, parallel
+retry, offline rejection, write failure, token reference counting, spinner cleanup, and 401 session
+expiry. All cases passed: GETs retry once, writes do not retry, parallel retry feedback remains until
+both calls settle, controls restore, and 401 redirects without retry. No code change was required.
+
 ## Loading feedback hardening — Mini-phase 2 keyboard and touch audit - 2026-09-13
 
 Confirmed loading actions use native buttons and inputs, preserving keyboard activation and visible
