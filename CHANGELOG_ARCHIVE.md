@@ -5587,6 +5587,13 @@ retry, offline rejection, write failure, token reference counting, spinner clean
 expiry. All cases passed: GETs retry once, writes do not retry, parallel retry feedback remains until
 both calls settle, controls restore, and 401 redirects without retry. No code change was required.
 
+## Loading feedback hardening — Mini-phase 4 recovery audit - 2026-09-13
+
+Playwright verified stale and repeated token cleanup, successful and failed mutation spinner
+restoration, single-attempt writes, duplicate navigation blocking, and Escape/pagehide/pageshow
+recovery. All cases passed with the original cursor and control state restored. No code change was
+required.
+
 ## Loading feedback hardening — Mini-phase 2 keyboard and touch audit - 2026-09-13
 
 Confirmed loading actions use native buttons and inputs, preserving keyboard activation and visible

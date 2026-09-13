@@ -37,7 +37,7 @@ Apply narrow locking and progress feedback to Save, Verify, Complete, Import, De
 
 ### Phase 4 — Coverage and hardening
 
-Status: Phase 4A, Phase 4B, and Phase 4C implemented and accepted; hardening Mini-phases 1–3 are complete. Mini-phases 4–5 remain optional.
+Status: Phase 4A, Phase 4B, and Phase 4C implemented and accepted; hardening Mini-phases 1–4 are complete. Mini-phase 5 remains optional.
 
 Audit remaining waiting paths and test slow/failed/parallel requests, stale responses, session expiry, keyboard/touch use, reduced-motion accessibility, long-running work, and stuck-cursor or stuck-control recovery. A custom animated cursor remains optional and deferred until the standard `progress` cursor proves insufficient.
 
