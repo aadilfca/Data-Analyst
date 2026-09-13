@@ -2,7 +2,7 @@
    Namespaced under window.LoadingUI rather than bare globals — client_context.js's own
    comments flag exactly this collision risk for a shared classic <script> (see
    error_dashboard.js's stale STORAGE_KEY / databank.js's shadowed getSelectedClientId()).
-   The global cursor is currently piloted on the dashboard; remaining pages are later phases. */
+   The global cursor currently covers dashboard and Procedure Modal flows; remaining pages are later phases. */
 (function () {
     'use strict';
 

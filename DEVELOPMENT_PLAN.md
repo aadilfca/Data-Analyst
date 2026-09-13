@@ -25,11 +25,13 @@ Procedure Modal. Existing local spinners, modal cleanup, and unrelated interacti
 
 ### Phase 2B — Navigation and remaining modal-opening rollout
 
-Status: next phase; candidate files require confirmation.
+Status: implemented and accepted; navigation code and shared-script cache busting completed.
 
 Extend the behavior to dashboard/module cards, header and quick navigation, async dropdowns, modal/detail openings, and template/supporting-document views. Handle the transition between the old and newly loaded page, including Back/bfcache and browser Stop behavior.
 
 ### Phase 3 — High-risk workflow actions
+
+Status: next phase; candidate files require confirmation.
 
 Apply narrow locking and progress feedback to Save, Verify, Complete, Import, Delete/Restore, Verification Prev/Next, Audit Rules writes, and other actions that can conflict with the same data or workflow. Preserve independent application use where it cannot interfere.
 

@@ -89,11 +89,37 @@ async function loadSessionClient() {
     }
 }
 
+// ---------- NAVIGATION LOADING FEEDBACK ----------
+// One token covers the current navigation transition. It blocks duplicate navigation clicks only;
+// unrelated page controls remain usable while the browser or an async guard is completing the move.
+let navigationLoadingToken = null;
+
+function startNavigationLoading(target) {
+    if (navigationLoadingToken) return false;
+    if (window.LoadingUI) navigationLoadingToken = window.LoadingUI.startGlobalLoading(target);
+    return true;
+}
+
+function stopNavigationLoading() {
+    if (!navigationLoadingToken) return;
+    if (window.LoadingUI) window.LoadingUI.stopGlobalLoading(navigationLoadingToken);
+    navigationLoadingToken = null;
+}
+
+// A real page transition replaces this document, but Escape/Stop or bfcache can leave it alive.
+// These event-driven releases avoid a guessed timeout and prevent a stranded cursor.
+window.addEventListener('pagehide', stopNavigationLoading);
+window.addEventListener('pageshow', stopNavigationLoading);
+document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') stopNavigationLoading();
+});
+
 /**
  * Log out: clear the session server-side, then redirect to login regardless of
  * response (logout is designed to always succeed / be idempotent).
  */
-async function logoutUser() {
+async function logoutUser(target) {
+    if (!startNavigationLoading(target)) return;
     try {
         await fetch(API_BASE + '/api/auth/logout', { method: 'POST' });
     } catch (error) {
@@ -794,7 +820,7 @@ function consumePendingNavRestore() {
  */
 function handleBackArrowClick() {
     const stack = readNavHistory();
-    if (stack.length <= 1) return; // nothing to go back to; button is disabled in this state anyway
+    if (stack.length <= 1) return false; // nothing to go back to; button is disabled in this state anyway
 
     stack.pop(); // discard "current" entry
     const newTop = stack[stack.length - 1];
@@ -804,7 +830,7 @@ function handleBackArrowClick() {
         if (typeof window._appNav.inPageRestoreHandler === 'function') {
             window._appNav.inPageRestoreHandler(newTop.viewKey);
         }
-        return;
+        return false;
     }
 
     if (newTop.viewKey) {
@@ -815,6 +841,7 @@ function handleBackArrowClick() {
         }
     }
     window.location.href = newTop.url;
+    return true;
 }
 
 // ---------- RENDER LEFT SECTION (brand + home icon + back arrow) ----------
@@ -1011,6 +1038,7 @@ document.addEventListener('click', function (e) {
     if (!tab) return;
     // Clicking the tab you're already on is a deliberate no-op - no reload, no flicker.
     if (tab.classList.contains('active')) return;
+    if (!startNavigationLoading(tab)) return;
     window.location.href = '/static/' + tab.dataset.tabFile;
 });
 
@@ -1295,7 +1323,7 @@ function initNavSearch() {
             const results = getSearchFocusableResults(panel);
             const target = results[searchHighlightIndex] || results[0];
             if (target) {
-                window.location.href = target.getAttribute('href');
+                target.click();
             }
         }
     });
@@ -1404,6 +1432,16 @@ function closeNavSearch(input, panel) {
     input.focus();
 }
 
+// Ready links are rendered by both the quick-nav menu and its search results. Let the browser keep
+// its normal navigation semantics while marking the transition; modified/new-tab clicks stay free
+// of a cursor token because this document remains open after those clicks.
+document.addEventListener('click', function (e) {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const link = e.target.closest('a.nav-menu-item, a.firm-nav-brand');
+    if (!link || link.target === '_blank') return;
+    if (!startNavigationLoading(link)) e.preventDefault();
+});
+
 // ---------- GLOBAL KEYBOARD SHORTCUT: "/" FOCUSES SEARCH ----------
 // Bound once at module load (same reasoning as the other document-level listeners in this file —
 // #navSearchInput is rebuilt via innerHTML on every renderNavLeft() call, so this looks it up fresh
@@ -1429,7 +1467,8 @@ document.addEventListener('keydown', function (e) {
 document.addEventListener('click', function (e) {
     const backArrow = e.target.closest('.nav-back-arrow');
     if (backArrow && !backArrow.disabled) {
-        handleBackArrowClick();
+        if (!startNavigationLoading(backArrow)) return;
+        if (!handleBackArrowClick()) stopNavigationLoading();
     }
 });
 
@@ -1440,7 +1479,9 @@ document.addEventListener('click', function (e) {
     const homeIcon = e.target.closest('.nav-home-icon');
     if (homeIcon && typeof window.leaveVerificationSafely === 'function') {
         e.preventDefault();
+        if (navigationLoadingToken) return;
         window.leaveVerificationSafely(function() {
+            if (!startNavigationLoading(homeIcon)) return;
             window.location.href = homeIcon.href;
         });
         return;
@@ -1450,8 +1491,22 @@ document.addEventListener('click', function (e) {
 document.addEventListener('click', function (e) {
     const upArrow = e.target.closest('.nav-up-arrow');
     if (!upArrow) return;
+    if (!startNavigationLoading(upArrow)) return;
     if (typeof window._appNav.upOverride === 'function') {
-        window._appNav.upOverride();
+        try {
+            const currentPath = window.location.pathname;
+            const result = window._appNav.upOverride();
+            if (result && typeof result.then === 'function') {
+                result.then(stopNavigationLoading, stopNavigationLoading);
+            } else if (window.location.pathname === currentPath) {
+                // Synchronous in-page view changes are complete when the override returns. A
+                // cross-page override keeps the token until pagehide replaces this document.
+                stopNavigationLoading();
+            }
+        } catch (error) {
+            stopNavigationLoading();
+            console.warn('⚠️ Up navigation failed:', error.message);
+        }
     } else {
         window.location.href = getUpTarget();
     }
@@ -1461,7 +1516,7 @@ document.addEventListener('click', function (e) {
 document.addEventListener('click', function (e) {
     const logoutBtn = e.target.closest('.nav-logout-btn');
     if (logoutBtn) {
-        logoutUser();
+        logoutUser(logoutBtn);
     }
 });
 
@@ -1474,11 +1529,12 @@ document.addEventListener('click', function (e) {
 document.addEventListener('click', function (e) {
     const display = e.target.closest('.nav-client-display');
     if (!display) return;
+    if (navigationLoadingToken) return;
     if (display.classList.contains('client-none')) {
         // Nothing selected yet — nothing to lose, so skip the confirm entirely.
-        goToClientSelect();
+        goToClientSelect(display);
     } else {
-        confirmSwitchClient();
+        confirmSwitchClient(display);
     }
 });
 // ---------- RENDER CLIENT BADGE (read-only) ----------
@@ -1513,17 +1569,19 @@ function renderClientBadge() {
 // removed; and it fired a second alert() warning that "all client-related data visible on current
 // pages will be cleared", which was never accurate under the session-backed design — every query
 // is client_id-scoped, so nothing mixes and nothing is discarded by switching. Cancel does nothing.
-function confirmSwitchClient() {
+function confirmSwitchClient(target) {
     if (confirm('Switch client? Any unsaved work on this page may be lost.')) {
-        goToClientSelect();
+        goToClientSelect(target);
     }
 }
 
-function goToClientSelect() {
+function goToClientSelect(target) {
+    if (!startNavigationLoading(target)) return;
     window.location.href = '/static/client_select.html';
 }
 
-function goToDashboard() {
+function goToDashboard(target) {
+    if (!startNavigationLoading(target)) return;
     window.location.href = '/static/index.html';
 }
 

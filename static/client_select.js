@@ -9,6 +9,25 @@
 // client — the user must click a card again each time.
 
 let allClients = [];
+let clientSelectNavigationToken = null;
+
+function startClientSelectNavigation(target) {
+    if (clientSelectNavigationToken) return false;
+    if (window.LoadingUI) clientSelectNavigationToken = window.LoadingUI.startGlobalLoading(target);
+    return true;
+}
+
+function stopClientSelectNavigation() {
+    if (!clientSelectNavigationToken) return;
+    if (window.LoadingUI) window.LoadingUI.stopGlobalLoading(clientSelectNavigationToken);
+    clientSelectNavigationToken = null;
+}
+
+window.addEventListener('pagehide', stopClientSelectNavigation);
+window.addEventListener('pageshow', stopClientSelectNavigation);
+document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') stopClientSelectNavigation();
+});
 
 const clientCardGrid = document.getElementById('clientCardGrid');
 const clientSelectEmpty = document.getElementById('clientSelectEmpty');
@@ -124,7 +143,7 @@ function renderClients(clients) {
             ${industryHtml}
         `;
 
-        card.addEventListener('click', () => selectClient(client));
+        card.addEventListener('click', () => selectClient(client, card));
         clientCardGrid.appendChild(card);
     });
 }
@@ -173,7 +192,8 @@ function resolveNextUrl(clientId) {
     return url;
 }
 
-async function selectClient(client) {
+async function selectClient(client, card) {
+    if (!startClientSelectNavigation(card)) return;
     try {
         const res = await fetch('/api/auth/select-client', {
             method: 'PUT',
@@ -184,6 +204,7 @@ async function selectClient(client) {
         // With no (or an unrecognised) ?next=, this is exactly the previous behaviour.
         window.location.href = resolveNextUrl(client.id) || '/static/index.html';
     } catch (err) {
+        stopClientSelectNavigation();
         clientCardGrid.innerHTML = '';
         clientSelectEmpty.textContent = 'Could not select client. Please try again.';
         clientSelectEmpty.style.display = 'block';
@@ -229,6 +250,8 @@ async function checkAdminAndShowGear() {
 }
 
 document.getElementById('adminSettingsBtn')?.addEventListener('click', () => {
+    const button = document.getElementById('adminSettingsBtn');
+    if (!startClientSelectNavigation(button)) return;
     window.location.href = '/static/settings.html';
 });
 
@@ -264,6 +287,8 @@ function renderClientSelectHeader(username) {
 // document-level .nav-logout-btn listener. Same contract: clear the session server-side, then go to
 // login regardless of the response (logout is idempotent and must never leave the user stuck).
 async function logout() {
+    const button = document.querySelector('.nav-logout-btn');
+    if (!startClientSelectNavigation(button)) return;
     try {
         await fetch('/api/auth/logout', { method: 'POST' });
     } catch (err) {

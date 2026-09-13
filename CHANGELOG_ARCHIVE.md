@@ -5478,3 +5478,14 @@ then restore the original cursor. Existing local spinners and unrelated interact
 Browser harness checks confirmed reference-counted cursor restoration and duplicate-click protection;
 the user manually confirmed the Procedure Modal flow on Render. No backend or stylesheet changes
 were required. Phase 2A was released as `bc67341`; Phase 2B navigation rollout is next.
+
+## Global Loading Cursor — Phase 2B cache release - 2026-09-13
+
+Navigation feedback now covers shared header controls, quick-navigation links and search results,
+firm tabs, client switching, logout, and standalone Client Cards selection. Duplicate navigation is
+narrowly suppressed while unrelated controls remain available; Escape, bfcache, page transitions,
+errors, and same-page restores release the cursor through real events or completion.
+
+All HTML references to changed shared scripts were refreshed: `client_context.js` is now `v15` across
+17 pages and `loading_ui.js` is now `v2` across 12 pages. JavaScript syntax, stale-reference, and
+diff checks passed. No backend or CSS changes were made. Phase 3 high-risk workflow feedback is next.
