@@ -14,25 +14,49 @@
     const progressState = new WeakMap();
     const badgeState = new WeakMap();
     const globalLoadingTokens = new Set();
+    const globalTokenTargets = new WeakMap();
+    const globalTargetCursorStates = new WeakMap();
     let nextGlobalLoadingToken = 1;
     let originalDocumentCursor = '';
 
     // Ambient progress cursor. The caller owns the returned token and must pass the same
     // token to stopGlobalLoading; repeated or stale stops are harmless. The standard
     // `progress` cursor keeps the interface usable, unlike the browser's `wait` cursor.
-    function startGlobalLoading() {
+    function startGlobalLoading(target) {
         const token = { id: nextGlobalLoadingToken++ };
         if (globalLoadingTokens.size === 0 && document.documentElement) {
             originalDocumentCursor = document.documentElement.style.cursor;
             document.documentElement.style.cursor = 'progress';
         }
         globalLoadingTokens.add(token);
+        if (target && target.style) {
+            let targetState = globalTargetCursorStates.get(target);
+            if (!targetState) {
+                targetState = { originalCursor: target.style.cursor, tokens: new Set() };
+                globalTargetCursorStates.set(target, targetState);
+            }
+            targetState.tokens.add(token);
+            target.style.cursor = 'progress';
+            globalTokenTargets.set(token, target);
+        }
         return token;
     }
 
     function stopGlobalLoading(token) {
         if (!token || !globalLoadingTokens.has(token)) return;
         globalLoadingTokens.delete(token);
+        const target = globalTokenTargets.get(token);
+        if (target) {
+            const targetState = globalTargetCursorStates.get(target);
+            if (targetState) {
+                targetState.tokens.delete(token);
+                if (targetState.tokens.size === 0) {
+                    target.style.cursor = targetState.originalCursor;
+                    globalTargetCursorStates.delete(target);
+                }
+            }
+            globalTokenTargets.delete(token);
+        }
         if (globalLoadingTokens.size === 0 && document.documentElement) {
             document.documentElement.style.cursor = originalDocumentCursor;
             originalDocumentCursor = '';

@@ -830,9 +830,12 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // the column there (confirmed bug), so escalation is disabled for that case specifically. The
     // no-triggerEl re-navigation case targets the wide panels container, which has room, so it
     // keeps the default escalating message.
-    if (window.LoadingUI) window.LoadingUI.showSpinner(spinnerTarget, 'Loading', { escalate: !triggerEl });
-
+    let globalLoadingToken = null;
     try {
+        if (window.LoadingUI) {
+            globalLoadingToken = window.LoadingUI.startGlobalLoading(spinnerTarget);
+            window.LoadingUI.showSpinner(spinnerTarget, 'Loading', { escalate: !triggerEl });
+        }
         // Session-level ref-data caching (Phase 2 of 4): forceRefresh=false — reuses
         // auditGuidanceCache[type] when already warm instead of re-fetching on every open.
         // In practice this Category's guidance is usually already cached by the time a modal
@@ -1134,6 +1137,7 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
             });
         }
         if (window.LoadingUI) window.LoadingUI.hideSpinner(spinnerTarget);
+        if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
     }
 }
 
