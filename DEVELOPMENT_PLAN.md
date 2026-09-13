@@ -37,7 +37,7 @@ Apply narrow locking and progress feedback to Save, Verify, Complete, Import, De
 
 ### Phase 4 — Coverage and hardening
 
-Status: later phase; candidate files require confirmation.
+Status: Phase 4A implemented and accepted; Phase 4B candidate files require confirmation.
 
 Audit remaining waiting paths and test slow/failed/parallel requests, stale responses, session expiry, keyboard/touch use, reduced-motion accessibility, long-running work, and stuck-cursor or stuck-control recovery. A custom animated cursor remains optional and deferred until the standard `progress` cursor proves insufficient.
 

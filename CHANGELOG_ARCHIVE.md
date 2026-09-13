@@ -5531,3 +5531,19 @@ Existing local progress bars, button spinners, confirmations, and unrelated appl
 remain intact. `audit_rules.html` now loads `audit_rules.js?v=19`. JavaScript syntax, LoadingUI
 token/ref-count, and scoped diff checks passed. The user manually confirmed Audit Rules on Render.
 No backend, CSS, or shared `loading_ui.js` changes were required.
+
+## Global Loading Cursor — Phase 4A Trial Balance coverage - 2026-09-13
+
+Trial Balance now loads the shared Loading UI and shows a target-aware `progress` cursor while
+Excel mapping/preview, conflict checks, upload/classification, available-upload browsing, and
+account loading are in progress. Upload actions suppress duplicate requests across the full
+conflict-check, confirmation, upload, polling, and refresh sequence.
+
+Per-account Leaf/Parent overrides now use an account-scoped duplicate guard and temporarily lock
+only the clicked row action. Upload deletion locks the selected upload workflow while unrelated
+navigation remains available. All new cursor and control states release on success, failure,
+cancellation, stale response, or refresh completion.
+
+`trial_balance.html` now loads `loading_ui.js?v=2` and `trial_balance.js?v=7`. JavaScript syntax,
+LoadingUI token/ref-count, cache-reference, and scoped diff checks passed. The user manually
+confirmed Trial Balance on Render. No backend or CSS changes were required.

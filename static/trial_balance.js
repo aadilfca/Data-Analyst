@@ -122,6 +122,23 @@ const availableAccountsTableWrapper = getElement('availableAccountsTableWrapper'
 const availableAccountsTableBody = getElement('availableAccountsTableBody');
 const deleteUploadBtn = getElement('deleteUploadBtn');
 
+// Mutation keys prevent duplicate writes for the same Trial Balance resource while leaving
+// unrelated controls usable. The shared cursor token is deliberately owned by each complete
+// action, including any confirmation check and post-write refresh it triggers.
+const trialBalanceActionsInFlight = new Set();
+const trialBalanceOverrideInFlight = new Set();
+
+function startTrialBalanceLoading(target) {
+    if (!window.LoadingUI || typeof window.LoadingUI.startGlobalLoading !== 'function') return null;
+    return window.LoadingUI.startGlobalLoading(target);
+}
+
+function stopTrialBalanceLoading(token) {
+    if (token && window.LoadingUI && typeof window.LoadingUI.stopGlobalLoading === 'function') {
+        window.LoadingUI.stopGlobalLoading(token);
+    }
+}
+
 // ---------- STATUS BAR ----------
 // Same show/hide + color-coded classes convention as upload.js's showStatus().
 function showStatus(msg, type = 'info') {
@@ -397,6 +414,7 @@ function readFileRowsForPreview(file) {
 // state belonging to the newer file.
 async function loadColumnMappingForFile(file) {
     const token = ++mappingRequestToken;
+    const loadingToken = startTrialBalanceLoading(uploadFileBtn);
     showStatus('Reading file and suggesting column mapping...', 'loading');
 
     try {
@@ -435,6 +453,7 @@ async function loadColumnMappingForFile(file) {
         if (token === mappingRequestToken) {
             updateClientDependentUI();
         }
+        stopTrialBalanceLoading(loadingToken);
     }
 }
 
@@ -620,34 +639,39 @@ async function uploadTrialBalance() {
         return;
     }
 
-    // Section 2, Phase 6: authoritative overwrite-conflict gate. This re-checks (or
-    // reuses a still-valid cached result) right before the actual request -- catches
-    // a period entered/changed after file selection, and re-prompts if an earlier
-    // check on this exact period was declined or failed. Period is now always present
-    // by this point (guarded above), so this check always runs.
-    const conflictResult = await checkAndConfirmPeriodOverwrite(clientId, periodStartInput.value, periodEndInput.value);
-    if (conflictResult === 'declined' || conflictResult === 'error') {
-        // No request sent -- the form stays exactly as the auditor left it so
-        // they can adjust the period (or try again) themselves.
-        showStatus('Upload cancelled.', 'info');
-        return;
-    }
-    const confirmOverwrite = conflictResult === 'confirmed';
-
-    if (summaryContainer) summaryContainer.style.display = 'none';
-    if (reviewContainer) reviewContainer.style.display = 'none';
-    showStatus('Uploading and classifying...', 'loading');
-    uploadTrialBalanceBtn.disabled = true;
-
-    // Fast Trial Balance upload: client-generated progress key (TB upload is a single
-    // one-shot endpoint, so there's no server-issued file_id the way Data Bank's two-step
-    // upload flow has). Started before the request fires so the bar is visible for the
-    // whole request, not just after the response comes back.
-    const progressKey = 'tb_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-    showTbUploadProgressBar();
-    pollTbUploadProgress(progressKey);
+    if (trialBalanceActionsInFlight.has('upload')) return;
+    trialBalanceActionsInFlight.add('upload');
+    const loadingToken = startTrialBalanceLoading(uploadTrialBalanceBtn);
+    const previousDisabled = uploadTrialBalanceBtn ? uploadTrialBalanceBtn.disabled : false;
+    if (uploadTrialBalanceBtn) uploadTrialBalanceBtn.disabled = true;
 
     try {
+        // Section 2, Phase 6: authoritative overwrite-conflict gate. This re-checks (or
+        // reuses a still-valid cached result) right before the actual request -- catches
+        // a period entered/changed after file selection, and re-prompts if an earlier
+        // check on this exact period was declined or failed. Period is now always present
+        // by this point (guarded above), so this check always runs.
+        const conflictResult = await checkAndConfirmPeriodOverwrite(clientId, periodStartInput.value, periodEndInput.value);
+        if (conflictResult === 'declined' || conflictResult === 'error') {
+            // No request sent -- the form stays exactly as the auditor left it so
+            // they can adjust the period (or try again) themselves.
+            showStatus('Upload cancelled.', 'info');
+            return;
+        }
+        const confirmOverwrite = conflictResult === 'confirmed';
+
+        if (summaryContainer) summaryContainer.style.display = 'none';
+        if (reviewContainer) reviewContainer.style.display = 'none';
+        showStatus('Uploading and classifying...', 'loading');
+
+        // Fast Trial Balance upload: client-generated progress key (TB upload is a single
+        // one-shot endpoint, so there's no server-issued file_id the way Data Bank's two-step
+        // upload flow has). Started before the request fires so the bar is visible for the
+        // whole request, not just after the response comes back.
+        const progressKey = 'tb_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+        showTbUploadProgressBar();
+        pollTbUploadProgress(progressKey);
+
         const formData = new FormData();
         formData.append('client_id', clientId);
         // The backend's as_of_date field still exists (not touched this phase) -- Period
@@ -688,7 +712,10 @@ async function uploadTrialBalance() {
         // both a successful upload and a thrown error the same way.
         stopTbUploadProgressPoll();
         hideTbUploadProgressBar();
+        if (uploadTrialBalanceBtn) uploadTrialBalanceBtn.disabled = previousDisabled;
         updateClientDependentUI();
+        stopTrialBalanceLoading(loadingToken);
+        trialBalanceActionsInFlight.delete('upload');
     }
 }
 
@@ -808,14 +835,20 @@ if (reviewTableBody) {
 
         const accountId = btn.dataset.accountId;
         const currentIsLeaf = btn.dataset.currentIsLeaf === 'true';
-        toggleAccountClassification(accountId, !currentIsLeaf);
+        toggleAccountClassification(accountId, !currentIsLeaf, btn);
     });
 }
 
 // PUTs the new classification to the Phase 5 override endpoint, then updates just that
 // row in place (no full table re-render) and refreshes the summary tiles so the
 // Leaf/Parent counts stay correct after the flip.
-async function toggleAccountClassification(accountId, newIsLeaf) {
+async function toggleAccountClassification(accountId, newIsLeaf, triggerBtn) {
+    const actionKey = 'override:' + accountId;
+    if (trialBalanceOverrideInFlight.has(actionKey)) return;
+    trialBalanceOverrideInFlight.add(actionKey);
+    const loadingToken = startTrialBalanceLoading(triggerBtn);
+    const previousDisabled = triggerBtn ? triggerBtn.disabled : false;
+    if (triggerBtn) triggerBtn.disabled = true;
     try {
         const res = await fetch(API_BASE + '/api/trial-balance/accounts/' + accountId + '/override', {
             method: 'PUT',
@@ -842,6 +875,10 @@ async function toggleAccountClassification(accountId, newIsLeaf) {
         if (currentUploadId) await loadSummary(currentUploadId);
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
+    } finally {
+        if (triggerBtn) triggerBtn.disabled = previousDisabled;
+        stopTrialBalanceLoading(loadingToken);
+        trialBalanceOverrideInFlight.delete(actionKey);
     }
 }
 
@@ -894,9 +931,10 @@ function buildUploadLabel(upload) {
 // Fetches Phase 1's list-uploads endpoint and populates the dropdown. Only 'parsed'
 // uploads are listed -- an 'error'/'pending' upload has no accounts to browse, so
 // including it would just be a dead entry that returns an empty table on selection.
-async function loadAvailableUploads() {
+async function loadAvailableUploads(target = availableTrialBalancesBtn) {
     const clientId = window.getSelectedClientId ? window.getSelectedClientId() : null;
     if (!availableUploadsDropdown || !clientId) return;
+    const loadingToken = startTrialBalanceLoading(target);
 
     availableUploadsDropdown.innerHTML = '<option value="">— Select an upload —</option>';
     if (availableUploadsEmptyHint) availableUploadsEmptyHint.style.display = 'none';
@@ -927,14 +965,17 @@ async function loadAvailableUploads() {
         });
     } catch (error) {
         showStatus('❌ Could not load available trial balances: ' + error.message, 'error');
+    } finally {
+        stopTrialBalanceLoading(loadingToken);
     }
 }
 
 // Fetches the existing accounts-list endpoint for the selected upload (unchanged --
 // same endpoint the Review Classifications screen already uses) and renders it into
 // this view's own table.
-async function loadAvailableUploadAccounts(uploadId) {
+async function loadAvailableUploadAccounts(uploadId, target = availableUploadsDropdown) {
     if (!availableAccountsTableWrapper || !availableAccountsTableBody) return;
+    const loadingToken = startTrialBalanceLoading(target);
 
     try {
         const res = await fetch(API_BASE + '/api/trial-balance/accounts?upload_id=' + uploadId);
@@ -948,6 +989,8 @@ async function loadAvailableUploadAccounts(uploadId) {
         availableAccountsTableWrapper.style.display = 'block';
     } catch (error) {
         showStatus('❌ ' + error.message, 'error');
+    } finally {
+        stopTrialBalanceLoading(loadingToken);
     }
 }
 
@@ -986,7 +1029,7 @@ if (availableUploadsDropdown) {
             if (deleteUploadBtn) deleteUploadBtn.style.display = 'none';
             return;
         }
-        loadAvailableUploadAccounts(uploadId);
+        loadAvailableUploadAccounts(uploadId, this);
         // Confirmed fix: Delete only appears once a real upload is selected.
         if (deleteUploadBtn) deleteUploadBtn.style.display = 'inline-block';
     });
@@ -1003,6 +1046,14 @@ if (deleteUploadBtn) {
 
         const confirmed = window.confirm('Delete this Trial Balance and all its accounts? This cannot be undone.');
         if (!confirmed) return;
+
+        if (trialBalanceActionsInFlight.has('delete-upload:' + uploadId)) return;
+        trialBalanceActionsInFlight.add('delete-upload:' + uploadId);
+        const loadingToken = startTrialBalanceLoading(deleteUploadBtn);
+        const previousDeleteDisabled = deleteUploadBtn.disabled;
+        const previousDropdownDisabled = availableUploadsDropdown ? availableUploadsDropdown.disabled : false;
+        deleteUploadBtn.disabled = true;
+        if (availableUploadsDropdown) availableUploadsDropdown.disabled = true;
 
         try {
             const res = await fetch(API_BASE + '/api/trial-balance/uploads/' + uploadId, {
@@ -1024,6 +1075,11 @@ if (deleteUploadBtn) {
             await loadAvailableUploads();
         } catch (error) {
             showStatus('❌ ' + error.message, 'error');
+        } finally {
+            deleteUploadBtn.disabled = previousDeleteDisabled;
+            if (availableUploadsDropdown) availableUploadsDropdown.disabled = previousDropdownDisabled;
+            stopTrialBalanceLoading(loadingToken);
+            trialBalanceActionsInFlight.delete('delete-upload:' + uploadId);
         }
     });
 }
@@ -1034,7 +1090,7 @@ if (availableTrialBalancesBtn) {
     availableTrialBalancesBtn.addEventListener('click', function () {
         if (uploadViewContainer) uploadViewContainer.style.display = 'none';
         if (availableTrialBalancesSection) availableTrialBalancesSection.style.display = 'block';
-        loadAvailableUploads();
+        loadAvailableUploads(this);
     });
 }
 

@@ -32,7 +32,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/procedure_modal.js → reusable Supporting Documents modal shared by Verification and Audit Workbook, with target-aware loading feedback for open, save, verify, and line navigation. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, mapping suggestions, period-conflict checks, classification/override, upload history, category assignment, deletion; scoped cache invalidation. See CHANGELOG_ARCHIVE.md.
-- static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
+- static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
 - routers/audit_rules.py → Audit Rules APIs: Documents, Cross-checks, Category policies, Signature Specimens, ordered Voucher-level Checks; soft-delete/restore, scoped caching. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Audit Rules three-pane editor, Assign Categories view, and processing feedback with a shared progress cursor. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
@@ -275,7 +275,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-13: Form draft discard safeguards completed; Procedure data-table linking now supports multi-select with professionally aligned reference, date, and quantity rows.
 - 2026-09-13: Procedure Data Table text clicks now link immediately; blank row areas and checkboxes toggle selection without triggering a fetch.
 
-- 2026-09-13: Verification, Upload, Data Bank, and Audit Rules high-risk loading feedback completed and manually accepted. See CHANGELOG_ARCHIVE.md.
+- 2026-09-13: Verification, Upload, Data Bank, Audit Rules, and Trial Balance loading feedback completed and manually accepted. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
