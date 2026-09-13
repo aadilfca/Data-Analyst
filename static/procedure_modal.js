@@ -695,12 +695,15 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId, option
         ? `<input type="checkbox" class="procedure-result-checkbox" data-id="${row.id}"
                 aria-label="Select ${hostAdapter.escapeHtml(String(label))}"${isSelected ? ' checked' : ''}>`
         : '';
-    const resultTag = multiSelect && !isLocked ? 'label' : 'div';
+    const resultTag = 'div';
     const resultInteraction = multiSelect || isLocked ? '' : ' role="button" tabindex="0"';
+    const contentInteraction = multiSelect && !isLocked
+        ? ` role="button" tabindex="0" aria-label="Select ${hostAdapter.escapeHtml(String(label))}"`
+        : '';
     return `
         <${resultTag} class="procedure-result-item${isLocked ? ' locked' : ''}${isSelected ? ' selected' : ''}" data-id="${row.id}"${resultInteraction}>
             ${selectionControl}
-            <div class="procedure-result-main">
+            <div class="procedure-result-main${multiSelect && !isLocked ? ' procedure-result-content' : ''}"${contentInteraction}>
                 <span class="procedure-result-label">${hostAdapter.escapeHtml(String(label))}</span>
                 <span class="procedure-result-meta">${hostAdapter.escapeHtml(date)} · Quantity: ${hostAdapter.escapeHtml(String(quantity))}</span>
             </div>
@@ -3708,8 +3711,12 @@ function renderProcedureModalPanel(uid, docId) {
             <div class="procedure-segment-body">
                 ${docCrossChecks.length ? buildCrossCheckRollup(docCrossChecks) : ''}
                 <div class="procedure-search-row">
-                    <input type="text" id="procedureSearchInput" class="procedure-search-input"
-                        placeholder="Search by reference, vendor, amount..." value="${hostAdapter.escapeHtml(tabState.searchTerm)}">
+                    <div class="procedure-search-input-wrap">
+                        <input type="text" id="procedureSearchInput" class="procedure-search-input"
+                            placeholder="Search by reference, vendor, amount..." value="${hostAdapter.escapeHtml(tabState.searchTerm)}">
+                        <button type="button" id="procedureSearchClearBtn" class="procedure-search-clear-btn"
+                            aria-label="Close Data Table results" title="Close Data Table results" hidden>×</button>
+                    </div>
                     <button type="button" id="procedureBrowseBtn" class="procedure-browse-btn" title="Browse all rows for this document">👁️</button>
                 </div>
                 <div id="procedureSearchDropdown" class="procedure-search-dropdown"></div>
@@ -3753,7 +3760,14 @@ function renderProcedureModalPanel(uid, docId) {
         const searchInput = document.getElementById('procedureSearchInput');
         if (searchInput) {
             searchInput.addEventListener('input', function() {
+                updateProcedureSearchClearUi(uid, docId);
                 debounceProcedureSearch(uid, docId, this.value);
+            });
+        }
+        const clearSearchBtn = document.getElementById('procedureSearchClearBtn');
+        if (clearSearchBtn) {
+            clearSearchBtn.addEventListener('click', function() {
+                closeProcedureSearchDropdown(uid, docId);
             });
         }
         const browseBtn = document.getElementById('procedureBrowseBtn');
@@ -3788,6 +3802,8 @@ function renderProcedureModalPanel(uid, docId) {
     // lose unsaved work" to cover search results too) — re-renders from tabState, no new fetch.
     if (tabState.searchResults && tabState.searchResults.length) {
         renderProcedureSearchDropdown(uid, docId);
+    } else {
+        updateProcedureSearchClearUi(uid, docId);
     }
 }
 
@@ -4547,6 +4563,7 @@ function renderProcedureSearchDropdown(uid, docId) {
         dropdown.innerHTML = tabState.searchTerm.trim()
             ? '<div class="procedure-search-empty">No matching rows found.</div>'
             : '';
+        updateProcedureSearchClearUi(uid, docId);
         return;
     }
     const availableResults = results.filter(row => !row.is_assigned);
@@ -4575,12 +4592,44 @@ function renderProcedureSearchDropdown(uid, docId) {
         });
     });
 
+    dropdown.querySelectorAll('.procedure-result-label, .procedure-result-meta').forEach(text => {
+        const selectFromText = async function(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (this.dataset.linking === 'true') return;
+            const item = this.closest('.procedure-result-item');
+            const row = results.find(result => String(result.id) === String(item?.dataset.id));
+            if (!row) return;
+            this.dataset.linking = 'true';
+            try {
+                await selectProcedureDocument(uid, docId, row, item);
+            } finally {
+                this.dataset.linking = 'false';
+            }
+        };
+        text.addEventListener('click', selectFromText);
+        text.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter' || event.key === ' ') selectFromText.call(this, event);
+        });
+    });
+
+    dropdown.querySelectorAll('.procedure-result-item:not(.locked)').forEach(item => {
+        item.addEventListener('click', function(event) {
+            if (event.target.closest('.procedure-result-label, .procedure-result-meta, .procedure-result-checkbox')) return;
+            const checkbox = this.querySelector('.procedure-result-checkbox');
+            if (!checkbox) return;
+            checkbox.checked = !checkbox.checked;
+            checkbox.dispatchEvent(new Event('change'));
+        });
+    });
+
     const linkSelectedBtn = document.getElementById('procedureSearchLinkSelectedBtn');
     if (linkSelectedBtn) {
         linkSelectedBtn.addEventListener('click', function() {
             linkSelectedProcedureRows(uid, docId, this);
         });
     }
+    updateProcedureSearchClearUi(uid, docId);
 }
 
 function updateProcedureSearchSelectionUi(uid, docId) {
@@ -4605,6 +4654,31 @@ function updateProcedureSearchSelectionUi(uid, docId) {
         linkSelectedBtn.textContent = `Link selected (${pendingIds.size})`;
         linkSelectedBtn.disabled = pendingIds.size === 0;
     }
+}
+
+function updateProcedureSearchClearUi(uid, docId) {
+    const searchInput = document.getElementById('procedureSearchInput');
+    const clearButton = document.getElementById('procedureSearchClearBtn');
+    if (!searchInput || !clearButton) return;
+    const tabState = getProcedureTabState(uid, docId);
+    clearButton.hidden = !(searchInput.value.trim() || (tabState.searchResults || []).length);
+}
+
+function closeProcedureSearchDropdown(uid, docId) {
+    clearTimeout(procedureSearchDebounceTimer);
+    procedureSearchRequestToken++;
+    const tabState = getProcedureTabState(uid, docId);
+    tabState.searchTerm = '';
+    tabState.searchResults = [];
+    tabState.pendingSelectionIds = [];
+    const searchInput = document.getElementById('procedureSearchInput');
+    if (searchInput) {
+        searchInput.value = '';
+        searchInput.focus();
+    }
+    const dropdown = document.getElementById('procedureSearchDropdown');
+    if (dropdown) dropdown.innerHTML = '';
+    updateProcedureSearchClearUi(uid, docId);
 }
 
 // ---------- SELECTING A ROW (Phase 1's assign_document endpoint) ----------

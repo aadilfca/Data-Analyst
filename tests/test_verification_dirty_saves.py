@@ -324,7 +324,13 @@ def test_procedure_search_dropdown_links_multiple_selected_rows(procedure_modal_
         renderProcedureModalTabs = () => {};
         renderProcedureModalPanel = () => {};
         invalidateProcedureModalData = () => {};
-        document.body.insertAdjacentHTML('beforeend', '<div id="procedureSearchDropdown"></div>');
+        document.body.insertAdjacentHTML('beforeend', `
+            <div class="procedure-search-input-wrap">
+                <input id="procedureSearchInput" value="invoice">
+                <button id="procedureSearchClearBtn" hidden>×</button>
+            </div>
+            <div id="procedureSearchDropdown"></div>
+        `);
         const tabState = getProcedureTabState(1, 2);
         tabState.searchTerm = 'invoice';
         tabState.docKeyColumn = 'Reference';
@@ -334,9 +340,20 @@ def test_procedure_search_dropdown_links_multiple_selected_rows(procedure_modal_
             {id: 13, row_data: {Reference: 'INV-13', Quantity: 120}, extract_date: '2026-09-03', extract_amount: 30, is_assigned: true}
         ];
         renderProcedureSearchDropdown(1, 2);
-            const checkboxes = document.querySelectorAll('.procedure-result-checkbox');
-            const firstMeta = document.querySelector('.procedure-result-meta').textContent.trim();
-        checkboxes[0].click();
+        const checkboxes = document.querySelectorAll('.procedure-result-checkbox');
+        const firstMeta = document.querySelector('.procedure-result-meta').textContent.trim();
+        const firstContent = document.querySelector('.procedure-result-content');
+        firstContent.click();
+        const checkedAfterBlankContentClick = checkboxes[0].checked;
+        firstContent.click();
+        const uncheckedAfterBlankContentClick = checkboxes[0].checked;
+        const firstRow = document.querySelector('.procedure-result-item');
+        firstRow.click();
+        const checkedAfterFirstPaddingClick = checkboxes[0].checked;
+        firstRow.click();
+        const uncheckedAfterSecondPaddingClick = checkboxes[0].checked;
+        firstRow.click();
+        const checkedAfterThirdPaddingClick = checkboxes[0].checked;
         checkboxes[1].click();
         const linkButton = document.getElementById('procedureSearchLinkSelectedBtn');
         const selectedLabel = linkButton.textContent.trim();
@@ -353,6 +370,11 @@ def test_procedure_search_dropdown_links_multiple_selected_rows(procedure_modal_
         return {
             checkboxCount: checkboxes.length,
             firstMeta,
+            clearVisible: !document.getElementById('procedureSearchClearBtn').hidden,
+            blankAreaToggleWorked: checkedAfterBlankContentClick && !uncheckedAfterBlankContentClick,
+            paddingToggleWorked: checkedAfterFirstPaddingClick
+                && !uncheckedAfterSecondPaddingClick
+                && checkedAfterThirdPaddingClick,
             selectedLabel,
             calls: window.assignCalls,
             selections: tabState.selections.map(selection => selection.client_data_id),
@@ -362,7 +384,117 @@ def test_procedure_search_dropdown_links_multiple_selected_rows(procedure_modal_
 
     assert result["checkboxCount"] == 2
     assert result["firstMeta"] == "2026-09-01 · Quantity: 1"
+    assert result["clearVisible"] is True
+    assert result["blankAreaToggleWorked"] is True
+    assert result["paddingToggleWorked"] is True
     assert result["selectedLabel"] == "Link selected (2)"
     assert [call["body"]["client_data_id"] for call in result["calls"]] == [11, 12]
     assert result["selections"] == [11, 12]
     assert result["status"] == {"message": "Evidence linked for 2 lines.", "kind": "success"}
+
+
+def test_procedure_search_text_click_links_and_closes_dropdown(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        window.assignCalls = [];
+        window.ApiUtils = {
+            apiFetchMutate: async (url, options) => {
+                window.assignCalls.push({url, body: JSON.parse(options.body)});
+                return new Response(JSON.stringify({id: 201}), {
+                    status: 200,
+                    headers: {'Content-Type': 'application/json'}
+                });
+            }
+        };
+        hostAdapter = {
+            procedureModalState: {1: {tabs: {}, assignedDocIds: new Set(), documents: []}},
+            currentVoucherLines: [],
+            escapeHtml: value => String(value),
+            markLineDirty: () => {},
+            showStatus: (message, kind) => { window.lastModalStatus = {message, kind}; }
+        };
+        renderProcedureModalTabs = () => {};
+        renderProcedureModalPanel = () => renderProcedureSearchDropdown(1, 2);
+        invalidateProcedureModalData = () => {};
+        document.body.insertAdjacentHTML('beforeend', `
+            <div class="procedure-search-input-wrap">
+                <input id="procedureSearchInput" value="invoice">
+                <button id="procedureSearchClearBtn" hidden>×</button>
+            </div>
+            <div id="procedureSearchDropdown"></div>
+        `);
+        const tabState = getProcedureTabState(1, 2);
+        tabState.searchTerm = 'invoice';
+        tabState.docKeyColumn = 'Reference';
+        tabState.searchResults = [
+            {id: 11, row_data: {Reference: 'INV-11', Quantity: 1}, extract_date: '2026-09-01', is_assigned: false},
+            {id: 12, row_data: {Reference: 'INV-12', Quantity: 10}, extract_date: '2026-09-02', is_assigned: false}
+        ];
+        renderProcedureSearchDropdown(1, 2);
+        document.querySelector('.procedure-result-label').click();
+        await new Promise(resolve => {
+            const startedAt = Date.now();
+            const waitForAssignment = () => {
+                if ((window.assignCalls.length === 1 && tabState.selections.length === 1)
+                    || Date.now() - startedAt > 1000) resolve();
+                else setTimeout(waitForAssignment, 0);
+            };
+            waitForAssignment();
+        });
+        return {
+            calls: window.assignCalls,
+            selections: tabState.selections.map(selection => selection.client_data_id),
+            rows: document.querySelectorAll('.procedure-result-item').length,
+            status: window.lastModalStatus
+        };
+    }""")
+
+    assert [call["body"]["client_data_id"] for call in result["calls"]] == [11]
+    assert result["selections"] == [11]
+    assert result["rows"] == 0
+    assert result["status"] == {"message": "✅ Evidence linked.", "kind": "success"}
+
+
+def test_procedure_search_clear_button_closes_dropdown(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""() => {
+        hostAdapter = {
+            procedureModalState: {1: {tabs: {}}},
+            currentVoucherLines: [],
+            escapeHtml: value => String(value)
+        };
+        document.body.insertAdjacentHTML('beforeend', `
+            <div class="procedure-search-input-wrap">
+                <input id="procedureSearchInput" value="invoice">
+                <button id="procedureSearchClearBtn" hidden>×</button>
+            </div>
+            <div id="procedureSearchDropdown"></div>
+        `);
+        const tabState = getProcedureTabState(1, 2);
+        tabState.searchTerm = 'invoice';
+        tabState.docKeyColumn = 'Reference';
+        tabState.pendingSelectionIds = ['11'];
+        tabState.searchResults = [
+            {id: 11, row_data: {Reference: 'INV-11', Quantity: 1}, extract_date: '2026-09-01', is_assigned: false}
+        ];
+        renderProcedureSearchDropdown(1, 2);
+        document.getElementById('procedureSearchClearBtn').addEventListener('click', () => {
+            closeProcedureSearchDropdown(1, 2);
+        });
+        const clearButton = document.getElementById('procedureSearchClearBtn');
+        const before = {visible: !clearButton.hidden, rows: document.querySelectorAll('.procedure-result-item').length};
+        clearButton.click();
+        return {
+            before,
+            after: {
+                visible: !clearButton.hidden,
+                value: document.getElementById('procedureSearchInput').value,
+                rows: document.querySelectorAll('.procedure-result-item').length,
+                searchTerm: tabState.searchTerm,
+                pending: tabState.pendingSelectionIds
+            }
+        };
+    }""")
+
+    assert result == {
+        "before": {"visible": True, "rows": 1},
+        "after": {"visible": False, "value": "", "rows": 0, "searchTerm": "", "pending": []}
+    }

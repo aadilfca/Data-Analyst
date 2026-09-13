@@ -5446,3 +5446,19 @@ JavaScript syntax validation, the focused dirty-save suite (16 tests), and a liv
 check passed. The earlier full-suite run remained at 237 passed, 13 unrelated legacy expectation
 failures, 7 warnings, and 28 subtests; those failures are in app-smoke, Postgres-pool, and
 Verification-performance fixtures outside this phase and were not modified.
+
+## Procedure Data Table click-target correction - 2026-09-13
+
+The Procedure Data Table dropdown now treats only the visible document reference and date/quantity
+text as the immediate-link target. Clicking that text reuses the existing single-row assignment
+request, refreshes the selected document field, and closes the search results after success.
+
+The full result row and blank space in the content column now remain checkbox-selection surfaces:
+they toggle checked/unchecked state without starting a fetch. Direct checkbox clicks retain native
+toggle behavior. Hover styling and underline hit areas were narrowed to the actual text spans so
+blank row space no longer appears or behaves like linked text.
+
+Added browser regression coverage for immediate text linking, dropdown closure, blank-area toggling,
+row-padding toggling, and direct checkbox selection. JavaScript syntax validation, the focused
+dirty-save suite (18 tests), and `git diff --check` passed. The existing pytest cache warning is
+environmental; no backend changes were made.

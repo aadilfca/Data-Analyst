@@ -4257,12 +4257,19 @@ body {
     gap: 8px;
     margin-bottom: 6px;
 }
-.procedure-search-input {
+.procedure-search-input-wrap {
+    position: relative;
     flex: 1;
+    min-width: 0;
+}
+.procedure-search-input {
+    width: 100%;
     padding: 8px 12px;
+    padding-right: 34px;
     border: 2px solid #e2e8f0;
     border-radius: 8px;
     font-size: 14px;
+    box-sizing: border-box;
 }
 .procedure-search-input:focus {
     outline: none;
@@ -4271,6 +4278,49 @@ body {
 .procedure-search-input:disabled {
     background: #f1f5f9;
     cursor: not-allowed;
+}
+.procedure-search-clear-btn {
+    position: absolute;
+    top: 50%;
+    right: 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: #94a3b8;
+    font-size: 18px;
+    line-height: 1;
+    transform: translateY(-50%);
+    cursor: pointer;
+}
+.procedure-search-clear-btn:hover {
+    background: #f1f5f9;
+    color: #64748b;
+}
+.procedure-search-clear-btn:focus-visible {
+    outline: 2px solid #93c5fd;
+    outline-offset: 1px;
+}
+.procedure-search-dropdown .procedure-result-content {
+    cursor: default;
+}
+.procedure-search-dropdown .procedure-result-label,
+.procedure-search-dropdown .procedure-result-meta {
+    align-self: flex-start;
+    max-width: 100%;
+    cursor: pointer;
+}
+.procedure-search-dropdown .procedure-result-label:hover,
+.procedure-search-dropdown .procedure-result-meta:hover {
+    color: #5b78a5;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
 }
 .procedure-browse-btn {
     padding: 6px 14px;
