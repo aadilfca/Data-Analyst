@@ -4314,14 +4314,14 @@ body {
 /* Result row — shared markup/classes between the search dropdown and the browse modal
    (buildProcedureResultRowHtml() in verification.js), so both look and behave identically. */
 .procedure-result-item {
-    display: flex;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
+    gap: 12px;
+    padding: 11px 14px;
     border-bottom: 1px solid #f0f2f5;
     cursor: pointer;
-    transition: background 0.1s ease;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 .procedure-result-item:last-child {
     border-bottom: none;
@@ -4329,16 +4329,32 @@ body {
 .procedure-result-item:hover {
     background: #f8fafc;
 }
+.procedure-result-item.selected {
+    background: #eff6ff;
+    box-shadow: inset 3px 0 #3b82f6;
+}
 .procedure-result-item.locked {
     cursor: not-allowed;
     opacity: 0.6;
     background: #f8fafc;
+}
+.procedure-result-checkbox {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: #2563eb;
+    cursor: pointer;
 }
 .procedure-result-main {
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+    text-align: left;
+    grid-column: 2;
+}
+.procedure-result-item.locked .procedure-result-main {
+    grid-column: 1 / 3;
 }
 .procedure-result-label {
     font-weight: 600;
@@ -4351,6 +4367,7 @@ body {
 .procedure-result-meta {
     font-size: 12px;
     color: #64748b;
+    text-align: left;
 }
 .procedure-result-locked {
     font-size: 11px;
@@ -4360,6 +4377,7 @@ body {
     padding: 2px 8px;
     border-radius: 10px;
     white-space: nowrap;
+    justify-self: end;
 }
 
 /* ----- Supporting Documents: selected-lines table + totals (Phase 4 of 6) ----- */
@@ -4936,6 +4954,26 @@ body {
 .procedure-modal-saved-note.dirty {
     color: #b45309;
     font-weight: 600;
+}
+.procedure-modal-footer-status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+#procedureModal .procedure-modal-discard-btn {
+    padding: 6px 10px;
+    border: 1px solid #fecaca;
+    border-radius: 6px;
+    background: #fff7f7;
+    color: #b45353;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+#procedureModal .procedure-modal-discard-btn:hover {
+    border-color: #fca5a5;
+    background: #fef2f2;
+    color: #991b1b;
 }
 .procedure-modal-footnav {
     display: flex;

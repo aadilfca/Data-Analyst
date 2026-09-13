@@ -104,7 +104,10 @@ const PROCEDURE_MODAL_MARKUP = `
                      distinct from the rail's tab switching, which moves between one line's Documents.
                      See navigateProcedureModalLine()/updateProcedureModalSavedNote() in verification.js. -->
                 <div class="procedure-modal-footer">
-                    <span id="procedureModalSavedNote" class="procedure-modal-saved-note"></span>
+                    <div class="procedure-modal-footer-status">
+                        <span id="procedureModalSavedNote" class="procedure-modal-saved-note"></span>
+                        <button type="button" id="procedureModalDiscardBtn" class="procedure-modal-discard-btn">Close without saving</button>
+                    </div>
                     <div class="procedure-modal-footnav">
                         <button type="button" id="procedureModalBackBtn" class="btn-ghost">← Back</button>
                         <!-- Plain "Verify" (confirmed requirement): same save+verify action as Verify & Next
@@ -663,12 +666,14 @@ function isSameUnderlyingLine(uid, row) {
 // client_data_id comparison) instead of raw assigned_to_voucher_line === uid — see that
 // function's own comment for why a session-specific id comparison silently missed assignments
 // made in an earlier verification session for the exact same voucher line.
-function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
+function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId, options = {}) {
     const label = (docKeyColumn && row.row_data && row.row_data[docKeyColumn] != null && row.row_data[docKeyColumn] !== '')
         ? row.row_data[docKeyColumn]
         : `Row #${row.id}`;
     const date = row.extract_date || '—';
-    const amount = row.extract_amount != null ? row.extract_amount : '—';
+    const quantity = getRowFieldCaseInsensitive(row.row_data, 'Quantity')
+        || getRowFieldCaseInsensitive(row.row_data, 'Qty')
+        || '—';
     const isSameLine = isSameUnderlyingLine(uid, row);
     const isSelf = isSameLine && activeDocId != null && String(row.assigned_to_document_id) === String(activeDocId);
     const isSameLineOtherDoc = isSameLine && !isSelf;
@@ -681,19 +686,31 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
     } else if (isLocked) {
         lockNote = `<span class="procedure-result-locked">Assigned to voucher ${hostAdapter.escapeHtml(formatAssignedVoucherLabel(row.assigned_to_voucher_id, row.assigned_to_line_srno))}</span>`;
     }
+    const multiSelect = !!options.multiSelect;
+    const selectedIds = multiSelect && options.selectedIds instanceof Set
+        ? options.selectedIds
+        : new Set();
+    const isSelected = multiSelect && !isLocked && selectedIds.has(String(row.id));
+    const selectionControl = multiSelect && !isLocked
+        ? `<input type="checkbox" class="procedure-result-checkbox" data-id="${row.id}"
+                aria-label="Select ${hostAdapter.escapeHtml(String(label))}"${isSelected ? ' checked' : ''}>`
+        : '';
+    const resultTag = multiSelect && !isLocked ? 'label' : 'div';
+    const resultInteraction = multiSelect || isLocked ? '' : ' role="button" tabindex="0"';
     return `
-        <div class="procedure-result-item${isLocked ? ' locked' : ''}" data-id="${row.id}"${isLocked ? '' : ' role="button" tabindex="0"'}>
+        <${resultTag} class="procedure-result-item${isLocked ? ' locked' : ''}${isSelected ? ' selected' : ''}" data-id="${row.id}"${resultInteraction}>
+            ${selectionControl}
             <div class="procedure-result-main">
                 <span class="procedure-result-label">${hostAdapter.escapeHtml(String(label))}</span>
-                <span class="procedure-result-meta">${hostAdapter.escapeHtml(date)} · ${hostAdapter.escapeHtml(String(amount))}</span>
+                <span class="procedure-result-meta">${hostAdapter.escapeHtml(date)} · Quantity: ${hostAdapter.escapeHtml(String(quantity))}</span>
             </div>
             ${lockNote}
-        </div>
+        </${resultTag}>
     `;
 }
 
 // Returns (creating if needed) one tab's own state object, so every reader/writer shares the
-// same shape: { loaded, searchTerm, searchResults, docKeyColumn, selections, observation,
+// same shape: { loaded, searchTerm, searchResults, pendingSelectionIds, docKeyColumn, selections, observation,
 // suggestionApplied, checklist }. selections/searchTerm/searchResults persist across tab
 // switches within one modal-open session (not reset on close, only on voucher navigation in
 // seedVoucherLineState()) — the "switching tabs doesn't lose unsaved work" requirement.
@@ -711,7 +728,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId) {
 function getProcedureTabState(uid, docId) {
     if (!hostAdapter.procedureModalState[uid]) hostAdapter.procedureModalState[uid] = { activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0, crossCheckResults: [], tabs: {} };
     if (!hostAdapter.procedureModalState[uid].tabs[docId]) {
-        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false, formRevision: 0, formCopyStatus: '', formSourceRows: [], formAutoPrefillAttempted: false, formAutoPrefillLoading: false, formCollapsedBills: {} };
+        hostAdapter.procedureModalState[uid].tabs[docId] = { loaded: false, searchTerm: '', searchResults: [], pendingSelectionIds: [], docKeyColumn: null, selections: [], observation: '', observationDirty: false, suggestionApplied: false, lastSyncedText: null, checklist: {}, physicalBills: [], physicalBillSaved: false, physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false, formRevision: 0, formCopyStatus: '', formSourceRows: [], formAutoPrefillAttempted: false, formAutoPrefillLoading: false, formCollapsedBills: {} };
     }
     return hostAdapter.procedureModalState[uid].tabs[docId];
 }
@@ -1318,6 +1335,30 @@ async function closeProcedureModal() {
     // The changed path already refreshed every line above. Avoid a second current-line refresh,
     // which would otherwise start another support-data read on close.
     hideProcedureModalOnly(false);
+}
+
+function cancelScheduledProcedureModalSaves() {
+    Object.values(hostAdapter?.procedureModalState || {}).forEach(lineState => {
+        Object.values(lineState.tabs || {}).forEach(tabState => {
+            if (!tabState.formAutoSaveTimer) return;
+            window.clearTimeout(tabState.formAutoSaveTimer);
+            tabState.formAutoSaveTimer = null;
+        });
+    });
+}
+
+// This is intentionally local-only: hide first for instant feedback, then discard the host's
+// in-memory modal draft and dirty marker. It never flushes a tab or calls a save endpoint.
+function closeProcedureModalWithoutSaving() {
+    if (!currentProcedureModalUid) {
+        hideProcedureModalOnly(false);
+        return;
+    }
+    hideProcedureModalOnly(false);
+    cancelScheduledProcedureModalSaves();
+    if (typeof hostAdapter?.discardProcedureModalChanges === 'function') {
+        hostAdapter.discardProcedureModalChanges();
+    }
 }
 
 // Sets the footer's "Verify & Next/Close" button label and disabled state. The label has three
@@ -4473,6 +4514,7 @@ async function performProcedureSearch(uid, docId, term) {
 
     if (!term.trim()) {
         tabState.searchResults = [];
+        tabState.pendingSelectionIds = [];
         if (dropdown) dropdown.innerHTML = '';
         return;
     }
@@ -4486,6 +4528,7 @@ async function performProcedureSearch(uid, docId, term) {
         // started after this one — only the most recently dispatched request may write state/DOM.
         if (thisRequest !== procedureSearchRequestToken) return;
         tabState.searchResults = data.rows || [];
+        tabState.pendingSelectionIds = [];
         tabState.docKeyColumn = data.document_key_column;
         renderProcedureSearchDropdown(uid, docId);
     } catch (e) {
@@ -4506,13 +4549,62 @@ function renderProcedureSearchDropdown(uid, docId) {
             : '';
         return;
     }
-    dropdown.innerHTML = results.map(row => buildProcedureResultRowHtml(uid, row, tabState.docKeyColumn, docId)).join('');
-    dropdown.querySelectorAll('.procedure-result-item:not(.locked)').forEach(item => {
-        item.addEventListener('click', async function() {
-            const row = results.find(r => r.id === parseInt(this.dataset.id));
-            if (row) await selectProcedureDocument(uid, docId, row, this);
+    const availableResults = results.filter(row => !row.is_assigned);
+    const selectedIds = new Set((tabState.pendingSelectionIds || []).map(String));
+    const selectedCount = availableResults.filter(row => selectedIds.has(String(row.id))).length;
+    const selectionToolbar = availableResults.length ? `
+        <div class="procedure-browse-toolbar">
+            <span class="procedure-browse-status-count">Select one or more available rows to link.</span>
+            <button type="button" id="procedureSearchLinkSelectedBtn" class="btn-primary"${selectedCount ? '' : ' disabled'}>
+                Link selected (${selectedCount})
+            </button>
+        </div>
+    ` : '';
+    dropdown.innerHTML = selectionToolbar + results.map(row => buildProcedureResultRowHtml(
+        uid, row, tabState.docKeyColumn, docId, {multiSelect: true, selectedIds}
+    )).join('');
+    dropdown.querySelectorAll('.procedure-result-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            const pendingIds = new Set((tabState.pendingSelectionIds || []).map(String));
+            const rowId = String(this.dataset.id);
+            if (this.checked) pendingIds.add(rowId);
+            else pendingIds.delete(rowId);
+            tabState.pendingSelectionIds = [...pendingIds];
+            this.closest('.procedure-result-item')?.classList.toggle('selected', this.checked);
+            updateProcedureSearchSelectionUi(uid, docId);
         });
     });
+
+    const linkSelectedBtn = document.getElementById('procedureSearchLinkSelectedBtn');
+    if (linkSelectedBtn) {
+        linkSelectedBtn.addEventListener('click', function() {
+            linkSelectedProcedureRows(uid, docId, this);
+        });
+    }
+}
+
+function updateProcedureSearchSelectionUi(uid, docId) {
+    const dropdown = document.getElementById('procedureSearchDropdown');
+    if (!dropdown) return;
+    const tabState = getProcedureTabState(uid, docId);
+    const availableIds = new Set((tabState.searchResults || [])
+        .filter(row => !row.is_assigned)
+        .map(row => String(row.id)));
+    const pendingIds = new Set((tabState.pendingSelectionIds || [])
+        .map(String)
+        .filter(id => availableIds.has(id)));
+    tabState.pendingSelectionIds = [...pendingIds];
+
+    dropdown.querySelectorAll('.procedure-result-checkbox').forEach(checkbox => {
+        const selected = pendingIds.has(String(checkbox.dataset.id));
+        checkbox.checked = selected;
+        checkbox.closest('.procedure-result-item')?.classList.toggle('selected', selected);
+    });
+    const linkSelectedBtn = document.getElementById('procedureSearchLinkSelectedBtn');
+    if (linkSelectedBtn) {
+        linkSelectedBtn.textContent = `Link selected (${pendingIds.size})`;
+        linkSelectedBtn.disabled = pendingIds.size === 0;
+    }
 }
 
 // ---------- SELECTING A ROW (Phase 1's assign_document endpoint) ----------
@@ -4522,33 +4614,48 @@ function renderProcedureSearchDropdown(uid, docId) {
 // Returns true on success, false on failure, so callers (the dropdown and the browse modal) can
 // each decide what to do next (clear the dropdown vs. keep the browse modal open and refresh it).
 // target (optional) is the clicked dropdown item/browse-table row, for a LoadingUI spinner.
+async function requestProcedureDocumentAssignment(uid, docId, row, target = null) {
+    const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/assign_document`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voucher_line_id: parseInt(uid), client_data_id: row.id, document_id: docId })
+    }, {target, message: 'Assigning'});
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return {
+            ok: false,
+            error: err.detail || 'That row is no longer available - it was just assigned elsewhere.'
+        };
+    }
+    return {ok: true, assignment: await res.json()};
+}
+
+function appendProcedureSelection(tabState, docId, row, assignment) {
+    tabState.selections.push({
+        id: assignment.id,
+        client_data_id: row.id,
+        document_id: docId,
+        row_data: row.row_data,
+        extract_date: row.extract_date,
+        extract_amount: row.extract_amount
+    });
+}
+
 async function selectProcedureDocument(uid, docId, row, target = null) {
     const lineState = hostAdapter.procedureModalState[uid];
     if (!lineState) return false;
     const tabState = getProcedureTabState(uid, docId);
     try {
-        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/assign_document`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ voucher_line_id: parseInt(uid), client_data_id: row.id, document_id: docId })
-        }, { target, message: 'Assigning' });
-        if (!res.ok) {
+        const result = await requestProcedureDocumentAssignment(uid, docId, row, target);
+        if (!result.ok) {
             // A real race, not hypothetical — the row's own UNIQUE(client_data_id) constraint is
             // the actual enforcement, so a concurrent assignment elsewhere can land first.
-            const err = await res.json().catch(() => ({}));
-            hostAdapter.showStatus(err.detail || 'That row is no longer available — it was just assigned elsewhere.', 'error');
+            hostAdapter.showStatus(result.error, 'error');
             if (tabState.searchTerm) performProcedureSearch(uid, docId, tabState.searchTerm);
             return false;
         }
-        const assignment = await res.json();
-        tabState.selections.push({
-            id: assignment.id,
-            client_data_id: row.id,
-            document_id: docId,
-            row_data: row.row_data,
-            extract_date: row.extract_date,
-            extract_amount: row.extract_amount
-        });
+        const assignment = result.assignment;
+        appendProcedureSelection(tabState, docId, row, assignment);
         lineState.assignedDocIds.add(String(docId));
         // The current panel is updated from local state below, but any previously fetched
         // payload for this line must not overwrite it when the line is reopened or revisited.
@@ -4558,6 +4665,7 @@ async function selectProcedureDocument(uid, docId, row, target = null) {
         // selected in the table below, no longer meaningful as a search result.
         tabState.searchTerm = '';
         tabState.searchResults = [];
+        tabState.pendingSelectionIds = [];
         renderProcedureModalTabs(uid);
         renderProcedureModalPanel(uid, docId);
         hostAdapter.showStatus('✅ Evidence linked.', 'success');
@@ -4566,6 +4674,74 @@ async function selectProcedureDocument(uid, docId, row, target = null) {
         console.error('Failed to assign supporting document:', e);
         hostAdapter.showStatus('Failed to link evidence — please try again.', 'error');
         return false;
+    }
+}
+
+async function linkSelectedProcedureRows(uid, docId, target = null) {
+    const lineState = hostAdapter.procedureModalState[uid];
+    if (!lineState) return;
+    const tabState = getProcedureTabState(uid, docId);
+    const pendingIds = new Set((tabState.pendingSelectionIds || []).map(String));
+    const rows = (tabState.searchResults || []).filter(row =>
+        !row.is_assigned && pendingIds.has(String(row.id))
+    );
+    if (!rows.length) {
+        updateProcedureSearchSelectionUi(uid, docId);
+        return;
+    }
+
+    const originalLabel = target ? target.textContent : '';
+    if (target) {
+        target.disabled = true;
+        target.textContent = 'Linking...';
+    }
+    let linkedCount = 0;
+    const failedRows = [];
+    try {
+        for (const row of rows) {
+            try {
+                const result = await requestProcedureDocumentAssignment(uid, docId, row);
+                if (!result.ok) {
+                    failedRows.push({row, error: result.error});
+                    continue;
+                }
+                appendProcedureSelection(tabState, docId, row, result.assignment);
+                linkedCount++;
+            } catch (error) {
+                console.error('Failed to link selected supporting document:', error);
+                failedRows.push({row, error: 'The row could not be linked.'});
+            }
+        }
+    } finally {
+        if (target && document.contains(target)) {
+            target.disabled = false;
+            target.textContent = originalLabel;
+        }
+    }
+
+    tabState.pendingSelectionIds = failedRows.map(({row}) => String(row.id));
+    if (linkedCount) {
+        lineState.assignedDocIds.add(String(docId));
+        invalidateProcedureModalData(uid);
+        hostAdapter.markLineDirty(uid, 'supporting documents linked');
+        if (!failedRows.length) {
+            tabState.searchTerm = '';
+            tabState.searchResults = [];
+            tabState.pendingSelectionIds = [];
+        }
+        renderProcedureModalTabs(uid);
+        renderProcedureModalPanel(uid, docId);
+    }
+
+    if (failedRows.length) {
+        hostAdapter.showStatus(
+            linkedCount
+                ? `${linkedCount} evidence line${linkedCount === 1 ? '' : 's'} linked; ${failedRows.length} could not be linked.`
+                : 'None of the selected evidence lines could be linked.',
+            'error'
+        );
+    } else {
+        hostAdapter.showStatus(`Evidence linked for ${linkedCount} line${linkedCount === 1 ? '' : 's'}.`, 'success');
     }
 }
 
@@ -5304,6 +5480,7 @@ document.getElementById('procedureModalValidateBtn')?.addEventListener('click', 
 if (procedureModalClose) {
     procedureModalClose.addEventListener('click', closeProcedureModal);
 }
+document.getElementById('procedureModalDiscardBtn')?.addEventListener('click', closeProcedureModalWithoutSaving);
 // Confirmed fix: no outside-click-to-close — the overlay click listener that called
 // closeProcedureModal() when e.target === procedureModal was removed. The × button above
 // remains the only way to close this modal.

@@ -296,3 +296,73 @@ def test_grouped_save_preserves_edit_made_during_request(dirty_page):
 
     assert result["saveResult"]["ok"]
     assert result["dirty"] == [False, True, False]
+
+
+def test_procedure_search_dropdown_links_multiple_selected_rows(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        window.assignCalls = [];
+        window.ApiUtils = {
+            apiFetchMutate: async (url, options) => {
+                window.assignCalls.push({url, body: JSON.parse(options.body)});
+                return new Response(JSON.stringify({id: 100 + window.assignCalls.length}), {
+                    status: 200,
+                    headers: {'Content-Type': 'application/json'}
+                });
+            }
+        };
+        hostAdapter = {
+            procedureModalState: {1: {
+                tabs: {},
+                assignedDocIds: new Set(),
+                documents: []
+            }},
+            currentVoucherLines: [],
+            escapeHtml: value => String(value),
+            markLineDirty: () => {},
+            showStatus: (message, kind) => { window.lastModalStatus = {message, kind}; }
+        };
+        renderProcedureModalTabs = () => {};
+        renderProcedureModalPanel = () => {};
+        invalidateProcedureModalData = () => {};
+        document.body.insertAdjacentHTML('beforeend', '<div id="procedureSearchDropdown"></div>');
+        const tabState = getProcedureTabState(1, 2);
+        tabState.searchTerm = 'invoice';
+        tabState.docKeyColumn = 'Reference';
+        tabState.searchResults = [
+            {id: 11, row_data: {Reference: 'INV-11', Quantity: 1}, extract_date: '2026-09-01', extract_amount: 10, is_assigned: false},
+            {id: 12, row_data: {Reference: 'INV-12', Quantity: 10}, extract_date: '2026-09-02', extract_amount: 20, is_assigned: false},
+            {id: 13, row_data: {Reference: 'INV-13', Quantity: 120}, extract_date: '2026-09-03', extract_amount: 30, is_assigned: true}
+        ];
+        renderProcedureSearchDropdown(1, 2);
+            const checkboxes = document.querySelectorAll('.procedure-result-checkbox');
+            const firstMeta = document.querySelector('.procedure-result-meta').textContent.trim();
+        checkboxes[0].click();
+        checkboxes[1].click();
+        const linkButton = document.getElementById('procedureSearchLinkSelectedBtn');
+        const selectedLabel = linkButton.textContent.trim();
+        linkButton.click();
+        await new Promise(resolve => {
+            const startedAt = Date.now();
+            const waitForAssignments = () => {
+                if ((window.assignCalls.length === 2 && tabState.selections.length === 2)
+                    || Date.now() - startedAt > 1000) resolve();
+                else setTimeout(waitForAssignments, 0);
+            };
+            waitForAssignments();
+        });
+        return {
+            checkboxCount: checkboxes.length,
+            firstMeta,
+            selectedLabel,
+            calls: window.assignCalls,
+            selections: tabState.selections.map(selection => selection.client_data_id),
+            status: window.lastModalStatus
+        };
+    }""")
+
+    assert result["checkboxCount"] == 2
+    assert result["firstMeta"] == "2026-09-01 · Quantity: 1"
+    assert result["selectedLabel"] == "Link selected (2)"
+    assert [call["body"]["client_data_id"] for call in result["calls"]] == [11, 12]
+    assert result["selections"] == [11, 12]
+    assert result["status"] == {"message": "Evidence linked for 2 lines.", "kind": "success"}

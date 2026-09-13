@@ -122,6 +122,15 @@ function markAllVoucherLinesDirty(reason = 'voucher-wide change') {
 function isVoucherLineDirty(detailId) {
     return (voucherLineDirtyRevisions[String(detailId)] || 0) > 0;
 }
+
+// Procedure-window drafts are local until a save path runs. Discard them across the current
+// voucher so a later Verify cannot persist a change the user explicitly abandoned.
+function discardProcedureModalChanges() {
+    currentVoucherLines.forEach(line => {
+        delete procedureModalState[line.detail_id];
+        voucherLineDirtyRevisions[String(line.detail_id)] = 0;
+    });
+}
 // Processing/Loading UI, Phase 6: incremented once per renderVoucherHeader() call (once per new
 // voucher painted) — lets a slow-resolving PREVIOUS voucher's completion recognize itself as
 // stale and skip hiding the badge, instead of wrongly hiding the NEW voucher's still-loading one.
@@ -225,6 +234,7 @@ function buildProcedureModalAdapter() {
         markLineDirty: markVoucherLineDirty,
         markAllLinesDirty: markAllVoucherLinesDirty,
         isLineDirty: isVoucherLineDirty,
+        discardProcedureModalChanges,
         escapeHtml,
         getVoucherLineAlias,
         getVoucherLineAmount,

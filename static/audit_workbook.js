@@ -997,6 +997,11 @@ function buildAuditWorkbookAdapter(voucherGroup) {
                 await awSaveLineItems(line.detail_id);
             }
         },
+        // The shared modal's discard action is local-only. Limit cleanup to this voucher because
+        // the Workbook may retain modal state for other rows on the same page.
+        discardProcedureModalChanges: () => {
+            (voucherGroup.lines || []).forEach(line => delete awProcedureModalState[line.detail_id]);
+        },
         escapeHtml,
         getVoucherLineAlias: getAwLineAlias,
         getVoucherLineAmount: getAwVoucherLineAmount,

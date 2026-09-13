@@ -5423,3 +5423,26 @@ The follow-up review found a misplaced processing increment in the signature-spe
 Cross-check cache loading received the increment while signature deletion owned the cleanup. The
 increment now sits beside its matching `finally` cleanup, so the shared banner can hide after all
 operations finish.
+
+## Procedure modal selection and Form draft follow-up - 2026-09-13
+
+The shared Procedure modal now lets users select multiple available Data Table rows with checkboxes
+and link them in one action. Assignments reuse the existing endpoint sequentially, preserve the
+existing single-row path, show progress and partial-failure feedback, and retain rows that could
+not be linked for retry. The selection count and selected-row highlight update immediately.
+
+Data Table result rows now use a compact three-column layout: checkbox, left-aligned document
+reference, and right-side assignment state. The supporting metadata is shown beneath the reference
+as date plus `Quantity`, using the row's case-insensitive Quantity/Qty field rather than the
+extracted amount. Locked rows remain visibly distinct. Shared stylesheet cache references were
+bumped from v15 to v16 across the existing HTML pages.
+
+The Procedure modal's Close without saving path now hides immediately, cancels pending Form
+autosaves, and clears only the current voucher's in-memory draft/dirty state. Form bill restore and
+reconciliation changes retain saved bill groups and refresh Procedure/live status without affecting
+other voucher state. Added browser regression coverage for discard behavior and multi-row linking.
+
+JavaScript syntax validation, the focused dirty-save suite (16 tests), and a live computed-style
+check passed. The earlier full-suite run remained at 237 passed, 13 unrelated legacy expectation
+failures, 7 warnings, and 28 subtests; those failures are in app-smoke, Postgres-pool, and
+Verification-performance fixtures outside this phase and were not modified.

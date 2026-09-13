@@ -2698,6 +2698,38 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_close_without_saving_hides_immediately_and_never_calls_save(self):
+        script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.set_content('<html><body></body></html>')
+                page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};")
+                page.add_script_tag(path=str(script))
+                result = page.evaluate('''async () => {
+                    let discarded = 0;
+                    let saves = 0;
+                    const tab = {formDirty: true};
+                    hostAdapter = {
+                        procedureModalState: {4: {tabs: {7: tab}}},
+                        voucherLineState: {}, currentVoucherLines: [],
+                        discardProcedureModalChanges: () => { discarded += 1; },
+                        saveLineItems: () => { saves += 1; },
+                        saveAndVerifyVoucher: () => { saves += 1; }
+                    };
+                    currentProcedureModalUid = 4;
+                    procedureModal.style.display = 'flex';
+                    tab.formAutoSaveTimer = window.setTimeout(() => { saves += 1; }, 30);
+                    document.getElementById('procedureModalDiscardBtn').click();
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                    return {display: procedureModal.style.display, uid: currentProcedureModalUid,
+                        discarded, saves};
+                }''')
+                self.assertEqual(result, {'display': 'none', 'uid': None, 'discarded': 1, 'saves': 0})
+            finally:
+                browser.close()
+
     def test_form_save_syncs_the_returned_cleared_status_to_its_host(self):
         script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
         with sync_playwright() as playwright:
