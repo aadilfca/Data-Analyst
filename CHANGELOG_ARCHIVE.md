@@ -5572,3 +5572,10 @@ state. All new cursor and control states release on success, failure, cancellati
 completion. `templates.html` now loads `templates.js?v=4`. JavaScript syntax, LoadingUI token/ref-
 count, cache-reference, and scoped diff checks passed. The user manually confirmed Templates on
 Render. No backend, CSS, or shared `loading_ui.js` changes were required.
+
+## Loading feedback hardening — Mini-phase 1 reduced-motion audit - 2026-09-13
+
+Confirmed the shared loading primitives retain clear non-motion feedback under
+`prefers-reduced-motion: reduce`: cursor state, labels, static spinner rings, skeleton tone, and
+progress-bar fill remain visible. The determinate progress-width transition is now disabled in
+that mode. JavaScript syntax and whitespace checks passed; no backend change was required.

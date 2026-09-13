@@ -7785,6 +7785,9 @@ body {
     .ui-spinner {
         animation: none;
     }
+    .ui-progress-bar-fill {
+        transition: none;
+    }
     .ui-field-spinner .ui-spinner {
         animation: none;
     }
