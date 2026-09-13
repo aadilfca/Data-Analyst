@@ -48,6 +48,9 @@ let previewTemplateId = null;
 let previewTemplateName = '';
 let isPreviewOpen = false;
 let isPreviewLoading = false;
+// Phase 3B: delete is scoped per template, so one confirmed destructive action blocks only its
+// own repeated request while other datasets and unrelated controls remain available.
+const deleteTemplateInFlight = new Set();
 
 // Coverage Calendar state — independent of the shared date range (see
 // sharedRangeFromInput/sharedRangeToInput below). As of the Coverage
@@ -859,6 +862,11 @@ function buildFrequencyCell(item) {
         const previousValue = select.dataset.lastValue || 'Daily';
         const newValue = select.value;
         const clientId = getSelectedClientId();
+        const previousDisabled = select.disabled;
+        const globalLoadingToken = window.LoadingUI
+            ? window.LoadingUI.startGlobalLoading(select)
+            : null;
+        select.disabled = true;
 
         try {
             const res = await fetch(`${API_BASE}/api/data/upload-frequency`, {
@@ -881,6 +889,9 @@ function buildFrequencyCell(item) {
             console.error('Update upload frequency error:', error);
             select.value = previousValue;
             showStatus('❌ Error: ' + error.message, 'error');
+        } finally {
+            select.disabled = previousDisabled;
+            if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
         }
     });
 
@@ -956,7 +967,7 @@ function buildDatasetActionButtons(item) {
         deleteBtn.style.marginLeft = '6px';
         deleteBtn.style.color = '#dc2626';
         deleteBtn.addEventListener('click', () => {
-            deleteTemplateData(item.template_id, item.template_name, item.total_row_count);
+            deleteTemplateData(item.template_id, item.template_name, item.total_row_count, deleteBtn);
         });
         tdActions.appendChild(deleteBtn);
     } else {
@@ -1065,7 +1076,7 @@ async function renderFilteredYourDatasetsTable(progressTarget = null) {
     await renderYourDatasetsTable(filtered, emptyMessage, progressTarget);
 }
 
-async function deleteTemplateData(templateId, templateName, rowCount) {
+async function deleteTemplateData(templateId, templateName, rowCount, triggerTarget = null) {
     const clientId = getSelectedClientId();
     if (!clientId) {
         showStatus('⚠️ No client selected.', 'error');
@@ -1079,6 +1090,20 @@ async function deleteTemplateData(templateId, templateName, rowCount) {
     if (!confirm(confirmMsg)) {
         return;
     }
+
+    const key = String(templateId);
+    if (deleteTemplateInFlight.has(key)) return;
+    deleteTemplateInFlight.add(key);
+    const previousDisabled = triggerTarget ? triggerTarget.disabled : undefined;
+    if (triggerTarget) triggerTarget.disabled = true;
+    const globalLoadingToken = window.LoadingUI
+        ? window.LoadingUI.startGlobalLoading(triggerTarget)
+        : null;
+    const finishDelete = () => {
+        if (triggerTarget) triggerTarget.disabled = previousDisabled;
+        if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
+        deleteTemplateInFlight.delete(key);
+    };
     
     try {
         showStatus('⏳ Deleting data...', 'loading');
@@ -1096,6 +1121,8 @@ async function deleteTemplateData(templateId, templateName, rowCount) {
     } catch (error) {
         console.error('Delete error:', error);
         showStatus('❌ Error deleting data: ' + error.message, 'error');
+    } finally {
+        finishDelete();
     }
 }
 // ==============================================

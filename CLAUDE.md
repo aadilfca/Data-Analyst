@@ -16,9 +16,9 @@ One line per file group: what it is now. Full build history for every entry live
 
 - routers/clients.py + static/clients.* → firm-level client management; admin-only except the paginated `GET /api/clients`. See CHANGELOG_ARCHIVE.md.
 - routers/dashboard.py + static/index.html, script.js → dashboard cards, real DB size (Postgres/SQLite) in MB, and live overview KPIs. See CHANGELOG_ARCHIVE.md.
-- routers/data.py + static/databank.* → Client Data Bank: availability, coverage calendar, overdue-upload detection, upload-frequency settings, preview/search/filter. See CHANGELOG_ARCHIVE.md.
+- routers/data.py + static/databank.* → Client Data Bank availability, calendars, overdue uploads, preview/filtering, frequency settings, and guarded mutations. See CHANGELOG_ARCHIVE.md.
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
-- routers/import_export.py + static/upload.* → Excel upload, mapping, date parsing, row/blank-field handling, validation, change detection, import/export, saved mappings, rate derivation. See CHANGELOG_ARCHIVE.md.
+- routers/import_export.py + static/upload.* → Excel upload, mapping, validation/import, date handling, change detection, export, saved mappings, and guarded actions. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, column mapping/reordering, rate-source rules, subtotal default, backup/restore. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js → per-client voucher-prefix category configuration; requires `?client_id=`, entry-aware header chrome. See CHANGELOG_ARCHIVE.md.
@@ -275,7 +275,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-13: Form draft discard safeguards completed; Procedure data-table linking now supports multi-select with professionally aligned reference, date, and quantity rows.
 - 2026-09-13: Procedure Data Table text clicks now link immediately; blank row areas and checkboxes toggle selection without triggering a fetch.
 
-- 2026-09-13: Verification high-risk workflow loading feedback completed and manually accepted. See CHANGELOG_ARCHIVE.md.
+- 2026-09-13: Verification, Upload, and Data Bank high-risk loading feedback completed and manually accepted. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

@@ -5503,3 +5503,18 @@ suppressed, while unrelated application controls remain usable.
 remains `v2`. JavaScript syntax, LoadingUI token/ref-count, and scoped diff checks passed. The user
 manually confirmed the Verification workflow on Render. No backend or stylesheet changes were
 required.
+
+## Global Loading Cursor — Phase 3B Upload and Data Bank actions - 2026-09-13
+
+Upload validation/import now owns a target-aware global `progress` cursor across the full
+validation-to-import sequence, with duplicate Upload protection. Save/Clear Mapping actions also
+release their cursor tokens through `finally`.
+
+Data Bank upload-frequency updates and per-template deletion now show target-aware feedback,
+temporarily lock only the active control, suppress duplicate deletes per template, and release on
+confirmation cancellation, success, failure, or refresh completion. Existing local progress UI and
+unrelated controls remain intact; no restore action exists in the current Data Bank UI.
+
+`upload.html` now loads `upload.js?v=7` and `databank.html` loads `databank.js?v=7`. JavaScript
+syntax, LoadingUI token/ref-count, and scoped diff checks passed. The user manually confirmed the
+Upload and Data Bank flows. No backend, CSS, or shared LoadingUI changes were required.

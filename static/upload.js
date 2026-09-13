@@ -76,6 +76,9 @@ let sheetNames = [];
 let currentSheet = null;
 let workbookData = null;
 let isProcessing = false;
+// Phase 3B: one Upload action (validation or import) owns the button and shared cursor for its
+// complete async sequence while the rest of the page remains usable.
+let uploadActionInFlight = false;
 let validationStatus = 'idle'; // 'idle' | 'validating' | 'valid' | 'invalid'
 // Pre-import Rate mode visibility (Phase D of the Rate-derivation requirement) --
 // the validate response's rate_mode field ({template_setting, effective_source, label}),
@@ -451,6 +454,20 @@ function showSpinner(show) {
     } else {
         importBtn.innerHTML = '🚀 Upload to Server';
         importBtn.disabled = false;
+    }
+}
+
+async function runUploadAction(target, action) {
+    if (uploadActionInFlight) return;
+    uploadActionInFlight = true;
+    const globalLoadingToken = window.LoadingUI
+        ? window.LoadingUI.startGlobalLoading(target)
+        : null;
+    try {
+        await action();
+    } finally {
+        if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
+        uploadActionInFlight = false;
     }
 }
 
@@ -1015,6 +1032,9 @@ if (saveMappingBtn) {
         }
 
         saveMappingBtn.disabled = true;
+        const globalLoadingToken = window.LoadingUI
+            ? window.LoadingUI.startGlobalLoading(this)
+            : null;
         try {
             const res = await fetch(API_BASE + '/api/upload/save-mapping', {
                 method: 'POST',
@@ -1033,6 +1053,7 @@ if (saveMappingBtn) {
             showStatus('❌ Failed to save mapping: ' + error.message, 'error');
         } finally {
             saveMappingBtn.disabled = false;
+            if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
         }
     });
 }
@@ -1059,6 +1080,9 @@ if (clearMappingBtn) {
         if (!confirmed) return;
 
         clearMappingBtn.disabled = true;
+        const globalLoadingToken = window.LoadingUI
+            ? window.LoadingUI.startGlobalLoading(this)
+            : null;
         try {
             const res = await fetch(API_BASE + `/api/upload/saved-mapping?client_id=${clientId}&template_id=${selectedTemplateId}`, {
                 method: 'DELETE'
@@ -1075,6 +1099,7 @@ if (clearMappingBtn) {
             showStatus('❌ Failed to clear saved mapping: ' + error.message, 'error');
         } finally {
             clearMappingBtn.disabled = false;
+            if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
         }
     });
 }
@@ -1742,7 +1767,8 @@ function showOverwriteConfirmation(duplicates, count) {
 }
 // ---------- IMPORT (UPLOAD TO SERVER) ----------
 if (importBtn) {
-    importBtn.addEventListener('click', async function() {
+    importBtn.addEventListener('click', function() {
+        runUploadAction(this, async () => {
         // Ensure client is selected
         let clientId = null;
         if (typeof window.isClientSelected === 'function' && window.isClientSelected()) {
@@ -1875,6 +1901,7 @@ if (importBtn) {
             importBtn.style.background = '';
             validationStatus = 'invalid';
         }
+        });
     });
 }
 // ---------- PERFORM IMPORT (after validation) ----------
