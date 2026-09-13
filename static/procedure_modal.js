@@ -1184,7 +1184,7 @@ function isProcedureModalDirty(uid) {
 // nothing to show (openProcedureModal() no-ops on a falsy type, per this module's existing
 // documented rule) — caught here first so the user gets a clear message instead of the modal
 // silently freezing on the old line's content.
-async function navigateProcedureModalLine(delta) {
+async function navigateProcedureModalLine(delta, triggerTarget = null) {
     const uid = currentProcedureModalUid;
     if (!uid) return;
     // String()-normalized — see the matching comment in openProcedureModal() for why a bare ===
@@ -1199,6 +1199,10 @@ async function navigateProcedureModalLine(delta) {
         hostAdapter.showStatus('This line has no assigned category — supporting documents unavailable.', 'error');
         return;
     }
+    const globalLoadingToken = window.LoadingUI
+        ? window.LoadingUI.startGlobalLoading(triggerTarget)
+        : null;
+    try {
     // Validation Rules Phase 5: hostAdapter.saveLineItems() (not just flushProcedureObservations()) so
     // cleared_status recomputes and the badge refreshes every time the modal moves between
     // lines — the badge lives in the main table, hidden behind the modal while it's open, so
@@ -1222,6 +1226,9 @@ async function navigateProcedureModalLine(delta) {
     });
     await openProcedureModal(newUid);
     await savePromise;
+    } finally {
+        if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
+    }
 }
 
 // Finds the next *unverified* line of the currently loaded voucher, searching forward only from
@@ -1306,6 +1313,9 @@ async function closeProcedureModal() {
     // recomputes cleared_status (Validation Rules Phase 5) so the main table's badge is caught up
     // by the time the modal is gone.
     if (uid) {
+        const globalLoadingToken = window.LoadingUI
+            ? window.LoadingUI.startGlobalLoading(procedureModalClose)
+            : null;
         if (window.LoadingUI) window.LoadingUI.showProgressBar(procedureModalClose, { mode: 'indeterminate', message: 'Saving…' });
         try {
             const formEntriesSaved = await flushFormEntries(uid);
@@ -1337,6 +1347,7 @@ async function closeProcedureModal() {
             return;
         } finally {
             if (window.LoadingUI) window.LoadingUI.hideProgressBar(procedureModalClose);
+            if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
         }
     }
     // The changed path already refreshed every line above. Avoid a second current-line refresh,
@@ -1438,9 +1449,10 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
     if (btn) btn.disabled = true;
     if (verifyOnlyBtn) verifyOnlyBtn.disabled = true;
     const progressTarget = triggerBtn || btn;
-    const previousBodyCursor = document.body ? document.body.style.cursor : '';
     const previousModalBusy = procedureModal ? procedureModal.getAttribute('aria-busy') : null;
-    if (document.body) document.body.style.cursor = 'wait';
+    const globalLoadingToken = window.LoadingUI
+        ? window.LoadingUI.startGlobalLoading(progressTarget)
+        : null;
     if (procedureModal) procedureModal.setAttribute('aria-busy', 'true');
     if (window.LoadingUI) window.LoadingUI.showProgressBar(progressTarget, { mode: 'indeterminate', message: 'Saving…' });
     try {
@@ -1501,7 +1513,7 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
             window.LoadingUI.hideProgressBar(btn);
             window.LoadingUI.hideProgressBar(verifyOnlyBtn);
         }
-        if (document.body) document.body.style.cursor = previousBodyCursor;
+        if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
         if (procedureModal) {
             if (previousModalBusy === null) procedureModal.removeAttribute('aria-busy');
             else procedureModal.setAttribute('aria-busy', previousModalBusy);
@@ -5563,7 +5575,7 @@ document.getElementById('procedureModalDiscardBtn')?.addEventListener('click', c
 // closeProcedureModal() when e.target === procedureModal was removed. The × button above
 // remains the only way to close this modal.
 document.getElementById('procedureModalBackBtn')?.addEventListener('click', function() {
-    navigateProcedureModalLine(-1).catch(e => {
+    navigateProcedureModalLine(-1, this).catch(e => {
         console.error('Failed to move to the previous procedure line:', e);
         if (hostAdapter) hostAdapter.showStatus(
             e && e.message ? e.message : 'The previous procedure line could not be opened.',

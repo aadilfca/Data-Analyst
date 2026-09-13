@@ -29,17 +29,17 @@ One line per file group: what it is now. Full build history for every entry live
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js → standalone login page posting to `/api/auth/login`, generic auth error; does not load `client_context.js`.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
-- static/procedure_modal.js → reusable Supporting Documents modal shared by Verification and Audit Workbook (evidence, procedures, observations, Physical Bills, voucher checks); host adapter. See CHANGELOG_ARCHIVE.md.
+- static/procedure_modal.js → reusable Supporting Documents modal shared by Verification and Audit Workbook, with target-aware loading feedback for open, save, verify, and line navigation. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, mapping suggestions, period-conflict checks, classification/override, upload history, category assignment, deletion; scoped cache invalidation. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
 - routers/audit_rules.py → Audit Rules APIs: Documents, Cross-checks, Category policies, Signature Specimens, ordered Voucher-level Checks; soft-delete/restore, scoped caching. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Audit Rules three-pane editor, Assign Categories view, and staged non-blocking processing feedback. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
-- routers/verification.py + static/verification.* → Cash/Bank Verification: sessions, frozen Categories, evidence/Forms, checks, status, saves, timings, and Audit Workbook rows with Form completion. See CHANGELOG_ARCHIVE.md.
+- routers/verification.py + static/verification.* → Cash/Bank Verification sessions, evidence/Forms, checks, status, saves, navigation, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
-- static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
+- static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
 - services/ledger_group_summary.py + ledger_report_source.py → pure summary engine and stored Client Data/report-category adapter. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
@@ -275,7 +275,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-13: Form draft discard safeguards completed; Procedure data-table linking now supports multi-select with professionally aligned reference, date, and quantity rows.
 - 2026-09-13: Procedure Data Table text clicks now link immediately; blank row areas and checkboxes toggle selection without triggering a fetch.
 
-- 2026-09-13: Global loading cursor navigation rollout and shared-script cache busting completed; high-risk workflow feedback is next. See CHANGELOG_ARCHIVE.md.
+- 2026-09-13: Verification high-risk workflow loading feedback completed and manually accepted. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

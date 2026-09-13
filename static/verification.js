@@ -95,6 +95,9 @@ let currentTransactionType = '';
 let lineItems = [];
 let procedureData = {};
 let isNavigating = false;
+// Phase 3A: keep Start Verification single-flight while the server builds the session, with
+// the existing button progress bar supplemented by the shared progress cursor.
+let startSessionInFlight = false;
 // Phase 3: per-line client state for the collapsed/expand voucher lines list, keyed by
 // detail_id. Fully separate from currentTransactionType/procedureData above, which remain
 // scoped to the session's single "active" line — no shared state between the two.
@@ -1379,12 +1382,16 @@ async function startSessionFromCashbook() {
         showStatus('⚠️ Start must be ≤ end.', 'error');
         return;
     }
+    if (startSessionInFlight) return;
+    startSessionInFlight = true;
     // No real progress feed from start_session (the backend only returns total_transactions once
     // the whole build is done) - cashbookTotalRows (fetchCashbookData(), already populated since
     // this button lives on the same cashbook view) is used as an upfront estimate, animated toward
     // completion on a timer, same as loading_ui.js's own 'simulated' curve.
     let progressIntervalId = null;
+    let globalLoadingToken = null;
     try {
+        if (window.LoadingUI) globalLoadingToken = window.LoadingUI.startGlobalLoading(startVerificationBtn);
         const estimatedTotal = cashbookTotalRows || 0;
         if (estimatedTotal > 0) {
             window.LoadingUI.showProgressBar(startVerificationBtn, {
@@ -1435,6 +1442,8 @@ async function startSessionFromCashbook() {
         showStatus('❌ Error starting verification: ' + error.message, 'error');
     } finally {
         window.LoadingUI.hideProgressBar(startVerificationBtn);
+        if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
+        startSessionInFlight = false;
     }
 }
 
@@ -1823,10 +1832,10 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
 
     // ----- Event wiring (rebound after every innerHTML write, matching this file's convention) -----
     document.getElementById('prevArrow')?.addEventListener('click', function() {
-        if (typeof goToPreviousTransaction === 'function') goToPreviousTransaction();
+        if (typeof goToPreviousTransaction === 'function') goToPreviousTransaction(this);
     });
     document.getElementById('nextArrow')?.addEventListener('click', function() {
-        if (typeof goToNextTransaction === 'function') goToNextTransaction();
+        if (typeof goToNextTransaction === 'function') goToNextTransaction(this);
     });
     // Voucher No. text (distinct from the 🔍 mirror icon right beside it, which is untouched) —
     // reuses navigateToAuditWorkbook() verbatim, the same session-based lookup the peer nav
@@ -3873,14 +3882,29 @@ function hideVoucherNavBadge() {
 // Every exit route restores the buttons through the finally, including a cancelled confirm dialog,
 // a boundary, Phase 1's error block, and a thrown error — there is no path that leaves them stuck
 // disabled.
-async function runGuardedVoucherNav(message, fn) {
+async function runGuardedVoucherNav(message, fn, triggerTarget = null) {
     if (voucherNavInFlight) return;
     voucherNavInFlight = true;
     applyVoucherNavButtonState();
     showVoucherNavBadge(message);
+    let globalLoadingToken = window.LoadingUI
+        ? window.LoadingUI.startGlobalLoading(triggerTarget)
+        : null;
+    const pauseGlobalLoading = () => {
+        if (globalLoadingToken) {
+            window.LoadingUI.stopGlobalLoading(globalLoadingToken);
+            globalLoadingToken = null;
+        }
+    };
+    const resumeGlobalLoading = () => {
+        if (!globalLoadingToken && window.LoadingUI) {
+            globalLoadingToken = window.LoadingUI.startGlobalLoading(triggerTarget);
+        }
+    };
     try {
-        return await fn();
+        return await fn({ pauseGlobalLoading, resumeGlobalLoading });
     } finally {
+        pauseGlobalLoading();
         hideVoucherNavBadge();
         voucherNavInFlight = false;
         applyVoucherNavButtonState();
@@ -3974,7 +3998,7 @@ function showVoucherNavError(direction, message) {
     container.querySelector('#voucherNavRetryBtn')?.addEventListener('click', function () {
         runGuardedVoucherNav(`Loading the ${voucherNavDirectionLabel(direction)} voucher…`, function () {
             return moveToAdjacentVoucher(direction);
-        });
+        }, this);
     });
     container.querySelector('#voucherNavReloadBtn')?.addEventListener('click', function () {
         window.location.reload();
@@ -4047,7 +4071,7 @@ async function moveToAdjacentVoucher(direction) {
 }
 
 // Go to previous voucher – with confirmation if not validated
-async function goToPreviousTransaction() {
+async function goToPreviousTransaction(triggerTarget = null) {
     const pos = getVoucherPosition();
     if (pos.total > 0 && pos.index <= 1) {
         // No message – silently ignore (already at the first voucher). Deliberately BEFORE the
@@ -4055,7 +4079,7 @@ async function goToPreviousTransaction() {
         // disabled and the badge on for nothing.
         return;
     }
-    return runGuardedVoucherNav('Saving your work…', async () => {
+    return runGuardedVoucherNav('Saving your work…', async ({ pauseGlobalLoading, resumeGlobalLoading }) => {
         // Save current state first (always)
         await saveCurrentTransaction();
         // If not validated, ask for confirmation
@@ -4064,32 +4088,35 @@ async function goToPreviousTransaction() {
             // a question waiting on the user would be misleading. The buttons stay disabled — they
             // sit behind the modal and nothing should navigate until this is answered.
             hideVoucherNavBadge();
+            pauseGlobalLoading();
             const confirmed = await showNavigationConfirm();
             if (!confirmed) {
                 // User cancelled – no message. The wrapper's finally re-enables the buttons.
                 return;
             }
             showVoucherNavBadge('Saving your work…');
+            resumeGlobalLoading();
         }
         await moveToAdjacentVoucher('prev');
-    });
+    }, triggerTarget);
 }
 
 // Go to next voucher – with confirmation if not validated
-async function goToNextTransaction() {
+async function goToNextTransaction(triggerTarget = null) {
     // Silently no-op at the last voucher — the Next button is already disabled there, so
     // this restates nothing new to the user.
     const pos = getVoucherPosition();
     if (pos.total > 0 && pos.index >= pos.total) {
         return;
     }
-    return runGuardedVoucherNav('Saving your work…', async () => {
+    return runGuardedVoucherNav('Saving your work…', async ({ pauseGlobalLoading, resumeGlobalLoading }) => {
         // Save current state
         await saveCurrentTransaction();
         // If not validated, ask for confirmation (badge down for the dialog — see the Prev
         // function above for why).
         if (!isCurrentVoucherValidated()) {
             hideVoucherNavBadge();
+            pauseGlobalLoading();
             const confirmed = await showNavigationConfirm();
             if (!confirmed) {
                 // Cancelled — stay on the current voucher, no toast (nothing changed for the user
@@ -4097,6 +4124,7 @@ async function goToNextTransaction() {
                 return;
             }
             showVoucherNavBadge('Saving your work…');
+            resumeGlobalLoading();
         }
         // Proceed: validate and move (if validation passes, mark verified; if it fails, still allow
         // navigation since the user already confirmed they want to proceed).
@@ -4113,7 +4141,7 @@ async function goToNextTransaction() {
             // boundary — which isn't a failure at all.
             await moveToAdjacentVoucher('next');
         }
-    });
+    }, triggerTarget);
 }
 // Override the mirror icon click – we replace the alert
 document.addEventListener('DOMContentLoaded', function() {
@@ -4152,6 +4180,9 @@ async function saveLineItems(detailId = currentDetailId, options = {}) {
         return inFlightLineSaves.get(detailId);
     }
     const revisionAtStart = voucherLineDirtyRevisions[String(detailId)] || 0;
+    const globalLoadingToken = window.LoadingUI
+        ? window.LoadingUI.startGlobalLoading()
+        : null;
     const savePromise = doSaveLineItems(detailId).then(result => {
         if (result.ok && (voucherLineDirtyRevisions[String(detailId)] || 0) === revisionAtStart) {
             voucherLineDirtyRevisions[String(detailId)] = 0;
@@ -4163,6 +4194,7 @@ async function saveLineItems(detailId = currentDetailId, options = {}) {
         return await savePromise;
     } finally {
         inFlightLineSaves.delete(detailId);
+        if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
     }
 }
 

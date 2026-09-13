@@ -5489,3 +5489,17 @@ errors, and same-page restores release the cursor through real events or complet
 All HTML references to changed shared scripts were refreshed: `client_context.js` is now `v15` across
 17 pages and `loading_ui.js` is now `v2` across 12 pages. JavaScript syntax, stale-reference, and
 diff checks passed. No backend or CSS changes were made. Phase 3 high-risk workflow feedback is next.
+
+## Global Loading Cursor — Phase 3A high-risk Verification actions - 2026-09-13
+
+Verification now keeps the shared `progress` cursor active through Start Verification, dirty-line
+saves, Prev/Next voucher navigation, procedure-modal Back, Save-on-close, and Verify actions.
+Existing local progress bars, skeletons, confirmation dialogs, and narrow control locks remain in
+place; the cursor pauses while a confirmation decision is requested and always releases through
+success, failure, cancellation, or completion paths. Duplicate Start Verification requests are
+suppressed, while unrelated application controls remain usable.
+
+`verification.html` now loads `procedure_modal.js?v=26` and `verification.js?v=30`; `loading_ui.js`
+remains `v2`. JavaScript syntax, LoadingUI token/ref-count, and scoped diff checks passed. The user
+manually confirmed the Verification workflow on Render. No backend or stylesheet changes were
+required.
