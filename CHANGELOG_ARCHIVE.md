@@ -5532,6 +5532,18 @@ remain intact. `audit_rules.html` now loads `audit_rules.js?v=19`. JavaScript sy
 token/ref-count, and scoped diff checks passed. The user manually confirmed Audit Rules on Render.
 No backend, CSS, or shared `loading_ui.js` changes were required.
 
+## Global Loading Cursor — Phase 4C Master Columns coverage - 2026-09-13
+
+Master Columns list, category, and usage-preview waits now use the shared target-aware `progress`
+cursor. Add/Edit saves use the existing button spinner plus duplicate-submit protection, while
+soft-delete waits for the table and category refresh before releasing the selected action.
+
+Sorting, filtering, modal behavior, confirmations, and unrelated navigation remain unchanged.
+`columns.html` now loads `columns.js?v=4`. JavaScript syntax, LoadingUI token/ref-count,
+cache-reference, and scoped diff checks passed. The user manually confirmed Master Columns on
+Render. No backend, CSS, or shared `loading_ui.js` changes were required. The loading-cursor
+rollout is closed after Phase 4C; broader optional hardening remains deferred.
+
 ## Global Loading Cursor — Phase 4A Trial Balance coverage - 2026-09-13
 
 Trial Balance now loads the shared Loading UI and shows a target-aware `progress` cursor while

@@ -29,6 +29,18 @@ const saveAndNewBtn = document.getElementById('saveAndNewBtn');
 const addColumnBtn = document.getElementById('addColumnBtn');
 
 let editingId = null;
+const columnActionsInFlight = new Set();
+
+function startColumnsLoading(target) {
+    if (!window.LoadingUI || typeof window.LoadingUI.startGlobalLoading !== 'function') return null;
+    return window.LoadingUI.startGlobalLoading(target);
+}
+
+function stopColumnsLoading(token) {
+    if (token && window.LoadingUI && typeof window.LoadingUI.stopGlobalLoading === 'function') {
+        window.LoadingUI.stopGlobalLoading(token);
+    }
+}
 
 // ---------- SORTING ----------
 let sortColumn = 'id';
@@ -79,7 +91,8 @@ function setupSorting() {
 }
 
 // ---------- LOAD COLUMNS ----------
-async function loadColumns() {
+async function loadColumns(target = null) {
+    const loadingToken = startColumnsLoading(target);
     try {
         const res = await fetch(API_BASE + '/api/columns/all');
         if (!res.ok) throw new Error('Failed to fetch columns');
@@ -95,6 +108,8 @@ async function loadColumns() {
         columnsBody.innerHTML = '';
         noColumnsMsg.style.display = 'block';
         totalCountSpan.textContent = '0';
+    } finally {
+        stopColumnsLoading(loadingToken);
     }
 }
 
@@ -147,7 +162,7 @@ function renderColumns(columns) {
         editBtn.style.cursor = 'pointer';
         editBtn.style.fontSize = '18px';
         editBtn.title = 'Edit column';
-        editBtn.addEventListener('click', () => openEditModal(col));
+        editBtn.addEventListener('click', () => openEditModal(col, editBtn));
 
         const delBtn = document.createElement('button');
         delBtn.textContent = '🗑️';
@@ -157,7 +172,7 @@ function renderColumns(columns) {
         delBtn.style.fontSize = '18px';
         delBtn.style.marginLeft = '8px';
         delBtn.title = 'Delete column (soft)';
-        delBtn.addEventListener('click', () => confirmDelete(col.id, col.column_name));
+        delBtn.addEventListener('click', () => confirmDelete(col.id, col.column_name, delBtn));
 
         tdActions.appendChild(editBtn);
         tdActions.appendChild(delBtn);
@@ -173,7 +188,8 @@ function renderColumns(columns) {
 }
 
 // ---------- LOAD CATEGORY DROPDOWN ----------
-async function loadCategoryDropdown() {
+async function loadCategoryDropdown(target = null) {
+    const loadingToken = startColumnsLoading(target);
     try {
         const res = await fetch(API_BASE + '/api/columns/categories');
         if (!res.ok) throw new Error('Failed to fetch categories');
@@ -189,6 +205,8 @@ async function loadCategoryDropdown() {
             if (this.value) colCategory.value = this.value;
         };
     } catch (error) {
+    } finally {
+        stopColumnsLoading(loadingToken);
     }
 }
 
@@ -212,13 +230,16 @@ function showModalStatus(message, type) {
 }
 
 // ---------- USAGE PREVIEW ----------
-async function loadColumnUsage(columnId) {
+async function loadColumnUsage(columnId, target = null) {
+    const loadingToken = startColumnsLoading(target);
     try {
         const res = await fetch(API_BASE + '/api/columns/' + columnId + '/usage');
         if (!res.ok) throw new Error('Failed to fetch usage');
         return await res.json();
     } catch (error) {
         return null;
+    } finally {
+        stopColumnsLoading(loadingToken);
     }
 }
 
@@ -236,7 +257,7 @@ function renderColumnUsage(usage) {
 }
 
 // ---------- MODAL CONTROL ----------
-function openModal(title, columnData = null) {
+function openModal(title, columnData = null, triggerBtn = null) {
     modalTitle.textContent = title;
     modalOverlay.style.display = 'block';
     modal.style.display = 'block';
@@ -254,7 +275,7 @@ function openModal(title, columnData = null) {
 
         columnUsagePreview.style.display = 'block';
         columnUsagePreview.textContent = 'Loading usage...';
-        loadColumnUsage(columnData.id).then(usage => {
+        loadColumnUsage(columnData.id, triggerBtn).then(usage => {
             // Guard against a stale response landing after the modal was closed/reopened for a different column
             if (editingId === columnData.id) {
                 renderColumnUsage(usage);
@@ -283,18 +304,24 @@ function closeModal() {
     columnUsagePreview.textContent = '';
 }
 
-addColumnBtn.addEventListener('click', () => openModal('Add New Column'));
+addColumnBtn.addEventListener('click', function() { openModal('Add New Column', null, this); });
 cancelBtn.addEventListener('click', closeModal);
 modalOverlay.addEventListener('click', closeModal);
 
-function openEditModal(column) { openModal('Edit Column', column); }
+function openEditModal(column, triggerBtn = null) { openModal('Edit Column', column, triggerBtn); }
 
 // ---------- CONFIRM DELETE ----------
-async function confirmDelete(id, name) {
+async function confirmDelete(id, name, triggerBtn = null) {
     if (!confirm(`Are you sure you want to delete column "${name}"? This will soft-delete it.`)) {
         return;
     }
 
+    const actionKey = 'column-delete:' + id;
+    if (columnActionsInFlight.has(actionKey)) return;
+    columnActionsInFlight.add(actionKey);
+    const loadingToken = startColumnsLoading(triggerBtn);
+    const previousDisabled = triggerBtn ? triggerBtn.disabled : false;
+    if (triggerBtn) triggerBtn.disabled = true;
     try {
         const res = await fetch(API_BASE + '/api/columns/' + id, { method: 'DELETE' });
         const result = await res.json();
@@ -302,10 +329,14 @@ async function confirmDelete(id, name) {
             throw new Error(result.message || result.detail || 'Failed to delete column');
         }
         showStatus('✅ ' + result.message, 'success');
-        loadColumns();
-        loadCategoryDropdown();
+        await loadColumns();
+        await loadCategoryDropdown();
     } catch (error) {
         showStatus('❌ Error deleting column: ' + error.message, 'error');
+    } finally {
+        if (triggerBtn) triggerBtn.disabled = previousDisabled;
+        stopColumnsLoading(loadingToken);
+        columnActionsInFlight.delete(actionKey);
     }
 }
 
@@ -359,6 +390,12 @@ async function saveColumn(keepModalOpen, triggerBtn) {
         notes: colNotes.value.trim() || null
     };
 
+    if (columnActionsInFlight.has('column-save')) return false;
+    columnActionsInFlight.add('column-save');
+    const loadingToken = startColumnsLoading(triggerBtn);
+    const previousDisabled = triggerBtn ? triggerBtn.disabled : false;
+    if (triggerBtn) triggerBtn.disabled = true;
+
     try {
         window.LoadingUI.showSpinner(triggerBtn, 'Saving');
 
@@ -397,10 +434,9 @@ async function saveColumn(keepModalOpen, triggerBtn) {
             modalOverlay.style.display = 'block';
         } else {
             // Normal Save: close modal after a short delay
-            setTimeout(() => {
-                closeModal();
-                showStatus('✅ Column saved successfully!', 'success');
-            }, 800);
+            await new Promise(resolve => setTimeout(resolve, 800));
+            closeModal();
+            showStatus('✅ Column saved successfully!', 'success');
         }
 
         return true;
@@ -410,6 +446,9 @@ async function saveColumn(keepModalOpen, triggerBtn) {
         return false;
     } finally {
         window.LoadingUI.hideSpinner(triggerBtn);
+        if (triggerBtn) triggerBtn.disabled = previousDisabled;
+        stopColumnsLoading(loadingToken);
+        columnActionsInFlight.delete('column-save');
     }
 }
 
