@@ -5579,3 +5579,10 @@ Confirmed the shared loading primitives retain clear non-motion feedback under
 `prefers-reduced-motion: reduce`: cursor state, labels, static spinner rings, skeleton tone, and
 progress-bar fill remain visible. The determinate progress-width transition is now disabled in
 that mode. JavaScript syntax and whitespace checks passed; no backend change was required.
+
+## Loading feedback hardening — Mini-phase 2 keyboard and touch audit - 2026-09-13
+
+Confirmed loading actions use native buttons and inputs, preserving keyboard activation and visible
+focus. Loading disables only the initiating control, while unrelated controls remain available;
+navigation duplicate protection and Escape/page-lifecycle recovery remain active. No functional
+code change was required; JavaScript syntax and whitespace checks passed.
