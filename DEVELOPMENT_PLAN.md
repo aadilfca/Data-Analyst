@@ -1,5 +1,35 @@
 # Development Plan
 
+## Current roadmap — Global Loading Feedback and Interaction Locking — 2026-09-13
+
+Recommended model: GPT-5. This cross-app UX change spans shared loading behavior, navigation, asynchronous reads, and high-risk workflow actions.
+
+### Phase 0 — Interaction policy and acceptance rules
+
+Status: completed through discussion.
+
+Use the standard `progress` cursor as an ambient signal while retaining local spinners, skeletons, and processing banners. Lock the initiating control or affected workflow only; unrelated actions remain available where safe. Release loading on actual completion, error, cancellation, or interrupted navigation—never through a guessed timeout. Overlapping work must use reference counting or tokens.
+
+### Phase 1 — Shared foundation and one pilot
+
+Status: next phase; implementation not started.
+
+Add the reusable global cursor behavior through the existing loading infrastructure and prove it on one representative low-risk flow. Verify immediate feedback, duplicate-click protection, safe unrelated interaction, and recovery on success, failure, cancellation, and interrupted navigation. No backend changes are expected.
+
+### Phase 2 — Navigation and modal-opening rollout
+
+Extend the behavior to dashboard/module cards, header and quick navigation, async dropdowns, modal/detail openings, and template/supporting-document views. Handle the transition between the old and newly loaded page, including Back/bfcache and browser Stop behavior.
+
+### Phase 3 — High-risk workflow actions
+
+Apply narrow locking and progress feedback to Save, Verify, Complete, Import, Delete/Restore, Verification Prev/Next, Audit Rules writes, and other actions that can conflict with the same data or workflow. Preserve independent application use where it cannot interfere.
+
+### Phase 4 — Coverage and hardening
+
+Audit remaining waiting paths and test slow/failed/parallel requests, stale responses, session expiry, keyboard/touch use, reduced-motion accessibility, long-running work, and stuck-cursor or stuck-control recovery. A custom animated cursor remains optional and deferred until the standard `progress` cursor proves insufficient.
+
+Each phase requires candidate-file confirmation, approach approval, implementation, proportional verification, and Aadil’s test confirmation before the next phase. After every completed phase, provide a plain-language walkthrough of the changes made and the remaining test points. No staging, commit, or push occurs before explicit approval.
+
 ## Current roadmap — Ledger Reconciliation & Monthly Category Summary — 2026-09-10
 
 Recommended model: GPT-5. The feature combines financial calculations, existing client data, configurable account groups, Excel output, and reconciliation controls.

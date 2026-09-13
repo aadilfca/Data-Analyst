@@ -150,10 +150,56 @@ const MODULE_CARD_DESTINATIONS = {
     auditRulesCard: '/static/audit_rules.html',
     clientSettingsCard: () => getClientSettingsUrl()
 };
+
+let dashboardNavigationInFlight = false;
+let dashboardNavigationToken = null;
+let dashboardNavigationCard = null;
+let dashboardNavigationOriginalCursor = '';
+
+function releaseDashboardNavigation() {
+    if (!dashboardNavigationInFlight) return;
+    if (dashboardNavigationCard) {
+        dashboardNavigationCard.style.cursor = dashboardNavigationOriginalCursor;
+        dashboardNavigationCard.removeAttribute('aria-busy');
+    }
+    if (dashboardNavigationToken) {
+        window.LoadingUI.stopGlobalLoading(dashboardNavigationToken);
+    }
+    dashboardNavigationCard = null;
+    dashboardNavigationToken = null;
+    dashboardNavigationOriginalCursor = '';
+    dashboardNavigationInFlight = false;
+}
+
 Object.entries(MODULE_CARD_DESTINATIONS).forEach(([cardId, destination]) => {
-    document.getElementById(cardId).addEventListener('click', function() {
-        window.location.href = typeof destination === 'function' ? destination() : destination;
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    card.addEventListener('click', function() {
+        if (dashboardNavigationInFlight) return;
+
+        dashboardNavigationInFlight = true;
+        dashboardNavigationCard = this;
+        dashboardNavigationOriginalCursor = this.style.cursor;
+        this.style.cursor = 'progress';
+        this.setAttribute('aria-busy', 'true');
+        dashboardNavigationToken = window.LoadingUI.startGlobalLoading();
+
+        try {
+            window.location.href = typeof destination === 'function' ? destination() : destination;
+        } catch (error) {
+            releaseDashboardNavigation();
+            throw error;
+        }
     });
+});
+
+// A normal navigation replaces this document. These recovery paths cover the cases where
+// the old dashboard survives instead (browser Stop/Escape or bfcache restoration).
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') releaseDashboardNavigation();
+});
+window.addEventListener('pageshow', function(event) {
+    if (event.persisted) releaseDashboardNavigation();
 });
 
 // ---------- ADD CLICK FEEDBACK TO MODULE CARDS ----------

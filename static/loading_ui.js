@@ -2,7 +2,7 @@
    Namespaced under window.LoadingUI rather than bare globals — client_context.js's own
    comments flag exactly this collision risk for a shared classic <script> (see
    error_dashboard.js's stale STORAGE_KEY / databank.js's shadowed getSelectedClientId()).
-   Not yet wired into any page <script> tag — that's later phases. */
+   The global cursor is currently piloted on the dashboard; remaining pages are later phases. */
 (function () {
     'use strict';
 
@@ -13,6 +13,31 @@
     const fieldState = new WeakMap();
     const progressState = new WeakMap();
     const badgeState = new WeakMap();
+    const globalLoadingTokens = new Set();
+    let nextGlobalLoadingToken = 1;
+    let originalDocumentCursor = '';
+
+    // Ambient progress cursor. The caller owns the returned token and must pass the same
+    // token to stopGlobalLoading; repeated or stale stops are harmless. The standard
+    // `progress` cursor keeps the interface usable, unlike the browser's `wait` cursor.
+    function startGlobalLoading() {
+        const token = { id: nextGlobalLoadingToken++ };
+        if (globalLoadingTokens.size === 0 && document.documentElement) {
+            originalDocumentCursor = document.documentElement.style.cursor;
+            document.documentElement.style.cursor = 'progress';
+        }
+        globalLoadingTokens.add(token);
+        return token;
+    }
+
+    function stopGlobalLoading(token) {
+        if (!token || !globalLoadingTokens.has(token)) return;
+        globalLoadingTokens.delete(token);
+        if (globalLoadingTokens.size === 0 && document.documentElement) {
+            document.documentElement.style.cursor = originalDocumentCursor;
+            originalDocumentCursor = '';
+        }
+    }
 
     function isTableContainer(container) {
         const tag = container.tagName;
@@ -263,6 +288,8 @@
     }
 
     window.LoadingUI = {
+        startGlobalLoading: startGlobalLoading,
+        stopGlobalLoading: stopGlobalLoading,
         showSkeleton: showSkeleton,
         hideSkeleton: hideSkeleton,
         showSpinner: showSpinner,
