@@ -34,7 +34,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/trial_balance.py → Trial Balance upload, mapping suggestions, period-conflict checks, classification/override, upload history, category assignment, deletion; scoped cache invalidation. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
 - routers/audit_rules.py → Audit Rules APIs: Documents, Cross-checks, Category policies, Signature Specimens, ordered Voucher-level Checks; soft-delete/restore, scoped caching. See CHANGELOG_ARCHIVE.md.
-- static/audit_rules.html, static/audit_rules.js → Audit Rules three-pane editor, Assign Categories view, and staged non-blocking processing feedback. See CHANGELOG_ARCHIVE.md.
+- static/audit_rules.html, static/audit_rules.js → Audit Rules three-pane editor, Assign Categories view, and processing feedback with a shared progress cursor. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
 - routers/verification.py + static/verification.* → Cash/Bank Verification sessions, evidence/Forms, checks, status, saves, navigation, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
@@ -265,7 +265,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-09: Dashboard Database Size stat now reads real DB size (Postgres pg_database_size/SQLite file) in MB, not client_data estimate.
 - 2026-09-09: Audit Rules rail clicks now take priority over delayed startup URL restore; first-click tab switching verified.
 - 2026-09-09: Audit Rules gained staged non-blocking processing feedback for slow Supabase reads; shared stylesheet cache version moved to v14.
-- 2026-09-09: Audit Rules processing feedback covers delayed row/detail, matrix, Category rule, Voucher-check, and Assign Categories operations; a counter pairing bug was corrected; audit_rules.js cache is v18.
+- 2026-09-13: Audit Rules processing feedback now also owns the shared progress cursor; counter cleanup covers CRUD, matrix, assignment, and reorder actions; audit_rules.js cache is v19.
 - 2026-09-10: Ledger Reconciliation Phase 1 added the framework-independent account-group summary engine and unit tests; Excel export and UI remain future phases.
 - 2026-09-11: Ledger Reconciliation Phases 2–3 added source diagnostics, account-group storage, and report-category prerequisites; report API remains future work.
 - 2026-09-11: Ledger Reconciliation Phases 3–7 added separate report categories, configuration UI, Excel export, balance inputs, and session-scoped Reports/setup; Phase 8 remains pending acceptance.
@@ -275,7 +275,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-13: Form draft discard safeguards completed; Procedure data-table linking now supports multi-select with professionally aligned reference, date, and quantity rows.
 - 2026-09-13: Procedure Data Table text clicks now link immediately; blank row areas and checkboxes toggle selection without triggering a fetch.
 
-- 2026-09-13: Verification, Upload, and Data Bank high-risk loading feedback completed and manually accepted. See CHANGELOG_ARCHIVE.md.
+- 2026-09-13: Verification, Upload, Data Bank, and Audit Rules high-risk loading feedback completed and manually accepted. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

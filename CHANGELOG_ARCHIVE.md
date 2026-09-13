@@ -5518,3 +5518,16 @@ unrelated controls remain intact; no restore action exists in the current Data B
 `upload.html` now loads `upload.js?v=7` and `databank.html` loads `databank.js?v=7`. JavaScript
 syntax, LoadingUI token/ref-count, and scoped diff checks passed. The user manually confirmed the
 Upload and Data Bank flows. No backend, CSS, or shared LoadingUI changes were required.
+
+## Global Loading Cursor — Phase 3C Audit Rules actions - 2026-09-13
+
+Audit Rules now connects its existing reference-counted processing counter to the shared document-
+level `progress` cursor. The cursor covers CRUD saves/deletes/restores for Documents, Cross-checks,
+Categories, and Voucher-level Checks; signature specimens; Cross-check matrix mutations; Category
+required-flag and Assign Categories changes; and Voucher-level Check reorder. Nested refreshes keep
+the cursor active until the complete action finishes, and new paths release through `finally`.
+
+Existing local progress bars, button spinners, confirmations, and unrelated application controls
+remain intact. `audit_rules.html` now loads `audit_rules.js?v=19`. JavaScript syntax, LoadingUI
+token/ref-count, and scoped diff checks passed. The user manually confirmed Audit Rules on Render.
+No backend, CSS, or shared `loading_ui.js` changes were required.

@@ -102,6 +102,7 @@ const arProcessingStatus = document.getElementById('arProcessingStatus');
 const arProcessingProgress = document.getElementById('arProcessingProgress');
 const arProcessingMessage = document.getElementById('arProcessingMessage');
 let arProcessingOperations = 0;
+let arGlobalLoadingToken = null;
 
 function beginAuditRulesProcessing(message) {
     if (!arProcessingStatus || !arProcessingProgress) return;
@@ -110,6 +111,10 @@ function beginAuditRulesProcessing(message) {
     arProcessingStatus.classList.remove('is-error');
     if (arProcessingMessage) arProcessingMessage.textContent = message || 'Loading Audit Rules…';
     if (arProcessingOperations === 1 && window.LoadingUI) {
+        // Keep one reference-counted cursor token for the whole Audit Rules operation group.
+        // Nested refreshes therefore keep the cursor active until the originating action and
+        // every server refresh it triggered have completed.
+        arGlobalLoadingToken = window.LoadingUI.startGlobalLoading();
         window.LoadingUI.showProgressBar(arProcessingProgress, {
             mode: 'simulated',
             message: 'Working…'
@@ -121,7 +126,11 @@ function endAuditRulesProcessing() {
     if (!arProcessingStatus || !arProcessingProgress) return;
     arProcessingOperations = Math.max(0, arProcessingOperations - 1);
     if (arProcessingOperations > 0) return;
-    if (window.LoadingUI) window.LoadingUI.hideProgressBar(arProcessingProgress);
+    if (window.LoadingUI) {
+        window.LoadingUI.hideProgressBar(arProcessingProgress);
+        window.LoadingUI.stopGlobalLoading(arGlobalLoadingToken);
+    }
+    arGlobalLoadingToken = null;
     arProcessingStatus.hidden = true;
 }
 
@@ -807,6 +816,8 @@ async function saveDocument(triggerBtn) {
         if (!proceed) return;
     }
 
+    beginAuditRulesProcessing('Saving Document...');
+
     const payload = {
         name: name,
         kb_note: arKbNoteInput.value.trim() || null,
@@ -858,6 +869,7 @@ async function saveDocument(triggerBtn) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
     } finally {
         window.LoadingUI.hideSpinner(triggerBtn);
+        endAuditRulesProcessing();
     }
 }
 
@@ -866,6 +878,7 @@ async function deleteDocument() {
     if (!editingId) return;
     if (!confirm('Are you sure you want to delete "' + arNameInput.value + '"? This will soft-delete it.')) return;
 
+    beginAuditRulesProcessing('Deleting Document...');
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/documents/' + editingId, { method: 'DELETE' });
         const result = await res.json();
@@ -876,12 +889,15 @@ async function deleteDocument() {
         await selectDocument(editingId);
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
 async function restoreDocument() {
     if (!editingId) return;
 
+    beginAuditRulesProcessing('Restoring Document...');
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/documents/' + editingId + '/restore', { method: 'POST' });
         const result = await res.json();
@@ -892,6 +908,8 @@ async function restoreDocument() {
         await selectDocument(editingId);
     } catch (error) {
         showDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -1819,6 +1837,7 @@ function renderMatrixAddColumnPicker() {
 // Every matrix mutation persists immediately. Helper: run the write, keep the optimistic local
 // change on success, roll it back (via a caller-supplied undo) + surface the error on failure.
 async function matrixPersist(doRequest, undo) {
+    beginAuditRulesProcessing('Saving Cross-check matrix change...');
     try {
         const res = await doRequest();
         const result = await res.json().catch(() => ({}));
@@ -1832,6 +1851,8 @@ async function matrixPersist(doRequest, undo) {
         renderMatrix();
         showCrossCheckDetailStatus('❌ ' + error.message, 'error');
         return null;
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -2101,6 +2122,7 @@ async function saveCrossCheck(triggerBtn) {
         return;
     }
 
+    beginAuditRulesProcessing('Saving Cross-check...');
     try {
         window.LoadingUI.showSpinner(triggerBtn, 'Saving');
         let res, result;
@@ -2144,6 +2166,7 @@ async function saveCrossCheck(triggerBtn) {
         showCrossCheckDetailStatus('❌ Error: ' + error.message, 'error');
     } finally {
         window.LoadingUI.hideSpinner(triggerBtn);
+        endAuditRulesProcessing();
     }
 }
 
@@ -2152,6 +2175,7 @@ async function deleteCrossCheck() {
     if (!editingCrossCheckId) return;
     if (!confirm('Are you sure you want to delete "' + arCrossCheckNameInput.value + '"? This will soft-delete it.')) return;
 
+    beginAuditRulesProcessing('Deleting Cross-check...');
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/cross-checks/' + editingCrossCheckId, { method: 'DELETE' });
         const result = await res.json();
@@ -2165,12 +2189,15 @@ async function deleteCrossCheck() {
         await selectCrossCheck(editingCrossCheckId);
     } catch (error) {
         showCrossCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
 async function restoreCrossCheck() {
     if (!editingCrossCheckId) return;
 
+    beginAuditRulesProcessing('Restoring Cross-check...');
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/cross-checks/' + editingCrossCheckId + '/restore', { method: 'POST' });
         const result = await res.json();
@@ -2184,6 +2211,8 @@ async function restoreCrossCheck() {
         await selectCrossCheck(editingCrossCheckId);
     } catch (error) {
         showCrossCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -3145,6 +3174,7 @@ function renderCategoryDocsList() {
 async function toggleCategoryDocumentRequired(docId, checked) {
     if (!editingCategoryId) return;
 
+    beginAuditRulesProcessing('Saving required flag...');
     try {
         const res = await fetch(
             API_BASE + '/api/audit-rules/categories/' + editingCategoryId + '/documents/' + docId + '/required',
@@ -3171,6 +3201,8 @@ async function toggleCategoryDocumentRequired(docId, checked) {
     } catch (error) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
         renderCategoryDocsList();
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -3786,6 +3818,7 @@ async function saveCategory(triggerBtn) {
         cross_check_ids: categoryCrossCheckIds
     };
 
+    beginAuditRulesProcessing('Saving Category...');
     try {
         window.LoadingUI.showSpinner(triggerBtn, 'Saving');
 
@@ -3827,6 +3860,7 @@ async function saveCategory(triggerBtn) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
     } finally {
         window.LoadingUI.hideSpinner(triggerBtn);
+        endAuditRulesProcessing();
     }
 }
 
@@ -3835,6 +3869,7 @@ async function deleteCategory() {
     if (!editingCategoryId) return;
     if (!confirm('Are you sure you want to delete "' + arCategoryNameInput.value + '"? This will soft-delete it.')) return;
 
+    beginAuditRulesProcessing('Deleting Category...');
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/categories/' + editingCategoryId, { method: 'DELETE' });
         const result = await res.json();
@@ -3846,12 +3881,15 @@ async function deleteCategory() {
         await selectCategory(editingCategoryId);
     } catch (error) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
 async function restoreCategory() {
     if (!editingCategoryId) return;
 
+    beginAuditRulesProcessing('Restoring Category...');
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/categories/' + editingCategoryId + '/restore', { method: 'POST' });
         const result = await res.json();
@@ -3863,6 +3901,8 @@ async function restoreCategory() {
         await selectCategory(editingCategoryId);
     } catch (error) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -4411,10 +4451,10 @@ async function resetAssignCategories() {
         // Full reload rather than a local state patch — simplest way to guarantee the
         // table matches the server exactly after a bulk change touching every row.
         await loadAssignCategoriesData();
-        endAuditRulesProcessing();
     } catch (error) {
-        endAuditRulesProcessing();
         showAssignCategoriesStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
@@ -4746,6 +4786,7 @@ function initVoucherCheckSortable() {
         disabled: arVoucherCheckShowInactiveCheckbox.checked,
         onEnd: async function () {
             const orderedIds = Array.from(arVoucherCheckListBody.children).map(row => parseInt(row.dataset.id, 10));
+            beginAuditRulesProcessing('Saving Voucher-level Check order...');
             try {
                 const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks/reorder', {
                     method: 'POST',
@@ -4760,6 +4801,8 @@ function initVoucherCheckSortable() {
                 // Re-fetch to restore the true server order after a failed persist, since
                 // the DOM has already been reordered visually by Sortable itself.
                 await loadVoucherChecks();
+            } finally {
+                endAuditRulesProcessing();
             }
         }
         });
@@ -4833,6 +4876,7 @@ async function saveVoucherCheck(triggerBtn) {
 
     const payload = { name: name, authority: arVoucherCheckAuthorityInput.value.trim() || null };
 
+    beginAuditRulesProcessing('Saving Voucher-level Check...');
     try {
         window.LoadingUI.showSpinner(triggerBtn, 'Saving');
 
@@ -4860,6 +4904,7 @@ async function saveVoucherCheck(triggerBtn) {
         showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
     } finally {
         window.LoadingUI.hideSpinner(triggerBtn);
+        endAuditRulesProcessing();
     }
 }
 
@@ -4867,6 +4912,7 @@ async function deleteVoucherCheck() {
     if (!editingVoucherCheckId) return;
     if (!confirm('Are you sure you want to delete "' + arVoucherCheckNameInput.value + '"? This will soft-delete it.')) return;
 
+    beginAuditRulesProcessing('Deleting Voucher-level Check...');
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks/' + editingVoucherCheckId, { method: 'DELETE' });
         const result = await res.json();
@@ -4877,12 +4923,15 @@ async function deleteVoucherCheck() {
         await selectVoucherCheck(editingVoucherCheckId);
     } catch (error) {
         showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 
 async function restoreVoucherCheck() {
     if (!editingVoucherCheckId) return;
 
+    beginAuditRulesProcessing('Restoring Voucher-level Check...');
     try {
         const res = await fetch(API_BASE + '/api/audit-rules/voucher-checks/' + editingVoucherCheckId + '/restore', { method: 'POST' });
         const result = await res.json();
@@ -4893,6 +4942,8 @@ async function restoreVoucherCheck() {
         await selectVoucherCheck(editingVoucherCheckId);
     } catch (error) {
         showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
     }
 }
 

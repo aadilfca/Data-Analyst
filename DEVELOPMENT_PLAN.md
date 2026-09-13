@@ -31,7 +31,7 @@ Extend the behavior to dashboard/module cards, header and quick navigation, asyn
 
 ### Phase 3 — High-risk workflow actions
 
-Status: Phase 3A and Phase 3B implemented and accepted; Phase 3C candidate files require confirmation.
+Status: Phase 3A, Phase 3B, and Phase 3C implemented and accepted; Phase 4 candidate files require confirmation.
 
 Apply narrow locking and progress feedback to Save, Verify, Complete, Import, Delete/Restore, Verification Prev/Next, Audit Rules writes, and other actions that can conflict with the same data or workflow. Preserve independent application use where it cannot interfere.
 
