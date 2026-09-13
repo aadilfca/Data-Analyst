@@ -5462,3 +5462,19 @@ Added browser regression coverage for immediate text linking, dropdown closure, 
 row-padding toggling, and direct checkbox selection. JavaScript syntax validation, the focused
 dirty-save suite (18 tests), and `git diff --check` passed. The existing pytest cache warning is
 environmental; no backend changes were made.
+
+## Global Loading Cursor — Phases 1 and 2A - 2026-09-13
+
+The shared Loading UI gained token-based global `progress` cursor ownership. The dashboard pilot
+starts feedback when a live module card is clicked, ignores duplicate clicks, and releases on real
+navigation completion, error, cancellation, or bfcache restoration. Dashboard `script.js` cache
+busting was bumped to v6 before release.
+
+The reusable Procedure Modal now starts a target-aware loading token on the clicked Verification or
+Audit Workbook trigger and stops it in the existing `finally` cleanup after render or failure.
+Overlapping tokens keep both the document and target cursor active until their respective work ends,
+then restore the original cursor. Existing local spinners and unrelated interaction are preserved.
+
+Browser harness checks confirmed reference-counted cursor restoration and duplicate-click protection;
+the user manually confirmed the Procedure Modal flow on Render. No backend or stylesheet changes
+were required. Phase 2A was released as `bc67341`; Phase 2B navigation rollout is next.

@@ -39,7 +39,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/verification.py + static/verification.* → Cash/Bank Verification: sessions, frozen Categories, evidence/Forms, checks, status, saves, timings, and Audit Workbook rows with Form completion. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
-- static/loading_ui.js → shared `window.LoadingUI` primitives (skeletons, spinners, field overlays, progress bars, persistent badges); wired app-wide. See CHANGELOG_ARCHIVE.md.
+- static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
 - static/api_utils.js → shared `apiFetch()` (GET debounce/retry) and `apiFetchMutate()` (non-retried writes, optional Loading UI); warning-only direct-`/api/` fetch guard; partial rollout. See CHANGELOG_ARCHIVE.md.
 - services/ledger_group_summary.py + ledger_report_source.py → pure summary engine and stored Client Data/report-category adapter. See CHANGELOG_ARCHIVE.md.
 - services/reconciliation_xlsx.py → static Bank/Cash workbook exporter for summaries, schedules, reviews, cross-checks, and reconciliation proofs. See CHANGELOG_ARCHIVE.md.
@@ -268,21 +268,14 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-09: Audit Rules processing feedback covers delayed row/detail, matrix, Category rule, Voucher-check, and Assign Categories operations; a counter pairing bug was corrected; audit_rules.js cache is v18.
 - 2026-09-10: Ledger Reconciliation Phase 1 added the framework-independent account-group summary engine and unit tests; Excel export and UI remain future phases.
 - 2026-09-11: Ledger Reconciliation Phases 2–3 added source diagnostics, account-group storage, and report-category prerequisites; report API remains future work.
-- 2026-09-11: Ledger Reconciliation report-category foundation added separate category sets, definitions, assignments, and adapter isolation; export/UI remain future work.
-- 2026-09-11: Ledger Reconciliation Phase 4 added standalone exact-code account-group configuration UI with search, warnings, save feedback, and responsive styling.
-- 2026-09-11: Ledger Reconciliation Phase 5 added the source-backed Bank/Cash Excel export engine and golden workbook tests; report API/UI remain future work.
-- 2026-09-11: Ledger Reconciliation Phase 6 added standardized client/group balance inputs and completeness diagnostics; report UI remains future work.
-- 2026-09-11: Ledger Reconciliation Phase 7 added session-scoped Reports/setup, controls/navigation, existing-Postgres migration, and passed manual account-head loading.
-- 2026-09-12: Form bill-group persistence now preserves validated groups through save, fetch, and support data; automated checks passed.
-- 2026-09-12: Ledger Reconciliation Phase 8 added selected-client category assignment and reconciliation-balance entry UI; manual acceptance pending.
-- 2026-09-12: Physical Bill Split UI and Form bill-group schema foundation added; automated checks passed.
-- 2026-09-12: Routine multi-bill Form cards added with expandable summaries, Add/Remove/Split, and first-bill Copy from lines; automated checks passed.
-- 2026-09-12: Form Quick add bills popover added with optional vendor/bill number, amount grouping, and Enter navigation; manual acceptance pending.
-- 2026-09-12: Form per-bill Quick add items popover added with grouped item rows and derived Amount; manual acceptance pending.
-- 2026-09-12: Form Quick add items popover layering corrected above Observation; manual acceptance pending.
-- 2026-09-12: Form bills restore/reconcile, update Procedures/live status, and retain focused Enter-driven quick item entry.
+- 2026-09-11: Ledger Reconciliation Phases 3–7 added separate report categories, configuration UI, Excel export, balance inputs, and session-scoped Reports/setup; Phase 8 remains pending acceptance.
+- 2026-09-12: Ledger Reconciliation Phase 8 added selected-client category and reconciliation-balance UI; manual acceptance pending.
+- 2026-09-12: Physical Bill Split and Form bill-group foundations, multi-bill cards, and Quick-add bills/items flows completed; manual acceptance pending where noted.
+- 2026-09-12: Form bill persistence, restore/reconcile, live status refresh, and Quick-add layering/focus corrections completed.
 - 2026-09-13: Form draft discard safeguards completed; Procedure data-table linking now supports multi-select with professionally aligned reference, date, and quantity rows.
 - 2026-09-13: Procedure Data Table text clicks now link immediately; blank row areas and checkboxes toggle selection without triggering a fetch.
+
+- 2026-09-13: Global loading cursor foundation and Procedure Modal target feedback completed; navigation rollout is next. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

@@ -12,11 +12,20 @@ Use the standard `progress` cursor as an ambient signal while retaining local sp
 
 ### Phase 1 — Shared foundation and one pilot
 
-Status: next phase; implementation not started.
+Status: implemented and accepted; dashboard pilot released in commit `6905ad5`.
 
 Add the reusable global cursor behavior through the existing loading infrastructure and prove it on one representative low-risk flow. Verify immediate feedback, duplicate-click protection, safe unrelated interaction, and recovery on success, failure, cancellation, and interrupted navigation. No backend changes are expected.
 
-### Phase 2 — Navigation and modal-opening rollout
+### Phase 2A — Procedure-modal loading feedback
+
+Status: implemented and accepted; released in commit `bc67341`.
+
+Added target-aware global `progress` cursor ownership to the shared Loading UI and the reusable
+Procedure Modal. Existing local spinners, modal cleanup, and unrelated interaction remain intact.
+
+### Phase 2B — Navigation and remaining modal-opening rollout
+
+Status: next phase; candidate files require confirmation.
 
 Extend the behavior to dashboard/module cards, header and quick navigation, async dropdowns, modal/detail openings, and template/supporting-document views. Handle the transition between the old and newly loaded page, including Back/bfcache and browser Stop behavior.
 
