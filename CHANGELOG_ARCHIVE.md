@@ -5600,3 +5600,10 @@ Confirmed loading actions use native buttons and inputs, preserving keyboard act
 focus. Loading disables only the initiating control, while unrelated controls remain available;
 navigation duplicate protection and Escape/page-lifecycle recovery remain active. No functional
 code change was required; JavaScript syntax and whitespace checks passed.
+
+## Loading feedback hardening — Mini-phase 5 cursor decision and closeout - 2026-09-13
+
+The standard `progress` cursor is sufficient alongside the existing local spinners, labels, and
+recovery safeguards. A custom animated cursor is deferred because it would add complexity without
+improving the verified user feedback. Mini-phases 1–5 are complete and the loading-feedback work
+is closed; no code or dependency change was required.
