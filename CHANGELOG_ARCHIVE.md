@@ -5547,3 +5547,16 @@ cancellation, stale response, or refresh completion.
 `trial_balance.html` now loads `loading_ui.js?v=2` and `trial_balance.js?v=7`. JavaScript syntax,
 LoadingUI token/ref-count, cache-reference, and scoped diff checks passed. The user manually
 confirmed Trial Balance on Render. No backend or CSS changes were required.
+
+## Global Loading Cursor — Phase 4B Template coverage - 2026-09-13
+
+Template list, master-column, Quick Add Column, Template save/delete, edit, and preview waits now
+use the shared target-aware `progress` cursor. Master-column requests are shared while in flight,
+and Template/Quick Add mutations suppress duplicate submissions while preserving existing button
+spinners, confirmations, local column selection, and unrelated navigation.
+
+Successful saves and deletes now await the refreshed Template list before releasing their loading
+state. All new cursor and control states release on success, failure, cancellation, or refresh
+completion. `templates.html` now loads `templates.js?v=4`. JavaScript syntax, LoadingUI token/ref-
+count, cache-reference, and scoped diff checks passed. The user manually confirmed Templates on
+Render. No backend, CSS, or shared `loading_ui.js` changes were required.

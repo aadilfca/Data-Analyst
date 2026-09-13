@@ -61,18 +61,32 @@ window.allMasterColumns = [];
 let selectedColumns = [];
 let closeMatchDebounceTimer = null;
 let masterColumnsLoaded = false;
+let masterColumnsInFlight = null;
 let templatesCache = null;
+const templateActionsInFlight = new Set();
+
+function startTemplateLoading(target) {
+    if (!window.LoadingUI || typeof window.LoadingUI.startGlobalLoading !== 'function') return null;
+    return window.LoadingUI.startGlobalLoading(target);
+}
+
+function stopTemplateLoading(token) {
+    if (token && window.LoadingUI && typeof window.LoadingUI.stopGlobalLoading === 'function') {
+        window.LoadingUI.stopGlobalLoading(token);
+    }
+}
 
 // ---------- LOAD TEMPLATES ----------
 // forceRefresh=true bypasses the cache after a create/edit/delete that changed server
 // state (Fast Data Handling, Phase 8) -- the initial load leaves the cache empty so it
 // fetches normally.
-async function loadTemplates(forceRefresh = false) {
+async function loadTemplates(forceRefresh = false, target = null) {
     if (templatesCache && !forceRefresh) {
         renderTemplates(templatesCache);
         totalCountSpan.textContent = templatesCache.length;
         return;
     }
+    const loadingToken = startTemplateLoading(target);
     try {
         const res = await fetch(API_BASE + '/api/templates');
         if (!res.ok) throw new Error('Failed to fetch templates');
@@ -84,6 +98,8 @@ async function loadTemplates(forceRefresh = false) {
         templatesBody.innerHTML = '';
         noTemplatesMsg.style.display = 'block';
         totalCountSpan.textContent = '0';
+    } finally {
+        stopTemplateLoading(loadingToken);
     }
 }
 
@@ -154,7 +170,7 @@ function renderTemplates(templates) {
         previewBtn.style.cursor = 'pointer';
         previewBtn.style.fontSize = '18px';
         previewBtn.title = 'Preview template';
-        previewBtn.addEventListener('click', () => openPreviewModal(tpl));
+        previewBtn.addEventListener('click', () => openPreviewModal(tpl, previewBtn));
         tdActions.appendChild(previewBtn);
 
         // Edit
@@ -166,7 +182,7 @@ function renderTemplates(templates) {
         editBtn.style.fontSize = '18px';
         editBtn.style.marginLeft = '8px';
         editBtn.title = 'Edit template';
-        editBtn.addEventListener('click', () => openEditModal(tpl));
+        editBtn.addEventListener('click', () => openEditModal(tpl, editBtn));
         tdActions.appendChild(editBtn);
 
         // Delete – hide for system templates
@@ -179,7 +195,7 @@ function renderTemplates(templates) {
             delBtn.style.fontSize = '18px';
             delBtn.style.marginLeft = '8px';
             delBtn.title = 'Delete template';
-            delBtn.addEventListener('click', () => confirmDelete(tpl.id, tpl.template_name));
+            delBtn.addEventListener('click', () => confirmDelete(tpl.id, tpl.template_name, delBtn));
             tdActions.appendChild(delBtn);
         } else {
             // Show a lock icon for system templates
@@ -206,18 +222,27 @@ function renderTemplates(templates) {
 // Fetch-once cache (Fast Data Handling, Phase 8) -- this used to re-fetch on every
 // Add/Edit modal open and every Preview open. No invalidation needed: Quick Add already
 // patches allMasterColumns directly (see saveQuickAddColumn()), so the cache stays correct.
-async function loadMasterColumns() {
+async function loadMasterColumns(target = null) {
     if (masterColumnsLoaded) return allMasterColumns;
-    try {
-        const res = await fetch(API_BASE + '/api/columns');
-        if (!res.ok) throw new Error('Failed to fetch columns');
-        allMasterColumns = await res.json();
-        window.allMasterColumns = allMasterColumns;
-        masterColumnsLoaded = true;
-        return allMasterColumns;
-    } catch (error) {
-        return [];
-    }
+    if (masterColumnsInFlight) return masterColumnsInFlight;
+
+    const loadingToken = startTemplateLoading(target);
+    masterColumnsInFlight = (async function () {
+        try {
+            const res = await fetch(API_BASE + '/api/columns');
+            if (!res.ok) throw new Error('Failed to fetch columns');
+            allMasterColumns = await res.json();
+            window.allMasterColumns = allMasterColumns;
+            masterColumnsLoaded = true;
+            return allMasterColumns;
+        } catch (error) {
+            return [];
+        } finally {
+            masterColumnsInFlight = null;
+            stopTemplateLoading(loadingToken);
+        }
+    })();
+    return masterColumnsInFlight;
 }
 
 // ---------- STATUS HELPERS ----------
@@ -389,7 +414,8 @@ function showQuickAddModalStatus(message, type) {
     quickAddModalStatus.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
 }
 
-async function loadQuickAddCategoryDropdown() {
+async function loadQuickAddCategoryDropdown(target = quickAddCategoryDropdown) {
+    const loadingToken = startTemplateLoading(target);
     try {
         const res = await fetch(API_BASE + '/api/columns/categories');
         if (!res.ok) throw new Error('Failed to fetch categories');
@@ -403,6 +429,8 @@ async function loadQuickAddCategoryDropdown() {
         });
     } catch (error) {
         // Advisory only -- leave the dropdown at its default option on failure.
+    } finally {
+        stopTemplateLoading(loadingToken);
     }
 }
 
@@ -441,6 +469,12 @@ async function saveQuickAddColumn(keepModalOpen, triggerBtn) {
         showQuickAddModalStatus('⚠️ Column name is required.', 'error');
         return;
     }
+
+    if (templateActionsInFlight.has('quick-add-column')) return;
+    templateActionsInFlight.add('quick-add-column');
+    const loadingToken = startTemplateLoading(triggerBtn);
+    const previousDisabled = triggerBtn ? triggerBtn.disabled : false;
+    if (triggerBtn) triggerBtn.disabled = true;
 
     try {
         window.LoadingUI.showSpinner(triggerBtn, 'Saving');
@@ -488,6 +522,9 @@ async function saveQuickAddColumn(keepModalOpen, triggerBtn) {
         showQuickAddModalStatus('❌ Error: ' + error.message, 'error');
     } finally {
         window.LoadingUI.hideSpinner(triggerBtn);
+        if (triggerBtn) triggerBtn.disabled = previousDisabled;
+        stopTemplateLoading(loadingToken);
+        templateActionsInFlight.delete('quick-add-column');
     }
 }
 
@@ -595,7 +632,7 @@ function updateSelectedCount() {
 }
 
 // ---------- MODAL OPEN / CLOSE ----------
-async function openModal(title, templateData = null) {
+async function openModal(title, templateData = null, triggerBtn = null) {
     selectedColumns = [];
     searchInput.value = '';
     searchResults.style.display = 'none';
@@ -608,7 +645,7 @@ async function openModal(title, templateData = null) {
     modal.style.display = 'block';
     document.body.style.overflow = 'hidden';
 
-    const columns = await loadMasterColumns();
+    const columns = await loadMasterColumns(triggerBtn);
     if (columns.length === 0) {
         noColumnsMsg.style.display = 'block';
         searchInput.disabled = true;
@@ -689,10 +726,12 @@ addColumnTriggerBtn.addEventListener('click', function() {
 });
 
 // ---------- MODAL CONTROLS ----------
-document.getElementById('addTemplateBtn').addEventListener('click', () => openModal('Create New Template'));
+document.getElementById('addTemplateBtn').addEventListener('click', function () {
+    openModal('Create New Template', null, this);
+});
 
-function openEditModal(template) {
-    openModal('Edit Template', template);
+function openEditModal(template, triggerBtn = null) {
+    openModal('Edit Template', template, triggerBtn);
 }
 
 cancelBtn.addEventListener('click', closeModal);
@@ -714,6 +753,11 @@ document.getElementById('templateForm').addEventListener('submit', async functio
 
     const selectedIds = selectedColumns.map(c => c.id);
     const saveTemplateBtn = document.getElementById('saveTemplateBtn');
+    if (templateActionsInFlight.has('template-save')) return;
+    templateActionsInFlight.add('template-save');
+    const loadingToken = startTemplateLoading(saveTemplateBtn);
+    const previousDisabled = saveTemplateBtn ? saveTemplateBtn.disabled : false;
+    if (saveTemplateBtn) saveTemplateBtn.disabled = true;
 
     try {
         window.LoadingUI.showSpinner(saveTemplateBtn, 'Saving');
@@ -740,32 +784,44 @@ document.getElementById('templateForm').addEventListener('submit', async functio
         }
 
         showModalStatus('✅ ' + result.message, 'success');
-        setTimeout(() => {
-            closeModal();
-            loadTemplates(true);
-            showStatus('✅ Template saved successfully!', 'success');
-        }, 800);
+        await new Promise(resolve => setTimeout(resolve, 800));
+        closeModal();
+        await loadTemplates(true);
+        showStatus('✅ Template saved successfully!', 'success');
 
     } catch (error) {
         showModalStatus('❌ Error: ' + error.message, 'error');
     } finally {
         window.LoadingUI.hideSpinner(saveTemplateBtn);
+        if (saveTemplateBtn) saveTemplateBtn.disabled = previousDisabled;
+        stopTemplateLoading(loadingToken);
+        templateActionsInFlight.delete('template-save');
     }
 });
 
 // ---------- CONFIRM DELETE ----------
-async function confirmDelete(id, name) {
+async function confirmDelete(id, name, triggerBtn = null) {
     if (!confirm(`Are you sure you want to delete template "${name}"? This will soft-delete it.`)) {
         return;
     }
+    const actionKey = 'template-delete:' + id;
+    if (templateActionsInFlight.has(actionKey)) return;
+    templateActionsInFlight.add(actionKey);
+    const loadingToken = startTemplateLoading(triggerBtn);
+    const previousDisabled = triggerBtn ? triggerBtn.disabled : false;
+    if (triggerBtn) triggerBtn.disabled = true;
     try {
         const res = await fetch(API_BASE + '/api/templates/' + id, { method: 'DELETE' });
         const result = await res.json();
         if (!res.ok) throw new Error(result.message || result.detail || 'Failed to delete template');
         showStatus('✅ ' + result.message, 'success');
-        loadTemplates(true);
+        await loadTemplates(true);
     } catch (error) {
         showStatus('❌ Error deleting template: ' + error.message, 'error');
+    } finally {
+        if (triggerBtn) triggerBtn.disabled = previousDisabled;
+        stopTemplateLoading(loadingToken);
+        templateActionsInFlight.delete(actionKey);
     }
 }
 
@@ -773,12 +829,12 @@ async function confirmDelete(id, name) {
 // PREVIEW MODAL (Eye Icon) - PIVOT TABLE VERSION
 // ==============================================
 
-async function openPreviewModal(tpl) {
+async function openPreviewModal(tpl, triggerBtn = null) {
     // Use tpl.columns (from pivot table) instead of selected_columns.
     // GET /api/templates doesn't select master_columns.notes, so refresh
     // allMasterColumns (GET /api/columns, which does) and look notes up by
     // id -- keeps this phase frontend-only, no backend change.
-    await loadMasterColumns();
+    await loadMasterColumns(triggerBtn);
     const cols = tpl.columns || [];
     let columnData = [];
     if (cols.length > 0) {

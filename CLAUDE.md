@@ -20,7 +20,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/error_log.py + static/error_dashboard.* → error logging and error-dashboard reporting.
 - routers/import_export.py + static/upload.* → Excel upload, mapping, validation/import, date handling, change detection, export, saved mappings, and guarded actions. See CHANGELOG_ARCHIVE.md.
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
-- routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, column mapping/reordering, rate-source rules, subtotal default, backup/restore. See CHANGELOG_ARCHIVE.md.
+- routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, mapping/reordering, rate rules, backup/restore, and Template loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js → per-client voucher-prefix category configuration; requires `?client_id=`, entry-aware header chrome. See CHANGELOG_ARCHIVE.md.
 - database.py, main.py → schema, startup, routes, SQLite logs/legacy, and pooled PostgreSQL business data configured through `DATABASE_URL`. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
@@ -275,7 +275,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-13: Form draft discard safeguards completed; Procedure data-table linking now supports multi-select with professionally aligned reference, date, and quantity rows.
 - 2026-09-13: Procedure Data Table text clicks now link immediately; blank row areas and checkboxes toggle selection without triggering a fetch.
 
-- 2026-09-13: Verification, Upload, Data Bank, Audit Rules, and Trial Balance loading feedback completed and manually accepted. See CHANGELOG_ARCHIVE.md.
+- 2026-09-13: Verification, Upload, Data Bank, Audit Rules, Trial Balance, and Template loading feedback completed and manually accepted. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
