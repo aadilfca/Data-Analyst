@@ -3570,6 +3570,16 @@ function filterTransactionsForPopover(term) {
     });
 }
 
+// Keep the voucher-list search ready for keyboard input whenever the popover opens. Do not
+// refocus while the field is already active, because renderTransactionPopover() also runs for
+// each input event and should not disturb the user's caret or text selection.
+function focusTransactionListSearchInput() {
+    const searchInput = document.getElementById('transactionListSearchInput');
+    if (searchInput && document.activeElement !== searchInput) {
+        searchInput.focus({ preventScroll: true });
+    }
+}
+
 function renderTransactionPopover() {
     const popover = document.getElementById('transactionListPopover');
     const tbody = document.getElementById('transactionListBody');
@@ -3585,6 +3595,7 @@ function renderTransactionPopover() {
         tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#94a3b8;">No transactions found.</td></tr>`;
         if (totalSpan) totalSpan.textContent = '';
         popover.style.display = 'block';
+        focusTransactionListSearchInput();
         return;
     }
 
@@ -3594,6 +3605,7 @@ function renderTransactionPopover() {
         tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#94a3b8;">No transactions match your search.</td></tr>`;
         if (totalSpan) totalSpan.textContent = 'Total vouchers: 0 | Total: 0 transactions';
         popover.style.display = 'block';
+        focusTransactionListSearchInput();
         return;
     }
 
@@ -3685,6 +3697,7 @@ function renderTransactionPopover() {
     });
 
     popover.style.display = 'block';
+    focusTransactionListSearchInput();
 }
 
 function closeTransactionPopover() {

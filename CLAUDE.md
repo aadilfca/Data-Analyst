@@ -200,6 +200,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
 
+- 2026-09-15: Verification voucher search popover now focuses its search field on open while preserving the caret during filtering.
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.
 - 2026-07-13/15: Verification cards, voucher grouping/table/header, transaction popover, validation indicators, and Prev/Next navigation redesigned across successive phases.

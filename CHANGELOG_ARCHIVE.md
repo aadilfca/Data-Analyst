@@ -1,5 +1,14 @@
 # Changelog Archive
 
+## Verification voucher search focus — 2026-09-15
+
+The Verification voucher-list popover now focuses `#transactionListSearchInput` as soon as the
+mirror-icon popover is shown, including empty and no-match states. The focus helper skips
+refocusing when the field is already active, so each in-memory filter render preserves the user's
+caret or text selection. Implemented in `static/verification.js` only; no backend, HTML, or CSS
+changes were needed. JavaScript syntax and diff checks passed, and the user confirmed the behavior
+manually in the authenticated Verification flow.
+
 ## Verification Form Arithmetic Runtime — 2026-09-14
 
 Verification now recalculates Arithmetic — Multiply Form totals from exactly two Numeric Item-row
