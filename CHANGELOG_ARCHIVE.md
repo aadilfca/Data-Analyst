@@ -1,5 +1,14 @@
 # Changelog Archive
 
+## Verification Form Arithmetic Runtime — 2026-09-14
+
+Verification now recalculates Arithmetic — Multiply Form totals from exactly two Numeric Item-row
+operands. The browser keeps derived totals read-only and updates them live; the backend recalculates
+and ignores submitted derived values, so completion, status, and Cross-checks use numeric totals.
+
+Focused Verification, Audit Rulebook, compilation, and diff checks passed. The full suite passed 244
+tests with 13 pre-existing fixture/bootstrap failures unrelated to this phase.
+
 ## Audit Rules Form Arithmetic — 2026-09-14
 
 Form Documents now support a read-only-definition field type, Arithmetic — Multiply, configured

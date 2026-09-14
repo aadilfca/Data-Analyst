@@ -61,9 +61,23 @@ router = APIRouter()
 # is None and the other a datetime) raises TypeError. This sentinel/helper pair replaces the
 # `or ''` fallback with a real minimum datetime, so comparisons stay well-typed either way.
 _MIN_TS = datetime.min.replace(tzinfo=timezone.utc)
+ARITHMETIC_MULTIPLY_FIELD_TYPE = 'arithmetic_multiply'
+NUMERIC_FORM_FIELD_TYPES = {'numeric', ARITHMETIC_MULTIPLY_FIELD_TYPE}
 
 def _ts_sort_key(value):
     return value if value is not None else _MIN_TS
+
+
+def _saved_form_arithmetic_operands(value: Any) -> List[str]:
+    """Decode the saved operand-name list used by Arithmetic — Multiply Form fields."""
+    if not value:
+        return []
+    try:
+        decoded = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return []
+    return [str(operand).strip() for operand in decoded
+            if str(operand).strip()] if isinstance(decoded, list) else []
 
 
 def _document_role_names(document: dict) -> List[str]:
@@ -5214,6 +5228,43 @@ def _form_value_for_storage(field_type: str, value: Any, field_name: str):
     raise HTTPException(400, f"Unsupported Form field type '{field_type}'.")
 
 
+def _materialize_form_entry_values(fields: Dict[int, dict], raw_values: Dict[int, Any], row_scope: str) -> dict:
+    """Normalize editable values and calculate server-owned Arithmetic — Multiply values."""
+    fields_by_name = {str(field['field_name']).strip().casefold(): field for field in fields.values()}
+    normalized_values = {}
+    for field_id, raw_value in raw_values.items():
+        field = fields[field_id]
+        if field.get('field_type') == ARITHMETIC_MULTIPLY_FIELD_TYPE:
+            # Derived fields are server-owned. Ignore a submitted value, including a
+            # malicious one, and calculate it from the saved operand fields below.
+            continue
+        normalized_values[field_id] = _form_value_for_storage(
+            field.get('field_type') or 'text', raw_value, field['field_name']
+        )
+
+    for field_id, field in fields.items():
+        if field.get('field_type') != ARITHMETIC_MULTIPLY_FIELD_TYPE:
+            continue
+        if (field.get('field_scope') or 'header') != row_scope:
+            continue
+        operands = _saved_form_arithmetic_operands(field.get('arithmetic_operands'))
+        if len(operands) != 2:
+            continue
+        operand_fields = [fields_by_name.get(operand.casefold()) for operand in operands]
+        if any(not operand_field or operand_field.get('field_type') != 'numeric'
+               or (operand_field.get('field_scope') or 'header') != row_scope
+               for operand_field in operand_fields):
+            continue
+        operand_values = [normalized_values.get(int(operand_field['id']))
+                          for operand_field in operand_fields]
+        numeric_values = [value[2] if value else None for value in operand_values]
+        if all(value is not None for value in numeric_values):
+            product = numeric_values[0] * numeric_values[1]
+            if math.isfinite(product):
+                normalized_values[field_id] = (None, None, product)
+    return normalized_values
+
+
 def _replace_form_entries(voucher_line_id: int, document_id: int, raw_entries: Any) -> int:
     """Full-replace the manual evidence rows for one Form Document and voucher line."""
     line = execute_query_pg("SELECT id FROM verification_details WHERE id = %s", (voucher_line_id,))
@@ -5229,7 +5280,7 @@ def _replace_form_entries(voucher_line_id: int, document_id: int, raw_entries: A
         raise HTTPException(400, "entries must be a list.")
 
     field_rows = execute_query_pg(
-        "SELECT id, field_name, field_type, field_scope FROM audit_rule_document_fields "
+        "SELECT id, field_name, field_type, field_scope, arithmetic_operands FROM audit_rule_document_fields "
         "WHERE document_id = %s ORDER BY sort_order, id",
         (document_id,)
     )
@@ -5257,7 +5308,7 @@ def _replace_form_entries(voucher_line_id: int, document_id: int, raw_entries: A
             raw_values = [{'field_id': key, 'value': value} for key, value in raw_values.items()]
         if not isinstance(raw_values, list):
             raise HTTPException(400, f"Form entry {entry_index + 1} values must be a list.")
-        clean_values = []
+        raw_values_by_field = {}
         seen_fields = set()
         for value_index, raw_value in enumerate(raw_values):
             if not isinstance(raw_value, dict):
@@ -5274,14 +5325,16 @@ def _replace_form_entries(voucher_line_id: int, document_id: int, raw_entries: A
             if (field.get('field_scope') or 'header') != row_scope:
                 raise HTTPException(400, f"Form field '{field['field_name']}' belongs to the {field.get('field_scope') or 'header'} section.")
             seen_fields.add(field_id)
-            text_value, date_value, numeric_value = _form_value_for_storage(
-                field.get('field_type') or 'text', raw_value.get('value'), field['field_name']
-            )
-            if text_value is not None or date_value is not None or numeric_value is not None:
-                clean_values.append({
-                    'field_id': field_id, 'value_text': text_value,
-                    'value_date': date_value, 'value_numeric': numeric_value
-                })
+            raw_values_by_field[field_id] = raw_value.get('value')
+
+        normalized_values = _materialize_form_entry_values(fields, raw_values_by_field, row_scope)
+
+        clean_values = [
+            {'field_id': field_id, 'value_text': typed[0],
+             'value_date': typed[1], 'value_numeric': typed[2]}
+            for field_id, typed in normalized_values.items()
+            if typed[0] is not None or typed[1] is not None or typed[2] is not None
+        ]
         if clean_values:
             clean_entries.append({
                 'bill_group_index': bill_group_index,
@@ -5327,7 +5380,7 @@ def _shape_form_entries(rows: List[dict]) -> List[dict]:
         if (row.get('field_type') or 'text') == 'date':
             date_value = row.get('value_date')
             value = date_value.isoformat() if hasattr(date_value, 'isoformat') else date_value
-        elif (row.get('field_type') or 'text') == 'numeric':
+        elif (row.get('field_type') or 'text') in NUMERIC_FORM_FIELD_TYPES:
             value = float(row['value_numeric']) if row.get('value_numeric') is not None else None
         if value is not None:
             entry['values'].append({'field_id': row['field_id'], 'field_name': row['field_name'], 'value': value})
@@ -6091,7 +6144,9 @@ def _shape_form_entries_for_completion(rows: List[dict]) -> List[dict]:
             'bill_group_index': key[0], 'row_scope': key[1], 'sort_order': key[2], 'values': {}
         })
         field_type = row.get('field_type') or 'text'
-        value = row.get({'numeric': 'value_numeric', 'date': 'value_date'}.get(field_type, 'value_text'))
+        value = row.get({'numeric': 'value_numeric',
+                         ARITHMETIC_MULTIPLY_FIELD_TYPE: 'value_numeric',
+                         'date': 'value_date'}.get(field_type, 'value_text'))
         if value is not None and str(value).strip():
             entry['values'][int(row['field_id'])] = value
     return list(entries.values())
@@ -6328,7 +6383,7 @@ def _get_form_cross_check_values(
         candidate = (_ts_sort_key(row.get('updated_at')), row['voucher_line_id'])
         if winning.get(key) != candidate:
             continue
-        raw_value = row.get('value_numeric') if row.get('field_type') == 'numeric' else row.get('value_text')
+        raw_value = row.get('value_numeric') if row.get('field_type') in NUMERIC_FORM_FIELD_TYPES else row.get('value_text')
         numeric = _cross_check_numeric(raw_value)
         if numeric is None:
             continue

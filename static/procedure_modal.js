@@ -2315,7 +2315,7 @@ function getDerivedFormAmountFields(itemFields) {
     const quantityField = findQuickBillField(itemFields, ['quantity', 'qty']);
     const rateField = findQuickBillField(itemFields, ['rate', 'unit rate', 'price']);
     const amountField = getFormBillAmountField(itemFields);
-    if (!quantityField || !rateField || !amountField) return null;
+    if (!quantityField || !rateField || !amountField || amountField.field_type === 'arithmetic_multiply') return null;
     return {quantityField, rateField, amountField};
 }
 
@@ -2326,6 +2326,41 @@ function getFormBillAmountField(itemFields) {
 function isDerivedFormAmountField(field, itemFields) {
     const derivedFields = getDerivedFormAmountFields(itemFields);
     return !!derivedFields && String(derivedFields.amountField.id) === String(field.id);
+}
+
+function getArithmeticOperandFields(field, itemFields) {
+    if (field?.field_type !== 'arithmetic_multiply' || !Array.isArray(field.arithmetic_operands)
+        || field.arithmetic_operands.length !== 2) return null;
+    const byName = new Map(itemFields.map(candidate => [String(candidate.field_name || '').trim().toLowerCase(), candidate]));
+    const operands = field.arithmetic_operands.map(name => byName.get(String(name || '').trim().toLowerCase()));
+    return operands.every(Boolean) ? operands : null;
+}
+
+function isDerivedFormField(field, itemFields) {
+    return field?.field_type === 'arithmetic_multiply'
+        || isDerivedFormAmountField(field, itemFields);
+}
+
+function syncArithmeticMultiplyFields(entry, itemFields) {
+    if (!entry) return;
+    itemFields.filter(field => field.field_type === 'arithmetic_multiply').forEach(field => {
+        const operands = getArithmeticOperandFields(field, itemFields);
+        const targetId = String(field.id);
+        if (!operands) {
+            entry.values[targetId] = '';
+            return;
+        }
+        const values = operands.map(operand => entry.values[String(operand.id)]);
+        if (values.some(formValueIsBlank)) {
+            entry.values[targetId] = '';
+            return;
+        }
+        const left = Number(values[0]);
+        const right = Number(values[1]);
+        const product = left * right;
+        entry.values[targetId] = Number.isFinite(left) && Number.isFinite(right)
+            && Number.isFinite(product) ? String(product) : '';
+    });
 }
 
 function syncDerivedFormAmount(entry, itemFields) {
@@ -2345,6 +2380,11 @@ function syncDerivedFormAmount(entry, itemFields) {
         ? (quantity === 1 ? String(rawRate) : String(quantity * rate)) : '';
 }
 
+function syncDerivedFormValues(entry, itemFields) {
+    syncArithmeticMultiplyFields(entry, itemFields);
+    syncDerivedFormAmount(entry, itemFields);
+}
+
 function updateDerivedFormAmountInput(sourceInput, entry, itemFields) {
     const derivedFields = getDerivedFormAmountFields(itemFields);
     const row = sourceInput && sourceInput.closest('.procedure-form-item-row');
@@ -2353,6 +2393,17 @@ function updateDerivedFormAmountInput(sourceInput, entry, itemFields) {
         String(input.dataset.fieldId) === String(derivedFields.amountField.id)
     );
     if (amountInput) amountInput.value = entry.values[String(derivedFields.amountField.id)] || '';
+}
+
+function updateDerivedFormInputs(sourceInput, entry, itemFields) {
+    const row = sourceInput && sourceInput.closest('.procedure-form-item-row');
+    if (!row || !entry) return;
+    row.querySelectorAll('.procedure-form-input').forEach(input => {
+        const field = itemFields.find(candidate => String(candidate.id) === String(input.dataset.fieldId));
+        if (field && isDerivedFormField(field, itemFields)) {
+            input.value = entry.values[String(field.id)] || '';
+        }
+    });
 }
 
 function computeFormBillGrandTotal(tabState, itemFields) {
@@ -2483,7 +2534,7 @@ function appendQuickFormItemRows(tabState, itemFields, billGroupIndex, rawRows) 
         }
         const entry = makeEmptyFormEntry('item', itemFields, 0, billGroupIndex);
         entry.values = values;
-        syncDerivedFormAmount(entry, itemFields);
+        syncDerivedFormValues(entry, itemFields);
         cleanRows.push(entry);
     }
     if (!cleanRows.length) return {added: 0, error: 'Enter at least one Item field value.'};
@@ -2510,7 +2561,7 @@ function quickBillRowHtml(rowIndex, values = {}) {
 function quickFormItemRowHtml(rowIndex, itemFields, values = {}) {
     return `<div class="procedure-form-quick-item-row" data-quick-item-row-index="${rowIndex}">
         ${itemFields.map(field => {
-            const derived = isDerivedFormAmountField(field, itemFields);
+            const derived = isDerivedFormField(field, itemFields);
             const type = field.field_type === 'date' ? 'date' : 'text';
             const inputMode = field.field_type === 'numeric' ? 'decimal' : undefined;
             return `<input type="${type}"${inputMode ? ` inputmode="${inputMode}"` : ''}
@@ -2571,7 +2622,7 @@ function formValueIsBlank(value) {
 
 function formFieldValuesMatch(field, actualValue, expectedValue) {
     if (formValueIsBlank(actualValue) || formValueIsBlank(expectedValue)) return false;
-    if (field.field_type === 'numeric') {
+    if (field.field_type === 'numeric' || field.field_type === 'arithmetic_multiply') {
         const actual = Number(actualValue);
         const expected = Number(expectedValue);
         return Number.isFinite(actual) && Number.isFinite(expected)
@@ -2738,13 +2789,13 @@ function applyMappedFormValues(tabState, fields, sources) {
         }
         if (copyIntoBlankFields(
             itemEntry,
-            itemFields.filter(field => !isDerivedFormAmountField(field, itemFields)),
+            itemFields.filter(field => !isDerivedFormField(field, itemFields)),
             source
         )) changed = true;
         const previousAmount = itemEntry.values[String(
             getDerivedFormAmountFields(itemFields)?.amountField?.id || ''
         )];
-        syncDerivedFormAmount(itemEntry, itemFields);
+        syncDerivedFormValues(itemEntry, itemFields);
         const currentAmount = itemEntry.values[String(
             getDerivedFormAmountFields(itemFields)?.amountField?.id || ''
         )];
@@ -2867,7 +2918,7 @@ function renderFormDocumentPanel(uid, doc) {
                     <div class="procedure-form-item-row" data-item-index="${index}" data-bill-group-index="${billGroupIndex}">
                         <div class="procedure-form-grid">${itemFields.map(field => formFieldInputHtml(
                             field, entry.values[String(field.id)], index, 'item', billGroupIndex,
-                            isDerivedFormAmountField(field, itemFields)
+                            isDerivedFormField(field, itemFields)
                         )).join('')}</div>
                         <div class="procedure-form-item-actions">
                             <button type="button" class="procedure-form-remove-item-btn"
@@ -2994,7 +3045,8 @@ function renderFormDocumentPanel(uid, doc) {
             if (!entry) return;
             entry.values[this.dataset.fieldId] = this.value;
             if (rowScope === 'item') {
-                syncDerivedFormAmount(entry, itemFields);
+                syncDerivedFormValues(entry, itemFields);
+                updateDerivedFormInputs(this, entry, itemFields);
                 updateDerivedFormAmountInput(this, entry, itemFields);
                 updateFormBillTotal(uid, doc, itemFields);
             }
@@ -3126,12 +3178,13 @@ function renderFormDocumentPanel(uid, doc) {
             if (event.target.matches('.procedure-form-quick-item-input')) {
                 const row = event.target.closest('.procedure-form-quick-item-row');
                 const entry = {values: quickFormItemRowValues(row)};
-                syncDerivedFormAmount(entry, itemFields);
-                const derivedFields = getDerivedFormAmountFields(itemFields);
-                const amountInput = derivedFields && row.querySelector(
-                    `.procedure-form-quick-item-input[data-quick-item-field-id="${derivedFields.amountField.id}"]`
-                );
-                if (amountInput) amountInput.value = entry.values[String(derivedFields.amountField.id)] || '';
+                syncDerivedFormValues(entry, itemFields);
+                row.querySelectorAll('.procedure-form-quick-item-input').forEach(input => {
+                    const field = itemFields.find(candidate => String(candidate.id) === String(input.dataset.quickItemFieldId));
+                    if (field && isDerivedFormField(field, itemFields)) {
+                        input.value = entry.values[String(field.id)] || '';
+                    }
+                });
             }
             if (quickStatus) quickStatus.textContent = '';
         });

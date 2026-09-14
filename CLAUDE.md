@@ -276,6 +276,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-13: Procedure Data Table text clicks now link immediately; blank row areas and checkboxes toggle selection without triggering a fetch.
 - 2026-09-14: Audit Rules Forms gained Arithmetic — Multiply field definitions, operand selection, persistence, and existing-schema migration repair.
 
+- 2026-09-14: Verification Forms gained server-owned Multiply calculations, read-only totals, numeric completion/cross-check handling, and tamper-safe persistence.
 - 2026-09-13: Loading feedback and hardening Mini-phases 1–5 completed; standard progress cursor retained. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
