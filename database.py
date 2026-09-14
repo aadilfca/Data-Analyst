@@ -17,6 +17,19 @@ load_dotenv()
 
 DB_NAME = "test.db"
 _POSTGRES_SCHEMA_READY = False
+
+_STORAGE_CLEANUP_RUNS_SQL = """
+    CREATE TABLE IF NOT EXISTS storage_cleanup_runs (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        operator TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        status TEXT NOT NULL,
+        deleted_counts TEXT,
+        preview_hash TEXT,
+        started_at TIMESTAMPTZ DEFAULT now(),
+        completed_at TIMESTAMPTZ
+    )
+"""
 # Print absolute path for verification
 # Windows may use cp1252 for console output; startup diagnostics contain Unicode icons.
 if hasattr(sys.stdout, "reconfigure"):
@@ -1068,6 +1081,18 @@ def init_db():
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_data_audit_log_clientdata ON data_audit_log (client_data_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_data_audit_log_action ON data_audit_log (action)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS storage_cleanup_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operator TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                status TEXT NOT NULL,
+                deleted_counts TEXT,
+                preview_hash TEXT,
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
+            )
+        ''')
         print("✅ Created data_audit_log table for change tracking")
 
         # Schema upgrade: add document_group_id column for grouping rows by Document ID (Phase 1)
@@ -3281,6 +3306,12 @@ def _ensure_postgres_report_category_tables(conn):
     finally:
         cur.close()
 
+def _ensure_postgres_storage_cleanup_runs(conn):
+    """Create the cleanup-run ledger on both fresh and existing schemas."""
+    with conn.cursor() as cleanup_cur:
+        cleanup_cur.execute(_STORAGE_CLEANUP_RUNS_SQL)
+
+
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
 
@@ -3294,6 +3325,7 @@ def init_db_postgres(conn):
     cur.execute("SELECT to_regclass('public.audit_rules_config_state')")
     if cur.fetchone()[0] is not None:
         cur.close()
+        _ensure_postgres_storage_cleanup_runs(conn)
         migrated_document_type = _ensure_postgres_audit_rule_document_type_constraint(conn)
         migrated_form_columns = _ensure_postgres_form_field_columns(conn)
         migrated_form_tables = _ensure_postgres_form_tables(conn)
@@ -3652,6 +3684,9 @@ def init_db_postgres(conn):
     ''', "data_audit_log")
     run("CREATE INDEX IF NOT EXISTS idx_data_audit_log_clientdata ON data_audit_log (client_data_id)")
     run("CREATE INDEX IF NOT EXISTS idx_data_audit_log_action ON data_audit_log (action)")
+
+    # ---------- 16a. storage_cleanup_runs ----------
+    run(_STORAGE_CLEANUP_RUNS_SQL, "storage_cleanup_runs")
 
     # ---------- 17. client_voucher_prefixes ----------
     run('''

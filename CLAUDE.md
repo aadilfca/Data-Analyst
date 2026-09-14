@@ -22,11 +22,11 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js → per-client voucher-prefix category configuration; requires `?client_id=`, entry-aware header chrome. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → schema, startup migrations, SQLite logs/legacy, pooled PostgreSQL business data, and mounted Storage Cleanup preview configured through `DATABASE_URL`. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → schema, startup migrations (including existing-schema Storage Cleanup ledger repair), SQLite logs/legacy, pooled PostgreSQL business data, and mounted Storage Cleanup preview/apply flow configured through `DATABASE_URL`. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
-- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Admin-only read-only storage preview; deletion/compaction remains gated for a later phase. See CHANGELOG_ARCHIVE.md.
+- routers/storage_cleanup.py + services/storage_cleanup.py + static/storage_cleanup.* → Admin-only storage preview and typed-confirmation cleanup transaction; VACUUM/compaction remains deferred. See CHANGELOG_ARCHIVE.md.
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js → standalone login page posting to `/api/auth/login`, generic auth error; does not load `client_context.js`.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
@@ -273,7 +273,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-13: Form draft discard safeguards completed; Procedure data-table linking now supports multi-select with professionally aligned reference, date, and quantity rows.
 - 2026-09-13: Procedure Data Table text clicks now link immediately; blank row areas and checkboxes toggle selection without triggering a fetch.
 - 2026-09-14: Forms gained Multiply definitions and server-owned calculations, read-only totals, numeric completion/cross-check handling, and tamper-safe persistence.
-- 2026-09-14: Storage Cleanup Phase A added an admin-only read-only preview; deletion and compaction remain gated for later phases. See CHANGELOG_ARCHIVE.md.
+- 2026-09-14: Storage Cleanup Phase B added a fresh-preview-hash, typed-confirmation cleanup transaction and existing-schema ledger migration protecting client, Verification, Trial Balance, and linked evidence. See CHANGELOG_ARCHIVE.md.
 - 2026-09-13: Loading feedback and hardening Mini-phases 1–5 completed; Audit Rules cursor/cache integration verified. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance

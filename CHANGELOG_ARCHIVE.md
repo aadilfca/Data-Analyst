@@ -5632,3 +5632,25 @@ sizes, removable log totals, retired unlinked `client_data` candidates, and prot
 `client_data`/`verification_details`/Trial Balance counts. It performs no writes, deletion, or
 compaction. Navigation and cache-busting references were updated, and focused tests cover the
 dry-run route and admin guard. Destructive cleanup remains a separately gated phase.
+
+## Storage Cleanup Phase B — confirmation-gated cleanup — 2026-09-14
+
+Added the approved in-app cleanup operation across `database.py`, `services/storage_cleanup.py`,
+`routers/storage_cleanup.py`, `static/storage_cleanup.html`/`.js`, and the CLI. The administrator
+must submit a fresh preview hash and type `DELETE APPROVED STORAGE DATA`; the service then removes
+only the four approved application logs, dependency-free retired `client_data`, deleted and
+unreferenced upload metadata, stale presence, and expired sessions in one PostgreSQL transaction.
+Current Data Bank rows, Verification details, Trial Balance tables, and linked evidence are guarded
+by explicit predicates and post-delete count checks. Each successful run stores operator, scope,
+preview hash, status, and deleted counts in `storage_cleanup_runs`. VACUUM/compaction remains
+deferred. Focused tests cover confirmation, stale-preview rejection, and route forwarding; no live
+cleanup was invoked during development.
+
+## Storage Cleanup Phase B correction — existing-schema startup migration — 2026-09-14
+
+Investigation of the first live apply attempt found the preview succeeded but the POST returned
+503 because `init_db_postgres()` returned through its existing-schema fast path without creating
+`storage_cleanup_runs`; the apply transaction therefore rolled back before any deletion. Added a
+shared idempotent table definition/ensure step to that path in `database.py`, with regression
+coverage in `tests/test_storage_cleanup.py`. The cleanup scope and protected-data rules were not
+changed, and no live cleanup was invoked while correcting this issue.
