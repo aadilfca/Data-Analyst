@@ -142,6 +142,18 @@ async function handleImportFile(event) {
 window.onload = function() {
     loadSetupStats();
 
+    const storageCleanupCard = document.getElementById('storageCleanupCard');
+    if (storageCleanupCard) {
+        const openStorageCleanup = () => { window.location.href = '/static/storage_cleanup.html'; };
+        storageCleanupCard.addEventListener('click', openStorageCleanup);
+        storageCleanupCard.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openStorageCleanup();
+            }
+        });
+    }
+
     // Backup export button
     document.getElementById('exportBackupBtn').addEventListener('click', exportBackup);
     // Backup import button triggers file input

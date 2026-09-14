@@ -5624,3 +5624,11 @@ The standard `progress` cursor is sufficient alongside the existing local spinne
 recovery safeguards. A custom animated cursor is deferred because it would add complexity without
 improving the verified user feedback. Mini-phases 1–5 are complete and the loading-feedback work
 is closed; no code or dependency change was required.
+## Storage Cleanup Phase A — read-only administrator preview — 2026-09-14
+
+Added `services/storage_cleanup.py`, `routers/storage_cleanup.py`, and the Setup-linked
+`storage_cleanup.html`/`.js` firm-level admin screen. The preview reads PostgreSQL database/table
+sizes, removable log totals, retired unlinked `client_data` candidates, and protected
+`client_data`/`verification_details`/Trial Balance counts. It performs no writes, deletion, or
+compaction. Navigation and cache-busting references were updated, and focused tests cover the
+dry-run route and admin guard. Destructive cleanup remains a separately gated phase.

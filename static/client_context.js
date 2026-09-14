@@ -209,6 +209,7 @@ const NAV_MANIFEST = [
                     { label: 'Manage Templates', url: '/static/templates.html', state: 'ready' },
                     { label: 'Error Dashboard', url: '/static/error_dashboard.html', state: 'ready' },
                     { label: 'App Settings', url: '/static/settings.html', state: 'ready' },
+                    { label: 'Storage Cleanup', url: '/static/storage_cleanup.html', state: 'ready', keywords: ['database size', 'storage', 'cleanup', 'maintenance'] },
                 ]
             },
             // Client-scoped, not firm-level: this is the selected client's own voucher-prefix
@@ -371,9 +372,9 @@ function isDashboardPage() {
 // Firm-level pages (Admin area, Phase 6 of 8) - not client-scoped, so they shouldn't need a
 // client selected to load. A named exemption list, not a general opt-out mechanism - only these
 // three pages are exempt. The admin-role guards on top of this are untouched and still apply -
-// clients.js's checkAdminAccess(), users.js's own 403-aware loadUsers(), and the tab strip's
-// admin-only gating, all resolving through the shared isAdminUser() probe below.
-const FIRM_LEVEL_PAGES = ['settings.html', 'users.html', 'clients.html'];
+// clients.js's checkAdminAccess(), users.js's own 403-aware loadUsers(), the Storage Cleanup
+// route's server-side guard, and the tab strip's admin-only gating all remain layered together.
+const FIRM_LEVEL_PAGES = ['settings.html', 'users.html', 'clients.html', 'storage_cleanup.html'];
 
 function isFirmLevelPage() {
     const currentFile = window.location.pathname.split('/').pop() || '';
@@ -960,19 +961,20 @@ function renderFirmLevelNav() {
 // The Admin area's persistent tab navigation, defined once here for the same reason
 // renderFirmLevelNav() above is: it used to be hardcoded inline in settings.html only, so clicking
 // "Manage Clients"/"Manage Users" landed the user on a page with no tab strip at all and no way
-// back to the other two. One renderer on all three pages can't drift the way per-page markup did.
+// back to the other pages. One renderer can't drift the way per-page markup did.
 // A hand-maintained data array, deliberately not a scrape of any page's DOM - same convention as
 // NAV_MANIFEST above. `file` doubles as both the navigation target and the active-state key.
 const FIRM_LEVEL_TABS = [
     { file: 'settings.html', label: '⚙️ App Settings', adminOnly: false },
     { file: 'clients.html', label: '🏢 Manage Clients', adminOnly: true },
-    { file: 'users.html', label: '👥 Manage Users', adminOnly: true }
+    { file: 'users.html', label: '👥 Manage Users', adminOnly: true },
+    { file: 'storage_cleanup.html', label: '🧹 Storage Cleanup', adminOnly: true }
 ];
 
 // Memoised admin probe. There is still no dedicated "am I admin" endpoint, so this reuses the same
 // de facto GET /api/users 403-probe that settings.js/clients.js/client_select.js already rely on -
-// memoising the promise means the three Admin pages issue one probe between them rather than each
-// firing its own. Fails closed (false) on any error, matching every existing call site's behaviour.
+// memoising the promise means the Admin pages issue one probe rather than each firing its own.
+// Fails closed (false) on any error, matching every existing call site's behaviour.
 let adminProbePromise = null;
 
 function isAdminUser() {

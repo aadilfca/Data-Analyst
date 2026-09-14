@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from database import init_db, log_error, get_error_code_for_exception, execute_query
 from fastapi.concurrency import run_in_threadpool
 import os
-from routers import dashboard, verification, import_export, templates, clients, data, error_log, settings, audit_rules, trial_balance, reconciliation, auth, users
+from routers import dashboard, verification, import_export, templates, clients, data, error_log, settings, audit_rules, trial_balance, reconciliation, auth, users, storage_cleanup
 from routers.auth import get_current_user
 from datetime import datetime
 import traceback
@@ -62,6 +62,7 @@ app.include_router(trial_balance.router)
 app.include_router(reconciliation.router)
 app.include_router(auth.router)
 app.include_router(users.router)
+app.include_router(storage_cleanup.router)
 
 # ---------- GLOBAL EXCEPTION HANDLER ----------
 from fastapi import Request, status
