@@ -1583,6 +1583,7 @@ def init_db():
                 field_type TEXT NOT NULL DEFAULT 'text',
                 field_scope TEXT NOT NULL DEFAULT 'header',
                 linked_column TEXT,
+                arithmetic_operands TEXT,
                 FOREIGN KEY (document_id) REFERENCES audit_rule_documents(id) ON DELETE CASCADE,
                 UNIQUE(document_id, field_name)
             )
@@ -1592,7 +1593,10 @@ def init_db():
         for column_name, definition in {
             'field_type': "TEXT NOT NULL DEFAULT 'text'",
             'field_scope': "TEXT NOT NULL DEFAULT 'header'",
-            'linked_column': 'TEXT'
+            'linked_column': 'TEXT',
+            # Phase 1: JSON array of the two Form field names used by an
+            # explicit arithmetic_multiply field; NULL for ordinary fields.
+            'arithmetic_operands': 'TEXT'
         }.items():
             try:
                 existing_field_columns = {row[1] for row in conn.execute("PRAGMA table_info(audit_rule_document_fields)").fetchall()}
@@ -3092,6 +3096,7 @@ def _ensure_postgres_form_field_columns(conn):
         "field_type": "TEXT NOT NULL DEFAULT 'text'",
         "field_scope": "TEXT NOT NULL DEFAULT 'header'",
         "linked_column": "TEXT",
+        "arithmetic_operands": "TEXT",
     }
     cur = conn.cursor()
     try:
@@ -3703,12 +3708,14 @@ def init_db_postgres(conn):
             field_type TEXT NOT NULL DEFAULT 'text',
             field_scope TEXT NOT NULL DEFAULT 'header',
             linked_column TEXT,
+            arithmetic_operands TEXT,
             UNIQUE(document_id, field_name)
         )
     ''', "audit_rule_document_fields")
     run("ALTER TABLE audit_rule_document_fields ADD COLUMN IF NOT EXISTS field_type TEXT NOT NULL DEFAULT 'text'")
     run("ALTER TABLE audit_rule_document_fields ADD COLUMN IF NOT EXISTS field_scope TEXT NOT NULL DEFAULT 'header'")
     run("ALTER TABLE audit_rule_document_fields ADD COLUMN IF NOT EXISTS linked_column TEXT")
+    run("ALTER TABLE audit_rule_document_fields ADD COLUMN IF NOT EXISTS arithmetic_operands TEXT")
     run("CREATE INDEX IF NOT EXISTS idx_audit_rule_document_fields_document ON audit_rule_document_fields (document_id)")
 
     # Form evidence values (Phase A): one header/item entry can carry one typed value per

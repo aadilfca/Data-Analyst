@@ -728,8 +728,35 @@ def get_document_auth_role_authorities(document_id: int) -> dict:
     )
     return {r["role_name"]: r["required_authority"] for r in rows if r["required_authority"]}
 
-FORM_FIELD_TYPES = ('text', 'date', 'numeric')
+FORM_FIELD_TYPES = ('text', 'date', 'numeric', 'arithmetic_multiply')
 FORM_FIELD_SCOPES = ('header', 'item')
+ARITHMETIC_MULTIPLY_FIELD_TYPE = 'arithmetic_multiply'
+
+
+def _raw_arithmetic_operands(raw_operands: Any) -> List[str]:
+    """Return the submitted operand names in a predictable list shape."""
+    if raw_operands in (None, '', []):
+        return []
+    if isinstance(raw_operands, str):
+        try:
+            raw_operands = json.loads(raw_operands)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Arithmetic operands must be a list of Form field names")
+    if not isinstance(raw_operands, list):
+        raise HTTPException(400, "Arithmetic operands must be a list of Form field names")
+    return [str(operand or '').strip() for operand in raw_operands]
+
+
+def _saved_arithmetic_operands(value: Any) -> List[str]:
+    """Decode the additive TEXT storage used by both SQLite and PostgreSQL."""
+    if not value:
+        return []
+    try:
+        decoded = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return []
+    return [str(operand).strip() for operand in decoded
+            if str(operand).strip()] if isinstance(decoded, list) else []
 
 def normalize_form_fields(document_type: str, template_id: Optional[int], raw_fields: List[Dict[str, Any]]) -> List[dict]:
     """Validate the reusable Form field contract and return stable ordered rows."""
@@ -753,6 +780,9 @@ def normalize_form_fields(document_type: str, template_id: Optional[int], raw_fi
         field_type = str(raw.get('field_type') or raw.get('column_type') or 'text').strip().lower()
         field_scope = str(raw.get('field_scope') or 'header').strip().lower()
         linked_column = str(raw.get('linked_column') or '').strip() or None
+        arithmetic_operands = _raw_arithmetic_operands(
+            raw.get('arithmetic_operands', raw.get('calculation_operands'))
+        )
         if not name:
             raise HTTPException(400, f"Form field {index + 1} needs a column name")
         if name.casefold() in seen_names:
@@ -763,20 +793,49 @@ def normalize_form_fields(document_type: str, template_id: Optional[int], raw_fi
             raise HTTPException(400, f"Invalid Form field scope '{field_scope}'")
         if linked_column and linked_column.casefold() not in template_columns:
             raise HTTPException(400, f"Linked Column '{linked_column}' is not an active column on the selected Template")
+        if field_type == ARITHMETIC_MULTIPLY_FIELD_TYPE:
+            if field_scope != 'item':
+                raise HTTPException(400, f"Arithmetic field '{name}' must use Item row scope")
+            if linked_column:
+                raise HTTPException(400, f"Arithmetic field '{name}' cannot use a Linked Column")
+            if len(arithmetic_operands) != 2 or any(not operand for operand in arithmetic_operands):
+                raise HTTPException(400, f"Arithmetic field '{name}' must select exactly two operand fields")
+            if len({operand.casefold() for operand in arithmetic_operands}) != 2:
+                raise HTTPException(400, f"Arithmetic field '{name}' cannot multiply the same field twice")
+        elif arithmetic_operands:
+            raise HTTPException(400, f"Arithmetic operands are only valid for Arithmetic — Multiply fields")
         seen_names.add(name.casefold())
         fields.append({'field_name': name, 'field_type': field_type, 'field_scope': field_scope,
-                       'linked_column': linked_column, 'sort_order': index})
+                       'linked_column': linked_column, 'arithmetic_operands': arithmetic_operands,
+                       'sort_order': index})
+
+    fields_by_name = {field['field_name'].casefold(): field for field in fields}
+    for field in fields:
+        if field['field_type'] != ARITHMETIC_MULTIPLY_FIELD_TYPE:
+            continue
+        canonical_operands = []
+        for operand in field['arithmetic_operands']:
+            source = fields_by_name.get(operand.casefold())
+            if not source:
+                raise HTTPException(400, f"Arithmetic field '{field['field_name']}' uses unknown operand '{operand}'")
+            if source['field_type'] != 'numeric':
+                raise HTTPException(400, f"Arithmetic operand '{source['field_name']}' must be a Numeric field")
+            if source['field_scope'] != field['field_scope']:
+                raise HTTPException(400, f"Arithmetic operand '{source['field_name']}' must use the same scope")
+            canonical_operands.append(source['field_name'])
+        field['arithmetic_operands'] = canonical_operands
     return fields
 
 def get_document_form_fields(document_id: int) -> List[dict]:
     rows = execute_query_pg(
-        "SELECT id, field_name, field_type, field_scope, linked_column, sort_order "
+        "SELECT id, field_name, field_type, field_scope, linked_column, arithmetic_operands, sort_order "
         "FROM audit_rule_document_fields WHERE document_id = %s ORDER BY sort_order, id",
         (document_id,)
     )
     return [{
         'id': row['id'], 'field_name': row['field_name'], 'field_type': row.get('field_type') or 'text',
         'field_scope': row.get('field_scope') or 'header', 'linked_column': row.get('linked_column'),
+        'arithmetic_operands': _saved_arithmetic_operands(row.get('arithmetic_operands')),
         'sort_order': row['sort_order']
     } for row in rows]
 
@@ -784,10 +843,12 @@ def save_document_form_fields(document_id: int, fields: List[dict]):
     execute_write_pg("DELETE FROM audit_rule_document_fields WHERE document_id = %s", (document_id,))
     for field in fields:
         execute_write_pg(
-            "INSERT INTO audit_rule_document_fields (document_id, field_name, sort_order, field_type, field_scope, linked_column) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
+            "INSERT INTO audit_rule_document_fields "
+            "(document_id, field_name, sort_order, field_type, field_scope, linked_column, arithmetic_operands) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
             (document_id, field['field_name'], field['sort_order'], field['field_type'],
-             field['field_scope'], field['linked_column'])
+             field['field_scope'], field['linked_column'],
+             json.dumps(field.get('arithmetic_operands') or []) if field.get('arithmetic_operands') else None)
         )
 
 def get_document_auth_roles_batch(document_ids: List[int]) -> Dict[int, List[str]]:
@@ -1024,7 +1085,7 @@ def get_document_cross_check_field_specs(
         document_type = (rows[0].get("document_type") if rows else None) or "linked_template"
     if document_type == "form":
         rows = execute_query_pg(
-            "SELECT field_name, field_type, linked_column FROM audit_rule_document_fields "
+            "SELECT field_name, field_type, linked_column, arithmetic_operands FROM audit_rule_document_fields "
             "WHERE document_id = %s ORDER BY sort_order, id",
             (document_id,)
         )
@@ -1033,6 +1094,7 @@ def get_document_cross_check_field_specs(
                 "field_name": row["field_name"],
                 "data_type": row.get("field_type") or "text",
                 "linked_column": row.get("linked_column"),
+                "arithmetic_operands": _saved_arithmetic_operands(row.get("arithmetic_operands")),
                 "source": "form",
             }
             for row in rows
@@ -1056,6 +1118,7 @@ def _cross_check_field_specs_from_document_row(row: dict) -> List[dict]:
                 "field_name": field["field_name"],
                 "data_type": field.get("field_type") or "text",
                 "linked_column": field.get("linked_column"),
+                "arithmetic_operands": field.get("arithmetic_operands") or [],
                 "source": "form",
             }
             for field in row.get("form_fields") or []

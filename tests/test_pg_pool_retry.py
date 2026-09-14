@@ -240,16 +240,17 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
 
         migrated = database._ensure_postgres_form_field_columns(conn)
 
-        self.assertEqual(migrated, ["field_type", "field_scope", "linked_column"])
+        self.assertEqual(migrated, ["field_type", "field_scope", "linked_column", "arithmetic_operands"])
         self.assertIn("ADD COLUMN IF NOT EXISTS field_type TEXT NOT NULL DEFAULT 'text'", conn.executed[-1][0])
         self.assertIn("ADD COLUMN IF NOT EXISTS field_scope TEXT NOT NULL DEFAULT 'header'", conn.executed[-1][0])
         self.assertIn("ADD COLUMN IF NOT EXISTS linked_column TEXT", conn.executed[-1][0])
+        self.assertIn("ADD COLUMN IF NOT EXISTS arithmetic_operands TEXT", conn.executed[-1][0])
         self.assertEqual(conn.rollbacks, 0)
 
     def test_form_field_column_migration_is_noop_when_columns_exist(self):
         conn = FakeConn(rows=[
             ("id",), ("document_id",), ("field_name",),
-            ("field_type",), ("field_scope",), ("linked_column",),
+            ("field_type",), ("field_scope",), ("linked_column",), ("arithmetic_operands",),
         ])
 
         self.assertEqual(database._ensure_postgres_form_field_columns(conn), [])
@@ -286,7 +287,7 @@ class PostgresSchemaBootstrapTests(unittest.TestCase):
 
     def test_completed_schema_marker_skips_repeated_bootstrap(self):
         conn = FakeConn(
-            rows=[("field_type",), ("field_scope",), ("linked_column",)],
+            rows=[("field_type",), ("field_scope",), ("linked_column",), ("arithmetic_operands",)],
             fetchone_rows=[
                 ("audit_rules_config_state",),
                 ("CHECK ((document_type = ANY (ARRAY['linked_template'::text, 'form'::text, 'physical_bill'::text])))",),

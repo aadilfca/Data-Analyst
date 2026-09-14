@@ -754,8 +754,8 @@ class AuditRulebookCompilerTests(unittest.TestCase):
 
     def test_form_cross_check_field_specs_keep_form_name_and_linked_column(self):
         with patch("routers.audit_rules.execute_query_pg", return_value=[
-            {"field_name": "Quantity", "field_type": "numeric", "linked_column": "Receive Quantity"},
-            {"field_name": "Rate", "field_type": "numeric", "linked_column": "Rate"},
+            {"field_name": "Quantity", "field_type": "numeric", "linked_column": "Receive Quantity", "arithmetic_operands": None},
+            {"field_name": "Rate", "field_type": "numeric", "linked_column": "Rate", "arithmetic_operands": None},
         ]):
             specs = get_document_cross_check_field_specs(42, "form")
             field_names = get_document_cross_check_fields(42, "form")
@@ -764,6 +764,7 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             "field_name": "Quantity",
             "data_type": "numeric",
             "linked_column": "Receive Quantity",
+            "arithmetic_operands": [],
             "source": "form",
         })
         self.assertEqual(field_names, ["Quantity", "Rate"])
@@ -2049,7 +2050,7 @@ class FormDocumentSchemaTests(unittest.TestCase):
             conn.close()
 
     def test_form_schema_has_typed_fields_and_repeatable_values(self):
-        self.assertTrue({"field_type", "field_scope", "linked_column"}.issubset(
+        self.assertTrue({"field_type", "field_scope", "linked_column", "arithmetic_operands"}.issubset(
             self._columns("audit_rule_document_fields")
         ))
         self.assertEqual(
@@ -2136,6 +2137,35 @@ class FormDocumentSchemaTests(unittest.TestCase):
         self.assertEqual([field["sort_order"] for field in result], [0, 1, 2])
         self.assertEqual(result[0]["field_scope"], "header")
         self.assertEqual(result[2]["field_scope"], "item")
+        self.assertEqual(result[0]["arithmetic_operands"], [])
+
+    def test_arithmetic_multiply_fields_require_two_numeric_item_operands(self):
+        result = normalize_form_fields("form", None, [
+            {"field_name": "Quantity", "field_type": "numeric", "field_scope": "item"},
+            {"field_name": "Rate", "field_type": "numeric", "field_scope": "item"},
+            {"field_name": "Total", "field_type": "arithmetic_multiply", "field_scope": "item",
+             "arithmetic_operands": ["rate", "QUANTITY"]},
+        ])
+        self.assertEqual(result[2]["arithmetic_operands"], ["Rate", "Quantity"])
+
+        invalid_definitions = [
+            [{"field_name": "Total", "field_type": "arithmetic_multiply", "field_scope": "item",
+              "arithmetic_operands": ["Quantity"]}],
+            [{"field_name": "Quantity", "field_type": "numeric", "field_scope": "item"},
+             {"field_name": "Total", "field_type": "arithmetic_multiply", "field_scope": "item",
+              "arithmetic_operands": ["Quantity", "Unknown"]}],
+            [{"field_name": "Rate", "field_type": "text", "field_scope": "item"},
+             {"field_name": "Total", "field_type": "arithmetic_multiply", "field_scope": "item",
+              "arithmetic_operands": ["Rate", "Rate"]}],
+            [{"field_name": "Quantity", "field_type": "numeric", "field_scope": "header"},
+             {"field_name": "Rate", "field_type": "numeric", "field_scope": "item"},
+             {"field_name": "Total", "field_type": "arithmetic_multiply", "field_scope": "item",
+              "arithmetic_operands": ["Quantity", "Rate"]}],
+        ]
+        for fields in invalid_definitions:
+            with self.subTest(fields=fields), self.assertRaises(HTTPException) as raised:
+                normalize_form_fields("form", None, fields)
+            self.assertEqual(raised.exception.status_code, 400)
 
     def test_form_fields_reject_duplicate_names_and_invalid_types(self):
         with self.assertRaises(Exception):
@@ -2160,6 +2190,21 @@ class FormDocumentSchemaTests(unittest.TestCase):
         self.assertEqual([params[2] for params in inserts], [0, 1])
         self.assertEqual([params[3] for params in inserts], ["text", "numeric"])
         self.assertEqual([params[4] for params in inserts], ["header", "item"])
+
+    def test_form_field_save_serializes_arithmetic_operands(self):
+        fields = normalize_form_fields("form", None, [
+            {"field_name": "Quantity", "field_type": "numeric", "field_scope": "item"},
+            {"field_name": "Rate", "field_type": "numeric", "field_scope": "item"},
+            {"field_name": "Total", "field_type": "arithmetic_multiply", "field_scope": "item",
+             "arithmetic_operands": ["Quantity", "Rate"]},
+        ])
+        writes = []
+        with patch("routers.audit_rules.execute_write_pg", side_effect=lambda sql, params: writes.append((sql, params))):
+            from routers.audit_rules import save_document_form_fields
+            save_document_form_fields(17, fields)
+        insert = next(params for sql, params in writes if "INSERT INTO audit_rule_document_fields" in sql
+                      and params[1] == "Total")
+        self.assertEqual(json.loads(insert[6]), ["Quantity", "Rate"])
 
 
 class FormEvidenceContractTests(unittest.TestCase):

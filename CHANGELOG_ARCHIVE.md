@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Audit Rules Form Arithmetic — 2026-09-14
+
+Form Documents now support a read-only-definition field type, Arithmetic — Multiply, configured
+with exactly two same-scope Numeric Item-row operands. The operand names persist in SQLite and
+PostgreSQL, and the marked-ready PostgreSQL startup migration now repairs existing schemas missing
+the new column. Focused Audit Rules tests, migration checks, compilation, and local browser
+acceptance passed; three unrelated baseline Postgres bootstrap assertions remain.
+
 ## Verification Form quick-item entry flow - 2026-09-12
 
 Quick add items again opens on Rate and uses Enter to create/focus the next Rate row, with no

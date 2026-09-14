@@ -22,7 +22,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/settings.py + static/settings.* → application settings and the firm-wide Holiday list; header/tabs rendered by `client_context.js`. See CHANGELOG_ARCHIVE.md.
 - routers/templates.py + static/templates.*, static/columns.* → master-column and template CRUD, mapping/reordering, rate rules, backup/restore, and setup loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/client_settings.html, static/client_settings.js → per-client voucher-prefix category configuration; requires `?client_id=`, entry-aware header chrome. See CHANGELOG_ARCHIVE.md.
-- database.py, main.py → schema, startup, routes, SQLite logs/legacy, and pooled PostgreSQL business data configured through `DATABASE_URL`. See CHANGELOG_ARCHIVE.md.
+- database.py, main.py → schema, startup migrations, SQLite logs/legacy, and pooled PostgreSQL business data configured through `DATABASE_URL`. See CHANGELOG_ARCHIVE.md.
 - database.py (users/sessions) → authenticated users and session records for Login → Client Cards → Dashboard; bcrypt, session-stored selected client, seeded placeholder admin. See CHANGELOG_ARCHIVE.md.
 - routers/auth.py → login/logout, current-session lookup, client selection, `get_current_user()`/`require_admin()` guards; timezone-aware session expiry. See CHANGELOG_ARCHIVE.md.
 - routers/users.py → Admin user management (list/create/edit/deactivate/reactivate/reset password); every endpoint `require_admin`, mutations SQLite-audited. See CHANGELOG_ARCHIVE.md.
@@ -33,8 +33,8 @@ One line per file group: what it is now. Full build history for every entry live
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, mapping suggestions, period-conflict checks, classification/override, upload history, category assignment, deletion; scoped cache invalidation. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
-- routers/audit_rules.py → Audit Rules APIs: Documents, Cross-checks, Category policies, Signature Specimens, ordered Voucher-level Checks; soft-delete/restore, scoped caching. See CHANGELOG_ARCHIVE.md.
-- static/audit_rules.html, static/audit_rules.js → Audit Rules three-pane editor, Assign Categories view, and processing feedback with a shared progress cursor. See CHANGELOG_ARCHIVE.md.
+- routers/audit_rules.py → Audit Rules APIs with typed Form fields, Arithmetic — Multiply operand validation, Documents, Cross-checks, Category policies, and Voucher-level Checks. See CHANGELOG_ARCHIVE.md.
+- static/audit_rules.html, static/audit_rules.js → Audit Rules editor with typed Form authoring, Arithmetic — Multiply selection, Assign Categories, and processing feedback. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
 - routers/verification.py + static/verification.* → Cash/Bank Verification sessions, evidence/Forms, checks, status, saves, navigation, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
@@ -274,6 +274,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-12: Form bill persistence, restore/reconcile, live status refresh, and Quick-add layering/focus corrections completed.
 - 2026-09-13: Form draft discard safeguards completed; Procedure data-table linking now supports multi-select with professionally aligned reference, date, and quantity rows.
 - 2026-09-13: Procedure Data Table text clicks now link immediately; blank row areas and checkboxes toggle selection without triggering a fetch.
+- 2026-09-14: Audit Rules Forms gained Arithmetic — Multiply field definitions, operand selection, persistence, and existing-schema migration repair.
 
 - 2026-09-13: Loading feedback and hardening Mini-phases 1–5 completed; standard progress cursor retained. See CHANGELOG_ARCHIVE.md.
 

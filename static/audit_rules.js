@@ -533,15 +533,68 @@ function renderVerificationFieldPolicy(policy) {
 function formFieldsFromServer(fields) {
     return (fields || []).map((field, index) => ({
         field_name: field.field_name || '', field_type: field.field_type || 'text',
-        field_scope: field.field_scope || 'header', linked_column: field.linked_column || '', sort_order: index
+        field_scope: field.field_scope || 'header', linked_column: field.linked_column || '',
+        arithmetic_operands: Array.isArray(field.arithmetic_operands) ? field.arithmetic_operands.slice(0, 2) : [],
+        sort_order: index
     }));
 }
 
 function formFieldsPayload() {
     return formFieldsState.map((field, index) => ({
         field_name: field.field_name.trim(), field_type: field.field_type,
-        field_scope: field.field_scope, linked_column: field.linked_column || null, sort_order: index
+        field_scope: field.field_scope, linked_column: field.linked_column || null,
+        arithmetic_operands: field.field_type === 'arithmetic_multiply'
+            ? (field.arithmetic_operands || []).slice(0, 2) : [],
+        sort_order: index
     }));
+}
+
+function arithmeticOperandCandidates(field) {
+    return formFieldsState.filter(candidate => candidate !== field
+        && candidate.field_type === 'numeric'
+        && candidate.field_scope === field.field_scope);
+}
+
+function appendArithmeticOperandSelect(cell, field, operandIndex, candidates) {
+    const select = document.createElement('select');
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = operandIndex === 0 ? '-- First field --' : '-- Second field --';
+    select.appendChild(placeholder);
+    candidates.forEach(candidate => {
+        const option = document.createElement('option');
+        option.value = candidate.field_name;
+        option.textContent = candidate.field_name;
+        select.appendChild(option);
+    });
+    const savedOperand = (field.arithmetic_operands || [])[operandIndex] || '';
+    if (savedOperand && !candidates.some(candidate =>
+        candidate.field_name.toLowerCase() === savedOperand.toLowerCase())) {
+        const stale = document.createElement('option');
+        stale.value = savedOperand;
+        stale.textContent = '⚠️ ' + savedOperand + ' (unavailable)';
+        select.appendChild(stale);
+    }
+    select.value = savedOperand;
+    select.addEventListener('change', () => {
+        const selected = select.value;
+        const otherIndex = operandIndex === 0 ? 1 : 0;
+        const other = (field.arithmetic_operands || [])[otherIndex] || '';
+        if (selected && other && selected.toLowerCase() === other.toLowerCase()) {
+            select.value = '';
+            field.arithmetic_operands[operandIndex] = '';
+            arFormFieldsHint.textContent = 'Choose two different Numeric Item-row fields for each Arithmetic — Multiply field.';
+            return;
+        }
+        field.arithmetic_operands[operandIndex] = selected;
+        arFormFieldsHint.textContent = '';
+    });
+    cell.appendChild(select);
+    if (operandIndex === 0) {
+        const multiply = document.createElement('span');
+        multiply.textContent = ' × ';
+        cell.appendChild(multiply);
+    }
 }
 
 function renderFormFields() {
@@ -557,21 +610,58 @@ function renderFormFields() {
         const nameCell = row.insertCell();
         const name = document.createElement('input'); name.type = 'text'; name.value = field.field_name;
         name.placeholder = 'e.g. Bill No'; name.className = 'ar-form-field-name';
-        name.addEventListener('input', () => { field.field_name = name.value; }); nameCell.appendChild(name);
+        name.addEventListener('input', () => {
+            const previousName = field.field_name;
+            field.field_name = name.value;
+            if (previousName.trim()) {
+                formFieldsState.forEach(candidate => {
+                    candidate.arithmetic_operands = (candidate.arithmetic_operands || []).map(operand =>
+                        operand && operand.toLowerCase() === previousName.trim().toLowerCase()
+                            ? field.field_name : operand
+                    );
+                });
+            }
+        }); nameCell.appendChild(name);
 
         const typeCell = row.insertCell();
         const type = document.createElement('select');
-        [['text', 'Text'], ['date', 'Date'], ['numeric', 'Numeric']].forEach(([value, label]) => {
+        [['text', 'Text'], ['date', 'Date'], ['numeric', 'Numeric'],
+            ['arithmetic_multiply', 'Arithmetic — Multiply']].forEach(([value, label]) => {
             const option = document.createElement('option'); option.value = value; option.textContent = label; type.appendChild(option);
         });
-        type.value = field.field_type; type.addEventListener('change', () => { field.field_type = type.value; }); typeCell.appendChild(type);
+        type.value = field.field_type; type.addEventListener('change', () => {
+            field.field_type = type.value;
+            field.arithmetic_operands = [];
+            if (field.field_type === 'arithmetic_multiply') {
+                field.field_scope = 'item';
+                field.linked_column = '';
+            }
+            renderFormFields();
+        }); typeCell.appendChild(type);
+
+        const isArithmetic = field.field_type === 'arithmetic_multiply';
+        const operandCell = row.insertCell();
+        if (isArithmetic) {
+            const candidates = arithmeticOperandCandidates(field);
+            appendArithmeticOperandSelect(operandCell, field, 0, candidates);
+            appendArithmeticOperandSelect(operandCell, field, 1, candidates);
+            if (!candidates.length) {
+                const note = document.createElement('small');
+                note.textContent = 'Add Numeric Item fields first.';
+                operandCell.appendChild(note);
+            }
+        } else {
+            operandCell.textContent = '—';
+        }
 
         const scopeCell = row.insertCell();
         const scope = document.createElement('select');
         [['header', 'Header'], ['item', 'Item row']].forEach(([value, label]) => {
             const option = document.createElement('option'); option.value = value; option.textContent = label; scope.appendChild(option);
         });
-        scope.value = field.field_scope; scope.addEventListener('change', () => { field.field_scope = scope.value; }); scopeCell.appendChild(scope);
+        scope.value = isArithmetic ? 'item' : field.field_scope;
+        scope.disabled = isArithmetic;
+        scope.addEventListener('change', () => { field.field_scope = scope.value; renderFormFields(); }); scopeCell.appendChild(scope);
 
         const linkCell = row.insertCell();
         const link = document.createElement('select');
@@ -580,7 +670,9 @@ function renderFormFields() {
         if (field.linked_column && !formTemplateColumns.some(column => column.column_name === field.linked_column)) {
             const stale = document.createElement('option'); stale.value = field.linked_column; stale.textContent = '⚠️ ' + field.linked_column + ' (not on template)'; link.appendChild(stale);
         }
-        link.value = field.linked_column || ''; link.addEventListener('change', () => { field.linked_column = link.value; }); linkCell.appendChild(link);
+        link.value = field.linked_column || '';
+        link.disabled = isArithmetic;
+        link.addEventListener('change', () => { field.linked_column = link.value; }); linkCell.appendChild(link);
 
         const actions = row.insertCell();
         const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'ar-btn-delete'; remove.textContent = 'Remove';
@@ -595,7 +687,8 @@ function renderFormFields() {
 }
 
 function addFormField() {
-    formFieldsState.push({ field_name: '', field_type: 'text', field_scope: 'header', linked_column: '', sort_order: formFieldsState.length });
+    formFieldsState.push({ field_name: '', field_type: 'text', field_scope: 'header',
+        linked_column: '', arithmetic_operands: [], sort_order: formFieldsState.length });
     renderFormFields();
     arFormFieldsBody.lastElementChild?.querySelector('.ar-form-field-name')?.focus();
 }
