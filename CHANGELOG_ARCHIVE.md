@@ -5663,3 +5663,20 @@ Investigation of the first live apply attempt found the preview succeeded but th
 shared idempotent table definition/ensure step to that path in `database.py`, with regression
 coverage in `tests/test_storage_cleanup.py`. The cleanup scope and protected-data rules were not
 changed, and no live cleanup was invoked while correcting this issue.
+
+## Procedure Data Table Select All and assigned-row alignment — 2026-09-15
+
+The Data Table search toolbar now selects or clears every currently displayed, unassigned row.
+Its checkbox reflects full and partial selection, while `Link selected` counts only rows that can
+be linked. A dedicated Select All row sits directly above the results and reuses the result-row and
+checkbox classes. Multi-select rows use a fixed checkbox column and a shared description column;
+assigned rows keep the grey locked treatment and checked, disabled checkbox while their item name
+and metadata align with available rows. The assignment badge sits beside the item name, and the
+checkbox is vertically centered against the two-line description. Assigned text remains
+non-interactive.
+
+Both Procedure modal hosts now load `procedure_modal.js?v=30`; all 20 shared-stylesheet consumers
+load `style.css?v=18`. The Playwright regression loads production CSS and checks checkbox, text,
+metadata, and badge geometry as well as Select All, clear, partial selection, locked rows, and
+text-to-link behavior. `test_verification_dirty_saves.py` passed (18 tests); JavaScript syntax and
+diff checks passed.

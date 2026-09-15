@@ -4388,6 +4388,98 @@ body {
     opacity: 0.6;
     background: #f8fafc;
 }
+.procedure-result-item.procedure-result-multi-select {
+    grid-template-columns: 20px minmax(0, 1fr);
+}
+/* Grouped document results: one unique document reference with its matching evidence lines
+   nested below it. The group header is a disclosure control, while the child rows retain the
+   existing checkbox/text-link behavior from buildProcedureResultRowHtml(). */
+.procedure-result-group {
+    border-bottom: 1px solid #e2e8f0;
+}
+.procedure-result-group:last-child {
+    border-bottom: none;
+}
+.procedure-result-group-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: #f8fafc;
+}
+.procedure-result-group-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #1a1a2e;
+    text-align: left;
+    cursor: pointer;
+}
+.procedure-result-group-toggle:focus-visible {
+    outline: 2px solid #93c5fd;
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+.procedure-result-group-chevron {
+    flex: 0 0 auto;
+    color: #64748b;
+    font-size: 15px;
+    transition: transform 0.15s ease;
+}
+.procedure-result-group-toggle[aria-expanded="true"] .procedure-result-group-chevron {
+    transform: rotate(90deg);
+}
+.procedure-result-group-document {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.procedure-result-group-reference {
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.procedure-result-group-meta {
+    overflow: hidden;
+    color: #64748b;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.procedure-result-group-checkbox {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: #2563eb;
+    cursor: pointer;
+}
+.procedure-result-group-locked {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.procedure-result-group-lines {
+    margin-left: 18px;
+    border-left: 3px solid #e2e8f0;
+}
+.procedure-result-group-lines .procedure-result-item {
+    padding-left: 12px;
+}
+.procedure-result-group-selection {
+    padding: 5px 14px 8px 45px;
+    color: #94a3b8;
+    font-size: 11px;
+}
+
 .procedure-result-checkbox {
     width: 16px;
     height: 16px;
@@ -4403,8 +4495,26 @@ body {
     text-align: left;
     grid-column: 2;
 }
+.procedure-result-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+.procedure-result-heading .procedure-result-label {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.procedure-result-multi-select .procedure-result-locked {
+    flex: 0 0 auto;
+    margin-left: auto;
+    justify-self: auto;
+}
 .procedure-result-item.locked .procedure-result-main {
     grid-column: 1 / 3;
+}
+.procedure-result-item.locked.procedure-result-multi-select .procedure-result-main {
+    grid-column: 2;
 }
 .procedure-result-label {
     font-weight: 600;

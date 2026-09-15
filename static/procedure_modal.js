@@ -666,10 +666,73 @@ function isSameUnderlyingLine(uid, row) {
 // client_data_id comparison) instead of raw assigned_to_voucher_line === uid — see that
 // function's own comment for why a session-specific id comparison silently missed assignments
 // made in an earlier verification session for the exact same voucher line.
+const PROCEDURE_DOCUMENT_QUANTITY_FIELDS = [
+    'Overall Quantity', 'Overall Qty', 'Document Quantity', 'Document Qty',
+    'Total Quantity', 'Total Qty'
+];
+
+function getProcedureResultDocumentReference(row, docKeyColumn) {
+    const value = docKeyColumn ? getRowFieldCaseInsensitive(row.row_data, docKeyColumn) : '';
+    return value.trim() || `Row #${row.id}`;
+}
+
+function getProcedureDocumentOverallQuantity(rows) {
+    for (const fieldName of PROCEDURE_DOCUMENT_QUANTITY_FIELDS) {
+        for (const row of rows) {
+            const value = getRowFieldCaseInsensitive(row.row_data, fieldName);
+            if (value.trim()) return value;
+        }
+    }
+    return '';
+}
+
+function getProcedureResultLineLabel(row, docKeyColumn, doc) {
+    const excluded = new Set([
+        docKeyColumn,
+        'Date',
+        'Quantity',
+        'Qty',
+        ...PROCEDURE_DOCUMENT_QUANTITY_FIELDS
+    ].filter(Boolean).map(name => name.trim().toLowerCase()));
+    const configuredColumns = getDocumentVerificationColumns(doc)
+        .map(column => typeof column === 'string' ? column : column?.column_name)
+        .filter(Boolean);
+    const preferredColumns = [
+        ...configuredColumns,
+        'Item Name', 'Item', 'Description', 'Particulars', 'Account Name',
+        'Account', 'Vendor', 'Reference', 'Code'
+    ];
+    const seen = new Set();
+    for (const fieldName of preferredColumns) {
+        const normalizedName = fieldName.trim().toLowerCase();
+        if (seen.has(normalizedName) || excluded.has(normalizedName)) continue;
+        seen.add(normalizedName);
+        const value = getRowFieldCaseInsensitive(row.row_data, fieldName).trim();
+        if (value) return `${fieldName}: ${value}`;
+    }
+    return `Row #${row.id}`;
+}
+
+function groupProcedureSearchResults(results, docKeyColumn) {
+    const groups = [];
+    const groupsByReference = new Map();
+    results.forEach(row => {
+        const reference = getProcedureResultDocumentReference(row, docKeyColumn);
+        let group = groupsByReference.get(reference);
+        if (!group) {
+            group = {reference, rows: []};
+            groupsByReference.set(reference, group);
+            groups.push(group);
+        }
+        group.rows.push(row);
+    });
+    return groups;
+}
+
 function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId, options = {}) {
-    const label = (docKeyColumn && row.row_data && row.row_data[docKeyColumn] != null && row.row_data[docKeyColumn] !== '')
+    const label = options.displayLabel || ((docKeyColumn && row.row_data && row.row_data[docKeyColumn] != null && row.row_data[docKeyColumn] !== '')
         ? row.row_data[docKeyColumn]
-        : `Row #${row.id}`;
+        : `Row #${row.id}`);
     const date = row.extract_date || '—';
     const quantity = getRowFieldCaseInsensitive(row.row_data, 'Quantity')
         || getRowFieldCaseInsensitive(row.row_data, 'Qty')
@@ -691,24 +754,80 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId, option
         ? options.selectedIds
         : new Set();
     const isSelected = multiSelect && !isLocked && selectedIds.has(String(row.id));
-    const selectionControl = multiSelect && !isLocked
-        ? `<input type="checkbox" class="procedure-result-checkbox" data-id="${row.id}"
-                aria-label="Select ${hostAdapter.escapeHtml(String(label))}"${isSelected ? ' checked' : ''}>`
+    const accessibleLabel = options.accessibleLabel || label;
+    const meta = options.lineNumber
+        ? `Line ${String(options.lineNumber).padStart(2, '0')} · ${date} · Line quantity: ${quantity}`
+        : `${date} · Quantity: ${quantity}`;
+    const selectionControl = multiSelect
+        ? (isLocked
+            ? `<input type="checkbox" class="procedure-result-checkbox" data-id="${row.id}"
+                    aria-label="Already assigned: ${hostAdapter.escapeHtml(String(accessibleLabel))}" checked disabled>`
+            : `<input type="checkbox" class="procedure-result-checkbox" data-id="${row.id}"
+                    aria-label="Select ${hostAdapter.escapeHtml(String(accessibleLabel))}"${isSelected ? ' checked' : ''}>`)
         : '';
     const resultTag = 'div';
     const resultInteraction = multiSelect || isLocked ? '' : ' role="button" tabindex="0"';
     const contentInteraction = multiSelect && !isLocked
-        ? ` role="button" tabindex="0" aria-label="Select ${hostAdapter.escapeHtml(String(label))}"`
+        ? ` role="button" tabindex="0" aria-label="Select ${hostAdapter.escapeHtml(String(accessibleLabel))}"`
         : '';
     return `
-        <${resultTag} class="procedure-result-item${isLocked ? ' locked' : ''}${isSelected ? ' selected' : ''}" data-id="${row.id}"${resultInteraction}>
+        <${resultTag} class="procedure-result-item${multiSelect ? ' procedure-result-multi-select' : ''}${isLocked ? ' locked' : ''}${isSelected ? ' selected' : ''}" data-id="${row.id}"${resultInteraction}>
             ${selectionControl}
-            <div class="procedure-result-main${multiSelect && !isLocked ? ' procedure-result-content' : ''}"${contentInteraction}>
-                <span class="procedure-result-label">${hostAdapter.escapeHtml(String(label))}</span>
-                <span class="procedure-result-meta">${hostAdapter.escapeHtml(date)} · Quantity: ${hostAdapter.escapeHtml(String(quantity))}</span>
+            <div class="procedure-result-main${multiSelect ? ' procedure-result-content' : ''}"${contentInteraction}>
+                <div class="procedure-result-heading">
+                    <span class="procedure-result-label">${hostAdapter.escapeHtml(String(label))}</span>
+                    ${multiSelect ? lockNote : ''}
+                </div>
+                <span class="procedure-result-meta">${hostAdapter.escapeHtml(meta)}</span>
             </div>
-            ${lockNote}
+            ${multiSelect ? '' : lockNote}
         </${resultTag}>
+    `;
+}
+
+function buildProcedureResultGroupHtml(uid, docId, group, doc, docKeyColumn, selectedIds, groupIndex, expanded) {
+    const availableRows = group.rows.filter(row => !row.is_assigned);
+    const selectedCount = availableRows.filter(row => selectedIds.has(String(row.id))).length;
+    const overallQuantity = getProcedureDocumentOverallQuantity(group.rows);
+    const lineCountLabel = `${group.rows.length} matching line${group.rows.length === 1 ? '' : 's'}`;
+    const groupMeta = overallQuantity
+        ? `${lineCountLabel} · Overall quantity: ${overallQuantity}`
+        : lineCountLabel;
+    const selectionControl = availableRows.length
+        ? `<input type="checkbox" class="procedure-result-group-checkbox" data-group-index="${groupIndex}"
+                aria-label="Select all available lines for ${hostAdapter.escapeHtml(group.reference)}"${selectedCount === availableRows.length ? ' checked' : ''}>`
+        : '<span class="procedure-result-group-locked">All lines linked</span>';
+    const lineRows = group.rows.map((row, index) => buildProcedureResultRowHtml(
+        uid,
+        row,
+        docKeyColumn,
+        docId,
+        {
+            multiSelect: true,
+            selectedIds,
+            displayLabel: getProcedureResultLineLabel(row, docKeyColumn, doc),
+            accessibleLabel: `${group.reference}, line ${index + 1}`,
+            lineNumber: index + 1
+        }
+    )).join('');
+    return `
+        <div class="procedure-result-group${expanded ? ' is-expanded' : ''}" data-group-index="${groupIndex}">
+            <div class="procedure-result-group-header">
+                <button type="button" class="procedure-result-group-toggle"
+                    aria-expanded="${expanded}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${hostAdapter.escapeHtml(group.reference)}">
+                    <span class="procedure-result-group-chevron" aria-hidden="true">▸</span>
+                    <span class="procedure-result-group-document">
+                        <span class="procedure-result-group-reference">${hostAdapter.escapeHtml(group.reference)}</span>
+                        <span class="procedure-result-group-meta">${hostAdapter.escapeHtml(groupMeta)}</span>
+                    </span>
+                </button>
+                ${selectionControl}
+            </div>
+            <div class="procedure-result-group-lines"${expanded ? '' : ' hidden'}>${lineRows}</div>
+            <div class="procedure-result-group-selection" data-procedure-group-selected-count>
+                ${availableRows.length ? `Selected ${selectedCount} of ${availableRows.length} available lines` : 'All lines linked'}
+            </div>
+        </div>
     `;
 }
 
@@ -4627,6 +4746,8 @@ function renderProcedureSearchDropdown(uid, docId) {
     const dropdown = document.getElementById('procedureSearchDropdown');
     if (!dropdown) return;
     const tabState = getProcedureTabState(uid, docId);
+    const lineState = hostAdapter.procedureModalState[uid];
+    const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     const results = tabState.searchResults || [];
     if (!results.length) {
         dropdown.innerHTML = tabState.searchTerm.trim()
@@ -4646,11 +4767,79 @@ function renderProcedureSearchDropdown(uid, docId) {
             </button>
         </div>
     ` : '';
-    dropdown.innerHTML = selectionToolbar + results.map(row => buildProcedureResultRowHtml(
-        uid, row, tabState.docKeyColumn, docId, {multiSelect: true, selectedIds}
-    )).join('');
-    dropdown.querySelectorAll('.procedure-result-checkbox').forEach(checkbox => {
+    // Reuse the result-row and checkbox classes so Select All shares the exact control column
+    // with each available or locked row below it.
+    const selectAllRow = availableResults.length ? `
+        <div class="procedure-result-item procedure-result-multi-select procedure-result-select-all-row">
+            <input type="checkbox" class="procedure-result-checkbox procedure-result-select-all-checkbox"
+                aria-label="Select all available rows currently shown"${selectedCount === availableResults.length ? ' checked' : ''}>
+            <div class="procedure-result-main procedure-result-content">
+                <span class="procedure-result-select-all-label">Select all available rows</span>
+            </div>
+        </div>
+    ` : '';
+    const groups = groupProcedureSearchResults(results, tabState.docKeyColumn);
+    const searchTerm = tabState.searchTerm.trim().toLowerCase();
+    const resultHtml = groups.map((group, groupIndex) => {
+        if (group.rows.length === 1) {
+            return buildProcedureResultRowHtml(
+                uid, group.rows[0], tabState.docKeyColumn, docId,
+                {multiSelect: true, selectedIds}
+            );
+        }
+        const expandsForDocumentMatch = searchTerm && group.reference.toLowerCase().includes(searchTerm);
+        const expanded = !!(expandsForDocumentMatch || groups.length === 1);
+        return buildProcedureResultGroupHtml(
+            uid, docId, group, doc, tabState.docKeyColumn, selectedIds, groupIndex, expanded
+        );
+    }).join('');
+    dropdown.innerHTML = selectionToolbar + selectAllRow + resultHtml;
+
+    dropdown.querySelectorAll('.procedure-result-group-toggle').forEach(toggle => {
+        toggle.addEventListener('click', function() {
+            const group = this.closest('.procedure-result-group');
+            const lines = group?.querySelector('.procedure-result-group-lines');
+            if (!group || !lines) return;
+            const expanded = this.getAttribute('aria-expanded') === 'true';
+            this.setAttribute('aria-expanded', String(!expanded));
+            this.setAttribute('aria-label', `${expanded ? 'Expand' : 'Collapse'} ${group.querySelector('.procedure-result-group-reference')?.textContent || 'document'}`);
+            group.classList.toggle('is-expanded', !expanded);
+            lines.hidden = expanded;
+        });
+    });
+
+    dropdown.querySelectorAll('.procedure-result-group-checkbox').forEach(checkbox => {
         checkbox.addEventListener('change', function() {
+            const groupIndex = Number(this.dataset.groupIndex);
+            const group = groups[groupIndex];
+            if (!group) return;
+            const pendingIds = new Set((tabState.pendingSelectionIds || []).map(String));
+            group.rows.filter(row => !row.is_assigned).forEach(row => {
+                if (this.checked) pendingIds.add(String(row.id));
+                else pendingIds.delete(String(row.id));
+            });
+            tabState.pendingSelectionIds = [...pendingIds];
+            updateProcedureSearchSelectionUi(uid, docId);
+        });
+    });
+
+    const selectAllCheckbox = dropdown.querySelector('.procedure-result-select-all-checkbox');
+    if (selectAllCheckbox) {
+        selectAllCheckbox.addEventListener('change', function() {
+            const pendingIds = new Set((tabState.pendingSelectionIds || []).map(String));
+            availableResults.forEach(row => {
+                const rowId = String(row.id);
+                if (this.checked) pendingIds.add(rowId);
+                else pendingIds.delete(rowId);
+            });
+            tabState.pendingSelectionIds = [...pendingIds];
+            updateProcedureSearchSelectionUi(uid, docId);
+        });
+    }
+
+    dropdown.querySelectorAll('.procedure-result-checkbox:not(.procedure-result-select-all-checkbox)').forEach(checkbox => {
+        checkbox.addEventListener('change', function() {
+            if (this.disabled) return;
             const pendingIds = new Set((tabState.pendingSelectionIds || []).map(String));
             const rowId = String(this.dataset.id);
             if (this.checked) pendingIds.add(rowId);
@@ -4662,6 +4851,7 @@ function renderProcedureSearchDropdown(uid, docId) {
     });
 
     dropdown.querySelectorAll('.procedure-result-label, .procedure-result-meta').forEach(text => {
+        if (text.closest('.procedure-result-item.locked')) return;
         const selectFromText = async function(event) {
             event.preventDefault();
             event.stopPropagation();
@@ -4699,6 +4889,7 @@ function renderProcedureSearchDropdown(uid, docId) {
         });
     }
     updateProcedureSearchClearUi(uid, docId);
+    updateProcedureSearchSelectionUi(uid, docId);
 }
 
 function updateProcedureSearchSelectionUi(uid, docId) {
@@ -4713,10 +4904,35 @@ function updateProcedureSearchSelectionUi(uid, docId) {
         .filter(id => availableIds.has(id)));
     tabState.pendingSelectionIds = [...pendingIds];
 
-    dropdown.querySelectorAll('.procedure-result-checkbox').forEach(checkbox => {
+    dropdown.querySelectorAll('.procedure-result-checkbox:not(.procedure-result-select-all-checkbox)').forEach(checkbox => {
+        if (checkbox.disabled) {
+            checkbox.checked = true;
+            return;
+        }
         const selected = pendingIds.has(String(checkbox.dataset.id));
         checkbox.checked = selected;
         checkbox.closest('.procedure-result-item')?.classList.toggle('selected', selected);
+    });
+    const selectAllCheckbox = dropdown.querySelector('.procedure-result-select-all-checkbox');
+    if (selectAllCheckbox) {
+        const selectedCount = pendingIds.size;
+        selectAllCheckbox.checked = availableIds.size > 0 && selectedCount === availableIds.size;
+        selectAllCheckbox.indeterminate = selectedCount > 0 && selectedCount < availableIds.size;
+    }
+    const groups = groupProcedureSearchResults(tabState.searchResults || [], tabState.docKeyColumn);
+    dropdown.querySelectorAll('.procedure-result-group-checkbox').forEach(checkbox => {
+        const group = groups[Number(checkbox.dataset.groupIndex)];
+        if (!group) return;
+        const availableRows = group.rows.filter(row => !row.is_assigned);
+        const selectedCount = availableRows.filter(row => pendingIds.has(String(row.id))).length;
+        checkbox.checked = availableRows.length > 0 && selectedCount === availableRows.length;
+        checkbox.indeterminate = selectedCount > 0 && selectedCount < availableRows.length;
+        const selectionCount = checkbox.closest('.procedure-result-group')?.querySelector('[data-procedure-group-selected-count]');
+        if (selectionCount) {
+            selectionCount.textContent = availableRows.length
+                ? `Selected ${selectedCount} of ${availableRows.length} available lines`
+                : 'All lines linked';
+        }
     });
     const linkSelectedBtn = document.getElementById('procedureSearchLinkSelectedBtn');
     if (linkSelectedBtn) {

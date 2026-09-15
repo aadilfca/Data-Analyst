@@ -30,7 +30,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/users.html, static/users.js → firm-level Manage Users UI (sortable/searchable rows, add/edit, deactivate, password reset); shared Admin header/tab strip. See CHANGELOG_ARCHIVE.md.
 - static/login.html, static/login.js → standalone login page posting to `/api/auth/login`, generic auth error; does not load `client_context.js`.
 - static/client_select.html, static/client_select.js → standalone Client Cards page with guarded selection, admin entry, and loading feedback. See CHANGELOG_ARCHIVE.md.
-- static/procedure_modal.js → reusable Supporting Documents modal shared by Verification and Audit Workbook, with target-aware loading feedback for open, save, verify, and line navigation. See CHANGELOG_ARCHIVE.md.
+- static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, mapping suggestions, period-conflict checks, classification/override, upload history, category assignment, deletion; scoped cache invalidation. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
@@ -201,6 +201,7 @@ One line per file group: what it is now. Full build history for every entry live
 Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
 
 - 2026-09-15: Verification voucher search popover now focuses its search field on open while preserving the caret during filtering.
+- 2026-09-15: Procedure search aligned assigned checkboxes, two-line descriptions, and inline badges; shared stylesheet/cache versions updated.
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.
 - 2026-07-13/15: Verification cards, voucher grouping/table/header, transaction popover, validation indicators, and Prev/Next navigation redesigned across successive phases.
@@ -271,8 +272,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-10/12: Ledger Reconciliation Phases 1–8 added summary, diagnostics, categories, export, balances, and Reports/setup; manual acceptance remains pending.
 - 2026-09-12: Physical Bill Split and Form bill-group foundations, multi-bill cards, and Quick-add bills/items flows completed; manual acceptance pending where noted.
 - 2026-09-12: Form bill persistence, restore/reconcile, live status refresh, and Quick-add layering/focus corrections completed.
-- 2026-09-13: Form draft discard safeguards completed; Procedure data-table linking now supports multi-select with professionally aligned reference, date, and quantity rows.
-- 2026-09-13: Procedure Data Table text clicks now link immediately; blank row areas and checkboxes toggle selection without triggering a fetch.
+- 2026-09-13: Form draft discard safeguards completed; Procedure Data Table gained aligned multi-select rows and click-to-select/link behavior.
 - 2026-09-14: Forms gained Multiply definitions and server-owned calculations, read-only totals, numeric completion/cross-check handling, and tamper-safe persistence.
 - 2026-09-14: Storage Cleanup Phase B added a fresh-preview-hash, typed-confirmation cleanup transaction and existing-schema ledger migration protecting client, Verification, Trial Balance, and linked evidence. See CHANGELOG_ARCHIVE.md.
 - 2026-09-13: Loading feedback and hardening Mini-phases 1–5 completed; Audit Rules cursor/cache integration verified. See CHANGELOG_ARCHIVE.md.

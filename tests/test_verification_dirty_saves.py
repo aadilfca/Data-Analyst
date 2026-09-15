@@ -9,6 +9,7 @@ from routers.verification import _evaluate_physical_bill_completion
 
 VERIFICATION_JS = Path(__file__).resolve().parents[1] / "static" / "verification.js"
 PROCEDURE_MODAL_JS = Path(__file__).resolve().parents[1] / "static" / "procedure_modal.js"
+STYLE_CSS = Path(__file__).resolve().parents[1] / "static" / "style.css"
 
 
 def test_physical_bill_completion_accepts_postgres_date_value():
@@ -58,6 +59,7 @@ def procedure_modal_page():
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.set_content("<html><body></body></html>")
+        page.add_style_tag(path=str(STYLE_CSS))
         page.add_script_tag(content="var API_BASE = ''; ")
         page.add_script_tag(path=str(PROCEDURE_MODAL_JS))
         page.evaluate("""
@@ -316,7 +318,7 @@ def test_procedure_search_dropdown_links_multiple_selected_rows(procedure_modal_
                 assignedDocIds: new Set(),
                 documents: []
             }},
-            currentVoucherLines: [],
+            currentVoucherLines: [{detail_id: 1, client_data_id: 13}],
             escapeHtml: value => String(value),
             markLineDirty: () => {},
             showStatus: (message, kind) => { window.lastModalStatus = {message, kind}; }
@@ -337,17 +339,67 @@ def test_procedure_search_dropdown_links_multiple_selected_rows(procedure_modal_
         tabState.searchResults = [
             {id: 11, row_data: {Reference: 'INV-11', Quantity: 1}, extract_date: '2026-09-01', extract_amount: 10, is_assigned: false},
             {id: 12, row_data: {Reference: 'INV-12', Quantity: 10}, extract_date: '2026-09-02', extract_amount: 20, is_assigned: false},
-            {id: 13, row_data: {Reference: 'INV-13', Quantity: 120}, extract_date: '2026-09-03', extract_amount: 30, is_assigned: true}
+            {id: 13, row_data: {Reference: 'INV-13', Quantity: 120}, extract_date: '2026-09-03', extract_amount: 30, is_assigned: true, assigned_to_line_client_data_id: 13, assigned_to_document_id: 2}
         ];
         renderProcedureSearchDropdown(1, 2);
-        const checkboxes = document.querySelectorAll('.procedure-result-checkbox');
+        const checkboxes = document.querySelectorAll('.procedure-result-checkbox:not(.procedure-result-select-all-checkbox)');
+        const availableCheckboxes = Array.from(checkboxes).filter(checkbox => !checkbox.disabled);
+        const assignedCheckbox = Array.from(checkboxes).find(checkbox => checkbox.disabled);
+        const selectAllCheckbox = document.querySelector('.procedure-result-select-all-checkbox');
+        const selectAllRow = selectAllCheckbox.closest('.procedure-result-item');
+        const firstResultRow = document.querySelector('.procedure-result-item:not(.procedure-result-select-all-row)');
+        const assignedRow = assignedCheckbox.closest('.procedure-result-item');
+        const assignedMain = assignedRow?.querySelector('.procedure-result-main');
+        const availableMain = availableCheckboxes[0]?.closest('.procedure-result-item')?.querySelector('.procedure-result-main');
+        const selectAllMain = selectAllRow?.querySelector('.procedure-result-main');
+        const layoutBoxes = {
+            selectAllCheckbox: selectAllCheckbox.getBoundingClientRect().toJSON(),
+            availableCheckbox: availableCheckboxes[0].getBoundingClientRect().toJSON(),
+            assignedCheckbox: assignedCheckbox.getBoundingClientRect().toJSON(),
+            availableLabel: availableMain.querySelector('.procedure-result-label').getBoundingClientRect().toJSON(),
+            availableMeta: availableMain.querySelector('.procedure-result-meta').getBoundingClientRect().toJSON(),
+            assignedLabel: assignedMain.querySelector('.procedure-result-label').getBoundingClientRect().toJSON(),
+            assignedMeta: assignedMain.querySelector('.procedure-result-meta').getBoundingClientRect().toJSON(),
+            assignedBadge: assignedMain.querySelector('.procedure-result-locked').getBoundingClientRect().toJSON()
+        };
+        const near = (left, right) => Math.abs(left - right) <= 1;
+        const resultRowsAreGeometricallyAligned = near(layoutBoxes.selectAllCheckbox.x, layoutBoxes.availableCheckbox.x)
+            && near(layoutBoxes.availableCheckbox.x, layoutBoxes.assignedCheckbox.x)
+            && near(layoutBoxes.availableLabel.x, layoutBoxes.assignedLabel.x)
+            && near(layoutBoxes.availableMeta.x, layoutBoxes.assignedMeta.x)
+            && near(layoutBoxes.availableMeta.y - layoutBoxes.availableLabel.y, layoutBoxes.assignedMeta.y - layoutBoxes.assignedLabel.y)
+            && near(layoutBoxes.assignedCheckbox.y + layoutBoxes.assignedCheckbox.height / 2,
+                layoutBoxes.assignedLabel.y + (layoutBoxes.assignedMeta.y + layoutBoxes.assignedMeta.height - layoutBoxes.assignedLabel.y) / 2)
+            && near(layoutBoxes.assignedBadge.y + layoutBoxes.assignedBadge.height / 2,
+                layoutBoxes.assignedLabel.y + layoutBoxes.assignedLabel.height / 2);
+        assignedRow?.querySelector('.procedure-result-label')?.click();
+        const assignedTextDidNotLink = window.assignCalls.length === 0;
+        const selectAllPlacementIsSymmetric = !!selectAllRow
+            && !!firstResultRow
+            && selectAllRow.nextElementSibling === firstResultRow
+            && selectAllRow.classList.contains('procedure-result-select-all-row')
+            && selectAllCheckbox.classList.contains('procedure-result-checkbox');
+        const contentColumnsAreSymmetric = !!assignedMain?.classList.contains('procedure-result-content')
+            && !!availableMain?.classList.contains('procedure-result-content')
+            && !!selectAllMain?.classList.contains('procedure-result-content')
+            && assignedRow?.querySelector('.procedure-result-locked')?.textContent === 'Already linked here';
+        const assignedCheckboxUsesResultControl = assignedCheckbox?.classList.contains('procedure-result-checkbox')
+            && assignedCheckbox?.closest('.procedure-result-item')?.classList.contains('locked');
+        selectAllCheckbox.click();
+        const selectAllWorked = availableCheckboxes.every(checkbox => checkbox.checked)
+            && assignedCheckbox?.checked === true
+            && assignedCheckbox?.closest('.procedure-result-item')?.classList.contains('locked');
+        selectAllCheckbox.click();
+        const clearAllWorked = availableCheckboxes.every(checkbox => !checkbox.checked)
+            && assignedCheckbox?.checked === true;
         const firstMeta = document.querySelector('.procedure-result-meta').textContent.trim();
-        const firstContent = document.querySelector('.procedure-result-content');
+        const firstContent = document.querySelector('.procedure-result-item:not(.procedure-result-select-all-row) .procedure-result-content');
         firstContent.click();
         const checkedAfterBlankContentClick = checkboxes[0].checked;
+        const masterShowsPartialSelection = selectAllCheckbox.indeterminate;
         firstContent.click();
         const uncheckedAfterBlankContentClick = checkboxes[0].checked;
-        const firstRow = document.querySelector('.procedure-result-item');
+        const firstRow = document.querySelector('.procedure-result-item:not(.procedure-result-select-all-row)');
         firstRow.click();
         const checkedAfterFirstPaddingClick = checkboxes[0].checked;
         firstRow.click();
@@ -369,6 +421,18 @@ def test_procedure_search_dropdown_links_multiple_selected_rows(procedure_modal_
         });
         return {
             checkboxCount: checkboxes.length,
+            availableCheckboxCount: availableCheckboxes.length,
+            assignedCheckboxIsLockedAndChecked: !!assignedCheckbox?.checked
+                && !!assignedCheckbox?.disabled
+                && !!assignedCheckbox?.closest('.procedure-result-item')?.classList.contains('locked'),
+            selectAllPlacementIsSymmetric,
+            contentColumnsAreSymmetric: !!contentColumnsAreSymmetric,
+            resultRowsAreGeometricallyAligned,
+            assignedTextDidNotLink,
+            assignedCheckboxUsesResultControl: !!assignedCheckboxUsesResultControl,
+            selectAllWorked,
+            clearAllWorked,
+            masterShowsPartialSelection,
             firstMeta,
             clearVisible: !document.getElementById('procedureSearchClearBtn').hidden,
             blankAreaToggleWorked: checkedAfterBlankContentClick && !uncheckedAfterBlankContentClick,
@@ -382,7 +446,17 @@ def test_procedure_search_dropdown_links_multiple_selected_rows(procedure_modal_
         };
     }""")
 
-    assert result["checkboxCount"] == 2
+    assert result["checkboxCount"] == 3
+    assert result["availableCheckboxCount"] == 2
+    assert result["assignedCheckboxIsLockedAndChecked"] is True
+    assert result["selectAllPlacementIsSymmetric"] is True
+    assert result["contentColumnsAreSymmetric"] is True
+    assert result["resultRowsAreGeometricallyAligned"] is True
+    assert result["assignedTextDidNotLink"] is True
+    assert result["assignedCheckboxUsesResultControl"] is True
+    assert result["selectAllWorked"] is True
+    assert result["clearAllWorked"] is True
+    assert result["masterShowsPartialSelection"] is True
     assert result["firstMeta"] == "2026-09-01 · Quantity: 1"
     assert result["clearVisible"] is True
     assert result["blankAreaToggleWorked"] is True
@@ -430,7 +504,7 @@ def test_procedure_search_text_click_links_and_closes_dropdown(procedure_modal_p
             {id: 12, row_data: {Reference: 'INV-12', Quantity: 10}, extract_date: '2026-09-02', is_assigned: false}
         ];
         renderProcedureSearchDropdown(1, 2);
-        document.querySelector('.procedure-result-label').click();
+        document.querySelector('.procedure-result-item:not(.procedure-result-select-all-row) .procedure-result-label').click();
         await new Promise(resolve => {
             const startedAt = Date.now();
             const waitForAssignment = () => {
@@ -480,14 +554,17 @@ def test_procedure_search_clear_button_closes_dropdown(procedure_modal_page):
             closeProcedureSearchDropdown(1, 2);
         });
         const clearButton = document.getElementById('procedureSearchClearBtn');
-        const before = {visible: !clearButton.hidden, rows: document.querySelectorAll('.procedure-result-item').length};
+        const before = {
+            visible: !clearButton.hidden,
+            rows: document.querySelectorAll('.procedure-result-item:not(.procedure-result-select-all-row)').length
+        };
         clearButton.click();
         return {
             before,
             after: {
                 visible: !clearButton.hidden,
                 value: document.getElementById('procedureSearchInput').value,
-                rows: document.querySelectorAll('.procedure-result-item').length,
+                    rows: document.querySelectorAll('.procedure-result-item:not(.procedure-result-select-all-row)').length,
                 searchTerm: tabState.searchTerm,
                 pending: tabState.pendingSelectionIds
             }
