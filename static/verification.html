@@ -79,6 +79,16 @@
             cursor: not-allowed;
         }
 
+        /* Direct shortcut into Verification, kept scoped to this popup so the existing
+           global primary-button language remains unchanged elsewhere. */
+        #sessionPopup .btn-start-verification {
+            background: #16a34a;
+        }
+
+        #sessionPopup .btn-start-verification:hover:not(:disabled) {
+            background: #15803d;
+        }
+
         #sessionPopup .btn-secondary {
             padding: 8px 24px;
             background: #e2e8f0;
@@ -686,6 +696,7 @@
                 <div class="btn-row">
                     <button class="btn-secondary" id="popupCancelBtn">Cancel</button>
                     <button class="btn-primary" id="popupStartBtn" disabled>🚀 Open Cashbook</button>
+                    <button class="btn-primary btn-start-verification" id="popupStartVerificationBtn" disabled>✅ Start Verification</button>
                 </div>
             </div>
         </div>
@@ -865,7 +876,7 @@
         <script src="/static/procedure_modal.js?v=30"></script>
         <script src="/static/loading_ui.js?v=2"></script>
         <script src="/static/api_utils.js?v=1"></script>
-        <script src="/static/verification.js?v=30"></script>
+        <script src="/static/verification.js?v=31"></script>
     </div>
 </body>
 

@@ -201,6 +201,7 @@ One line per file group: what it is now. Full build history for every entry live
 Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
 
 - 2026-09-15: Verification voucher search popover now focuses its search field on open while preserving the caret during filtering.
+- 2026-09-17: Verification start popup gained a direct session shortcut with shared request/progress handling. See CHANGELOG_ARCHIVE.md.
 - 2026-09-15: Procedure search aligned assigned checkboxes, two-line descriptions, and inline badges; shared stylesheet/cache versions updated.
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.

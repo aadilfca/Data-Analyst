@@ -5680,3 +5680,12 @@ load `style.css?v=18`. The Playwright regression loads production CSS and checks
 metadata, and badge geometry as well as Select All, clear, partial selection, locked rows, and
 text-to-link behavior. `test_verification_dirty_saves.py` passed (18 tests); JavaScript syntax and
 diff checks passed.
+
+## Verification Start Shortcut — 2026-09-17
+
+The Cash/Bank Verification start popup now includes a green `✅ Start Verification` shortcut beside
+`Open Cashbook`. It uses the popup's selected book and date range, while sharing the existing session
+request, loading progress, duplicate-click guard, activation, and error handling with the Cashbook
+screen button. Only `static/verification.html` and `static/verification.js` changed; the script cache
+version moved to `v31`. JavaScript syntax, diff, targeted wiring, and the focused Verification
+navigation suite (9 tests) passed; Aadil manually confirmed the flow.

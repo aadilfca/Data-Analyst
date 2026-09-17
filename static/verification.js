@@ -284,6 +284,7 @@ const cashbookContent = document.getElementById('cashbookContent');
 const popupOverlay = document.getElementById('sessionPopupOverlay');
 const popupCashbookSelect = document.getElementById('popupCashbookSelect');
 const popupStartBtn = document.getElementById('popupStartBtn');
+const popupStartVerificationBtn = document.getElementById('popupStartVerificationBtn');
 const popupCancelBtn = document.getElementById('popupCancelBtn');
 const popupError = document.getElementById('popupError');
 // Editable search-range inputs (confirmed fix) - populated with the auto-detected default range
@@ -349,6 +350,11 @@ function showPopupError(msg) {
     if (!popupError) return;
     popupError.textContent = msg;
     popupError.style.display = 'block';
+}
+
+function setPopupActionButtonsDisabled(disabled) {
+    if (popupStartBtn) popupStartBtn.disabled = disabled;
+    if (popupStartVerificationBtn) popupStartVerificationBtn.disabled = disabled;
 }
 
 function hidePopupError() {
@@ -837,9 +843,11 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
     if (!clientId) {
         popupCashbookSelect.innerHTML = '<option value="">-- Select client first --</option>';
         popupCashbookSelect.disabled = true;
-        popupStartBtn.disabled = true;
+        setPopupActionButtonsDisabled(true);
         return;
     }
+    // Keep both popup actions locked while the date-range search is rebuilding the list.
+    setPopupActionButtonsDisabled(true);
     window.LoadingUI.showFieldLoading(popupCashbookSelect, { prominent: true });
     // Bank Verification (Phase 8): book-type-specific copy, since this same function serves both
     // Cash and Bank discovery now (only the category_group filter/wording differs).
@@ -898,11 +906,11 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
                 popupCashbookSelect.value = previousSelection;
             }
             popupCashbookSelect.disabled = false;
-            popupStartBtn.disabled = false;
+            setPopupActionButtonsDisabled(false);
         } else {
             popupCashbookSelect.innerHTML = `<option value="">⚠️ No ${bookWord}s found</option>`;
             popupCashbookSelect.disabled = true;
-            popupStartBtn.disabled = true;
+            setPopupActionButtonsDisabled(true);
             showPopupError(
                 `No ${bookWord}s found for this client.\n` +
                 `Make sure you have uploaded data containing ${voucherHint} vouchers.\n` +
@@ -914,6 +922,7 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
         window.LoadingUI.hideFieldLoading(popupCashbookSelect);
         popupCashbookSelect.innerHTML = '<option value="">⚠️ Error loading</option>';
         popupCashbookSelect.disabled = true;
+        setPopupActionButtonsDisabled(true);
         showPopupError(`Failed to load ${bookWord}s: ` + e.message);
     }
 }
@@ -1361,6 +1370,78 @@ function updateCashbookPagination() {
 }
 
 // ---------- START VERIFICATION SESSION ----------
+async function startVerificationSession({ cashbook, start, end, progressButton, estimatedTotal = 0, onSuccess, onError }) {
+    if (startSessionInFlight) return;
+    startSessionInFlight = true;
+    // No real progress feed from start_session (the backend only returns total_transactions once
+    // the whole build is done) - cashbookTotalRows (fetchCashbookData(), already populated since
+    // this button lives on the same cashbook view) is used as an upfront estimate, animated toward
+    // completion on a timer, same as loading_ui.js's own 'simulated' curve.
+    let progressIntervalId = null;
+    let globalLoadingToken = null;
+    const progressTarget = progressButton || startVerificationBtn;
+    try {
+        if (window.LoadingUI) globalLoadingToken = window.LoadingUI.startGlobalLoading(progressTarget);
+        if (estimatedTotal > 0) {
+            window.LoadingUI.showProgressBar(progressTarget, {
+                mode: 'determinate',
+                total: estimatedTotal,
+                message: 'Loading transactions'
+            });
+            const startTime = Date.now();
+            progressIntervalId = setInterval(function () {
+                const elapsed = Date.now() - startTime;
+                const current = Math.floor(estimatedTotal * 0.9 * (1 - Math.exp(-elapsed / 2000)));
+                window.LoadingUI.updateProgressBar(progressTarget, current, estimatedTotal);
+            }, 150);
+        } else {
+            window.LoadingUI.showProgressBar(progressTarget, { mode: 'indeterminate', message: 'Starting verification…' });
+        }
+        const clientId = getClientId();
+        const params = new URLSearchParams({
+            client_id: clientId,
+            cashbook_name: cashbook,
+            period_start: start,
+            period_end: end,
+            created_by: 'Analyst',
+            // Bank Verification (Phase 8): stores which mode this session was started under
+            // (see the session_type column added to verification_sessions in Phase 6).
+            session_type: currentType
+        });
+        const res = await fetch(`${API_BASE}/api/verification/start_session?${params}`, {
+            method: 'POST'
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Failed to start session');
+        }
+            const data = await res.json();
+        totalTransactions = data.total_transactions || 0;
+        if (progressIntervalId) {
+            clearInterval(progressIntervalId);
+            progressIntervalId = null;
+        }
+        window.LoadingUI.updateProgressBar(progressTarget, totalTransactions, totalTransactions);
+        await activateSessionView(data.session_id);
+        if (onSuccess) onSuccess();
+    } catch (error) {
+        if (progressIntervalId) {
+            clearInterval(progressIntervalId);
+            progressIntervalId = null;
+        }
+        console.error('Error starting session:', error);
+        if (onError) {
+            onError(error);
+        } else {
+            showStatus('❌ Error starting verification: ' + error.message, 'error');
+        }
+    } finally {
+        window.LoadingUI.hideProgressBar(progressTarget);
+        if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
+        startSessionInFlight = false;
+    }
+}
+
 async function startSessionFromCashbook() {
     const clientId = getClientId();
     if (!clientId) {
@@ -1382,69 +1463,58 @@ async function startSessionFromCashbook() {
         showStatus('⚠️ Start must be ≤ end.', 'error');
         return;
     }
-    if (startSessionInFlight) return;
-    startSessionInFlight = true;
-    // No real progress feed from start_session (the backend only returns total_transactions once
-    // the whole build is done) - cashbookTotalRows (fetchCashbookData(), already populated since
-    // this button lives on the same cashbook view) is used as an upfront estimate, animated toward
-    // completion on a timer, same as loading_ui.js's own 'simulated' curve.
-    let progressIntervalId = null;
-    let globalLoadingToken = null;
-    try {
-        if (window.LoadingUI) globalLoadingToken = window.LoadingUI.startGlobalLoading(startVerificationBtn);
-        const estimatedTotal = cashbookTotalRows || 0;
-        if (estimatedTotal > 0) {
-            window.LoadingUI.showProgressBar(startVerificationBtn, {
-                mode: 'determinate',
-                total: estimatedTotal,
-                message: 'Loading transactions'
-            });
-            const startTime = Date.now();
-            progressIntervalId = setInterval(function () {
-                const elapsed = Date.now() - startTime;
-                const current = Math.floor(estimatedTotal * 0.9 * (1 - Math.exp(-elapsed / 2000)));
-                window.LoadingUI.updateProgressBar(startVerificationBtn, current, estimatedTotal);
-            }, 150);
-        } else {
-            window.LoadingUI.showProgressBar(startVerificationBtn, { mode: 'indeterminate', message: 'Starting verification…' });
-        }
-        const params = new URLSearchParams({
-            client_id: clientId,
-            cashbook_name: selectedCashbook,
-            period_start: start,
-            period_end: end,
-            created_by: 'Analyst',
-            // Bank Verification (Phase 8): stores which mode this session was started under
-            // (see the session_type column added to verification_sessions in Phase 6).
-            session_type: currentType
-        });
-        const res = await fetch(`${API_BASE}/api/verification/start_session?${params}`, {
-            method: 'POST'
-        });
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.detail || 'Failed to start session');
-        }
-            const data = await res.json();
-        totalTransactions = data.total_transactions || 0;
-        if (progressIntervalId) {
-            clearInterval(progressIntervalId);
-            progressIntervalId = null;
-        }
-        window.LoadingUI.updateProgressBar(startVerificationBtn, totalTransactions, totalTransactions);
-        await activateSessionView(data.session_id);
-    } catch (error) {
-        if (progressIntervalId) {
-            clearInterval(progressIntervalId);
-            progressIntervalId = null;
-        }
-        console.error('Error starting session:', error);
-        showStatus('❌ Error starting verification: ' + error.message, 'error');
-    } finally {
-        window.LoadingUI.hideProgressBar(startVerificationBtn);
-        if (globalLoadingToken) window.LoadingUI.stopGlobalLoading(globalLoadingToken);
-        startSessionInFlight = false;
+    return startVerificationSession({
+        cashbook: selectedCashbook,
+        start,
+        end,
+        progressButton: startVerificationBtn,
+        estimatedTotal: cashbookTotalRows
+    });
+}
+
+// Starts directly from Place 1 using the same request/progress path as the Cashbook screen.
+// The popup remains visible on failure so the user can correct the selection or retry.
+async function startSessionFromPopup() {
+    const clientId = getClientId();
+    const cashbook = popupCashbookSelect ? popupCashbookSelect.value : '';
+    const sessionRange = popupDateRangePicker ? popupDateRangePicker.getRange() : { start: null, end: null };
+    const start = sessionRange.start;
+    const end = sessionRange.end;
+    if (!clientId) {
+        showPopupError('No client selected.');
+        return;
     }
+    if (!cashbook) {
+        showPopupError('Please select a cashbook.');
+        return;
+    }
+    if (!start || !end) {
+        showPopupError('Please select a date range.');
+        return;
+    }
+    if (start > end) {
+        showPopupError('Start must be ≤ end.');
+        return;
+    }
+
+    selectedCashbook = cashbook;
+    saveSelectedCashbook(cashbook);
+    saveVerificationDateRange(start, end);
+    if (cashbookDateRangePicker) cashbookDateRangePicker.setRange(start, end);
+    return startVerificationSession({
+        cashbook,
+        start,
+        end,
+        progressButton: popupStartVerificationBtn,
+        onSuccess: function () {
+            hidePopupError();
+            popupOverlay.style.display = 'none';
+        },
+        onError: function (error) {
+            popupOverlay.style.display = 'flex';
+            showPopupError('❌ Error starting verification: ' + error.message);
+        }
+    });
 }
 
 // Switches to the session view for the given session id — shared by startSessionFromCashbook()
@@ -4764,6 +4834,7 @@ if (hubPopupWillOpen) {
     lockHubTile(arrivingTile, hubTileOpeningMessage(currentType));
 }
 if (popupStartBtn) popupStartBtn.addEventListener('click', openCashbook);
+if (popupStartVerificationBtn) popupStartVerificationBtn.addEventListener('click', startSessionFromPopup);
 // Editable search range (confirmed fix): re-run the search with the user's chosen dates once a
 // full range is picked - mirrors the existing cashbookStartDate/cashbookEndDate pattern in
 // #cashbookContent. Now fired directly as the date-range picker's onChange callback (Phase 1 of
