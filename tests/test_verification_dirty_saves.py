@@ -425,6 +425,31 @@ def test_voucher_line_correct_checkbox_turns_dot_green_and_enters_save_payload(p
     }
 
 
+def test_voucher_line_correctness_flush_uses_server_system_document_id(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        window.ApiUtils = {
+            apiFetchMutate: async (url, options) => {
+                window.correctnessFlushBody = JSON.parse(options.body);
+                return new Response(JSON.stringify({}), {
+                    status: 200,
+                    headers: {'Content-Type': 'application/json'}
+                });
+            }
+        };
+        procedureSystemDocumentIds.voucher_line_correctness = 502;
+        hostAdapter.procedureModalState[1] = {
+            voucherLineCorrect: true,
+            voucherLineCorrectDirty: true,
+            tabs: {}
+        };
+        await flushVoucherLineCorrectness(1);
+        return window.correctnessFlushBody;
+    }""")
+
+    assert result["document_id"] == 502
+    assert result["observation_text"] == "correct"
+
+
 def test_account_head_recommendation_disables_correct_checkbox_until_cleared(procedure_modal_page):
     result = procedure_modal_page.evaluate("""() => {
         hostAdapter.escapeHtml = value => String(value ?? '');

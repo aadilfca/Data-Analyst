@@ -247,13 +247,11 @@ def _has_pending_account_head_note(voucher_line_id: int, sibling_ids: Optional[L
     True if this voucher line (or any sibling session's copy of it - a cashbook reopen creates
     a fresh verification_details row with no true session-resume, see
     _resolve_sibling_voucher_line_ids()) currently has a non-blank "no suitable account exists"
-    Account Head note recorded in voucher_line_observations under the reserved sentinel
-    document_id = ACCOUNT_HEAD_OBSERVATION_DOC_ID (both defined later in this file - resolved
-    at call time, same forward-reference this function's own caller already relies on for
-    _resolve_sibling_voucher_line_ids()).
+    Account Head note recorded in voucher_line_observations under the hidden system Document
+    (with the legacy ACCOUNT_HEAD_OBSERVATION_DOC_ID alias accepted for older data).
 
     The "Recommended Account Head" field itself (static/verification.js's accountHeadCache) has
-    no backend persistence at all - this sentinel observation note is the ONLY real signal that
+    no backend persistence at all - this system observation note is the ONLY real signal that
     exists server-side for "an auditor flagged this line as needing a new account head with no
     Trial Balance match" (Account Head Recommendation reposition + search-select + no-match
     note fix). Mirrors get_line_observations()'s sibling-resolution + updated_at dedup, narrowed
@@ -273,10 +271,13 @@ def _has_pending_account_head_note(voucher_line_id: int, sibling_ids: Optional[L
     placeholders = ",".join("%s" for _ in sibling_ids)
     rows = execute_query_pg(
         f"""
-        SELECT observation_text, updated_at FROM voucher_line_observations
-        WHERE voucher_line_id IN ({placeholders}) AND document_id = %s
+        SELECT vlo.observation_text, vlo.updated_at
+        FROM voucher_line_observations vlo
+        LEFT JOIN audit_rule_documents ard ON ard.id = vlo.document_id
+        WHERE vlo.voucher_line_id IN ({placeholders})
+          AND (vlo.document_id = %s OR (ard.is_system = TRUE AND ard.name = %s))
         """,
-        tuple(sibling_ids) + (ACCOUNT_HEAD_OBSERVATION_DOC_ID,)
+        tuple(sibling_ids) + (ACCOUNT_HEAD_OBSERVATION_DOC_ID, SYSTEM_ACCOUNT_HEAD_DOCUMENT_NAME)
     )
     if not rows:
         return False
@@ -304,10 +305,14 @@ def _has_voucher_line_correct_confirmation(voucher_line_id: int,
     placeholders = ",".join("%s" for _ in sibling_ids)
     rows = execute_query_pg(
         f"""
-        SELECT observation_text, updated_at FROM voucher_line_observations
-        WHERE voucher_line_id IN ({placeholders}) AND document_id = %s
+        SELECT vlo.observation_text, vlo.updated_at
+        FROM voucher_line_observations vlo
+        LEFT JOIN audit_rule_documents ard ON ard.id = vlo.document_id
+        WHERE vlo.voucher_line_id IN ({placeholders})
+          AND (vlo.document_id = %s OR (ard.is_system = TRUE AND ard.name = %s))
         """,
-        tuple(sibling_ids) + (VOUCHER_LINE_CORRECTNESS_DOC_ID,)
+        tuple(sibling_ids) + (VOUCHER_LINE_CORRECTNESS_DOC_ID,
+                              SYSTEM_VOUCHER_LINE_CORRECTNESS_DOCUMENT_NAME)
     )
     if not rows:
         return False
@@ -2158,6 +2163,9 @@ def save_and_verify_voucher_bundle(
             timings["line_saves_ms"] = round((time.perf_counter() - save_started) * 1000, 1)
             timings.update({key: round(value, 1) for key, value in save_components.items()})
         procedure_started = time.perf_counter()
+        system_document_ids = None
+        if account_head_notes or voucher_line_correctness:
+            system_document_ids = _get_system_observation_document_ids(create=True)
         for entry in observations:
             execute_write_pg(
                 """INSERT INTO voucher_line_observations
@@ -2176,7 +2184,7 @@ def save_and_verify_voucher_bundle(
                    ON CONFLICT(voucher_line_id, document_id) DO UPDATE SET
                    observation_text = excluded.observation_text, synced = FALSE,
                    updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""",
-                (entry['voucher_line_id'], ACCOUNT_HEAD_OBSERVATION_DOC_ID,
+                (entry['voucher_line_id'], system_document_ids['account_head'],
                  entry.get('observation_text', ''), 'Analyst')
             )
         for entry in voucher_line_correctness:
@@ -2189,7 +2197,7 @@ def save_and_verify_voucher_bundle(
                    ON CONFLICT(voucher_line_id, document_id) DO UPDATE SET
                    observation_text = excluded.observation_text, synced = FALSE,
                    updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""",
-                (entry['voucher_line_id'], VOUCHER_LINE_CORRECTNESS_DOC_ID,
+                (entry['voucher_line_id'], system_document_ids['voucher_line_correctness'],
                  VOUCHER_LINE_CORRECT_TEXT if is_correct else 'incorrect', 'Analyst')
             )
         for entry in physical_bills:
@@ -4033,6 +4041,76 @@ ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1
 ACCOUNT_HEAD_RECOMMENDATION_PREFIX = '__account_head_recommendation__: '
 VOUCHER_LINE_CORRECTNESS_DOC_ID = -2
 VOUCHER_LINE_CORRECT_TEXT = 'correct'
+SYSTEM_ACCOUNT_HEAD_DOCUMENT_NAME = '[System] Account Head Recommendation'
+SYSTEM_VOUCHER_LINE_CORRECTNESS_DOCUMENT_NAME = '[System] Voucher Line Correctness'
+
+
+def _get_or_create_system_observation_document_id(document_name: str) -> int:
+    """Return the real hidden Document ID used for a system observation stream."""
+    rows = execute_query_pg(
+        "SELECT id FROM audit_rule_documents WHERE name = %s AND is_system = TRUE ORDER BY id LIMIT 1",
+        (document_name,)
+    )
+    if rows:
+        return rows[0]['id']
+    return execute_write_pg(
+        """
+        INSERT INTO audit_rule_documents (name, is_active, is_system, document_type)
+        VALUES (%s, FALSE, TRUE, 'linked_template')
+        RETURNING id
+        """,
+        (document_name,)
+    )
+
+
+def _get_system_observation_document_ids(create: bool = False) -> dict:
+    """Return the hidden system-document IDs, optionally creating missing rows."""
+    names = {
+        'account_head': SYSTEM_ACCOUNT_HEAD_DOCUMENT_NAME,
+        'voucher_line_correctness': SYSTEM_VOUCHER_LINE_CORRECTNESS_DOCUMENT_NAME,
+    }
+    rows = execute_query_pg(
+        """
+        SELECT id, name FROM audit_rule_documents
+        WHERE is_system = TRUE AND name IN (%s, %s)
+        """,
+        (names['account_head'], names['voucher_line_correctness'])
+    )
+    result = {
+        'account_head': next((row['id'] for row in rows if row['name'] == names['account_head']), None),
+        'voucher_line_correctness': next(
+            (row['id'] for row in rows if row['name'] == names['voucher_line_correctness']), None
+        ),
+    }
+    if create:
+        for key, name in names.items():
+            if result[key] is None:
+                result[key] = _get_or_create_system_observation_document_id(name)
+    return result
+
+
+def _resolve_system_observation_document_id(document_id: int, create: bool = False) -> int:
+    """Translate legacy negative aliases to their real hidden Document IDs."""
+    ids = _get_system_observation_document_ids(create=create)
+    if document_id == ACCOUNT_HEAD_OBSERVATION_DOC_ID:
+        return ids['account_head'] or document_id
+    if document_id == VOUCHER_LINE_CORRECTNESS_DOC_ID:
+        return ids['voucher_line_correctness'] or document_id
+    return document_id
+
+
+def _is_account_head_observation_entry(entry: dict) -> bool:
+    return (
+        entry.get('document_id') == ACCOUNT_HEAD_OBSERVATION_DOC_ID
+        or entry.get('document_name') == SYSTEM_ACCOUNT_HEAD_DOCUMENT_NAME
+    )
+
+
+def _is_voucher_line_correctness_entry(entry: dict) -> bool:
+    return (
+        entry.get('document_id') == VOUCHER_LINE_CORRECTNESS_DOC_ID
+        or entry.get('document_name') == SYSTEM_VOUCHER_LINE_CORRECTNESS_DOCUMENT_NAME
+    )
 
 _ACCOUNT_HEAD_STOPWORDS = {
     'the', 'and', 'for', 'from', 'with', 'this', 'that', 'account', 'accounts'
@@ -4734,10 +4812,8 @@ def sync_line_observations_to_voucher(voucher_line_id: int, sibling_ids: Optiona
             return
 
         placeholders = ",".join("%s" for _ in sibling_ids)
-        # LEFT JOIN (not INNER) so the reserved ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel entry -
-        # which has no matching audit_rule_documents row by design - isn't silently dropped from
-        # the rollup; its document_name comes back NULL and is handled in the block-building loop
-        # below instead.
+        # LEFT JOIN (not INNER) so legacy sentinel rows remain visible while new system-document
+        # rows are labelled by their hidden Document name.
         all_entries = execute_query_pg(
             f"""
             SELECT vlo.id, vlo.document_id, vlo.observation_text, vlo.updated_at,
@@ -4766,9 +4842,9 @@ def sync_line_observations_to_voucher(voucher_line_id: int, sibling_ids: Optiona
             # The sentinel entry stores the intern's raw note text (unwrapped, so re-opening the
             # modal shows exactly what was typed) - the fully-worded finding is only assembled
             # here, at rollup time.
-            if entry['document_id'] == VOUCHER_LINE_CORRECTNESS_DOC_ID:
+            if _is_voucher_line_correctness_entry(entry):
                 return ''
-            if entry['document_id'] == ACCOUNT_HEAD_OBSERVATION_DOC_ID:
+            if _is_account_head_observation_entry(entry):
                 return _format_account_head_observation(entry['observation_text'])
             # Automated cross-document validation engine, Phase 8 of 10: a shortfall sentinel is
             # a real, hidden Document row (ard.is_system) - the Cross-check's own name is already
@@ -4781,7 +4857,7 @@ def sync_line_observations_to_voucher(voucher_line_id: int, sibling_ids: Optiona
         doc_blocks = [
             _format_block(entry)
             for entry in sorted(latest_by_doc.values(), key=lambda e: e['document_id'])
-            if entry['document_id'] != VOUCHER_LINE_CORRECTNESS_DOC_ID
+            if not _is_voucher_line_correctness_entry(entry)
             and entry['observation_text'] and entry['observation_text'].strip()
         ]
 
@@ -4890,9 +4966,9 @@ def sync_voucher_observations_to_voucher(voucher_line_ids: List[int], sibling_id
             for (owner, _), entry in sorted(latest.items(), key=lambda item: (item[0][0], item[0][1])):
                 if owner != line_id or not (entry['observation_text'] or '').strip():
                     continue
-                if entry['document_id'] == VOUCHER_LINE_CORRECTNESS_DOC_ID:
+                if _is_voucher_line_correctness_entry(entry):
                     continue
-                if entry['document_id'] == ACCOUNT_HEAD_OBSERVATION_DOC_ID:
+                if _is_account_head_observation_entry(entry):
                     blocks.append(_format_account_head_observation(entry['observation_text']))
                 elif entry.get('is_system'):
                     blocks.append(f"[Cross-check Shortfall]: {entry['observation_text'].strip()}")
@@ -4958,14 +5034,9 @@ def get_line_observations(voucher_line_id: int):
             "last_synced_text": r['last_synced_text'],
             "updated_by": r['updated_by'],
             "updated_at": r['updated_at'],
-            # Inactive-document handling: LEFT JOIN so the reserved ACCOUNT_HEAD_OBSERVATION_DOC_ID
-            # sentinel (still not a real audit_rule_documents row) is never dropped - its
-            # document_name/is_active come back None, never coerced to False, so the frontend can
-            # tell "not a real document" apart from "real, deactivated". A cross-check-shortfall
-            # entry is different since the note-save fix: it now has a real (but is_system=TRUE,
-            # is_active=FALSE) Document row, so this comes back as a real name and
-            # is_active: false rather than None/None - inert today, since nothing in the frontend
-            # renders this sentinel as a Document tab (it's never attached to any Category).
+            # Inactive-document handling: LEFT JOIN keeps legacy sentinel rows readable while
+            # the new hidden system Documents return their real name and inactive state. Neither
+            # system stream is attached to a Category or rendered as an evidence tab.
             "document_name": r['document_name'],
             "is_active": r['document_is_active'] if r['document_is_active'] is None else bool(r['document_is_active'])
         }
@@ -5004,9 +5075,16 @@ def save_line_observation(
     if not line:
         raise HTTPException(404, "Voucher line not found.")
 
-    # Account Head and Voucher Line Correctness use reserved sentinels, not real
-    # audit_rule_documents rows - skip the existence/active check for both.
-    if document_id not in {ACCOUNT_HEAD_OBSERVATION_DOC_ID, VOUCHER_LINE_CORRECTNESS_DOC_ID}:
+    requested_document_id = document_id
+    is_legacy_system_id = document_id in {
+        ACCOUNT_HEAD_OBSERVATION_DOC_ID, VOUCHER_LINE_CORRECTNESS_DOC_ID
+    }
+    system_document_ids = _get_system_observation_document_ids(create=is_legacy_system_id)
+    document_id = _resolve_system_observation_document_id(document_id, create=False)
+    is_account_head_document = document_id == system_document_ids['account_head']
+    is_correctness_document = document_id == system_document_ids['voucher_line_correctness']
+
+    if not is_account_head_document and not is_correctness_document:
         doc = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (document_id,))
         if not doc:
             raise HTTPException(404, "Document not found or inactive.")
@@ -5030,7 +5108,7 @@ def save_line_observation(
     sync_line_observations_to_voucher(voucher_line_id)
 
     cleared_status = None
-    if document_id == VOUCHER_LINE_CORRECTNESS_DOC_ID:
+    if is_correctness_document:
         status_result = compute_and_persist_cleared_status(voucher_line_id)
         cleared_status = status_result.get('cleared_status') if status_result else None
 
@@ -5054,7 +5132,7 @@ def save_line_observation(
 
     return {
         "voucher_line_id": updated['voucher_line_id'],
-        "document_id": updated['document_id'],
+        "document_id": requested_document_id,
         "observation_text": updated['observation_text'] or '',
         "synced": bool(updated['synced']),
         "updated_by": updated['updated_by'],

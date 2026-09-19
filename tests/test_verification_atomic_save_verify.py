@@ -263,6 +263,51 @@ def test_bundle_endpoint_success_with_snake_case_voucher_checks(bundle_http_clie
     assert reached == ["verify"]
 
 
+def test_bundle_uses_real_system_documents_for_modal_markers(monkeypatch):
+    writes = []
+
+    @contextmanager
+    def transaction():
+        yield object()
+
+    def execute_query_pg(query, params=None):
+        if "SELECT id, status" in query:
+            return [{"id": 7, "status": "Pending"}]
+        if "FROM audit_rule_documents" in query:
+            return []
+        return []
+
+    def execute_write_pg(query, params=None):
+        if "INSERT INTO audit_rule_documents" in query:
+            return 501 if "Account Head Recommendation" in params[0] else 502
+        if "INSERT INTO voucher_line_observations" in query:
+            writes.append(params)
+        return None
+
+    monkeypatch.setattr(verification, "pg_transaction", transaction)
+    monkeypatch.setattr(verification, "execute_query_pg", execute_query_pg)
+    monkeypatch.setattr(verification, "execute_write_pg", execute_write_pg)
+    monkeypatch.setattr(verification, "_save_line_items_impl", lambda *a, **k: None)
+    monkeypatch.setattr(
+        verification,
+        "compute_and_persist_cleared_status",
+        lambda *a, **k: {"cleared_status": "Query", "matrix_version_applied": 1},
+    )
+    monkeypatch.setattr(verification, "sync_line_observations_to_voucher", lambda *a, **k: None)
+
+    result = verification.save_and_verify_voucher_bundle(
+        session_id=10,
+        current_detail_id=7,
+        lines=[{"detail_id": 7, "line_items": [], "procedure_data": {}}],
+        verify=False,
+        account_head_notes=[{"voucher_line_id": 7, "observation_text": "__account_head_recommendation__: Office Supplies"}],
+        voucher_line_correctness=[{"voucher_line_id": 7, "is_correct": True}],
+    )
+
+    assert result["saved"] is True
+    assert [params[1] for params in writes] == [501, 502]
+
+
 def test_bundle_endpoint_400_when_voucher_checks_missing(bundle_http_client, monkeypatch):
     reached = _stub_bundle_pg(monkeypatch, active_checks=[{"id": 1, "name": "Check A"}])
 

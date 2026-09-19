@@ -227,14 +227,20 @@ let hostAdapter = null;
 // verification.js (Phase 1b) — nothing outside this file ever read or wrote it.
 let currentProcedureModalUid = null;
 
-// Account Head Recommendation follow-up: reserved sentinel document_id for the "no suitable TB
-// account" note, reused via the existing save_line_observation/voucher_line_observations flow.
-// Must match ACCOUNT_HEAD_OBSERVATION_DOC_ID in routers/verification.py exactly.
+// Account Head Recommendation and Voucher Line Correctness use hidden system Documents on the
+// server. Keep the legacy aliases as a fail-safe for an older modal payload; openProcedureModal()
+// learns the real IDs from any saved system entries before hydrating or saving.
 const ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1;
 const ACCOUNT_HEAD_RECOMMENDATION_PREFIX = '__account_head_recommendation__: ';
 const VOUCHER_LINE_CORRECTNESS_DOC_ID = -2;
 const VOUCHER_LINE_CORRECT_TEXT = 'correct';
 const VOUCHER_LINE_INCORRECT_TEXT = 'incorrect';
+const SYSTEM_ACCOUNT_HEAD_DOCUMENT_NAME = '[System] Account Head Recommendation';
+const SYSTEM_VOUCHER_LINE_CORRECTNESS_DOCUMENT_NAME = '[System] Voucher Line Correctness';
+let procedureSystemDocumentIds = {
+    account_head: ACCOUNT_HEAD_OBSERVATION_DOC_ID,
+    voucher_line_correctness: VOUCHER_LINE_CORRECTNESS_DOC_ID
+};
 
 // Voucher-level Checks simplified to name-only (Phase 3 of 4) — voucher-level checks cache,
 // keyed by transaction_ref (shared across every line of the same voucher, not per-uid) — array
@@ -1265,6 +1271,13 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // Every saved observation entry for this line, across all documents — re-fetched fresh on
     // every open (via the composite call above) so a saved note is never silently stale.
     const observationEntries = (modalData.observations && modalData.observations.entries) || [];
+    observationEntries.forEach(entry => {
+        if (entry.document_name === SYSTEM_ACCOUNT_HEAD_DOCUMENT_NAME) {
+            procedureSystemDocumentIds.account_head = Number(entry.document_id);
+        } else if (entry.document_name === SYSTEM_VOUCHER_LINE_CORRECTNESS_DOCUMENT_NAME) {
+            procedureSystemDocumentIds.voucher_line_correctness = Number(entry.document_id);
+        }
+    });
 
     // Confirmed fix: tabs for Documents not applicable to this line's Category are fully hidden,
     // not rendered greyed-out — `documents` (built from guidanceDocuments above) already IS that
@@ -1288,12 +1301,15 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     const crossCheckResults = (modalData.cross_check_results && modalData.cross_check_results.results) || [];
 
     // Account Head Recommendation follow-up: re-seed the no-match note from server truth on every
-    // open (the ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel entry, if any) — a stale local edit from a
+    // open (the Account Head system-document entry, if any) — a stale local edit from a
     // previous session must never silently persist across reload, same convention every other
     // tab's state already follows. The match-mode selection (selectedAccountId/Name) is
     // deliberately NOT re-seeded here — it's confirmed scratch-only, with no server-side source.
     const ahState = getAccountHeadState(uid);
-    const savedNoMatchEntry = observationEntries.find(e => e.document_id === ACCOUNT_HEAD_OBSERVATION_DOC_ID);
+    const savedNoMatchEntry = observationEntries.find(e =>
+        String(e.document_id) === String(procedureSystemDocumentIds.account_head)
+        || e.document_id === ACCOUNT_HEAD_OBSERVATION_DOC_ID
+    );
     const savedAccountHeadText = savedNoMatchEntry ? (savedNoMatchEntry.observation_text || '') : '';
     const isSavedRecommendation = savedAccountHeadText.startsWith(ACCOUNT_HEAD_RECOMMENDATION_PREFIX);
     const savedRecommendationName = isSavedRecommendation
@@ -1314,7 +1330,10 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // correctness marker means the auditor made an explicit decision; only the "correct" value
     // satisfies the backend gate, while "incorrect" lets the rail show that the decision needs
     // attention after a saved checkbox is cleared.
-    const correctEntry = observationEntries.find(e => e.document_id === VOUCHER_LINE_CORRECTNESS_DOC_ID);
+    const correctEntry = observationEntries.find(e =>
+        String(e.document_id) === String(procedureSystemDocumentIds.voucher_line_correctness)
+        || e.document_id === VOUCHER_LINE_CORRECTNESS_DOC_ID
+    );
     const correctText = correctEntry ? String(correctEntry.observation_text || '').trim().toLowerCase() : '';
     const lineState = hostAdapter.procedureModalState[uid] || (hostAdapter.procedureModalState[uid] = {
         activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0,
@@ -3554,7 +3573,7 @@ function renderVoucherApprovalPanel(uid) {
 //               only per the confirmed decision (no backend persistence), plus the existing
 //               fuzzy-match Suggest flow.
 //   'nomatch' — free-text finding, persisted via flushAccountHeadNoMatchNote() into the existing
-//               Observation flow under the ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel.
+//               Observation flow under the Account Head system Document.
 function renderAccountHeadCard(uid) {
     const bodyEl = document.getElementById('procedureAccountHeadBody');
     if (!bodyEl) return;
@@ -5708,8 +5727,9 @@ async function saveLineObservation(uid, docId, target = null) {
 
 // Persists Voucher Line correctness and Account Head recommendations from the same save chokepoint
 // as flushProcedureObservations() (hostAdapter.saveLineItems()). Each uses the existing
-// save_line_observation endpoint with its reserved sentinel; the backend excludes correctness from
-// user-facing observation rollups and formats Account Head recommendations at rollup time.
+// save_line_observation endpoint with its hidden system-document ID; the backend excludes
+// correctness from user-facing observation rollups and formats Account Head recommendations at
+// rollup time.
 async function flushVoucherLineCorrectness(uid) {
     if (!hostAdapter) return true;
     const lineState = hostAdapter.procedureModalState[uid];
@@ -5721,7 +5741,7 @@ async function flushVoucherLineCorrectness(uid) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 voucher_line_id: parseInt(uid),
-                document_id: VOUCHER_LINE_CORRECTNESS_DOC_ID,
+                document_id: procedureSystemDocumentIds.voucher_line_correctness,
                 observation_text: lineState.voucherLineCorrect
                     ? VOUCHER_LINE_CORRECT_TEXT : VOUCHER_LINE_INCORRECT_TEXT
             })
@@ -5762,7 +5782,7 @@ async function flushAccountHeadNoMatchNote(uid) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 voucher_line_id: parseInt(uid),
-                document_id: ACCOUNT_HEAD_OBSERVATION_DOC_ID,
+                document_id: procedureSystemDocumentIds.account_head,
                 observation_text: serializeAccountHeadRecommendation(state)
             })
         });

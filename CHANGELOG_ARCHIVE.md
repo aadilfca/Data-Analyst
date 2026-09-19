@@ -1,5 +1,14 @@
 # Changelog Archive
 
+## Verification Save/Verify foreign-key fix — 2026-09-19
+
+Account Head Recommendation and Voucher Line Correctness markers now persist through hidden,
+real `audit_rule_documents` rows instead of invalid negative document IDs. Legacy aliases remain
+readable, the modal learns real IDs from saved entries, and status/observation rollups recognize
+both forms. Backend and browser regression coverage was added. `py_compile`, JavaScript syntax,
+diff checks, and 38 focused tests passed; broader runs retained two unrelated baseline failures in
+the Browse Rows geometry assertion and a modal test double missing `form_entries`.
+
 ## Verification voucher search focus — 2026-09-15
 
 The Verification voucher-list popover now focuses `#transactionListSearchInput` as soon as the
