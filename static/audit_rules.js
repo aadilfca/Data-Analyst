@@ -514,13 +514,54 @@ function renderVerificationFieldPolicy(policy) {
     // editor presents one simple removable list to the administrator.
     const allSelected = used();
     if (shouldSelectAll) columns.forEach(column => { if (!allSelected.has(Number(column.column_id))) verificationPolicyState.optional.push({ column_id: Number(column.column_id), risk_level: 'Medium', sort_order: verificationPolicyState.optional.length }); });
+    // Keep the saved selection model unchanged while presenting it as a scannable configuration
+    // table; the Procedure modal uses the same selected columns for its row-level preview.
+    const selectedColumnsTable = document.createElement('div');
+    selectedColumnsTable.className = 'ar-verification-selected-table';
+    selectedColumnsTable.setAttribute('role', 'table');
+    selectedColumnsTable.setAttribute('aria-label', 'Selected Data Table columns');
+    const tableHeader = document.createElement('div');
+    tableHeader.className = 'ar-verification-selected-row ar-verification-selected-header';
+    tableHeader.setAttribute('role', 'row');
+    tableHeader.innerHTML = '<span role="columnheader">Data Table column</span><span role="columnheader">Procedure window</span><span aria-hidden="true"></span>';
+    selectedColumnsTable.appendChild(tableHeader);
     [...used()].forEach(columnId => {
         const column = columns.find(item => Number(item.column_id) === columnId); if (!column) return;
-        const chip = document.createElement('span'); chip.className = 'ar-verification-field-chip'; chip.textContent = column.column_name;
-        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'ar-verification-field-remove'; remove.textContent = '×'; remove.title = 'Remove field';
+        const row = document.createElement('div');
+        row.className = 'ar-verification-selected-row';
+        row.setAttribute('role', 'row');
+        const columnCell = document.createElement('div');
+        columnCell.className = 'ar-verification-selected-column';
+        columnCell.setAttribute('role', 'cell');
+        const columnName = document.createElement('span');
+        columnName.className = 'ar-verification-selected-name';
+        columnName.textContent = column.column_name;
+        columnCell.appendChild(columnName);
+        if (column.data_type) {
+            const type = document.createElement('span');
+            type.className = 'ar-verification-selected-type';
+            type.textContent = column.data_type;
+            columnCell.appendChild(type);
+        }
+        const visibilityCell = document.createElement('div');
+        visibilityCell.className = 'ar-verification-selected-visibility';
+        visibilityCell.setAttribute('role', 'cell');
+        visibilityCell.innerHTML = '<span class="ar-verification-show-badge">Show</span><span class="ar-verification-show-note">Shown in Data Table</span>';
+        const actionsCell = document.createElement('div');
+        actionsCell.className = 'ar-verification-selected-actions';
+        actionsCell.setAttribute('role', 'cell');
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'ar-verification-field-remove';
+        remove.textContent = '×';
+        remove.title = 'Remove field';
+        remove.setAttribute('aria-label', `Remove ${column.column_name}`);
         remove.addEventListener('click', () => { Object.keys(verificationPolicyState.core).forEach(key => { if (Number(verificationPolicyState.core[key]) === columnId) delete verificationPolicyState.core[key]; }); verificationPolicyState.optional = verificationPolicyState.optional.filter(field => Number(field.column_id) !== columnId); renderVerificationFieldPolicy({ ...policy, configured: true }); });
-        chip.appendChild(remove); arVerificationOptionalFields.appendChild(chip);
+        actionsCell.appendChild(remove);
+        row.append(columnCell, visibilityCell, actionsCell);
+        selectedColumnsTable.appendChild(row);
     });
+    arVerificationOptionalFields.appendChild(selectedColumnsTable);
     const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = columns.length ? '-- Add a Template column --' : '-- No active mapped columns --'; arVerificationOptionalSelect.appendChild(placeholder);
     columns.forEach(column => { if (!used().has(Number(column.column_id))) { const option = document.createElement('option'); option.value = column.column_id; option.textContent = column.column_name; arVerificationOptionalSelect.appendChild(option); } });
     arVerificationOptionalRisk.style.display = 'none';

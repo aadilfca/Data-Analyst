@@ -713,6 +713,52 @@ function getProcedureResultLineLabel(row, docKeyColumn, doc) {
     return `Row #${row.id}`;
 }
 
+function getProcedureResultPreviewColumns(doc) {
+    const seen = new Set();
+    return getDocumentVerificationColumns(doc).filter(column => {
+        const name = String(column?.column_name || '').trim();
+        const normalizedName = name.toLowerCase();
+        if (!name || seen.has(normalizedName)) return false;
+        seen.add(normalizedName);
+        return true;
+    });
+}
+
+// The Procedure search summary stays compact for fast linking; the configured Audit Rules
+// fields are available behind a per-row disclosure so large templates do not turn the dropdown
+// into an unbounded wall of repeated values.
+function buildProcedureResultPreviewHtml(row, doc) {
+    const columns = getProcedureResultPreviewColumns(doc);
+    if (!columns.length) return {toggle: '', details: ''};
+    const previewRows = columns.map(column => `
+        <tr>
+            <th scope="row">${hostAdapter.escapeHtml(column.column_name)}</th>
+            <td>${hostAdapter.escapeHtml(formatProcedureCellValue(
+                getRowFieldCaseInsensitive(row.row_data, column.column_name)
+            ))}</td>
+        </tr>
+    `).join('');
+    const detailsId = `procedure-result-details-${row.id}`;
+    return {
+        toggle: `
+        <button type="button" class="procedure-result-details-toggle"
+            data-procedure-result-details-toggle aria-expanded="false" aria-controls="${detailsId}"
+            title="Show selected Data Table columns and values">Show</button>
+        `,
+        details: `
+        <div id="${detailsId}" class="procedure-result-details" data-procedure-result-details hidden>
+            <div class="procedure-result-details-caption">Selected Data Table columns</div>
+            <div class="procedure-result-details-scroll">
+                <table class="procedure-result-detail-table">
+                    <thead><tr><th scope="col">Column</th><th scope="col">Value</th></tr></thead>
+                    <tbody>${previewRows}</tbody>
+                </table>
+            </div>
+        </div>
+        `
+    };
+}
+
 function groupProcedureSearchResults(results, docKeyColumn) {
     const groups = [];
     const groupsByReference = new Map();
@@ -767,7 +813,9 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId, option
         : '';
     const resultTag = 'div';
     const resultInteraction = multiSelect || isLocked ? '' : ' role="button" tabindex="0"';
+    const preview = buildProcedureResultPreviewHtml(row, options.previewDoc);
     const contentInteraction = multiSelect && !isLocked
+        && !preview.toggle
         ? ` role="button" tabindex="0" aria-label="Select ${hostAdapter.escapeHtml(String(accessibleLabel))}"`
         : '';
     return `
@@ -777,8 +825,10 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId, option
                 <div class="procedure-result-heading">
                     <span class="procedure-result-label">${hostAdapter.escapeHtml(String(label))}</span>
                     ${multiSelect ? lockNote : ''}
+                    ${preview.toggle}
                 </div>
                 <span class="procedure-result-meta">${hostAdapter.escapeHtml(meta)}</span>
+                ${preview.details}
             </div>
             ${multiSelect ? '' : lockNote}
         </${resultTag}>
@@ -807,7 +857,8 @@ function buildProcedureResultGroupHtml(uid, docId, group, doc, docKeyColumn, sel
             selectedIds,
             displayLabel: getProcedureResultLineLabel(row, docKeyColumn, doc),
             accessibleLabel: `${group.reference}, line ${index + 1}`,
-            lineNumber: index + 1
+            lineNumber: index + 1,
+            previewDoc: doc
         }
     )).join('');
     return `
@@ -4564,7 +4615,7 @@ function renderProcedureSearchDropdown(uid, docId) {
         if (group.rows.length === 1) {
             return buildProcedureResultRowHtml(
                 uid, group.rows[0], tabState.docKeyColumn, docId,
-                {multiSelect: true, selectedIds}
+                {multiSelect: true, selectedIds, previewDoc: doc}
             );
         }
         const expandsForDocumentMatch = searchTerm && group.reference.toLowerCase().includes(searchTerm);
@@ -4585,6 +4636,20 @@ function renderProcedureSearchDropdown(uid, docId) {
             this.setAttribute('aria-label', `${expanded ? 'Expand' : 'Collapse'} ${group.querySelector('.procedure-result-group-reference')?.textContent || 'document'}`);
             group.classList.toggle('is-expanded', !expanded);
             lines.hidden = expanded;
+        });
+    });
+
+    dropdown.querySelectorAll('[data-procedure-result-details-toggle]').forEach(toggle => {
+        toggle.addEventListener('click', function(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const details = this.closest('.procedure-result-main')?.querySelector('[data-procedure-result-details]');
+            if (!details) return;
+            const isOpening = details.hidden;
+            details.hidden = !isOpening;
+            this.textContent = isOpening ? 'Hide' : 'Show';
+            this.setAttribute('aria-expanded', String(isOpening));
+            this.closest('.procedure-result-item')?.classList.toggle('details-open', isOpening);
         });
     });
 
@@ -4654,7 +4719,7 @@ function renderProcedureSearchDropdown(uid, docId) {
 
     dropdown.querySelectorAll('.procedure-result-item:not(.locked)').forEach(item => {
         item.addEventListener('click', function(event) {
-            if (event.target.closest('.procedure-result-label, .procedure-result-meta, .procedure-result-checkbox')) return;
+            if (event.target.closest('.procedure-result-label, .procedure-result-meta, .procedure-result-checkbox, .procedure-result-details, .procedure-result-details-toggle')) return;
             const checkbox = this.querySelector('.procedure-result-checkbox');
             if (!checkbox) return;
             checkbox.checked = !checkbox.checked;
