@@ -278,6 +278,8 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-14: Storage Cleanup Phase B added a fresh-preview-hash, typed-confirmation cleanup transaction and existing-schema ledger migration protecting client, Verification, Trial Balance, and linked evidence. See CHANGELOG_ARCHIVE.md.
 - 2026-09-13: Loading feedback and hardening Mini-phases 1–5 completed; Audit Rules cursor/cache integration verified. See CHANGELOG_ARCHIVE.md.
 
+- 2026-09-19: Procedure badge opens the shared modal on Voucher Line; explicit targets stay intact, with browser regression coverage. See CHANGELOG_ARCHIVE.md.
+
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

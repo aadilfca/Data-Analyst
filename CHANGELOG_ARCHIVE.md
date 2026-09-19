@@ -5689,3 +5689,12 @@ request, loading progress, duplicate-click guard, activation, and error handling
 screen button. Only `static/verification.html` and `static/verification.js` changed; the script cache
 version moved to `v31`. JavaScript syntax, diff, targeted wiring, and the focused Verification
 navigation suite (9 tests) passed; Aadil manually confirmed the flow.
+
+## Verification Procedure badge opens Voucher Line - 2026-09-19
+
+Fresh Procedure/Observations badge opens now select the synthetic Voucher Line rail tab. Explicit
+document targets still win, and internal line navigation retains its completion-based default.
+Changed `static/procedure_modal.js` with browser regression coverage in
+`tests/test_verification_dirty_saves.py`. Focused Verification coverage passed (18 applicable
+tests, including the new regression); JavaScript syntax and diff checks passed. Aadil confirmed
+the local-server behavior.

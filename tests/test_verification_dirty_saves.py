@@ -242,6 +242,46 @@ def test_failed_dirty_procedure_modal_close_stays_open_and_reports_error(procedu
     assert result["messages"][-1] == {"message": "save failed", "kind": "error"}
 
 
+def test_procedure_badge_open_starts_on_voucher_line_and_explicit_document_target_wins(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        const capturedTabs = [];
+        hostAdapter = {
+            procedureModalState: {1: {tabs: {}}},
+            voucherLineState: {1: {transactionType: 'Purchases'}},
+            currentVoucherLines: [{detail_id: 1, row_data: {Account: 'Office supplies'}}],
+            currentVoucherId: 10,
+            fetchAuditGuidanceData: async () => ({
+                documents: [{id: 7, name: 'Invoice'}],
+                procedure_evidence: {checks: []}
+            }),
+            computeLineRiskData: () => ({risk: null}),
+            getVoucherLineAlias: () => 'Office supplies',
+            getVoucherLineAmount: () => '100',
+            parseVoucherAmount: value => Number(value),
+            VOUCHER_LINE_ACCOUNT_NAME_ALIASES: ['Account'],
+            markLineDirty: () => {},
+            markAllLinesDirty: () => {}
+        };
+        loadProcedureModalData = async () => ({});
+        renderVoucherChecksBar = () => {};
+        renderProcedureModalTabs = () => {};
+        updateProcedureModalSavedNote = () => {};
+        hideValidatePanel = () => {};
+        activateProcedureTab = (uid, docId) => capturedTabs.push({uid, docId});
+        const procedureBadge = document.createElement('button');
+        await openProcedureModal(1, null, hostAdapter, procedureBadge);
+        const badgeOpenTab = capturedTabs.at(-1).docId;
+        await openProcedureModal(1, 7, hostAdapter, procedureBadge);
+        const explicitDocumentTab = capturedTabs.at(-1).docId;
+        return {badgeOpenTab, explicitDocumentTab};
+    }""")
+
+    assert result == {
+        "badgeOpenTab": "__voucher_line__",
+        "explicitDocumentTab": 7,
+    }
+
+
 def test_rulebook_change_alert_shows_change_and_returns_user_choice(dirty_page):
     result = dirty_page.evaluate("""async () => {
         const recoverPromise = showRulebookChangeAlert({

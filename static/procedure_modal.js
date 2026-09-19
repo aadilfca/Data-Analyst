@@ -1316,12 +1316,14 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
         }
     });
 
-    // Rail default (Phase 1): an explicit target (a specific document link clicked in the
-    // Supporting column) still wins; otherwise open the first document that isn't yet complete,
-    // falling back to the first document if everything is already done.
+    // Rail default: an explicit target (a specific document link clicked in the Supporting
+    // column) still wins. Fresh badge/pill opens start on the synthetic Voucher Line tab, while
+    // internal line navigation keeps its completion-based real-Document default.
     let activeDocId;
     if (initialDocId && documents.some(d => d.id === initialDocId)) {
         activeDocId = initialDocId;
+    } else if (triggerEl) {
+        activeDocId = VOUCHER_LINE_TAB_ID;
     } else {
         const firstIncomplete = documents.find(doc => !isProcedureDocumentComplete(uid, doc));
         activeDocId = firstIncomplete ? firstIncomplete.id : documents[0].id;
