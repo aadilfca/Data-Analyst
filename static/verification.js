@@ -38,6 +38,8 @@ let currentSessionId = null;
 let currentDetailId = null;
 let sessionRulebook = null;
 let verificationPresenceHeartbeat = null;
+let verificationUnloadCloseSent = false;
+let suppressVerificationUnloadClose = false;
 
 function startVerificationPresence(sessionId) {
     const body = JSON.stringify({ session_id: sessionId });
@@ -60,6 +62,31 @@ function stopVerificationPresence() {
     }
 }
 
+// A browser/tab close does not allow a normal awaited fetch to finish reliably. Keep this request
+// small and use sendBeacon where available; the backend closes the session and releases this
+// browser's presence lease in one idempotent operation. pagehide is used instead of
+// visibilitychange so switching tabs does not end an active Verification session.
+function closeVerificationSessionOnUnload(event) {
+    if (event && event.persisted) return; // bfcache: the page may be restored immediately.
+    if (suppressVerificationUnloadClose || verificationUnloadCloseSent || !currentSessionId) return;
+    verificationUnloadCloseSent = true;
+    const body = JSON.stringify({ session_id: currentSessionId });
+    if (verificationPresenceHeartbeat) clearInterval(verificationPresenceHeartbeat);
+    verificationPresenceHeartbeat = null;
+    const url = `${API_BASE}/api/verification/session/close`;
+    if (navigator.sendBeacon) {
+        navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
+    } else {
+        fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+            keepalive: true
+        }).catch(() => {});
+    }
+}
+window.addEventListener('pagehide', closeVerificationSessionOnUnload);
+
 // Shared by every navigation exit from an active Verification session. The unfinished business
 // session stays resumable; only the active-presence lease is released after the user confirms.
 async function leaveVerificationSafely(continueNavigation) {
@@ -73,7 +100,15 @@ async function leaveVerificationSafely(continueNavigation) {
     if (!confirmed) return false;
     await saveAllVoucherLines();
     stopVerificationPresence();
-    await continueNavigation();
+    // This path deliberately keeps the session resumable while the app swaps back to the
+    // Cashbook view. Do not let the full-page navigation's pagehide handler close it.
+    suppressVerificationUnloadClose = true;
+    try {
+        await continueNavigation();
+    } catch (error) {
+        suppressVerificationUnloadClose = false;
+        throw error;
+    }
     return true;
 }
 window.leaveVerificationSafely = leaveVerificationSafely;
@@ -1624,6 +1659,8 @@ async function loadSessionRulebookWithRecovery(sessionId) {
 // the mandatory Rulebook read.
 async function activateSessionView(sessionId, targetVoucherId = null, rulebookPromise = null) {
     currentSessionId = sessionId;
+    verificationUnloadCloseSent = false;
+    suppressVerificationUnloadClose = false;
     sessionRulebook = null;
     // Both reads are independent. Start the transaction-list request immediately, but still
     // await and validate the Rulebook before any voucher/category/procedure data is rendered.

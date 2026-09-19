@@ -463,7 +463,7 @@ async function loadVerificationFieldsForTemplate(templateId) {
 
 // ---------- VERIFICATION DATA FIELDS (Phase 2) ----------
 function verificationPolicyStateFromServer(policy) {
-    const state = { core: {}, optional: [] };
+    const state = { core: {}, optional: [], brief: [] };
     (policy && policy.core_fields || []).forEach(field => {
         if (field.column_id !== null && field.column_id !== undefined) {
             state.core[field.key] = Number(field.column_id);
@@ -476,6 +476,14 @@ function verificationPolicyStateFromServer(policy) {
             sort_order: index
         });
     });
+    const selectedIds = [
+        ...Object.values(state.core),
+        ...state.optional.map(field => field.column_id)
+    ].map(Number);
+    const savedBriefIds = Array.isArray(policy?.brief_column_ids)
+        ? policy.brief_column_ids.map(Number).filter(columnId => selectedIds.includes(columnId))
+        : selectedIds.slice(0, 5);
+    state.brief = [...new Set(savedBriefIds)].slice(0, 5);
     return state;
 }
 
@@ -493,7 +501,10 @@ function verificationPolicyPayload() {
             column_id: Number(field.column_id),
             risk_level: field.risk_level || 'Medium',
             sort_order: index
-        }))
+        })),
+        brief_column_ids: [...new Set((verificationPolicyState.brief || []).map(Number))]
+            .filter(columnId => Number.isInteger(columnId) && columnId > 0)
+            .slice(0, 5)
     };
 }
 
@@ -514,6 +525,10 @@ function renderVerificationFieldPolicy(policy) {
     // editor presents one simple removable list to the administrator.
     const allSelected = used();
     if (shouldSelectAll) columns.forEach(column => { if (!allSelected.has(Number(column.column_id))) verificationPolicyState.optional.push({ column_id: Number(column.column_id), risk_level: 'Medium', sort_order: verificationPolicyState.optional.length }); });
+    if (shouldSelectAll && !verificationPolicyState.brief.length) {
+        verificationPolicyState.brief = columns.slice(0, 5).map(column => Number(column.column_id));
+    }
+    const brief = () => new Set((verificationPolicyState.brief || []).map(Number));
     // Keep the saved selection model unchanged while presenting it as a scannable configuration
     // table; the Procedure modal uses the same selected columns for its row-level preview.
     const selectedColumnsTable = document.createElement('div');
@@ -523,10 +538,11 @@ function renderVerificationFieldPolicy(policy) {
     const tableHeader = document.createElement('div');
     tableHeader.className = 'ar-verification-selected-row ar-verification-selected-header';
     tableHeader.setAttribute('role', 'row');
-    tableHeader.innerHTML = '<span role="columnheader">Data Table column</span><span role="columnheader">Procedure window</span><span aria-hidden="true"></span>';
+    tableHeader.innerHTML = '<span role="columnheader">Data Table column</span><span role="columnheader" class="ar-verification-window-header"><span>Procedure window</span><span class="ar-verification-brief-count">Brief ' + brief().size + '/5</span></span>';
     selectedColumnsTable.appendChild(tableHeader);
-    [...used()].forEach(columnId => {
-        const column = columns.find(item => Number(item.column_id) === columnId); if (!column) return;
+    columns.forEach(column => {
+        const columnId = Number(column.column_id);
+        const isSelected = used().has(columnId);
         const row = document.createElement('div');
         row.className = 'ar-verification-selected-row';
         row.setAttribute('role', 'row');
@@ -546,19 +562,56 @@ function renderVerificationFieldPolicy(policy) {
         const visibilityCell = document.createElement('div');
         visibilityCell.className = 'ar-verification-selected-visibility';
         visibilityCell.setAttribute('role', 'cell');
-        visibilityCell.innerHTML = '<span class="ar-verification-show-badge">Show</span><span class="ar-verification-show-note">Shown in Data Table</span>';
-        const actionsCell = document.createElement('div');
-        actionsCell.className = 'ar-verification-selected-actions';
-        actionsCell.setAttribute('role', 'cell');
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'ar-verification-field-remove';
-        remove.textContent = '×';
-        remove.title = 'Remove field';
-        remove.setAttribute('aria-label', `Remove ${column.column_name}`);
-        remove.addEventListener('click', () => { Object.keys(verificationPolicyState.core).forEach(key => { if (Number(verificationPolicyState.core[key]) === columnId) delete verificationPolicyState.core[key]; }); verificationPolicyState.optional = verificationPolicyState.optional.filter(field => Number(field.column_id) !== columnId); renderVerificationFieldPolicy({ ...policy, configured: true }); });
-        actionsCell.appendChild(remove);
-        row.append(columnCell, visibilityCell, actionsCell);
+        const visibilityButton = document.createElement('button');
+        visibilityButton.type = 'button';
+        visibilityButton.className = `ar-verification-show-toggle${isSelected ? ' selected' : ''}`;
+        visibilityButton.textContent = 'Show';
+        visibilityButton.setAttribute('aria-pressed', String(isSelected));
+        visibilityButton.setAttribute('aria-label', `${isSelected ? 'Hide' : 'Show'} ${column.column_name} in the Procedure Data Table`);
+        visibilityButton.title = `${isSelected ? 'Hide' : 'Show'} this column in the Procedure Data Table`;
+        visibilityButton.addEventListener('click', () => {
+            Object.keys(verificationPolicyState.core).forEach(key => {
+                if (Number(verificationPolicyState.core[key]) === columnId) delete verificationPolicyState.core[key];
+            });
+            verificationPolicyState.optional = verificationPolicyState.optional.filter(field => Number(field.column_id) !== columnId);
+            verificationPolicyState.brief = (verificationPolicyState.brief || []).filter(id => Number(id) !== columnId);
+            if (!isSelected) {
+                verificationPolicyState.optional.push({
+                    column_id: columnId,
+                    risk_level: 'Medium',
+                    sort_order: verificationPolicyState.optional.length
+                });
+            }
+            renderVerificationFieldPolicy({ ...policy, configured: true });
+        });
+        visibilityCell.appendChild(visibilityButton);
+        const briefButton = document.createElement('button');
+        const isBrief = brief().has(columnId);
+        briefButton.type = 'button';
+        briefButton.className = `ar-verification-brief-toggle${isBrief ? ' selected' : ''}`;
+        briefButton.textContent = 'Brief';
+        briefButton.disabled = !isSelected;
+        briefButton.setAttribute('aria-pressed', String(isBrief));
+        briefButton.setAttribute('aria-label', `${isBrief ? 'Remove' : 'Add'} ${column.column_name} from the brief Procedure view`);
+        briefButton.title = isSelected
+            ? `${isBrief ? 'Remove from' : 'Add to'} the brief Procedure view`
+            : 'Show this column first using the Show control';
+        briefButton.addEventListener('click', () => {
+            if (!isSelected) return;
+            if (isBrief) {
+                verificationPolicyState.brief = (verificationPolicyState.brief || []).filter(id => Number(id) !== columnId);
+            } else {
+                if ((verificationPolicyState.brief || []).length >= 5) {
+                    arVerificationPolicyStatus.textContent = 'Brief view is limited to 5 columns. Remove one Brief selection before adding another.';
+                    arVerificationPolicyStatus.className = 'ar-verification-policy-status warning';
+                    return;
+                }
+                verificationPolicyState.brief = [...(verificationPolicyState.brief || []), columnId];
+            }
+            renderVerificationFieldPolicy({ ...policy, configured: true });
+        });
+        visibilityCell.appendChild(briefButton);
+        row.append(columnCell, visibilityCell);
         selectedColumnsTable.appendChild(row);
     });
     arVerificationOptionalFields.appendChild(selectedColumnsTable);

@@ -1294,6 +1294,41 @@ def leave_verification_presence(session_id: int = Body(..., embed=True), user_se
     return {"active": False, "session_id": session_id}
 
 
+@router.post("/api/verification/session/close")
+def close_verification_session(session_id: int = Body(..., embed=True), user_session=Depends(get_current_user)):
+    """Close the active session owned by this browser presence lease.
+
+    The browser sends this as a keepalive/beacon request when the Verification page is unloaded.
+    Requiring the caller's live presence token prevents one authenticated user from closing a
+    different user's active session, while the status predicate makes repeated unload requests
+    harmless.
+    """
+    token = user_session["token"]
+    closed = execute_write_pg(
+        """UPDATE verification_sessions
+           SET status = 'Closed'
+           WHERE id = %s
+             AND status = 'In Progress'
+             AND EXISTS (
+                 SELECT 1 FROM verification_presence vp
+                 WHERE vp.verification_session_id = verification_sessions.id
+                   AND vp.session_token = %s
+                   AND vp.ended_at IS NULL
+             )
+           RETURNING id""",
+        (session_id, token)
+    )
+    execute_write_pg(
+        """UPDATE verification_presence
+           SET ended_at = CURRENT_TIMESTAMP
+           WHERE verification_session_id = %s
+             AND session_token = %s
+             AND ended_at IS NULL""",
+        (session_id, token)
+    )
+    return {"closed": bool(closed), "session_id": session_id}
+
+
 @router.post("/api/verification/start_session")
 def start_verification_session(
     client_id: int = Query(..., description="Client ID"),

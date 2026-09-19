@@ -215,6 +215,25 @@ def _build_selected_verification_fields(
     return selected
 
 
+def _build_selected_verification_brief_fields(
+    template_id: Optional[int], stored_policy: Any, mappings_by_template: Dict[int, List[dict]]
+) -> List[dict]:
+    """Return the small row-level projection used by the Procedure search result."""
+    detail_fields = _build_selected_verification_fields(template_id, stored_policy, mappings_by_template)
+    if not detail_fields:
+        return []
+    parsed = _parse_verification_field_policy(stored_policy)
+    if isinstance(parsed, dict) and isinstance(parsed.get("brief_column_ids"), list):
+        brief_ids = parsed.get("brief_column_ids") or []
+    else:
+        # Existing policies predate the brief view. Preserve their detail projection and use a
+        # stable, bounded first-five fallback until an administrator saves an explicit choice.
+        brief_ids = [field["column_id"] for field in detail_fields[:5]]
+    fields_by_id = {int(field["column_id"]): field for field in detail_fields}
+    return [fields_by_id[int(column_id)] for column_id in brief_ids
+            if isinstance(column_id, int) and column_id in fields_by_id][:5]
+
+
 def _build_procedure_evidence_contract(
     validation_rules: dict,
     document_by_id: Dict[int, dict],
@@ -488,6 +507,9 @@ def compile_verification_rulebook(client_id: int) -> dict:
             "form_fields": form_fields,
             "verification_field_policy": _parse_verification_field_policy(row.get("verification_field_policy")),
             "verification_fields": _build_selected_verification_fields(
+                template_id, row.get("verification_field_policy"), mappings_by_template
+            ),
+            "verification_brief_fields": _build_selected_verification_brief_fields(
                 template_id, row.get("verification_field_policy"), mappings_by_template
             ),
             "authority_roles": roles_by_document.get(document_id, []),
@@ -977,7 +999,28 @@ def validate_and_normalize_verification_field_policy(
     optional.sort(key=lambda entry: (entry["sort_order"], entry["column_id"]))
     for index, entry in enumerate(optional):
         entry["sort_order"] = index
-    return {"version": 1, "core": core_ids, "optional": optional}
+    selected_ids = list(core_ids.values()) + [entry["column_id"] for entry in optional]
+    if "brief_column_ids" in raw_policy:
+        raw_brief = raw_policy.get("brief_column_ids")
+        if not isinstance(raw_brief, list):
+            raise HTTPException(400, "Brief verification fields must be a list")
+        brief_ids = []
+        for index, column_id in enumerate(raw_brief):
+            if isinstance(column_id, bool) or not isinstance(column_id, int):
+                raise HTTPException(400, f"Brief verification field {index + 1} must use a column ID")
+            if column_id not in by_id:
+                raise HTTPException(400, f"Brief verification field {index + 1} is not active in this Template")
+            if column_id not in selected_ids:
+                raise HTTPException(400, "Brief verification fields must also be shown in the Procedure window")
+            if column_id in brief_ids:
+                raise HTTPException(400, "Brief verification fields cannot be duplicated")
+            brief_ids.append(column_id)
+        if len(brief_ids) > 5:
+            raise HTTPException(400, "The Procedure brief view can show at most 5 columns")
+    else:
+        # Backward-compatible normalization for policies saved before the brief-view control.
+        brief_ids = selected_ids[:5]
+    return {"version": 1, "core": core_ids, "optional": optional, "brief_column_ids": brief_ids}
 
 
 def build_verification_field_policy(template_id: Optional[int], stored_policy: Any) -> dict:
@@ -1041,6 +1084,20 @@ def build_verification_field_policy(template_id: Optional[int], stored_policy: A
             "data_type": column.get("data_type") if column else None,
             "available": bool(column),
         })
+    selected_column_ids = [field["column_id"] for field in core_fields if field["column_id"] is not None]
+    selected_column_ids += [field["column_id"] for field in optional]
+    raw_brief = (parsed or {}).get("brief_column_ids") if parsed is not None else None
+    if isinstance(raw_brief, list):
+        selected_ids = set(selected_column_ids)
+        brief_column_ids = [column_id for column_id in raw_brief
+                            if isinstance(column_id, int) and not isinstance(column_id, bool)
+                            and column_id in selected_ids][:5]
+    else:
+        # Unconfigured Documents show every mapped column by default; older configured policies
+        # have no brief list yet, so both cases receive a predictable first-five row projection.
+        brief_column_ids = selected_column_ids[:5]
+    if parsed is None:
+        brief_column_ids = [int(row["column_id"]) for row in columns[:5]]
     return {
         "version": 1,
         "template_id": template_id,
@@ -1053,8 +1110,8 @@ def build_verification_field_policy(template_id: Optional[int], stored_policy: A
         "core_fields": core_fields,
         "optional_fields": optional,
         "unavailable_fields": unavailable,
-        "selected_column_ids": [field["column_id"] for field in core_fields if field["column_id"] is not None]
-            + [field["column_id"] for field in optional],
+        "selected_column_ids": selected_column_ids,
+        "brief_column_ids": brief_column_ids,
     }
 
 

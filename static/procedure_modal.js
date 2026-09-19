@@ -724,12 +724,67 @@ function getProcedureResultPreviewColumns(doc) {
     });
 }
 
-// The Procedure search summary stays compact for fast linking; the configured Audit Rules
-// fields are available behind a per-row disclosure so large templates do not turn the dropdown
-// into an unbounded wall of repeated values.
+function getDocumentVerificationBriefColumns(doc) {
+    const detailColumns = getProcedureResultPreviewColumns(doc);
+    if (!detailColumns.length) return [];
+    if (Array.isArray(doc?.verification_brief_fields)) {
+        const briefNames = new Set(doc.verification_brief_fields.map(column =>
+            String(column?.column_name || '').trim().toLowerCase()
+        ));
+        return detailColumns.filter(column => briefNames.has(String(column.column_name).trim().toLowerCase())).slice(0, 5);
+    }
+    const briefIds = doc?.verification_field_policy?.brief_column_ids;
+    if (Array.isArray(briefIds)) {
+        const detailById = new Map(detailColumns.map(column => [Number(column.column_id), column]));
+        return briefIds.map(Number).map(columnId => detailById.get(columnId)).filter(Boolean).slice(0, 5);
+    }
+    // Older rulebooks have no explicit brief projection. The bounded fallback keeps those
+    // documents readable while administrators gradually save their preferred five columns.
+    return detailColumns.slice(0, 5);
+}
+
+// The row keeps a bounded, brief projection. All configured fields move into a focused popup so
+// a template with many columns never turns the search dropdown into a tall, hard-to-scan table.
 function buildProcedureResultPreviewHtml(row, doc) {
     const columns = getProcedureResultPreviewColumns(doc);
-    if (!columns.length) return {toggle: '', details: ''};
+    if (!columns.length) {
+        return '<div class="procedure-result-brief-empty">No Data Table columns are selected in Audit Rules.</div>';
+    }
+    const briefColumns = getDocumentVerificationBriefColumns(doc);
+    const briefFields = briefColumns.map(column => `
+        <span class="procedure-result-brief-field">
+            <span class="procedure-result-brief-label">${hostAdapter.escapeHtml(column.column_name)}</span>
+            <span class="procedure-result-brief-value">${hostAdapter.escapeHtml(formatProcedureCellValue(
+                getRowFieldCaseInsensitive(row.row_data, column.column_name)
+            ))}</span>
+        </span>
+    `).join('');
+    return `
+        <div class="procedure-result-brief" data-procedure-result-brief>
+            <div class="procedure-result-brief-fields">${briefFields || '<span class="procedure-result-brief-empty">No brief columns selected.</span>'}</div>
+            <button type="button" class="procedure-result-show-detail" data-procedure-result-show-detail
+                aria-label="Show all Data Table details" title="Show all selected Data Table details">
+                Show detail
+            </button>
+        </div>
+    `;
+}
+
+let procedureResultDetailOverlay = null;
+
+function closeProcedureResultDetailPopup() {
+    if (!procedureResultDetailOverlay) return;
+    const overlay = procedureResultDetailOverlay;
+    procedureResultDetailOverlay = null;
+    if (overlay._procedureDetailKeyHandler) {
+        document.removeEventListener('keydown', overlay._procedureDetailKeyHandler);
+    }
+    overlay.remove();
+}
+
+function openProcedureResultDetailPopup(row, doc) {
+    closeProcedureResultDetailPopup();
+    const columns = getProcedureResultPreviewColumns(doc);
     const previewRows = columns.map(column => `
         <tr>
             <th scope="row">${hostAdapter.escapeHtml(column.column_name)}</th>
@@ -738,25 +793,41 @@ function buildProcedureResultPreviewHtml(row, doc) {
             ))}</td>
         </tr>
     `).join('');
-    const detailsId = `procedure-result-details-${row.id}`;
-    return {
-        toggle: `
-        <button type="button" class="procedure-result-details-toggle"
-            data-procedure-result-details-toggle aria-expanded="false" aria-controls="${detailsId}"
-            title="Show selected Data Table columns and values">Show</button>
-        `,
-        details: `
-        <div id="${detailsId}" class="procedure-result-details" data-procedure-result-details hidden>
-            <div class="procedure-result-details-caption">Selected Data Table columns</div>
-            <div class="procedure-result-details-scroll">
-                <table class="procedure-result-detail-table">
-                    <thead><tr><th scope="col">Column</th><th scope="col">Value</th></tr></thead>
-                    <tbody>${previewRows}</tbody>
-                </table>
+    const overlay = document.createElement('div');
+    overlay.className = 'procedure-result-detail-overlay';
+    overlay.setAttribute('role', 'presentation');
+    overlay.innerHTML = `
+        <section class="procedure-result-detail-popup" role="dialog" aria-modal="true"
+            aria-labelledby="procedureResultDetailTitle">
+            <div class="procedure-result-detail-popup-header">
+                <div>
+                    <div id="procedureResultDetailTitle" class="procedure-result-detail-popup-title">Data Table details</div>
+                    <div class="procedure-result-detail-popup-subtitle">${columns.length} selected column${columns.length === 1 ? '' : 's'}</div>
+                </div>
+                <button type="button" class="procedure-result-detail-popup-close" aria-label="Close details">&times;</button>
             </div>
-        </div>
-        `
+            <div class="procedure-result-details-scroll">
+                ${columns.length
+                    ? `<table class="procedure-result-detail-table"><thead><tr><th scope="col">Column</th><th scope="col">Value</th></tr></thead><tbody>${previewRows}</tbody></table>`
+                    : '<div class="procedure-result-details-empty">No Data Table columns are selected in Audit Rules.</div>'}
+            </div>
+        </section>
+    `;
+    document.body.appendChild(overlay);
+    procedureResultDetailOverlay = overlay;
+    const closeButton = overlay.querySelector('.procedure-result-detail-popup-close');
+    const onKeyDown = event => {
+        if (event.key === 'Escape') closeProcedureResultDetailPopup();
     };
+    overlay._procedureDetailKeyHandler = onKeyDown;
+    document.addEventListener('keydown', onKeyDown);
+    overlay.addEventListener('click', event => {
+        if (event.target === overlay || event.target.closest('.procedure-result-detail-popup-close')) {
+            document.removeEventListener('keydown', onKeyDown);
+            closeProcedureResultDetailPopup();
+        }
+    });
+    closeButton?.focus();
 }
 
 function groupProcedureSearchResults(results, docKeyColumn) {
@@ -815,7 +886,7 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId, option
     const resultInteraction = multiSelect || isLocked ? '' : ' role="button" tabindex="0"';
     const preview = buildProcedureResultPreviewHtml(row, options.previewDoc);
     const contentInteraction = multiSelect && !isLocked
-        && !preview.toggle
+        && !preview
         ? ` role="button" tabindex="0" aria-label="Select ${hostAdapter.escapeHtml(String(accessibleLabel))}"`
         : '';
     return `
@@ -825,10 +896,9 @@ function buildProcedureResultRowHtml(uid, row, docKeyColumn, activeDocId, option
                 <div class="procedure-result-heading">
                     <span class="procedure-result-label">${hostAdapter.escapeHtml(String(label))}</span>
                     ${multiSelect ? lockNote : ''}
-                    ${preview.toggle}
                 </div>
                 <span class="procedure-result-meta">${hostAdapter.escapeHtml(meta)}</span>
-                ${preview.details}
+                ${preview}
             </div>
             ${multiSelect ? '' : lockNote}
         </${resultTag}>
@@ -1457,6 +1527,7 @@ async function refreshProcedureModalHostBadges() {
 
 function hideProcedureModalOnly(refreshBadges = true) {
     if (procedureModal) procedureModal.style.display = 'none';
+    closeProcedureResultDetailPopup();
     // Defensive — the browse modal is nested on top of this one, so it should never remain open
     // once the parent closes.
     closeProcedureBrowseModal();
@@ -4576,6 +4647,7 @@ async function performProcedureSearch(uid, docId, term) {
 function renderProcedureSearchDropdown(uid, docId) {
     const dropdown = document.getElementById('procedureSearchDropdown');
     if (!dropdown) return;
+    closeProcedureResultDetailPopup();
     const tabState = getProcedureTabState(uid, docId);
     const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
@@ -4636,20 +4708,6 @@ function renderProcedureSearchDropdown(uid, docId) {
             this.setAttribute('aria-label', `${expanded ? 'Expand' : 'Collapse'} ${group.querySelector('.procedure-result-group-reference')?.textContent || 'document'}`);
             group.classList.toggle('is-expanded', !expanded);
             lines.hidden = expanded;
-        });
-    });
-
-    dropdown.querySelectorAll('[data-procedure-result-details-toggle]').forEach(toggle => {
-        toggle.addEventListener('click', function(event) {
-            event.preventDefault();
-            event.stopPropagation();
-            const details = this.closest('.procedure-result-main')?.querySelector('[data-procedure-result-details]');
-            if (!details) return;
-            const isOpening = details.hidden;
-            details.hidden = !isOpening;
-            this.textContent = isOpening ? 'Hide' : 'Show';
-            this.setAttribute('aria-expanded', String(isOpening));
-            this.closest('.procedure-result-item')?.classList.toggle('details-open', isOpening);
         });
     });
 
@@ -4717,9 +4775,19 @@ function renderProcedureSearchDropdown(uid, docId) {
         });
     });
 
+    dropdown.querySelectorAll('.procedure-result-show-detail').forEach(button => {
+        button.addEventListener('click', function(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const item = this.closest('.procedure-result-item');
+            const row = results.find(result => String(result.id) === String(item?.dataset.id));
+            if (row) openProcedureResultDetailPopup(row, doc);
+        });
+    });
+
     dropdown.querySelectorAll('.procedure-result-item:not(.locked)').forEach(item => {
         item.addEventListener('click', function(event) {
-            if (event.target.closest('.procedure-result-label, .procedure-result-meta, .procedure-result-checkbox, .procedure-result-details, .procedure-result-details-toggle')) return;
+            if (event.target.closest('.procedure-result-label, .procedure-result-meta, .procedure-result-checkbox, .procedure-result-show-detail, .procedure-result-brief')) return;
             const checkbox = this.querySelector('.procedure-result-checkbox');
             if (!checkbox) return;
             checkbox.checked = !checkbox.checked;
