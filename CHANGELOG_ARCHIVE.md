@@ -5698,3 +5698,16 @@ Changed `static/procedure_modal.js` with browser regression coverage in
 `tests/test_verification_dirty_saves.py`. Focused Verification coverage passed (18 applicable
 tests, including the new regression); JavaScript syntax and diff checks passed. Aadil confirmed
 the local-server behavior.
+
+## Verification Voucher Line correctness and recommendation gating - 2026-09-19
+
+The Voucher Line tab now includes a styled Correct checkbox. Its rail dot is grey until touched,
+green only when Correct is checked and no Account Head recommendation remains, and red for an
+unresolved recommendation, incomplete correctness decision, or mismatched audit state. Correctness
+is persisted through the reserved observation path and is now a backend gate for Cleared status;
+Account Head recommendations continue to roll up as Query findings.
+
+When a Recommended Account Head is present, Correct is forced false, disabled, and visibly greyed
+out. Clearing the recommendation re-enables the checkbox but requires a fresh confirmation. Modal
+opening now also initializes missing per-line state before restoring the saved correctness marker.
+Playwright coverage passed (22 applicable modal tests); JavaScript syntax and diff checks passed.

@@ -282,6 +282,211 @@ def test_procedure_badge_open_starts_on_voucher_line_and_explicit_document_targe
     }
 
 
+def test_procedure_modal_initializes_missing_line_state_before_restoring_checkbox(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        const capturedTabs = [];
+        hostAdapter = {
+            procedureModalState: {},
+            voucherLineState: {1: {transactionType: 'Purchases'}},
+            currentVoucherLines: [{detail_id: 1, row_data: {Account: 'Office supplies'}}],
+            currentVoucherId: 10,
+            fetchAuditGuidanceData: async () => ({
+                documents: [{id: 7, name: 'Invoice'}],
+                procedure_evidence: {checks: []}
+            }),
+            computeLineRiskData: () => ({risk: null}),
+            getVoucherLineAlias: () => 'Office supplies',
+            getVoucherLineAmount: () => '100',
+            parseVoucherAmount: value => Number(value),
+            VOUCHER_LINE_ACCOUNT_NAME_ALIASES: ['Account'],
+            markLineDirty: () => {},
+            markAllLinesDirty: () => {}
+        };
+        loadProcedureModalData = async () => ({});
+        renderVoucherChecksBar = () => {};
+        renderProcedureModalTabs = () => {};
+        updateProcedureModalSavedNote = () => {};
+        hideValidatePanel = () => {};
+        activateProcedureTab = (uid, docId) => capturedTabs.push({uid, docId});
+        await openProcedureModal(1, null, hostAdapter, document.createElement('button'));
+        const state = hostAdapter.procedureModalState[1];
+        return {
+            openedTab: capturedTabs.at(-1).docId,
+            stateCreated: !!state,
+            correct: state.voucherLineCorrect,
+            dirty: state.voucherLineCorrectDirty
+        };
+    }""")
+
+    assert result == {
+        "openedTab": "__voucher_line__",
+        "stateCreated": True,
+        "correct": False,
+        "dirty": False,
+    }
+
+
+def test_procedure_rail_uses_grey_green_red_states_and_account_head_query(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""() => {
+        hostAdapter.escapeHtml = value => String(value ?? '');
+        hostAdapter.currentVoucherId = 10;
+        voucherChecksCache[10] = [];
+        document.body.innerHTML = '<div id="procedureModalTabs"></div>';
+        const doc = {
+            id: 7, name: 'Invoice', template_id: 70,
+            auth_roles: ['checked_by'], procedure_rules_configured: false,
+            verification_fields: [{column_name: 'Amount', data_type: 'Numeric'}]
+        };
+        const voucherTab = {id: '__voucher_line__', name: 'Voucher Line', __voucherTab: true};
+        const line = {
+            documents: [voucherTab, doc], activeDocId: 7, assignedDocIds: new Set(),
+            voucherLineAmount: 100, crossCheckResults: [], tabs: {}
+        };
+        hostAdapter.procedureModalState = {1: line};
+        const renderStates = () => {
+            renderProcedureModalTabs(1);
+            return [...document.querySelectorAll('.procedure-tab-dot')].map(dot => dot.className);
+        };
+        const untouched = renderStates();
+        line.assignedDocIds = new Set(['7']);
+        line.tabs['7'] = {
+            loaded: true, checklist: {checked_by: {is_checked: false}},
+            selections: [{extract_amount: 50, row_data: {Amount: 50}}], observation: '',
+            observationDirty: false, physicalBills: [], physicalBillSaved: false,
+            physicalBillDirty: false, formEntries: [], formSaved: false, formDirty: false
+        };
+        const incomplete = renderStates();
+        line.tabs['7'].checklist.checked_by.is_checked = true;
+        line.tabs['7'].selections[0].extract_amount = 100;
+        line.tabs['7'].selections[0].row_data.Amount = 100;
+        const complete = renderStates();
+        line.tabs['7'].selections[0].extract_amount = 50;
+        line.tabs['7'].selections[0].row_data.Amount = 50;
+        const mismatch = renderStates();
+        const accountHead = getAccountHeadState(1);
+        accountHead.matched = true;
+        accountHead.suggestions = [{account_name: 'Office Supplies'}];
+        accountHead.recommendationDirty = true;
+        const voucherRecommendation = renderStates();
+        const saveState = getVoucherTickSaveState();
+        return {untouched, incomplete, complete, mismatch, voucherRecommendation,
+            accountHeadNote: saveState.account_head_notes[0].observation_text};
+    }""")
+
+    assert result["untouched"] == ["procedure-tab-dot", "procedure-tab-dot"]
+    assert result["incomplete"] == ["procedure-tab-dot", "procedure-tab-dot query"]
+    assert result["complete"] == ["procedure-tab-dot", "procedure-tab-dot complete"]
+    assert result["mismatch"] == ["procedure-tab-dot", "procedure-tab-dot query"]
+    assert result["voucherRecommendation"] == ["procedure-tab-dot query", "procedure-tab-dot query"]
+    assert result["accountHeadNote"] == "__account_head_recommendation__: Office Supplies"
+
+
+def test_voucher_line_correct_checkbox_turns_dot_green_and_enters_save_payload(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""() => {
+        hostAdapter.escapeHtml = value => String(value ?? '');
+        hostAdapter.getClientId = () => null;
+        hostAdapter.markLineDirty = () => {};
+        hostAdapter.currentVoucherId = 10;
+        hostAdapter.currentVoucherLines = [{detail_id: 1, row_data: {Account: 'Office supplies'}}];
+        hostAdapter.VOUCHER_LINE_ACCOUNT_NAME_ALIASES = ['Account'];
+        hostAdapter.getVoucherLineAlias = row => row.Account || '—';
+        hostAdapter.procedureModalState = {
+            1: {
+                documents: [{id: '__voucher_line__', name: 'Voucher Line', __voucherTab: true}],
+                activeDocId: '__voucher_line__', assignedDocIds: new Set(),
+                voucherLineAmount: 100, crossCheckResults: [], tabs: {}
+            }
+        };
+        document.body.innerHTML = '<div id="procedureModalPanels"></div><div id="procedureModalTabs"></div><span id="procedureModalSavedNote"></span>';
+        renderVoucherApprovalPanel(1);
+        renderProcedureModalTabs(1);
+        const before = {
+            checked: document.getElementById('procedureVoucherLineCorrect').checked,
+            dot: document.querySelector('.procedure-tab-dot').className
+        };
+        const checkbox = document.getElementById('procedureVoucherLineCorrect');
+        checkbox.checked = true;
+        checkbox.dispatchEvent(new Event('change', {bubbles: true}));
+        const after = {
+            checked: checkbox.checked,
+            dot: document.querySelector('.procedure-tab-dot').className,
+            dirty: hostAdapter.procedureModalState[1].voucherLineCorrectDirty,
+            payload: getVoucherTickSaveState().voucher_line_correctness
+        };
+        return {before, after};
+    }""")
+
+    assert result["before"] == {"checked": False, "dot": "procedure-tab-dot"}
+    assert result["after"] == {
+        "checked": True,
+        "dot": "procedure-tab-dot complete",
+        "dirty": True,
+        "payload": [{"voucher_line_id": 1, "is_correct": True}],
+    }
+
+
+def test_account_head_recommendation_disables_correct_checkbox_until_cleared(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""() => {
+        hostAdapter.escapeHtml = value => String(value ?? '');
+        hostAdapter.getClientId = () => null;
+        hostAdapter.markLineDirty = () => {};
+        hostAdapter.currentVoucherId = 10;
+        hostAdapter.currentVoucherLines = [{detail_id: 1, row_data: {Account: 'Office supplies'}}];
+        hostAdapter.VOUCHER_LINE_ACCOUNT_NAME_ALIASES = ['Account'];
+        hostAdapter.getVoucherLineAlias = row => row.Account || '—';
+        hostAdapter.procedureModalState = {
+            1: {
+                documents: [{id: '__voucher_line__', name: 'Voucher Line', __voucherTab: true}],
+                activeDocId: '__voucher_line__', assignedDocIds: new Set(),
+                voucherLineAmount: 100, crossCheckResults: [], tabs: {},
+                voucherLineCorrect: true, voucherLineCorrectTouched: true,
+                voucherLineCorrectDirty: false
+            }
+        };
+        document.body.innerHTML = '<div id="procedureModalPanels"></div><div id="procedureModalTabs"></div><span id="procedureModalSavedNote"></span>';
+        renderVoucherApprovalPanel(1);
+        const accountHead = getAccountHeadState(1);
+        accountHead.selectedAccountName = 'Office Supplies';
+        accountHead.matched = true;
+        renderProcedureModalTabs(1);
+        const checkbox = document.getElementById('procedureVoucherLineCorrect');
+        const recommended = {
+            checked: checkbox.checked,
+            disabled: checkbox.disabled,
+            dot: document.querySelector('.procedure-tab-dot').className,
+            stateCorrect: hostAdapter.procedureModalState[1].voucherLineCorrect
+        };
+        accountHead.selectedAccountName = '';
+        accountHead.matched = null;
+        accountHead.suggestions = [];
+        renderProcedureModalTabs(1);
+        checkbox.checked = true;
+        checkbox.dispatchEvent(new Event('change', {bubbles: true}));
+        return {
+            recommended,
+            cleared: {
+                checked: checkbox.checked,
+                disabled: checkbox.disabled,
+                dot: document.querySelector('.procedure-tab-dot').className
+            }
+        };
+    }""")
+
+    assert result == {
+        "recommended": {
+            "checked": False,
+            "disabled": True,
+            "dot": "procedure-tab-dot query",
+            "stateCorrect": False,
+        },
+        "cleared": {
+            "checked": True,
+            "disabled": False,
+            "dot": "procedure-tab-dot complete",
+        },
+    }
+
+
 def test_rulebook_change_alert_shows_change_and_returns_user_choice(dirty_page):
     result = dirty_page.evaluate("""async () => {
         const recoverPromise = showRulebookChangeAlert({

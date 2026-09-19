@@ -129,10 +129,11 @@ class AppSmokeTests(unittest.TestCase):
             ("blocking Cross-check", {"cross": "fail"}, "Query"),
             ("nonblocking shortfall", {"cross": "shortfall"}, "Cleared"),
             ("account-head note", {"note": True}, "Query"),
+            ("voucher line not confirmed correct", {"correct": False}, "Query"),
         ]
         for name, changes, expected in cases:
             with self.subTest(name=name), ExitStack() as stack:
-                state = {"form": True, "check": True, "signature": 0, "cross": "pass", "note": False, **changes}
+                state = {"form": True, "check": True, "signature": 0, "cross": "pass", "note": False, "correct": True, **changes}
 
                 def query(sql, params=None):
                     if "SELECT vd.id, vd.session_id" in sql:
@@ -158,6 +159,7 @@ class AppSmokeTests(unittest.TestCase):
                 stack.enter_context(patch.object(verification, "evaluate_cross_checks_for_line", return_value={
                     "results": [{"status": state["cross"], "name": "Fixture rule", "message": "Fixture result"}]}))
                 stack.enter_context(patch.object(verification, "_has_pending_account_head_note", return_value=state["note"]))
+                stack.enter_context(patch.object(verification, "_has_voucher_line_correct_confirmation", return_value=state["correct"]))
                 shortfalls = stack.enter_context(patch.object(verification, "_write_shortfall_observations", return_value=False))
                 write = stack.enter_context(patch.object(verification, "execute_write_pg"))
                 reason = verification.compute_and_persist_cleared_status(7, detail=True, persist=False, sibling_ids=[7], rulebook=profile)
@@ -167,6 +169,20 @@ class AppSmokeTests(unittest.TestCase):
                 saved = verification.compute_and_persist_cleared_status(7, sibling_ids=[7], rulebook=profile)
                 self.assertEqual(saved["cleared_status"], expected)
                 self.assertEqual(write.call_args.args[1], (expected, 1, 7))
+
+    def test_account_head_recommendation_marker_rolls_up_as_review_finding(self):
+        from routers import verification
+
+        matched = verification._format_account_head_observation(
+            "__account_head_recommendation__: Office Supplies"
+        )
+        legacy = verification._format_account_head_observation("Create a new travel account")
+
+        self.assertEqual(
+            matched,
+            "[Account Head Recommendation]: Review suggested account head: Office Supplies",
+        )
+        self.assertIn("no match in Trial Balance", legacy)
 
     def test_unclassified_line_is_not_written_as_cleared(self):
         from routers import verification

@@ -284,6 +284,37 @@ def _has_pending_account_head_note(voucher_line_id: int, sibling_ids: Optional[L
     return bool((latest['observation_text'] or '').strip())
 
 
+def _format_account_head_observation(observation_text: str) -> str:
+    """Format either a matched suggestion or legacy no-match Account Head note."""
+    raw = (observation_text or '').strip()
+    if raw.startswith(ACCOUNT_HEAD_RECOMMENDATION_PREFIX):
+        account_name = raw[len(ACCOUNT_HEAD_RECOMMENDATION_PREFIX):].strip()
+        return f"[Account Head Recommendation]: Review suggested account head: {account_name}"
+    return (f"[Account Head Recommendation]: New account head recommended: {raw} "
+            "— no match in Trial Balance")
+
+
+def _has_voucher_line_correct_confirmation(voucher_line_id: int,
+                                           sibling_ids: Optional[List[int]] = None) -> bool:
+    """Return whether the latest reserved correctness marker explicitly says "correct"."""
+    if sibling_ids is None:
+        sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id)
+    if not sibling_ids:
+        return False
+    placeholders = ",".join("%s" for _ in sibling_ids)
+    rows = execute_query_pg(
+        f"""
+        SELECT observation_text, updated_at FROM voucher_line_observations
+        WHERE voucher_line_id IN ({placeholders}) AND document_id = %s
+        """,
+        tuple(sibling_ids) + (VOUCHER_LINE_CORRECTNESS_DOC_ID,)
+    )
+    if not rows:
+        return False
+    latest = max(rows, key=lambda r: _ts_sort_key(r['updated_at']))
+    return (latest['observation_text'] or '').strip().lower() == VOUCHER_LINE_CORRECT_TEXT
+
+
 def _format_shortfall_observation_text(rule_result: dict) -> str:
     """
     One specific, auditable sentence per shortfall pair in a single Cross-check's result (a
@@ -892,16 +923,27 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
 
     if detail:
         gates.append(_clear_status_gate(
-            "account_head", "No pending Account Head note", account_head_ok,
-            detail="No 'no suitable account exists' note is recorded for this line."
-                   if account_head_ok
-                   else "A 'no suitable account exists' Account Head note is recorded for this "
-                        "line — clear it once a proper account head is assigned."
+            "account_head", "No pending Account Head recommendation", account_head_ok,
+            detail="No Account Head recommendation is recorded for this line."
+            if account_head_ok
+            else "An Account Head recommendation is recorded for this line — clear it once "
+                 "the proper account head is assigned."
+        ))
+
+    correctness_ok = _has_voucher_line_correct_confirmation(
+        voucher_line_id, sibling_ids=sibling_ids
+    )
+    if detail:
+        gates.append(_clear_status_gate(
+            "voucher_line_correct", "Voucher Line marked Correct", correctness_ok,
+            detail="The Voucher Line is marked Correct."
+            if correctness_ok
+            else "Mark the Voucher Line as Correct before clearing this line."
         ))
 
     all_ok = (
         doc_requirement_met and voucher_checks_ok and signature_ok
-        and cross_checks_ok and account_head_ok
+        and cross_checks_ok and account_head_ok and correctness_ok
     )
     cleared_status = "Cleared" if all_ok else "Query"
 
@@ -2036,6 +2078,7 @@ def save_and_verify_voucher_bundle(
     verify: bool = Body(True, embed=True),
     observations: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     account_head_notes: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
+    voucher_line_correctness: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     physical_bills: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     form_entries: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
     procedure_checks: Optional[List[Dict[str, Any]]] = Body(None, embed=True),
@@ -2051,6 +2094,7 @@ def save_and_verify_voucher_bundle(
     voucher_checks = voucher_checks if isinstance(voucher_checks, list) else []
     observations = observations if isinstance(observations, list) else []
     account_head_notes = account_head_notes if isinstance(account_head_notes, list) else []
+    voucher_line_correctness = voucher_line_correctness if isinstance(voucher_line_correctness, list) else []
     physical_bills = physical_bills if isinstance(physical_bills, list) else []
     form_entries = form_entries if isinstance(form_entries, list) else []
     if not lines:
@@ -2134,6 +2178,19 @@ def save_and_verify_voucher_bundle(
                    updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""",
                 (entry['voucher_line_id'], ACCOUNT_HEAD_OBSERVATION_DOC_ID,
                  entry.get('observation_text', ''), 'Analyst')
+            )
+        for entry in voucher_line_correctness:
+            raw_value = entry.get('is_correct')
+            is_correct = raw_value is True or raw_value == 1 or str(raw_value).lower() == 'true'
+            execute_write_pg(
+                """INSERT INTO voucher_line_observations
+                   (voucher_line_id, document_id, observation_text, synced, updated_by, updated_at)
+                   VALUES (%s, %s, %s, FALSE, %s, CURRENT_TIMESTAMP)
+                   ON CONFLICT(voucher_line_id, document_id) DO UPDATE SET
+                   observation_text = excluded.observation_text, synced = FALSE,
+                   updated_by = excluded.updated_by, updated_at = CURRENT_TIMESTAMP""",
+                (entry['voucher_line_id'], VOUCHER_LINE_CORRECTNESS_DOC_ID,
+                 VOUCHER_LINE_CORRECT_TEXT if is_correct else 'incorrect', 'Analyst')
             )
         for entry in physical_bills:
             line_id = entry['voucher_line_id']; document_id = entry['document_id']
@@ -3973,6 +4030,9 @@ ACCOUNT_HEAD_MATCH_THRESHOLD = 55
 # row (this app never enables PRAGMA foreign_keys=ON, so a non-existent id is safe at the DB
 # level). Must match ACCOUNT_HEAD_OBSERVATION_DOC_ID in static/verification.js.
 ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1
+ACCOUNT_HEAD_RECOMMENDATION_PREFIX = '__account_head_recommendation__: '
+VOUCHER_LINE_CORRECTNESS_DOC_ID = -2
+VOUCHER_LINE_CORRECT_TEXT = 'correct'
 
 _ACCOUNT_HEAD_STOPWORDS = {
     'the', 'and', 'for', 'from', 'with', 'this', 'that', 'account', 'accounts'
@@ -4706,9 +4766,10 @@ def sync_line_observations_to_voucher(voucher_line_id: int, sibling_ids: Optiona
             # The sentinel entry stores the intern's raw note text (unwrapped, so re-opening the
             # modal shows exactly what was typed) - the fully-worded finding is only assembled
             # here, at rollup time.
+            if entry['document_id'] == VOUCHER_LINE_CORRECTNESS_DOC_ID:
+                return ''
             if entry['document_id'] == ACCOUNT_HEAD_OBSERVATION_DOC_ID:
-                return (f"[Account Head Recommendation]: New account head recommended: "
-                        f"{entry['observation_text'].strip()} — no match in Trial Balance")
+                return _format_account_head_observation(entry['observation_text'])
             # Automated cross-document validation engine, Phase 8 of 10: a shortfall sentinel is
             # a real, hidden Document row (ard.is_system) - the Cross-check's own name is already
             # embedded in the stored text itself (_format_shortfall_observation_text()), so this
@@ -4720,7 +4781,8 @@ def sync_line_observations_to_voucher(voucher_line_id: int, sibling_ids: Optiona
         doc_blocks = [
             _format_block(entry)
             for entry in sorted(latest_by_doc.values(), key=lambda e: e['document_id'])
-            if entry['observation_text'] and entry['observation_text'].strip()
+            if entry['document_id'] != VOUCHER_LINE_CORRECTNESS_DOC_ID
+            and entry['observation_text'] and entry['observation_text'].strip()
         ]
 
         # Voucher-check blocks: derived from this line's own (client_id, transaction_ref), not
@@ -4828,8 +4890,10 @@ def sync_voucher_observations_to_voucher(voucher_line_ids: List[int], sibling_id
             for (owner, _), entry in sorted(latest.items(), key=lambda item: (item[0][0], item[0][1])):
                 if owner != line_id or not (entry['observation_text'] or '').strip():
                     continue
+                if entry['document_id'] == VOUCHER_LINE_CORRECTNESS_DOC_ID:
+                    continue
                 if entry['document_id'] == ACCOUNT_HEAD_OBSERVATION_DOC_ID:
-                    blocks.append(f"[Account Head Recommendation]: New account head recommended: {entry['observation_text'].strip()} — no match in Trial Balance")
+                    blocks.append(_format_account_head_observation(entry['observation_text']))
                 elif entry.get('is_system'):
                     blocks.append(f"[Cross-check Shortfall]: {entry['observation_text'].strip()}")
                 else:
@@ -4940,9 +5004,9 @@ def save_line_observation(
     if not line:
         raise HTTPException(404, "Voucher line not found.")
 
-    # ACCOUNT_HEAD_OBSERVATION_DOC_ID is a reserved sentinel, not a real audit_rule_documents row -
-    # skip the existence/active check for it (see the constant's definition above).
-    if document_id != ACCOUNT_HEAD_OBSERVATION_DOC_ID:
+    # Account Head and Voucher Line Correctness use reserved sentinels, not real
+    # audit_rule_documents rows - skip the existence/active check for both.
+    if document_id not in {ACCOUNT_HEAD_OBSERVATION_DOC_ID, VOUCHER_LINE_CORRECTNESS_DOC_ID}:
         doc = execute_query_pg("SELECT id FROM audit_rule_documents WHERE id = %s AND is_active = TRUE", (document_id,))
         if not doc:
             raise HTTPException(404, "Document not found or inactive.")
@@ -4964,6 +5028,11 @@ def save_line_observation(
     # docstring above. Runs before the final SELECT below so the response's own "synced" field
     # correctly reflects the roll-up that just happened, not a stale pre-sync value.
     sync_line_observations_to_voucher(voucher_line_id)
+
+    cleared_status = None
+    if document_id == VOUCHER_LINE_CORRECTNESS_DOC_ID:
+        status_result = compute_and_persist_cleared_status(voucher_line_id)
+        cleared_status = status_result.get('cleared_status') if status_result else None
 
     updated = execute_query_pg(
         """
@@ -4990,7 +5059,8 @@ def save_line_observation(
         "synced": bool(updated['synced']),
         "updated_by": updated['updated_by'],
         "updated_at": updated['updated_at'],
-        "voucher_observations": voucher_observations
+        "voucher_observations": voucher_observations,
+        "cleared_status": cleared_status
     }
 
 

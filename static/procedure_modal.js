@@ -220,6 +220,10 @@ let currentProcedureModalUid = null;
 // account" note, reused via the existing save_line_observation/voucher_line_observations flow.
 // Must match ACCOUNT_HEAD_OBSERVATION_DOC_ID in routers/verification.py exactly.
 const ACCOUNT_HEAD_OBSERVATION_DOC_ID = -1;
+const ACCOUNT_HEAD_RECOMMENDATION_PREFIX = '__account_head_recommendation__: ';
+const VOUCHER_LINE_CORRECTNESS_DOC_ID = -2;
+const VOUCHER_LINE_CORRECT_TEXT = 'correct';
+const VOUCHER_LINE_INCORRECT_TEXT = 'incorrect';
 
 // Voucher-level Checks simplified to name-only (Phase 3 of 4) — voucher-level checks cache,
 // keyed by transaction_ref (shared across every line of the same voucher, not per-uid) — array
@@ -244,6 +248,7 @@ function getVoucherTickSaveState() {
     const transactionRef = hostAdapter?.currentVoucherId;
     const observations = [];
     const accountHeadNotes = [];
+    const voucherLineCorrectness = [];
     const physicalBills = [];
     const formEntries = [];
     Object.entries(hostAdapter?.procedureModalState || {}).forEach(([uid, line]) => {
@@ -278,8 +283,18 @@ function getVoucherTickSaveState() {
             });
         });
         const accountHead = accountHeadCache[uid];
-        if (accountHead && accountHead.mode === 'nomatch' && accountHead.noMatchDirty) {
-            accountHeadNotes.push({ voucher_line_id: parseInt(uid), observation_text: accountHead.noMatchText || '' });
+        if (accountHead && (hasAccountHeadRecommendation(accountHead)
+            || accountHead.recommendationDirty || accountHead.noMatchDirty)) {
+            accountHeadNotes.push({
+                voucher_line_id: parseInt(uid),
+                observation_text: serializeAccountHeadRecommendation(accountHead)
+            });
+        }
+        if (line.voucherLineCorrectDirty) {
+            voucherLineCorrectness.push({
+                voucher_line_id: parseInt(uid),
+                is_correct: !!line.voucherLineCorrect
+            });
         }
     });
     // Keys here must match the snake_case Body(embed=True) param names on
@@ -287,7 +302,7 @@ function getVoucherTickSaveState() {
     // key, so a camelCase key here silently falls through to that param's None default instead
     // of erroring, which is what caused the endpoint's unconditional 400 on verify (root-caused
     // 2026-08-28: voucher_checks always arrived empty, so every active check read as untouched).
-    return { observations, account_head_notes: accountHeadNotes, physical_bills: physicalBills, form_entries: formEntries, procedure_checks: procedureChecks, voucher_checks: (voucherChecksCache[transactionRef] || []).map(check => ({
+    return { observations, account_head_notes: accountHeadNotes, voucher_line_correctness: voucherLineCorrectness, physical_bills: physicalBills, form_entries: formEntries, procedure_checks: procedureChecks, voucher_checks: (voucherChecksCache[transactionRef] || []).map(check => ({
         check_id: check.id, state: check.state
     })) };
 }
@@ -314,10 +329,68 @@ function getAccountHeadState(uid) {
             searchTerm: '',
             suggestions: [], matched: null, message: '', loading: false, hasFetched: false,
             noMatchText: '',
-            noMatchDirty: false
+            noMatchDirty: false,
+            recommendationDirty: false
         };
     }
     return accountHeadCache[uid];
+}
+
+function hasAccountHeadRecommendation(state) {
+    if (!state) return false;
+    if (state.mode === 'nomatch') return !!String(state.noMatchText || '').trim();
+    return !!String(state.selectedAccountName || '').trim()
+        || (!!state.matched && Array.isArray(state.suggestions) && state.suggestions.length > 0);
+}
+
+function serializeAccountHeadRecommendation(state) {
+    if (!state) return '';
+    if (state.mode === 'nomatch') return String(state.noMatchText || '').trim();
+    const accountName = String(state.selectedAccountName || '').trim()
+        || (state.matched && state.suggestions && state.suggestions[0]
+            ? String(state.suggestions[0].account_name || '').trim() : '');
+    return accountName ? `${ACCOUNT_HEAD_RECOMMENDATION_PREFIX}${accountName}` : '';
+}
+
+function getVoucherLineCorrectState(uid) {
+    const lineState = hostAdapter?.procedureModalState?.[uid];
+    if (!lineState) return { isCorrect: false, touched: false, dirty: false };
+    if (typeof lineState.voucherLineCorrect !== 'boolean') lineState.voucherLineCorrect = false;
+    if (typeof lineState.voucherLineCorrectTouched !== 'boolean') lineState.voucherLineCorrectTouched = false;
+    if (typeof lineState.voucherLineCorrectDirty !== 'boolean') lineState.voucherLineCorrectDirty = false;
+    return {
+        isCorrect: lineState.voucherLineCorrect,
+        touched: lineState.voucherLineCorrectTouched,
+        dirty: lineState.voucherLineCorrectDirty
+    };
+}
+
+function applyVoucherLineRecommendationOverride(uid) {
+    const lineState = hostAdapter?.procedureModalState?.[uid];
+    const recommendationPresent = hasAccountHeadRecommendation(getAccountHeadState(uid));
+    if (!lineState || !recommendationPresent) return recommendationPresent;
+
+    const wasCorrect = lineState.voucherLineCorrect === true;
+    const wasDirty = lineState.voucherLineCorrectDirty === true;
+    lineState.voucherLineCorrect = false;
+    lineState.voucherLineCorrectTouched = true;
+    if (wasCorrect) lineState.voucherLineCorrectDirty = true;
+    if (wasCorrect && !wasDirty && typeof hostAdapter.markLineDirty === 'function') {
+        hostAdapter.markLineDirty(uid, 'account-head recommendation made Voucher Line incorrect');
+    }
+    return recommendationPresent;
+}
+
+function syncVoucherLineCorrectnessControl(uid) {
+    const input = document.getElementById('procedureVoucherLineCorrect');
+    if (!input) return;
+    const recommendationPresent = applyVoucherLineRecommendationOverride(uid);
+    const correctState = getVoucherLineCorrectState(uid);
+    input.disabled = recommendationPresent;
+    input.checked = !recommendationPresent && correctState.isCorrect;
+    input.setAttribute('aria-disabled', recommendationPresent ? 'true' : 'false');
+    const control = input.closest('.procedure-correctness-control');
+    if (control) control.classList.toggle('is-disabled', recommendationPresent);
 }
 // Trial Balance leaf accounts for the Account Head search-select — via GET /api/trial-balance/
 // latest-accounts, same source Assign Categories already uses. That endpoint returns both parent
@@ -1210,9 +1283,37 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     // deliberately NOT re-seeded here — it's confirmed scratch-only, with no server-side source.
     const ahState = getAccountHeadState(uid);
     const savedNoMatchEntry = observationEntries.find(e => e.document_id === ACCOUNT_HEAD_OBSERVATION_DOC_ID);
-    ahState.noMatchText = savedNoMatchEntry ? (savedNoMatchEntry.observation_text || '') : '';
+    const savedAccountHeadText = savedNoMatchEntry ? (savedNoMatchEntry.observation_text || '') : '';
+    const isSavedRecommendation = savedAccountHeadText.startsWith(ACCOUNT_HEAD_RECOMMENDATION_PREFIX);
+    const savedRecommendationName = isSavedRecommendation
+        ? savedAccountHeadText.slice(ACCOUNT_HEAD_RECOMMENDATION_PREFIX.length).trim() : '';
+    ahState.selectedAccountId = null;
+    ahState.selectedAccountName = savedRecommendationName;
+    ahState.searchTerm = savedRecommendationName;
+    ahState.suggestions = [];
+    ahState.matched = savedRecommendationName ? true : null;
+    ahState.message = '';
+    ahState.hasFetched = false;
+    ahState.noMatchText = isSavedRecommendation ? '' : savedAccountHeadText;
     ahState.noMatchDirty = false;
-    ahState.mode = ahState.noMatchText ? 'nomatch' : 'match';
+    ahState.recommendationDirty = false;
+    ahState.mode = savedRecommendationName ? 'match' : (ahState.noMatchText ? 'nomatch' : 'match');
+
+    // Voucher Line correctness is stored separately from normal observations. A non-blank
+    // correctness marker means the auditor made an explicit decision; only the "correct" value
+    // satisfies the backend gate, while "incorrect" lets the rail show that the decision needs
+    // attention after a saved checkbox is cleared.
+    const correctEntry = observationEntries.find(e => e.document_id === VOUCHER_LINE_CORRECTNESS_DOC_ID);
+    const correctText = correctEntry ? String(correctEntry.observation_text || '').trim().toLowerCase() : '';
+    const lineState = hostAdapter.procedureModalState[uid] || (hostAdapter.procedureModalState[uid] = {
+        activeDocId: null, documents: [], assignedDocIds: new Set(), voucherLineAmount: 0,
+        crossCheckResults: [], tabs: {}
+    });
+    lineState.voucherLineCorrect = correctText === VOUCHER_LINE_CORRECT_TEXT;
+    lineState.voucherLineCorrectTouched = correctText === VOUCHER_LINE_CORRECT_TEXT
+        || correctText === VOUCHER_LINE_INCORRECT_TEXT;
+    lineState.voucherLineCorrectDirty = false;
+    applyVoucherLineRecommendationOverride(uid);
 
     // Phase 3c: the Trial Balance leaf-account list is no longer warmed here. It is used only by
     // the "Voucher Line" tab's Account Head search-select, which is usually not the tab that
@@ -2139,6 +2240,85 @@ function getProcedureChecklistEntries(doc) {
 // Generic Voucher-Level Checks cutover): a Document flagged transaction_level_approval requires the
 // new voucher-level checks bar to ALSO be complete, on top of (not instead of) its own base
 // completeness rule above.
+function getProcedureDocumentStatus(uid, doc) {
+    const lineState = hostAdapter.procedureModalState[uid];
+    if (!lineState) return { state: 'untouched', reason: 'Not started' };
+
+    if (doc.__voucherTab) {
+        const correctState = getVoucherLineCorrectState(uid);
+        if (hasAccountHeadRecommendation(getAccountHeadState(uid))) {
+            return { state: 'query', reason: 'Account Head recommendation needs review' };
+        }
+        if (correctState.isCorrect) return { state: 'complete', reason: 'Voucher Line marked Correct' };
+        return correctState.touched
+            ? { state: 'query', reason: 'Voucher Line correctness needs confirmation' }
+            : { state: 'untouched', reason: 'Not started' };
+    }
+
+    const tabState = getProcedureTabState(uid, doc.id);
+    const entries = getProcedureChecklistEntries(doc);
+    const checklistValues = Object.values(tabState.checklist || {});
+    const checklistTouched = checklistValues.some(check => check && (
+        check.is_checked === true || check.is_checked === false || check.checked_at || check.checked_by
+    ));
+    const proceduresComplete = !entries.length || entries.every(entry =>
+        tabState.checklist[entry.role] && tabState.checklist[entry.role].is_checked
+    );
+    const observationPresent = !!String(tabState.observation || '').trim();
+    const isPhysicalBill = doc.document_type === 'physical_bill';
+    const isForm = doc.document_type === 'form';
+    const evidenceTouched = isPhysicalBill
+        ? !!tabState.physicalBillSaved || !!tabState.physicalBillDirty || (tabState.physicalBills || []).length > 0
+        : isForm
+            ? !!tabState.formSaved || !!tabState.formDirty || (tabState.formEntries || []).length > 0
+            : !!(lineState.assignedDocIds && lineState.assignedDocIds.has(String(doc.id)));
+
+    let evidenceComplete;
+    if (isPhysicalBill) {
+        evidenceComplete = !!tabState.physicalBillSaved
+            && computePhysicalBillCompletion(tabState.physicalBills, lineState.voucherLineAmount || 0);
+    } else if (isForm) {
+        const fields = Array.isArray(doc.form_fields) ? doc.form_fields : [];
+        evidenceComplete = !fields.length || (!!tabState.formSaved && isFormDraftComplete(uid, doc));
+    } else if (doc.template_id) {
+        evidenceComplete = !!(lineState.assignedDocIds && lineState.assignedDocIds.has(String(doc.id)));
+    } else {
+        evidenceComplete = true;
+    }
+
+    const docCrossChecks = (lineState.crossCheckResults || []).filter(rule =>
+        Array.isArray(rule.chain) && rule.chain.some(c => String(c.document_id) === String(doc.id))
+    );
+    const crossCheckIssue = docCrossChecks.some(rule => rule.status === 'fail' || rule.status === 'shortfall');
+    const crossCheckAwaiting = docCrossChecks.some(rule => rule.status === 'not_evaluated');
+    const amountSummary = doc.template_id ? getSelectedLinesSummary(uid, doc.id) : null;
+    const amountMismatch = !!(amountSummary && amountSummary.count > 0
+        && amountSummary.hasAmountField && amountSummary.mismatch);
+    const voucherChecks = voucherChecksCache[hostAdapter.currentVoucherId] || [];
+    const voucherChecksTouched = voucherChecks.some(check => check.state !== 'untouched');
+    const voucherChecksComplete = isVoucherChecksComplete(voucherChecks);
+    const voucherChecksIssue = !!doc.transaction_level_approval && !voucherChecksComplete
+        && (voucherChecksTouched || evidenceTouched || checklistTouched || observationPresent);
+    const touched = evidenceTouched || checklistTouched || observationPresent
+        || (doc.transaction_level_approval && voucherChecksTouched)
+        || docCrossChecks.some(rule => rule.status === 'pass' || rule.status === 'fail' || rule.status === 'shortfall');
+
+    if (observationPresent || (touched && !proceduresComplete) || crossCheckIssue || amountMismatch || voucherChecksIssue
+        || (crossCheckAwaiting && touched) || (evidenceTouched && !evidenceComplete)) {
+        return { state: 'query', reason: observationPresent ? 'Observation recorded'
+            : amountMismatch ? 'Data Table amount mismatch'
+                : crossCheckIssue ? 'Cross-check mismatch'
+                    : crossCheckAwaiting && touched ? 'Data checks awaiting data'
+                        : 'Audit procedures or evidence are incomplete' };
+    }
+    if (!touched) return { state: 'untouched', reason: 'Not started' };
+    if (evidenceComplete && proceduresComplete && !crossCheckAwaiting
+        && (!doc.transaction_level_approval || voucherChecksComplete)) {
+        return { state: 'complete', reason: 'All procedures and data checks clear' };
+    }
+    return { state: touched ? 'query' : 'untouched', reason: touched ? 'Review required' : 'Not started' };
+}
+
 function isProcedureDocumentComplete(uid, doc) {
     // Generic Voucher-Level Checks cutover: the synthetic Voucher Line tab now only hosts the
     // Account Head Recommendation card (an optional recommendation, not a gate) — the voucher-level
@@ -2200,11 +2380,15 @@ function renderProcedureModalTabs(uid) {
     if (!container) return;
     const lineState = hostAdapter.procedureModalState[uid];
     if (!lineState) { container.innerHTML = ''; return; }
+    applyVoucherLineRecommendationOverride(uid);
     const documents = lineState.documents || [];
 
     container.innerHTML = documents.map(doc => {
         const isActive = String(doc.id) === String(lineState.activeDocId);
-        const isComplete = isProcedureDocumentComplete(uid, doc);
+        const procedureStatus = getProcedureDocumentStatus(uid, doc);
+        const isComplete = procedureStatus.state === 'complete';
+        const dotClass = procedureStatus.state === 'complete' ? ' complete'
+            : procedureStatus.state === 'query' ? ' query' : '';
 
         // Generic Voucher-Level Checks cutover: the synthetic Voucher Line tab now only hosts the
         // (optional, non-gating) Account Head Recommendation card — no roles/mismatch concept, and
@@ -2213,7 +2397,7 @@ function renderProcedureModalTabs(uid) {
         if (doc.__voucherTab) {
             return `
                 <button type="button" class="procedure-tab-btn${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
-                    <span class="procedure-tab-dot complete" title="Account Head Recommendation"></span>
+                    <span class="procedure-tab-dot${dotClass}" title="${procedureStatus.reason}"></span>
                     <span class="procedure-tab-text">
                         <span class="procedure-tab-label">${hostAdapter.escapeHtml(doc.name)}</span>
                     </span>
@@ -2226,7 +2410,9 @@ function renderProcedureModalTabs(uid) {
         // document_type-first branch order as isProcedureDocumentComplete() above).
         const isPhysicalBill = doc.document_type === 'physical_bill';
         const isForm = doc.document_type === 'form';
-        const dotTitle = isPhysicalBill
+        const dotTitle = procedureStatus.state === 'query'
+            ? `Query: ${procedureStatus.reason}`
+            : isPhysicalBill
             ? (isComplete ? 'Bill entered' : 'Bill not yet entered')
             : isForm
                 ? (isComplete ? 'Form evidence matches mapped values' : 'Form evidence pending or mismatched')
@@ -2258,7 +2444,7 @@ function renderProcedureModalTabs(uid) {
 
         return `
             <button type="button" class="procedure-tab-btn${isActive ? ' active' : ''}" data-uid="${uid}" data-doc-id="${doc.id}">
-                <span class="procedure-tab-dot${isComplete ? ' complete' : ''}" title="${dotTitle}"></span>
+                <span class="procedure-tab-dot${dotClass}" title="${dotTitle}"></span>
                 <span class="procedure-tab-text">
                     <span class="procedure-tab-label">${hostAdapter.escapeHtml(doc.name)}</span>
                     <span class="procedure-tab-sub">${subText}</span>
@@ -2278,6 +2464,7 @@ function renderProcedureModalTabs(uid) {
             activateProcedureTab(this.dataset.uid, docId);
         });
     });
+    syncVoucherLineCorrectnessControl(uid);
 }
 
 // Switches the active tab for one line's modal. Other tabs' own state objects are left
@@ -3299,12 +3486,26 @@ function renderVoucherApprovalPanel(uid) {
     const lineIdx = hostAdapter.currentVoucherLines.findIndex(l => String(l.detail_id) === String(uid));
     const voucherLine = lineIdx !== -1 ? hostAdapter.currentVoucherLines[lineIdx] : null;
     const currentAccountName = voucherLine ? hostAdapter.getVoucherLineAlias(voucherLine.row_data || {}, hostAdapter.VOUCHER_LINE_ACCOUNT_NAME_ALIASES) : '—';
+    const recommendationPresent = applyVoucherLineRecommendationOverride(uid);
+    const correctState = getVoucherLineCorrectState(uid);
 
     container.innerHTML = `
         <div class="procedure-tab-panel" data-doc-id="${VOUCHER_LINE_TAB_ID}">
             <div class="procedure-segment procedure-segment-data">
                 <h4 class="procedure-segment-header">🎯 Account Head Recommendation</h4>
                 <div class="procedure-segment-body">
+                    <div class="procedure-correctness-card">
+                        <label class="procedure-correctness-control" for="procedureVoucherLineCorrect">
+                            <input type="checkbox" id="procedureVoucherLineCorrect"
+                                ${correctState.isCorrect && !recommendationPresent ? 'checked' : ''}
+                                ${recommendationPresent ? 'disabled' : ''}
+                                aria-disabled="${recommendationPresent ? 'true' : 'false'}">
+                            <span class="procedure-correctness-copy">
+                                <strong>Correct</strong>
+                                <small>Confirm that this voucher line is correct.</small>
+                            </span>
+                        </label>
+                    </div>
                     <div class="procedure-account-head-current">
                         <label>Current Account Name</label>
                         <span>${hostAdapter.escapeHtml(currentAccountName)}</span>
@@ -3314,6 +3515,23 @@ function renderVoucherApprovalPanel(uid) {
             </div>
         </div>
     `;
+
+    const correctInput = document.getElementById('procedureVoucherLineCorrect');
+    if (correctInput) {
+        correctInput.addEventListener('change', function() {
+            if (hasAccountHeadRecommendation(getAccountHeadState(uid))) {
+                syncVoucherLineCorrectnessControl(uid);
+                return;
+            }
+            const lineState = hostAdapter.procedureModalState[uid];
+            lineState.voucherLineCorrect = this.checked;
+            lineState.voucherLineCorrectTouched = true;
+            lineState.voucherLineCorrectDirty = true;
+            hostAdapter.markLineDirty(uid, 'voucher line correctness changed');
+            renderProcedureModalTabs(uid);
+            updateProcedureModalSavedNote(uid);
+        });
+    }
 
     renderAccountHeadCard(uid);
 }
@@ -3349,11 +3567,13 @@ function renderAccountHeadCard(uid) {
             <button type="button" id="procedureAccountHeadToggleBtn" class="procedure-account-head-toggle-link">🔍 Search Trial Balance instead</button>
         `;
         const noMatchInput = document.getElementById('procedureAccountHeadNoMatchInput');
-        if (noMatchInput) {
+            if (noMatchInput) {
             noMatchInput.addEventListener('input', function() {
                 state.noMatchText = this.value;
                 state.noMatchDirty = true;
+                applyVoucherLineRecommendationOverride(uid);
                 hostAdapter.markLineDirty(uid, 'account-head finding edited');
+                renderProcedureModalTabs(uid);
             });
         }
     } else {
@@ -3372,10 +3592,19 @@ function renderAccountHeadCard(uid) {
         const searchInput = document.getElementById('procedureAccountHeadSearchInput');
         if (searchInput) {
             searchInput.addEventListener('input', function() {
+                const hadRecommendation = hasAccountHeadRecommendation(state);
                 state.searchTerm = this.value;
                 state.selectedAccountId = null;
                 state.selectedAccountName = '';
+                state.matched = null;
+                state.suggestions = [];
+                state.hasFetched = false;
+                if (hadRecommendation) {
+                    state.recommendationDirty = true;
+                    hostAdapter.markLineDirty(uid, 'account-head recommendation edited');
+                }
                 renderAccountHeadSearchDropdown(uid);
+                renderProcedureModalTabs(uid);
             });
         }
         const suggestBtn = document.getElementById('procedureAccountHeadSuggestBtn');
@@ -3390,8 +3619,24 @@ function renderAccountHeadCard(uid) {
     const toggleBtn = document.getElementById('procedureAccountHeadToggleBtn');
     if (toggleBtn) {
         toggleBtn.addEventListener('click', function() {
+            const hadRecommendation = hasAccountHeadRecommendation(state);
+            const hadNoMatchText = !!String(state.noMatchText || '').trim();
             state.mode = state.mode === 'nomatch' ? 'match' : 'nomatch';
+            if (state.mode === 'nomatch') {
+                state.selectedAccountId = null;
+                state.selectedAccountName = '';
+                state.searchTerm = '';
+                state.matched = null;
+                state.suggestions = [];
+                state.hasFetched = false;
+                if (hadRecommendation) state.recommendationDirty = true;
+                state.noMatchDirty = hadNoMatchText;
+            } else if (hadNoMatchText) {
+                state.recommendationDirty = true;
+            }
+            hostAdapter.markLineDirty(uid, 'account-head recommendation mode changed');
             renderAccountHeadCard(uid);
+            renderProcedureModalTabs(uid);
         });
     }
 }
@@ -3441,10 +3686,13 @@ function selectAccountHeadTbAccount(uid, accountId, accountName) {
     state.selectedAccountId = accountId;
     state.selectedAccountName = accountName;
     state.searchTerm = accountName;
+    state.recommendationDirty = true;
+    hostAdapter.markLineDirty(uid, 'account-head recommendation selected');
     const inputEl = document.getElementById('procedureAccountHeadSearchInput');
     if (inputEl) inputEl.value = accountName;
     const dropdownEl = document.getElementById('procedureAccountHeadSearchDropdown');
     if (dropdownEl) dropdownEl.innerHTML = '';
+    renderProcedureModalTabs(uid);
 }
 
 // Renders the results container inside the Account Head Recommendation segment based on the
@@ -3526,6 +3774,10 @@ async function fetchAccountHeadSuggestions(uid) {
         state.suggestions = data.suggestions || [];
         state.message = data.message || '';
         state.hasFetched = true;
+        if (hasAccountHeadRecommendation(state)) {
+            state.recommendationDirty = true;
+            hostAdapter.markLineDirty(uid, 'account-head recommendation suggested');
+        }
     } catch (e) {
         console.error('Failed to fetch account head suggestions:', e);
         state.matched = false;
@@ -3536,6 +3788,7 @@ async function fetchAccountHeadSuggestions(uid) {
         state.loading = false;
         renderAccountHeadResultsButtonState(uid);
         renderAccountHeadResults(uid);
+        renderProcedureModalTabs(uid);
     }
 }
 
@@ -5442,13 +5695,44 @@ async function saveLineObservation(uid, docId, target = null) {
     }
 }
 
-// Account Head Recommendation follow-up: persists a dirty no-match finding — called from the same
-// save chokepoint as flushProcedureObservations() (hostAdapter.saveLineItems()). No-op
-// unless the card is currently in no-match mode with unsaved text. Reuses the existing
-// save_line_observation endpoint under the reserved ACCOUNT_HEAD_OBSERVATION_DOC_ID sentinel — the
-// backend wraps the raw text into the "[Account Head Recommendation]: New account head
-// recommended: ... — no match in Trial Balance" finding at rollup time
-// (sync_line_observations_to_voucher()), so only the raw note is sent here.
+// Persists Voucher Line correctness and Account Head recommendations from the same save chokepoint
+// as flushProcedureObservations() (hostAdapter.saveLineItems()). Each uses the existing
+// save_line_observation endpoint with its reserved sentinel; the backend excludes correctness from
+// user-facing observation rollups and formats Account Head recommendations at rollup time.
+async function flushVoucherLineCorrectness(uid) {
+    if (!hostAdapter) return true;
+    const lineState = hostAdapter.procedureModalState[uid];
+    if (!lineState || !lineState.voucherLineCorrectDirty) return true;
+
+    try {
+        const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_line_observation`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                voucher_line_id: parseInt(uid),
+                document_id: VOUCHER_LINE_CORRECTNESS_DOC_ID,
+                observation_text: lineState.voucherLineCorrect
+                    ? VOUCHER_LINE_CORRECT_TEXT : VOUCHER_LINE_INCORRECT_TEXT
+            })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save voucher line correctness.');
+        }
+        const data = await res.json();
+        lineState.voucherLineCorrectDirty = false;
+        if (Object.prototype.hasOwnProperty.call(data, 'cleared_status')
+            && typeof hostAdapter.syncClearedStatusForLine === 'function') {
+            hostAdapter.syncClearedStatusForLine(uid, data.cleared_status);
+        }
+        return true;
+    } catch (e) {
+        console.error('Failed to save voucher line correctness:', e);
+        hostAdapter.showStatus('Failed to save voucher line correctness — please try again.', 'error');
+        return false;
+    }
+}
+
 async function flushAccountHeadNoMatchNote(uid) {
     // hostAdapter can be null here — this is called from verification.js's saveLineItems() on
     // EVERY line save, including a save that happens before the modal has ever been opened this
@@ -5457,8 +5741,9 @@ async function flushAccountHeadNoMatchNote(uid) {
     // 'match', noMatchDirty false) — this guard reaches the exact same early-return the next line
     // would have taken anyway, just without needing hostAdapter to check it.
     if (!hostAdapter) return;
+    await flushVoucherLineCorrectness(uid);
     const state = getAccountHeadState(uid);
-    if (state.mode !== 'nomatch' || !state.noMatchDirty) return;
+    if (!hasAccountHeadRecommendation(state) && !state.recommendationDirty && !state.noMatchDirty) return;
 
     try {
         const res = await window.ApiUtils.apiFetchMutate(`${API_BASE}/api/verification/save_line_observation`, {
@@ -5467,7 +5752,7 @@ async function flushAccountHeadNoMatchNote(uid) {
             body: JSON.stringify({
                 voucher_line_id: parseInt(uid),
                 document_id: ACCOUNT_HEAD_OBSERVATION_DOC_ID,
-                observation_text: state.noMatchText || ''
+                observation_text: serializeAccountHeadRecommendation(state)
             })
         });
         if (!res.ok) {
@@ -5476,6 +5761,7 @@ async function flushAccountHeadNoMatchNote(uid) {
         }
         const data = await res.json();
         state.noMatchDirty = false;
+        state.recommendationDirty = false;
 
         // Same "keep the main table's Observations cell caught up immediately" pattern
         // saveLineObservation() already uses for real Document tabs.
