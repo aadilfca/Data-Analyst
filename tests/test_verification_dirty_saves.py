@@ -545,6 +545,90 @@ def test_grouped_save_preserves_edit_made_during_request(dirty_page):
     assert result["dirty"] == [False, True, False]
 
 
+def test_procedure_browse_search_and_multi_selection(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        window.browseFetches = [];
+        window.assignCalls = [];
+        window.ApiUtils = {
+            apiFetch: async url => {
+                window.browseFetches.push(url);
+                return new Response(JSON.stringify({
+                    rows: [
+                        {id: 11, row_data: {Reference: 'INV-11', Description: 'Office supplies'}, extract_date: '2026-09-01', extract_amount: 10, is_assigned: false},
+                        {id: 12, row_data: {Reference: 'INV-12', Description: 'Office travel'}, extract_date: '2026-09-02', extract_amount: 20, is_assigned: false},
+                        {id: 13, row_data: {Reference: 'INV-13', Description: 'Already linked'}, extract_date: '2026-09-03', extract_amount: 30, is_assigned: true, assigned_to_voucher_id: 'V-1', assigned_to_document_id: 2}
+                    ],
+                    total_rows: 3
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+            },
+            apiFetchMutate: async (url, options) => {
+                const body = JSON.parse(options.body);
+                window.assignCalls.push(body);
+                return new Response(JSON.stringify({id: 100 + window.assignCalls.length}), {
+                    status: 200, headers: {'Content-Type': 'application/json'}
+                });
+            }
+        };
+        hostAdapter = {
+            procedureModalState: {1: {
+                activeDocId: 2,
+                documents: [{id: 2, name: 'Invoice', template_id: 20, verification_fields: [{column_name: 'Reference'}]}],
+                assignedDocIds: new Set(),
+                tabs: {2: {selections: []}}
+            }},
+            currentVoucherLines: [{detail_id: 1, client_data_id: 100}],
+            escapeHtml: value => String(value ?? ''),
+            markLineDirty: () => {},
+            showStatus: (message, kind) => { window.lastBrowseStatus = {message, kind}; },
+            getClientId: () => 1
+        };
+        renderProcedureModalTabs = () => {};
+        renderProcedureModalPanel = () => {};
+        invalidateProcedureModalData = () => {};
+        procedureBrowseState = {
+            uid: 1, docId: 2, page: 1, totalRows: 0, rows: [], statusFilter: 'all', search: '',
+            selectedRows: new Map(), requestToken: 0
+        };
+        const searchInput = document.getElementById('procedureBrowseSearchInput');
+        searchInput.value = 'INV';
+        searchInput.dispatchEvent(new Event('input', {bubbles: true}));
+        await new Promise(resolve => setTimeout(resolve, 350));
+        const searchParams = new URLSearchParams(browseFetches[0].split('?')[1]);
+        const selectAll = document.getElementById('procedureBrowseSelectAllCheckbox');
+        selectAll.click();
+        const linkButton = document.getElementById('procedureBrowseLinkSelectedBtn');
+        const selectionBefore = linkButton.textContent.trim();
+        const assignedCheckbox = document.querySelector('.procedure-browse-row-assigned .procedure-browse-row-checkbox');
+        linkButton.click();
+        await new Promise(resolve => {
+            const startedAt = Date.now();
+            const waitForAssignments = () => {
+                if ((window.assignCalls.length === 2
+                    && hostAdapter.procedureModalState[1].tabs[2].selections.length === 2
+                    && window.lastBrowseStatus)
+                    || Date.now() - startedAt > 1000) resolve();
+                else setTimeout(waitForAssignments, 0);
+            };
+            waitForAssignments();
+        });
+        return {
+            search: searchParams.get('search'),
+            selectionBefore,
+            assignedCheckboxLocked: !!assignedCheckbox?.disabled && !!assignedCheckbox?.checked,
+            calls: window.assignCalls,
+            selections: hostAdapter.procedureModalState[1].tabs[2].selections.map(selection => selection.client_data_id),
+            status: window.lastBrowseStatus
+        };
+    }""")
+
+    assert result["search"] == "INV"
+    assert result["selectionBefore"] == "Link selected (2)"
+    assert result["assignedCheckboxLocked"] is True
+    assert [call["client_data_id"] for call in result["calls"]] == [11, 12]
+    assert result["selections"] == [11, 12]
+    assert result["status"] == {"message": "Evidence linked for 2 lines.", "kind": "success"}
+
+
 def test_procedure_search_dropdown_links_multiple_selected_rows(procedure_modal_page):
     result = procedure_modal_page.evaluate("""async () => {
         window.assignCalls = [];

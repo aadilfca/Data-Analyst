@@ -145,6 +145,15 @@ const PROCEDURE_MODAL_MARKUP = `
                      the already-loaded current page of #procedureBrowseTableContainer's rows by
                      the Status column Phase 1 added. No search box here (this modal has none of
                      its own; that's the separate tab-panel dropdown, Phase 2, untouched). -->
+                <div class="procedure-browse-search-row">
+                    <label class="procedure-browse-search-label" for="procedureBrowseSearchInput">Search all rows</label>
+                    <div class="procedure-browse-search-wrap">
+                        <input type="search" id="procedureBrowseSearchInput" class="procedure-browse-search-input"
+                            placeholder="Search any value in any row..." autocomplete="off">
+                        <button type="button" id="procedureBrowseSearchClearBtn" class="procedure-browse-search-clear-btn"
+                            aria-label="Clear row search" hidden>&times;</button>
+                    </div>
+                </div>
                 <div class="procedure-browse-toolbar">
                     <label for="procedureBrowseStatusFilter">Status</label>
                     <select id="procedureBrowseStatusFilter" class="procedure-browse-status-select">
@@ -153,6 +162,8 @@ const PROCEDURE_MODAL_MARKUP = `
                         <option value="unassigned">Unassigned</option>
                     </select>
                     <span id="procedureBrowseStatusCount" class="procedure-browse-status-count"></span>
+                    <span id="procedureBrowseSelectionCount" class="procedure-browse-selection-count"></span>
+                    <button type="button" id="procedureBrowseLinkSelectedBtn" class="btn-primary" disabled>Link selected (0)</button>
                 </div>
                 <div id="procedureBrowseTableContainer" class="procedure-browse-table-container"></div>
                 <div class="procedure-browse-pagination">
@@ -5811,12 +5822,20 @@ const procedureBrowsePageInfo = document.getElementById('procedureBrowsePageInfo
 // Phase 3 of 3, FINAL: Status filter + count badge controls.
 const procedureBrowseStatusFilterSelect = document.getElementById('procedureBrowseStatusFilter');
 const procedureBrowseStatusCountEl = document.getElementById('procedureBrowseStatusCount');
+const procedureBrowseSearchInput = document.getElementById('procedureBrowseSearchInput');
+const procedureBrowseSearchClearBtn = document.getElementById('procedureBrowseSearchClearBtn');
+const procedureBrowseSelectionCountEl = document.getElementById('procedureBrowseSelectionCount');
+const procedureBrowseLinkSelectedBtn = document.getElementById('procedureBrowseLinkSelectedBtn');
 
 const PROCEDURE_BROWSE_PAGE_SIZE = 20;
 // statusFilter is 'all'/'assigned'/'unassigned' — purely client-side, applied to whichever page of
 // rows is already loaded (no new fetch, no backend change; see the Phase 3 note on
 // renderProcedureBrowseTable() below).
-let procedureBrowseState = { uid: null, docId: null, page: 1, totalRows: 0, rows: [], statusFilter: 'all' };
+let procedureBrowseSearchTimer = null;
+let procedureBrowseState = {
+    uid: null, docId: null, page: 1, totalRows: 0, rows: [], statusFilter: 'all', search: '',
+    selectedRows: new Map(), requestToken: 0
+};
 
 async function openProcedureBrowseModal(uid, docId) {
     if (!procedureBrowseModal) return;
@@ -5824,10 +5843,15 @@ async function openProcedureBrowseModal(uid, docId) {
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     if (!doc || !doc.template_id) return;
 
-    procedureBrowseState = { uid, docId, page: 1, totalRows: 0, rows: [], statusFilter: 'all' };
+    procedureBrowseState = {
+        uid, docId, page: 1, totalRows: 0, rows: [], statusFilter: 'all', search: '',
+        selectedRows: new Map(), requestToken: 0
+    };
     // The <select> element itself retains its own value across modal reopens independent of this
     // state object, so it needs an explicit reset too — "default to All on modal/tab open".
     if (procedureBrowseStatusFilterSelect) procedureBrowseStatusFilterSelect.value = 'all';
+    if (procedureBrowseSearchInput) procedureBrowseSearchInput.value = '';
+    if (procedureBrowseSearchClearBtn) procedureBrowseSearchClearBtn.hidden = true;
     if (procedureBrowseModalTitle) procedureBrowseModalTitle.textContent = `👁️ Browse — ${doc.name}`;
     procedureBrowseModal.style.display = 'flex';
     await fetchProcedureBrowsePage();
@@ -5838,15 +5862,17 @@ function closeProcedureBrowseModal() {
 }
 
 async function fetchProcedureBrowsePage() {
-    const { uid, docId, page } = procedureBrowseState;
+    const { uid, docId, page, search } = procedureBrowseState;
     const lineState = hostAdapter.procedureModalState[uid];
     const doc = lineState && (lineState.documents || []).find(d => d.id === docId);
     if (!doc) return;
+    const requestToken = ++procedureBrowseState.requestToken;
     if (procedureBrowseTableContainer) {
         procedureBrowseTableContainer.innerHTML = '<div style="text-align:center; padding:20px;"><span class="spinner"></span> Loading...</div>';
     }
     try {
-        const data = await fetchProcedureRows(doc.template_id, doc.id, '', page, PROCEDURE_BROWSE_PAGE_SIZE);
+        const data = await fetchProcedureRows(doc.template_id, doc.id, search, page, PROCEDURE_BROWSE_PAGE_SIZE);
+        if (requestToken !== procedureBrowseState.requestToken) return;
         procedureBrowseState.rows = data.rows || [];
         procedureBrowseState.totalRows = data.total_rows || 0;
         renderProcedureBrowseTable();
@@ -5906,6 +5932,7 @@ function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
         : Object.keys(rows[0].row_data || {});
 
     let html = '<table class="procedure-browse-table"><thead><tr>';
+    html += '<th class="procedure-browse-select-column"><input type="checkbox" id="procedureBrowseSelectAllCheckbox" class="procedure-browse-select-all" aria-label="Select all available rows currently shown"></th>';
     columns.forEach(col => { html += `<th>${hostAdapter.escapeHtml(col)}</th>`; });
     html += '<th>Status</th><th>Voucher No.</th>';
     html += '</tr></thead><tbody>';
@@ -5915,6 +5942,7 @@ function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
         const rowClass = isAssigned ? ' class="procedure-browse-row-assigned"' : '';
         const interactiveAttrs = isAssigned ? '' : ' role="button" tabindex="0"';
         html += `<tr data-id="${row.id}"${rowClass}${interactiveAttrs}>`;
+        html += `<td class="procedure-browse-select-column"><input type="checkbox" class="procedure-browse-row-checkbox" data-id="${row.id}" aria-label="Select row ${row.id}"${isAssigned ? ' disabled checked' : procedureBrowseState.selectedRows.has(String(row.id)) ? ' checked' : ''}></td>`;
         columns.forEach(col => {
             // Template labels can differ from imported JSON keys only by case or surrounding
             // whitespace (for example, "PD no" vs "PD No"). Use the same tolerant resolver as
@@ -5955,6 +5983,46 @@ function updateProcedureBrowseStatusCount(rows) {
     const assignedCount = rows.filter(r => r.is_assigned).length;
     const unassignedCount = rows.length - assignedCount;
     procedureBrowseStatusCountEl.textContent = `This page: ${unassignedCount} unassigned · ${assignedCount} assigned`;
+    if (procedureBrowseSelectionCountEl) {
+        const count = procedureBrowseState.selectedRows ? procedureBrowseState.selectedRows.size : 0;
+        procedureBrowseSelectionCountEl.textContent = count ? `Selected: ${count}` : '';
+    }
+}
+
+function updateProcedureBrowseSelectionUi(visibleRows) {
+    const availableRows = visibleRows.filter(row => !row.is_assigned);
+    const selectedCount = availableRows.filter(row => procedureBrowseState.selectedRows.has(String(row.id))).length;
+    const selectAll = document.getElementById('procedureBrowseSelectAllCheckbox');
+    if (selectAll) {
+        selectAll.checked = availableRows.length > 0 && selectedCount === availableRows.length;
+        selectAll.indeterminate = selectedCount > 0 && selectedCount < availableRows.length;
+    }
+    if (procedureBrowseLinkSelectedBtn) {
+        const totalSelected = procedureBrowseState.selectedRows.size;
+        procedureBrowseLinkSelectedBtn.disabled = totalSelected === 0;
+        procedureBrowseLinkSelectedBtn.textContent = `Link selected (${totalSelected})`;
+    }
+    if (procedureBrowseSelectionCountEl) {
+        const totalSelected = procedureBrowseState.selectedRows.size;
+        procedureBrowseSelectionCountEl.textContent = totalSelected ? `Selected: ${totalSelected}` : '';
+    }
+}
+
+function toggleProcedureBrowseRowSelection(row, selected) {
+    if (!row || row.is_assigned) return;
+    const key = String(row.id);
+    if (selected) procedureBrowseState.selectedRows.set(key, row);
+    else procedureBrowseState.selectedRows.delete(key);
+    renderProcedureBrowseTable();
+}
+
+function toggleProcedureBrowseVisibleSelection(rows, selected) {
+    rows.filter(row => !row.is_assigned).forEach(row => {
+        const key = String(row.id);
+        if (selected) procedureBrowseState.selectedRows.set(key, row);
+        else procedureBrowseState.selectedRows.delete(key);
+    });
+    renderProcedureBrowseTable();
 }
 
 function renderProcedureBrowseTable() {
@@ -5977,23 +6045,29 @@ function renderProcedureBrowseTable() {
         procedureBrowseTableContainer.innerHTML = '<div style="color:#94a3b8; text-align:center; padding:20px;">No rows match this filter.</div>';
     } else {
         procedureBrowseTableContainer.innerHTML = buildProcedureBrowseTableHtml(uid, filteredRows, docId);
+        const visibleRows = filteredRows;
+        const selectAll = document.getElementById('procedureBrowseSelectAllCheckbox');
+        if (selectAll) {
+            selectAll.addEventListener('change', function() {
+                toggleProcedureBrowseVisibleSelection(visibleRows, this.checked);
+            });
+        }
+        procedureBrowseTableContainer.querySelectorAll('.procedure-browse-row-checkbox:not(:disabled)').forEach(input => {
+            input.addEventListener('change', function() {
+                const row = visibleRows.find(item => String(item.id) === String(this.dataset.id));
+                toggleProcedureBrowseRowSelection(row, this.checked);
+            });
+        });
         procedureBrowseTableContainer.querySelectorAll('.procedure-browse-table tbody tr:not(.procedure-browse-row-assigned)').forEach(item => {
-            item.addEventListener('click', async function() {
-                // Looked up against the full (unfiltered) rows — row ids are stable regardless of
-                // whether the row is currently hidden by the status filter.
-                const row = rows.find(r => r.id === parseInt(this.dataset.id));
+            item.addEventListener('click', function(event) {
+                if (event.target.closest('input')) return;
+                const row = visibleRows.find(item => String(item.id) === String(this.dataset.id));
                 if (!row) return;
-                const success = await selectProcedureDocument(uid, docId, row, this);
-                if (success) {
-                    closeProcedureBrowseModal();
-                } else {
-                    // The row was locked by someone else between fetch and click — refresh this
-                    // page so it shows correctly instead of staying stale/clickable.
-                    fetchProcedureBrowsePage();
-                }
+                toggleProcedureBrowseRowSelection(row, !procedureBrowseState.selectedRows.has(String(row.id)));
             });
         });
     }
+    updateProcedureBrowseSelectionUi(filteredRows);
     const totalPages = Math.max(Math.ceil(totalRows / PROCEDURE_BROWSE_PAGE_SIZE), 1);
     if (procedureBrowsePageInfo) procedureBrowsePageInfo.textContent = `Page ${page} of ${totalPages} (${totalRows} row${totalRows === 1 ? '' : 's'})`;
     if (procedureBrowsePrevBtn) procedureBrowsePrevBtn.disabled = page <= 1;
@@ -6023,6 +6097,83 @@ if (procedureBrowseStatusFilterSelect) {
     procedureBrowseStatusFilterSelect.addEventListener('change', function() {
         procedureBrowseState.statusFilter = this.value;
         renderProcedureBrowseTable();
+    });
+}
+if (procedureBrowseSearchInput) {
+    procedureBrowseSearchInput.addEventListener('input', function() {
+        procedureBrowseState.search = this.value.trim();
+        procedureBrowseState.page = 1;
+        procedureBrowseState.selectedRows.clear();
+        if (procedureBrowseSearchClearBtn) procedureBrowseSearchClearBtn.hidden = !this.value;
+        clearTimeout(procedureBrowseSearchTimer);
+        procedureBrowseSearchTimer = setTimeout(() => fetchProcedureBrowsePage(), 250);
+    });
+}
+if (procedureBrowseSearchClearBtn) {
+    procedureBrowseSearchClearBtn.addEventListener('click', function() {
+        if (procedureBrowseSearchInput) {
+            procedureBrowseSearchInput.value = '';
+            procedureBrowseSearchInput.focus();
+        }
+        procedureBrowseState.search = '';
+        procedureBrowseState.page = 1;
+        procedureBrowseState.selectedRows.clear();
+        this.hidden = true;
+        fetchProcedureBrowsePage();
+    });
+}
+async function linkSelectedProcedureBrowseRows(target = null) {
+    const { uid, docId } = procedureBrowseState;
+    const lineState = hostAdapter.procedureModalState[uid];
+    if (!lineState) return;
+    const rows = [...procedureBrowseState.selectedRows.values()].filter(row => !row.is_assigned);
+    if (!rows.length) return;
+    const originalLabel = target ? target.textContent : '';
+    if (target) {
+        target.disabled = true;
+        target.textContent = 'Linking...';
+    }
+    let linkedCount = 0;
+    const failedRows = [];
+    try {
+        for (const row of rows) {
+            const result = await requestProcedureDocumentAssignment(uid, docId, row, target);
+            if (!result.ok) {
+                failedRows.push({row, error: result.error});
+                continue;
+            }
+            appendProcedureSelection(getProcedureTabState(uid, docId), docId, row, result.assignment);
+            procedureBrowseState.selectedRows.delete(String(row.id));
+            linkedCount++;
+        }
+    } finally {
+        if (target && document.contains(target)) {
+            target.disabled = false;
+            target.textContent = originalLabel;
+        }
+    }
+    if (linkedCount) {
+        lineState.assignedDocIds.add(String(docId));
+        invalidateProcedureModalData(uid);
+        hostAdapter.markLineDirty(uid, 'supporting documents linked from Browse');
+        renderProcedureModalTabs(uid);
+        renderProcedureModalPanel(uid, docId);
+        await fetchProcedureBrowsePage();
+    }
+    if (failedRows.length) {
+        hostAdapter.showStatus(
+            linkedCount
+                ? `${linkedCount} evidence line${linkedCount === 1 ? '' : 's'} linked; ${failedRows.length} could not be linked.`
+                : 'None of the selected evidence lines could be linked.',
+            'error'
+        );
+    } else if (linkedCount) {
+        hostAdapter.showStatus(`Evidence linked for ${linkedCount} line${linkedCount === 1 ? '' : 's'}.`, 'success');
+    }
+}
+if (procedureBrowseLinkSelectedBtn) {
+    procedureBrowseLinkSelectedBtn.addEventListener('click', function() {
+        linkSelectedProcedureBrowseRows(this);
     });
 }
 if (procedureBrowseModalClose) {

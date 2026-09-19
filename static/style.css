@@ -5535,6 +5535,90 @@ body {
     font-style: italic;
 }
 
+.procedure-browse-search-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.procedure-browse-search-label {
+    flex: 0 0 auto;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 700;
+}
+.procedure-browse-search-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.procedure-browse-search-input {
+    width: 100%;
+    min-height: 38px;
+    padding: 8px 38px 8px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    color: #1e293b;
+    font-size: 13px;
+    background: #fff;
+    box-sizing: border-box;
+}
+.procedure-browse-search-input:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .12);
+}
+.procedure-browse-search-clear-btn {
+    position: absolute;
+    top: 50%;
+    right: 7px;
+    width: 26px;
+    height: 26px;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 5px;
+    color: #64748b;
+    background: transparent;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+}
+.procedure-browse-search-clear-btn:hover,
+.procedure-browse-search-clear-btn:focus-visible {
+    color: #1e293b;
+    background: #f1f5f9;
+}
+.procedure-browse-selection-count {
+    flex: 0 0 auto;
+    color: #2563eb;
+    font-size: 12px;
+    font-weight: 600;
+}
+.procedure-browse-toolbar #procedureBrowseLinkSelectedBtn {
+    flex: 0 0 auto;
+    min-height: 30px;
+    padding: 5px 10px;
+    font-size: 12px;
+}
+.procedure-browse-select-column {
+    width: 38px;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+    text-align: center !important;
+}
+.procedure-browse-select-all,
+.procedure-browse-row-checkbox {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: #2563eb;
+    cursor: pointer;
+    vertical-align: middle;
+}
+.procedure-browse-row-assigned .procedure-browse-row-checkbox {
+    cursor: not-allowed;
+}
+
 /* ----- Browse Modal: Status filter + count badge (Phase 3 of 3, FINAL) -----
    Sits between the modal header and the table container. Purely client-side over the current
    page's already-loaded rows (see renderProcedureBrowseTable() in verification.js) — no search

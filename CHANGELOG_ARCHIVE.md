@@ -5711,3 +5711,14 @@ When a Recommended Account Head is present, Correct is forced false, disabled, a
 out. Clearing the recommendation re-enables the checkbox but requires a fresh confirmation. Modal
 opening now also initializes missing per-line state before restoring the saved correctness marker.
 Playwright coverage passed (22 applicable modal tests); JavaScript syntax and diff checks passed.
+
+## Verification Browse All Rows search and multi-selection - 2026-09-19
+
+The procedure window's Browse All Rows preview now has a wide top search field that sends any
+typed value through the existing Data Bank preview search across row content. Search requests are
+debounced, stale responses are ignored, and the existing pagination/status filtering remains in
+place.
+
+The preview now supports selecting multiple unassigned rows, Select All for visible eligible rows,
+selection counts, and a Link selected action. Assigned rows remain checked, greyed, and locked.
+Playwright coverage passed (23 applicable modal tests); JavaScript syntax and diff checks passed.
