@@ -2413,7 +2413,7 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_quick_form_bill_rows_create_one_group_per_amount_and_ignore_blank_rows(self):
+    def test_inline_form_item_grid_renders_labels_and_actions(self):
         script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
@@ -2423,45 +2423,44 @@ class FormEvidenceContractTests(unittest.TestCase):
                 page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {}; ")
                 page.add_script_tag(path=str(script))
                 result = page.evaluate('''() => {
-                    const fields = [
-                        {id: 1, field_name: 'Vendor Name', field_type: 'text', field_scope: 'header'},
-                        {id: 2, field_name: 'Bill No', field_type: 'text', field_scope: 'header'},
+                    const headerFields = [
+                        {id: 1, field_name: 'Vendor Name', field_type: 'text', field_scope: 'header'}
+                    ];
+                    const itemFields = [
+                        {id: 2, field_name: 'Description', field_type: 'text', field_scope: 'item'},
                         {id: 3, field_name: 'Quantity', field_type: 'numeric', field_scope: 'item'},
                         {id: 4, field_name: 'Rate', field_type: 'numeric', field_scope: 'item'},
-                        {id: 5, field_name: 'Amount', field_type: 'numeric', field_scope: 'item'}
+                        {id: 5, field_name: 'Amount', field_type: 'arithmetic_multiply', field_scope: 'item',
+                            arithmetic_operands: ['Quantity', 'Rate']}
                     ];
-                    const state = {formEntries: []};
-                    const added = appendQuickFormBillRows(state, fields, [
-                        {vendor: 'Vendor A', billNo: 'A-1', amount: '100'},
-                        {vendor: '', billNo: '', amount: ''},
-                        {vendor: 'Vendor B', billNo: '', amount: '25.50'}
-                    ]);
-                    const invalidState = {formEntries: []};
-                    const invalid = appendQuickFormBillRows(invalidState, fields, [{amount: 'bad'}]);
+                    const tab = {
+                        formEntries: [
+                            makeEmptyFormEntry('header', headerFields, 0, 0),
+                            makeEmptyFormEntry('item', itemFields, 0, 0)
+                        ],
+                        checklist: {}, formCollapsedBills: {}
+                    };
+                    const doc = {id: 7, document_type: 'form', form_fields: [...headerFields, ...itemFields]};
+                    hostAdapter = {
+                        procedureModalState: {4: {activeDocId: 7, documents: [doc], voucherLineAmount: 0,
+                            crossCheckResults: [], tabs: {7: tab}}},
+                        markLineDirty: () => {}, showStatus: () => {}, escapeHtml: value => String(value ?? '')
+                    };
+                    renderFormDocumentPanel(4, doc);
                     return {
-                        added,
-                        groups: getFormBillGroupIndexes(state),
-                        headers: getFormBillGroupIndexes(state).map(group =>
-                            getFormEntriesForGroup(state, group, 'header')[0]?.values || {}),
-                        items: getFormBillGroupIndexes(state).map(group =>
-                            getFormEntriesForGroup(state, group, 'item').map(entry => ({
-                                quantity: entry.values['3'], rate: entry.values['4'], amount: entry.values['5']
-                            }))),
-                        invalid,
-                        invalidEntryCount: invalidState.formEntries.length
+                        headers: Array.from(document.querySelectorAll('.procedure-form-item-line-head span'))
+                            .map(element => element.textContent.trim()),
+                        itemRows: document.querySelectorAll('.procedure-form-item-row').length,
+                        actionLabels: document.querySelectorAll('.procedure-form-item-actions-label').length,
+                        removeButtonLabel: document.querySelector('.procedure-form-remove-item-btn')?.getAttribute('aria-label'),
+                        splitDisabled: document.querySelector('.procedure-form-split-item-btn')?.disabled
                     };
                 }''')
-                self.assertEqual(result['added'], {'added': 2, 'error': ''})
-                self.assertEqual(result['groups'], [0, 1])
-                self.assertEqual(result['headers'], [{'1': 'Vendor A', '2': 'A-1'}, {'1': 'Vendor B', '2': ''}])
-                self.assertEqual(result['items'], [[
-                    {'quantity': '1', 'rate': '100', 'amount': '100'}
-                ], [
-                    {'quantity': '1', 'rate': '25.50', 'amount': '25.50'}
-                ]])
-                self.assertEqual(result['invalid']['added'], 0)
-                self.assertTrue(result['invalid']['error'])
-                self.assertEqual(result['invalidEntryCount'], 0)
+                self.assertEqual(result['headers'], ['Description', 'Quantity', 'Rate', 'Amount', 'Actions'])
+                self.assertEqual(result['itemRows'], 1)
+                self.assertEqual(result['actionLabels'], 1)
+                self.assertEqual(result['removeButtonLabel'], 'Remove item row')
+                self.assertTrue(result['splitDisabled'])
             finally:
                 browser.close()
 
@@ -2569,7 +2568,7 @@ class FormEvidenceContractTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_quick_form_item_rows_stay_within_selected_bill_group(self):
+    def test_inline_form_item_enter_adds_row_and_defaults_quantity(self):
         script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
@@ -2579,49 +2578,38 @@ class FormEvidenceContractTests(unittest.TestCase):
                 page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {}; ")
                 page.add_script_tag(path=str(script))
                 result = page.evaluate('''() => {
-                    const headers = [{id: 1, field_name: 'Vendor Name', field_scope: 'header'}];
                     const itemFields = [
-                        {id: 2, field_name: 'Description', field_type: 'text', field_scope: 'item'},
                         {id: 3, field_name: 'Quantity', field_type: 'numeric', field_scope: 'item'},
                         {id: 4, field_name: 'Rate', field_type: 'numeric', field_scope: 'item'},
-                        {id: 5, field_name: 'Amount', field_type: 'numeric', field_scope: 'item'}
+                        {id: 5, field_name: 'Amount', field_type: 'arithmetic_multiply', field_scope: 'item',
+                            arithmetic_operands: ['Quantity', 'Rate']}
                     ];
-                    const state = {formEntries: [
-                        makeEmptyFormEntry('header', headers, 0, 0),
-                        makeEmptyFormEntry('header', headers, 0, 1),
-                        makeEmptyFormEntry('item', itemFields, 0, 0)
-                    ]};
-                    state.formEntries[2].values['2'] = 'Existing line';
-                    const added = appendQuickFormItemRows(state, itemFields, 1, [
-                        {'2': 'Rice', '3': '2', '4': '15', '5': ''},
-                        {'2': 'Oil', '3': '', '4': '20', '5': ''},
-                        {'2': '', '3': '', '4': '', '5': ''}
-                    ]);
-                    const invalidState = {formEntries: [makeEmptyFormEntry('header', headers, 0, 1)]};
-                    const invalid = appendQuickFormItemRows(invalidState, itemFields, 1, [
-                        {'2': 'Bad', '3': 'not numeric', '4': '20', '5': ''}
-                    ]);
+                    const tab = {formEntries: [makeEmptyFormEntry('item', itemFields, 0, 0)],
+                        checklist: {}, formCollapsedBills: {}};
+                    const doc = {id: 7, document_type: 'form', form_fields: itemFields};
+                    hostAdapter = {
+                        procedureModalState: {4: {activeDocId: 7, documents: [doc], voucherLineAmount: 20,
+                            crossCheckResults: [], tabs: {7: tab}}},
+                        markLineDirty: () => {}, showStatus: () => {}, escapeHtml: value => String(value ?? '')
+                    };
+                    renderFormDocumentPanel(4, doc);
+                    const rateInput = document.querySelector('[data-field-id="4"]');
+                    rateInput.value = '20';
+                    rateInput.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
                     return {
-                        added,
-                        groupZero: getFormEntriesForGroup(state, 0, 'item').map(entry => entry.values),
-                        groupOne: getFormEntriesForGroup(state, 1, 'item').map(entry => entry.values),
-                        invalid,
-                        invalidItemCount: getFormEntriesForGroup(invalidState, 1, 'item').length
+                        rowCount: document.querySelectorAll('.procedure-form-item-row').length,
+                        values: getFormEntriesForGroup(tab, 0, 'item').map(entry => entry.values),
+                        groups: getFormEntriesForGroup(tab, 0, 'item').map(entry => entry.bill_group_index)
                     };
                 }''')
-                self.assertEqual(result['added'], {'added': 2, 'error': ''})
-                self.assertEqual(result['groupZero'], [{'2': 'Existing line', '3': '', '4': '', '5': ''}])
-                self.assertEqual(result['groupOne'], [
-                    {'2': 'Rice', '3': '2', '4': '15', '5': '30'},
-                    {'2': 'Oil', '3': '1', '4': '20', '5': '20'}
-                ])
-                self.assertEqual(result['invalid']['added'], 0)
-                self.assertTrue(result['invalid']['error'])
-                self.assertEqual(result['invalidItemCount'], 0)
+                self.assertEqual(result['rowCount'], 2)
+                self.assertEqual(result['values'][0], {'3': '1', '4': '20', '5': '20'})
+                self.assertEqual(result['values'][1], {'3': '', '4': '', '5': ''})
+                self.assertEqual(result['groups'], [0, 0])
             finally:
                 browser.close()
 
-    def test_quick_item_popover_shows_existing_particulars_for_its_own_bill(self):
+    def test_inline_form_rows_stay_within_bill_groups(self):
         script = Path(__file__).resolve().parents[1] / 'static' / 'procedure_modal.js'
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
@@ -2631,88 +2619,72 @@ class FormEvidenceContractTests(unittest.TestCase):
                 page.add_script_tag(content="var API_BASE = ''; window.ApiUtils = {};")
                 page.add_script_tag(path=str(script))
                 result = page.evaluate('''() => {
-                    const itemFields = [
-                        {id: 1, field_name: 'Item Name', field_type: 'text', field_scope: 'item'},
-                        {id: 2, field_name: 'Quantity', field_type: 'numeric', field_scope: 'item'},
-                        {id: 3, field_name: 'Rate', field_type: 'numeric', field_scope: 'item'},
-                        {id: 4, field_name: 'Amount', field_type: 'numeric', field_scope: 'item'}
-                    ];
+                    const itemFields = [{id: 1, field_name: 'Item Name', field_type: 'text', field_scope: 'item'}];
                     const item = (group, sortOrder, values) => ({
                         bill_group_index: group, row_scope: 'item', sort_order: sortOrder, values
                     });
                     const tab = {formEntries: [
-                        item(0, 0, {'1': 'Tea', '2': '2', '3': '50', '4': '100'}),
-                        item(1, 0, {'1': 'Rice', '2': '1', '3': '120', '4': '120'}),
-                        item(1, 1, {'1': 'Oil', '2': '3', '3': '40', '4': '120'})
+                        item(0, 0, {'1': 'Tea'}),
+                        item(1, 0, {'1': 'Rice'}),
+                        item(1, 1, {'1': 'Oil'})
                     ], checklist: {}, formCollapsedBills: {}};
                     const doc = {id: 7, document_type: 'form', form_fields: itemFields};
                     hostAdapter = {
-                        procedureModalState: {4: {activeDocId: 7, documents: [doc], voucherLineAmount: 340,
+                        procedureModalState: {4: {activeDocId: 7, documents: [doc], voucherLineAmount: 0,
                             crossCheckResults: [], tabs: {7: tab}}},
                         markLineDirty: () => {}, showStatus: () => {}, escapeHtml: value => String(value ?? '')
                     };
                     renderFormDocumentPanel(4, doc);
-                    const popovers = Array.from(document.querySelectorAll('.procedure-form-quick-items-popover'));
-                    const buttons = Array.from(document.querySelectorAll('.procedure-form-quick-items-btn'));
-                    buttons[1].click();
-                    const secondNewRows = popovers[1].querySelector('.procedure-form-quick-new-item-rows');
-                    const rate = secondNewRows.querySelector('[data-quick-item-field-id="3"]');
-                    const focusedRateOnOpen = document.activeElement === rate;
-                    rate.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
-                    return popovers.map(popover => {
-                        const newRows = popover.querySelector('.procedure-form-quick-new-item-rows');
+                    return Array.from(document.querySelectorAll('.procedure-form-bill-card')).map(card => {
                         return {
-                            existing: Array.from(popover.querySelectorAll('.procedure-form-quick-item-existing-row')).map(row =>
-                                Array.from(row.querySelectorAll('input')).map(input => input.value)),
-                            readOnly: Array.from(popover.querySelectorAll('.procedure-form-quick-item-existing-row input'))
-                                .every(input => input.readOnly),
-                            addRows: newRows.querySelectorAll('.procedure-form-quick-item-row').length,
-                            hasAddRowButton: !!popover.querySelector('.procedure-form-quick-item-add-row-btn'),
-                            focusedRateOnOpen: popover === popovers[1] ? focusedRateOnOpen : null,
-                            focusedNewRateAfterEnter: popover === popovers[1]
-                                ? document.activeElement?.closest('.procedure-form-quick-item-row')?.dataset.quickItemRowIndex : null
+                            group: card.dataset.billGroupIndex,
+                            rows: Array.from(card.querySelectorAll('.procedure-form-item-row')).map(row =>
+                                row.querySelector('.procedure-form-input')?.value)
                         };
                     });
                 }''')
                 self.assertEqual(result, [
-                    {'existing': [['Tea', '2', '50', '100']], 'readOnly': True, 'addRows': 1,
-                     'hasAddRowButton': False, 'focusedRateOnOpen': None, 'focusedNewRateAfterEnter': None},
-                    {'existing': [['Rice', '1', '120', '120'], ['Oil', '3', '40', '120']], 'readOnly': True, 'addRows': 2,
-                     'hasAddRowButton': False, 'focusedRateOnOpen': True, 'focusedNewRateAfterEnter': '1'}
+                    {'group': '0', 'rows': ['Tea']},
+                    {'group': '1', 'rows': ['Rice', 'Oil']}
                 ])
             finally:
                 browser.close()
 
-    def test_quick_form_items_popover_layers_above_observation(self):
+    def test_inline_form_item_layout_is_scrollable_with_compact_actions(self):
         stylesheet = Path(__file__).resolve().parents[1] / 'static' / 'style.css'
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
                 page = browser.new_page()
                 page.set_content('''<div id="procedureModal">
-                    <section class="procedure-segment procedure-form-segment">
-                        <div class="procedure-form-bill-card">
-                            <div class="procedure-form-quick-items-popover"></div>
+                    <div>
+                        <div class="procedure-form-items">
+                            <div class="procedure-form-item-row">
+                                <div class="procedure-form-item-actions">
+                                    <button class="procedure-form-remove-item-btn"></button>
+                                </div>
+                            </div>
                         </div>
-                    </section>
-                    <section class="procedure-segment procedure-segment-observation"></section>
+                    </div>
                 </div>''')
                 page.add_style_tag(path=str(stylesheet))
                 result = page.evaluate('''() => {
-                    const styles = selector => {
-                        const element = document.querySelector(selector);
-                        const computed = getComputedStyle(element);
-                        return {position: computed.position, overflow: computed.overflow, zIndex: computed.zIndex};
-                    };
+                    const items = document.querySelector('.procedure-form-items');
+                    const row = document.querySelector('.procedure-form-item-row');
+                    const actions = document.querySelector('.procedure-form-item-actions');
+                    const remove = document.querySelector('.procedure-form-remove-item-btn');
                     return {
-                        form: styles('.procedure-form-segment'),
-                        popover: styles('.procedure-form-quick-items-popover'),
-                        observation: styles('.procedure-segment-observation')
+                        items: {overflowX: getComputedStyle(items).overflowX},
+                        row: {display: getComputedStyle(row).display, minWidth: getComputedStyle(row).minWidth},
+                        actions: {flexWrap: getComputedStyle(actions).flexWrap, minWidth: getComputedStyle(actions).minWidth},
+                        remove: {width: getComputedStyle(remove).width, height: getComputedStyle(remove).height,
+                            borderRadius: getComputedStyle(remove).borderRadius}
                     };
                 }''')
-                self.assertEqual(result['form'], {'position': 'relative', 'overflow': 'visible', 'zIndex': '2'})
-                self.assertEqual(result['popover'], {'position': 'absolute', 'overflow': 'visible', 'zIndex': '6'})
-                self.assertEqual(result['observation'], {'position': 'relative', 'overflow': 'hidden', 'zIndex': '1'})
+                self.assertEqual(result['items'], {'overflowX': 'auto'})
+                self.assertEqual(result['row'], {'display': 'grid', 'minWidth': '520px'})
+                self.assertEqual(result['actions'], {'flexWrap': 'nowrap', 'minWidth': '118px'})
+                self.assertEqual(result['remove'], {'width': '28px', 'height': '28px', 'borderRadius': '50%'})
             finally:
                 browser.close()
 

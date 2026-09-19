@@ -2430,12 +2430,21 @@ function findQuickBillField(fields, exactLabels, fallback = null) {
     return fields.find(field => wanted.includes(normalizeFormFieldLabel(field.field_name))) || fallback;
 }
 
+function getFormQuantityRateFields(itemFields) {
+    const quantityField = findQuickBillField(itemFields, [
+        'quantity', 'qty', 'persons', 'no of persons', 'number of persons'
+    ]);
+    const rateField = findQuickBillField(itemFields, [
+        'rate', 'unit rate', 'per head rate', 'price'
+    ]);
+    return quantityField && rateField ? {quantityField, rateField} : null;
+}
+
 function getDerivedFormAmountFields(itemFields) {
-    const quantityField = findQuickBillField(itemFields, ['quantity', 'qty']);
-    const rateField = findQuickBillField(itemFields, ['rate', 'unit rate', 'price']);
+    const quantityRateFields = getFormQuantityRateFields(itemFields);
     const amountField = getFormBillAmountField(itemFields);
-    if (!quantityField || !rateField || !amountField || amountField.field_type === 'arithmetic_multiply') return null;
-    return {quantityField, rateField, amountField};
+    if (!quantityRateFields || !amountField || amountField.field_type === 'arithmetic_multiply') return null;
+    return {...quantityRateFields, amountField};
 }
 
 function getFormBillAmountField(itemFields) {
@@ -2448,10 +2457,18 @@ function isDerivedFormAmountField(field, itemFields) {
 }
 
 function getArithmeticOperandFields(field, itemFields) {
-    if (field?.field_type !== 'arithmetic_multiply' || !Array.isArray(field.arithmetic_operands)
-        || field.arithmetic_operands.length !== 2) return null;
+    if (field?.field_type !== 'arithmetic_multiply') return null;
+    let operandNames = field.arithmetic_operands;
+    if (typeof operandNames === 'string') {
+        try {
+            operandNames = JSON.parse(operandNames);
+        } catch (error) {
+            return null;
+        }
+    }
+    if (!Array.isArray(operandNames) || operandNames.length !== 2) return null;
     const byName = new Map(itemFields.map(candidate => [String(candidate.field_name || '').trim().toLowerCase(), candidate]));
-    const operands = field.arithmetic_operands.map(name => byName.get(String(name || '').trim().toLowerCase()));
+    const operands = operandNames.map(name => byName.get(String(name || '').trim().toLowerCase()));
     return operands.every(Boolean) ? operands : null;
 }
 
@@ -2572,148 +2589,22 @@ function updateFormBillTotal(uid, doc, itemFields) {
     }
 }
 
-function appendQuickFormBillRows(tabState, fields, rawRows) {
-    const headerFields = fields.filter(field => (field.field_scope || 'header') === 'header');
-    const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
-    const derivedFields = getDerivedFormAmountFields(itemFields);
-    if (!derivedFields) return {added: 0, error: 'Quick add bills requires Quantity, Rate, and Amount item fields.'};
-
-    const cleanRows = [];
-    for (let index = 0; index < (rawRows || []).length; index += 1) {
-        const row = rawRows[index] || {};
-        const amount = String(row.amount ?? '').trim();
-        if (!amount) continue;
-        const numericAmount = Number(amount);
-        if (!Number.isFinite(numericAmount)) {
-            return {added: 0, error: `Amount in row ${index + 1} must be numeric.`};
-        }
-        cleanRows.push({
-            vendor: String(row.vendor ?? '').trim(),
-            billNo: String(row.billNo ?? '').trim(),
-            amount
-        });
-    }
-    if (!cleanRows.length) return {added: 0, error: 'Enter at least one numeric amount.'};
-
-    const firstGroupEntries = getFormEntriesForGroup(tabState, 0);
-    const firstGroupIsBlank = !firstGroupEntries.some(entry =>
-        Object.values(entry.values || {}).some(value => !formValueIsBlank(value))
-    );
-    let nextBillGroupIndex = getFormBillGroupIndexes(tabState).length
-        ? Math.max(...getFormBillGroupIndexes(tabState)) + 1 : 0;
-    cleanRows.forEach((row, rowIndex) => {
-        const billGroupIndex = rowIndex === 0 && firstGroupIsBlank ? 0 : nextBillGroupIndex++;
-        const headerEntry = ensureFormHeaderEntry(tabState, headerFields, billGroupIndex);
-        const vendorField = findQuickBillField(headerFields, ['vendor', 'vendor name']);
-        const billNoField = findQuickBillField(headerFields, ['bill no', 'bill number', 'invoice no', 'invoice number']);
-        if (headerEntry) {
-            if (vendorField && row.vendor) headerEntry.values[String(vendorField.id)] = row.vendor;
-            if (billNoField && row.billNo) headerEntry.values[String(billNoField.id)] = row.billNo;
-        }
-        const itemEntry = makeEmptyFormEntry('item', itemFields, 0, billGroupIndex);
-        itemEntry.values[String(derivedFields.quantityField.id)] = '1';
-        itemEntry.values[String(derivedFields.rateField.id)] = row.amount;
-        syncDerivedFormAmount(itemEntry, itemFields);
-        tabState.formEntries.push(itemEntry);
-        renumberFormItemRows(tabState, billGroupIndex);
-    });
-    return {added: cleanRows.length, error: ''};
-}
-
-function quickFormItemRowValues(row) {
-    const values = {};
-    (row?.querySelectorAll('.procedure-form-quick-item-input') || []).forEach(input => {
-        values[String(input.dataset.quickItemFieldId)] = input.value;
-    });
-    return values;
-}
-
-function appendQuickFormItemRows(tabState, itemFields, billGroupIndex, rawRows) {
-    if (!itemFields.length) return {added: 0, error: 'This bill has no configured Item fields.'};
-    const derivedFields = getDerivedFormAmountFields(itemFields);
-    const cleanRows = [];
-    for (let index = 0; index < (rawRows || []).length; index += 1) {
-        const row = rawRows[index] || {};
-        const values = Object.fromEntries(itemFields.map(field => [
-            String(field.id), String(row[String(field.id)] ?? '').trim()
-        ]));
-        if (!Object.values(values).some(value => !formValueIsBlank(value))) continue;
-        if (derivedFields
-            && formValueIsBlank(values[String(derivedFields.quantityField.id)])
-            && !formValueIsBlank(values[String(derivedFields.rateField.id)])) {
-            values[String(derivedFields.quantityField.id)] = '1';
-        }
-        const invalidField = itemFields.find(field =>
-            field.field_type === 'numeric'
-            && values[String(field.id)]
-            && !Number.isFinite(Number(values[String(field.id)]))
-        );
-        if (invalidField) {
-            return {added: 0, error: `${invalidField.field_name} in row ${index + 1} must be numeric.`};
-        }
-        const entry = makeEmptyFormEntry('item', itemFields, 0, billGroupIndex);
-        entry.values = values;
-        syncDerivedFormValues(entry, itemFields);
-        cleanRows.push(entry);
-    }
-    if (!cleanRows.length) return {added: 0, error: 'Enter at least one Item field value.'};
-    const existingItems = getFormEntriesForGroup(tabState, billGroupIndex, 'item');
-    cleanRows.forEach((entry, index) => {
-        entry.sort_order = existingItems.length + index;
-        tabState.formEntries.push(entry);
-    });
-    renumberFormItemRows(tabState, billGroupIndex);
-    return {added: cleanRows.length, error: ''};
-}
-
-function quickBillRowHtml(rowIndex, values = {}) {
-    return `<div class="procedure-form-quick-bill-row" data-quick-row-index="${rowIndex}">
-        <input type="text" class="procedure-form-quick-input" data-quick-column="vendor"
-            data-quick-row-index="${rowIndex}" placeholder="Optional vendor" value="${hostAdapter.escapeHtml(values.vendor || '')}">
-        <input type="text" class="procedure-form-quick-input" data-quick-column="billNo"
-            data-quick-row-index="${rowIndex}" placeholder="Optional bill no." value="${hostAdapter.escapeHtml(values.billNo || '')}">
-        <input type="text" inputmode="decimal" class="procedure-form-quick-input" data-quick-column="amount"
-            data-quick-row-index="${rowIndex}" placeholder="Required amount" value="${hostAdapter.escapeHtml(values.amount || '')}">
-    </div>`;
-}
-
-function quickFormItemRowHtml(rowIndex, itemFields, values = {}) {
-    return `<div class="procedure-form-quick-item-row" data-quick-item-row-index="${rowIndex}">
-        ${itemFields.map(field => {
-            const derived = isDerivedFormField(field, itemFields);
-            const type = field.field_type === 'date' ? 'date' : 'text';
-            const inputMode = field.field_type === 'numeric' ? 'decimal' : undefined;
-            return `<input type="${type}"${inputMode ? ` inputmode="${inputMode}"` : ''}
-                class="procedure-form-quick-item-input" data-quick-item-field-id="${field.id}"
-                placeholder="${hostAdapter.escapeHtml(field.field_name)}"${derived ? ' readonly aria-readonly="true"' : ''}
-                value="${hostAdapter.escapeHtml(values[String(field.id)] || '')}">`;
-        }).join('')}
-    </div>`;
-}
-
-// Existing bill items are intentionally read-only here: Quick add items remains an append-only
-// workflow, while the auditor can still review the particulars already captured for this bill.
-function quickFormExistingItemRowHtml(rowIndex, itemFields, values = {}) {
-    return `<div class="procedure-form-quick-item-row procedure-form-quick-item-existing-row"
-        data-existing-item-row-index="${rowIndex}">
-        ${itemFields.map(field => `<input type="text" class="procedure-form-quick-item-input"
-            readonly aria-readonly="true" value="${hostAdapter.escapeHtml(values[String(field.id)] || '')}">`).join('')}
-    </div>`;
-}
-
-function formFieldInputHtml(field, value, rowIndex, rowScope, billGroupIndex = 0, readOnly = false) {
+function formFieldInputHtml(field, value, rowIndex, rowScope, billGroupIndex = 0, readOnly = false, compact = false) {
     const type = field.field_type === 'date' ? 'date' : 'text';
     const inputMode = field.field_type === 'numeric' ? 'decimal' : undefined;
     const mapping = field.linked_column
         ? `<small class="procedure-form-linked-column">Prefill: ${hostAdapter.escapeHtml(field.linked_column)}</small>` : '';
-    return `<div class="procedure-form-field">
-        <label>${hostAdapter.escapeHtml(field.field_name)}${mapping}</label>
-        <input type="${type}"${inputMode ? ` inputmode="${inputMode}"` : ''}
+    const inputHtml = `<input type="${type}"${inputMode ? ` inputmode="${inputMode}"` : ''}
             ${readOnly ? 'readonly aria-readonly="true"' : ''}
+            aria-label="${hostAdapter.escapeHtml(field.field_name)}"
             class="procedure-form-input" data-row-index="${rowIndex}" data-row-scope="${rowScope}"
             data-bill-group-index="${billGroupIndex}"
             data-field-id="${field.id}" data-field-type="${field.field_type || 'text'}"
-            value="${hostAdapter.escapeHtml(value == null ? '' : String(value))}">
+            value="${hostAdapter.escapeHtml(value == null ? '' : String(value))}">`;
+    if (compact) return inputHtml;
+    return `<div class="procedure-form-field">
+        <label>${hostAdapter.escapeHtml(field.field_name)}${mapping}</label>
+        ${inputHtml}
     </div>`;
 }
 
@@ -3033,19 +2924,30 @@ function renderFormDocumentPanel(uid, doc) {
                     <button type="button" class="procedure-form-add-item-btn procedure-form-add-btn"
                         data-bill-group-index="${billGroupIndex}">+ Add item row</button>
                 </div>
-                <div class="procedure-form-items">${itemEntries.length ? itemEntries.map((entry, index) => `
+                <div class="procedure-form-items">
+                    <div class="procedure-form-item-line-head" aria-hidden="true">
+                        <div class="procedure-form-grid procedure-form-item-grid"
+                            style="--procedure-form-item-field-count:${Math.max(itemFields.length, 1)};">${itemFields.map(field =>
+                            `<span>${hostAdapter.escapeHtml(field.field_name)}</span>`).join('')}</div>
+                        <span class="procedure-form-item-actions-label">Actions</span>
+                    </div>
+                    ${itemEntries.length ? itemEntries.map((entry, index) => `
                     <div class="procedure-form-item-row" data-item-index="${index}" data-bill-group-index="${billGroupIndex}">
-                        <div class="procedure-form-grid">${itemFields.map(field => formFieldInputHtml(
+                        <div class="procedure-form-grid procedure-form-item-grid"
+                            style="--procedure-form-item-field-count:${Math.max(itemFields.length, 1)};">${itemFields.map(field => formFieldInputHtml(
                             field, entry.values[String(field.id)], index, 'item', billGroupIndex,
-                            isDerivedFormField(field, itemFields)
+                            isDerivedFormField(field, itemFields), true
                         )).join('')}</div>
                         <div class="procedure-form-item-actions">
                             <button type="button" class="procedure-form-remove-item-btn"
-                                data-item-index="${index}" data-bill-group-index="${billGroupIndex}">Remove row</button>
-                            ${index > 0 ? `<button type="button" class="procedure-form-split-item-btn"
-                                data-item-index="${index}" data-bill-group-index="${billGroupIndex}">Split here</button>` : ''}
+                                data-item-index="${index}" data-bill-group-index="${billGroupIndex}"
+                                aria-label="Remove item row" title="Remove item row">&times;</button>
+                            <button type="button" class="procedure-form-split-item-btn${index === 0 ? ' is-disabled' : ''}"
+                                data-item-index="${index}" data-bill-group-index="${billGroupIndex}"
+                                ${index === 0 ? 'disabled aria-disabled="true" title="Split is available from the second row"' : ''}>Split here</button>
                         </div>
-                    </div>`).join('') : '<div class="procedure-form-empty-items">No item rows added.</div>'}</div>
+                    </div>`).join('') : '<div class="procedure-form-empty-items">No item rows added.</div>'}
+                </div>
             </div>` : '';
         return `<section class="procedure-form-bill-card" data-bill-group-index="${billGroupIndex}">
             <div class="procedure-form-bill-card-heading">
@@ -3059,37 +2961,8 @@ function renderFormDocumentPanel(uid, doc) {
                     </span>
                 </button>
                 <div class="procedure-form-bill-heading-actions">
-                    ${itemFields.length ? `<button type="button" class="procedure-form-quick-items-btn procedure-form-quick-btn"
-                        data-bill-group-index="${billGroupIndex}">Quick add items</button>` : ''}
                     ${billIndex > 0 ? `<button type="button" class="procedure-form-remove-bill-btn"
                         data-bill-group-index="${billGroupIndex}">Remove bill</button>` : ''}
-                </div>
-            </div>
-            <div class="procedure-form-quick-items-popover" data-bill-group-index="${billGroupIndex}" hidden>
-                <div class="procedure-form-quick-popover-header">
-                    <div><strong>Quick add items</strong>
-                        <small>Enter values for several lines. Rows are added to this physical bill only.</small></div>
-                    <button type="button" class="procedure-form-quick-close-btn" aria-label="Close quick add items">×</button>
-                </div>
-                ${itemEntries.length ? `<div class="procedure-form-quick-existing-items">
-                    <small>Already added items · read only</small>
-                    <div class="procedure-form-quick-item-grid procedure-form-quick-item-grid-head" aria-hidden="true">
-                        ${itemFields.map(field => `<span>${hostAdapter.escapeHtml(field.field_name)}</span>`).join('')}
-                    </div>
-                    <div class="procedure-form-quick-item-rows procedure-form-quick-existing-item-rows">${itemEntries.map((entry, index) =>
-                        quickFormExistingItemRowHtml(index, itemFields, entry.values)
-                    ).join('')}</div>
-                </div>` : ''}
-                <div class="procedure-form-quick-item-grid procedure-form-quick-item-grid-head" aria-hidden="true">
-                    ${itemFields.map(field => `<span>${hostAdapter.escapeHtml(field.field_name)}</span>`).join('')}
-                </div>
-                <div class="procedure-form-quick-item-rows procedure-form-quick-new-item-rows">${quickFormItemRowHtml(0, itemFields)}</div>
-                <div class="procedure-form-quick-footer">
-                    <span class="procedure-form-quick-item-status procedure-form-quick-status" role="status"></span>
-                    <div class="procedure-form-quick-footer-actions">
-                        <button type="button" class="procedure-form-quick-item-cancel-btn procedure-form-quick-cancel-btn">Cancel</button>
-                        <button type="button" class="procedure-form-quick-item-apply-btn procedure-form-quick-apply-btn">Add items</button>
-                    </div>
                 </div>
             </div>
             <div class="procedure-form-bill-card-body${isCollapsed ? ' is-collapsed' : ''}">
@@ -3113,27 +2986,7 @@ function renderFormDocumentPanel(uid, doc) {
                         <div><span class="procedure-form-section-title">Bill details</span>
                             <small class="procedure-form-bills-hint">Add one card per physical bill or vendor.</small></div>
                         <div class="procedure-form-bills-actions">
-                            <button type="button" id="procedureFormQuickBillsBtn" class="procedure-form-quick-btn">Quick add bills</button>
                             <button type="button" id="procedureFormAddBillBtn" class="procedure-form-add-btn">+ Add bill</button>
-                        </div>
-                        <div id="procedureFormQuickBillsPopover" class="procedure-form-quick-popover" hidden>
-                            <div class="procedure-form-quick-popover-header">
-                                <div><strong>Quick add bills</strong>
-                                    <small>Enter an amount to create one bill. Vendor and bill number are optional.</small></div>
-                                <button type="button" class="procedure-form-quick-close-btn" aria-label="Close quick add bills">×</button>
-                            </div>
-                            <div class="procedure-form-quick-grid procedure-form-quick-grid-head" aria-hidden="true">
-                                <span>Vendor</span><span>Bill No</span><span>Amount *</span>
-                            </div>
-                            <div class="procedure-form-quick-rows">${quickBillRowHtml(0)}</div>
-                            <div class="procedure-form-quick-footer">
-                                <button type="button" class="procedure-form-quick-add-row-btn">+ Add row</button>
-                                <span class="procedure-form-quick-status" role="status"></span>
-                                <div class="procedure-form-quick-footer-actions">
-                                    <button type="button" class="procedure-form-quick-cancel-btn">Cancel</button>
-                                    <button type="button" class="procedure-form-quick-apply-btn">Apply bills</button>
-                                </div>
-                            </div>
                         </div>
                     </div>` : ''}
                     ${formBillTotalStatus ? `<div class="procedure-form-bill-total" aria-live="polite">
@@ -3175,6 +3028,61 @@ function renderFormDocumentPanel(uid, doc) {
             updateProcedureModalSavedNote(uid);
         });
     });
+    const focusItemInput = (billGroupIndex, itemIndex, fieldId) => {
+        const row = Array.from(container.querySelectorAll('.procedure-form-item-row')).find(candidate =>
+            String(candidate.dataset.billGroupIndex) === String(billGroupIndex)
+            && String(candidate.dataset.itemIndex) === String(itemIndex)
+        );
+        const nextInput = row && Array.from(row.querySelectorAll('.procedure-form-input')).find(candidate =>
+            String(candidate.dataset.fieldId) === String(fieldId)
+        );
+        if (nextInput && !nextInput.readOnly) nextInput.focus();
+    };
+    container.querySelectorAll('.procedure-form-item-row .procedure-form-input').forEach(input => {
+        input.addEventListener('keydown', function(event) {
+            if (event.key !== 'Enter' || this.readOnly) return;
+            event.preventDefault();
+            const row = this.closest('.procedure-form-item-row');
+            if (!row) return;
+            const billGroupIndex = parseInt(row.dataset.billGroupIndex || '0');
+            const itemIndex = parseInt(row.dataset.itemIndex || '0');
+            const itemEntries = getFormEntriesForGroup(tabState, billGroupIndex, 'item');
+            const entry = itemEntries[itemIndex];
+            const quantityRateFields = getFormQuantityRateFields(itemFields);
+            const isRateField = quantityRateFields
+                && String(this.dataset.fieldId) === String(quantityRateFields.rateField.id);
+            if (entry && isRateField && !formValueIsBlank(this.value)
+                && formValueIsBlank(entry.values[String(quantityRateFields.quantityField.id)])) {
+                entry.values[this.dataset.fieldId] = this.value;
+                entry.values[String(quantityRateFields.quantityField.id)] = '1';
+                syncDerivedFormValues(entry, itemFields);
+                const quantityInput = Array.from(row.querySelectorAll('.procedure-form-input')).find(candidate =>
+                    String(candidate.dataset.fieldId) === String(quantityRateFields.quantityField.id)
+                );
+                if (quantityInput) quantityInput.value = '1';
+                updateDerivedFormInputs(this, entry, itemFields);
+                updateDerivedFormAmountInput(this, entry, itemFields);
+                updateFormBillTotal(uid, doc, itemFields);
+                markFormEvidenceDirty(uid, tabState, 'quantity defaulted to one');
+                renderProcedureModalTabs(uid);
+                scheduleFormDraftAutoSave(uid, doc);
+                updateProcedureModalSavedNote(uid);
+            }
+            const nextItemIndex = itemIndex + 1;
+            if (itemEntries[nextItemIndex]) {
+                focusItemInput(billGroupIndex, nextItemIndex, this.dataset.fieldId);
+                return;
+            }
+            tabState.formEntries = tabState.formEntries || [];
+            tabState.formEntries.push(makeEmptyFormEntry('item', itemFields, itemEntries.length, billGroupIndex));
+            markFormEvidenceDirty(uid, tabState, 'form item row added');
+            renderFormDocumentPanel(uid, doc);
+            autoSaveFormDraft(uid, doc);
+            window.requestAnimationFrame(() => focusItemInput(
+                billGroupIndex, nextItemIndex, this.dataset.fieldId
+            ));
+        });
+    });
     const addBillBtn = document.getElementById('procedureFormAddBillBtn');
     if (addBillBtn) addBillBtn.addEventListener('click', function() {
         const billGroupIndexes = getFormBillGroupIndexes(tabState);
@@ -3183,142 +3091,14 @@ function renderFormDocumentPanel(uid, doc) {
         if (headerFields.length) tabState.formEntries.push(
             makeEmptyFormEntry('header', headerFields, 0, newBillGroupIndex)
         );
+        // A Form with item fields only still needs an entry carrying the new bill group index.
+        // Without this marker, getFormBillGroupIndexes() cannot render the new physical bill.
+        if (!headerFields.length && itemFields.length) tabState.formEntries.push(
+            makeEmptyFormEntry('item', itemFields, 0, newBillGroupIndex)
+        );
         markFormEvidenceDirty(uid, tabState, 'form bill added');
         renderFormDocumentPanel(uid, doc);
         autoSaveFormDraft(uid, doc);
-    });
-    const quickBillsBtn = document.getElementById('procedureFormQuickBillsBtn');
-    const quickBillsPopover = document.getElementById('procedureFormQuickBillsPopover');
-    if (quickBillsBtn && quickBillsPopover) {
-        const quickRows = quickBillsPopover.querySelector('.procedure-form-quick-rows');
-        const quickStatus = quickBillsPopover.querySelector('.procedure-form-quick-status');
-        const addQuickRow = () => {
-            const rowIndex = quickRows.querySelectorAll('.procedure-form-quick-bill-row').length;
-            quickRows.insertAdjacentHTML('beforeend', quickBillRowHtml(rowIndex));
-        };
-        const focusNextQuickCell = input => {
-            const columnInputs = Array.from(quickRows.querySelectorAll(
-                `.procedure-form-quick-input[data-quick-column="${input.dataset.quickColumn}"]`
-            ));
-            const currentIndex = columnInputs.indexOf(input);
-            if (currentIndex === columnInputs.length - 1) addQuickRow();
-            const nextInput = columnInputs[currentIndex + 1]
-                || quickRows.querySelector(`.procedure-form-quick-row:last-child [data-quick-column="${input.dataset.quickColumn}"]`);
-            if (nextInput) nextInput.focus();
-        };
-        quickBillsBtn.addEventListener('click', function() {
-            quickBillsPopover.hidden = !quickBillsPopover.hidden;
-            if (!quickBillsPopover.hidden) {
-                const amountInput = quickRows.querySelector('[data-quick-column="amount"]');
-                if (amountInput) amountInput.focus();
-            }
-        });
-        quickBillsPopover.querySelector('.procedure-form-quick-close-btn').addEventListener('click', () => {
-            quickBillsPopover.hidden = true;
-        });
-        quickBillsPopover.querySelector('.procedure-form-quick-cancel-btn').addEventListener('click', () => {
-            quickBillsPopover.hidden = true;
-        });
-        quickBillsPopover.querySelector('.procedure-form-quick-add-row-btn').addEventListener('click', () => {
-            addQuickRow();
-            const lastAmount = quickRows.querySelector('.procedure-form-quick-bill-row:last-child [data-quick-column="amount"]');
-            if (lastAmount) lastAmount.focus();
-        });
-        quickRows.addEventListener('keydown', event => {
-            if (event.key !== 'Enter') return;
-            event.preventDefault();
-            focusNextQuickCell(event.target);
-        });
-        quickRows.addEventListener('input', () => {
-            if (quickStatus) quickStatus.textContent = '';
-        });
-        quickBillsPopover.querySelector('.procedure-form-quick-apply-btn').addEventListener('click', () => {
-            const rows = Array.from(quickRows.querySelectorAll('.procedure-form-quick-bill-row')).map(row => {
-                const values = {};
-                row.querySelectorAll('.procedure-form-quick-input').forEach(input => {
-                    values[input.dataset.quickColumn] = input.value;
-                });
-                return values;
-            });
-            const result = appendQuickFormBillRows(tabState, fields, rows);
-            if (result.error) {
-                if (quickStatus) quickStatus.textContent = result.error;
-                return;
-            }
-            markFormEvidenceDirty(uid, tabState, `${result.added} quick bill${result.added === 1 ? '' : 's'} added`);
-            renderFormDocumentPanel(uid, doc);
-            autoSaveFormDraft(uid, doc);
-        });
-    }
-    container.querySelectorAll('.procedure-form-quick-items-btn').forEach(button => {
-        const billCard = button.closest('.procedure-form-bill-card');
-        const quickItemsPopover = billCard?.querySelector('.procedure-form-quick-items-popover');
-        if (!quickItemsPopover) return;
-        const quickRows = quickItemsPopover.querySelector('.procedure-form-quick-new-item-rows');
-        const quickStatus = quickItemsPopover.querySelector('.procedure-form-quick-item-status');
-        const billGroupIndex = parseInt(button.dataset.billGroupIndex || '0');
-        const derivedFields = getDerivedFormAmountFields(itemFields);
-        const addQuickItemRow = () => {
-            const rowIndex = quickRows.querySelectorAll('.procedure-form-quick-item-row').length;
-            quickRows.insertAdjacentHTML('beforeend', quickFormItemRowHtml(rowIndex, itemFields));
-        };
-        const focusNextQuickItemCell = input => {
-            const fieldInputs = Array.from(quickRows.querySelectorAll(
-                `.procedure-form-quick-item-input[data-quick-item-field-id="${input.dataset.quickItemFieldId}"]`
-            ));
-            const currentIndex = fieldInputs.indexOf(input);
-            if (currentIndex === fieldInputs.length - 1) addQuickItemRow();
-            const nextInput = fieldInputs[currentIndex + 1]
-                || quickRows.querySelector(`.procedure-form-quick-item-row:last-child [data-quick-item-field-id="${input.dataset.quickItemFieldId}"]`);
-            if (nextInput && !nextInput.readOnly) nextInput.focus();
-        };
-        button.addEventListener('click', () => {
-            quickItemsPopover.hidden = !quickItemsPopover.hidden;
-            if (!quickItemsPopover.hidden) {
-                const rateInput = derivedFields && quickRows.querySelector(
-                    `.procedure-form-quick-item-input[data-quick-item-field-id="${derivedFields.rateField.id}"]`
-                );
-                const firstInput = rateInput || quickRows.querySelector('.procedure-form-quick-item-input:not([readonly])');
-                if (firstInput) firstInput.focus();
-            }
-        });
-        quickItemsPopover.querySelector('.procedure-form-quick-close-btn').addEventListener('click', () => {
-            quickItemsPopover.hidden = true;
-        });
-        quickItemsPopover.querySelector('.procedure-form-quick-item-cancel-btn').addEventListener('click', () => {
-            quickItemsPopover.hidden = true;
-        });
-        quickRows.addEventListener('keydown', event => {
-            if (event.key !== 'Enter' || event.target.readOnly) return;
-            event.preventDefault();
-            focusNextQuickItemCell(event.target);
-        });
-        quickRows.addEventListener('input', event => {
-            if (event.target.matches('.procedure-form-quick-item-input')) {
-                const row = event.target.closest('.procedure-form-quick-item-row');
-                const entry = {values: quickFormItemRowValues(row)};
-                syncDerivedFormValues(entry, itemFields);
-                row.querySelectorAll('.procedure-form-quick-item-input').forEach(input => {
-                    const field = itemFields.find(candidate => String(candidate.id) === String(input.dataset.quickItemFieldId));
-                    if (field && isDerivedFormField(field, itemFields)) {
-                        input.value = entry.values[String(field.id)] || '';
-                    }
-                });
-            }
-            if (quickStatus) quickStatus.textContent = '';
-        });
-        quickItemsPopover.querySelector('.procedure-form-quick-item-apply-btn').addEventListener('click', () => {
-            const rows = Array.from(quickRows.querySelectorAll('.procedure-form-quick-item-row'))
-                .map(row => quickFormItemRowValues(row));
-            const result = appendQuickFormItemRows(tabState, itemFields, billGroupIndex, rows);
-            if (result.error) {
-                if (quickStatus) quickStatus.textContent = result.error;
-                return;
-            }
-            markFormEvidenceDirty(uid, tabState, `${result.added} item row${result.added === 1 ? '' : 's'} added`);
-            renderFormDocumentPanel(uid, doc);
-            autoSaveFormDraft(uid, doc);
-        });
     });
     container.querySelectorAll('.procedure-form-bill-toggle').forEach(toggle => {
         toggle.addEventListener('click', function() {
