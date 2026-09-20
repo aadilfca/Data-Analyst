@@ -2019,6 +2019,38 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add validation_rules_json to audit_rule_categories:", e)
 
+        # Assertions: fixed master list (Existence/Occurrence, Completeness, Accuracy/Valuation,
+        # Cut-off, Authorisation) that a Category's attached Documents/Cross-checks/Voucher-level
+        # Checks will be tagged against in a later phase. Global (no client_id), same shape as
+        # audit_rule_categories. sort_order preserves the conventional audit-standard ordering
+        # above, since it is not alphabetical (matches the audit_rule_voucher_checks precedent of
+        # sort_order over alphabetical, not a new convention).
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_assertions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        existing_assertions = conn.execute("SELECT COUNT(*) FROM audit_rule_assertions").fetchone()[0]
+        if existing_assertions == 0:
+            default_assertions = [
+                ("Existence/Occurrence", 1),
+                ("Completeness", 2),
+                ("Accuracy/Valuation", 3),
+                ("Cut-off", 4),
+                ("Authorisation", 5),
+            ]
+            for name, order in default_assertions:
+                conn.execute(
+                    "INSERT INTO audit_rule_assertions (name, sort_order) VALUES (?, ?)",
+                    (name, order)
+                )
+            print("✅ Seeded audit_rule_assertions (5 entries)")
+
         # Documents a Category uses. approval_required (Validation Rules Phase 1 of 7) has since
         # been hard-removed (confirmed requirement, 2026-08-02) - approval requirement is now
         # decided entirely at Document level via the "Approved by" role's Required Authority
@@ -3312,6 +3344,50 @@ def _ensure_postgres_storage_cleanup_runs(conn):
         cleanup_cur.execute(_STORAGE_CLEANUP_RUNS_SQL)
 
 
+def _ensure_postgres_audit_rule_assertions(conn):
+    """Add audit_rule_assertions (+ its 5 seed rows) to an already-marked Postgres schema.
+
+    Same additive, idempotent repair path as _ensure_postgres_form_tables above - this table
+    was added (Assertions Phase 1 of 5) after some databases already received the bootstrap
+    marker, so the declarative CREATE TABLE in the full-bootstrap branch below never runs for
+    them.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT to_regclass('public.audit_rule_assertions')")
+        was_missing = cur.fetchone()[0] is None
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_assertions (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT now()
+            )
+        ''')
+        cur.executemany(
+            """
+            INSERT INTO audit_rule_assertions (name, sort_order)
+            VALUES (%s, %s)
+            ON CONFLICT (name) DO NOTHING
+            """,
+            [
+                ("Existence/Occurrence", 1),
+                ("Completeness", 2),
+                ("Accuracy/Valuation", 3),
+                ("Cut-off", 4),
+                ("Authorisation", 5),
+            ]
+        )
+        return was_missing
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
 
@@ -3330,6 +3406,7 @@ def init_db_postgres(conn):
         migrated_form_columns = _ensure_postgres_form_field_columns(conn)
         migrated_form_tables = _ensure_postgres_form_tables(conn)
         _ensure_postgres_report_category_tables(conn)
+        migrated_assertions = _ensure_postgres_audit_rule_assertions(conn)
         conn.commit()
         migration_notes = []
         if migrated_document_type:
@@ -3338,6 +3415,8 @@ def init_db_postgres(conn):
             migration_notes.append("Form field columns upgraded")
         if migrated_form_tables:
             migration_notes.append("Form evidence tables upgraded")
+        if migrated_assertions:
+            migration_notes.append("audit_rule_assertions created and seeded")
         print(
             "[postgres] existing schema verified; skipped bootstrap"
             + (f" ({'; '.join(migration_notes)})" if migration_notes else "")
@@ -3899,6 +3978,18 @@ def init_db_postgres(conn):
     ''', "audit_rule_categories")
     run("ALTER TABLE audit_rule_categories ADD COLUMN IF NOT EXISTS validation_rules_json JSONB", "audit_rule_categories.validation_rules_json")
 
+    # ---------- 24a. audit_rule_assertions ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_assertions (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+    ''', "audit_rule_assertions")
+
     # ---------- 25. audit_rule_category_documents ----------
     run('''
         CREATE TABLE IF NOT EXISTS audit_rule_category_documents (
@@ -4438,6 +4529,24 @@ def _seed_postgres_data(conn):
         default_columns
     )
     print(f"[postgres] seeded master_columns defaults ({len(default_columns)} rows)")
+
+    # ---- audit_rule_assertions defaults (5 fixed rows, conventional audit-standard order) ----
+    default_assertions = [
+        ("Existence/Occurrence", 1),
+        ("Completeness", 2),
+        ("Accuracy/Valuation", 3),
+        ("Cut-off", 4),
+        ("Authorisation", 5),
+    ]
+    cur.executemany(
+        """
+        INSERT INTO audit_rule_assertions (name, sort_order)
+        VALUES (%s, %s)
+        ON CONFLICT (name) DO NOTHING
+        """,
+        default_assertions
+    )
+    print(f"[postgres] seeded audit_rule_assertions ({len(default_assertions)} rows)")
 
     # ---- system template: Transaction Report + its 7 columns ----
     cur.execute("SELECT id FROM templates WHERE template_name = 'Transaction Report'")

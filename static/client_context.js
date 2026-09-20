@@ -248,6 +248,15 @@ const NAV_MANIFEST = [
                         label: 'Signature Specimens', url: '/static/audit_rules.html?feature=signature-specimens', state: 'ready',
                         keywords: ['signature specimen', 'specimen', 'signatory', 'authority'],
                     },
+                    {
+                        // Assertions Phase 1 of 5: uses the real ?entity= param audit_rules.js's
+                        // restoreAuditRulesViewFromUrl() actually reads (AR_VALID_ENTITY_TYPES) -
+                        // unlike the sibling entries above, which still use the dead ?feature=
+                        // param (pre-existing, out of scope for this phase; audit_rules.js never
+                        // reads it, confirmed via grep).
+                        label: 'Assertions', url: '/static/audit_rules.html?entity=assertions', state: 'ready',
+                        keywords: ['assertion', 'existence', 'occurrence', 'completeness', 'accuracy', 'valuation', 'cut-off', 'authorisation', 'coverage'],
+                    },
                 ]
             },
             { label: 'Audit Log', url: null, state: 'coming-soon' },

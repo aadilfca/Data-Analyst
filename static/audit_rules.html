@@ -55,6 +55,10 @@
                     <span class="ar-rail-icon">✅</span>
                     <span class="ar-rail-label">Voucher-level Checks</span>
                 </button>
+                <button type="button" id="arRailAssertions" class="ar-rail-item">
+                    <span class="ar-rail-icon">🎯</span>
+                    <span class="ar-rail-label">Assertions</span>
+                </button>
             </div>
 
             <!-- MIDDLE: list panel. Each entity type gets its own section, toggled by
@@ -143,6 +147,23 @@
                 <div id="arVoucherCheckListBody" class="ar-list-body"></div>
                 <div id="arVoucherCheckListEmptyMessage" class="ar-list-empty" style="display:none;">No
                     voucher-level checks found.</div>
+            </div>
+
+            <!-- Assertions list section (Assertions Phase 1 of 5, new). Fixed master list, ordered
+                 by sort_order (the conventional audit-standard order) -- same ordering rule as
+                 Voucher-level Checks above, but no drag-to-reorder here (order is fixed at seed). -->
+            <div id="arAssertionsListSection" class="ar-list-panel" style="display:none;">
+                <div class="ar-list-panel-header">
+                    <span class="ar-list-panel-title">Assertions</span>
+                    <button type="button" id="arAssertionAddNewBtn" class="ar-btn-add-new">+ Add New</button>
+                </div>
+                <label class="ar-show-inactive-toggle">
+                    <input type="checkbox" id="arAssertionShowInactiveCheckbox">
+                    <span>Show inactive</span>
+                </label>
+                <div id="arAssertionListBody" class="ar-list-body"></div>
+                <div id="arAssertionListEmptyMessage" class="ar-list-empty" style="display:none;">No assertions
+                    found.</div>
             </div>
 
             <!-- RIGHT: detail / edit panel. Same one-section-per-entity-type toggle pattern
@@ -455,6 +476,37 @@
                 </form>
             </div>
 
+            <!-- Assertions detail section (Assertions Phase 1 of 5, new). -->
+            <div id="arAssertionsDetailSection" class="ar-detail-panel" style="display:none;">
+                <div id="arAssertionDetailEmpty" class="ar-detail-empty">
+                    <p>Select an assertion from the list, or click "+ Add New" to create one.</p>
+                </div>
+
+                <form id="arAssertionDetailForm" class="ar-detail-form" style="display:none;">
+                    <input type="hidden" id="arAssertionEditingId" value="">
+
+                    <div class="ar-field">
+                        <label for="arAssertionNameInput">Name</label>
+                        <input type="text" id="arAssertionNameInput" required>
+                    </div>
+
+                    <div class="ar-field">
+                        <label for="arAssertionDescriptionInput">Description</label>
+                        <textarea id="arAssertionDescriptionInput" rows="3"></textarea>
+                    </div>
+
+                    <div id="arAssertionDetailStatus" class="upload-status" style="display:none;"></div>
+
+                    <div class="ar-detail-actions">
+                        <button type="button" id="arAssertionSaveBtn" class="ar-btn-save">Save</button>
+                        <button type="button" id="arAssertionDeleteBtn" class="ar-btn-delete"
+                            style="display:none;">Delete</button>
+                        <button type="button" id="arAssertionRestoreBtn" class="ar-btn-restore"
+                            style="display:none;">Restore</button>
+                    </div>
+                </form>
+            </div>
+
         </div>
 
         <!-- Assign Categories (Section 2, Phase 5, FINAL): full-page view listing the
@@ -500,9 +552,9 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
     <script src="/static/loading_ui.js?v=2"></script>
-    <script src="/static/client_context.js?v=16"></script>
+    <script src="/static/client_context.js?v=17"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/audit_rules.js?v=22"></script>
+    <script src="/static/audit_rules.js?v=23"></script>
 </body>
 
 </html>

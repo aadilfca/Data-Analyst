@@ -1425,6 +1425,9 @@ const arCategoriesDetailSection = document.getElementById('arCategoriesDetailSec
 const arRailVoucherChecks = document.getElementById('arRailVoucherChecks');
 const arVoucherChecksListSection = document.getElementById('arVoucherChecksListSection');
 const arVoucherChecksDetailSection = document.getElementById('arVoucherChecksDetailSection');
+const arRailAssertions = document.getElementById('arRailAssertions');
+const arAssertionsListSection = document.getElementById('arAssertionsListSection');
+const arAssertionsDetailSection = document.getElementById('arAssertionsDetailSection');
 
 function switchEntityType(type, options) {
     const userInitiated = Boolean(options && options.userInitiated);
@@ -1436,6 +1439,7 @@ function switchEntityType(type, options) {
     arRailCrossChecks.classList.toggle('active', type === 'cross-checks');
     arRailCategories.classList.toggle('active', type === 'categories');
     arRailVoucherChecks.classList.toggle('active', type === 'voucher-checks');
+    arRailAssertions.classList.toggle('active', type === 'assertions');
 
     arDocumentsListSection.style.display = (type === 'documents') ? 'flex' : 'none';
     arDocumentsDetailSection.style.display = (type === 'documents') ? 'block' : 'none';
@@ -1445,6 +1449,8 @@ function switchEntityType(type, options) {
     arCategoriesDetailSection.style.display = (type === 'categories') ? 'block' : 'none';
     arVoucherChecksListSection.style.display = (type === 'voucher-checks') ? 'flex' : 'none';
     arVoucherChecksDetailSection.style.display = (type === 'voucher-checks') ? 'block' : 'none';
+    arAssertionsListSection.style.display = (type === 'assertions') ? 'flex' : 'none';
+    arAssertionsDetailSection.style.display = (type === 'assertions') ? 'block' : 'none';
 
     // URL state persistence (confirmed fix): reflect the newly-active entity type (and
     // whatever item, if any, was last selected within it — editingCrossCheckId etc. are
@@ -1483,6 +1489,9 @@ function switchEntityType(type, options) {
     } else if (type === 'voucher-checks') {
         beginAuditRulesProcessing('Loading Voucher-level Checks…');
         return loadVoucherChecks().finally(endAuditRulesProcessing);
+    } else if (type === 'assertions') {
+        beginAuditRulesProcessing('Loading Assertions…');
+        return loadAssertions().finally(endAuditRulesProcessing);
     }
     // Documents are the default view, so the initial URL restore loads them separately. A
     // user click can pre-empt that restore while page-start work is still pending; reload the
@@ -2408,6 +2417,7 @@ arRailDocuments.addEventListener('click', () => switchEntityType('documents', { 
 arRailCrossChecks.addEventListener('click', () => switchEntityType('cross-checks', { userInitiated: true }));
 arRailCategories.addEventListener('click', () => switchEntityType('categories', { userInitiated: true }));
 arRailVoucherChecks.addEventListener('click', () => switchEntityType('voucher-checks', { userInitiated: true }));
+arRailAssertions.addEventListener('click', () => switchEntityType('assertions', { userInitiated: true }));
 
 arCrossCheckAddNewBtn.addEventListener('click', startNewCrossCheck);
 arCrossCheckShowInactiveCheckbox.addEventListener('change', loadCrossChecks);
@@ -4165,7 +4175,8 @@ function updateAuditRulesUrl() {
             documents: editingId,
             'cross-checks': editingCrossCheckId,
             categories: editingCategoryId,
-            'voucher-checks': editingVoucherCheckId
+            'voucher-checks': editingVoucherCheckId,
+            assertions: editingAssertionId
         }[currentEntityType];
         if (selectedId) {
             url.searchParams.set('id', String(selectedId));
@@ -4744,7 +4755,7 @@ arAssignCategoriesTableBody.addEventListener('click', function(e) {
 // item, or the Assign Categories full-page view) was showing before a hard refresh, using
 // the same ?entity=&id=/?view= params updateAuditRulesUrl() writes throughout this file —
 // mirrors verification.js's own hard-refresh restore pattern in window.onload.
-const AR_VALID_ENTITY_TYPES = ['documents', 'cross-checks', 'categories', 'voucher-checks'];
+const AR_VALID_ENTITY_TYPES = ['documents', 'cross-checks', 'categories', 'voucher-checks', 'assertions'];
 
 // Global navbar Back icon: factored out of window.onload's own hard-refresh restore logic (below)
 // so the same dispatch also serves as the Back history stack's in-page restore handler — reached
@@ -4795,6 +4806,7 @@ async function restoreAuditRulesViewFromUrl() {
             if (restoredEntity === 'cross-checks') await selectCrossCheck(id);
             else if (restoredEntity === 'categories') await selectCategory(id);
             else if (restoredEntity === 'voucher-checks') await selectVoucherCheck(id);
+            else if (restoredEntity === 'assertions') await selectAssertion(id);
         }
     }
 }
@@ -5141,3 +5153,234 @@ arVoucherCheckShowInactiveCheckbox.addEventListener('change', loadVoucherChecks)
 arVoucherCheckSaveBtn.addEventListener('click', () => saveVoucherCheck(arVoucherCheckSaveBtn));
 arVoucherCheckDeleteBtn.addEventListener('click', deleteVoucherCheck);
 arVoucherCheckRestoreBtn.addEventListener('click', restoreVoucherCheck);
+
+// =====================================================================================
+// ASSERTIONS (Assertions Phase 1 of 5, new)
+// A 5th reusable entity type: audit_rule_assertions. Fixed master list (Existence/Occurrence,
+// Completeness, Accuracy/Valuation, Cut-off, Authorisation), seeded in database.py, ordered by
+// sort_order (server-assigned, conventional audit-standard order) - same non-alphabetical
+// precedent as Voucher-level Checks above, but no drag-to-reorder here. Soft-delete/restore
+// like Documents/Categories/Voucher-level Checks. No pagination - this list stays small, same
+// as Voucher-level Checks' own unpaginated load. Uses its own state (editingAssertionId),
+// distinct from every other entity's editingId global.
+// =====================================================================================
+
+// ---------- DOM REFS ----------
+const arAssertionListBody = document.getElementById('arAssertionListBody');
+const arAssertionListEmptyMessage = document.getElementById('arAssertionListEmptyMessage');
+const arAssertionShowInactiveCheckbox = document.getElementById('arAssertionShowInactiveCheckbox');
+const arAssertionAddNewBtn = document.getElementById('arAssertionAddNewBtn');
+
+const arAssertionDetailEmpty = document.getElementById('arAssertionDetailEmpty');
+const arAssertionDetailForm = document.getElementById('arAssertionDetailForm');
+const arAssertionEditingIdInput = document.getElementById('arAssertionEditingId');
+const arAssertionNameInput = document.getElementById('arAssertionNameInput');
+const arAssertionDescriptionInput = document.getElementById('arAssertionDescriptionInput');
+const arAssertionDetailStatus = document.getElementById('arAssertionDetailStatus');
+const arAssertionSaveBtn = document.getElementById('arAssertionSaveBtn');
+const arAssertionDeleteBtn = document.getElementById('arAssertionDeleteBtn');
+const arAssertionRestoreBtn = document.getElementById('arAssertionRestoreBtn');
+
+// ---------- STATE ----------
+// null while creating a new Assertion; set to its id while editing an existing one.
+let editingAssertionId = null;
+
+// ---------- STATUS MESSAGE ----------
+function showAssertionDetailStatus(message, type) {
+    arAssertionDetailStatus.textContent = message;
+    arAssertionDetailStatus.className = 'upload-status ' + type;
+    arAssertionDetailStatus.style.display = 'block';
+    clearTimeout(window.arAssertionDetailStatusTimeout);
+    window.arAssertionDetailStatusTimeout = setTimeout(() => {
+        arAssertionDetailStatus.style.display = 'none';
+    }, 5000);
+}
+
+// ---------- LOAD & RENDER LIST ----------
+async function loadAssertions() {
+    const includeInactive = arAssertionShowInactiveCheckbox.checked;
+    beginAuditRulesProcessing('Loading Assertions…');
+    window.LoadingUI.showSkeleton(arAssertionListBody, 5);
+    try {
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/assertions?include_inactive=' + includeInactive);
+        if (!res.ok) throw new Error('Failed to load assertions');
+        const assertions = await res.json(); // already ORDER BY sort_order server-side -- do not re-sort here
+        renderAssertionList(assertions);
+    } catch (error) {
+        arAssertionListBody.innerHTML = '';
+        arAssertionListEmptyMessage.textContent = '❌ Error loading assertions: ' + error.message;
+        arAssertionListEmptyMessage.style.display = 'block';
+    } finally {
+        endAuditRulesProcessing();
+    }
+}
+
+function renderAssertionList(assertions) {
+    arAssertionListBody.innerHTML = '';
+
+    if (assertions.length === 0) {
+        arAssertionListEmptyMessage.textContent = 'No assertions found.';
+        arAssertionListEmptyMessage.style.display = 'block';
+        return;
+    }
+    arAssertionListEmptyMessage.style.display = 'none';
+    assertions.forEach(assertion => {
+        const row = document.createElement('div');
+        row.className = 'ar-list-row' + (assertion.is_active ? '' : ' ar-list-row-inactive');
+        if (assertion.id === editingAssertionId) row.classList.add('ar-list-row-selected');
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'ar-list-row-name';
+        nameSpan.textContent = assertion.name;
+        row.appendChild(nameSpan);
+
+        if (!assertion.is_active) {
+            const badge = document.createElement('span');
+            badge.className = 'ar-list-row-badge';
+            badge.textContent = 'Inactive';
+            row.appendChild(badge);
+        }
+
+        row.addEventListener('click', () => selectAssertion(assertion.id));
+        arAssertionListBody.appendChild(row);
+    });
+}
+
+// ---------- SELECT / NEW ----------
+async function selectAssertion(id) {
+    beginAuditRulesProcessing('Loading Assertion details...');
+    try {
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/assertions/' + id);
+        if (!res.ok) throw new Error('Assertion not found');
+        const assertion = await res.json();
+
+        editingAssertionId = assertion.id;
+        arAssertionEditingIdInput.value = assertion.id;
+        arAssertionNameInput.value = assertion.name;
+        arAssertionDescriptionInput.value = assertion.description || '';
+
+        if (assertion.is_active) {
+            arAssertionDeleteBtn.style.display = 'inline-block';
+            arAssertionRestoreBtn.style.display = 'none';
+        } else {
+            arAssertionDeleteBtn.style.display = 'none';
+            arAssertionRestoreBtn.style.display = 'inline-block';
+        }
+
+        arAssertionDetailEmpty.style.display = 'none';
+        arAssertionDetailForm.style.display = 'block';
+
+        updateAuditRulesUrl();
+
+        loadAssertions(); // refresh selected-row highlight, same pattern as Voucher-level Checks
+    } catch (error) {
+        showAssertionDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
+    }
+}
+
+function startNewAssertion() {
+    editingAssertionId = null;
+    arAssertionEditingIdInput.value = '';
+    arAssertionNameInput.value = '';
+    arAssertionDescriptionInput.value = '';
+
+    arAssertionDeleteBtn.style.display = 'none';
+    arAssertionRestoreBtn.style.display = 'none';
+
+    arAssertionDetailEmpty.style.display = 'none';
+    arAssertionDetailForm.style.display = 'block';
+    arAssertionNameInput.focus();
+
+    updateAuditRulesUrl();
+}
+
+// ---------- SAVE / DELETE / RESTORE ----------
+async function saveAssertion(triggerBtn) {
+    const name = arAssertionNameInput.value.trim();
+    if (!name) {
+        showAssertionDetailStatus('⚠️ Name is required.', 'error');
+        return;
+    }
+
+    const payload = { name: name, description: arAssertionDescriptionInput.value.trim() || null };
+
+    beginAuditRulesProcessing('Saving Assertion...');
+    try {
+        window.LoadingUI.showSpinner(triggerBtn, 'Saving');
+
+        let url = API_BASE + '/api/audit-rules/assertions';
+        let method = 'POST';
+        if (editingAssertionId) {
+            url += '/' + editingAssertionId;
+            method = 'PUT';
+        }
+
+        const res = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save assertion');
+
+        showAssertionDetailStatus('✅ ' + result.message, 'success');
+
+        const savedId = editingAssertionId || result.assertion_id;
+        await loadAssertions();
+        await selectAssertion(savedId);
+    } catch (error) {
+        showAssertionDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        window.LoadingUI.hideSpinner(triggerBtn);
+        endAuditRulesProcessing();
+    }
+}
+
+async function deleteAssertion() {
+    if (!editingAssertionId) return;
+    if (!confirm('Are you sure you want to delete "' + arAssertionNameInput.value + '"? This will soft-delete it.')) return;
+
+    beginAuditRulesProcessing('Deleting Assertion...');
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/assertions/' + editingAssertionId, { method: 'DELETE' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to delete assertion');
+
+        showAssertionDetailStatus('✅ ' + result.message, 'success');
+        await loadAssertions();
+        await selectAssertion(editingAssertionId);
+    } catch (error) {
+        showAssertionDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
+    }
+}
+
+async function restoreAssertion() {
+    if (!editingAssertionId) return;
+
+    beginAuditRulesProcessing('Restoring Assertion...');
+    try {
+        const res = await fetch(API_BASE + '/api/audit-rules/assertions/' + editingAssertionId + '/restore', { method: 'POST' });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to restore assertion');
+
+        showAssertionDetailStatus('✅ ' + result.message, 'success');
+        await loadAssertions();
+        await selectAssertion(editingAssertionId);
+    } catch (error) {
+        showAssertionDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
+    }
+}
+
+// ---------- WIRE UP EVENT LISTENERS ----------
+arAssertionAddNewBtn.addEventListener('click', startNewAssertion);
+arAssertionShowInactiveCheckbox.addEventListener('change', loadAssertions);
+
+arAssertionSaveBtn.addEventListener('click', () => saveAssertion(arAssertionSaveBtn));
+arAssertionDeleteBtn.addEventListener('click', deleteAssertion);
+arAssertionRestoreBtn.addEventListener('click', restoreAssertion);

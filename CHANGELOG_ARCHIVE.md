@@ -5821,3 +5821,61 @@ It clears the selected account/search/suggestion state, marks a saved recommenda
 persistence, re-enables the Correct checkbox, and keeps the rail in Query until Correct is freshly
 confirmed. The control is keyboard-focusable and follows the existing modal input/button styling.
 Focused Playwright coverage passed (26 applicable tests); JavaScript syntax and diff checks passed.
+
+## Assertions Master Entity — Audit Rules Phase 1 of 5 - 2026-09-20
+
+New `audit_rule_assertions` table (SQLite `database.py` `init_db()`, Postgres `init_db_postgres()`),
+seeded with the 5 fixed entries in conventional audit-standard order (Existence/Occurrence,
+Completeness, Accuracy/Valuation, Cut-off, Authorisation), each with a `sort_order` column so list
+order stays fixed rather than alphabetical — same non-alphabetical precedent `audit_rule_voucher_checks`
+already established. This is the first of a 5-phase requirement; later phases (not built here) will
+let a Category's attached Documents/Cross-checks/Voucher-level Checks be tagged against this list,
+plus a per-Category coverage-gap warning. Tags live on the attachment, not the entity, per the
+confirmed brief — no schema for that yet.
+
+`routers/audit_rules.py` gained `AssertionCreate`/`AssertionUpdate` models, `row_to_assertion()`, and
+six endpoints (list/get/create/update/soft-delete/restore) mirroring the Categories entity exactly —
+same `cache_get`/`cache_set`/`invalidate_audit_rules_cache()` wiring, same
+`Depends(ensure_no_active_verification_sessions)` write guard this router uses instead of admin auth,
+same soft-delete-then-restore shape (no hard delete). `static/audit_rules.html` gained a 5th rail
+button/list-section/detail-section, mirroring the Voucher-level Checks detail form (Name + one text
+field) rather than Categories' (no document/cross-check picker needed here). `static/audit_rules.js`
+gained a full parallel "ASSERTIONS" section (DOM refs, state, load/render/select/save/delete/restore,
+listener wiring) plus a `switchEntityType()`/`AR_VALID_ENTITY_TYPES` branch — same full-duplication-
+per-entity-type convention the file already follows for Documents/Cross-checks/Categories/Voucher-level
+Checks. No pagination (unlike Documents/Categories) — this list stays small, same as Voucher-level
+Checks' own unpaginated load. `client_context.js`'s `NAV_MANIFEST` gained an "Assertions" child under
+Audit Rules, using the real `?entity=` param `restoreAuditRulesViewFromUrl()` actually reads — its five
+sibling entries (Documents/Cross-checks/Categories/Voucher-level Checks/Assign Categories/Signature
+Specimens) all use the dead `?feature=` param instead (pre-existing, confirmed via grep that
+`audit_rules.js` never reads it; left alone as out of scope for this phase).
+
+Two bugs found and fixed during live verification, both against the real Supabase database (not a
+throwaway):
+
+1. **Postgres bootstrap-marker gap.** `init_db_postgres()` skips its entire declarative CREATE TABLE
+   pass — including a newly-added one — on any database that already has the `audit_rules_config_state`
+   marker table (i.e. any already-bootstrapped database, confirmed live: this app's own Supabase hit
+   this path and returned `UndefinedTable: relation "audit_rule_assertions" does not exist` on first
+   request). Fixed by adding `_ensure_postgres_audit_rule_assertions(conn)` — same idempotent
+   `to_regclass()`-check-then-`CREATE TABLE IF NOT EXISTS` (+ `ON CONFLICT (name) DO NOTHING` seed)
+   pattern as the existing `_ensure_postgres_form_tables()` — and calling it from the fast-path branch
+   alongside the other `_ensure_postgres_*` migrations. See the new Conventions entry in CLAUDE.md — any
+   future new Postgres table needs this same companion function, not just a CREATE TABLE in the full
+   bootstrap section.
+2. **`updateAuditRulesUrl()` didn't know about the new entity type** — its `currentEntityType →
+   selectedId` lookup object was a hardcoded list of the 4 existing entities, so selecting an Assertion
+   never wrote `&id=` into the URL, and a hard refresh silently dropped back to whatever the URL's
+   `?entity=assertions` alone would restore (no specific row re-selected). Added `assertions:
+   editingAssertionId` to that lookup.
+
+Verified: `pytest tests/ -v` (266 passed; the 16 pre-existing failures were confirmed unrelated via a
+`git stash`-based before/after comparison — none touch any file this phase changed); Python
+`py_compile` and `node -c` syntax checks on every changed backend/frontend file; a throwaway server on
+port 5050 (the user's own port-5000 dev server was left untouched, per this file's port-5000-check
+convention) driven end-to-end with Playwright against the real database — login, client selection, the
+new Assertions rail tab rendering all 5 seeded entries in order, row select/edit/save with the edit
+confirmed to survive a page reload, and full create/delete/restore/update round-trips via direct API
+calls. All test data was cleaned up afterward (seed rows reset to their original `description: null`
+state). Aadil then manually confirmed the feature working on his own port-5000 server before this was
+committed.

@@ -2333,6 +2333,16 @@ class CategoryUpdate(BaseModel):
     cross_check_ids: List[int] = []
 
 
+class AssertionCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class AssertionUpdate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
 class PhysicalBillMigrationPreviewRequest(BaseModel):
     source_document_id: int
     target_document_id: int
@@ -3062,6 +3072,15 @@ def row_to_category(row: dict) -> dict:
         "used_by_vouchers_count": get_category_used_by_vouchers_count(category_id)
     }
 
+def row_to_assertion(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "description": row.get("description"),
+        "sort_order": row.get("sort_order", 0),
+        "is_active": bool(row["is_active"]),
+    }
+
 def save_category_documents(category_id: int, document_ids: List[int]):
     """
     Replace a Category's Document list (delete-then-reinsert). Carries each surviving
@@ -3333,6 +3352,103 @@ def restore_category(category_id: int):
     invalidate_audit_rules_cache({"entity_type": "Category", "entity_id": category_id,
                                   "entity_name": existing[0]['name'], "action": "Restored"})
     return {"message": "Category restored successfully"}
+
+# ---------- ASSERTIONS ----------
+# Fixed master list (seeded in database.py) that a Category's attached Documents/Cross-checks/
+# Voucher-level Checks will be tagged against in a later phase. Same CRUD/cache/soft-delete
+# shape as Categories above, since both are global (no client_id) simple master lists.
+@router.get("/api/audit-rules/assertions")
+def get_assertions(response: Response, include_inactive: bool = False, limit: Optional[int] = Query(None, ge=1, le=200), offset: int = Query(0, ge=0)):
+    """
+    Get all Assertions. By default, only active Assertions are returned.
+    Set include_inactive=True to get all. Ordered by sort_order (the conventional
+    audit-standard order), not alphabetically - see the audit_rule_assertions comment
+    in database.py.
+    """
+    cache_key = f"assertions:list:{include_inactive}:{limit}:{offset}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        result, total = cached
+        if total is not None:
+            response.headers["X-Total-Count"] = str(total)
+        return result
+
+    where = "" if include_inactive else " WHERE is_active = TRUE"
+    base_query = "SELECT * FROM audit_rule_assertions" + where
+    count_query = "SELECT COUNT(*) as cnt FROM audit_rule_assertions" + where
+    rows, total = fetch_paginated_rows(base_query, count_query, "ORDER BY sort_order", limit, offset)
+    if total is not None:
+        response.headers["X-Total-Count"] = str(total)
+    result = [row_to_assertion(r) for r in rows]
+    cache_set(cache_key, (result, total))
+    return result
+
+@router.get("/api/audit-rules/assertions/{assertion_id}")
+def get_assertion(assertion_id: int):
+    cache_key = f"assertions:{assertion_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
+    rows = execute_query_pg("SELECT * FROM audit_rule_assertions WHERE id = %s", (assertion_id,))
+    if not rows:
+        raise HTTPException(404, "Assertion not found")
+    result = row_to_assertion(rows[0])
+    cache_set(cache_key, result)
+    return result
+
+@router.post("/api/audit-rules/assertions", dependencies=[Depends(ensure_no_active_verification_sessions)])
+def create_assertion(assertion: AssertionCreate):
+    assertion_id = execute_write_pg(
+        "INSERT INTO audit_rule_assertions (name, description) VALUES (%s, %s) RETURNING id",
+        (assertion.name, assertion.description)
+    )
+    log_audit("Admin", "Create", "AuditRules", f"Created Assertion: {assertion.name}")
+    invalidate_audit_rules_cache({"entity_type": "Assertion", "entity_id": assertion_id,
+                                  "entity_name": assertion.name, "action": "Created"})
+    return {"message": f"Assertion '{assertion.name}' created successfully", "assertion_id": assertion_id}
+
+@router.put("/api/audit-rules/assertions/{assertion_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
+def update_assertion(assertion_id: int, assertion: AssertionUpdate):
+    existing = execute_query_pg("SELECT id FROM audit_rule_assertions WHERE id = %s", (assertion_id,))
+    if not existing:
+        raise HTTPException(404, "Assertion not found")
+
+    execute_write_pg(
+        "UPDATE audit_rule_assertions SET name = %s, description = %s WHERE id = %s",
+        (assertion.name, assertion.description, assertion_id)
+    )
+    log_audit("Admin", "Update", "AuditRules", f"Updated Assertion ID {assertion_id}")
+    invalidate_audit_rules_cache({"entity_type": "Assertion", "entity_id": assertion_id,
+                                  "entity_name": assertion.name, "action": "Updated"})
+    return {"message": "Assertion updated successfully"}
+
+@router.delete("/api/audit-rules/assertions/{assertion_id}", dependencies=[Depends(ensure_no_active_verification_sessions)])
+def delete_assertion(assertion_id: int):
+    """
+    Soft-delete an Assertion (set is_active = FALSE).
+    """
+    existing = execute_query_pg("SELECT name FROM audit_rule_assertions WHERE id = %s AND is_active = TRUE", (assertion_id,))
+    if not existing:
+        raise HTTPException(404, "Active Assertion not found")
+    execute_write_pg("UPDATE audit_rule_assertions SET is_active = FALSE WHERE id = %s", (assertion_id,))
+    log_audit("Admin", "Delete", "AuditRules", f"Soft-deleted Assertion: {existing[0]['name']} (ID: {assertion_id})")
+    invalidate_audit_rules_cache({"entity_type": "Assertion", "entity_id": assertion_id,
+                                  "entity_name": existing[0]['name'], "action": "Deleted"})
+    return {"message": "Assertion deleted (soft-delete) successfully"}
+
+@router.post("/api/audit-rules/assertions/{assertion_id}/restore", dependencies=[Depends(ensure_no_active_verification_sessions)])
+def restore_assertion(assertion_id: int):
+    """
+    Restore a soft-deleted Assertion.
+    """
+    existing = execute_query_pg("SELECT name FROM audit_rule_assertions WHERE id = %s AND is_active = FALSE", (assertion_id,))
+    if not existing:
+        raise HTTPException(404, "Inactive Assertion not found")
+    execute_write_pg("UPDATE audit_rule_assertions SET is_active = TRUE WHERE id = %s", (assertion_id,))
+    log_audit("Admin", "Restore", "AuditRules", f"Restored Assertion: {existing[0]['name']} (ID: {assertion_id})")
+    invalidate_audit_rules_cache({"entity_type": "Assertion", "entity_id": assertion_id,
+                                  "entity_name": existing[0]['name'], "action": "Restored"})
+    return {"message": "Assertion restored successfully"}
 
 @router.get("/api/audit-rules/categories/{category_id}/cleared-requirements")
 def get_category_cleared_requirements(category_id: int):
