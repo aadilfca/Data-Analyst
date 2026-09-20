@@ -381,6 +381,129 @@ def test_procedure_rail_uses_grey_green_red_states_and_account_head_query(proced
     assert result["accountHeadNote"] == "__account_head_recommendation__: Office Supplies"
 
 
+def test_physical_bill_item_grid_keeps_spreadsheet_columns_and_actions_aligned(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""() => {
+        hostAdapter.escapeHtml = value => String(value ?? '');
+        document.body.innerHTML = '<div id="procedureModal"></div>';
+        const bill = {
+            bill_no: 'B-1', bill_date: '2026-09-19', vendor_name: 'Vendor',
+            items: [
+                {item_name: 'First', quantity: '1', rate: '10', amount: 10},
+                {item_name: 'Second', quantity: '2', rate: '20', amount: 40}
+            ]
+        };
+        document.getElementById('procedureModal').innerHTML = renderPhysicalBillCard(bill, 0);
+        const table = document.querySelector('.procedure-bill-items-table');
+        const headerCells = [...table.tHead.rows[0].cells];
+        const rows = [...table.tBodies[0].rows];
+        const rect = element => {
+            const box = element.getBoundingClientRect();
+            return {x: Math.round(box.x), width: Math.round(box.width)};
+        };
+        const headerGeometry = headerCells.map(rect);
+        const rowGeometry = rows.map(row => [...row.cells].map(rect));
+        const removeButtons = [...table.querySelectorAll('.procedure-bill-remove-line-btn')].map(rect);
+        const splitButtonElements = [...table.querySelectorAll('.procedure-bill-split-line-btn')];
+        const splitButtons = splitButtonElements.map(rect);
+        const same = (left, right) => left.x === right.x && left.width === right.width;
+        return {
+            layout: getComputedStyle(table).tableLayout,
+            columnsAligned: headerGeometry.every((header, index) =>
+                rowGeometry.every(row => same(header, row[index]))
+            ),
+            actionCellsAligned: same(rowGeometry[0][4], rowGeometry[1][4]),
+            removeButtonsAligned: same(removeButtons[0], removeButtons[1]),
+            removeCount: removeButtons.length,
+            splitCount: splitButtons.length,
+            splitLabel: splitButtonElements[0]?.textContent.trim(),
+            compactCellPadding: getComputedStyle(rows[0].cells[0]).padding,
+            inputPadding: getComputedStyle(rows[0].cells[0].querySelector('input')).padding,
+            inputRadius: getComputedStyle(rows[0].cells[0].querySelector('input')).borderRadius
+        };
+    }""")
+
+    assert result == {
+        "layout": "fixed",
+        "columnsAligned": True,
+        "actionCellsAligned": True,
+        "removeButtonsAligned": True,
+        "removeCount": 2,
+        "splitCount": 1,
+        "splitLabel": "Split here",
+        "compactCellPadding": "0px",
+        "inputPadding": "2px 4px",
+        "inputRadius": "0px",
+    }
+
+
+def test_form_physical_bill_item_grid_is_flush_like_excel_cells(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""() => {
+        document.body.innerHTML = `
+            <div id="procedureModal">
+                <div class="procedure-form-bill-card">
+                    <div class="procedure-form-bill-card-heading">Physical bill</div>
+                    <section class="procedure-form-section procedure-form-bill-items">
+                        <div class="procedure-form-section-heading">
+                            <h4 class="procedure-form-section-title">Item fields</h4>
+                            <button class="procedure-form-add-item-btn procedure-form-add-btn">+ Add item row</button>
+                        </div>
+                        <div class="procedure-form-items">
+                            <div class="procedure-form-item-line-head" aria-hidden="true">
+                                <div class="procedure-form-grid procedure-form-item-grid" style="--procedure-form-item-field-count:3;">
+                                    <span>Persons</span><span>Per head rate</span><span>Total</span>
+                                </div>
+                                <span class="procedure-form-item-actions-label">Actions</span>
+                            </div>
+                            <div class="procedure-form-item-row">
+                                <div class="procedure-form-grid procedure-form-item-grid" style="--procedure-form-item-field-count:3;">
+                                    <input class="procedure-form-input" value="2">
+                                    <input class="procedure-form-input" value="2">
+                                    <input class="procedure-form-input" value="4" readonly>
+                                </div>
+                                <div class="procedure-form-item-actions">
+                                    <button class="procedure-form-remove-item-btn">×</button>
+                                    <button class="procedure-form-split-item-btn">Split here</button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>`;
+        const section = document.querySelector('.procedure-form-bill-items');
+        const head = document.querySelector('.procedure-form-item-line-head');
+        const row = document.querySelector('.procedure-form-item-row');
+        const headFields = [...head.querySelectorAll('.procedure-form-item-grid span')];
+        const inputs = [...row.querySelectorAll('.procedure-form-item-grid .procedure-form-input')];
+        const rect = element => {
+            const box = element.getBoundingClientRect();
+            return {x: Math.round(box.x), width: Math.round(box.width)};
+        };
+        const same = (left, right) => left.x === right.x && left.width === right.width;
+        return {
+            sectionPadding: getComputedStyle(section).padding,
+            rowPadding: getComputedStyle(row).padding,
+            rowRadius: getComputedStyle(row).borderRadius,
+            inputPadding: getComputedStyle(inputs[0]).padding,
+            inputRadius: getComputedStyle(inputs[0]).borderRadius,
+            columnsAligned: headFields.every((field, index) => same(rect(field), rect(inputs[index]))),
+            actionsAligned: same(
+                rect(head.querySelector('.procedure-form-item-actions-label')),
+                rect(row.querySelector('.procedure-form-item-actions'))
+            )
+        };
+    }""")
+
+    assert result == {
+        "sectionPadding": "12px 14px",
+        "rowPadding": "5px 8px",
+        "rowRadius": "0px",
+        "inputPadding": "6px 8px",
+        "inputRadius": "6px",
+        "columnsAligned": True,
+        "actionsAligned": True,
+    }
+
+
 def test_voucher_line_correct_checkbox_turns_dot_green_and_enters_save_payload(procedure_modal_page):
     result = procedure_modal_page.evaluate("""() => {
         hostAdapter.escapeHtml = value => String(value ?? '');
@@ -473,22 +596,29 @@ def test_account_head_recommendation_disables_correct_checkbox_until_cleared(pro
         const accountHead = getAccountHeadState(1);
         accountHead.selectedAccountName = 'Office Supplies';
         accountHead.matched = true;
+        renderAccountHeadCard(1);
         renderProcedureModalTabs(1);
         const checkbox = document.getElementById('procedureVoucherLineCorrect');
+        const clearBtn = document.getElementById('procedureAccountHeadClearBtn');
         const recommended = {
             checked: checkbox.checked,
             disabled: checkbox.disabled,
+            clearVisible: !clearBtn.hidden,
             dot: document.querySelector('.procedure-tab-dot').className,
             stateCorrect: hostAdapter.procedureModalState[1].voucherLineCorrect
         };
-        accountHead.selectedAccountName = '';
-        accountHead.matched = null;
-        accountHead.suggestions = [];
-        renderProcedureModalTabs(1);
+        clearBtn.click();
+        const afterClear = {
+            inputValue: document.getElementById('procedureAccountHeadSearchInput').value,
+            clearHidden: document.getElementById('procedureAccountHeadClearBtn').hidden,
+            disabled: checkbox.disabled,
+            dot: document.querySelector('.procedure-tab-dot').className
+        };
         checkbox.checked = true;
         checkbox.dispatchEvent(new Event('change', {bubbles: true}));
         return {
             recommended,
+            afterClear,
             cleared: {
                 checked: checkbox.checked,
                 disabled: checkbox.disabled,
@@ -501,8 +631,15 @@ def test_account_head_recommendation_disables_correct_checkbox_until_cleared(pro
         "recommended": {
             "checked": False,
             "disabled": True,
+            "clearVisible": True,
             "dot": "procedure-tab-dot query",
             "stateCorrect": False,
+        },
+        "afterClear": {
+            "inputValue": "",
+            "clearHidden": True,
+            "disabled": False,
+            "dot": "procedure-tab-dot query",
         },
         "cleared": {
             "checked": True,

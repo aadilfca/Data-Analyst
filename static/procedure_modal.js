@@ -3610,9 +3610,15 @@ function renderAccountHeadCard(uid) {
         bodyEl.innerHTML = `
             <div class="procedure-voucher-approval-field">
                 <label for="procedureAccountHeadSearchInput">Recommended Account Head</label>
-                <input type="text" id="procedureAccountHeadSearchInput" class="procedure-search-input"
-                    placeholder="Search Trial Balance accounts..." autocomplete="off"
-                    value="${hostAdapter.escapeHtml(state.selectedAccountName || state.searchTerm || '')}">
+                <div class="procedure-account-head-input-wrap">
+                    <input type="text" id="procedureAccountHeadSearchInput" class="procedure-search-input"
+                        placeholder="Search Trial Balance accounts..." autocomplete="off"
+                        value="${hostAdapter.escapeHtml(state.selectedAccountName || state.searchTerm || '')}">
+                    <button type="button" id="procedureAccountHeadClearBtn"
+                        class="procedure-account-head-clear-btn"
+                        aria-label="Clear Recommended Account Head" title="Clear Recommended Account Head"
+                        ${state.selectedAccountName || state.searchTerm || hasAccountHeadRecommendation(state) ? '' : 'hidden'}>&times;</button>
+                </div>
             </div>
             <div id="procedureAccountHeadSearchDropdown" class="procedure-search-dropdown"></div>
             <button type="button" id="procedureAccountHeadSuggestBtn" class="procedure-account-head-suggest-btn" ${state.loading ? 'disabled' : ''}>${state.loading ? 'Searching…' : '🔍 Suggest Account Head'}</button>
@@ -3620,6 +3626,7 @@ function renderAccountHeadCard(uid) {
             <button type="button" id="procedureAccountHeadToggleBtn" class="procedure-account-head-toggle-link">No suitable account exists</button>
         `;
         const searchInput = document.getElementById('procedureAccountHeadSearchInput');
+        const clearBtn = document.getElementById('procedureAccountHeadClearBtn');
         if (searchInput) {
             searchInput.addEventListener('input', function() {
                 const hadRecommendation = hasAccountHeadRecommendation(state);
@@ -3634,6 +3641,26 @@ function renderAccountHeadCard(uid) {
                     hostAdapter.markLineDirty(uid, 'account-head recommendation edited');
                 }
                 renderAccountHeadSearchDropdown(uid);
+                renderProcedureModalTabs(uid);
+            });
+        }
+        if (clearBtn) {
+            clearBtn.addEventListener('click', function() {
+                const hadRecommendation = hasAccountHeadRecommendation(state);
+                const hadValue = !!String(state.selectedAccountName || state.searchTerm || '').trim();
+                if (!hadRecommendation && !hadValue) return;
+                state.selectedAccountId = null;
+                state.selectedAccountName = '';
+                state.searchTerm = '';
+                state.matched = null;
+                state.suggestions = [];
+                state.message = '';
+                state.hasFetched = false;
+                if (hadRecommendation) {
+                    state.recommendationDirty = true;
+                    hostAdapter.markLineDirty(uid, 'account-head recommendation cleared');
+                }
+                renderAccountHeadCard(uid);
                 renderProcedureModalTabs(uid);
             });
         }
@@ -3720,6 +3747,8 @@ function selectAccountHeadTbAccount(uid, accountId, accountName) {
     hostAdapter.markLineDirty(uid, 'account-head recommendation selected');
     const inputEl = document.getElementById('procedureAccountHeadSearchInput');
     if (inputEl) inputEl.value = accountName;
+    const clearBtn = document.getElementById('procedureAccountHeadClearBtn');
+    if (clearBtn) clearBtn.hidden = false;
     const dropdownEl = document.getElementById('procedureAccountHeadSearchDropdown');
     if (dropdownEl) dropdownEl.innerHTML = '';
     renderProcedureModalTabs(uid);
@@ -4496,8 +4525,10 @@ function renderPhysicalBillCard(bill, billIdx) {
             <td><input type="text" inputmode="decimal" class="procedure-bill-input" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" data-field="quantity" value="${hostAdapter.escapeHtml(item.quantity)}" placeholder="0"></td>
             <td class="procedure-bill-item-amount" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}">${formatBillTotalDisplay(item.amount)}</td>
             <td class="procedure-bill-item-actions">
-                ${itemIdx > 0 ? `<button type="button" class="procedure-bill-split-line-btn" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" title="Start a new bill before this line">Split</button>` : ''}
-                <button type="button" class="procedure-bill-remove-line-btn" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" title="Remove line">${PB_ICON_REMOVE}</button>
+                <div class="procedure-bill-item-actions-inner">
+                    <button type="button" class="procedure-bill-remove-line-btn" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" title="Remove line" aria-label="Remove line">${PB_ICON_REMOVE}</button>
+                    ${itemIdx > 0 ? `<button type="button" class="procedure-bill-split-line-btn" data-bill-idx="${billIdx}" data-item-idx="${itemIdx}" title="Start a new bill before this line">Split here</button>` : '<span class="procedure-bill-split-line-placeholder" aria-hidden="true"></span>'}
+                </div>
             </td>
         </tr>
     `).join('');
@@ -4520,8 +4551,15 @@ function renderPhysicalBillCard(bill, billIdx) {
                 <button type="button" class="procedure-bill-remove-bill-btn" data-bill-idx="${billIdx}" title="Remove bill">${PB_ICON_REMOVE} Remove Bill</button>
             </div>
             <table class="procedure-bill-items-table">
+                <colgroup>
+                    <col class="procedure-bill-item-col">
+                    <col class="procedure-bill-rate-col">
+                    <col class="procedure-bill-quantity-col">
+                    <col class="procedure-bill-amount-col">
+                    <col class="procedure-bill-actions-col">
+                </colgroup>
                 <thead>
-                    <tr><th>Item</th><th>Rate</th><th>Qty</th><th>Amount</th><th>Action</th></tr>
+                    <tr><th>Item</th><th>Rate</th><th>Qty</th><th>Amount</th><th>Actions</th></tr>
                 </thead>
                 <tbody>${itemRows}</tbody>
             </table>

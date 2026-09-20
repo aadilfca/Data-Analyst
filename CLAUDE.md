@@ -282,6 +282,11 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-19: Voucher Line rail status now enforces Correct and Account Head recommendation gates; modal state initialization and disabled-control behavior were hardened. See CHANGELOG_ARCHIVE.md.
 - 2026-09-19: Browse All Rows gained wide cross-column search and multi-row selection/linking with assigned-row protection. See CHANGELOG_ARCHIVE.md.
 - 2026-09-19: Save/Verify now resolves Account Head and Voucher Line Correctness markers to hidden system Documents, removing PostgreSQL foreign-key 500s. See CHANGELOG_ARCHIVE.md.
+- 2026-09-19: Physical Bill item entry now uses a compact spreadsheet-style grid with aligned columns and preserved remove/split actions. See CHANGELOG_ARCHIVE.md.
+- 2026-09-19: Physical Bill styling was flattened to plain Excel-like cells with zero table-cell padding and flush controls. See CHANGELOG_ARCHIVE.md.
+- 2026-09-19: Form-style Physical Bill grids now share plain Excel-like cell styling with zero padding while preserving existing controls. See CHANGELOG_ARCHIVE.md.
+- 2026-09-19: Form-style Physical Bill presentation now combines compact spreadsheet alignment with the Verification modal's professional card and action styling. See CHANGELOG_ARCHIVE.md.
+- 2026-09-20: Voucher Line Recommended Account Head now has a clear cross that removes the selected recommendation and preserves the re-confirmation gate. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

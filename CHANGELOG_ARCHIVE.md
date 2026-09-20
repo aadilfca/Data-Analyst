@@ -5731,3 +5731,45 @@ place.
 The preview now supports selecting multiple unassigned rows, Select All for visible eligible rows,
 selection counts, and a Link selected action. Assigned rows remain checked, greyed, and locked.
 Playwright coverage passed (23 applicable modal tests); JavaScript syntax and diff checks passed.
+
+## Verification Physical Bill spreadsheet-style item grid - 2026-09-19
+
+Physical Bill item entry now uses a compact fixed-column table with Excel-like cell rules, reduced
+outer/card padding, compact inputs, and a dedicated aligned Actions column. Remove (X) remains in
+every row; Split here remains available from the second row, with both controls vertically centered
+and kept in the same action positions. Existing calculations, keyboard navigation, add/remove,
+split, and persistence behavior were preserved. JavaScript syntax, focused Physical Bill/rail tests,
+the existing split regression, and diff checks passed.
+
+## Verification Physical Bill plain-cell refinement - 2026-09-19
+
+The Physical Bill card was flattened further to match an unformatted Excel worksheet: no rounded
+outer card, zero table-cell padding, flush borderless inputs, compact square actions, plain header
+and subtotal rules, and reduced Add line/Add Bill/Grand Total spacing. Required-field red cues and
+all existing controls remain available. The browser geometry regression now verifies zero cell
+padding, compact input padding, zero input radius, fixed columns, and aligned actions.
+
+## Verification Form-style Physical Bill grid correction - 2026-09-19
+
+The visible saved Form-style Physical Bill branch was using separate `.procedure-form-*` rules,
+so the earlier `.procedure-bill-*` refinement did not reach it. Added a scoped worksheet treatment
+for the Form branch: flat bill/section containers, zero row and cell padding, flush borderless
+inputs, compact square actions, and shared header/data/action geometry. Form event handlers and
+persistence were not changed. Playwright coverage now verifies both renderer variants.
+
+## Verification Form-style Physical Bill professional worksheet refinement - 2026-09-19
+
+The first Form-branch correction was intentionally too bare: it removed useful application styling
+along with the excess padding. The final treatment restores the Verification module's rounded card,
+slate borders, blue action language, compact readable inputs, restrained gridlines, and consistent
+X/Split here controls while retaining shared spreadsheet column geometry. The change is CSS-only;
+event handlers, persistence, calculations, and backend behavior are unchanged. Focused browser
+geometry tests passed for both Physical Bill renderers.
+
+## Verification Recommended Account Head clear control - 2026-09-20
+
+Added a compact right-side clear (×) control to the Voucher Line Recommended Account Head field.
+It clears the selected account/search/suggestion state, marks a saved recommendation deletion for
+persistence, re-enables the Correct checkbox, and keeps the rail in Query until Correct is freshly
+confirmed. The control is keyboard-focusable and follows the existing modal input/button styling.
+Focused Playwright coverage passed (26 applicable tests); JavaScript syntax and diff checks passed.

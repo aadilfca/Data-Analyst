@@ -1392,7 +1392,7 @@ body {
     width: 100%;
     padding: 8px 10px;
     border: 1px solid #d0d5dd;
-    border-radius: 6px;
+    border-radius: 0;
     font-size: 14px;
     resize: vertical;
     min-height: 50px;
@@ -1415,7 +1415,7 @@ body {
 
 .obs-comments-row .obs-dropdown-container select {
     flex: 1;
-    padding: 6px 10px;
+    padding: 2px 6px;
     border: 1px solid #d0d5dd;
     border-radius: 6px;
     font-size: 13px;
@@ -1797,7 +1797,7 @@ body {
 }
 .transaction-list-popover .popover-search-row input {
     width: 100%;
-    padding: 6px 10px;
+    padding: 2px 6px;
     border: 2px solid #e2e8f0;
     border-radius: 6px;
     font-size: 13px;
@@ -3591,6 +3591,41 @@ body {
     font-size: 14px;
     color: #1a1a2e;
 }
+.procedure-account-head-input-wrap {
+    position: relative;
+    width: 100%;
+}
+.procedure-account-head-input-wrap .procedure-search-input {
+    padding-right: 34px;
+}
+.procedure-account-head-clear-btn {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 50%;
+    background: #eef2f7;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    transition: background .15s, color .15s;
+}
+.procedure-account-head-clear-btn:hover {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+.procedure-account-head-clear-btn:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+}
 .procedure-account-head-suggest-btn {
     margin-top: 4px;
     padding: 6px 14px;
@@ -3846,24 +3881,25 @@ body {
    One .procedure-bill-card per bill inside #procedureBillForm, each with its own header fields,
    items table, and dimmed subtotal row, plus a shared Grand Total/reconciliation footer below all
    cards. Markup: renderPhysicalBillCard()/renderPhysicalBillDocumentPanel() in procedure_modal.js.
-   Card look matches .procedure-segment-data's own border/header-bg convention so a bill card reads
-   as a nested mini-card inside the Physical Bill segment. All rules scoped under #procedureModal
-   per this app's per-modal CSS convention. */
+   The item area intentionally uses compact spreadsheet geometry: one shared column grid, visible
+   cell rules, and a fixed Actions column. All rules scoped under #procedureModal per this app's
+   per-modal CSS convention. */
 #procedureModal .procedure-bill-card {
-    border: 1px solid #e6e9ed;
-    border-radius: 10px;
-    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+    overflow: visible;
     background: #ffffff;
 }
 #procedureModal .procedure-bill-card + .procedure-bill-card {
-    margin-top: 14px;
+    margin-top: 4px;
 }
 #procedureModal .procedure-bill-card-header {
     display: flex;
     align-items: flex-end;
-    gap: 12px;
-    padding: 12px 14px;
-    background: #eef0f2;
+    gap: 0;
+    padding: 0;
+    background: #f2f2f2;
+    border: 1px solid #b7b7b7;
 }
 #procedureModal .procedure-bill-card-header .procedure-bill-field {
     flex: 1 1 auto;
@@ -3876,7 +3912,7 @@ body {
     flex-shrink: 0;
     padding: 6px 10px;
     border: 1px solid #fecaca;
-    border-radius: 6px;
+    border-radius: 0;
     background: white;
     color: #b91c1c;
     font-size: 12px;
@@ -3891,38 +3927,72 @@ body {
 
 #procedureModal .procedure-bill-items-table {
     width: 100%;
+    table-layout: fixed;
     border-collapse: collapse;
+    border: 1px solid #b7b7b7;
     font-size: 13px;
+    background: #ffffff;
+}
+#procedureModal .procedure-bill-item-col {
+    width: 39%;
+}
+#procedureModal .procedure-bill-rate-col,
+#procedureModal .procedure-bill-quantity-col,
+#procedureModal .procedure-bill-amount-col {
+    width: 15%;
+}
+#procedureModal .procedure-bill-actions-col {
+    width: 16%;
 }
 #procedureModal .procedure-bill-items-table th {
     text-align: left;
-    padding: 6px 10px;
+    height: 24px;
+    padding: 0 4px;
     font-size: 11px;
     font-weight: 700;
     color: #64748b;
     text-transform: uppercase;
     letter-spacing: 0.4px;
-    border-bottom: 1px solid #e6e9ed;
+    background: #f2f2f2;
+    border: 1px solid #b7b7b7;
+    white-space: nowrap;
 }
 #procedureModal .procedure-bill-items-table th:last-child {
-    text-align: right;
+    text-align: center;
 }
 #procedureModal .procedure-bill-items-table td {
-    padding: 6px 10px;
-    border-bottom: 1px solid #f1f5f9;
+    height: 26px;
+    padding: 0;
+    border: 1px solid #d9d9d9;
     vertical-align: middle;
 }
 #procedureModal .procedure-bill-item-actions {
-    width: 1%;
+    padding: 0;
     white-space: nowrap;
-    text-align: right;
+    text-align: center;
 }
-#procedureModal .procedure-bill-items-table tbody tr:last-child td {
-    border-bottom: none;
+#procedureModal .procedure-bill-items-table tbody tr:nth-child(even) {
+    background: #ffffff;
 }
 #procedureModal .procedure-bill-items-table .procedure-bill-input {
-    padding: 6px 8px;
+    display: block;
+    box-sizing: border-box;
+    min-width: 0;
+    height: 26px;
+    padding: 2px 4px;
     font-size: 13px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+#procedureModal .procedure-bill-items-table .procedure-bill-input:focus {
+    outline: 2px solid #217346;
+    outline-offset: -2px;
+}
+#procedureModal .procedure-bill-items-table .procedure-bill-input-mandatory-missing {
+    outline: 2px solid #dc2626;
+    outline-offset: -2px;
 }
 /* Amount is derived (Rate × Quantity), never typed — greyed to read as computed/read-only,
    matching the .procedure-bill-input-computed convention used elsewhere in this form. */
@@ -3930,30 +4000,53 @@ body {
     color: #475569;
     font-weight: 600;
     white-space: nowrap;
+    text-align: right;
+    padding: 0 4px;
+}
+#procedureModal .procedure-bill-item-actions-inner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-height: 26px;
+}
+#procedureModal .procedure-bill-split-line-placeholder,
+#procedureModal .procedure-bill-split-line-btn {
+    width: 62px;
+}
+#procedureModal .procedure-bill-split-line-placeholder {
+    display: inline-block;
+    height: 1px;
 }
 #procedureModal .procedure-bill-remove-line-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 4px;
-    border: none;
-    background: transparent;
-    color: #94a3b8;
+    flex: 0 0 22px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid #d9d9d9;
+    background: #ffffff;
+    color: #b91c1c;
     cursor: pointer;
-    border-radius: 4px;
+    border-radius: 0;
     transition: color 0.15s, background 0.15s;
 }
 #procedureModal .procedure-bill-remove-line-btn:hover {
     color: #dc2626;
     background: #fee2e2;
+    border-color: #dc2626;
 }
 #procedureModal .procedure-bill-split-line-btn {
     display: inline-flex;
     align-items: center;
-    padding: 4px 7px;
-    border: 1px solid #bfdbfe;
-    border-radius: 5px;
-    background: #eff6ff;
+    justify-content: center;
+    height: 22px;
+    padding: 0 4px;
+    border: 1px solid #d9d9d9;
+    border-radius: 0;
+    background: #ffffff;
     color: #2563eb;
     font-size: 11px;
     font-weight: 600;
@@ -3961,8 +4054,8 @@ body {
     transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 #procedureModal .procedure-bill-split-line-btn:hover {
-    background: #dbeafe;
-    border-color: #93c5fd;
+    background: #f2f2f2;
+    border-color: #217346;
     color: #1d4ed8;
 }
 #procedureModal .procedure-bill-split-line-btn:focus-visible,
@@ -3975,10 +4068,10 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    margin: 10px 14px 0;
-    padding: 5px 10px;
-    border: 1px dashed #cbd5e1;
-    border-radius: 6px;
+    margin: 4px 0 0;
+    padding: 2px 4px;
+    border: 1px solid #d9d9d9;
+    border-radius: 0;
     background: transparent;
     color: #64748b;
     font-size: 12px;
@@ -3998,10 +4091,10 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    margin: 10px 0 0;
-    padding: 10px 14px;
-    background: #fafbfc;
-    border-top: 1px dashed #e2e8f0;
+    margin: 4px 0 0;
+    padding: 2px 4px;
+    background: #f2f2f2;
+    border-top: 1px solid #b7b7b7;
     color: #94a3b8;
 }
 #procedureModal .procedure-bill-subtotal-label {
@@ -4020,7 +4113,7 @@ body {
     align-items: center;
     gap: 6px;
     align-self: flex-start;
-    padding: 7px 14px;
+    padding: 2px 6px;
     border: 1px solid #d0d5dd;
     border-radius: 6px;
     background: white;
@@ -4040,9 +4133,9 @@ body {
 #procedureModal .procedure-bill-grand-total-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin-top: 4px;
-    padding-top: 12px;
+    gap: 4px;
+    margin-top: 2px;
+    padding-top: 4px;
     border-top: 1px solid #e2e8f0;
 }
 #procedureModal .procedure-bill-grand-total-label {
@@ -4602,7 +4695,7 @@ body {
     flex: 0 0 auto;
     padding: 4px 9px;
     border: 1px solid #bfdbfe;
-    border-radius: 6px;
+    border-radius: 0;
     background: #eff6ff;
     color: #1d4ed8;
     font-size: 11px;
@@ -4654,7 +4747,7 @@ body {
     height: 28px;
     padding: 0;
     border: 0;
-    border-radius: 6px;
+    border-radius: 0;
     background: transparent;
     color: #64748b;
     font-size: 23px;
@@ -5355,9 +5448,9 @@ body {
     gap: 12px;
 }
 #procedureModal .procedure-modal-discard-btn {
-    padding: 6px 10px;
+    padding: 2px 6px;
     border: 1px solid #fecaca;
-    border-radius: 6px;
+    border-radius: 0;
     background: #fff7f7;
     color: #b45353;
     font-size: 12px;
@@ -9366,6 +9459,250 @@ body {
     font-size: 12px;
     text-align: center;
 }
+
+/* Plain worksheet Physical Bill view for legacy/configured Form documents. The Form renderer is
+   still the active path for saved Physical Bill-like Forms, so keep its behavior but remove the
+   nested-card/inset-row treatment and make its field columns read like ordinary Excel cells. */
+#procedureModal .procedure-form-bill-card {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+#procedureModal .procedure-form-bill-card-heading {
+    gap: 0;
+    padding: 0;
+    border: 1px solid #b7b7b7;
+    background: #f2f2f2;
+}
+#procedureModal .procedure-form-bill-card > .procedure-form-section {
+    padding: 0;
+}
+#procedureModal .procedure-form-bill-card > .procedure-form-section + .procedure-form-section {
+    border-top: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-section-heading {
+    min-height: 28px;
+    padding: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-items {
+    gap: 0;
+    margin-top: 0;
+    padding-bottom: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-line-head,
+#procedureModal .procedure-form-bill-items .procedure-form-item-row {
+    gap: 0;
+    min-width: 0;
+    padding: 0;
+    border-radius: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-line-head {
+    border: 1px solid #b7b7b7;
+    background: #f2f2f2;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-row {
+    border: 1px solid #d9d9d9;
+    border-top: 0;
+    background: #ffffff;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-grid {
+    gap: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-line-head .procedure-form-item-grid span,
+#procedureModal .procedure-form-bill-items .procedure-form-item-actions-label {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    height: 24px;
+    padding: 0 4px;
+    border-right: 1px solid #b7b7b7;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-actions-label {
+    min-width: 118px;
+    justify-content: center;
+    border-right: 0;
+    border-left: 1px solid #b7b7b7;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-grid .procedure-form-input {
+    box-sizing: border-box;
+    height: 26px;
+    min-height: 26px;
+    margin-top: 0;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-grid .procedure-form-input:focus {
+    outline: 2px solid #217346;
+    outline-offset: -2px;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-grid .procedure-form-input[readonly] {
+    border: 0;
+    background: #f2f2f2;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-actions {
+    box-sizing: border-box;
+    min-width: 118px;
+    min-height: 26px;
+    gap: 2px;
+    padding: 0;
+    border-left: 1px solid #d9d9d9;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-actions .procedure-form-remove-item-btn {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 22px;
+    margin: 0;
+    padding: 0;
+    border: 1px solid #d9d9d9;
+    border-radius: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-actions .procedure-form-split-item-btn {
+    height: 22px;
+    margin: 0;
+    padding: 0 4px;
+    border-radius: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-add-item-btn {
+    padding: 2px 6px;
+    border-radius: 0;
+}
+#procedureModal .procedure-form-bill-summary-chip {
+    border-radius: 0;
+}
+
+/* Refined Form-style Physical Bill treatment: keep spreadsheet alignment inside the Verification
+   module's established card, blue-action, and slate-border language. */
+#procedureModal .procedure-form-bill-card {
+    border: 1px solid #dbe5f0;
+    border-radius: 10px;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, .04);
+    overflow: hidden;
+}
+#procedureModal .procedure-form-bill-card-heading {
+    gap: 12px;
+    padding: 8px 10px;
+    border: 0;
+    border-bottom: 1px solid #e2e8f0;
+    background: linear-gradient(90deg, #f8fafc, #ffffff);
+}
+#procedureModal .procedure-form-bill-card .procedure-form-section {
+    margin: 0;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: #ffffff;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-section-heading {
+    min-height: 34px;
+    padding: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-items {
+    gap: 0;
+    margin-top: 8px;
+    padding-bottom: 0;
+    overflow: hidden;
+    border: 1px solid #dbe5f0;
+    border-radius: 8px;
+    background: #ffffff;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-line-head,
+#procedureModal .procedure-form-bill-items .procedure-form-item-row {
+    gap: 8px;
+    min-width: 520px;
+    padding: 0 8px;
+    border-radius: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-line-head {
+    min-height: 30px;
+    border: 0;
+    border-bottom: 1px solid #dbe5f0;
+    background: #f8fafc;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-row {
+    min-height: 44px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    border: 0;
+    border-bottom: 1px solid #eef2f7;
+    background: #ffffff;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-row:last-child {
+    border-bottom: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-grid {
+    gap: 8px;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-line-head .procedure-form-item-grid span,
+#procedureModal .procedure-form-bill-items .procedure-form-item-actions-label {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    height: 30px;
+    padding: 0;
+    border: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-actions-label {
+    min-width: 118px;
+    justify-content: center;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-grid .procedure-form-input {
+    box-sizing: border-box;
+    height: 34px;
+    min-height: 34px;
+    margin-top: 0;
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    box-shadow: none;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-grid .procedure-form-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, .12);
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-grid .procedure-form-input[readonly] {
+    border-color: #dce5ef;
+    background: #f3f6f9;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-actions {
+    box-sizing: border-box;
+    min-width: 118px;
+    min-height: 34px;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-actions .procedure-form-remove-item-btn {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    margin: 0;
+    padding: 0;
+    border: 1px solid #fecaca;
+    border-radius: 50%;
+    background: #ffffff;
+    color: #b91c1c;
+    font-size: 18px;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-item-actions .procedure-form-split-item-btn {
+    height: 30px;
+    margin: 0;
+    padding: 5px 8px;
+    border-radius: 6px;
+}
+#procedureModal .procedure-form-bill-items .procedure-form-add-item-btn {
+    padding: 6px 10px;
+    border-radius: 6px;
+}
+#procedureModal .procedure-form-bill-summary-chip {
+    border-radius: 999px;
+}
+
 @media (max-width: 700px) {
     #procedureModal .procedure-form-grid {
         grid-template-columns: 1fr;
