@@ -242,13 +242,71 @@ def test_failed_dirty_procedure_modal_close_stays_open_and_reports_error(procedu
     assert result["messages"][-1] == {"message": "save failed", "kind": "error"}
 
 
+def test_procedure_status_check_records_server_checkpoint(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        hostAdapter.currentVoucherId = 10;
+        hostAdapter.currentSessionId = 42;
+        hostAdapter.currentVoucherLines = [{detail_id: 1, cleared_status: 'Query'}];
+        hostAdapter.getLineRevision = () => 0;
+        let verifyCalls = 0;
+        performVerifyVoucherChecks = async () => {
+            verifyCalls += 1;
+            hostAdapter.currentVoucherLines[0].cleared_status = 'Cleared';
+            return {cleared_status: 'Cleared', line_statuses: {'1': 'Cleared'}};
+        };
+        await checkProcedureModalStatus();
+        return {
+            verifyCalls,
+            status: document.getElementById('procedureModalCheckStatus').textContent,
+            checkDisabled: document.getElementById('procedureModalCheckBtn').disabled
+        };
+    }""")
+
+    assert result == {
+        "verifyCalls": 1,
+        "status": "Checked: Cleared",
+        "checkDisabled": False,
+    }
+
+
+def test_verify_reuses_clean_procedure_status_checkpoint(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        hostAdapter.currentVoucherId = 10;
+        hostAdapter.currentSessionId = 42;
+        hostAdapter.getClientId = () => 1;
+        hostAdapter.getVoucherPosition = () => ({index: 0, total: 1});
+        hostAdapter.currentVoucherLines = [{detail_id: 1, cleared_status: 'Query'}];
+        let revision = 0;
+        hostAdapter.getLineRevision = () => revision;
+        let saveCalls = 0;
+        hostAdapter.saveAndVerifyVoucher = async () => {
+            saveCalls += 1;
+            hostAdapter.currentVoucherLines[0].cleared_status = 'Cleared';
+            return {ok: true, data: {cleared_status: 'Cleared', line_statuses: {'1': 'Cleared'}}};
+        };
+        ensureVoucherChecksLoaded = async () => [];
+        isVoucherChecksAllTouched = () => true;
+        updateVerifyFooterButton = () => {};
+        refreshProcedureModalHostBadges = async () => {};
+        invalidateProcedureModalDataForVoucher = () => {};
+        await checkProcedureModalStatus();
+        await performVerifyVoucherChecks(1, document.getElementById('procedureModalVerifyOnlyBtn'));
+        const callsAfterCleanVerify = saveCalls;
+        revision = 1;
+        await performVerifyVoucherChecks(1, document.getElementById('procedureModalVerifyOnlyBtn'));
+        return {callsAfterCleanVerify, callsAfterEdit: saveCalls};
+    }""")
+
+    assert result == {"callsAfterCleanVerify": 1, "callsAfterEdit": 2}
+
+
 def test_procedure_badge_open_starts_on_voucher_line_and_explicit_document_target_wins(procedure_modal_page):
     result = procedure_modal_page.evaluate("""async () => {
         const capturedTabs = [];
         hostAdapter = {
             procedureModalState: {1: {tabs: {}}},
             voucherLineState: {1: {transactionType: 'Purchases'}},
-            currentVoucherLines: [{detail_id: 1, row_data: {Account: 'Office supplies'}}],
+            currentVoucherLines: [{detail_id: 1, cleared_status: 'Query', row_data: {Account: 'Office supplies'}}],
             currentVoucherId: 10,
             fetchAuditGuidanceData: async () => ({
                 documents: [{id: 7, name: 'Invoice'}],
@@ -273,12 +331,26 @@ def test_procedure_badge_open_starts_on_voucher_line_and_explicit_document_targe
         const badgeOpenTab = capturedTabs.at(-1).docId;
         await openProcedureModal(1, 7, hostAdapter, procedureBadge);
         const explicitDocumentTab = capturedTabs.at(-1).docId;
-        return {badgeOpenTab, explicitDocumentTab};
+        const meta = document.getElementById('procedureModalMeta');
+        const metaStyle = getComputedStyle(meta);
+        return {
+            badgeOpenTab, explicitDocumentTab,
+            metaText: meta.textContent.replace(/\\s+/g, ' ').trim(),
+            statusClass: document.getElementById('procedureModalLineStatus')?.className,
+            metaDisplay: metaStyle.display,
+            metaWhiteSpace: metaStyle.whiteSpace,
+            metaOverflow: metaStyle.overflow
+        };
     }""")
 
     assert result == {
         "badgeOpenTab": "__voucher_line__",
         "explicitDocumentTab": 7,
+        "metaText": "Voucher line Purchases Amount 100 Status Query",
+        "statusClass": "procedure-modal-summary-status is-query",
+        "metaDisplay": "flex",
+        "metaWhiteSpace": "nowrap",
+        "metaOverflow": "hidden",
     }
 
 
@@ -421,6 +493,78 @@ def test_form_total_mismatch_turns_rail_dot_red(procedure_modal_page):
 
     assert result["mismatch"] == ["procedure-tab-dot", "procedure-tab-dot query"]
     assert result["match"] == ["procedure-tab-dot", "procedure-tab-dot complete"]
+
+
+def test_form_bill_starts_with_blank_row_and_preserves_add_split_actions(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""async () => {
+        const formDoc = {
+            id: 8, name: 'Physical Bill Form', document_type: 'form',
+            auth_roles: [], procedure_rules_configured: false,
+            form_fields: [
+                {id: 100, field_name: 'Item', field_type: 'text', field_scope: 'item'},
+                {id: 101, field_name: 'Quantity', field_type: 'numeric', field_scope: 'item'}
+            ]
+        };
+        hostAdapter = {
+            procedureModalState: {1: {
+                documents: [formDoc], activeDocId: 8, assignedDocIds: new Set(),
+                voucherLineAmount: 0, crossCheckResults: [], tabs: {
+                    8: {
+                        loaded: true, checklist: {}, observation: '', observationDirty: false,
+                        formEntries: [], formSaved: false, formDirty: false, formRevision: 0,
+                        formCollapsedBills: {}
+                    }
+                }
+            }},
+            voucherLineState: {1: {transactionType: 'Physical Bill'}},
+            currentVoucherLines: [{detail_id: 1, row_data: {Account: 'Test'}}],
+            escapeHtml: value => String(value ?? ''),
+            markLineDirty: () => {},
+            showStatus: () => {},
+            updateProceduresCellForLine: async () => {},
+            updateObservationsCellForLine: async () => {}
+        };
+        window.ApiUtils = {
+            apiFetchMutate: async () => new Response(JSON.stringify({entries: []}), {
+                status: 200, headers: {'Content-Type': 'application/json'}
+            }),
+            apiFetch: async () => new Response(JSON.stringify({results: []}), {
+                status: 200, headers: {'Content-Type': 'application/json'}
+            })
+        };
+        document.body.innerHTML = '<div id="procedureModalPanels"></div>';
+        currentProcedureModalUid = 1;
+        renderFormDocumentPanel(1, formDoc);
+        const tabState = hostAdapter.procedureModalState[1].tabs[8];
+        const initialRows = document.querySelectorAll('.procedure-form-item-row').length;
+        document.querySelector('.procedure-form-add-item-btn').click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const rowsAfterAdd = document.querySelectorAll('.procedure-form-item-row').length;
+        const stateRowsAfterAutosave = tabState.formEntries.filter(entry => entry.row_scope === 'item').length;
+        tabState.formEntries[0].values['100'] = 'First';
+        tabState.formEntries[1].values['100'] = 'Second';
+        renderFormDocumentPanel(1, formDoc);
+        document.querySelector('.procedure-form-split-item-btn[data-item-index="1"]').click();
+        const rows = [...document.querySelectorAll('.procedure-form-item-row')];
+        return {
+            initialRows,
+            rowsAfterAdd,
+            stateRowsAfterAutosave,
+            splitGroups: rows.map(row => row.dataset.billGroupIndex),
+            rowsPerBill: [...new Set(rows.map(row => row.dataset.billGroupIndex))]
+                .map(group => rows.filter(row => row.dataset.billGroupIndex === group).length),
+            firstRowSplitDisabled: document.querySelector('.procedure-form-split-item-btn[data-item-index="0"]')?.disabled
+        };
+    }""")
+
+    assert result == {
+        "initialRows": 1,
+        "rowsAfterAdd": 2,
+        "stateRowsAfterAutosave": 2,
+        "splitGroups": ["0", "0", "1", "1"],
+        "rowsPerBill": [2, 2],
+        "firstRowSplitDisabled": True,
+    }
 
 
 def test_physical_bill_item_grid_keeps_spreadsheet_columns_and_actions_aligned(procedure_modal_page):

@@ -1,5 +1,18 @@
 # Changelog Archive
 
+## Verification Procedure Checkpoint and Form item-row restoration — 2026-09-20
+
+The shared Procedure modal now exposes a server-authoritative Check action with progress and status
+feedback. It flushes current drafts, reuses the existing Save/Verify calculation, and records revision
+snapshots so unchanged Verify actions avoid duplicate processing until a new edit requires rechecking.
+
+Form-based Physical Bill tabs now open with one local blank item row per bill. Add item row and Split
+here retain their existing behavior, and extra blank rows survive autosave rehydration. Browser regression
+coverage was added; no backend or dependency changes were needed.
+
+Files: `static/procedure_modal.js`, `static/verification.js`, `static/style.css`,
+`tests/test_verification_dirty_saves.py`.
+
 ## Verification Form Total reconciliation — 2026-09-20
 
 Form-based physical bills now treat an item-level arithmetic `Total` field as the voucher amount

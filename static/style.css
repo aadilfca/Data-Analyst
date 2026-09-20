@@ -3375,14 +3375,175 @@ body {
     padding: 1px 7px;
     border-radius: 8px;
 }
-/* Modal header heading block (line/type/amount/risk) */
+/* Modal header heading block (line/type/amount/status/risk) */
 .procedure-modal-heading {
     min-width: 0;
 }
-.procedure-modal-meta {
-    font-size: 12px;
+.procedure-modal-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+.procedure-modal-check-btn {
+    min-width: 78px;
+}
+.procedure-modal-check-status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 9px;
+    border: 1px solid #dbe3ef;
+    border-radius: 999px;
+    background: #f8fafc;
     color: #64748b;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.procedure-modal-check-status::before {
+    width: 7px;
+    height: 7px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: #94a3b8;
+    content: '';
+}
+.procedure-modal-check-status.is-busy {
+    color: #1d4ed8;
+    border-color: #bfdbfe;
+    background: #eff6ff;
+}
+.procedure-modal-check-status.is-busy::before {
+    background: #3b82f6;
+    animation: procedure-check-pulse 1s ease-in-out infinite;
+}
+.procedure-modal-check-status.is-success {
+    color: #166534;
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+}
+.procedure-modal-check-status.is-success::before {
+    background: #22c55e;
+}
+.procedure-modal-check-status.is-query,
+.procedure-modal-check-status.is-error {
+    color: #991b1b;
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+.procedure-modal-check-status.is-query::before,
+.procedure-modal-check-status.is-error::before {
+    background: #ef4444;
+}
+.procedure-modal-check-status.is-dirty {
+    color: #92400e;
+    border-color: #fed7aa;
+    background: #fff7ed;
+}
+.procedure-modal-check-status.is-dirty::before {
+    background: #f59e0b;
+}
+@keyframes procedure-check-pulse {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 1; }
+}
+.procedure-modal-meta {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
     margin-top: 2px;
+    overflow: hidden;
+    font-size: 11px;
+    color: #64748b;
+    line-height: 18px;
+    white-space: nowrap;
+}
+.procedure-modal-summary-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    min-width: 0;
+    flex: 0 0 auto;
+}
+.procedure-modal-summary-main {
+    flex: 1 1 auto;
+    min-width: 110px;
+}
+.procedure-modal-summary-label {
+    flex: 0 0 auto;
+    color: #94a3b8;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.procedure-modal-summary-value {
+    min-width: 0;
+    overflow: hidden;
+    color: #475569;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.procedure-modal-summary-main .procedure-modal-summary-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.procedure-modal-summary-amount .procedure-modal-summary-value {
+    color: #1e293b;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+}
+.procedure-modal-summary-divider {
+    width: 1px;
+    height: 14px;
+    margin: 0 10px;
+    background: #e2e8f0;
+    flex: 0 0 auto;
+}
+.procedure-modal-summary-status-wrap {
+    align-items: center;
+}
+.procedure-modal-summary-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px;
+    border: 1px solid #e2e8f0;
+    border-radius: 999px;
+    color: #475569;
+    background: #f8fafc;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 15px;
+}
+.procedure-modal-summary-status.is-cleared {
+    border-color: #bbf7d0;
+    color: #166534;
+    background: #f0fdf4;
+}
+.procedure-modal-summary-status.is-query {
+    border-color: #fecaca;
+    color: #991b1b;
+    background: #fef2f2;
+}
+.procedure-modal-summary-status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #94a3b8;
+    flex: 0 0 auto;
+}
+.procedure-modal-summary-status.is-cleared .procedure-modal-summary-status-dot {
+    background: #22c55e;
+}
+.procedure-modal-summary-status.is-query .procedure-modal-summary-status-dot {
+    background: #ef4444;
+}
+.procedure-modal-summary-risk .procedure-modal-summary-value {
+    color: #991b1b;
 }
 .procedure-tab-panels {
     flex: 1;

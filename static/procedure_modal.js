@@ -69,9 +69,13 @@ const PROCEDURE_MODAL_MARKUP = `
                         <h3 id="procedureModalTitle">📎 Supporting Documents</h3>
                         <div id="procedureModalMeta" class="procedure-modal-meta"></div>
                     </div>
-                    <button type="button" class="btn-ghost procedure-validate-btn" id="procedureModalValidateBtn">🔍 Validate</button>
-                    <button class="close-btn" id="procedureModalClose"
-                        style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+                    <div class="procedure-modal-header-actions">
+                        <button type="button" class="btn-ghost procedure-modal-check-btn" id="procedureModalCheckBtn">✓ Check</button>
+                        <span id="procedureModalCheckStatus" class="procedure-modal-check-status" role="status" aria-live="polite">Not checked</span>
+                        <button type="button" class="btn-ghost procedure-validate-btn" id="procedureModalValidateBtn">🔍 Validate</button>
+                        <button class="close-btn" id="procedureModalClose"
+                            style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+                    </div>
                 </div>
                 <!-- Persistent voucher-level checks bar (Generic Voucher-Level Checks cutover): shown
                      once per voucher, above the document rail — not duplicated per tab/line, since
@@ -226,6 +230,14 @@ let hostAdapter = null;
 // its callers (the ✕ button and the outside-click listener) don't have one either. Moved here from
 // verification.js (Phase 1b) — nothing outside this file ever read or wrote it.
 let currentProcedureModalUid = null;
+
+// A successful Check is a server-authoritative checkpoint for the whole voucher bundle. The
+// revision snapshot makes the optimization safe: Verify/Next may reuse the result only while
+// every line still has the exact revision that was checked and the active modal has no pending
+// Form/Physical Bill draft. This is deliberately local UI state; the server remains the source
+// of truth whenever a new save is required.
+const procedureModalCheckStates = new Map();
+const inFlightProcedureModalChecks = new Map();
 
 // Account Head Recommendation and Voucher Line Correctness use hidden system Documents on the
 // server. Keep the legacy aliases as a fail-safe for an older modal payload; openProcedureModal()
@@ -1066,6 +1078,90 @@ function getProcedureTabState(uid, docId) {
     return hostAdapter.procedureModalState[uid].tabs[docId];
 }
 
+function renderProcedureModalLineStatus(uid) {
+    if (String(currentProcedureModalUid) !== String(uid)) return;
+    const statusEl = document.getElementById('procedureModalLineStatus');
+    if (!statusEl) return;
+    const line = (hostAdapter.currentVoucherLines || []).find(item =>
+        String(item.detail_id) === String(uid)
+    );
+    const rawStatus = String(line?.cleared_status || 'Pending').trim();
+    const status = rawStatus === 'Cleared' || rawStatus === 'Query' ? rawStatus : 'Pending';
+    const statusClass = status === 'Cleared' ? 'cleared' : status === 'Query' ? 'query' : 'pending';
+    const escapeHtml = typeof hostAdapter.escapeHtml === 'function'
+        ? hostAdapter.escapeHtml : value => String(value ?? '');
+    statusEl.className = `procedure-modal-summary-status is-${statusClass}`;
+    statusEl.setAttribute('aria-label', `Line status: ${status}`);
+    statusEl.innerHTML = `<span class="procedure-modal-summary-status-dot" aria-hidden="true"></span>${escapeHtml(status)}`;
+    updateProcedureModalCheckStatus(uid);
+}
+
+function getProcedureModalCheckKey() {
+    return String(hostAdapter?.currentVoucherId || hostAdapter?.currentSessionId || '');
+}
+
+function getProcedureModalRevisionSnapshot() {
+    if (!hostAdapter || typeof hostAdapter.getLineRevision !== 'function') return null;
+    return Object.fromEntries((hostAdapter.currentVoucherLines || []).map(line => [
+        String(line.detail_id),
+        hostAdapter.getLineRevision(line.detail_id)
+    ]));
+}
+
+function getProcedureModalCheckedState() {
+    return procedureModalCheckStates.get(getProcedureModalCheckKey()) || null;
+}
+
+function isProcedureModalCheckCurrent(uid) {
+    const state = getProcedureModalCheckedState();
+    const revisions = getProcedureModalRevisionSnapshot();
+    if (!state || state.result !== 'success' || !state.data || !revisions) return false;
+    if (isProcedureModalDirty(uid)) return false;
+    return (hostAdapter.currentVoucherLines || []).every(line => (
+        revisions[String(line.detail_id)] === state.revisions[String(line.detail_id)]
+    ));
+}
+
+function getProcedureModalCheckDisplayStatus(uid, state) {
+    if (!state) return {text: 'Not checked', className: 'is-neutral'};
+    if (state.result === 'checking') return {text: 'Checking…', className: 'is-busy'};
+    if (state.result === 'error') return {text: 'Check failed — retry', className: 'is-error'};
+    if (!isProcedureModalCheckCurrent(uid)) return {text: 'Needs recheck', className: 'is-dirty'};
+    const line = (hostAdapter.currentVoucherLines || []).find(item => String(item.detail_id) === String(uid));
+    const status = String(line?.cleared_status || state.data?.cleared_status || 'Pending').trim();
+    const normalized = status === 'Cleared' || status === 'Query' ? status : 'Pending';
+    return {
+        text: `Checked: ${normalized}`,
+        className: normalized === 'Cleared' ? 'is-success' : normalized === 'Query' ? 'is-query' : 'is-neutral'
+    };
+}
+
+function updateProcedureModalCheckStatus(uid = currentProcedureModalUid) {
+    const statusEl = document.getElementById('procedureModalCheckStatus');
+    if (!statusEl || !uid || !hostAdapter) return;
+    const display = getProcedureModalCheckDisplayStatus(uid, getProcedureModalCheckedState());
+    statusEl.className = `procedure-modal-check-status ${display.className}`;
+    statusEl.textContent = display.text;
+    statusEl.setAttribute('aria-label', `Procedure check status: ${display.text}`);
+}
+
+function recordProcedureModalCheck(uid, data) {
+    const revisions = getProcedureModalRevisionSnapshot();
+    procedureModalCheckStates.set(getProcedureModalCheckKey(), {
+        result: 'success',
+        revisions: revisions || {},
+        data,
+        detailId: String(uid)
+    });
+    renderProcedureModalLineStatus(uid);
+    updateProcedureModalCheckStatus(uid);
+}
+
+function resetProcedureModalCheckState() {
+    procedureModalCheckStates.clear();
+    inFlightProcedureModalChecks.clear();
+}
+
 // Opens the modal for one voucher line, showing a tab per document in that line's currently
 // assigned Category. initialDocId (optional) pre-selects that document's tab; otherwise the
 // first document's tab opens. No-ops if the line has no Category assigned yet (nothing to build
@@ -1479,9 +1575,30 @@ async function openProcedureModal(uid, initialDocId = null, adapter = null, trig
     if (procedureModalTitle) procedureModalTitle.textContent = `Line ${srNo} of ${totalLines} — ${accountName}`;
     const metaEl = document.getElementById('procedureModalMeta');
     if (metaEl) {
-        let meta = `${type} · ${amountDisplay}`;
-        if (riskData.risk) meta += ` · Risk: ${riskData.risk}`;
-        metaEl.textContent = meta;
+        const escapeHtml = typeof hostAdapter.escapeHtml === 'function'
+            ? hostAdapter.escapeHtml : value => String(value ?? '');
+        const riskMarkup = riskData.risk ? `
+            <span class="procedure-modal-summary-divider" aria-hidden="true"></span>
+            <span class="procedure-modal-summary-item procedure-modal-summary-risk">
+                <span class="procedure-modal-summary-label">Risk</span>
+                <span class="procedure-modal-summary-value">${escapeHtml(riskData.risk)}</span>
+            </span>` : '';
+        metaEl.innerHTML = `
+            <span class="procedure-modal-summary-item procedure-modal-summary-main">
+                <span class="procedure-modal-summary-label">Voucher line</span>
+                <span class="procedure-modal-summary-value">${escapeHtml(type || '—')}</span>
+            </span>
+            <span class="procedure-modal-summary-divider" aria-hidden="true"></span>
+            <span class="procedure-modal-summary-item procedure-modal-summary-amount">
+                <span class="procedure-modal-summary-label">Amount</span>
+                <span class="procedure-modal-summary-value">${escapeHtml(amountDisplay || '—')}</span>
+            </span>
+            <span class="procedure-modal-summary-divider" aria-hidden="true"></span>
+            <span class="procedure-modal-summary-item procedure-modal-summary-status-wrap">
+                <span class="procedure-modal-summary-label">Status</span>
+                <span id="procedureModalLineStatus" class="procedure-modal-summary-status"></span>
+            </span>${riskMarkup}`;
+        renderProcedureModalLineStatus(uid);
     }
 
     // Footer nav: Back disabled on the voucher's first line (unchanged). The old per-line "Next"
@@ -1528,6 +1645,7 @@ function updateProcedureModalSavedNote(uid) {
     );
     noteEl.textContent = dirty ? 'Unsaved changes' : 'All changes saved';
     noteEl.classList.toggle('dirty', dirty);
+    updateProcedureModalCheckStatus(uid);
 }
 
 // One shared dirty-state query for modal exit actions. The line revision covers edits owned by
@@ -1804,6 +1922,62 @@ function updateVerifyFooterButton(uid) {
 // clicked, so a click on the other button can't double-submit while this one is in flight.
 const inFlightVoucherVerifies = new Map();
 
+async function checkProcedureModalStatus() {
+    const uid = currentProcedureModalUid;
+    if (!uid) return null;
+    const button = document.getElementById('procedureModalCheckBtn');
+    if (button && button.disabled) return null;
+    const key = String(hostAdapter.currentVoucherId || uid);
+    if (inFlightProcedureModalChecks.has(key)) return inFlightProcedureModalChecks.get(key);
+    const sequence = checkProcedureModalStatusImpl(uid, button);
+    inFlightProcedureModalChecks.set(key, sequence);
+    try {
+        return await sequence;
+    } finally {
+        inFlightProcedureModalChecks.delete(key);
+    }
+}
+
+async function checkProcedureModalStatusImpl(uid, button) {
+    const key = getProcedureModalCheckKey();
+    procedureModalCheckStates.set(key, {result: 'checking', detailId: String(uid)});
+    if (button) {
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+    }
+    updateProcedureModalCheckStatus(uid);
+    try {
+        // Check must include modal-owned drafts before it records a checkpoint. A failed Form or
+        // Physical Bill save therefore cannot be mistaken for a successfully checked status.
+        const formEntriesSaved = await flushFormEntries(uid);
+        const physicalBillsSaved = await flushPhysicalBillEntries(uid);
+        if (!formEntriesSaved || !physicalBillsSaved) {
+            throw new Error('Some evidence could not be saved. Please retry the Check.');
+        }
+        const data = await performVerifyVoucherChecks(uid, button);
+        if (!data) {
+            procedureModalCheckStates.set(key, {result: 'error', detailId: String(uid)});
+            return null;
+        }
+        recordProcedureModalCheck(uid, data);
+        const line = (hostAdapter.currentVoucherLines || []).find(item => String(item.detail_id) === String(uid));
+        const status = line?.cleared_status || data.cleared_status || 'Pending';
+        showVerifyToast(`Status checked: ${status}`);
+        return data;
+    } catch (e) {
+        console.error('Procedure status Check failed:', e);
+        procedureModalCheckStates.set(key, {result: 'error', detailId: String(uid)});
+        hostAdapter.showStatus(e && e.message ? e.message : 'Status could not be checked. Please retry.', 'error');
+        return null;
+    } finally {
+        if (button && document.contains(button)) {
+            button.disabled = false;
+            button.removeAttribute('aria-busy');
+        }
+        updateProcedureModalCheckStatus(uid);
+    }
+}
+
 async function performVerifyVoucherChecks(uid, triggerBtn) {
     const key = String(hostAdapter.currentVoucherId || uid);
     if (inFlightVoucherVerifies.has(key)) return inFlightVoucherVerifies.get(key);
@@ -1828,7 +2002,8 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
         ? window.LoadingUI.startGlobalLoading(progressTarget)
         : null;
     if (procedureModal) procedureModal.setAttribute('aria-busy', 'true');
-    if (window.LoadingUI) window.LoadingUI.showProgressBar(progressTarget, { mode: 'indeterminate', message: 'Saving…' });
+    const progressMessage = triggerBtn?.id === 'procedureModalCheckBtn' ? 'Checking status…' : 'Saving…';
+    if (window.LoadingUI) window.LoadingUI.showProgressBar(progressTarget, { mode: 'indeterminate', message: progressMessage });
     try {
         // Defensive re-check (fixes verify_voucher_checks 400s reaching the server for a
         // voucher the UI itself doesn't believe is ready): voucherChecksCache is fetched once
@@ -1842,6 +2017,14 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
         if (!isVoucherChecksAllTouched(freshChecks || [])) {
             hostAdapter.showStatus('Mark every voucher-level check before verifying.', 'error');
             return null;
+        }
+        // A successful Check already ran this exact server-authoritative save/verify operation
+        // for the current revision snapshot. Reuse its response for Verify/Next instead of
+        // posting the same voucher bundle again; the revision and pending-draft guards above
+        // make this bypass safe even when the modal contains multiple voucher lines.
+        if (isProcedureModalCheckCurrent(uid)) {
+            const checkedState = getProcedureModalCheckedState();
+            return checkedState.data;
         }
         let combinedResult;
         if (typeof hostAdapter.saveAndVerifyVoucher === 'function') {
@@ -1867,6 +2050,7 @@ async function performVerifyVoucherChecksImpl(uid, triggerBtn) {
         await refreshProcedureModalHostBadges();
         const data = combinedResult.data;
         if (!data) return null;
+        renderProcedureModalLineStatus(uid);
         if (window.VerificationPerf) {
             window.VerificationPerf.log('verify_voucher_checks_sequence', perfStarted, {
                 detail_id: String(uid),
@@ -2696,6 +2880,45 @@ function getFormEntriesForGroup(tabState, billGroupIndex, rowScope = null) {
     );
 }
 
+function isFormItemEntryBlank(entry, itemFields) {
+    if (!entry || entry.row_scope !== 'item') return false;
+    const editableFields = itemFields.filter(field => !isDerivedFormField(field, itemFields));
+    const fieldsToCheck = editableFields.length ? editableFields : itemFields;
+    return !fieldsToCheck.some(field => !formValueIsBlank(entry.values?.[String(field.id)]));
+}
+
+function ensureFormBlankItemRow(tabState, itemFields, billGroupIndex) {
+    if (!itemFields.length) return;
+    const items = getFormEntriesForGroup(tabState, billGroupIndex, 'item');
+    const lastItem = items[items.length - 1];
+    if (lastItem && isFormItemEntryBlank(lastItem, itemFields)) return;
+    tabState.formEntries = tabState.formEntries || [];
+    tabState.formEntries.push(makeEmptyFormEntry('item', itemFields, items.length, billGroupIndex));
+}
+
+function preserveFormBlankItemRows(tabState, blankRows, itemFields) {
+    if (!tabState || !Array.isArray(blankRows) || !blankRows.length || !itemFields.length) return;
+    const existingKeys = new Set((tabState.formEntries || [])
+        .filter(entry => entry.row_scope === 'item')
+        .map(entry => `${Number(entry.bill_group_index || 0)}:${Number(entry.sort_order || 0)}`));
+    blankRows.forEach(entry => {
+        const key = `${Number(entry.bill_group_index || 0)}:${Number(entry.sort_order || 0)}`;
+        if (existingKeys.has(key)) return;
+        tabState.formEntries.push({
+            bill_group_index: Number(entry.bill_group_index || 0),
+            row_scope: 'item',
+            sort_order: Number(entry.sort_order || 0),
+            values: {...(entry.values || {})}
+        });
+        existingKeys.add(key);
+    });
+    tabState.formEntries.sort((left, right) =>
+        Number(left.bill_group_index || 0) - Number(right.bill_group_index || 0)
+        || (left.row_scope === right.row_scope ? 0 : left.row_scope === 'header' ? -1 : 1)
+        || Number(left.sort_order || 0) - Number(right.sort_order || 0)
+    );
+}
+
 function renumberFormItemRows(tabState, billGroupIndex) {
     getFormEntriesForGroup(tabState, billGroupIndex, 'item').forEach((entry, index) => {
         entry.sort_order = index;
@@ -3230,6 +3453,13 @@ function renderFormDocumentPanel(uid, doc) {
     const itemFields = fields.filter(field => (field.field_scope || 'header') === 'item');
     const mappedFields = fields.filter(field => field.linked_column);
     const billGroupIndexes = getFormBillGroupIndexes(tabState);
+    // Keep one local blank input row ready for the auditor when the Form opens, and after every
+    // structural rerender. It is a UI placeholder, not a new audit value, so it must not mark the
+    // line dirty by itself. Extra blank rows created deliberately through "+ Add item row" remain
+    // intact and are preserved across an autosave response below.
+    billGroupIndexes.forEach(billGroupIndex => {
+        ensureFormBlankItemRow(tabState, itemFields, billGroupIndex);
+    });
     const formGrandTotal = computeFormBillGrandTotal(tabState, itemFields);
     const voucherLineAmount = hostAdapter.procedureModalState[uid]?.voucherLineAmount;
     const formBillTotalStatus = formGrandTotal === null
@@ -4250,6 +4480,17 @@ async function toggleAllProcedureChecks(uid, docId) {
 
 async function saveFormEntry(uid, docId, revisionAtSave = null) {
     const tabState = getProcedureTabState(uid, docId);
+    const lineState = hostAdapter.procedureModalState[uid];
+    const doc = (lineState?.documents || []).find(item => String(item.id) === String(docId));
+    const itemFields = (doc?.form_fields || []).filter(field => (field.field_scope || 'header') === 'item');
+    const blankItemRows = (tabState.formEntries || [])
+        .filter(entry => isFormItemEntryBlank(entry, itemFields))
+        .map(entry => ({
+            bill_group_index: Number(entry.bill_group_index || 0),
+            row_scope: 'item',
+            sort_order: Number(entry.sort_order || 0),
+            values: {...(entry.values || {})}
+        }));
     const entries = (tabState.formEntries || []).map(entry => ({
         bill_group_index: Number(entry.bill_group_index || 0),
         row_scope: entry.row_scope,
@@ -4278,9 +4519,11 @@ async function saveFormEntry(uid, docId, revisionAtSave = null) {
                 const line = hostAdapter.currentVoucherLines?.find(item => String(item.detail_id) === String(uid));
                 if (line) line.cleared_status = data.cleared_status || 'Pending';
             }
+            renderProcedureModalLineStatus(uid);
         }
         if (revisionAtSave === null || tabState.formRevision === revisionAtSave) {
             tabState.formEntries = formEntriesFromSavedEntries(savedEntries);
+            preserveFormBlankItemRows(tabState, blankItemRows, itemFields);
             tabState.formDirty = false;
         }
         invalidateProcedureModalData(uid);
@@ -5796,9 +6039,14 @@ async function flushVoucherLineCorrectness(uid) {
         }
         const data = await res.json();
         lineState.voucherLineCorrectDirty = false;
-        if (Object.prototype.hasOwnProperty.call(data, 'cleared_status')
-            && typeof hostAdapter.syncClearedStatusForLine === 'function') {
-            hostAdapter.syncClearedStatusForLine(uid, data.cleared_status);
+        if (Object.prototype.hasOwnProperty.call(data, 'cleared_status')) {
+            if (typeof hostAdapter.syncClearedStatusForLine === 'function') {
+                hostAdapter.syncClearedStatusForLine(uid, data.cleared_status);
+            } else {
+                const line = hostAdapter.currentVoucherLines?.find(item => String(item.detail_id) === String(uid));
+                if (line) line.cleared_status = data.cleared_status || 'Pending';
+            }
+            renderProcedureModalLineStatus(uid);
         }
         return true;
     } catch (e) {
@@ -5837,6 +6085,16 @@ async function flushAccountHeadNoMatchNote(uid) {
         const data = await res.json();
         state.noMatchDirty = false;
         state.recommendationDirty = false;
+
+        if (Object.prototype.hasOwnProperty.call(data, 'cleared_status')) {
+            if (typeof hostAdapter.syncClearedStatusForLine === 'function') {
+                hostAdapter.syncClearedStatusForLine(uid, data.cleared_status);
+            } else {
+                const line = hostAdapter.currentVoucherLines?.find(item => String(item.detail_id) === String(uid));
+                if (line) line.cleared_status = data.cleared_status || 'Pending';
+            }
+            renderProcedureModalLineStatus(uid);
+        }
 
         // Same "keep the main table's Observations cell caught up immediately" pattern
         // saveLineObservation() already uses for real Document tabs.
@@ -6251,6 +6509,15 @@ if (procedureBrowseModal) {
 
 document.getElementById('procedureModalValidateBtn')?.addEventListener('click', function() {
     toggleValidatePanel();
+});
+document.getElementById('procedureModalCheckBtn')?.addEventListener('click', function() {
+    checkProcedureModalStatus().catch(e => {
+        console.error('Failed to Check procedure status:', e);
+        if (hostAdapter) hostAdapter.showStatus(
+            e && e.message ? e.message : 'Status could not be checked. Please retry.',
+            'error'
+        );
+    });
 });
 if (procedureModalClose) {
     procedureModalClose.addEventListener('click', closeProcedureModal);

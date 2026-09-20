@@ -161,6 +161,10 @@ function isVoucherLineDirty(detailId) {
     return (voucherLineDirtyRevisions[String(detailId)] || 0) > 0;
 }
 
+function getVoucherLineRevision(detailId) {
+    return voucherLineDirtyRevisions[String(detailId)] || 0;
+}
+
 // Procedure-window drafts are local until a save path runs. Discard them across the current
 // voucher so a later Verify cannot persist a change the user explicitly abandoned.
 function discardProcedureModalChanges() {
@@ -272,6 +276,7 @@ function buildProcedureModalAdapter() {
         markLineDirty: markVoucherLineDirty,
         markAllLinesDirty: markAllVoucherLinesDirty,
         isLineDirty: isVoucherLineDirty,
+        getLineRevision: getVoucherLineRevision,
         discardProcedureModalChanges,
         escapeHtml,
         getVoucherLineAlias,
@@ -2905,6 +2910,7 @@ document.addEventListener('click', function(e) {
 function seedVoucherLineState(lines) {
     voucherLineState = {};
     voucherLineDirtyRevisions = {};
+    if (typeof resetProcedureModalCheckState === 'function') resetProcedureModalCheckState();
     // Phase 4 (Procedures/Observations expand toggle): not persisted — every new voucher load
     // starts collapsed, same reset point as the other per-voucher state below.
     columnsExpanded = false;
