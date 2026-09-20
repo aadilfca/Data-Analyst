@@ -1,5 +1,20 @@
 # Changelog Archive
 
+## Verification Observation query scoping — 2026-09-20
+
+Verification Observation badges, expanded cells, and the quick-view popover now filter normal
+document findings against the current Category's active Procedure documents. Historical entries
+from documents no longer on the Procedure rail, such as Cash acknowledgement, no longer appear.
+Voucher Line and system exception streams (Account Head recommendations, incorrect decisions, and
+cross-check shortfalls) remain visible, while positive markers remain excluded.
+
+The backend support payload and status engine were left unchanged, so this correction adds no
+database work or status-processing cost. Added browser regression coverage for stale-document
+filtering and system-query preservation. Focused observation tests passed; the full dirty-save file
+had 32 passing tests and one pre-existing Browse Rows geometry failure.
+
+Files: `static/verification.js`, `tests/test_verification_dirty_saves.py`.
+
 ## Verification Observation quick-view popover — 2026-09-20
 
 Verification Observation badges now open a compact popover instead of the full Procedure modal. It lists

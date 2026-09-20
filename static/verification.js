@@ -2433,6 +2433,68 @@ async function fetchLineObservationEntries(uid) {
     }
 }
 
+// Query view semantics: the Observation column is an exception surface, not an audit diary.
+// Exact positive phrases are excluded so a negative sentence such as "Amount is not correct"
+// remains visible; substring matching would incorrectly hide that real query.
+const POSITIVE_OBSERVATION_MARKERS = new Set([
+    'correct', 'verified', 'verified okay', 'ok', 'okay', 'no issue', 'no issues',
+    'no observation', 'no observations', 'nil', 'none'
+]);
+
+function isQueryObservation(entry) {
+    if (!entry || entry.is_correct === true || entry.is_positive === true) return false;
+    const observationType = String(entry.observation_type || entry.observation_kind || entry.kind || '').trim().toLowerCase();
+    if (observationType === 'correct' || observationType === 'positive') return false;
+    const text = String(entry.observation_text || '').trim();
+    if (!text) return false;
+    const normalized = text.toLowerCase().replace(/\s+/g, ' ').replace(/[.!?]+$/, '').trim();
+    return !POSITIVE_OBSERVATION_MARKERS.has(normalized);
+}
+
+function isVoucherLineObservationEntry(entry) {
+    const documentId = String(entry?.document_id ?? '');
+    return documentId === '__voucher_line__'
+        || entry?.is_voucher_line === true
+        || entry?.document_type === 'voucher_line';
+}
+
+function isSystemObservationEntry(entry) {
+    const documentId = String(entry?.document_id ?? '');
+    const documentName = String(entry?.document_name || entry?.document_label || entry?.tab_name || '');
+    return entry?.is_system === true
+        || documentName.startsWith('[System]')
+        || documentId === '-1'
+        || documentId === '-2';
+}
+
+function getCurrentProcedureDocumentIds(guidanceData) {
+    if (!guidanceData || !Array.isArray(guidanceData.documents)) return null;
+    return new Set(guidanceData.documents
+        .filter(document => document && document.is_active !== false)
+        .map(document => document.id ?? document.document_id)
+        .filter(documentId => documentId != null)
+        .map(documentId => String(documentId)));
+}
+
+function isCurrentProcedureObservation(entry, guidanceData) {
+    if (!isQueryObservation(entry)) return false;
+    // These are not Category-owned evidence tabs, but they are real exception streams that
+    // must remain visible: Voucher Line findings, Account Head recommendations, incorrect
+    // Correct decisions, and automated cross-check shortfalls.
+    if (isVoucherLineObservationEntry(entry) || isSystemObservationEntry(entry)) return true;
+
+    const currentDocumentIds = getCurrentProcedureDocumentIds(guidanceData);
+    if (!currentDocumentIds) return false;
+    const documentId = String(entry.document_id ?? '');
+    return entry.is_active !== false && currentDocumentIds.has(documentId);
+}
+
+function getQueryObservationEntries(entries, guidanceData = null) {
+    return Array.isArray(entries)
+        ? entries.filter(entry => isCurrentProcedureObservation(entry, guidanceData))
+        : [];
+}
+
 // Renders the Observations column's flag+count for one line — replaces the old raw-text preview.
 // Reading the actual observation text now requires opening the modal (each document's own
 // Observation segment), matching the v7 prototype exactly.
@@ -2448,51 +2510,48 @@ async function updateObservationsCellForLine(uid, type, guidancePromise) {
     // while this fetch was in flight — don't clobber a newer selection.
     if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
 
-    // A document can have a voucher_line_observations row with blank text (e.g. cleared then
-    // explicitly synced) — that's a "nothing recorded" state, not a recorded observation, so both
-    // the collapsed count and the expanded list must exclude it (previously only the expanded
-    // branch did, leaving the collapsed badge permanently over-counting once anything was cleared).
-    const nonEmpty = entries.filter(e => (e.observation_text || '').trim());
+    // A document can have a voucher_line_observations row with blank or positive text (e.g. a
+    // cleared Correct marker) — those are not query items, so every Observation surface uses the
+    // same exception-only filter below.
+    let data = null;
+    try {
+        data = await (guidancePromise || fetchAuditGuidanceData(type));
+    } catch (e) {
+        console.error('Failed to load current Procedure documents for observations:', e);
+    }
+    if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
+    const queryEntries = getQueryObservationEntries(entries, data);
 
     if (columnsExpanded) {
-        if (!nonEmpty.length) {
+        if (!queryEntries.length) {
             cell.innerHTML = '<span class="voucher-line-obs-none">—</span>';
             return;
         }
         // Document names aren't on the entry itself — reuse the same cached guidance fetch the
         // Procedures cell already draws from, no new endpoint.
-        let data = null;
-        try {
-            data = await (guidancePromise || fetchAuditGuidanceData(type));
-        } catch (e) {
-            console.error('Failed to load document names for expanded Observations:', e);
-        }
-        if (!voucherLineState[uid] || voucherLineState[uid].transactionType !== type) return;
-        const nameById = {};
-        ((data && data.documents) || []).forEach(doc => { nameById[doc.id] = doc.name; });
-        const itemsHtml = nonEmpty.map(entry => `
+        const itemsHtml = queryEntries.map(entry => `
             <div class="voucher-line-obs-expanded-item">
-                <span class="voucher-line-obs-expanded-doc">${escapeHtml(nameById[entry.document_id] || 'Document')}:</span>
+                <span class="voucher-line-obs-expanded-doc">${escapeHtml(getObservationDocumentName(entry, data))}:</span>
                 <span class="voucher-line-obs-expanded-text">${escapeHtml(entry.observation_text)}</span>
             </div>
         `).join('');
         cell.innerHTML = `<div class="voucher-line-obs-expanded-list" data-uid="${uid}">${itemsHtml}</div>`;
         cell.querySelector('.voucher-line-obs-expanded-list')?.addEventListener('click', function(e) {
             e.stopPropagation();
-            showObservationPopover(this, this.dataset.uid, nonEmpty, data);
+            showObservationPopover(this, this.dataset.uid, queryEntries, data);
         });
         return;
     }
 
-    const count = nonEmpty.length;
+    const count = queryEntries.length;
     if (!count) {
         cell.innerHTML = '<span class="voucher-line-obs-none">—</span>';
         return;
     }
-    cell.innerHTML = `<span class="voucher-line-obs-flag" data-uid="${uid}" title="${count} observation${count === 1 ? '' : 's'} recorded">⚑ ${count}</span>`;
+    cell.innerHTML = `<span class="voucher-line-obs-flag" data-uid="${uid}" title="${count} audit quer${count === 1 ? 'y' : 'ies'} recorded">⚑ ${count}</span>`;
     cell.querySelector('.voucher-line-obs-flag')?.addEventListener('click', function(e) {
         e.stopPropagation();
-        showObservationPopover(this, this.dataset.uid, nonEmpty);
+        showObservationPopover(this, this.dataset.uid, queryEntries, data);
     });
 }
 
@@ -2529,19 +2588,22 @@ function hideObservationPopover() {
 }
 
 function getObservationDocumentName(entry, guidanceData) {
-    const explicitName = entry.document_name || entry.document_label || entry.tab_name;
-    if (explicitName) return explicitName;
     const documentId = String(entry.document_id ?? '');
-    if (documentId === '__voucher_line__' || entry.is_voucher_line || entry.document_type === 'voucher_line') {
+    if (isVoucherLineObservationEntry(entry)) {
         return 'Voucher Line';
     }
-    const document = (guidanceData?.documents || []).find(doc => String(doc.id) === documentId);
-    return document?.name || 'Procedure tab';
+    const document = (guidanceData?.documents || []).find(doc =>
+        String(doc.id ?? doc.document_id) === documentId
+    );
+    if (document?.name) return document.name;
+    const explicitName = entry.document_name || entry.document_label || entry.tab_name;
+    return explicitName || 'Procedure tab';
 }
 
 function renderObservationPopover(popover, entries, guidanceData) {
-    const listHtml = entries.length
-        ? entries.map(entry => `
+    const queryEntries = getQueryObservationEntries(entries, guidanceData);
+    const listHtml = queryEntries.length
+        ? queryEntries.map(entry => `
             <article class="voucher-line-observation-entry">
                 <div class="voucher-line-observation-entry-header">
                     <span class="voucher-line-observation-entry-dot" aria-hidden="true"></span>
@@ -2550,12 +2612,12 @@ function renderObservationPopover(popover, entries, guidanceData) {
                 <div class="voucher-line-observation-entry-text">${escapeHtml(entry.observation_text)}</div>
             </article>
         `).join('')
-        : '<p class="voucher-line-observation-empty">No observations recorded for this voucher line.</p>';
+        : '<p class="voucher-line-observation-empty">No queries recorded for this voucher line.</p>';
     popover.innerHTML = `
         <div class="voucher-line-observation-popover-header">
             <div>
-                <div class="voucher-line-observation-popover-title">Observations</div>
-                <div class="voucher-line-observation-popover-subtitle">${entries.length} recorded ${entries.length === 1 ? 'observation' : 'observations'}</div>
+                <div class="voucher-line-observation-popover-title">Audit queries</div>
+                <div class="voucher-line-observation-popover-subtitle">${queryEntries.length} requiring attention</div>
             </div>
             <button type="button" class="voucher-line-observation-popover-close" aria-label="Close observations">×</button>
         </div>
@@ -2601,7 +2663,7 @@ async function showObservationPopover(anchor, uid, initialEntries, initialGuidan
     observationPopoverUid = key;
     popover.innerHTML = `
         <div class="voucher-line-observation-popover-header">
-            <div class="voucher-line-observation-popover-title">Observations</div>
+            <div class="voucher-line-observation-popover-title">Audit queries</div>
             <button type="button" class="voucher-line-observation-popover-close" aria-label="Close observations">×</button>
         </div>
         <div class="voucher-line-observation-popover-body"><p class="voucher-line-observation-empty">Loading observations…</p></div>
@@ -2620,7 +2682,7 @@ async function showObservationPopover(anchor, uid, initialEntries, initialGuidan
         const type = voucherLineState[uid]?.transactionType || '';
         if (!guidanceData && type) guidanceData = await fetchAuditGuidanceData(type);
         if (observationPopoverUid !== key) return;
-        renderObservationPopover(popover, entries.filter(entry => (entry.observation_text || '').trim()), guidanceData);
+        renderObservationPopover(popover, entries, guidanceData);
         positionObservationPopover(anchor, popover);
     } catch (e) {
         if (observationPopoverUid !== key) return;

@@ -201,9 +201,10 @@ def test_observation_badge_opens_cached_document_popover(dirty_page):
         const entries = [
             {document_id: 7, observation_text: 'Invoice date is missing.'},
             {document_id: '__voucher_line__', observation_text: 'Account head needs review.'},
-            {document_id: 8, document_name: 'Physical Bill', observation_text: 'A'.repeat(320)}
+            {document_id: 8, document_name: 'Physical Bill', observation_text: 'A'.repeat(320)},
+            {document_id: 21, document_name: 'Cash acknowledgement', observation_text: 'Old document finding.'}
         ];
-        const guidance = {documents: [{id: 7, name: 'Invoice'}]};
+        const guidance = {documents: [{id: 7, name: 'Invoice'}, {id: 8, name: 'Physical Bill'}]};
         auditGuidanceCache['Purchases'] = guidance;
         voucherLineState[1].transactionType = 'Purchases';
         voucherSupportCache = {
@@ -235,7 +236,7 @@ def test_observation_badge_opens_cached_document_popover(dirty_page):
     assert result == {
         "openState": {
             "visible": True,
-            "title": "Observations",
+            "title": "Audit queries",
             "count": 3,
             "names": ["Invoice", "Voucher Line", "Physical Bill"],
             "bodyScrolls": "auto",
@@ -243,6 +244,45 @@ def test_observation_badge_opens_cached_document_popover(dirty_page):
         },
         "closedByOutsideClick": True,
         "closedByEscape": True,
+    }
+
+
+def test_observation_popover_filters_positive_markers_but_keeps_negative_text(dirty_page):
+    dirty_page.add_style_tag(path=str(STYLE_CSS))
+    result = dirty_page.evaluate("""async () => {
+        const entries = [
+            {document_id: 7, observation_text: 'correct'},
+            {document_id: 7, observation_text: 'okay'},
+            {document_id: 7, observation_text: ''},
+            {document_id: 7, observation_text: 'Amount is not correct'},
+            {document_id: 7, observation_text: 'Invoice date is missing.'},
+            {document_id: 21, document_name: 'Cash acknowledgement', observation_text: 'Stale document finding.'},
+            {document_id: 99, document_name: '[System] Account Head Recommendation', observation_text: 'Recommended account needs review.'}
+        ];
+        const guidance = {documents: [{id: 7, name: 'Invoice'}]};
+        auditGuidanceCache['Purchases'] = guidance;
+        voucherLineState[1].transactionType = 'Purchases';
+        voucherSupportCache = {voucher_line_id: 1, lines: {'1': {observations: {entries}}}};
+        document.body.innerHTML = '<div class="voucher-line-observations-cell" data-detail-id="1"></div>';
+        await updateObservationsCellForLine(1, 'Purchases', Promise.resolve(guidance));
+        const badge = document.querySelector('.voucher-line-obs-flag');
+        badge.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const popover = document.getElementById('voucherLineObservationPopover');
+        return {
+            badge: badge.textContent.trim(),
+            count: popover.querySelectorAll('.voucher-line-observation-entry').length,
+            texts: [...popover.querySelectorAll('.voucher-line-observation-entry-text')].map(node => node.textContent),
+            positiveTextVisible: [...popover.querySelectorAll('.voucher-line-observation-entry-text')]
+                .some(node => ['correct', 'okay'].includes(node.textContent.trim().toLowerCase()))
+        };
+    }""")
+
+    assert result == {
+        "badge": "⚑ 3",
+        "count": 3,
+        "texts": ["Amount is not correct", "Invoice date is missing.", "Recommended account needs review."],
+        "positiveTextVisible": False,
     }
 
 
