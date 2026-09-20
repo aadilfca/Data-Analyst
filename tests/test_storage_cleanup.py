@@ -85,7 +85,9 @@ class StorageCleanupPreviewTests(unittest.TestCase):
                 patch.object(database, "_ensure_postgres_audit_rule_document_type_constraint", return_value=[]), \
                 patch.object(database, "_ensure_postgres_form_field_columns", return_value=[]), \
                 patch.object(database, "_ensure_postgres_form_tables", return_value=[]), \
-                patch.object(database, "_ensure_postgres_report_category_tables"):
+                patch.object(database, "_ensure_postgres_report_category_tables"), \
+                patch.object(database, "_ensure_postgres_audit_rule_assertions", return_value=False), \
+                patch.object(database, "_ensure_postgres_category_document_assertions", return_value=False):
             database.init_db_postgres(connection)
 
         cleanup_cursor.execute.assert_called_once()

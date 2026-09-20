@@ -5879,3 +5879,54 @@ confirmed to survive a page reload, and full create/delete/restore/update round-
 calls. All test data was cleaned up afterward (seed rows reset to their original `description: null`
 state). Aadil then manually confirmed the feature working on his own port-5000 server before this was
 committed.
+
+## Tag Documents with Assertions — Audit Rules Phase 2 of 5 - 2026-09-20
+
+New `audit_rule_category_document_assertions` join table (SQLite + Postgres, same dual-schema
+requirement as Phase 1) letting a Category's attached Document be tagged with one or more
+Assertions from the Phase 1 master list. Keyed by the same `(category_id, document_id)` pair the
+existing `is_required` flag already uses to address a Category-Document attachment — not the
+attachment's own surrogate `id`, which is never exposed to the frontend — via a composite FK
+against `audit_rule_category_documents`' existing `UNIQUE(category_id, document_id)` constraint,
+plus `assertion_id` FK'd to `audit_rule_assertions`. `UNIQUE(category_id, document_id, assertion_id)`
+prevents duplicate tags; two indexes support the lookup and Phase 5's future "which Assertions have
+zero tagged items" query. No UI (Phase 4's job), no coverage-gap logic (Phase 5's job), and no
+`matrix_version` bump — that field drives the Cleared/Query engine and Assertions are explicitly out
+of engine scope.
+
+`routers/audit_rules.py` gained `get_category_document_assertions()`/
+`save_category_document_assertions()` helpers (full-replace, not diff — same convention
+`save_category_documents()` already uses) and two endpoints mirroring the existing `is_required`
+toggle's shape exactly: `GET`/`PUT .../categories/{category_id}/documents/{document_id}/assertions`
+(404 if the Document isn't attached to the Category, 400 naming the specific id if an unknown
+`assertion_id` is submitted — same per-id error style `validate_category_payload()` uses). Kept as a
+dedicated sub-resource rather than folded into `CategoryCreate`/`CategoryUpdate`, for the same reason
+the `is_required` toggle's own comment already gives — keeping that already-live payload shape
+untouched.
+
+Followed the Postgres bootstrap-marker Convention CLAUDE.md gained during Phase 1: added a companion
+`_ensure_postgres_category_document_assertions(conn)` migration function (same idempotent
+`to_regclass()`-check-then-`CREATE TABLE IF NOT EXISTS` pattern as
+`_ensure_postgres_audit_rule_assertions()`) alongside the full-bootstrap `CREATE TABLE`, and wired it
+into `init_db_postgres()`'s fast-path branch — confirmed necessary again live (the real Supabase
+database took this path, and the migration log correctly reported
+`audit_rule_category_document_assertions created`).
+
+A pre-existing regression was found and fixed along the way, not caused by this phase:
+`tests/test_storage_cleanup.py::test_existing_postgres_schema_path_ensures_cleanup_run_ledger`'s mock
+only queued 2 fake `cursor()` results and never patched out Phase 1's own
+`_ensure_postgres_audit_rule_assertions()` (added to the same fast-path branch this test exercises),
+so that function's real, unmocked `conn.cursor()` call exhausted the mock's `side_effect` list and
+raised `StopIteration` — confirmed via `git stash` to already fail at Phase 1's committed state, before
+any Phase 2 changes existed. Fixed by patching out both `_ensure_postgres_audit_rule_assertions()` and
+the new `_ensure_postgres_category_document_assertions()` in that test, matching how it already patches
+the other four sibling migration functions. User confirmed this scope addition before it was made.
+
+Verified: `pytest tests/ -v` back to exactly the same 16 pre-existing failures Phase 1 already
+confirmed unrelated (was 17 before the storage-cleanup mock fix); `py_compile` on both changed
+backend files; a throwaway server on port 5050 against the real Supabase database (port 5000 was not
+running this session, so no collision risk) — confirmed the migration log line, then exercised GET
+(empty list) → PUT with 2 assertion ids → GET (returns them) → PUT with an unknown id (400, names the
+id) → PUT against a document not attached to the category (404, both GET and PUT) → PUT with a
+different smaller set (confirms full-replace, not merge) → cleared tags to leave the real Category
+(id 11, "Computer and related expenses") / Document (id 21, "Cash acknowledgement") pairing clean.

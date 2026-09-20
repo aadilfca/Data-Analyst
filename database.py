@@ -2115,6 +2115,24 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add is_required to audit_rule_category_documents:", e)
 
+        # Assertions tagged on a Category's attached Document (Assertions Phase 2 of 5). Keyed by
+        # the same (category_id, document_id) pair the is_required flag above already uses to
+        # address this attachment - not the attachment's own surrogate id, which is never exposed
+        # to the frontend today. Composite FK is valid because that pair already carries a
+        # UNIQUE constraint on audit_rule_category_documents.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_category_document_assertions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                assertion_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (category_id, document_id) REFERENCES audit_rule_category_documents(category_id, document_id) ON DELETE CASCADE,
+                FOREIGN KEY (assertion_id) REFERENCES audit_rule_assertions(id) ON DELETE CASCADE,
+                UNIQUE(category_id, document_id, assertion_id)
+            )
+        ''')
+
         # Cross-checks a Category applies.
         conn.execute('''
             CREATE TABLE IF NOT EXISTS audit_rule_category_cross_checks (
@@ -2242,6 +2260,8 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cross_check_cells_field ON audit_rule_cross_check_cells (field_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_documents_category ON audit_rule_category_documents (category_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_documents_document ON audit_rule_category_documents (document_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_doc_assertions_lookup ON audit_rule_category_document_assertions (category_id, document_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_doc_assertions_assertion ON audit_rule_category_document_assertions (assertion_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_category ON audit_rule_category_cross_checks (category_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_crosscheck ON audit_rule_category_cross_checks (cross_check_id)")
         print("✅ Created Audit Rules module tables (Phase 1 of 9: schema foundation)")
@@ -3388,6 +3408,44 @@ def _ensure_postgres_audit_rule_assertions(conn):
         cur.close()
 
 
+def _ensure_postgres_category_document_assertions(conn):
+    """Add audit_rule_category_document_assertions to an already-marked Postgres schema.
+
+    Same companion-migration reasoning as _ensure_postgres_audit_rule_assertions above
+    (Assertions Phase 2 of 5) - must run after that one so audit_rule_assertions already
+    exists for this table's FK.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT to_regclass('public.audit_rule_category_document_assertions')")
+        was_missing = cur.fetchone()[0] is None
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_category_document_assertions (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                category_id INTEGER NOT NULL,
+                document_id INTEGER NOT NULL,
+                assertion_id INTEGER NOT NULL REFERENCES audit_rule_assertions(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                FOREIGN KEY (category_id, document_id) REFERENCES audit_rule_category_documents(category_id, document_id) ON DELETE CASCADE,
+                UNIQUE(category_id, document_id, assertion_id)
+            )
+        ''')
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_doc_assertions_lookup "
+            "ON audit_rule_category_document_assertions (category_id, document_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_doc_assertions_assertion "
+            "ON audit_rule_category_document_assertions (assertion_id)"
+        )
+        return was_missing
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
 
@@ -3407,6 +3465,7 @@ def init_db_postgres(conn):
         migrated_form_tables = _ensure_postgres_form_tables(conn)
         _ensure_postgres_report_category_tables(conn)
         migrated_assertions = _ensure_postgres_audit_rule_assertions(conn)
+        migrated_cat_doc_assertions = _ensure_postgres_category_document_assertions(conn)
         conn.commit()
         migration_notes = []
         if migrated_document_type:
@@ -3417,6 +3476,8 @@ def init_db_postgres(conn):
             migration_notes.append("Form evidence tables upgraded")
         if migrated_assertions:
             migration_notes.append("audit_rule_assertions created and seeded")
+        if migrated_cat_doc_assertions:
+            migration_notes.append("audit_rule_category_document_assertions created")
         print(
             "[postgres] existing schema verified; skipped bootstrap"
             + (f" ({'; '.join(migration_notes)})" if migration_notes else "")
@@ -4003,6 +4064,21 @@ def init_db_postgres(conn):
     ''', "audit_rule_category_documents")
     run("CREATE INDEX IF NOT EXISTS idx_audit_rule_category_documents_category ON audit_rule_category_documents (category_id)")
     run("CREATE INDEX IF NOT EXISTS idx_audit_rule_category_documents_document ON audit_rule_category_documents (document_id)")
+
+    # ---------- 25a. audit_rule_category_document_assertions ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_category_document_assertions (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            category_id INTEGER NOT NULL,
+            document_id INTEGER NOT NULL,
+            assertion_id INTEGER NOT NULL REFERENCES audit_rule_assertions(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            FOREIGN KEY (category_id, document_id) REFERENCES audit_rule_category_documents(category_id, document_id) ON DELETE CASCADE,
+            UNIQUE(category_id, document_id, assertion_id)
+        )
+    ''', "audit_rule_category_document_assertions")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_doc_assertions_lookup ON audit_rule_category_document_assertions (category_id, document_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_doc_assertions_assertion ON audit_rule_category_document_assertions (assertion_id)")
 
     # ---------- 26. audit_rule_category_cross_checks ----------
     run('''

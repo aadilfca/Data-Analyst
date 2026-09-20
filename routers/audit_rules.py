@@ -2942,6 +2942,50 @@ def get_category_document_requireds(category_id: int) -> dict:
     )
     return {r["document_id"]: r["is_required"] for r in rows}
 
+def get_category_document_assertions(category_id: int, document_id: int) -> List[dict]:
+    """
+    Assertions tagged on a Category's attached Document (Assertions Phase 2 of 5). Returns
+    every tagged row regardless of the Assertion's own is_active state - a tag isn't silently
+    dropped just because the master entry was later deactivated; the caller can decide how to
+    render that (same is_active-passthrough convention get_category_documents() already uses
+    for a soft-deleted attached Document).
+    """
+    rows = execute_query_pg(
+        """
+        SELECT a.id, a.name, a.is_active
+        FROM audit_rule_category_document_assertions cda
+        JOIN audit_rule_assertions a ON cda.assertion_id = a.id
+        WHERE cda.category_id = %s AND cda.document_id = %s
+        ORDER BY a.sort_order
+        """,
+        (category_id, document_id)
+    )
+    return [{"id": r["id"], "name": r["name"], "is_active": bool(r["is_active"])} for r in rows]
+
+def save_category_document_assertions(category_id: int, document_id: int, assertion_ids: List[int]):
+    """
+    Full-replace a Category-Document attachment's Assertion tags - same replace-not-diff
+    convention save_category_documents() already uses for a Category's own document list.
+    Raises HTTPException(400) naming the specific id if any assertion_id doesn't exist, same
+    per-id error style validate_category_payload() uses for Document/Cross-check ids.
+    """
+    if len(assertion_ids) != len(set(assertion_ids)):
+        raise HTTPException(400, "Assertion tags cannot be duplicated")
+    for assertion_id in assertion_ids:
+        rows = execute_query_pg("SELECT id FROM audit_rule_assertions WHERE id = %s", (assertion_id,))
+        if not rows:
+            raise HTTPException(400, f"Assertion ID {assertion_id} not found")
+
+    execute_write_pg(
+        "DELETE FROM audit_rule_category_document_assertions WHERE category_id = %s AND document_id = %s",
+        (category_id, document_id)
+    )
+    for assertion_id in assertion_ids:
+        execute_write_pg(
+            "INSERT INTO audit_rule_category_document_assertions (category_id, document_id, assertion_id) VALUES (%s, %s, %s)",
+            (category_id, document_id, assertion_id)
+        )
+
 def get_category_cross_checks(category_id: int) -> List[dict]:
     rows = execute_query_pg(
         """
@@ -3930,6 +3974,43 @@ def update_category_document_required(category_id: int, document_id: int, payloa
     )
     invalidate_audit_rules_cache()
     return {"category_id": category_id, "document_id": document_id, "is_required": payload.is_required}
+
+
+# ---------- PER-DOCUMENT ASSERTION TAGS (Assertions Phase 2 of 5) ----------
+# Same dedicated-sub-resource shape as the is_required toggle above - deliberately not folded
+# into CategoryCreate/CategoryUpdate's document_ids, keeping that already-live payload shape
+# untouched. Unlike is_required, tagging never bumps matrix_version - that field drives the
+# Cleared/Query engine, and Assertions are explicitly out of engine scope for this feature.
+class CategoryDocumentAssertionsUpdate(BaseModel):
+    assertion_ids: List[int] = []
+
+@router.get("/api/audit-rules/categories/{category_id}/documents/{document_id}/assertions")
+def get_category_document_assertion_tags(category_id: int, document_id: int):
+    existing = execute_query_pg(
+        "SELECT 1 FROM audit_rule_category_documents WHERE category_id = %s AND document_id = %s",
+        (category_id, document_id)
+    )
+    if not existing:
+        raise HTTPException(404, "This Document is not part of this Category")
+    return get_category_document_assertions(category_id, document_id)
+
+@router.put("/api/audit-rules/categories/{category_id}/documents/{document_id}/assertions", dependencies=[Depends(ensure_no_active_verification_sessions)])
+def update_category_document_assertion_tags(category_id: int, document_id: int, payload: CategoryDocumentAssertionsUpdate):
+    existing = execute_query_pg(
+        "SELECT 1 FROM audit_rule_category_documents WHERE category_id = %s AND document_id = %s",
+        (category_id, document_id)
+    )
+    if not existing:
+        raise HTTPException(404, "This Document is not part of this Category")
+
+    save_category_document_assertions(category_id, document_id, payload.assertion_ids)
+
+    log_audit(
+        "Admin", "Update", "AuditRules",
+        f"Set Assertion tags={payload.assertion_ids} for Document ID {document_id} in Category ID {category_id}"
+    )
+    invalidate_audit_rules_cache()
+    return {"category_id": category_id, "document_id": document_id, "assertion_ids": payload.assertion_ids}
 
 
 # ---------- PER-DOCUMENT TRANSACTION-LEVEL-APPROVAL FLAG (new, confirmed requirement) ----------
