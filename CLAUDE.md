@@ -290,7 +290,8 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-20: Form bill rail dots and Cleared/Query now reconcile arithmetic Total fields to voucher amounts; mismatch coverage added. See CHANGELOG_ARCHIVE.md.
 - 2026-09-20: Procedure modal Check/status and Form item-row persistence were completed in procedure_modal.js, verification.js, style.css, and tests. See CHANGELOG_ARCHIVE.md.
 - 2026-09-20: Verification Observation badges now open cached, scrollable document/tab summaries without opening the Procedure modal. See CHANGELOG_ARCHIVE.md.
-- 2026-09-20: Verification Observation queries now follow the current Procedure tabs and retain valid system exceptions, preventing stale documents from appearing. See CHANGELOG_ARCHIVE.md.
+- 2026-09-20: Verification Observation queries now follow the current Procedure tabs and retain valid system exceptions, preventing stale documents from appearing.
+- 2026-09-20: Read-only traceability investigation mapped Category rules to Verification Cleared/Query gates; 15 findings logged. See AUDIT_RULES_TRACEABILITY_INVESTIGATION.md. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
