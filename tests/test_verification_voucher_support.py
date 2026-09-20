@@ -61,6 +61,7 @@ class VoucherSupportBatchingTests(unittest.TestCase):
             rows[0],
         ]
         self.assertTrue(_evaluate_form_bill_completion(fields, completion_rows, 50))
+        self.assertFalse(_evaluate_form_bill_completion(fields, completion_rows, 400))
 
         with patch("routers.verification.execute_query_pg", return_value=[{
             'client_data_id': 100, 'document_id': 15, 'voucher_line_id': 7,

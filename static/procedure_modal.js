@@ -2789,7 +2789,13 @@ function getDerivedFormAmountFields(itemFields) {
 }
 
 function getFormBillAmountField(itemFields) {
-    return findQuickBillField(itemFields, ['amount', 'bill amount', 'total amount']);
+    const namedAmountField = findQuickBillField(itemFields, ['amount', 'bill amount', 'total amount']);
+    if (namedAmountField) return namedAmountField;
+    // Quick-bill Forms may configure the calculated amount column as an arithmetic field named
+    // "Total". Treat that derived field as the voucher-reconciliation source, but do not turn an
+    // ordinary editable field with the same label into an amount field by accident.
+    return itemFields.find(field => field.field_type === 'arithmetic_multiply'
+        && normalizeFormFieldLabel(field.field_name) === 'total') || null;
 }
 
 function isDerivedFormAmountField(field, itemFields) {

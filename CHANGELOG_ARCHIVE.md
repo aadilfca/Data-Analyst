@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Verification Form Total reconciliation — 2026-09-20
+
+Form-based physical bills now treat an item-level arithmetic `Total` field as the voucher amount
+source alongside existing amount labels. Browser rail status and backend Cleared/Query evaluation
+now flag a mismatch between the Form grand total and voucher line amount; matching totals remain
+complete. Added browser/backend regression coverage. Focused tests and JavaScript syntax passed;
+the full dirty-save file retained one unrelated Browse Rows geometry failure.
+
 ## Verification Save/Verify foreign-key fix — 2026-09-19
 
 Account Head Recommendation and Voucher Line Correctness markers now persist through hidden,

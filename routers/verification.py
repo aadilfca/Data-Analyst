@@ -6314,7 +6314,9 @@ def _evaluate_physical_bill_completion(bills: List[dict], voucher_amount: Option
 def _form_field_is_amount(field: dict) -> bool:
     """Recognize the configured derived Amount field used by the physical-bill Form."""
     label = re.sub(r'[^a-z0-9]+', ' ', str(field.get('field_name') or '').lower()).strip()
-    return label in {'amount', 'bill amount', 'total amount'}
+    return label in {'amount', 'bill amount', 'total amount'} or (
+        field.get('field_type') == ARITHMETIC_MULTIPLY_FIELD_TYPE and label == 'total'
+    )
 
 
 def _shape_form_entries_for_completion(rows: List[dict]) -> List[dict]:

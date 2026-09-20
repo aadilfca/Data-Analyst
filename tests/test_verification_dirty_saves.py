@@ -381,6 +381,48 @@ def test_procedure_rail_uses_grey_green_red_states_and_account_head_query(proced
     assert result["accountHeadNote"] == "__account_head_recommendation__: Office Supplies"
 
 
+def test_form_total_mismatch_turns_rail_dot_red(procedure_modal_page):
+    result = procedure_modal_page.evaluate("""() => {
+        hostAdapter.escapeHtml = value => String(value ?? '');
+        hostAdapter.currentVoucherId = 10;
+        voucherChecksCache[10] = [];
+        document.body.innerHTML = '<div id="procedureModalTabs"></div>';
+        const formDoc = {
+            id: 8, name: 'Food / Meal Overtime', document_type: 'form',
+            auth_roles: [], procedure_rules_configured: false,
+            form_fields: [
+                {id: 100, field_name: 'Persons', field_type: 'numeric', field_scope: 'item'},
+                {id: 101, field_name: 'Per Head Rate', field_type: 'numeric', field_scope: 'item'},
+                {id: 102, field_name: 'Total', field_type: 'arithmetic_multiply', field_scope: 'item'}
+            ]
+        };
+        const voucherTab = {id: '__voucher_line__', name: 'Voucher Line', __voucherTab: true};
+        const line = {
+            documents: [voucherTab, formDoc], activeDocId: 8, assignedDocIds: new Set(),
+            voucherLineAmount: 400, crossCheckResults: [], tabs: {
+                8: {
+                    loaded: true, checklist: {}, observation: '', observationDirty: false,
+                    physicalBills: [], physicalBillSaved: false, physicalBillDirty: false,
+                    formEntries: [{row_scope: 'item', values: {'100': '2', '101': '26', '102': '52'}}],
+                    formSaved: true, formDirty: false
+                }
+            }
+        };
+        hostAdapter.procedureModalState = {1: line};
+        const renderState = () => {
+            renderProcedureModalTabs(1);
+            return [...document.querySelectorAll('.procedure-tab-dot')].map(dot => dot.className);
+        };
+        const mismatch = renderState();
+        line.tabs[8].formEntries[0].values = {'100': '20', '101': '20', '102': '400'};
+        const match = renderState();
+        return {mismatch, match};
+    }""")
+
+    assert result["mismatch"] == ["procedure-tab-dot", "procedure-tab-dot query"]
+    assert result["match"] == ["procedure-tab-dot", "procedure-tab-dot complete"]
+
+
 def test_physical_bill_item_grid_keeps_spreadsheet_columns_and_actions_aligned(procedure_modal_page):
     result = procedure_modal_page.evaluate("""() => {
         hostAdapter.escapeHtml = value => String(value ?? '');
