@@ -2479,7 +2479,7 @@ async function updateObservationsCellForLine(uid, type, guidancePromise) {
         cell.innerHTML = `<div class="voucher-line-obs-expanded-list" data-uid="${uid}">${itemsHtml}</div>`;
         cell.querySelector('.voucher-line-obs-expanded-list')?.addEventListener('click', function(e) {
             e.stopPropagation();
-            openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter(), this);
+            showObservationPopover(this, this.dataset.uid, nonEmpty, data);
         });
         return;
     }
@@ -2492,7 +2492,7 @@ async function updateObservationsCellForLine(uid, type, guidancePromise) {
     cell.innerHTML = `<span class="voucher-line-obs-flag" data-uid="${uid}" title="${count} observation${count === 1 ? '' : 's'} recorded">⚑ ${count}</span>`;
     cell.querySelector('.voucher-line-obs-flag')?.addEventListener('click', function(e) {
         e.stopPropagation();
-        openProcedureModal(this.dataset.uid, null, buildProcedureModalAdapter(), this);
+        showObservationPopover(this, this.dataset.uid, nonEmpty);
     });
 }
 
@@ -2505,6 +2505,142 @@ async function updateObservationsCellForLine(uid, type, guidancePromise) {
 // revisiting an already-looked-up voucher this session doesn't re-hit the endpoint. A matched
 // name caches as itself, "no match" caches as null; a genuine fetch error is NOT cached, so a
 // later retry (e.g. reloading the voucher) can succeed.
+// ---------- Observation summary popover ----------
+// The Observations badge is a read-only quick review surface. It uses the same voucher-wide support
+// cache as the badge itself, so opening it never creates a second request for the same voucher.
+let observationPopoverUid = null;
+
+function getObservationPopover() {
+    let popover = document.getElementById('voucherLineObservationPopover');
+    if (!popover) {
+        popover = document.createElement('div');
+        popover.id = 'voucherLineObservationPopover';
+        popover.className = 'voucher-line-observation-popover';
+        popover.style.display = 'none';
+        document.body.appendChild(popover);
+    }
+    return popover;
+}
+
+function hideObservationPopover() {
+    const popover = document.getElementById('voucherLineObservationPopover');
+    if (popover) popover.style.display = 'none';
+    observationPopoverUid = null;
+}
+
+function getObservationDocumentName(entry, guidanceData) {
+    const explicitName = entry.document_name || entry.document_label || entry.tab_name;
+    if (explicitName) return explicitName;
+    const documentId = String(entry.document_id ?? '');
+    if (documentId === '__voucher_line__' || entry.is_voucher_line || entry.document_type === 'voucher_line') {
+        return 'Voucher Line';
+    }
+    const document = (guidanceData?.documents || []).find(doc => String(doc.id) === documentId);
+    return document?.name || 'Procedure tab';
+}
+
+function renderObservationPopover(popover, entries, guidanceData) {
+    const listHtml = entries.length
+        ? entries.map(entry => `
+            <article class="voucher-line-observation-entry">
+                <div class="voucher-line-observation-entry-header">
+                    <span class="voucher-line-observation-entry-dot" aria-hidden="true"></span>
+                    <span class="voucher-line-observation-entry-name">${escapeHtml(getObservationDocumentName(entry, guidanceData))}</span>
+                </div>
+                <div class="voucher-line-observation-entry-text">${escapeHtml(entry.observation_text)}</div>
+            </article>
+        `).join('')
+        : '<p class="voucher-line-observation-empty">No observations recorded for this voucher line.</p>';
+    popover.innerHTML = `
+        <div class="voucher-line-observation-popover-header">
+            <div>
+                <div class="voucher-line-observation-popover-title">Observations</div>
+                <div class="voucher-line-observation-popover-subtitle">${entries.length} recorded ${entries.length === 1 ? 'observation' : 'observations'}</div>
+            </div>
+            <button type="button" class="voucher-line-observation-popover-close" aria-label="Close observations">×</button>
+        </div>
+        <div class="voucher-line-observation-popover-body">${listHtml}</div>
+    `;
+    popover.querySelector('.voucher-line-observation-popover-close')?.addEventListener('click', function(e) {
+        e.stopPropagation();
+        hideObservationPopover();
+    });
+}
+
+function positionObservationPopover(anchor, popover) {
+    const rect = anchor.getBoundingClientRect();
+    const viewportPadding = 8;
+    const popoverWidth = Math.min(420, Math.max(260, window.innerWidth - (viewportPadding * 2)));
+    popover.style.width = `${popoverWidth}px`;
+    let left = rect.left;
+    if (left + popoverWidth > window.innerWidth - viewportPadding) {
+        left = window.innerWidth - popoverWidth - viewportPadding;
+    }
+    popover.style.left = `${Math.max(viewportPadding, left)}px`;
+
+    const maxHeight = Math.min(360, Math.max(180, window.innerHeight - (viewportPadding * 2)));
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow >= maxHeight + 6) {
+        popover.style.top = `${rect.bottom + 6}px`;
+        popover.style.bottom = 'auto';
+    } else {
+        popover.style.bottom = `${Math.max(viewportPadding, window.innerHeight - rect.top + 6)}px`;
+        popover.style.top = 'auto';
+    }
+    const body = popover.querySelector('.voucher-line-observation-popover-body');
+    if (body) body.style.maxHeight = `${Math.max(150, maxHeight - 72)}px`;
+}
+
+async function showObservationPopover(anchor, uid, initialEntries, initialGuidanceData) {
+    const key = String(uid);
+    if (observationPopoverUid === key) {
+        hideObservationPopover();
+        return;
+    }
+    const popover = getObservationPopover();
+    observationPopoverUid = key;
+    popover.innerHTML = `
+        <div class="voucher-line-observation-popover-header">
+            <div class="voucher-line-observation-popover-title">Observations</div>
+            <button type="button" class="voucher-line-observation-popover-close" aria-label="Close observations">×</button>
+        </div>
+        <div class="voucher-line-observation-popover-body"><p class="voucher-line-observation-empty">Loading observations…</p></div>
+    `;
+    popover.querySelector('.voucher-line-observation-popover-close')?.addEventListener('click', function(e) {
+        e.stopPropagation();
+        hideObservationPopover();
+    });
+    positionObservationPopover(anchor, popover);
+    popover.style.display = 'block';
+
+    let entries = Array.isArray(initialEntries) ? initialEntries : [];
+    let guidanceData = initialGuidanceData || null;
+    try {
+        if (!Array.isArray(initialEntries)) entries = await fetchLineObservationEntries(uid);
+        const type = voucherLineState[uid]?.transactionType || '';
+        if (!guidanceData && type) guidanceData = await fetchAuditGuidanceData(type);
+        if (observationPopoverUid !== key) return;
+        renderObservationPopover(popover, entries.filter(entry => (entry.observation_text || '').trim()), guidanceData);
+        positionObservationPopover(anchor, popover);
+    } catch (e) {
+        if (observationPopoverUid !== key) return;
+        console.error('Failed to load observations for quick view:', e);
+        const body = popover.querySelector('.voucher-line-observation-popover-body');
+        if (body) body.innerHTML = '<p class="voucher-line-observation-empty">Unable to load observations.</p>';
+    }
+}
+
+document.addEventListener('click', function(e) {
+    const popover = document.getElementById('voucherLineObservationPopover');
+    if (popover && popover.style.display === 'block' && !popover.contains(e.target)) {
+        hideObservationPopover();
+    }
+});
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && observationPopoverUid !== null) hideObservationPopover();
+});
+
 let categoryForAccountCache = {};
 
 // Writes the resolved Category (or null/unassigned) into one line's Type cell and state. Re-queries
@@ -2911,6 +3047,7 @@ function seedVoucherLineState(lines) {
     voucherLineState = {};
     voucherLineDirtyRevisions = {};
     if (typeof resetProcedureModalCheckState === 'function') resetProcedureModalCheckState();
+    hideObservationPopover();
     // Phase 4 (Procedures/Observations expand toggle): not persisted — every new voucher load
     // starts collapsed, same reset point as the other per-voucher state below.
     columnsExpanded = false;

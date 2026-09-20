@@ -2788,6 +2788,112 @@ body {
     font-size: 12px;
 }
 
+/* Quick observation review opened from the Verification table. The body is the only scrolling
+   region so the title/count stays visible while a long observation list remains compact. */
+.voucher-line-observation-popover {
+    position: fixed;
+    z-index: 1100;
+    background: #ffffff;
+    border: 1px solid #dbe4f0;
+    border-radius: 10px;
+    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.18);
+    color: #1a1a2e;
+    font-size: 12px;
+    overflow: hidden;
+}
+.voucher-line-observation-popover-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 11px 13px 10px;
+    border-bottom: 1px solid #e8eef5;
+    background: #f8fafc;
+}
+.voucher-line-observation-popover-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1e293b;
+}
+.voucher-line-observation-popover-subtitle {
+    margin-top: 2px;
+    color: #64748b;
+    font-size: 11px;
+}
+.voucher-line-observation-popover-close {
+    width: 24px;
+    height: 24px;
+    border: 1px solid #dbe4f0;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #64748b;
+    font-size: 17px;
+    line-height: 20px;
+    cursor: pointer;
+}
+.voucher-line-observation-popover-close:hover {
+    border-color: #94a3b8;
+    color: #1e293b;
+    background: #f1f5f9;
+}
+.voucher-line-observation-popover-body {
+    padding: 8px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+}
+.voucher-line-observation-popover-body::-webkit-scrollbar {
+    width: 7px;
+}
+.voucher-line-observation-popover-body::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 8px;
+}
+.voucher-line-observation-entry {
+    padding: 9px 10px;
+    border: 1px solid #e5eaf1;
+    border-left: 3px solid #dc2626;
+    border-radius: 7px;
+    background: #ffffff;
+}
+.voucher-line-observation-entry + .voucher-line-observation-entry {
+    margin-top: 7px;
+}
+.voucher-line-observation-entry-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
+.voucher-line-observation-entry-dot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    border-radius: 50%;
+    background: #dc2626;
+}
+.voucher-line-observation-entry-name {
+    min-width: 0;
+    overflow: hidden;
+    color: #334155;
+    font-size: 11px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.voucher-line-observation-entry-text {
+    margin: 5px 0 0 14px;
+    color: #475569;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.voucher-line-observation-empty {
+    margin: 8px 4px;
+    color: #64748b;
+    line-height: 1.5;
+}
+
 /* ----- Procedures/Observations column expand toggle (Phase 4) -----
    One tiny icon per header, mirrored: clicking either fires the same shared toggle
    (toggleColumnsExpanded() in verification.js), so both flip glyph/state together. Sits inline

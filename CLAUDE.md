@@ -289,6 +289,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-20: Voucher Line Recommended Account Head now has a clear cross that removes the selected recommendation and preserves the re-confirmation gate. See CHANGELOG_ARCHIVE.md.
 - 2026-09-20: Form bill rail dots and Cleared/Query now reconcile arithmetic Total fields to voucher amounts; mismatch coverage added. See CHANGELOG_ARCHIVE.md.
 - 2026-09-20: Procedure modal Check/status and Form item-row persistence were completed in procedure_modal.js, verification.js, style.css, and tests. See CHANGELOG_ARCHIVE.md.
+- 2026-09-20: Verification Observation badges now open cached, scrollable document/tab summaries without opening the Procedure modal. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

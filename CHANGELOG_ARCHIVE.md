@@ -1,5 +1,17 @@
 # Changelog Archive
 
+## Verification Observation quick-view popover — 2026-09-20
+
+Verification Observation badges now open a compact popover instead of the full Procedure modal. It lists
+recorded observation text by document/tab, uses a constrained scrolling body, viewport-safe positioning,
+outside-click/Escape/close controls, and loading/empty/error states. The Procedures badge remains unchanged.
+
+The popover reuses cached voucher-support data, so no backend change or new click-time request was added.
+Browser regression coverage, JavaScript/Python syntax checks, and diff checks passed; the focused suite
+retained one pre-existing Browse Rows geometry failure.
+
+Files: `static/verification.js`, `static/style.css`, `tests/test_verification_dirty_saves.py`.
+
 ## Verification Procedure Checkpoint and Form item-row restoration — 2026-09-20
 
 The shared Procedure modal now exposes a server-authoritative Check action with progress and status

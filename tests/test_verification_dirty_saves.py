@@ -195,6 +195,57 @@ def test_save_and_verify_failure_is_reported_without_extra_request(dirty_page):
     assert len(result["calls"]) == 1
 
 
+def test_observation_badge_opens_cached_document_popover(dirty_page):
+    dirty_page.add_style_tag(path=str(STYLE_CSS))
+    result = dirty_page.evaluate("""async () => {
+        const entries = [
+            {document_id: 7, observation_text: 'Invoice date is missing.'},
+            {document_id: '__voucher_line__', observation_text: 'Account head needs review.'},
+            {document_id: 8, document_name: 'Physical Bill', observation_text: 'A'.repeat(320)}
+        ];
+        const guidance = {documents: [{id: 7, name: 'Invoice'}]};
+        auditGuidanceCache['Purchases'] = guidance;
+        voucherLineState[1].transactionType = 'Purchases';
+        voucherSupportCache = {
+            voucher_line_id: 1,
+            lines: {'1': {observations: {entries}}}
+        };
+        document.body.innerHTML = '<div class="voucher-line-observations-cell" data-detail-id="1"></div>';
+        await updateObservationsCellForLine(1, 'Purchases', Promise.resolve(guidance));
+        const badge = document.querySelector('.voucher-line-obs-flag');
+        badge.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const popover = document.getElementById('voucherLineObservationPopover');
+        const openState = {
+            visible: popover.style.display === 'block',
+            title: popover.querySelector('.voucher-line-observation-popover-title')?.textContent,
+            count: popover.querySelectorAll('.voucher-line-observation-entry').length,
+            names: [...popover.querySelectorAll('.voucher-line-observation-entry-name')].map(node => node.textContent),
+            bodyScrolls: getComputedStyle(popover.querySelector('.voucher-line-observation-popover-body')).overflowY,
+            bodyMaxHeight: popover.querySelector('.voucher-line-observation-popover-body').style.maxHeight
+        };
+        document.body.click();
+        const closedByOutsideClick = popover.style.display === 'none';
+        badge.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}));
+        return {openState, closedByOutsideClick, closedByEscape: popover.style.display === 'none'};
+    }""")
+
+    assert result == {
+        "openState": {
+            "visible": True,
+            "title": "Observations",
+            "count": 3,
+            "names": ["Invoice", "Voucher Line", "Physical Bill"],
+            "bodyScrolls": "auto",
+            "bodyMaxHeight": "288px",
+        },
+        "closedByOutsideClick": True,
+        "closedByEscape": True,
+    }
+
+
 def test_clean_procedure_modal_close_is_immediate_and_does_not_save(procedure_modal_page):
     result = procedure_modal_page.evaluate("""async () => {
         await closeProcedureModal();
