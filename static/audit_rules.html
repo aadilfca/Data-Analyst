@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Audit Rules - Internal Audit App</title>
-    <link rel="stylesheet" href="/static/style.css?v=26">
+    <link rel="stylesheet" href="/static/style.css?v=27">
 </head>
 
 <body data-nav-module="Audit Rules" data-nav-parent="index.html">
@@ -36,33 +36,43 @@
              uses for its Available Trial Balances view. -->
         <div class="audit-rules-shell" id="arShellContainer">
 
-            <!-- LEFT RAIL: entity type selector. All three entity types are now functional
-                 (Phase 7 completes the set: Documents Phase 5, Cross-checks Phase 6). -->
+            <!-- LEFT RAIL: accordion entity navigation. The current entity's list is moved into
+                 its matching slot by audit_rules.js, leaving this shell as rail + detail only. -->
             <div class="ar-rail">
-                <button type="button" id="arRailDocuments" class="ar-rail-item active">
-                    <span class="ar-rail-icon">📄</span>
-                    <span class="ar-rail-label">Documents</span>
-                </button>
-                <button type="button" id="arRailCrossChecks" class="ar-rail-item">
-                    <span class="ar-rail-icon">🔗</span>
-                    <span class="ar-rail-label">Cross-checks</span>
-                </button>
-                <button type="button" id="arRailCategories" class="ar-rail-item">
-                    <span class="ar-rail-icon">🗂️</span>
-                    <span class="ar-rail-label">Categories</span>
-                </button>
-                <button type="button" id="arRailVoucherChecks" class="ar-rail-item">
-                    <span class="ar-rail-icon">✅</span>
-                    <span class="ar-rail-label">Voucher-level Checks</span>
-                </button>
-                <button type="button" id="arRailAssertions" class="ar-rail-item">
-                    <span class="ar-rail-icon">🎯</span>
-                    <span class="ar-rail-label">Assertions</span>
-                </button>
+                <div class="ar-rail-section" data-rail-section="documents">
+                    <button type="button" id="arRailDocuments" class="ar-rail-item active" aria-expanded="true" aria-controls="arDocumentsRailListSlot">
+                        <span class="ar-rail-icon">📄</span><span class="ar-rail-label">Documents</span><span class="ar-rail-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div id="arDocumentsRailListSlot" class="ar-rail-list-slot"></div>
+                </div>
+                <div class="ar-rail-section" data-rail-section="cross-checks">
+                    <button type="button" id="arRailCrossChecks" class="ar-rail-item" aria-expanded="false" aria-controls="arCrossChecksRailListSlot">
+                        <span class="ar-rail-icon">🔗</span><span class="ar-rail-label">Cross-checks</span><span class="ar-rail-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div id="arCrossChecksRailListSlot" class="ar-rail-list-slot"></div>
+                </div>
+                <div class="ar-rail-section" data-rail-section="categories">
+                    <button type="button" id="arRailCategories" class="ar-rail-item" aria-expanded="false" aria-controls="arCategoriesRailListSlot">
+                        <span class="ar-rail-icon">🗂️</span><span class="ar-rail-label">Categories</span><span class="ar-rail-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div id="arCategoriesRailListSlot" class="ar-rail-list-slot"></div>
+                </div>
+                <div class="ar-rail-section" data-rail-section="voucher-checks">
+                    <button type="button" id="arRailVoucherChecks" class="ar-rail-item" aria-expanded="false" aria-controls="arVoucherChecksRailListSlot">
+                        <span class="ar-rail-icon">✅</span><span class="ar-rail-label">Voucher-level Checks</span><span class="ar-rail-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div id="arVoucherChecksRailListSlot" class="ar-rail-list-slot"></div>
+                </div>
+                <div class="ar-rail-section" data-rail-section="assertions">
+                    <button type="button" id="arRailAssertions" class="ar-rail-item" aria-expanded="false" aria-controls="arAssertionsRailListSlot">
+                        <span class="ar-rail-icon">🎯</span><span class="ar-rail-label">Assertions</span><span class="ar-rail-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div id="arAssertionsRailListSlot" class="ar-rail-list-slot"></div>
+                </div>
             </div>
 
-            <!-- MIDDLE: list panel. Each entity type gets its own section, toggled by
-                 switchEntityType() in audit_rules.js — only one is visible at a time. -->
+            <!-- Entity lists are declared here for stable ids and moved into their rail slots at
+                 startup. The detail panels below remain direct shell children. -->
 
             <!-- Documents list section (Phase 5, unchanged — only newly wrapped in this div
                  so it can be shown/hidden alongside the Cross-checks section below). -->
@@ -568,7 +578,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=17"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/audit_rules.js?v=25"></script>
+    <script src="/static/audit_rules.js?v=26"></script>
 </body>
 
 </html>

@@ -1401,11 +1401,11 @@ arRestoreBtn.addEventListener('click', restoreDocument);
 // columns.js/client_settings.js rather than importing them).
 
 // ---------- RAIL / VIEW SWITCHING ----------
-// 'documents', 'cross-checks', 'categories', or 'voucher-checks' — which entity type's
-// list/detail sections are visible. Signature Specimens is no longer a switchable top-level
-// entity (moved into Documents detail, see the SIGNATURE SPECIMENS section below Documents'
-// own SAVE logic).
+// The entity list now lives inside its matching expandable rail section. The selected entity
+// still owns the detail pane even when its list is collapsed, so URL restoration and detail
+// state remain independent from this presentation-only expansion state.
 let currentEntityType = 'documents';
+let expandedEntityType = 'documents';
 
 // A rail click can happen while window.onload is still waiting for the shared Template list.
 // Remember that explicit user choice so the later URL-restore pass cannot switch the page back
@@ -1429,28 +1429,52 @@ const arRailAssertions = document.getElementById('arRailAssertions');
 const arAssertionsListSection = document.getElementById('arAssertionsListSection');
 const arAssertionsDetailSection = document.getElementById('arAssertionsDetailSection');
 
+const arRailEntities = {
+    documents: { rail: arRailDocuments, list: arDocumentsListSection, detail: arDocumentsDetailSection, slot: document.getElementById('arDocumentsRailListSlot') },
+    'cross-checks': { rail: arRailCrossChecks, list: arCrossChecksListSection, detail: arCrossChecksDetailSection, slot: document.getElementById('arCrossChecksRailListSlot') },
+    categories: { rail: arRailCategories, list: arCategoriesListSection, detail: arCategoriesDetailSection, slot: document.getElementById('arCategoriesRailListSlot') },
+    'voucher-checks': { rail: arRailVoucherChecks, list: arVoucherChecksListSection, detail: arVoucherChecksDetailSection, slot: document.getElementById('arVoucherChecksRailListSlot') },
+    assertions: { rail: arRailAssertions, list: arAssertionsListSection, detail: arAssertionsDetailSection, slot: document.getElementById('arAssertionsRailListSlot') }
+};
+
+function embedAuditRulesListsInRail() {
+    Object.values(arRailEntities).forEach(({ list, slot }) => {
+        if (!list || !slot) return;
+        list.classList.add('ar-rail-list-panel');
+        slot.appendChild(list);
+    });
+}
+
+function renderAuditRulesRailState() {
+    Object.entries(arRailEntities).forEach(([type, entity]) => {
+        const isCurrent = currentEntityType === type;
+        const isExpanded = expandedEntityType === type;
+        entity.rail.classList.toggle('active', isCurrent);
+        entity.rail.setAttribute('aria-expanded', String(isExpanded));
+        entity.list.style.display = isExpanded ? 'flex' : 'none';
+        entity.detail.style.display = isCurrent ? 'block' : 'none';
+    });
+}
+
+embedAuditRulesListsInRail();
+renderAuditRulesRailState();
+
 function switchEntityType(type, options) {
     const userInitiated = Boolean(options && options.userInitiated);
     if (userInitiated) userSelectedEntityType = type;
 
+    const entityChanged = currentEntityType !== type;
+    if (userInitiated && !entityChanged) {
+        expandedEntityType = expandedEntityType === type ? null : type;
+        renderAuditRulesRailState();
+        // The collapsed/open state is intentionally not navigation history or URL state.
+        // A first-click Documents selection during page startup must still trigger its list load.
+        return type === 'documents' ? loadDocuments() : Promise.resolve();
+    }
+
     currentEntityType = type;
-
-    arRailDocuments.classList.toggle('active', type === 'documents');
-    arRailCrossChecks.classList.toggle('active', type === 'cross-checks');
-    arRailCategories.classList.toggle('active', type === 'categories');
-    arRailVoucherChecks.classList.toggle('active', type === 'voucher-checks');
-    arRailAssertions.classList.toggle('active', type === 'assertions');
-
-    arDocumentsListSection.style.display = (type === 'documents') ? 'flex' : 'none';
-    arDocumentsDetailSection.style.display = (type === 'documents') ? 'block' : 'none';
-    arCrossChecksListSection.style.display = (type === 'cross-checks') ? 'flex' : 'none';
-    arCrossChecksDetailSection.style.display = (type === 'cross-checks') ? 'block' : 'none';
-    arCategoriesListSection.style.display = (type === 'categories') ? 'flex' : 'none';
-    arCategoriesDetailSection.style.display = (type === 'categories') ? 'block' : 'none';
-    arVoucherChecksListSection.style.display = (type === 'voucher-checks') ? 'flex' : 'none';
-    arVoucherChecksDetailSection.style.display = (type === 'voucher-checks') ? 'block' : 'none';
-    arAssertionsListSection.style.display = (type === 'assertions') ? 'flex' : 'none';
-    arAssertionsDetailSection.style.display = (type === 'assertions') ? 'block' : 'none';
+    expandedEntityType = type;
+    renderAuditRulesRailState();
 
     // URL state persistence (confirmed fix): reflect the newly-active entity type (and
     // whatever item, if any, was last selected within it — editingCrossCheckId etc. are
@@ -1460,7 +1484,7 @@ function switchEntityType(type, options) {
     // both a real switch and window.onload's own URL-restore call, the latter a no-op via
     // pushInPageNavEntry()'s own dedup since the page's own load-time push already recorded this
     // exact URL.
-    if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, type);
+    if (entityChanged && typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, type);
 
     if (type === 'cross-checks') {
         beginAuditRulesProcessing('Loading Cross-checks…');

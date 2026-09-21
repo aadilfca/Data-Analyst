@@ -6090,3 +6090,22 @@ tagging Voucher-level Check 8 with the same Assertion then cleared Category 3's 
 nonexistent category correctly 404s. Playwright screenshot confirmed the rendered warning
 ("⚠ Cut-off: no control mapped") on Category 3 and its correct absence on covered Category 11. All
 test tags cleared back to empty afterward.
+
+---
+
+## Audit Rules Accordion Navigation — Phase 1 - 2026-09-21
+
+**Files:** `static/audit_rules.html`, `static/audit_rules.js`, `static/style.css`, and all
+20 stylesheet-linked HTML pages.
+
+The former three-pane Audit Rules shell is now a two-pane editor. Each entity list is placed
+inside its matching expandable rail section; only one section opens at a time, while collapsing
+the active section leaves its selected detail visible. Existing selection, URL restore, global
+Back history, Add New, inactive filters, pagination, Assign Categories, Assertion tags, and
+coverage-gap behaviour remain on their existing code paths. Rail headers now expose expanded
+state and controls for assistive technology.
+
+The stylesheet cache marker advanced to `v=27` on all 20 pages, and `audit_rules.js` to `v=26`.
+Manual local-server acceptance confirmed the navigation works. `node --check` and `git diff --check`
+passed. Focused Rulebook tests reported 132 tests and 32 subtests passed; one unrelated unchanged
+Procedure Modal test failed (`FormEvidenceContractTests.test_inline_form_rows_stay_within_bill_groups`).
