@@ -9257,6 +9257,12 @@ body {
 .ar-category-info-card li::before { content: ""; width: 7px; height: 7px; flex: 0 0 auto; margin-top: 7px; border-radius: 50%; background: #79a5e5; }
 .ar-category-callout, .ar-category-crosscheck-policy { display: flex; gap: 9px; margin-top: 13px; padding: 10px 11px; border-radius: 9px; color: #76551e; background: #fff6e5; font-size: 12px; }
 .ar-category-callout strong, .ar-category-crosscheck-policy strong { display: block; color: #69450d; }
+/* Coverage gap warning (Assertions Phase 5 of 5, FINAL) - same amber pair as .ar-category-callout
+   above, since it sits on the same screen and should read as the same "heads up" language. Placed
+   at the very top of Category detail (audit_rules.html), so margin-bottom separates it from the
+   Name field below rather than margin-top like the callout (which always follows other content). */
+.ar-category-gap-warning { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; padding: 10px 12px; border-radius: 9px; color: #76551e; background: #fff6e5; font-size: 12px; }
+.ar-category-gap-warning-line::before { content: "⚠ "; }
 .ar-category-policy-summary { margin-top: 13px; border-left: 4px solid #2468d8; background: #eff6ff; }
 .ar-category-policy-summary .ar-cleared-requirements-bullets { margin-top: 10px; }
 .ar-category-section-heading { margin-bottom: 12px; }

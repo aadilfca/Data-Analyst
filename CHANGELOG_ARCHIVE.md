@@ -6039,3 +6039,54 @@ after, and the full live write/read-back/cleanup transcript was then captured an
 three locations: Document (Category 11/Document 21: `[]` → `[1,2]` → `[Existence/Occurrence,
 Completeness]` → `[]`), Cross-check (Category 3/Cross-check 31: `[]` → `[3,4]` → `[Accuracy/Valuation,
 Cut-off]` → bad-id `400` → `[]`), Voucher-level Check (id 8: `[]` → `[5]` → `[Authorisation]` → `[]`).
+
+## Coverage Gap Warning — Audit Rules Phase 5 of 5, FINAL - 2026-09-21
+
+Completes the 5-phase Assertions feature. Shows a compact amber warning at the very top of
+Category detail listing any Assertion that's in use somewhere in the app but has zero coverage for
+that specific Category — a live, uncached read over the three join tables Phases 2/3 built.
+
+**Resolved a real ambiguity in the brief, not glossed over**: read literally, "relevant Assertions
+= tagged on at least one item attached to this Category" makes a zero-coverage gap logically
+impossible (a relevant Assertion, by that definition, already has ≥1 tag on this exact Category).
+The brief's own follow-on sentence — "a gap is only meaningful once at least one Assertion is in
+use somewhere in the app" — resolves it: "relevant" is a firm-wide filter (only warn about
+Assertions someone has actually started using, anywhere), and the gap check itself is scoped
+per-Category. **Voucher-level Checks count toward every Category's coverage**, not just their own
+"relevant" contribution — they have no `category_id` at all (Phase 3's architectural fork) and run
+on every voucher of every Category uniformly, so a Voucher-level Check tag is coverage for every
+Category simultaneously, not a category-specific fact. Confirmed live: tagging Voucher-level Check
+8 with an Assertion cleared an existing gap on an unrelated Category that had never itself tagged
+anything with that Assertion.
+
+`routers/audit_rules.py` gained one new read-only endpoint,
+`GET /api/audit-rules/categories/{category_id}/assertion-gaps`, a single CTE query (`relevant`
+firm-wide, `covered` per-Category via Documents/Cross-checks attached to it plus any active
+Voucher-level Check) rather than a Python set-difference over multiple round-trips. Deliberately
+**not** added to `row_to_category()` (the function backing both the single-Category fetch and the
+paginated Categories list) — computing a firm-wide aggregation on every row of every list page
+would be real, unnecessary cost against the brief's "no caching" requirement, for a UI element that
+only belongs on the single-Category detail view.
+
+`static/audit_rules.js`'s `selectCategory()` fires the new gap fetch alongside its existing
+Phase 4 parallel per-document/per-cross-check tag fetches (`Promise.all`, not sequential);
+`renderCategoryAssertionGaps()` populates a new static container
+(`#arCategoryAssertionGapsWarning`, `audit_rules.html`, first child of `arCategoryDetailForm` —
+literally the top of Category detail) with one line per gap ("`<Name>`: no control mapped"),
+hidden entirely when there are none. `startNewCategory()` clears/hides it — a brand-new Category
+has no attachments yet, so showing every relevant Assertion as "missing" would be noise, not
+signal, same spirit as the Phase 4 unsaved-row picker gating. New `.ar-category-gap-warning` CSS
+deliberately reuses the exact amber pair (`#76551e`/`#fff6e5`) already used by the adjacent
+`.ar-category-callout` "Status rule" box on the same screen, for visual consistency, rather than
+the plan's originally-proposed generic app-wide amber pair. `style.css?v=26`/`audit_rules.js?v=25`
+bumped (style.css on all 20 pages that load it).
+
+Verified: `py_compile`/`node -c`/HTML parse checks; `pytest tests/ -v` back to the same 16
+pre-existing unrelated failures. Live curl transcript against the real Supabase database (port 5000
+was running the user's own session this time, left untouched; a throwaway port-5050 instance was
+used instead) proved the full rule live: tagging Document 21 (Category 11) with Cut-off produced
+`[]` for Category 11's own gap check but `[{"id":4,"name":"Cut-off"}]` for unrelated Category 3;
+tagging Voucher-level Check 8 with the same Assertion then cleared Category 3's gap to `[]`; a
+nonexistent category correctly 404s. Playwright screenshot confirmed the rendered warning
+("⚠ Cut-off: no control mapped") on Category 3 and its correct absence on covered Category 11. All
+test tags cleared back to empty afterward.

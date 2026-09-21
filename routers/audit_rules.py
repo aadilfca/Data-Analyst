@@ -4148,6 +4148,43 @@ def update_voucher_check_assertion_tags(voucher_check_id: int, payload: VoucherC
     return {"voucher_check_id": voucher_check_id, "assertion_ids": payload.assertion_ids}
 
 
+# ---------- CATEGORY ASSERTION COVERAGE GAPS (Assertions Phase 5 of 5, FINAL) ----------
+# Read-only aggregation over the three assertion-tag join tables above, computed live on every
+# call (no new table, no caching, per the confirmed brief). "Relevant" Assertions are a firm-wide
+# filter (any Assertion tagged anywhere at all) - not scoped to this Category, since a gap is only
+# meaningful once at least one Assertion is actually in use somewhere in the app; the "covered"
+# check is what's actually scoped per-Category. Voucher-level Checks contribute to every
+# Category's coverage (not just their own "relevant" membership) since they have no category_id
+# at all (Phase 3's architectural fork) and apply uniformly to every voucher of every Category.
+@router.get("/api/audit-rules/categories/{category_id}/assertion-gaps")
+def get_category_assertion_gaps(category_id: int):
+    existing = execute_query_pg("SELECT id FROM audit_rule_categories WHERE id = %s", (category_id,))
+    if not existing:
+        raise HTTPException(404, "Category not found")
+
+    rows = execute_query_pg(
+        """
+        WITH relevant AS (
+            SELECT assertion_id FROM audit_rule_category_document_assertions
+            UNION SELECT assertion_id FROM audit_rule_category_cross_check_assertions
+            UNION SELECT assertion_id FROM audit_rule_voucher_check_assertions
+        ),
+        covered AS (
+            SELECT assertion_id FROM audit_rule_category_document_assertions WHERE category_id = %s
+            UNION SELECT assertion_id FROM audit_rule_category_cross_check_assertions WHERE category_id = %s
+            UNION SELECT vca.assertion_id FROM audit_rule_voucher_check_assertions vca
+                JOIN audit_rule_voucher_checks vc ON vca.voucher_check_id = vc.id WHERE vc.is_active = TRUE
+        )
+        SELECT a.id, a.name FROM audit_rule_assertions a
+        JOIN relevant r ON r.assertion_id = a.id
+        WHERE a.is_active = TRUE AND a.id NOT IN (SELECT assertion_id FROM covered)
+        ORDER BY a.sort_order
+        """,
+        (category_id, category_id)
+    )
+    return [{"id": r["id"], "name": r["name"]} for r in rows]
+
+
 # ---------- PER-DOCUMENT TRANSACTION-LEVEL-APPROVAL FLAG (new, confirmed requirement) ----------
 # A dedicated toggle endpoint, same single-field-toggle-on-an-existing-row convention as the
 # Category-Document is_required toggle above - but scoped to the Document itself (no

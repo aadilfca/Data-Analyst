@@ -4048,6 +4048,7 @@ async function selectCategory(id) {
         // sequentially, bounded by how many are actually attached to this Category.
         categoryDocAssertions = {};
         categoryCrossCheckAssertions = {};
+        let assertionGaps = [];
         await Promise.all([
             ...(cat.documents || []).map(d =>
                 fetchAssertionTagIds('/api/audit-rules/categories/' + cat.id + '/documents/' + d.document_id + '/assertions')
@@ -4056,9 +4057,13 @@ async function selectCategory(id) {
             ...(cat.cross_checks || []).map(c =>
                 fetchAssertionTagIds('/api/audit-rules/categories/' + cat.id + '/cross-checks/' + c.cross_check_id + '/assertions')
                     .then(ids => { categoryCrossCheckAssertions[c.cross_check_id] = ids; })
-            )
+            ),
+            // Assertions Phase 5 of 5, FINAL: which Assertions (in use somewhere in the app) have
+            // zero coverage for this specific Category - see renderCategoryAssertionGaps().
+            fetchCategoryAssertionGaps(cat.id).then(gaps => { assertionGaps = gaps; })
         ]);
 
+        renderCategoryAssertionGaps(assertionGaps);
         renderCategoryDocsList();
         await loadCategoryValidationRules(cat.id);
         await renderAppliedCrossChecks();
@@ -4100,6 +4105,9 @@ function startNewCategory() {
     categoryDocAssertions = {};
     categoryCrossCheckAssertions = {};
     arCategoryMatrixVersion.textContent = '1';
+    // Assertions Phase 5 of 5, FINAL: a brand-new, unsaved Category has no attachments yet, so
+    // every relevant Assertion would show as "missing" - noise, not signal. Hidden until saved.
+    renderCategoryAssertionGaps([]);
     renderCategoryDocsList();
     document.getElementById('arProcedureRulesBody').innerHTML = '';
     categoryLegacyMathRuleCount = 0;
@@ -5607,6 +5615,38 @@ async function fetchAssertionTagIds(path) {
         console.warn('Could not load Assertion tags for ' + path + ':', error.message);
         return [];
     }
+}
+
+// Assertions Phase 5 of 5, FINAL: Assertions in use somewhere in the app with zero coverage for
+// this specific Category (Documents/Cross-checks attached to it, or any active Voucher-level
+// Check - see the GET .../categories/{id}/assertion-gaps endpoint for the full rule). Non-fatal
+// on failure, same convention as fetchAssertionTagIds() above - a failed gap check shouldn't
+// block the rest of the Category from loading.
+async function fetchCategoryAssertionGaps(categoryId) {
+    try {
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/categories/' + categoryId + '/assertion-gaps');
+        if (!res.ok) throw new Error('Failed to load Assertion coverage gaps');
+        return await res.json();
+    } catch (error) {
+        console.warn('Could not load Assertion coverage gaps for category ' + categoryId + ':', error.message);
+        return [];
+    }
+}
+
+function renderCategoryAssertionGaps(gaps) {
+    const container = document.getElementById('arCategoryAssertionGapsWarning');
+    container.innerHTML = '';
+    if (!gaps || gaps.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+    gaps.forEach(gap => {
+        const line = document.createElement('span');
+        line.className = 'ar-category-gap-warning-line';
+        line.textContent = gap.name + ': no control mapped';
+        container.appendChild(line);
+    });
+    container.style.display = 'flex';
 }
 
 // container: the element to render into (its previous content is replaced).
