@@ -299,6 +299,8 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-21: Added Assertion tag picker UI to Category Documents, Cross-checks, and Voucher-level Checks in Audit Rules. See CHANGELOG_ARCHIVE.md.
 - 2026-09-21: Added Category Assertion coverage-gap warning; completes the 5-phase Assertions feature. See CHANGELOG_ARCHIVE.md.
 
+- 2026-09-21: Audit Rules navigation moved to an accordion rail; Category detail now focuses on live requirements and rule configuration.
+
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found

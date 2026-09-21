@@ -6109,3 +6109,19 @@ The stylesheet cache marker advanced to `v=27` on all 20 pages, and `audit_rules
 Manual local-server acceptance confirmed the navigation works. `node --check` and `git diff --check`
 passed. Focused Rulebook tests reported 132 tests and 32 subtests passed; one unrelated unchanged
 Procedure Modal test failed (`FormEvidenceContractTests.test_inline_form_rows_stay_within_bill_groups`).
+
+---
+
+## Audit Rules Category Detail Declutter - Phase 2 - 2026-09-21
+
+**Files:** `static/audit_rules.js`, `static/audit_rules.html`.
+
+Removed static guidance that duplicated the purpose of Category configuration: the hero, status
+cards, Overview tab, policy notes, metric tiles, and repeated help text. Name, KB Overview, the
+Assertion coverage-gap warning, live status requirements, and a single status-logic action remain
+above Evidence, Procedures, and Cross-checks. Existing rule controls, tag pickers, save behaviour,
+and backend/API contracts are unchanged.
+
+Manual local-server acceptance confirmed the simplified Category view works. `node --check` and
+`git diff --check` passed. The focused Rulebook test was started but its final pytest summary was
+not returned by the terminal stream, so it is not recorded as a passing check.
