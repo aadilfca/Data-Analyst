@@ -2019,6 +2019,21 @@ def init_db():
         except Exception as e:
             print("⚠️ Could not add validation_rules_json to audit_rule_categories:", e)
 
+        # One derived, client-independent Rulebook snapshot per Category. The live audit-rule
+        # tables remain the source of truth; this table is a rebuildable read model for the
+        # Verification performance path introduced in a later phase.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_category_compiled_rulebooks (
+                category_id INTEGER PRIMARY KEY,
+                rulebook_json TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1,
+                source_config_version INTEGER NOT NULL,
+                compiled_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (category_id) REFERENCES audit_rule_categories(id) ON DELETE CASCADE
+            )
+        ''')
+
         # Assertions: fixed master list (Existence/Occurrence, Completeness, Accuracy/Valuation,
         # Cut-off, Authorisation) that a Category's attached Documents/Cross-checks/Voucher-level
         # Checks will be tagged against in a later phase. Global (no client_id), same shape as
@@ -3445,6 +3460,29 @@ def _ensure_postgres_audit_rule_assertions(conn):
         cur.close()
 
 
+def _ensure_postgres_category_compiled_rulebooks(conn):
+    """Add persisted Category Rulebooks to an already-marked Postgres schema."""
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT to_regclass('public.audit_rule_category_compiled_rulebooks')")
+        was_missing = cur.fetchone()[0] is None
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_category_compiled_rulebooks (
+                category_id INTEGER PRIMARY KEY REFERENCES audit_rule_categories(id) ON DELETE CASCADE,
+                rulebook_json JSONB NOT NULL,
+                fingerprint TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1,
+                source_config_version INTEGER NOT NULL,
+                compiled_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        ''')
+        return was_missing
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
 def _ensure_postgres_category_document_assertions(conn):
     """Add audit_rule_category_document_assertions to an already-marked Postgres schema.
 
@@ -3575,6 +3613,7 @@ def init_db_postgres(conn):
         migrated_form_tables = _ensure_postgres_form_tables(conn)
         _ensure_postgres_report_category_tables(conn)
         migrated_assertions = _ensure_postgres_audit_rule_assertions(conn)
+        migrated_compiled_rulebooks = _ensure_postgres_category_compiled_rulebooks(conn)
         migrated_cat_doc_assertions = _ensure_postgres_category_document_assertions(conn)
         migrated_cat_cc_assertions = _ensure_postgres_category_cross_check_assertions(conn)
         migrated_vc_assertions = _ensure_postgres_voucher_check_assertions(conn)
@@ -3588,6 +3627,8 @@ def init_db_postgres(conn):
             migration_notes.append("Form evidence tables upgraded")
         if migrated_assertions:
             migration_notes.append("audit_rule_assertions created and seeded")
+        if migrated_compiled_rulebooks:
+            migration_notes.append("category compiled Rulebooks created")
         if migrated_cat_doc_assertions:
             migration_notes.append("audit_rule_category_document_assertions created")
         if migrated_cat_cc_assertions:
@@ -4155,7 +4196,19 @@ def init_db_postgres(conn):
     ''', "audit_rule_categories")
     run("ALTER TABLE audit_rule_categories ADD COLUMN IF NOT EXISTS validation_rules_json JSONB", "audit_rule_categories.validation_rules_json")
 
-    # ---------- 24a. audit_rule_assertions ----------
+    # ---------- 24a. audit_rule_category_compiled_rulebooks ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_category_compiled_rulebooks (
+            category_id INTEGER PRIMARY KEY REFERENCES audit_rule_categories(id) ON DELETE CASCADE,
+            rulebook_json JSONB NOT NULL,
+            fingerprint TEXT NOT NULL,
+            revision INTEGER NOT NULL DEFAULT 1,
+            source_config_version INTEGER NOT NULL,
+            compiled_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    ''', "audit_rule_category_compiled_rulebooks")
+
+    # ---------- 24b. audit_rule_assertions ----------
     run('''
         CREATE TABLE IF NOT EXISTS audit_rule_assertions (
             id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

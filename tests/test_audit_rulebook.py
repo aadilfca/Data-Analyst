@@ -47,7 +47,7 @@ from routers.audit_rules import (
     set_cross_check_documents,
     validate_document_cross_check_dependencies,
 )
-from routers.audit_rules import compile_verification_rulebook
+from routers.audit_rules import compile_verification_rulebook, persist_category_compiled_rulebooks
 from routers.audit_rules import CategoryValidationRules, validate_category_validation_rules
 from routers.verification import (
     _build_working_paper_gates,
@@ -73,9 +73,12 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         database.DB_NAME = os.path.join(self.tmpdir.name, "test.db")
         init_db()
+        self._rebuild_patch = patch("routers.audit_rules.rebuild_category_compiled_rulebooks")
+        self._rebuild_patch.start()
         invalidate_audit_rules_cache()
 
     def tearDown(self):
+        self._rebuild_patch.stop()
         self.tmpdir.cleanup()
 
     def test_invalidation_increments_version_and_expires_cached_value(self):
@@ -103,6 +106,86 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         self.assertEqual(changes[0]["entity_type"], "Voucher-level Check")
         self.assertEqual(changes[0]["entity_name"], "Test check")
         self.assertEqual(changes[0]["action"], "Deleted")
+
+    def test_sqlite_schema_includes_category_rulebook_snapshots(self):
+        rows = database.execute_query(
+            "SELECT name FROM sqlite_master WHERE type = ? AND name = ?",
+            ("table", "audit_rule_category_compiled_rulebooks"),
+        )
+        self.assertEqual(rows[0]["name"], "audit_rule_category_compiled_rulebooks")
+
+    def test_persisted_category_rulebook_is_deterministic_and_excludes_client_specimens(self):
+        profile = {
+            "category_id": 7,
+            "name": "Fuel",
+            "documents": [{
+                "document_id": 10,
+                "authority_roles": [{"role_name": "Approved by", "required_authority": "Manager"}],
+                "signatories": [{"role_name": "Approved by", "expected_signatory_name": "A. Manager"}],
+                "signature_requirements": [{
+                    "role_name": "Approved by", "required_authority": "Manager",
+                    "specimens": [{"expected_signatory_name": "A. Manager"}],
+                }],
+            }],
+            "procedure_evidence": {"checks": [{
+                "document_id": 10, "role_name": "Approved by",
+                "configured_signatories": [{"expected_signatory_name": "A. Manager"}],
+            }]},
+        }
+        stored = {}
+
+        def query(sql, params=()):
+            if "to_regclass" in sql:
+                return [{"table_name": "audit_rule_category_compiled_rulebooks"}]
+            if "SELECT fingerprint, revision" in sql:
+                return [stored] if stored else []
+            if "SELECT category_id" in sql:
+                return []
+            self.fail(f"Unexpected query: {sql}")
+
+        def write(sql, params=()):
+            if sql.startswith("INSERT INTO audit_rule_category_compiled_rulebooks"):
+                stored.update({"fingerprint": params[2], "revision": params[3]})
+
+        rulebook = {"global_version": 12, "categories": [profile]}
+        with patch("routers.audit_rules.execute_query_pg", side_effect=query), \
+             patch("routers.audit_rules.execute_write_pg", side_effect=write) as write_mock:
+            first = persist_category_compiled_rulebooks(rulebook)
+            second = persist_category_compiled_rulebooks(rulebook)
+
+        inserted_payload = json.loads(write_mock.call_args_list[0].args[1][1])
+        self.assertEqual(first["stored"], 1)
+        self.assertEqual(second["unchanged"], 1)
+        self.assertEqual(stored["revision"], 1)
+        self.assertNotIn("signatories", inserted_payload["documents"][0])
+        self.assertNotIn("specimens", inserted_payload["documents"][0]["signature_requirements"][0])
+        self.assertNotIn("configured_signatories", inserted_payload["procedure_evidence"]["checks"][0])
+
+    def test_persisted_category_rulebook_revision_changes_only_for_rule_changes(self):
+        stored = {}
+
+        def query(sql, params=()):
+            if "to_regclass" in sql:
+                return [{"table_name": "audit_rule_category_compiled_rulebooks"}]
+            if "SELECT fingerprint, revision" in sql:
+                return [stored] if stored else []
+            if "SELECT category_id" in sql:
+                return []
+            self.fail(f"Unexpected query: {sql}")
+
+        def write(sql, params=()):
+            if sql.startswith("INSERT INTO audit_rule_category_compiled_rulebooks"):
+                stored.update({"fingerprint": params[2], "revision": params[3]})
+
+        first = {"global_version": 3, "categories": [{"category_id": 7, "name": "Fuel", "documents": []}]}
+        changed = {"global_version": 4, "categories": [{"category_id": 7, "name": "Fuel", "documents": [], "matrix_version": 2}]}
+        with patch("routers.audit_rules.execute_query_pg", side_effect=query), \
+             patch("routers.audit_rules.execute_write_pg", side_effect=write) as write_mock:
+            persist_category_compiled_rulebooks(first)
+            persist_category_compiled_rulebooks(changed)
+
+        self.assertEqual(stored["revision"], 2)
+        self.assertEqual(write_mock.call_args.args[1][4], 4)
 
     def test_category_create_ignores_legacy_evidence_type_and_does_not_write_it(self):
         category = CategoryCreate(name="Material", evidence_type="billable")

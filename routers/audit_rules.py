@@ -6,6 +6,7 @@
 # Categories) in the Audit Rules module now have CRUD. Categories is the entity a
 # voucher will eventually reference (wired up in Phase 9).
 
+import hashlib
 import json
 import time
 import threading
@@ -120,6 +121,11 @@ def invalidate_audit_rules_cache(change=None):
             change.get("action", "Updated"),
             change.get("changed_by", "System"),
         )
+
+    # The snapshot is a derived read model, rebuilt only after the source configuration was
+    # successfully saved and its durable version advanced. This call remains outside the cache
+    # lock because the compiler reads that same version while building the snapshot.
+    rebuild_category_compiled_rulebooks()
 
 def category_for_account_cache_key(client_id: int, account_code: str) -> str:
     """Key shape for the client-scoped category-for-account cache (Modal Caching Phase 3 extension)."""
@@ -340,6 +346,96 @@ def _build_cross_check_matrix_contract(
             "risk": field.get("risk") or "Medium",
         })
     return {"documents": documents, "fields": fields}
+
+
+def _category_rulebook_snapshot_payload(category_profile: dict) -> dict:
+    """Keep the persisted Category Rulebook independent of a particular client.
+
+    Signature specimens are client data, so their names are intentionally excluded. The
+    Category's required authority and the Procedure rule itself remain in the snapshot.
+    """
+    payload = json.loads(json.dumps(category_profile, default=str))
+    for document in payload.get("documents", []):
+        document.pop("signatories", None)
+        for requirement in document.get("signature_requirements", []):
+            requirement.pop("specimens", None)
+    for check in (payload.get("procedure_evidence") or {}).get("checks", []):
+        check.pop("configured_signatories", None)
+    return payload
+
+
+def _compiled_rulebook_storage_available() -> bool:
+    """Avoid breaking a save if code arrives before the additive table migration."""
+    if database.is_postgres_schema_ready():
+        rows = execute_query_pg(
+            "SELECT to_regclass('public.audit_rule_category_compiled_rulebooks') AS table_name"
+        )
+        return bool(rows and rows[0].get("table_name"))
+    rows = database.execute_query(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'audit_rule_category_compiled_rulebooks'"
+    )
+    return bool(rows)
+
+
+def persist_category_compiled_rulebooks(rulebook: dict) -> dict:
+    """Persist deterministic per-Category snapshots from one freshly compiled Rulebook."""
+    source_version = int(rulebook.get("global_version") or get_audit_rules_config_version())
+    if not _compiled_rulebook_storage_available():
+        return {"stored": 0, "unchanged": 0, "source_config_version": source_version}
+    active_category_ids = set()
+    stored = 0
+    unchanged = 0
+
+    for category_profile in rulebook.get("categories", []):
+        category_id = int(category_profile["category_id"])
+        active_category_ids.add(category_id)
+        payload = _category_rulebook_snapshot_payload(category_profile)
+        canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        fingerprint = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        existing = execute_query_pg(
+            "SELECT fingerprint, revision FROM audit_rule_category_compiled_rulebooks WHERE category_id = %s",
+            (category_id,),
+        )
+        if existing and existing[0].get("fingerprint") == fingerprint:
+            execute_write_pg(
+                "UPDATE audit_rule_category_compiled_rulebooks "
+                "SET source_config_version = %s, compiled_at = CURRENT_TIMESTAMP WHERE category_id = %s",
+                (source_version, category_id),
+            )
+            unchanged += 1
+            continue
+
+        revision = int(existing[0].get("revision") or 0) + 1 if existing else 1
+        execute_write_pg(
+            "INSERT INTO audit_rule_category_compiled_rulebooks "
+            "(category_id, rulebook_json, fingerprint, revision, source_config_version) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (category_id) DO UPDATE SET "
+            "rulebook_json = EXCLUDED.rulebook_json, fingerprint = EXCLUDED.fingerprint, "
+            "revision = EXCLUDED.revision, source_config_version = EXCLUDED.source_config_version, "
+            "compiled_at = CURRENT_TIMESTAMP",
+            (category_id, canonical_json, fingerprint, revision, source_version),
+        )
+        stored += 1
+
+    if "categories" in rulebook:
+        existing_rows = execute_query_pg(
+            "SELECT category_id FROM audit_rule_category_compiled_rulebooks ORDER BY category_id"
+        )
+        for row in existing_rows:
+            if int(row["category_id"]) not in active_category_ids:
+                execute_write_pg(
+                    "DELETE FROM audit_rule_category_compiled_rulebooks WHERE category_id = %s",
+                    (row["category_id"],),
+                )
+
+    return {"stored": stored, "unchanged": unchanged, "source_config_version": source_version}
+
+
+def rebuild_category_compiled_rulebooks() -> dict:
+    """Rebuild all active Category snapshots after an Audit Rules configuration save."""
+    return persist_category_compiled_rulebooks(compile_verification_rulebook(0))
 
 
 def compile_verification_rulebook(client_id: int) -> dict:
@@ -621,6 +717,9 @@ def load_client_verification_rulebook(client_id: int) -> dict:
 
     rulebook = compile_verification_rulebook(client_id)
     rulebook["global_version"] = version
+    # The first normal Rulebook load after deployment backfills every active Category without
+    # a separate migration job. Later loads retain the same fingerprint when rules are unchanged.
+    persist_category_compiled_rulebooks(rulebook)
     with _audit_rules_cache_lock:
         _verification_rulebook_cache[key] = (
             time.monotonic() + AUDIT_RULES_CACHE_TTL_SECONDS,

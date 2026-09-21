@@ -6125,3 +6125,20 @@ and backend/API contracts are unchanged.
 Manual local-server acceptance confirmed the simplified Category view works. `node --check` and
 `git diff --check` passed. The focused Rulebook test was started but its final pytest summary was
 not returned by the terminal stream, so it is not recorded as a passing check.
+
+---
+
+## Compiled Category Rulebook snapshots - 2026-09-21
+
+**Files:** `database.py`, `routers/audit_rules.py`, `tests/test_audit_rulebook.py`.
+
+Added a derived, per-Category Rulebook table in SQLite and PostgreSQL, including the existing-schema
+PostgreSQL migration. A canonical JSON snapshot receives a SHA-256 fingerprint, revision, source
+configuration version, and rebuild time. Client-specific signature specimens are excluded; authority
+rules remain. Audit Rules saves rebuild snapshots after their durable configuration version advances,
+and the normal Rulebook loader provides backfill. A migration-presence guard keeps saves safe during a
+code-first restart. Verification behavior is unchanged in this foundation phase.
+
+**Verified:** Python compilation, diff check, SQLite schema test, fingerprint/revision tests, and
+cache invalidation tests (5 focused checks passed). The complete focused file did not return a final
+terminal summary in its browser-dependent section.
