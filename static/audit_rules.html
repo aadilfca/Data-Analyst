@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Audit Rules - Internal Audit App</title>
-    <link rel="stylesheet" href="/static/style.css?v=24">
+    <link rel="stylesheet" href="/static/style.css?v=25">
 </head>
 
 <body data-nav-module="Audit Rules" data-nav-parent="index.html">
@@ -464,6 +464,14 @@
                         <input type="text" id="arVoucherCheckAuthorityInput">
                     </div>
 
+                    <!-- Assertion tags (Assertions Phase 4 of 5, new). Entity-scoped (no Category
+                         pairing for Voucher-level Checks, per Phase 3's architectural fork) -
+                         rendered/populated entirely by audit_rules.js's renderAssertionTagPicker(). -->
+                    <div class="ar-field" id="arVoucherCheckAssertionsField">
+                        <label id="arVoucherCheckAssertionsLabel">Assertions</label>
+                        <div id="arVoucherCheckAssertionsPicker" class="ar-chip-list"></div>
+                    </div>
+
                     <div id="arVoucherCheckDetailStatus" class="upload-status" style="display:none;"></div>
 
                     <div class="ar-detail-actions">
@@ -554,7 +562,7 @@
     <script src="/static/loading_ui.js?v=2"></script>
     <script src="/static/client_context.js?v=17"></script>
     <script src="/static/api_utils.js?v=1"></script>
-    <script src="/static/audit_rules.js?v=23"></script>
+    <script src="/static/audit_rules.js?v=24"></script>
 </body>
 
 </html>

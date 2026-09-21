@@ -1484,11 +1484,12 @@ function switchEntityType(type, options) {
         return Promise.all([
             loadAllDocumentsForCrossChecks(),
             loadAllCrossChecksForCategories(),
-            loadVoucherChecks()
+            loadVoucherChecks(),
+            loadAllAssertions()
         ]).then(loadCategories).finally(endAuditRulesProcessing);
     } else if (type === 'voucher-checks') {
         beginAuditRulesProcessing('Loading Voucher-level Checks…');
-        return loadVoucherChecks().finally(endAuditRulesProcessing);
+        return Promise.all([loadVoucherChecks(), loadAllAssertions()]).finally(endAuditRulesProcessing);
     } else if (type === 'assertions') {
         beginAuditRulesProcessing('Loading Assertions…');
         return loadAssertions().finally(endAuditRulesProcessing);
@@ -2962,6 +2963,12 @@ let categoryDocRequired = {};
 // above - the authoritative per-attachment name/active-state, valid even once a document has
 // been soft-deleted and so no longer appears in the active-only allDocuments cache below.
 let categoryDocMeta = {};
+// Assertions Phase 4 of 5: {document_id: [assertion_id, ...]} / {cross_check_id: [assertion_id, ...]},
+// populated from a parallel GET .../assertions fetch per attached Document/Cross-check on
+// selectCategory() - the Category read response itself carries no tag data (row_to_category()
+// deliberately untouched by Phases 2/3), so this cannot come from cat.documents/cat.cross_checks.
+let categoryDocAssertions = {};
+let categoryCrossCheckAssertions = {};
 // Cache of all active Cross-checks ({id, name, documents: [{document_id, name}], ...}),
 // mirroring Phase 6's allDocuments cache — used for the "add cross-check" picker's
 // eligibility check and the document-removal warning. No reusable "all cross-checks"
@@ -3277,7 +3284,7 @@ function renderCategoryDocsList() {
 
         const thead = document.createElement('thead');
         const headRow = document.createElement('tr');
-        ['Document', 'Required', ''].forEach(text => {
+        ['Document', 'Required', 'Assertions', ''].forEach(text => {
             const th = document.createElement('th');
             th.textContent = text;
             headRow.appendChild(th);
@@ -3324,6 +3331,22 @@ function renderCategoryDocsList() {
             requiredLabel.appendChild(document.createTextNode('Required'));
             requiredCell.appendChild(requiredLabel);
             row.appendChild(requiredCell);
+
+            // Assertion tags (Assertions Phase 4 of 5) - same isPersisted/isActive gate as
+            // Required above, since the tagging endpoint 404s until the Document is actually
+            // attached to this Category server-side.
+            const assertionsCell = document.createElement('td');
+            assertionsCell.className = 'ar-category-doc-assertions';
+            const assertionsPicker = document.createElement('div');
+            assertionsPicker.className = 'ar-chip-list';
+            renderAssertionTagPicker(
+                assertionsPicker,
+                categoryDocAssertions[docId] || [],
+                (assertionId) => toggleCategoryDocumentAssertion(docId, assertionId),
+                !isPersisted || !isActive
+            );
+            assertionsCell.appendChild(assertionsPicker);
+            row.appendChild(assertionsCell);
 
             const actionCell = document.createElement('td');
             actionCell.className = 'ar-category-doc-action';
@@ -3398,6 +3421,39 @@ async function toggleCategoryDocumentRequired(docId, checked) {
     } catch (error) {
         showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
         renderCategoryDocsList();
+    } finally {
+        endAuditRulesProcessing();
+    }
+}
+
+// Assertions Phase 4 of 5 - same live-PUT-on-toggle shape as toggleCategoryDocumentRequired()
+// above, but full-replace (the endpoint takes the whole tag list, not a single flag).
+async function toggleCategoryDocumentAssertion(docId, assertionId) {
+    if (!editingCategoryId) return;
+
+    const current = categoryDocAssertions[docId] || [];
+    const nextIds = current.includes(assertionId)
+        ? current.filter(id => id !== assertionId)
+        : current.concat([assertionId]);
+
+    beginAuditRulesProcessing('Saving Assertion tags...');
+    try {
+        const res = await fetch(
+            API_BASE + '/api/audit-rules/categories/' + editingCategoryId + '/documents/' + docId + '/assertions',
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ assertion_ids: nextIds })
+            }
+        );
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to update Assertion tags');
+
+        categoryDocAssertions[docId] = nextIds;
+        renderCategoryDocsList();
+        showCategoryDetailStatus('✅ Assertion tags updated.', 'success');
+    } catch (error) {
+        showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
     } finally {
         endAuditRulesProcessing();
     }
@@ -3662,6 +3718,28 @@ function renderAppliedCrossCheckSummary(container, ccId, definition) {
     header.appendChild(remove);
     card.appendChild(header);
 
+    // Assertion tags (Assertions Phase 4 of 5) - a cross-check's key presence in
+    // categoryCrossCheckAssertions is what "actually persisted in
+    // audit_rule_category_cross_checks" means here, same convention categoryDocRequired uses
+    // for Documents (a locally-added-but-unsaved cross-check has no key yet).
+    const isPersisted = Object.prototype.hasOwnProperty.call(categoryCrossCheckAssertions, ccId);
+    const assertionsSection = document.createElement('section');
+    assertionsSection.className = 'ar-applied-cross-check-section ar-applied-cross-check-assertions';
+    const assertionsHeading = document.createElement('div');
+    assertionsHeading.className = 'ar-applied-cross-check-section-heading';
+    assertionsHeading.textContent = 'Assertions' + (isPersisted ? '' : ' (save the category first)');
+    assertionsSection.appendChild(assertionsHeading);
+    const assertionsPicker = document.createElement('div');
+    assertionsPicker.className = 'ar-chip-list';
+    renderAssertionTagPicker(
+        assertionsPicker,
+        categoryCrossCheckAssertions[ccId] || [],
+        (assertionId) => toggleCategoryCrossCheckAssertion(ccId, assertionId),
+        !isPersisted
+    );
+    assertionsSection.appendChild(assertionsPicker);
+    card.appendChild(assertionsSection);
+
     const matrix = definition.matrix || {};
     const documentNames = Object.fromEntries((matrix.documents || []).map(doc => [String(doc.document_id), doc.name]));
     const documentsSection = document.createElement('section');
@@ -3909,6 +3987,39 @@ function removeCategoryCrossCheck(ccId) {
     renderAppliedCrossChecks();
 }
 
+// Assertions Phase 4 of 5 - same live-PUT-on-toggle, full-replace shape as
+// toggleCategoryDocumentAssertion() above.
+async function toggleCategoryCrossCheckAssertion(ccId, assertionId) {
+    if (!editingCategoryId) return;
+
+    const current = categoryCrossCheckAssertions[ccId] || [];
+    const nextIds = current.includes(assertionId)
+        ? current.filter(id => id !== assertionId)
+        : current.concat([assertionId]);
+
+    beginAuditRulesProcessing('Saving Assertion tags...');
+    try {
+        const res = await fetch(
+            API_BASE + '/api/audit-rules/categories/' + editingCategoryId + '/cross-checks/' + ccId + '/assertions',
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ assertion_ids: nextIds })
+            }
+        );
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to update Assertion tags');
+
+        categoryCrossCheckAssertions[ccId] = nextIds;
+        await renderAppliedCrossChecks();
+        showCategoryDetailStatus('✅ Assertion tags updated.', 'success');
+    } catch (error) {
+        showCategoryDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
+    }
+}
+
 // ---------- SELECT / NEW / RESET DETAIL PANEL ----------
 async function selectCategory(id) {
     beginAuditRulesProcessing('Loading Category details...');
@@ -3930,6 +4041,24 @@ async function selectCategory(id) {
             categoryDocMeta[d.document_id] = { name: d.name, is_active: !!d.is_active };
         });
         arCategoryMatrixVersion.textContent = String(cat.matrix_version || 1);
+
+        // Assertions Phase 4 of 5: cat.documents/cat.cross_checks carry no tag data (the Category
+        // read response was deliberately left untouched by Phases 2/3), so each attached
+        // Document/Cross-check's current tags need their own GET - fired in parallel, not
+        // sequentially, bounded by how many are actually attached to this Category.
+        categoryDocAssertions = {};
+        categoryCrossCheckAssertions = {};
+        await Promise.all([
+            ...(cat.documents || []).map(d =>
+                fetchAssertionTagIds('/api/audit-rules/categories/' + cat.id + '/documents/' + d.document_id + '/assertions')
+                    .then(ids => { categoryDocAssertions[d.document_id] = ids; })
+            ),
+            ...(cat.cross_checks || []).map(c =>
+                fetchAssertionTagIds('/api/audit-rules/categories/' + cat.id + '/cross-checks/' + c.cross_check_id + '/assertions')
+                    .then(ids => { categoryCrossCheckAssertions[c.cross_check_id] = ids; })
+            )
+        ]);
+
         renderCategoryDocsList();
         await loadCategoryValidationRules(cat.id);
         await renderAppliedCrossChecks();
@@ -3968,6 +4097,8 @@ function startNewCategory() {
     categoryCrossCheckIds = [];
     categoryDocRequired = {};
     categoryDocMeta = {};
+    categoryDocAssertions = {};
+    categoryCrossCheckAssertions = {};
     arCategoryMatrixVersion.textContent = '1';
     renderCategoryDocsList();
     document.getElementById('arProcedureRulesBody').innerHTML = '';
@@ -4856,6 +4987,8 @@ const arVoucherCheckDetailForm = document.getElementById('arVoucherCheckDetailFo
 const arVoucherCheckEditingIdInput = document.getElementById('arVoucherCheckEditingId');
 const arVoucherCheckNameInput = document.getElementById('arVoucherCheckNameInput');
 const arVoucherCheckAuthorityInput = document.getElementById('arVoucherCheckAuthorityInput');
+const arVoucherCheckAssertionsPicker = document.getElementById('arVoucherCheckAssertionsPicker');
+const arVoucherCheckAssertionsLabel = document.getElementById('arVoucherCheckAssertionsLabel');
 const arVoucherCheckDetailStatus = document.getElementById('arVoucherCheckDetailStatus');
 const arVoucherCheckSaveBtn = document.getElementById('arVoucherCheckSaveBtn');
 const arVoucherCheckDeleteBtn = document.getElementById('arVoucherCheckDeleteBtn');
@@ -4864,6 +4997,9 @@ const arVoucherCheckRestoreBtn = document.getElementById('arVoucherCheckRestoreB
 // ---------- STATE ----------
 // null while creating a new Voucher-level check; set to its id while editing an existing one.
 let editingVoucherCheckId = null;
+// Assertions Phase 4 of 5: this check's currently-tagged assertion ids - entity-scoped (no
+// category_id), populated via a GET .../voucher-checks/{id}/assertions on selectVoucherCheck().
+let currentVoucherCheckAssertionIds = [];
 // Sortable.js instance, created once (see initVoucherCheckSortable()) and toggled via
 // .option('disabled', ...) rather than destroyed/recreated on every render.
 let arVoucherCheckSortable = null;
@@ -5028,6 +5164,15 @@ async function selectVoucherCheck(id) {
         arVoucherCheckNameInput.value = check.name;
         arVoucherCheckAuthorityInput.value = check.authority || '';
 
+        arVoucherCheckAssertionsLabel.textContent = 'Assertions';
+        currentVoucherCheckAssertionIds = await fetchAssertionTagIds('/api/audit-rules/voucher-checks/' + check.id + '/assertions');
+        renderAssertionTagPicker(
+            arVoucherCheckAssertionsPicker,
+            currentVoucherCheckAssertionIds,
+            (assertionId) => toggleVoucherCheckAssertion(assertionId),
+            false
+        );
+
         if (check.is_active) {
             arVoucherCheckDeleteBtn.style.display = 'inline-block';
             arVoucherCheckRestoreBtn.style.display = 'none';
@@ -5055,6 +5200,10 @@ function startNewVoucherCheck() {
     arVoucherCheckNameInput.value = '';
     arVoucherCheckAuthorityInput.value = '';
 
+    currentVoucherCheckAssertionIds = [];
+    arVoucherCheckAssertionsLabel.textContent = 'Assertions (save the check first)';
+    renderAssertionTagPicker(arVoucherCheckAssertionsPicker, [], () => {}, true);
+
     arVoucherCheckDeleteBtn.style.display = 'none';
     arVoucherCheckRestoreBtn.style.display = 'none';
 
@@ -5063,6 +5212,38 @@ function startNewVoucherCheck() {
     arVoucherCheckNameInput.focus();
 
     updateAuditRulesUrl();
+}
+
+// Assertions Phase 4 of 5 - entity-scoped (no category_id), same live-PUT-on-toggle,
+// full-replace shape as toggleCategoryDocumentAssertion() above.
+async function toggleVoucherCheckAssertion(assertionId) {
+    if (!editingVoucherCheckId) return;
+
+    const nextIds = currentVoucherCheckAssertionIds.includes(assertionId)
+        ? currentVoucherCheckAssertionIds.filter(id => id !== assertionId)
+        : currentVoucherCheckAssertionIds.concat([assertionId]);
+
+    beginAuditRulesProcessing('Saving Assertion tags...');
+    try {
+        const res = await fetch(
+            API_BASE + '/api/audit-rules/voucher-checks/' + editingVoucherCheckId + '/assertions',
+            {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ assertion_ids: nextIds })
+            }
+        );
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || result.message || 'Failed to update Assertion tags');
+
+        currentVoucherCheckAssertionIds = nextIds;
+        renderAssertionTagPicker(arVoucherCheckAssertionsPicker, currentVoucherCheckAssertionIds, toggleVoucherCheckAssertion, false);
+        showVoucherCheckDetailStatus('✅ Assertion tags updated.', 'success');
+    } catch (error) {
+        showVoucherCheckDetailStatus('❌ Error: ' + error.message, 'error');
+    } finally {
+        endAuditRulesProcessing();
+    }
 }
 
 // ---------- SAVE / DELETE / RESTORE ----------
@@ -5184,6 +5365,11 @@ const arAssertionRestoreBtn = document.getElementById('arAssertionRestoreBtn');
 // ---------- STATE ----------
 // null while creating a new Assertion; set to its id while editing an existing one.
 let editingAssertionId = null;
+// Assertions Phase 4 of 5: the full Assertions list (active + inactive - an inactive Assertion
+// that's still tagged somewhere must stay visible, never silently drop off a picker), shared by
+// every tag picker below (Document/Cross-check rows in Category detail, Voucher-level Check
+// detail). Populated once per view entry via loadAllAssertions(), not per-row.
+let allAssertionsCache = [];
 
 // ---------- STATUS MESSAGE ----------
 function showAssertionDetailStatus(message, type) {
@@ -5384,3 +5570,77 @@ arAssertionShowInactiveCheckbox.addEventListener('change', loadAssertions);
 arAssertionSaveBtn.addEventListener('click', () => saveAssertion(arAssertionSaveBtn));
 arAssertionDeleteBtn.addEventListener('click', deleteAssertion);
 arAssertionRestoreBtn.addEventListener('click', restoreAssertion);
+
+// =====================================================================================
+// ASSERTION TAG PICKER (Assertions Phase 4 of 5)
+// Shared toggle-chip picker used in three places: Document rows and Cross-check cards inside
+// Category detail (Category-scoped, via the Phase 2/3 .../categories/{id}/.../assertions
+// endpoints), and the Voucher-level Check detail form (entity-scoped, via
+// .../voucher-checks/{id}/assertions - no category_id, per Phase 3's architectural fork). A
+// toggle-chip group fits this better than the existing dropdown+"Add" pattern used for
+// Documents/Cross-checks themselves, since the Assertions list is small and fixed (unlike a
+// growing Documents/Cross-checks list) - reuses the .ar-chip-list/.ar-chip family, not a new
+// pattern, plus the new .ar-chip-selectable/.ar-chip-selected modifier (style.css).
+// =====================================================================================
+
+async function loadAllAssertions() {
+    try {
+        const res = await window.ApiUtils.apiFetch(API_BASE + '/api/audit-rules/assertions?include_inactive=true');
+        if (!res.ok) throw new Error('Failed to load assertions');
+        allAssertionsCache = await res.json(); // already ORDER BY sort_order server-side
+    } catch (error) {
+        console.warn('Could not load Assertions for tag pickers:', error.message);
+        allAssertionsCache = [];
+    }
+}
+
+// Fetches one attachment's/entity's tagged assertion ids. Non-fatal on failure (returns []) -
+// one slow/failed row shouldn't block the rest of a Category's documents/cross-checks from
+// loading, mirroring the non-blocking spirit of this file's other supplementary-data fetches.
+async function fetchAssertionTagIds(path) {
+    try {
+        const res = await window.ApiUtils.apiFetch(API_BASE + path);
+        if (!res.ok) throw new Error('Failed to load Assertion tags');
+        const tags = await res.json();
+        return tags.map(t => t.id);
+    } catch (error) {
+        console.warn('Could not load Assertion tags for ' + path + ':', error.message);
+        return [];
+    }
+}
+
+// container: the element to render into (its previous content is replaced).
+// taggedIds: array of currently-tagged assertion ids for this row/check.
+// onToggle: called with the assertion id when an enabled chip is clicked.
+// disabled: true while the parent row/check has no server-side id yet to tag against.
+function renderAssertionTagPicker(container, taggedIds, onToggle, disabled) {
+    container.innerHTML = '';
+    const taggedSet = new Set(taggedIds || []);
+
+    if (allAssertionsCache.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'ar-chip-empty';
+        empty.textContent = 'No assertions defined yet.';
+        container.appendChild(empty);
+        return;
+    }
+
+    allAssertionsCache.forEach(assertion => {
+        const chip = document.createElement('span');
+        const isSelected = taggedSet.has(assertion.id);
+        chip.className = 'ar-chip ar-chip-selectable' +
+            (isSelected ? ' ar-chip-selected' : '') +
+            (disabled ? ' ar-chip-disabled' : '');
+        chip.textContent = assertion.name;
+        if (!assertion.is_active) {
+            const note = document.createElement('span');
+            note.className = 'ar-chip-inactive-note';
+            note.textContent = '(inactive)';
+            chip.appendChild(note);
+        }
+        if (!disabled) {
+            chip.addEventListener('click', () => onToggle(assertion.id));
+        }
+        container.appendChild(chip);
+    });
+}

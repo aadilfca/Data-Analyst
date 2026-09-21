@@ -5984,3 +5984,58 @@ Aadil before push, for both entity types: GET (empty) → PUT with 2 assertion i
 with a different-sized set (confirms full-replace) → cleanup. Cross-checks tested against the real
 Category 3 ("Material Purchased") / Cross-check 31 ("Purchase demand vs Purchase order") pairing;
 Voucher-level Checks tested against the real check 8 ("Prepared by"). Both left clean afterward.
+
+## Tag Picker UI — Audit Rules Phase 4 of 5 - 2026-09-21
+
+Wired the Phase 2/3 Assertion-tagging endpoints into the actual UI: a toggle-chip picker (reuses
+the existing `.ar-chip` family from Authorisation Roles, plus new `.ar-chip-selectable`/
+`.ar-chip-selected`/`.ar-chip-disabled` modifiers in `style.css`) on each Document row and
+Cross-check card inside Category detail, and on the Voucher-level Check detail form. A toggle-chip
+group fits this better than the existing dropdown+"Add" pattern (built for long/growing lists) since
+Assertions is a small fixed set. Each click fires an immediate PUT with the full recomputed tag
+list, mirroring `toggleCategoryDocumentRequired()`'s live-save shape exactly. A row/check with no
+server-side id yet (new, unsaved) shows its chips disabled with a "(save the category/check first)"
+label — same `isPersisted` gate the Required checkbox already uses.
+
+`static/audit_rules.js` gained `allAssertionsCache`/`loadAllAssertions()` (chained into
+`switchEntityType()`'s existing Categories/Voucher-checks loads), a shared
+`renderAssertionTagPicker()` helper, and per-location toggle functions
+(`toggleCategoryDocumentAssertion()`, `toggleCategoryCrossCheckAssertion()`,
+`toggleVoucherCheckAssertion()`). Since `get_category_documents()`/`get_category_cross_checks()`
+were deliberately left untouched by Phases 2/3 (no tag data in the Category read response),
+`selectCategory()` now fires one `GET .../assertions` per attached Document/Cross-check in parallel
+(`Promise.all`, not sequential) to populate each row's initial chip state — a real, bounded N+1 read,
+flagged in the plan rather than silently introduced. `audit_rules.html` gained one new static
+container (`arVoucherCheckAssertionsField`) for the Voucher-level Check form; the Document/Cross-check
+pickers needed no new markup, both render into already-JS-generated containers.
+`style.css?v=25`/`audit_rules.js?v=24` bumped (style.css on all 20 pages that load it, per the
+project's cache-busting convention).
+
+A real structural discovery, not a bug: the Category detail form has a pre-existing tabbed
+"Category Control Center" sub-UI (`upgradeCategoryControlCenter()`, `.ar-category-tab-panel`) with
+Overview/Evidence/Procedures/Cross-checks tabs — "Applicable Documents" lives inside the "Evidence"
+tab and "Applied Cross-checks" inside the "Cross-checks" tab, neither the default-shown "Overview"
+tab. This wasn't known going into the phase; found via a live DOM ancestor-chain trace after repeated
+Playwright click failures ("element not visible") turned out to be real (a hidden ancestor `<section
+display:none>`), not flakiness. No code change was needed — the pickers already rendered correctly
+once the correct tab was open; verification scripts were adjusted to click the right tab first.
+
+Verified: `node -c static/audit_rules.js` and an HTML parse check (no backend files changed this
+phase, so `pytest` wasn't rerun). Live browser verification via Playwright against the real Supabase
+database (port 5000 not running, no collision risk) — screenshots of all three picker locations
+rendering correctly with real data (Category 11 "Computer and related expenses" / Documents 21 & 15,
+Category 3 "Material Purchased" / Cross-check 31, Voucher-level Check 8 "Prepared by"), correct
+selected/inactive-chip styling, and correct disabled+"(save first)" gating for a brand-new unsaved
+Category and a brand-new unsaved Voucher-level Check (7 chips disabled in both cases, confirmed).
+
+One genuine external blocker surfaced mid-verification: every write attempt returned `409` from the
+pre-existing `ensure_no_active_verification_sessions` guard (a real, live `verification_presence`
+heartbeat row, not stale test data — someone had an active Verification session open). This is
+correct behavior, not a defect — the new endpoints correctly inherit the same guard every other
+Audit Rules write already has. Per the standing rule that a live write transcript is shown before
+push, this was surfaced to Aadil rather than worked around; he chose to wait. A background poll
+against the real endpoint (empty-array PUT, non-destructive) confirmed the session cleared shortly
+after, and the full live write/read-back/cleanup transcript was then captured and shown for all
+three locations: Document (Category 11/Document 21: `[]` → `[1,2]` → `[Existence/Occurrence,
+Completeness]` → `[]`), Cross-check (Category 3/Cross-check 31: `[]` → `[3,4]` → `[Accuracy/Valuation,
+Cut-off]` → bad-id `400` → `[]`), Voucher-level Check (id 8: `[]` → `[5]` → `[Authorisation]` → `[]`).
