@@ -2986,6 +2986,40 @@ def save_category_document_assertions(category_id: int, document_id: int, assert
             (category_id, document_id, assertion_id)
         )
 
+def get_category_cross_check_assertions(category_id: int, cross_check_id: int) -> List[dict]:
+    """Assertions tagged on a Category's attached Cross-check (Assertions Phase 3 of 5)."""
+    rows = execute_query_pg(
+        """
+        SELECT a.id, a.name, a.is_active
+        FROM audit_rule_category_cross_check_assertions cca
+        JOIN audit_rule_assertions a ON cca.assertion_id = a.id
+        WHERE cca.category_id = %s AND cca.cross_check_id = %s
+        ORDER BY a.sort_order
+        """,
+        (category_id, cross_check_id)
+    )
+    return [{"id": r["id"], "name": r["name"], "is_active": bool(r["is_active"])} for r in rows]
+
+def save_category_cross_check_assertions(category_id: int, cross_check_id: int, assertion_ids: List[int]):
+    """Full-replace a Category-Cross-check attachment's Assertion tags - same convention as
+    save_category_document_assertions() above."""
+    if len(assertion_ids) != len(set(assertion_ids)):
+        raise HTTPException(400, "Assertion tags cannot be duplicated")
+    for assertion_id in assertion_ids:
+        rows = execute_query_pg("SELECT id FROM audit_rule_assertions WHERE id = %s", (assertion_id,))
+        if not rows:
+            raise HTTPException(400, f"Assertion ID {assertion_id} not found")
+
+    execute_write_pg(
+        "DELETE FROM audit_rule_category_cross_check_assertions WHERE category_id = %s AND cross_check_id = %s",
+        (category_id, cross_check_id)
+    )
+    for assertion_id in assertion_ids:
+        execute_write_pg(
+            "INSERT INTO audit_rule_category_cross_check_assertions (category_id, cross_check_id, assertion_id) VALUES (%s, %s, %s)",
+            (category_id, cross_check_id, assertion_id)
+        )
+
 def get_category_cross_checks(category_id: int) -> List[dict]:
     rows = execute_query_pg(
         """
@@ -3612,6 +3646,41 @@ def row_to_voucher_check(row: dict) -> dict:
         "is_active": bool(row["is_active"]),
     }
 
+def get_voucher_check_assertions(voucher_check_id: int) -> List[dict]:
+    """Assertions tagged on a Voucher-level Check (Assertions Phase 3 of 5) - entity-scoped,
+    not Category+item-scoped, see the class comment on the endpoints above."""
+    rows = execute_query_pg(
+        """
+        SELECT a.id, a.name, a.is_active
+        FROM audit_rule_voucher_check_assertions vca
+        JOIN audit_rule_assertions a ON vca.assertion_id = a.id
+        WHERE vca.voucher_check_id = %s
+        ORDER BY a.sort_order
+        """,
+        (voucher_check_id,)
+    )
+    return [{"id": r["id"], "name": r["name"], "is_active": bool(r["is_active"])} for r in rows]
+
+def save_voucher_check_assertions(voucher_check_id: int, assertion_ids: List[int]):
+    """Full-replace a Voucher-level Check's Assertion tags - same convention as
+    save_category_document_assertions() above."""
+    if len(assertion_ids) != len(set(assertion_ids)):
+        raise HTTPException(400, "Assertion tags cannot be duplicated")
+    for assertion_id in assertion_ids:
+        rows = execute_query_pg("SELECT id FROM audit_rule_assertions WHERE id = %s", (assertion_id,))
+        if not rows:
+            raise HTTPException(400, f"Assertion ID {assertion_id} not found")
+
+    execute_write_pg(
+        "DELETE FROM audit_rule_voucher_check_assertions WHERE voucher_check_id = %s",
+        (voucher_check_id,)
+    )
+    for assertion_id in assertion_ids:
+        execute_write_pg(
+            "INSERT INTO audit_rule_voucher_check_assertions (voucher_check_id, assertion_id) VALUES (%s, %s)",
+            (voucher_check_id, assertion_id)
+        )
+
 def get_next_voucher_check_sort_order() -> int:
     """
     Next sort_order value to append a new check at the end of the list. Computed across all
@@ -4011,6 +4080,72 @@ def update_category_document_assertion_tags(category_id: int, document_id: int, 
     )
     invalidate_audit_rules_cache()
     return {"category_id": category_id, "document_id": document_id, "assertion_ids": payload.assertion_ids}
+
+
+# ---------- PER-CROSS-CHECK ASSERTION TAGS (Assertions Phase 3 of 5) ----------
+# Same dedicated-sub-resource shape as the Document assertion tags above, applied to a
+# Category's attached Cross-check instead - audit_rule_category_cross_checks is the
+# structurally identical Category+item attachment table for this entity.
+class CategoryCrossCheckAssertionsUpdate(BaseModel):
+    assertion_ids: List[int] = []
+
+@router.get("/api/audit-rules/categories/{category_id}/cross-checks/{cross_check_id}/assertions")
+def get_category_cross_check_assertion_tags(category_id: int, cross_check_id: int):
+    existing = execute_query_pg(
+        "SELECT 1 FROM audit_rule_category_cross_checks WHERE category_id = %s AND cross_check_id = %s",
+        (category_id, cross_check_id)
+    )
+    if not existing:
+        raise HTTPException(404, "This Cross-check is not part of this Category")
+    return get_category_cross_check_assertions(category_id, cross_check_id)
+
+@router.put("/api/audit-rules/categories/{category_id}/cross-checks/{cross_check_id}/assertions", dependencies=[Depends(ensure_no_active_verification_sessions)])
+def update_category_cross_check_assertion_tags(category_id: int, cross_check_id: int, payload: CategoryCrossCheckAssertionsUpdate):
+    existing = execute_query_pg(
+        "SELECT 1 FROM audit_rule_category_cross_checks WHERE category_id = %s AND cross_check_id = %s",
+        (category_id, cross_check_id)
+    )
+    if not existing:
+        raise HTTPException(404, "This Cross-check is not part of this Category")
+
+    save_category_cross_check_assertions(category_id, cross_check_id, payload.assertion_ids)
+
+    log_audit(
+        "Admin", "Update", "AuditRules",
+        f"Set Assertion tags={payload.assertion_ids} for Cross-check ID {cross_check_id} in Category ID {category_id}"
+    )
+    invalidate_audit_rules_cache()
+    return {"category_id": category_id, "cross_check_id": cross_check_id, "assertion_ids": payload.assertion_ids}
+
+
+# ---------- VOUCHER-LEVEL CHECK ASSERTION TAGS (Assertions Phase 3 of 5) ----------
+# Entity-scoped (not Category+item-scoped) - audit_rule_voucher_checks has no category_id and
+# no Category join table exists (this check applies uniformly to every Category), so there is
+# no Category+item attachment to key the tag off. Tags the check itself instead.
+class VoucherCheckAssertionsUpdate(BaseModel):
+    assertion_ids: List[int] = []
+
+@router.get("/api/audit-rules/voucher-checks/{voucher_check_id}/assertions")
+def get_voucher_check_assertion_tags(voucher_check_id: int):
+    existing = execute_query_pg("SELECT id FROM audit_rule_voucher_checks WHERE id = %s", (voucher_check_id,))
+    if not existing:
+        raise HTTPException(404, "Voucher check not found")
+    return get_voucher_check_assertions(voucher_check_id)
+
+@router.put("/api/audit-rules/voucher-checks/{voucher_check_id}/assertions", dependencies=[Depends(ensure_no_active_verification_sessions)])
+def update_voucher_check_assertion_tags(voucher_check_id: int, payload: VoucherCheckAssertionsUpdate):
+    existing = execute_query_pg("SELECT id FROM audit_rule_voucher_checks WHERE id = %s", (voucher_check_id,))
+    if not existing:
+        raise HTTPException(404, "Voucher check not found")
+
+    save_voucher_check_assertions(voucher_check_id, payload.assertion_ids)
+
+    log_audit(
+        "Admin", "Update", "AuditRules",
+        f"Set Assertion tags={payload.assertion_ids} for Voucher check ID {voucher_check_id}"
+    )
+    invalidate_audit_rules_cache()
+    return {"voucher_check_id": voucher_check_id, "assertion_ids": payload.assertion_ids}
 
 
 # ---------- PER-DOCUMENT TRANSACTION-LEVEL-APPROVAL FLAG (new, confirmed requirement) ----------

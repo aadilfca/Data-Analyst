@@ -5930,3 +5930,57 @@ running this session, so no collision risk) — confirmed the migration log line
 id) → PUT against a document not attached to the category (404, both GET and PUT) → PUT with a
 different smaller set (confirms full-replace, not merge) → cleared tags to leave the real Category
 (id 11, "Computer and related expenses") / Document (id 21, "Cash acknowledgement") pairing clean.
+
+## Tag Cross-checks and Voucher-level Checks with Assertions — Audit Rules Phase 3 of 5 - 2026-09-21
+
+Extended Phase 2's tagging pattern to the other two rule types. Cross-checks fit the pattern exactly:
+new `audit_rule_category_cross_check_assertions` table, keyed by the same `(category_id,
+cross_check_id)` pair `audit_rule_category_cross_checks` already uses, composite FK against that
+table's existing `UNIQUE(category_id, cross_check_id)` constraint. Endpoints
+`GET`/`PUT .../categories/{category_id}/cross-checks/{cross_check_id}/assertions` mirror Phase 2's
+Document endpoints byte-for-byte in shape.
+
+**Architectural fork found while looking at "Phase 2's actual table," as that phase's brief asked**:
+Voucher-level Checks have no Category attachment at all — `audit_rule_voucher_checks` has no
+`category_id` column and no `audit_rule_category_voucher_checks` join table exists anywhere in the
+schema (confirmed by grep), matching this project's own documented fact that the same check applies
+uniformly to every Category. So "tag lives on the attachment, not the entity" had nothing to attach
+to for this one entity type. Resolved by tagging the entity directly: new
+`audit_rule_voucher_check_assertions(voucher_check_id, assertion_id)`, endpoints
+`GET`/`PUT /api/audit-rules/voucher-checks/{voucher_check_id}/assertions`. Functionally equivalent to
+a Category-scoped tag when there's exactly one universal scope. Flagged in the plan before
+implementation rather than silently deviating from the brief's locked assumption.
+
+Both `routers/audit_rules.py` helper pairs (`get_category_cross_check_assertions()`/
+`save_category_cross_check_assertions()`, `get_voucher_check_assertions()`/
+`save_voucher_check_assertions()`) are direct copies of Phase 2's Document-assertion helpers — same
+full-replace-not-diff convention, same per-id `HTTPException(400, f"Assertion ID {id} not found")`
+validation, no `matrix_version` bump (tags don't drive the Cleared/Query engine).
+
+Two more companion `_ensure_postgres_category_cross_check_assertions(conn)` /
+`_ensure_postgres_voucher_check_assertions(conn)` migration functions were added per the Phase 1
+Convention, wired into `init_db_postgres()`'s fast-path branch — confirmed live again (migration log:
+`audit_rule_category_cross_check_assertions created; audit_rule_voucher_check_assertions created`).
+`tests/test_storage_cleanup.py`'s mock (already patched once in Phase 2 for the same reason) needed
+patching again for both new functions, same `StopIteration`-from-an-exhausted-mock-`cursor.side_effect`
+failure mode.
+
+**A real bug was found and fixed during this phase's own verification, before anything was shown to
+Aadil**: the two new SQLite index-creation calls (`CREATE INDEX ... ON audit_rule_voucher_check_assertions`)
+were initially added to the wrong batch in `init_db()` — the early "Audit Rules module Phase 1 of 9"
+batch, which runs *before* the Voucher-level Checks table section appears later in the function body.
+This broke `init_db()` outright (`sqlite3.OperationalError: no such table`), which was caught
+immediately via the throwaway-server smoke check (not by pytest, which was still running against the
+pre-fix code in the background) and fixed by moving those two index lines to sit right after the
+table's own `CREATE TABLE`, next to the sibling `audit_rule_voucher_check_auth_roles` index. A stale
+pytest run captured mid-bug (85 failed, cascading from the same root cause) was correctly identified
+as stale rather than reported, and rerun clean after the fix.
+
+Verified: `pytest tests/ -v` back to exactly the same 16 pre-existing failures Phase 1/2 already
+confirmed unrelated; `py_compile` on all three changed files. Live request/response transcripts
+against the real Supabase database (port 5000 not running this session, no collision risk), shown to
+Aadil before push, for both entity types: GET (empty) → PUT with 2 assertion ids → GET (returns them)
+→ PUT with an unknown id (400, names it) → PUT/GET against a target with no attachment (404) → PUT
+with a different-sized set (confirms full-replace) → cleanup. Cross-checks tested against the real
+Category 3 ("Material Purchased") / Cross-check 31 ("Purchase demand vs Purchase order") pairing;
+Voucher-level Checks tested against the real check 8 ("Prepared by"). Both left clean afterward.

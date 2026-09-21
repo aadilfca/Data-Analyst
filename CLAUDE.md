@@ -34,7 +34,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, mapping suggestions, period-conflict checks, classification/override, upload history, category assignment, deletion; scoped cache invalidation. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
-- routers/audit_rules.py → Audit Rules APIs with typed Form fields, Arithmetic — Multiply operand validation, Documents, Cross-checks, Category policies, Voucher-level Checks, Assertions, and per-Document Assertion tags. See CHANGELOG_ARCHIVE.md.
+- routers/audit_rules.py → Audit Rules APIs with typed Form fields, Arithmetic — Multiply operand validation, Documents, Cross-checks, Category policies, Voucher-level Checks, Assertions, and Assertion tags on Documents/Cross-checks/Voucher-level Checks. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Audit Rules editor with typed Form authoring, Arithmetic — Multiply selection, Assign Categories, Assertions, and processing feedback. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
 - routers/verification.py + static/verification.* → Cash/Bank Verification sessions, evidence/Forms, checks, status, saves, navigation, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
@@ -295,6 +295,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-20: Read-only traceability investigation mapped Category rules to Verification Cleared/Query gates; 15 findings logged. See AUDIT_RULES_TRACEABILITY_INVESTIGATION.md. See CHANGELOG_ARCHIVE.md.
 - 2026-09-20: Added Assertions master list (5 fixed entries) with CRUD, its own Audit Rules tab, and a Postgres schema top-up fix. See CHANGELOG_ARCHIVE.md.
 - 2026-09-20: Added Category-Document Assertion tagging (join table + GET/PUT endpoints); fixed a stale test mock from Phase 1. See CHANGELOG_ARCHIVE.md.
+- 2026-09-21: Extended Assertion tagging to Cross-checks and Voucher-level Checks (2 join tables, 4 endpoints); fixed an index-ordering bug. See CHANGELOG_ARCHIVE.md.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

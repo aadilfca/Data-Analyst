@@ -2146,6 +2146,21 @@ def init_db():
             )
         ''')
 
+        # Assertions tagged on a Category's attached Cross-check (Assertions Phase 3 of 5). Same
+        # (category_id, cross_check_id)-keyed shape as audit_rule_category_document_assertions.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_category_cross_check_assertions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL,
+                cross_check_id INTEGER NOT NULL,
+                assertion_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (category_id, cross_check_id) REFERENCES audit_rule_category_cross_checks(category_id, cross_check_id) ON DELETE CASCADE,
+                FOREIGN KEY (assertion_id) REFERENCES audit_rule_assertions(id) ON DELETE CASCADE,
+                UNIQUE(category_id, cross_check_id, assertion_id)
+            )
+        ''')
+
         # Signature specimens (Validation Rules, Phase 1 of 7: schema): the expected signatory
         # name for a given role, on a given Document, for a given client - name-only, no image
         # storage, per the locked assumption. Scoped per client (signatures are a client's own
@@ -2264,6 +2279,8 @@ def init_db():
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_doc_assertions_assertion ON audit_rule_category_document_assertions (assertion_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_category ON audit_rule_category_cross_checks (category_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_crosscheck ON audit_rule_category_cross_checks (cross_check_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_cc_assertions_lookup ON audit_rule_category_cross_check_assertions (category_id, cross_check_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_cc_assertions_assertion ON audit_rule_category_cross_check_assertions (assertion_id)")
         print("✅ Created Audit Rules module tables (Phase 1 of 9: schema foundation)")
 
         # ---------- AUDIT RULES MODULE (Phase 9 of 9: migrate legacy transaction types) ----------
@@ -2923,6 +2940,24 @@ def init_db():
         ''')
         print("✅ Created audit_rule_voucher_check_auth_roles table (Generic Voucher-Level Checks, Phase 1 of 6: schema)")
 
+        # Assertions tagged on a Voucher-level Check (Assertions Phase 3 of 5). Entity-scoped, not
+        # Category+item-scoped like Documents/Cross-checks - audit_rule_voucher_checks has no
+        # category_id and no Category join table exists (this check applies uniformly to every
+        # Category), so there is no Category+item attachment row to hang the tag off. Tagging the
+        # entity directly is the only coherent option, and is functionally equivalent to a
+        # Category-scoped tag when there's exactly one universal "Category scope."
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_voucher_check_assertions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                voucher_check_id INTEGER NOT NULL,
+                assertion_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (voucher_check_id) REFERENCES audit_rule_voucher_checks(id) ON DELETE CASCADE,
+                FOREIGN KEY (assertion_id) REFERENCES audit_rule_assertions(id) ON DELETE CASCADE,
+                UNIQUE(voucher_check_id, assertion_id)
+            )
+        ''')
+
         # Per-voucher status: one row per (voucher, check) capturing both the tick and the
         # inline name of who did it (no login/identity system exists to auto-fill this). Keyed
         # by (client_id, transaction_ref) rather than session_id, deliberately mirroring
@@ -2946,6 +2981,8 @@ def init_db():
             )
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_voucher_check_auth_roles_check ON audit_rule_voucher_check_auth_roles (voucher_check_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_vc_assertions_voucher_check ON audit_rule_voucher_check_assertions (voucher_check_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_audit_rule_vc_assertions_assertion ON audit_rule_voucher_check_assertions (assertion_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_voucher_check_status_client_ref ON voucher_check_status (client_id, transaction_ref)")
         print("✅ Created voucher_check_status table (Generic Voucher-Level Checks, Phase 1 of 6: schema)")
 
@@ -3446,6 +3483,79 @@ def _ensure_postgres_category_document_assertions(conn):
         cur.close()
 
 
+def _ensure_postgres_category_cross_check_assertions(conn):
+    """Add audit_rule_category_cross_check_assertions to an already-marked Postgres schema.
+
+    Same companion-migration reasoning as _ensure_postgres_category_document_assertions above
+    (Assertions Phase 3 of 5).
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT to_regclass('public.audit_rule_category_cross_check_assertions')")
+        was_missing = cur.fetchone()[0] is None
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_category_cross_check_assertions (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                category_id INTEGER NOT NULL,
+                cross_check_id INTEGER NOT NULL,
+                assertion_id INTEGER NOT NULL REFERENCES audit_rule_assertions(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                FOREIGN KEY (category_id, cross_check_id) REFERENCES audit_rule_category_cross_checks(category_id, cross_check_id) ON DELETE CASCADE,
+                UNIQUE(category_id, cross_check_id, assertion_id)
+            )
+        ''')
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_cc_assertions_lookup "
+            "ON audit_rule_category_cross_check_assertions (category_id, cross_check_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_cc_assertions_assertion "
+            "ON audit_rule_category_cross_check_assertions (assertion_id)"
+        )
+        return was_missing
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
+def _ensure_postgres_voucher_check_assertions(conn):
+    """Add audit_rule_voucher_check_assertions to an already-marked Postgres schema.
+
+    Entity-scoped, not Category+item-scoped - see the SQLite CREATE TABLE comment for why.
+    Same companion-migration reasoning as the other _ensure_postgres_*_assertions functions
+    (Assertions Phase 3 of 5).
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT to_regclass('public.audit_rule_voucher_check_assertions')")
+        was_missing = cur.fetchone()[0] is None
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_voucher_check_assertions (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                voucher_check_id INTEGER NOT NULL REFERENCES audit_rule_voucher_checks(id) ON DELETE CASCADE,
+                assertion_id INTEGER NOT NULL REFERENCES audit_rule_assertions(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(voucher_check_id, assertion_id)
+            )
+        ''')
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_rule_vc_assertions_voucher_check "
+            "ON audit_rule_voucher_check_assertions (voucher_check_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_audit_rule_vc_assertions_assertion "
+            "ON audit_rule_voucher_check_assertions (assertion_id)"
+        )
+        return was_missing
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
 
@@ -3466,6 +3576,8 @@ def init_db_postgres(conn):
         _ensure_postgres_report_category_tables(conn)
         migrated_assertions = _ensure_postgres_audit_rule_assertions(conn)
         migrated_cat_doc_assertions = _ensure_postgres_category_document_assertions(conn)
+        migrated_cat_cc_assertions = _ensure_postgres_category_cross_check_assertions(conn)
+        migrated_vc_assertions = _ensure_postgres_voucher_check_assertions(conn)
         conn.commit()
         migration_notes = []
         if migrated_document_type:
@@ -3478,6 +3590,10 @@ def init_db_postgres(conn):
             migration_notes.append("audit_rule_assertions created and seeded")
         if migrated_cat_doc_assertions:
             migration_notes.append("audit_rule_category_document_assertions created")
+        if migrated_cat_cc_assertions:
+            migration_notes.append("audit_rule_category_cross_check_assertions created")
+        if migrated_vc_assertions:
+            migration_notes.append("audit_rule_voucher_check_assertions created")
         print(
             "[postgres] existing schema verified; skipped bootstrap"
             + (f" ({'; '.join(migration_notes)})" if migration_notes else "")
@@ -4093,6 +4209,21 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_category ON audit_rule_category_cross_checks (category_id)")
     run("CREATE INDEX IF NOT EXISTS idx_audit_rule_category_cross_checks_crosscheck ON audit_rule_category_cross_checks (cross_check_id)")
 
+    # ---------- 26a. audit_rule_category_cross_check_assertions ----------
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_category_cross_check_assertions (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            category_id INTEGER NOT NULL,
+            cross_check_id INTEGER NOT NULL,
+            assertion_id INTEGER NOT NULL REFERENCES audit_rule_assertions(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            FOREIGN KEY (category_id, cross_check_id) REFERENCES audit_rule_category_cross_checks(category_id, cross_check_id) ON DELETE CASCADE,
+            UNIQUE(category_id, cross_check_id, assertion_id)
+        )
+    ''', "audit_rule_category_cross_check_assertions")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_cc_assertions_lookup ON audit_rule_category_cross_check_assertions (category_id, cross_check_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_cat_cc_assertions_assertion ON audit_rule_category_cross_check_assertions (assertion_id)")
+
     # ---------- 27. signature_specimens ----------
     # No table-level UNIQUE (deliberate - matches the SQLite final shape,
     # which relaxed this so a new specimen can replace an inactive one;
@@ -4385,6 +4516,20 @@ def init_db_postgres(conn):
         )
     ''', "audit_rule_voucher_check_auth_roles")
     run("CREATE INDEX IF NOT EXISTS idx_audit_rule_voucher_check_auth_roles_check ON audit_rule_voucher_check_auth_roles (voucher_check_id)")
+
+    # ---------- 38a. audit_rule_voucher_check_assertions ----------
+    # Entity-scoped, not Category+item-scoped - see the SQLite CREATE TABLE comment for why.
+    run('''
+        CREATE TABLE IF NOT EXISTS audit_rule_voucher_check_assertions (
+            id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            voucher_check_id INTEGER NOT NULL REFERENCES audit_rule_voucher_checks(id) ON DELETE CASCADE,
+            assertion_id INTEGER NOT NULL REFERENCES audit_rule_assertions(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE(voucher_check_id, assertion_id)
+        )
+    ''', "audit_rule_voucher_check_assertions")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_vc_assertions_voucher_check ON audit_rule_voucher_check_assertions (voucher_check_id)")
+    run("CREATE INDEX IF NOT EXISTS idx_audit_rule_vc_assertions_assertion ON audit_rule_voucher_check_assertions (assertion_id)")
 
     # ---------- 39. voucher_check_status ----------
     run('''
