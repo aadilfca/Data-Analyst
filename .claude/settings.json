@@ -18,7 +18,8 @@
       "Bash(curl -s -X DELETE http://localhost:5000/*)",
       "Bash(curl -s -X DELETE http://127.0.0.1:5000/*)",
       "Bash(curl -s -X DELETE \"http://localhost:5000/*)",
-      "Bash(curl -s -X DELETE \"http://127.0.0.1:5000/*)"
+      "Bash(curl -s -X DELETE \"http://127.0.0.1:5000/*)",
+      "Bash(./venv/Scripts/python.exe \"C:\\\\Users\\\\LENOVO\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Excel-Auto-2--Python-App\\\\2c29f18e-606d-4ab6-a5c3-5abc3394210f\\\\scratchpad\\\\inspect_chip.py\")"
     ]
   },
   "hooks": {

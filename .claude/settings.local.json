@@ -1,6 +1,24 @@
 {
   "permissions": {
-    "allow": ["Bash", "Edit", "Write"],
+    "allow": [
+      "Bash",
+      "Edit",
+      "Write",
+      "Bash(python -c ' *)",
+      "Bash(netstat -ano)",
+      "Bash(PYTHONIOENCODING=utf-8 PORT=5050 ./venv/Scripts/python.exe main.py)",
+      "Bash(curl -s -w \"\\\\nHTTP %{http_code}\\\\n\" \"http://localhost:5050/api/audit-rules/categories?limit=1\")",
+      "Bash(./venv/Scripts/python.exe \"C:\\\\Users\\\\LENOVO\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Excel-Auto-2--Python-App\\\\2c29f18e-606d-4ab6-a5c3-5abc3394210f\\\\scratchpad\\\\verify_tag_picker.py\")",
+      "Bash(./venv/Scripts/python.exe \"C:\\\\Users\\\\LENOVO\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Excel-Auto-2--Python-App\\\\2c29f18e-606d-4ab6-a5c3-5abc3394210f\\\\scratchpad\\\\verify_tag_picker3.py\")",
+      "Bash(curl -s \"http://localhost:5050/api/audit-rules/categories/11/documents/21/assertions\")",
+      "Bash(curl -s -X PUT \"http://localhost:5050/api/audit-rules/categories/11/documents/21/assertions\" -H \"Content-Type: application/json\" -d '{\"assertion_ids\":[1,2]}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
+      "Bash(curl -s -X PUT \"http://localhost:5050/api/audit-rules/categories/11/documents/21/assertions\" -H \"Content-Type: application/json\" -d '{\"assertion_ids\":[]}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
+      "Bash(curl -s \"http://localhost:5050/api/audit-rules/categories/3/cross-checks/31/assertions\")",
+      "Bash(curl -s -X PUT \"http://localhost:5050/api/audit-rules/categories/3/cross-checks/31/assertions\" -H \"Content-Type: application/json\" -d '{\"assertion_ids\":[3,4]}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
+      "Bash(curl -s -X PUT \"http://localhost:5050/api/audit-rules/categories/3/cross-checks/31/assertions\" -H \"Content-Type: application/json\" -d '{\"assertion_ids\":[999]}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
+      "Bash(curl -s -X PUT \"http://localhost:5050/api/audit-rules/categories/3/cross-checks/31/assertions\" -H \"Content-Type: application/json\" -d '{\"assertion_ids\":[]}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
+      "Bash(awk '/^## Status log/,/^## Self-maintenance/' CLAUDE.md)"
+    ],
     "deny": [
       "Bash(rm -rf:*)",
       "Bash(rm -r -f:*)",
