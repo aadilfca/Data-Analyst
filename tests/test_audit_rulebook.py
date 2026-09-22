@@ -114,78 +114,54 @@ class AuditRulebookCompilerTests(unittest.TestCase):
         )
         self.assertEqual(rows[0]["name"], "audit_rule_category_compiled_rulebooks")
 
+    def _snapshot_packet(self, profile):
+        return {
+            "client_id": None, "snapshot_schema_version": 2,
+            "global_version": database.get_persisted_audit_rules_config_version(),
+            "categories": [profile],
+        }
+
     def test_persisted_category_rulebook_is_deterministic_and_excludes_client_specimens(self):
         profile = {
-            "category_id": 7,
-            "name": "Fuel",
+            "category_id": 71, "name": "Fuel",
             "documents": [{
                 "document_id": 10,
                 "authority_roles": [{"role_name": "Approved by", "required_authority": "Manager"}],
-                "signatories": [{"role_name": "Approved by", "expected_signatory_name": "A. Manager"}],
+                "signatories": [{"expected_signatory_name": "A. Manager"}],
                 "signature_requirements": [{
-                    "role_name": "Approved by", "required_authority": "Manager",
-                    "specimens": [{"expected_signatory_name": "A. Manager"}],
+                    "role_name": "Approved by", "specimens": [{"expected_signatory_name": "A. Manager"}],
                 }],
             }],
-            "procedure_evidence": {"checks": [{
-                "document_id": 10, "role_name": "Approved by",
-                "configured_signatories": [{"expected_signatory_name": "A. Manager"}],
-            }]},
         }
-        stored = {}
-
-        def query(sql, params=()):
-            if "to_regclass" in sql:
-                return [{"table_name": "audit_rule_category_compiled_rulebooks"}]
-            if "SELECT fingerprint, revision" in sql:
-                return [stored] if stored else []
-            if "SELECT category_id" in sql:
-                return []
-            self.fail(f"Unexpected query: {sql}")
-
-        def write(sql, params=()):
-            if sql.startswith("INSERT INTO audit_rule_category_compiled_rulebooks"):
-                stored.update({"fingerprint": params[2], "revision": params[3]})
-
-        rulebook = {"global_version": 12, "categories": [profile]}
-        with patch("routers.audit_rules.execute_query_pg", side_effect=query), \
-             patch("routers.audit_rules.execute_write_pg", side_effect=write) as write_mock:
-            first = persist_category_compiled_rulebooks(rulebook)
-            second = persist_category_compiled_rulebooks(rulebook)
-
-        inserted_payload = json.loads(write_mock.call_args_list[0].args[1][1])
+        database.execute_write("INSERT INTO audit_rule_categories (id, name) VALUES (?, ?)", (71, "Fuel"))
+        with patch("database.is_postgres_schema_ready", return_value=False):
+            packet = self._snapshot_packet(profile)
+            first = persist_category_compiled_rulebooks(packet)
+            second = persist_category_compiled_rulebooks(packet)
+        stored = database.execute_query("SELECT * FROM audit_rule_category_compiled_rulebooks")[0]
+        payload = json.loads(stored["rulebook_json"])
+        self.assertTrue(first["published"])
         self.assertEqual(first["stored"], 1)
         self.assertEqual(second["unchanged"], 1)
         self.assertEqual(stored["revision"], 1)
-        self.assertNotIn("signatories", inserted_payload["documents"][0])
-        self.assertNotIn("specimens", inserted_payload["documents"][0]["signature_requirements"][0])
-        self.assertNotIn("configured_signatories", inserted_payload["procedure_evidence"]["checks"][0])
+        self.assertNotIn("signatories", payload["documents"][0])
+        self.assertNotIn("specimens", payload["documents"][0]["signature_requirements"][0])
+        self.assertNotIn("A. Manager", stored["rulebook_json"])
+        self.assertEqual(len(stored["evaluation_fingerprint"]), 64)
 
     def test_persisted_category_rulebook_revision_changes_only_for_rule_changes(self):
-        stored = {}
-
-        def query(sql, params=()):
-            if "to_regclass" in sql:
-                return [{"table_name": "audit_rule_category_compiled_rulebooks"}]
-            if "SELECT fingerprint, revision" in sql:
-                return [stored] if stored else []
-            if "SELECT category_id" in sql:
-                return []
-            self.fail(f"Unexpected query: {sql}")
-
-        def write(sql, params=()):
-            if sql.startswith("INSERT INTO audit_rule_category_compiled_rulebooks"):
-                stored.update({"fingerprint": params[2], "revision": params[3]})
-
-        first = {"global_version": 3, "categories": [{"category_id": 7, "name": "Fuel", "documents": []}]}
-        changed = {"global_version": 4, "categories": [{"category_id": 7, "name": "Fuel", "documents": [], "matrix_version": 2}]}
-        with patch("routers.audit_rules.execute_query_pg", side_effect=query), \
-             patch("routers.audit_rules.execute_write_pg", side_effect=write) as write_mock:
-            persist_category_compiled_rulebooks(first)
-            persist_category_compiled_rulebooks(changed)
-
-        self.assertEqual(stored["revision"], 2)
-        self.assertEqual(write_mock.call_args.args[1][4], 4)
+        database.execute_write("INSERT INTO audit_rule_categories (id, name) VALUES (?, ?)", (71, "Fuel"))
+        packet = self._snapshot_packet({"category_id": 71, "name": "Fuel", "documents": []})
+        with patch("database.is_postgres_schema_ready", return_value=False):
+            persist_category_compiled_rulebooks(packet)
+            first = database.execute_query("SELECT * FROM audit_rule_category_compiled_rulebooks")[0]
+            packet["categories"][0]["matrix_version"] = 2
+            persist_category_compiled_rulebooks(packet)
+        second = database.execute_query("SELECT * FROM audit_rule_category_compiled_rulebooks")[0]
+        self.assertEqual(second["revision"], 2)
+        self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+        self.assertEqual(first["evaluation_fingerprint"], second["evaluation_fingerprint"])
+        self.assertEqual(second["source_config_version"], packet["global_version"])
 
     def test_category_create_ignores_legacy_evidence_type_and_does_not_write_it(self):
         category = CategoryCreate(name="Material", evidence_type="billable")
@@ -3231,6 +3207,328 @@ class AuditWorkbookFormCompletionTests(unittest.TestCase):
             self.assertEqual(result['requests'], 3)
             self.assertEqual(result['statuses'], ['Cleared', 'Cleared'])
             self.assertEqual(errors, [])
+
+
+class CompiledSnapshotFoundationTests(unittest.TestCase):
+    """Real disposable SQLite compilation/publication; PostgreSQL is never contacted."""
+
+    def setUp(self):
+        from routers import audit_rules
+        self.rules = audit_rules
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        db_patch = patch.object(database, "DB_NAME", os.path.join(self.tmpdir.name, "snapshot.db"))
+        db_patch.start()
+        self.addCleanup(db_patch.stop)
+        ready_patch = patch.object(database, "_POSTGRES_SCHEMA_READY", False)
+        ready_patch.start()
+        self.addCleanup(ready_patch.stop)
+        pg_patch = patch.object(audit_rules, "execute_query_pg", side_effect=AssertionError("No live PostgreSQL"))
+        pg_patch.start()
+        self.addCleanup(pg_patch.stop)
+        init_db()
+        self.write("INSERT INTO audit_rule_categories (id, name) VALUES (71, 'Fuel'), (72, 'Other')")
+        self.write("INSERT INTO audit_rule_documents (id, name, document_type) VALUES (81, 'Request', 'form')")
+        self.write("INSERT INTO audit_rule_category_documents (category_id, document_id, is_required) VALUES (71, 81, 1)")
+        self.write("INSERT INTO audit_rule_document_fields (id, document_id, field_name, field_type, field_scope) "
+                   "VALUES (91, 81, 'Total', 'numeric', 'header')")
+        self.write("INSERT INTO audit_rule_cross_checks (id, name, compare_field, comparison_type) "
+                   "VALUES (101, 'Amounts', 'Total', 'Must be equal')")
+        self.write("INSERT INTO audit_rule_cross_check_documents (cross_check_id, document_id) VALUES (101, 81)")
+        self.write("INSERT INTO audit_rule_category_cross_checks (category_id, cross_check_id) VALUES (71, 101)")
+        self.write("INSERT INTO audit_rule_cross_check_fields (id, cross_check_id, blocking) VALUES (111, 101, 1)")
+        self.write("INSERT INTO audit_rule_cross_check_cells (field_id, document_id, column_name) VALUES (111, 81, 'Total')")
+        self.write("INSERT INTO audit_rule_voucher_checks (id, name) VALUES (121, 'Approved')")
+        self.assertion_id = database.execute_query("SELECT id FROM audit_rule_assertions ORDER BY id")[0]["id"]
+        self.write("INSERT INTO audit_rule_category_document_assertions (category_id, document_id, assertion_id) "
+                   "VALUES (71, 81, ?)", (self.assertion_id,))
+        self.write("INSERT INTO audit_rule_category_cross_check_assertions (category_id, cross_check_id, assertion_id) "
+                   "VALUES (71, 101, ?)", (self.assertion_id,))
+        self.write("INSERT INTO audit_rule_voucher_check_assertions (voucher_check_id, assertion_id) "
+                   "VALUES (121, ?)", (self.assertion_id,))
+
+    def write(self, sql, params=()):
+        return database.execute_write(sql, params)
+
+    def category(self, identity=71):
+        return database.execute_query(
+            "SELECT * FROM audit_rule_category_compiled_rulebooks WHERE category_id = ?", (identity,)
+        )[0]
+
+    def global_block(self):
+        return database.execute_query("SELECT * FROM audit_rule_global_compiled_rulebook WHERE id = 1")[0]
+
+    def rebuild(self, change=None):
+        return self.rules.rebuild_category_compiled_rulebooks(change)
+
+    def advance(self):
+        return database.bump_persisted_audit_rules_config_version()
+
+    def test_neutral_compiler_contains_forms_matrix_and_all_assertion_tags(self):
+        with patch.object(self.rules, "load_client_account_category_index", side_effect=AssertionError("No clients")):
+            packet = self.rules.compile_verification_rulebook(None)
+        self.assertIsNone(packet["client_id"])
+        self.assertEqual(packet["account_category_index"], {})
+        self.assertEqual(packet["snapshot_schema_version"], 2)
+        profile = next(c for c in packet["categories"] if c["category_id"] == 71)
+        self.assertEqual(profile["documents"][0]["form_fields"][0]["field_name"], "Total")
+        self.assertEqual(profile["documents"][0]["assertion_ids"], [self.assertion_id])
+        self.assertEqual(profile["cross_checks"][0]["assertion_ids"], [self.assertion_id])
+        self.assertEqual(profile["cross_checks"][0]["matrix"]["fields"][0]["cells"], {"81": "Total"})
+        self.assertEqual(packet["voucher_checks"][0]["assertion_ids"], [self.assertion_id])
+        self.assertTrue(self.rules.persist_category_compiled_rulebooks(packet)["published"])
+        self.assertNotIn("configured_signatories", self.category()["rulebook_json"])
+
+    def test_client_packet_cannot_publish_shared_snapshots(self):
+        packet = self.rules.compile_verification_rulebook(None)
+        packet["client_id"] = 9
+        with self.assertRaisesRegex(ValueError, "Only a shared"):
+            self.rules.persist_category_compiled_rulebooks(packet)
+        self.assertEqual(database.execute_query("SELECT * FROM audit_rule_global_compiled_rulebook"), [])
+
+    def test_client_resolved_roles_are_rebuilt_from_authored_selectors(self):
+        raw = {"procedure_evidence": {"checks": [{"document_id": 81, "sub_value": "Person A"}]}}
+        profile = {
+            "category_id": 71, "validation_rules": raw,
+            "documents": [{"document_id": 81, "authority_roles": [{"role_name": "Approved by"}]}],
+            "procedure_evidence": {"checks": [{"document_id": 81, "role_name": "Approved by"}]},
+        }
+        first = self.rules._category_rulebook_snapshot_payload(profile)
+        profile["procedure_evidence"]["checks"][0]["role_name"] = "Received by"
+        second = self.rules._category_rulebook_snapshot_payload(profile)
+        self.assertEqual(first, second)
+        check = first["procedure_evidence"]["checks"][0]
+        self.assertIsNone(check["role_name"])
+        self.assertTrue(check["requires_client_resolution"])
+
+    def test_metadata_and_assertion_tags_do_not_change_evaluation_hash(self):
+        self.rebuild()
+        before = self.category()
+        global_before = self.global_block()
+        self.write("UPDATE audit_rule_documents SET kb_note = 'Revised note', risk_rating = 'High' WHERE id = 81")
+        self.write("DELETE FROM audit_rule_category_document_assertions WHERE category_id = 71")
+        self.write("DELETE FROM audit_rule_category_cross_check_assertions WHERE category_id = 71")
+        self.write("DELETE FROM audit_rule_voucher_check_assertions WHERE voucher_check_id = 121")
+        self.write("UPDATE audit_rule_assertions SET description = 'Metadata' WHERE id = ?", (self.assertion_id,))
+        self.advance()
+        self.rebuild()
+        after = self.category()
+        self.assertNotEqual(before["fingerprint"], after["fingerprint"])
+        self.assertEqual(before["evaluation_fingerprint"], after["evaluation_fingerprint"])
+        self.assertNotEqual(global_before["fingerprint"], self.global_block()["fingerprint"])
+        self.assertEqual(global_before["evaluation_fingerprint"], self.global_block()["evaluation_fingerprint"])
+
+    def test_form_and_matrix_semantics_change_evaluation_hash(self):
+        self.rebuild()
+        previous = self.category()["evaluation_fingerprint"]
+        for sql in (
+            "UPDATE audit_rule_document_fields SET field_scope = 'item' WHERE id = 91",
+            "UPDATE audit_rule_document_fields SET field_type = 'arithmetic_multiply', "
+            "arithmetic_operands = '[\"Quantity\",\"Rate\"]' WHERE id = 91",
+            "UPDATE audit_rule_cross_check_fields SET operator = '>=', tolerance = 1 WHERE id = 111",
+            "UPDATE audit_rule_cross_check_cells SET column_name = NULL WHERE field_id = 111",
+        ):
+            with self.subTest(sql=sql):
+                self.write(sql)
+                self.advance()
+                self.rebuild()
+                current = self.category()["evaluation_fingerprint"]
+                self.assertNotEqual(previous, current)
+                previous = current
+
+    def test_inactive_and_restored_category_keep_monotonic_revision(self):
+        self.rebuild()
+        original = self.category()
+        for active, expected_revision in ((0, 2), (1, 3)):
+            self.write("UPDATE audit_rule_categories SET is_active = ? WHERE id = 71", (active,))
+            self.advance()
+            self.rebuild({"entity_type": "Category", "entity_id": 71})
+            row = self.category()
+            self.assertEqual(row["revision"], expected_revision)
+            self.assertEqual(row["is_active"], active)
+        self.assertEqual(original["fingerprint"], self.category()["fingerprint"])
+
+    def test_assertion_deactivate_restore_rebuilds_tagged_categories(self):
+        self.rebuild()
+        previous = self.category()
+        for active in (0, 1):
+            self.write("UPDATE audit_rule_assertions SET is_active = ? WHERE id = ?", (active, self.assertion_id))
+            self.advance()
+            self.rebuild({"entity_type": "Assertion", "entity_id": self.assertion_id})
+            row = self.category()
+            tags = json.loads(row["rulebook_json"])["documents"][0]["assertion_ids"]
+            self.assertEqual(tags, [self.assertion_id] if active else [])
+            self.assertEqual(row["evaluation_fingerprint"], previous["evaluation_fingerprint"])
+        self.assertEqual(self.category()["revision"], 3)
+
+    def test_targeted_rebuilds_and_global_voucher_check_changes(self):
+        self.rebuild()
+        untouched = self.category(72)
+        version = self.advance()
+        self.write("UPDATE audit_rule_documents SET kb_note = 'Changed' WHERE id = 81")
+        self.rebuild({"entity_type": "Document", "entity_id": 81})
+        self.assertEqual(self.category()["source_config_version"], version)
+        self.assertEqual(self.category(72), untouched)
+        category_before = self.category()
+        global_before = self.global_block()
+        self.write("UPDATE audit_rule_voucher_checks SET is_active = 0 WHERE id = 121")
+        self.advance()
+        self.rebuild({"entity_type": "Voucher-level Check", "entity_id": 121})
+        self.assertEqual(self.category(), category_before)
+        self.assertNotEqual(self.global_block()["evaluation_fingerprint"], global_before["evaluation_fingerprint"])
+        self.assertEqual(self.rules._snapshot_categories_for_change({"entity_type": "Cross-check", "entity_id": 101}), [71])
+
+    def test_document_rebuild_includes_cross_check_only_dependency(self):
+        self.write("INSERT INTO audit_rule_category_cross_checks (category_id, cross_check_id) VALUES (72, 101)")
+        self.assertEqual(self.rules._snapshot_categories_for_change({"entity_type": "Document", "entity_id": 81}), [71, 72])
+        self.assertIsNone(self.rules._snapshot_categories_for_change({"entity_type": "Template"}))
+
+    def test_missed_rebuild_forces_full_recovery_on_next_scoped_save(self):
+        self.rebuild()
+        self.advance()
+        self.write("UPDATE audit_rule_categories SET kb_overview = 'Missed save' WHERE id = 72")
+        self.advance()
+        self.rebuild({"entity_type": "Category", "entity_id": 71})
+        self.assertEqual(json.loads(self.category(72)["rulebook_json"])["kb_overview"], "Missed save")
+
+    def test_outdated_packet_is_rejected_without_writes(self):
+        self.rebuild()
+        before = self.global_block()
+        packet = self.rules.compile_verification_rulebook(None)
+        self.advance()
+        result = self.rules.persist_category_compiled_rulebooks(packet)
+        self.assertFalse(result["published"])
+        self.assertEqual(result["reason"], "source_changed")
+        self.assertEqual(self.global_block(), before)
+
+    def test_newer_snapshot_rolls_back_entire_publication(self):
+        self.rebuild()
+        before = self.global_block()
+        self.write("UPDATE audit_rule_category_compiled_rulebooks SET source_config_version = source_config_version + 10 "
+                   "WHERE category_id = 71")
+        packet = self.rules.compile_verification_rulebook(None)
+        packet["voucher_checks"] = []
+        with self.assertRaisesRegex(ValueError, "newer"):
+            self.rules.persist_category_compiled_rulebooks(packet)
+        self.assertEqual(self.global_block(), before)
+
+    def test_ensure_repairs_missing_and_old_schema_snapshots_then_reuses(self):
+        self.rebuild()
+        self.write("DELETE FROM audit_rule_category_compiled_rulebooks WHERE category_id = 72")
+        self.assertTrue(self.rules.ensure_category_compiled_rulebooks()["published"])
+        self.assertEqual(self.category(72)["schema_version"], 2)
+        self.write("UPDATE audit_rule_category_compiled_rulebooks SET schema_version = 1 WHERE category_id = 71")
+        self.rules.ensure_category_compiled_rulebooks()
+        self.assertEqual(self.category()["schema_version"], 2)
+        with patch.object(self.rules, "compile_verification_rulebook", side_effect=AssertionError("No recompile")):
+            self.assertTrue(self.rules.ensure_category_compiled_rulebooks()["reused"])
+
+    def test_sqlite_upgrade_preserves_existing_snapshot_revision(self):
+        # This table is exclusively inside this test's TemporaryDirectory.
+        with closing(database.get_db()) as conn:
+            conn.execute("DROP TABLE audit_rule_category_compiled_rulebooks")
+            conn.execute("CREATE TABLE audit_rule_category_compiled_rulebooks (category_id INTEGER PRIMARY KEY, "
+                         "rulebook_json TEXT NOT NULL, fingerprint TEXT NOT NULL, revision INTEGER NOT NULL, "
+                         "source_config_version INTEGER NOT NULL, compiled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+            conn.execute("INSERT INTO audit_rule_category_compiled_rulebooks "
+                         "(category_id, rulebook_json, fingerprint, revision, source_config_version) "
+                         "VALUES (71, '{}', 'legacy', 8, 1)")
+            conn.commit()
+        init_db()
+        init_db()
+        self.assertEqual(self.category()["revision"], 8)
+        self.assertEqual(self.category()["schema_version"], 1)
+        self.rules.ensure_category_compiled_rulebooks()
+        self.assertEqual(self.category()["revision"], 9)
+        self.assertEqual(self.category()["schema_version"], 2)
+
+    def test_scope_version_change_before_compile_is_not_published(self):
+        self.rebuild()
+        before = self.global_block()
+        self.advance()
+        compile_real = self.rules.compile_verification_rulebook
+
+        def concurrent_compile(*args, **kwargs):
+            self.advance()
+            return compile_real(*args, **kwargs)
+
+        with patch.object(self.rules, "compile_verification_rulebook", side_effect=concurrent_compile):
+            result = self.rebuild({"entity_type": "Category", "entity_id": 71})
+        self.assertFalse(result["published"])
+        self.assertEqual(result["reason"], "source_changed")
+        self.assertEqual(self.global_block(), before)
+        self.assertTrue(self.rules.ensure_category_compiled_rulebooks()["published"])
+
+    def test_source_version_change_during_compile_is_not_published(self):
+        query_real = self.rules._snapshot_source_query
+        advanced = False
+
+        def concurrent_query(sql, params=()):
+            nonlocal advanced
+            result = query_real(sql, params)
+            if not advanced and "FROM audit_rule_categories" in sql:
+                advanced = True
+                self.advance()
+            return result
+
+        starting_version = database.get_persisted_audit_rules_config_version()
+        with patch.object(self.rules, "_snapshot_source_query", side_effect=concurrent_query):
+            packet = self.rules.compile_verification_rulebook(None)
+        self.assertEqual(packet["global_version"], starting_version)
+        self.assertEqual(self.rules.persist_category_compiled_rulebooks(packet)["reason"], "source_changed")
+
+    def test_duplicate_warnings_and_document_order_are_evaluation_neutral(self):
+        profile = {
+            "category_id": 71, "documents": [{"document_id": 81}, {"document_id": 82}],
+            "warnings": [{"code": "inactive_template", "document_id": 81}],
+        }
+        first = self.rules._category_rulebook_snapshot_payload(profile)
+        profile["warnings"] *= 3
+        duplicate = self.rules._category_rulebook_snapshot_payload(profile)
+        self.assertEqual(first, duplicate)
+        profile["documents"].reverse()
+        reordered = self.rules._category_rulebook_snapshot_payload(profile)
+        self.assertEqual(self.rules._category_evaluation_contract(first),
+                         self.rules._category_evaluation_contract(reordered))
+
+    def test_matrix_chain_order_is_evaluation_significant(self):
+        packet = self.rules.compile_verification_rulebook(None)
+        profile = next(c for c in packet["categories"] if c["category_id"] == 71)
+        matrix = profile["cross_checks"][0]["matrix"]
+        matrix["documents"].append({"document_id": 82, "document_type": "form"})
+        first = self.rules._category_evaluation_contract(self.rules._category_rulebook_snapshot_payload(profile))
+        matrix["documents"].reverse()
+        second = self.rules._category_evaluation_contract(self.rules._category_rulebook_snapshot_payload(profile))
+        self.assertNotEqual(first, second)
+
+    def test_postgres_publication_locks_durable_version_and_writes_json_contract(self):
+        packet = self.rules.compile_verification_rulebook(None)
+        query = Mock(side_effect=lambda sql, params=(): (
+            [{"config_version": packet["global_version"]}] if "audit_rules_config_state" in sql else []
+        ))
+        write = Mock()
+        with patch.object(database, "is_postgres_schema_ready", return_value=True), \
+             patch.object(self.rules, "_compiled_rulebook_storage_available", return_value=True), \
+             patch.object(self.rules, "_snapshot_publication_transaction", return_value=nullcontext((query, write))):
+            result = self.rules.persist_category_compiled_rulebooks(packet)
+        self.assertTrue(result["published"])
+        self.assertIn("FOR UPDATE", query.call_args_list[0].args[0])
+        category_writes = [call for call in write.call_args_list if "category_compiled_rulebooks" in call.args[0]]
+        self.assertTrue(category_writes)
+        self.assertIsInstance(category_writes[0].args[1][-1], bool)
+        self.assertEqual(json.loads(category_writes[0].args[1][1])["schema_version"], 2)
+
+    def test_postgres_migration_is_additive_and_repeatable(self):
+        conn = Mock()
+        cursor = conn.cursor.return_value
+        cursor.fetchone.return_value = ("audit_rule_category_compiled_rulebooks",)
+        for _ in range(2):
+            database._ensure_postgres_category_compiled_rulebooks(conn)
+        sqls = [call.args[0] for call in cursor.execute.call_args_list]
+        for name in ("evaluation_fingerprint", "schema_version", "is_active"):
+            self.assertEqual(sum("ADD COLUMN IF NOT EXISTS " + name in sql for sql in sqls), 2)
+        self.assertEqual(sum("CREATE TABLE IF NOT EXISTS audit_rule_global_compiled_rulebook" in sql for sql in sqls), 2)
+        conn.rollback.assert_not_called()
 
 
 if __name__ == "__main__":

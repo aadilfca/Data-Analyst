@@ -1,6 +1,26 @@
 # Development Plan
 
-## Current roadmap — Global Loading Feedback and Interaction Locking — 2026-09-13
+## Current roadmap - Rulebook snapshots and Verification lookup - 2026-09-22
+
+Recommended model: GPT-6 Astra; shared/client separation, concurrent publication, migrations, and historical-result protection require careful cross-file reasoning.
+
+Step 4 investigation and the compiled-object contract are approved. See CHANGELOG_ARCHIVE.md, "Rulebook architecture decision and snapshot foundation".
+Extend the existing client/session Rulebook design: shared Category snapshots plus one global block; client-specific resolution stays outside shared storage.
+Assertions remain coverage metadata. Content revisions and evaluation fingerprints serve different purposes.
+
+| Step | Status / next action |
+|---|---|
+| 4 - Architecture decision | Complete; synthetic database-call baseline recorded in the archive, not a production latency claim. |
+| This phase | Step 5 foundation implemented and isolated tests completed; local acceptance and real PostgreSQL migration validation remain pending. |
+| 6 - Verification lookup | Separate approval: consume snapshots, combine Category/global/client-role evaluation hashes, retain session mismatch protection, and record the applied hash. |
+| 6 - Source consistency prerequisite | Address the multi-commit authoring/version boundary recorded in KNOWN_ISSUES.md before snapshots become authoritative. |
+| 6 - Saved results | Preserve saved Cleared/Query; mark changed rules Needs recheck, legacy hashes unknown, and require explicit Verify/Recheck rather than recalculation on load/rebase. |
+| 7 - Release validation | Prove unchanged-rule equivalence, measure against Step 4, run regression/browser acceptance, then obtain separate commit/push approval. |
+
+Status-log compression remains separate and requires the requested "generate brief" confirmation; File_Map.md needs review before new rows.
+The older roadmaps and closeout sections below are historical context, not authorization to reopen their phases.
+
+## Previous roadmap — Global Loading Feedback and Interaction Locking — 2026-09-13
 
 Recommended model: GPT-5. This cross-app UX change spans shared loading behavior, navigation, asynchronous reads, and high-risk workflow actions.
 
@@ -203,5 +223,4 @@ Form 44 remains active with 86 migrated entries; inactive Vendor Bill 19 retains
 across 42 lines. These are business records, not cleanup targets. This closeout created no live
 test records; temporary test databases were cleaned up.
 
-Unrelated historical findings and optional enhancements remain in `KNOWN_ISSUES.md`. The roadmap at
-the top is now the active plan for the new Ledger Reconciliation brief.
+Unrelated historical findings and optional enhancements remain in `KNOWN_ISSUES.md`; the Rulebook roadmap at the top governs the current brief.

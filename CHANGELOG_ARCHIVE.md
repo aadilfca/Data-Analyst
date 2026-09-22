@@ -6142,3 +6142,59 @@ code-first restart. Verification behavior is unchanged in this foundation phase.
 **Verified:** Python compilation, diff check, SQLite schema test, fingerprint/revision tests, and
 cache invalidation tests (5 focused checks passed). The complete focused file did not return a final
 terminal summary in its browser-dependent section.
+
+---
+
+## Rulebook architecture decision and snapshot foundation - 2026-09-22
+
+**Scope:** approved Step 4 investigation followed by Step 5 foundation in database.py, routers/audit_rules.py,
+tests/test_audit_rulebook.py and the four project notes. Existing client/session Rulebooks remain authoritative
+for Verification; this phase does not integrate snapshot consumption or change saved statuses.
+
+**Investigation:** Git HEAD 7c46e2e already stored Category snapshots, but shared procedures could retain a
+client-resolved role after specimen stripping; inactive snapshots were deleted, resetting restore revisions.
+Assertions were absent, saves rebuilt every active Category, and cold client loads republished snapshots.
+The grouped Verify path supplies one client Rulebook; Save-only resolves it per line. Status evaluation
+still reads Category matrices, Document/template/Form definitions and roles live; voucher evidence stays live.
+
+**Step 4 baseline:** real functions extracted through AST, warm caches, disposable in-memory SQLite adapter,
+five same-Category lines with linked/Form/no-template Documents, 11 repetitions. Counts are per bunch;
+times are local medians, not PostgreSQL/network/HTTP/commit latency or a speedup claim.
+
+| Path | Reads | Writes | Batch calls | SQLite audit writes | Median ms |
+|---|---:|---:|---:|---:|---:|
+| Status only | 70 | 5 | 0 | 0 | 3.2 |
+| Status plus matrix | 100 | 15 | 5 | 0 | 6.3 |
+| Grouped Verify | 113 | 17 | 7 | 5 | 9.2 |
+| Grouped Verify plus matrix | 143 | 27 | 12 | 5 | 6.5 |
+
+Timing jitter prevents comparisons between these tiny local runs. Existing metrics omit batch calls and
+SQLite audit writes; reproducible production benchmarking remains Step 7.
+
+**Approved contract / implementation:** schema-v2 neutral Category JSON includes Documents, Forms,
+Cross-check matrix order/cells, authored procedure selectors, dependency warnings and Assertion tags.
+One global block holds active voucher checks and Assertion metadata. Client specimens/account assignments
+never enter shared compilation; raw signer selectors are retained for later client-role resolution.
+Canonical SHA-256 content fingerprints advance revisions; evaluation fingerprints exclude coverage/risk/notes
+and legacy non-gating settings. Schema/evaluator versions make interpretation explicit.
+
+SQLite upgrades retain old revisions; PostgreSQL uses the same additive helper on existing and fresh schemas.
+Inactive Categories retain snapshots; restore increments revisions. Known dependency changes rebuild impacted
+Categories, voucher-check changes update the global block, and unknown scope/version gaps force full recovery.
+Cold client loads repair missing/old snapshots through neutral compilation instead of publishing client packets.
+Atomic publication locks the durable version, rejects obsolete or wrongly scoped packets, and rolls back
+partial writes. This does not make existing multi-commit rule-authoring endpoints atomic; see KNOWN_ISSUES.md.
+
+**Next-phase boundary:** consume these snapshots through the existing client/session architecture, combine
+Category/global/resolved-role evaluation hashes, and persist the applied hash. Preserve historical Cleared/Query;
+changed rules require a separate Needs recheck state, null legacy hashes mean unknown, and load/rebase must
+not re-evaluate saved work. Retain session version-mismatch protection. No UI or status-engine edits here.
+
+**Verification:** complete Rulebook file: 155 passed, 36 subtests passed, one pre-existing Form browser
+expectation failure reproduced from HEAD. Related Save/Verify/support/metrics/Postgres tests: 37 passed,
+four pre-existing fixture failures (metrics support shape and three Postgres migration assumptions);
+the three migration failures also reproduce with HEAD functions. Final foundation rerun: 20 passed and
+4 subtests passed. These new tests cover neutral
+compilation, metadata/evaluation separation, scope/recovery, restore revisions, concurrency and migrations.
+PostgreSQL checks use mocks; all test connection attempts to live PostgreSQL were blocked. No packages installed.
+Local-server acceptance and real PostgreSQL migration validation remain pending; no commit/push performed.

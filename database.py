@@ -2027,10 +2027,37 @@ def init_db():
                 category_id INTEGER PRIMARY KEY,
                 rulebook_json TEXT NOT NULL,
                 fingerprint TEXT NOT NULL,
+                evaluation_fingerprint TEXT,
+                schema_version INTEGER NOT NULL DEFAULT 1,
+                is_active INTEGER NOT NULL DEFAULT 1,
                 revision INTEGER NOT NULL DEFAULT 1,
                 source_config_version INTEGER NOT NULL,
                 compiled_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (category_id) REFERENCES audit_rule_categories(id) ON DELETE CASCADE
+            )
+        ''')
+
+        # Upgrade existing snapshot tables without replacing their revision history.
+        snapshot_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(audit_rule_category_compiled_rulebooks)")
+        }
+        for name, definition in (
+            ("evaluation_fingerprint", "TEXT"),
+            ("schema_version", "INTEGER NOT NULL DEFAULT 1"),
+            ("is_active", "INTEGER NOT NULL DEFAULT 1"),
+        ):
+            if name not in snapshot_columns:
+                conn.execute(f"ALTER TABLE audit_rule_category_compiled_rulebooks ADD COLUMN {name} {definition}")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_global_compiled_rulebook (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                rulebook_json TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                evaluation_fingerprint TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1,
+                source_config_version INTEGER NOT NULL,
+                schema_version INTEGER NOT NULL,
+                compiled_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
@@ -3471,8 +3498,31 @@ def _ensure_postgres_category_compiled_rulebooks(conn):
                 category_id INTEGER PRIMARY KEY REFERENCES audit_rule_categories(id) ON DELETE CASCADE,
                 rulebook_json JSONB NOT NULL,
                 fingerprint TEXT NOT NULL,
+                evaluation_fingerprint TEXT,
+                schema_version INTEGER NOT NULL DEFAULT 1,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 revision INTEGER NOT NULL DEFAULT 1,
                 source_config_version INTEGER NOT NULL,
+                compiled_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        ''')
+        for name, definition in (
+            ("evaluation_fingerprint", "TEXT"),
+            ("schema_version", "INTEGER NOT NULL DEFAULT 1"),
+            ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE"),
+        ):
+            cur.execute(
+                f"ALTER TABLE audit_rule_category_compiled_rulebooks ADD COLUMN IF NOT EXISTS {name} {definition}"
+            )
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS audit_rule_global_compiled_rulebook (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                rulebook_json JSONB NOT NULL,
+                fingerprint TEXT NOT NULL,
+                evaluation_fingerprint TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1,
+                source_config_version INTEGER NOT NULL,
+                schema_version INTEGER NOT NULL,
                 compiled_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )
         ''')
@@ -4207,6 +4257,8 @@ def init_db_postgres(conn):
             compiled_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
     ''', "audit_rule_category_compiled_rulebooks")
+    # The same additive upgrade covers fresh and previously bootstrapped installations.
+    _ensure_postgres_category_compiled_rulebooks(conn)
 
     # ---------- 24b. audit_rule_assertions ----------
     run('''

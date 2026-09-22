@@ -10,6 +10,7 @@ import hashlib
 import json
 import time
 import threading
+from contextlib import contextmanager
 from fastapi import APIRouter, HTTPException, Body, Query, Response, Depends
 from pydantic import BaseModel
 from psycopg2.extras import Json
@@ -125,7 +126,7 @@ def invalidate_audit_rules_cache(change=None):
     # The snapshot is a derived read model, rebuilt only after the source configuration was
     # successfully saved and its durable version advanced. This call remains outside the cache
     # lock because the compiler reads that same version while building the snapshot.
-    rebuild_category_compiled_rulebooks()
+    rebuild_category_compiled_rulebooks(change)
 
 def category_for_account_cache_key(client_id: int, account_code: str) -> str:
     """Key shape for the client-scoped category-for-account cache (Modal Caching Phase 3 extension)."""
@@ -348,110 +349,328 @@ def _build_cross_check_matrix_contract(
     return {"documents": documents, "fields": fields}
 
 
-def _category_rulebook_snapshot_payload(category_profile: dict) -> dict:
-    """Keep the persisted Category Rulebook independent of a particular client.
+SNAPSHOT_SCHEMA_VERSION = 2
+RULEBOOK_EVALUATOR_VERSION = 1
 
-    Signature specimens are client data, so their names are intentionally excluded. The
-    Category's required authority and the Procedure rule itself remain in the snapshot.
-    """
-    payload = json.loads(json.dumps(category_profile, default=str))
-    for document in payload.get("documents", []):
+
+def _canonical_rulebook_json(payload: dict) -> str:
+    """Only object keys are unordered; matrix/document chain order remains meaningful."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+
+
+def _rulebook_fingerprint(payload: dict) -> str:
+    return hashlib.sha256(_canonical_rulebook_json(payload).encode("utf-8")).hexdigest()
+
+
+def _category_rulebook_snapshot_payload(category_profile: dict) -> dict:
+    """Re-resolve shared procedures from their authored selectors, never client results."""
+    payload = json.loads(json.dumps(category_profile))
+    payload["schema_version"] = SNAPSHOT_SCHEMA_VERSION
+    payload["evaluator_version"] = RULEBOOK_EVALUATOR_VERSION
+    payload["is_active"] = bool(payload.get("is_active", True))
+    documents = payload.get("documents", [])
+    for document in documents:
         document.pop("signatories", None)
         for requirement in document.get("signature_requirements", []):
             requirement.pop("specimens", None)
-    for check in (payload.get("procedure_evidence") or {}).get("checks", []):
+        document["assertion_ids"] = sorted(set(document.get("assertion_ids", [])))
+    # Category document order is presentation-only; the Cross-check matrix preserves its chain.
+    document_by_id = {
+        document["document_id"]: {**document, "name": document.get("name")}
+        for document in documents
+    }
+    roles_by_document = {
+        document["document_id"]: document.get("authority_roles", []) for document in documents
+    }
+    payload["procedure_evidence"] = _build_procedure_evidence_contract(
+        payload.get("validation_rules") or {}, document_by_id, roles_by_document, {}
+    )
+    for check in payload["procedure_evidence"].get("checks", []):
         check.pop("configured_signatories", None)
+        check["requires_client_resolution"] = bool(check.get("selected_detail") and not check.get("role_name"))
+    for check in payload.get("cross_checks", []):
+        check["assertion_ids"] = sorted(set(check.get("assertion_ids", [])))
+    # A shared Document can produce the same warning in several Categories; rebuild scope
+    # must not change a Category's fingerprint merely by repeating that warning.
+    payload["warnings"] = [
+        json.loads(warning) for warning in sorted({
+            _canonical_rulebook_json(warning) for warning in payload.get("warnings", [])
+        })
+    ]
     return payload
 
 
+def _category_evaluation_contract(payload: dict) -> dict:
+    """Current evaluator inputs only; metadata/legacy inactive flags cannot invent new gates.
+
+    The authored Required flag and authority names are intentionally excluded: today's status
+    engine does not gate on them. A future semantic change must advance the evaluator version.
+    Client-resolved role names and global voucher checks join this hash at the consumer boundary.
+    """
+    documents = []
+    for document in payload.get("documents", []):
+        kind = document.get("document_type") or "linked_template"
+        documents.append({
+            "document_id": document["document_id"],
+            "document_type": kind,
+            "template_id": document.get("template_id"),
+            "roles": sorted(role["role_name"] for role in document.get("authority_roles", [])),
+            "form_fields": sorted([
+                {key: field.get(key) for key in (
+                    "id", "field_name", "field_type", "field_scope", "arithmetic_operands"
+                )} for field in document.get("form_fields", [])
+            ], key=lambda field: field["id"]),
+        })
+    checks = []
+    for check in payload.get("cross_checks", []):
+        matrix = check.get("matrix") or {}
+        checks.append({
+            "cross_check_id": check["cross_check_id"],
+            "compare_to_voucher_line": bool(check.get("compare_to_voucher_line")),
+            "documents": [
+                {key: document.get(key) for key in ("document_id", "document_type", "template_id")}
+                for document in matrix.get("documents", [])
+            ],
+            "fields": [
+                {key: field.get(key) for key in (
+                    "id", "operator", "tolerance", "missing_data_behavior", "blocking", "cells"
+                )} for field in matrix.get("fields", [])
+            ],
+        })
+    procedures = [
+        {key: check.get(key) for key in (
+            "document_id", "condition", "role", "role_name", "signature", "selected_detail",
+            "requires_client_resolution"
+        )} for check in (payload.get("procedure_evidence") or {}).get("checks", [])
+    ]
+    return {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "evaluator_version": RULEBOOK_EVALUATOR_VERSION,
+        "category_id": payload["category_id"], "is_active": payload["is_active"],
+        "documents": sorted(documents, key=lambda document: document["document_id"]),
+        "cross_checks": sorted(checks, key=lambda check: check["cross_check_id"]),
+        "procedures": sorted(procedures, key=_canonical_rulebook_json),
+        # Invalid dependencies must remain distinguishable from an intentionally empty Category.
+        "warnings": payload.get("warnings", []),
+    }
+
+
+def _snapshot_source_query(sql: str, params=()) -> list:
+    """The shared compiler also runs against a disposable/local SQLite database."""
+    if database.is_postgres_schema_ready():
+        return execute_query_pg(sql, params)
+    return database.execute_query(sql.replace("%s", "?"), params)
+
+
+@contextmanager
+def _snapshot_publication_transaction():
+    """Serialize version validation and publication; never partially publish a packet."""
+    if database.is_postgres_schema_ready():
+        with pg_transaction():
+            yield execute_query_pg, execute_write_pg
+        return
+    conn = database.get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        def query(sql, params=()):
+            return [dict(row) for row in conn.execute(sql.replace("%s", "?"), params).fetchall()]
+
+        def write(sql, params=()):
+            conn.execute(sql.replace("%s", "?"), params)
+
+        yield query, write
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _compiled_rulebook_storage_available() -> bool:
-    """Avoid breaking a save if code arrives before the additive table migration."""
+    """A code-first deployment remains compatible until both additive migrations run."""
     if database.is_postgres_schema_ready():
         rows = execute_query_pg(
-            "SELECT to_regclass('public.audit_rule_category_compiled_rulebooks') AS table_name"
+            "SELECT to_regclass('public.audit_rule_category_compiled_rulebooks') AS categories, "
+            "to_regclass('public.audit_rule_global_compiled_rulebook') AS globals"
         )
-        return bool(rows and rows[0].get("table_name"))
-    rows = database.execute_query(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-        "AND name = 'audit_rule_category_compiled_rulebooks'"
+        if not rows or not rows[0].get("categories") or not rows[0].get("globals"):
+            return False
+        columns = execute_query_pg(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' "
+            "AND table_name = 'audit_rule_category_compiled_rulebooks'"
+        )
+        return {"evaluation_fingerprint", "schema_version", "is_active"}.issubset(
+            {row["column_name"] for row in columns}
+        )
+    tables = database.execute_query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
+        "('audit_rule_category_compiled_rulebooks', 'audit_rule_global_compiled_rulebook')"
     )
-    return bool(rows)
+    if len(tables) != 2:
+        return False
+    columns = database.execute_query("PRAGMA table_info(audit_rule_category_compiled_rulebooks)")
+    return {"evaluation_fingerprint", "schema_version", "is_active"}.issubset({row["name"] for row in columns})
 
 
 def persist_category_compiled_rulebooks(rulebook: dict) -> dict:
-    """Persist deterministic per-Category snapshots from one freshly compiled Rulebook."""
-    source_version = int(rulebook.get("global_version") or get_audit_rules_config_version())
+    """Publish only a shared compiler packet whose durable source version is still current."""
+    if rulebook.get("client_id") is not None or rulebook.get("snapshot_schema_version") != SNAPSHOT_SCHEMA_VERSION:
+        raise ValueError("Only a shared, current-schema Rulebook may publish Category snapshots.")
+    source_version = int(rulebook["global_version"])
+    result = {"stored": 0, "unchanged": 0, "source_config_version": source_version, "published": False}
     if not _compiled_rulebook_storage_available():
-        return {"stored": 0, "unchanged": 0, "source_config_version": source_version}
-    active_category_ids = set()
-    stored = 0
-    unchanged = 0
+        return {**result, "reason": "migration_required"}
 
-    for category_profile in rulebook.get("categories", []):
-        category_id = int(category_profile["category_id"])
-        active_category_ids.add(category_id)
-        payload = _category_rulebook_snapshot_payload(category_profile)
-        canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        fingerprint = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
-        existing = execute_query_pg(
-            "SELECT fingerprint, revision FROM audit_rule_category_compiled_rulebooks WHERE category_id = %s",
-            (category_id,),
-        )
-        if existing and existing[0].get("fingerprint") == fingerprint:
-            execute_write_pg(
-                "UPDATE audit_rule_category_compiled_rulebooks "
-                "SET source_config_version = %s, compiled_at = CURRENT_TIMESTAMP WHERE category_id = %s",
-                (source_version, category_id),
+    global_payload = {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "evaluator_version": RULEBOOK_EVALUATOR_VERSION,
+        "voucher_checks": rulebook.get("voucher_checks", []),
+        "assertions": rulebook.get("assertions", []),
+    }
+    global_evaluation = {
+        "evaluator_version": RULEBOOK_EVALUATOR_VERSION,
+        "voucher_check_ids": sorted(check["id"] for check in global_payload["voucher_checks"]),
+    }
+    records = [("audit_rule_global_compiled_rulebook", "id", 1, global_payload, global_evaluation, None)]
+    for profile in rulebook.get("categories", []):
+        payload = _category_rulebook_snapshot_payload(profile)
+        records.append((
+            "audit_rule_category_compiled_rulebooks", "category_id", int(payload["category_id"]),
+            payload, _category_evaluation_contract(payload), payload["is_active"]
+        ))
+
+    with _snapshot_publication_transaction() as (query, write):
+        # The state-row lock also serializes concurrent publishers and durable version bumps.
+        lock = " FOR UPDATE" if database.is_postgres_schema_ready() else ""
+        current = query("SELECT config_version FROM audit_rules_config_state WHERE id = 1" + lock)
+        if not current or int(current[0]["config_version"]) != source_version:
+            return {**result, "reason": "source_changed"}
+        for table, key, identity, payload, evaluation, active in records:
+            existing = query(
+                f"SELECT fingerprint, revision, source_config_version FROM {table} WHERE {key} = %s",
+                (identity,),
             )
-            unchanged += 1
-            continue
+            if existing and int(existing[0]["source_config_version"]) > source_version:
+                raise ValueError("Refusing to overwrite a newer Rulebook snapshot.")
+            fingerprint = _rulebook_fingerprint(payload)
+            changed = not existing or existing[0]["fingerprint"] != fingerprint
+            revision = (int(existing[0]["revision"]) + int(changed)) if existing else 1
+            columns = [key, "rulebook_json", "fingerprint", "evaluation_fingerprint",
+                       "revision", "source_config_version", "schema_version"]
+            values = [identity, _canonical_rulebook_json(payload), fingerprint,
+                      _rulebook_fingerprint(evaluation), revision, source_version, SNAPSHOT_SCHEMA_VERSION]
+            if active is not None:
+                columns.append("is_active")
+                values.append(active)
+            assignments = ", ".join(f"{column} = EXCLUDED.{column}" for column in columns[1:])
+            write(
+                f"INSERT INTO {table} ({', '.join(columns)}) "
+                f"VALUES ({', '.join('%s' for _ in values)}) ON CONFLICT ({key}) DO UPDATE SET "
+                f"{assignments}, compiled_at = CURRENT_TIMESTAMP",
+                tuple(values),
+            )
+            if active is not None:
+                result["stored" if changed else "unchanged"] += 1
+    return {**result, "published": True}
 
-        revision = int(existing[0].get("revision") or 0) + 1 if existing else 1
-        execute_write_pg(
-            "INSERT INTO audit_rule_category_compiled_rulebooks "
-            "(category_id, rulebook_json, fingerprint, revision, source_config_version) "
-            "VALUES (%s, %s, %s, %s, %s) "
-            "ON CONFLICT (category_id) DO UPDATE SET "
-            "rulebook_json = EXCLUDED.rulebook_json, fingerprint = EXCLUDED.fingerprint, "
-            "revision = EXCLUDED.revision, source_config_version = EXCLUDED.source_config_version, "
-            "compiled_at = CURRENT_TIMESTAMP",
-            (category_id, canonical_json, fingerprint, revision, source_version),
+
+def _snapshot_categories_for_change(change: Optional[dict]) -> Optional[List[int]]:
+    """None means safe full rebuild; [] means only the shared global block changed."""
+    change = change or {}
+    kind, identity = change.get("entity_type"), change.get("entity_id")
+    if kind == "Voucher-level Check":
+        return []
+    if kind == "Assertion" and identity is not None:
+        rows = _snapshot_source_query(
+            "SELECT category_id FROM audit_rule_category_document_assertions WHERE assertion_id = %s "
+            "UNION SELECT category_id FROM audit_rule_category_cross_check_assertions WHERE assertion_id = %s",
+            (identity, identity)
         )
-        stored += 1
-
-    if "categories" in rulebook:
-        existing_rows = execute_query_pg(
-            "SELECT category_id FROM audit_rule_category_compiled_rulebooks ORDER BY category_id"
+        return sorted({int(row["category_id"]) for row in rows})
+    if kind == "Category" and identity is not None:
+        return [int(identity)]
+    if kind == "Document" and identity is not None:
+        rows = _snapshot_source_query(
+            "SELECT category_id FROM audit_rule_category_documents WHERE document_id = %s "
+            "UNION SELECT cc.category_id FROM audit_rule_category_cross_checks cc "
+            "JOIN audit_rule_cross_check_documents cd ON cd.cross_check_id = cc.cross_check_id "
+            "WHERE cd.document_id = %s", (identity, identity)
         )
-        for row in existing_rows:
-            if int(row["category_id"]) not in active_category_ids:
-                execute_write_pg(
-                    "DELETE FROM audit_rule_category_compiled_rulebooks WHERE category_id = %s",
-                    (row["category_id"],),
-                )
-
-    return {"stored": stored, "unchanged": unchanged, "source_config_version": source_version}
-
-
-def rebuild_category_compiled_rulebooks() -> dict:
-    """Rebuild all active Category snapshots after an Audit Rules configuration save."""
-    return persist_category_compiled_rulebooks(compile_verification_rulebook(0))
+        return sorted({int(row["category_id"]) for row in rows})
+    if kind == "Cross-check" and identity is not None:
+        rows = _snapshot_source_query(
+            "SELECT category_id FROM audit_rule_category_cross_checks WHERE cross_check_id = %s", (identity,)
+        )
+        return sorted({int(row["category_id"]) for row in rows})
+    return None
 
 
-def compile_verification_rulebook(client_id: int) -> dict:
+def rebuild_category_compiled_rulebooks(change: Optional[dict] = None) -> dict:
+    """Rebuild neutral snapshots, retaining inactive Categories and their revision history."""
+    if not _compiled_rulebook_storage_available():
+        return {"published": False, "reason": "migration_required"}
+    current = database.get_persisted_audit_rules_config_version()
+    category_ids = _snapshot_categories_for_change(change)
+    # A later scoped save must not conceal a failed/missed earlier rebuild.
+    previous = _snapshot_source_query(
+        "SELECT source_config_version, schema_version FROM audit_rule_global_compiled_rulebook WHERE id = 1"
+    )
+    if (not previous or previous[0]["schema_version"] != SNAPSHOT_SCHEMA_VERSION
+            or previous[0]["source_config_version"] != current - 1):
+        category_ids = None
+    packet = compile_verification_rulebook(None, category_ids=category_ids)
+    # The dependency scope was chosen for current, not a version that arrived mid-build.
+    if packet["global_version"] != current:
+        return {"published": False, "reason": "source_changed"}
+    return persist_category_compiled_rulebooks(packet)
+
+
+def ensure_category_compiled_rulebooks() -> dict:
+    """Backfill/repair missing or old-schema snapshots, never from a client's compiled packet."""
+    if not _compiled_rulebook_storage_available():
+        return {"published": False, "reason": "migration_required"}
+    current = database.get_persisted_audit_rules_config_version()
+    global_rows = _snapshot_source_query(
+        "SELECT source_config_version, schema_version FROM audit_rule_global_compiled_rulebook WHERE id = 1"
+    )
+    missing = _snapshot_source_query(
+        "SELECT c.id FROM audit_rule_categories c LEFT JOIN audit_rule_category_compiled_rulebooks s "
+        "ON s.category_id = c.id WHERE s.category_id IS NULL OR s.schema_version != %s",
+        (SNAPSHOT_SCHEMA_VERSION,)
+    )
+    if (missing or not global_rows or global_rows[0]["schema_version"] != SNAPSHOT_SCHEMA_VERSION
+            or global_rows[0]["source_config_version"] != current):
+        return rebuild_category_compiled_rulebooks()
+    return {"published": True, "reused": True}
+
+
+def compile_verification_rulebook(client_id: Optional[int], *, category_ids: Optional[List[int]] = None) -> dict:
     """Compile active Audit Rules into a Verification-facing, read-only rulebook.
 
     Voucher evidence and calculated results are deliberately outside this stable configuration
     read model. The returned object is a fresh compilation; use
     ``load_client_verification_rulebook`` for the version-aware cached loader.
     """
+    # None is the only shared mode: no specimen or account-assignment queries may run.
+    shared = client_id is None
+    query = _snapshot_source_query if shared else execute_query_pg
+    source_version = database.get_persisted_audit_rules_config_version() if shared else get_audit_rules_config_version()
+    if source_version is None:
+        raise ValueError("Audit Rules configuration has not been initialized.")
     warnings: List[dict] = []
+    category_params = ()
+    category_where = "" if shared else " WHERE is_active = TRUE"
+    if shared and category_ids is not None:
+        category_params = tuple(sorted(set(category_ids)))
+        category_where = " WHERE id IN (" + ",".join("%s" for _ in category_params) + ")" if category_params else " WHERE 1 = 0"
 
-    categories = execute_query_pg(
-        "SELECT id, name, kb_overview, evidence_type, matrix_version, validation_rules_json "
-        "FROM audit_rule_categories WHERE is_active = TRUE ORDER BY id"
+    categories = query(
+        "SELECT id, name, kb_overview, evidence_type, matrix_version, validation_rules_json, is_active "
+        "FROM audit_rule_categories" + category_where + " ORDER BY id", category_params
     )
-    documents = execute_query_pg(
+    documents = query(
         "SELECT id, name, kb_note, template_id, risk_rating, transaction_level_approval, "
         "document_type, verification_field_policy, is_active FROM audit_rule_documents "
         "WHERE is_active = TRUE ORDER BY id"
@@ -459,58 +678,58 @@ def compile_verification_rulebook(client_id: int) -> dict:
     document_ids = [row["id"] for row in documents]
     category_ids = [row["id"] for row in categories]
 
-    roles = execute_query_pg(
+    roles = query(
         "SELECT document_id, role_name, required_authority, sort_order "
-        "FROM audit_rule_document_auth_roles ORDER BY document_id, sort_order"
+        "FROM audit_rule_document_auth_roles ORDER BY document_id, sort_order, role_name"
     )
     # Cross-check fields are a mirror of the active Master Columns registry.  The legacy
     # audit_rule_document_fields table is retained for compatibility, but it is no longer the
     # source of truth because a manually saved list cannot include Master Columns added later.
-    master_columns = execute_query_pg(
+    master_columns = query(
         "SELECT id, column_name FROM master_columns "
         "WHERE is_active = TRUE ORDER BY category, column_name"
     )
-    requirements = execute_query_pg(
+    requirements = query(
         "SELECT category_id, document_id, is_required, sort_order "
-        "FROM audit_rule_category_documents ORDER BY category_id, sort_order"
+        "FROM audit_rule_category_documents ORDER BY category_id, sort_order, document_id"
     )
-    cross_checks = execute_query_pg(
+    cross_checks = query(
         "SELECT id, name, compare_field, comparison_type, compare_to_voucher_line "
         "FROM audit_rule_cross_checks WHERE is_active = TRUE ORDER BY id"
     )
     cross_check_ids = [row["id"] for row in cross_checks]
-    cross_check_documents = execute_query_pg(
+    cross_check_documents = query(
         "SELECT cross_check_id, document_id, sort_order "
-        "FROM audit_rule_cross_check_documents ORDER BY cross_check_id, sort_order"
+        "FROM audit_rule_cross_check_documents ORDER BY cross_check_id, sort_order, document_id"
     )
-    matrix_fields = execute_query_pg(
+    matrix_fields = query(
         "SELECT id, cross_check_id, sort_order, operator, tolerance, missing_data_behavior, "
         "blocking, risk FROM audit_rule_cross_check_fields "
         "ORDER BY cross_check_id, sort_order, id"
     )
-    matrix_cells = execute_query_pg(
+    matrix_cells = query(
         "SELECT field_id, document_id, column_name FROM audit_rule_cross_check_cells "
         "ORDER BY field_id, document_id"
     )
-    category_cross_checks = execute_query_pg(
+    category_cross_checks = query(
         "SELECT category_id, cross_check_id, sort_order "
-        "FROM audit_rule_category_cross_checks ORDER BY category_id, sort_order"
+        "FROM audit_rule_category_cross_checks ORDER BY category_id, sort_order, cross_check_id"
     )
-    voucher_checks = execute_query_pg(
+    voucher_checks = query(
         "SELECT id, name, authority, sort_order FROM audit_rule_voucher_checks "
         "WHERE is_active = TRUE ORDER BY sort_order, id"
     )
-    templates = execute_query_pg(
+    templates = query(
         "SELECT id, template_name AS name FROM templates WHERE is_active = TRUE ORDER BY id"
     )
-    mappings = execute_query_pg(
+    mappings = query(
         "SELECT p.template_id, p.column_id, m.column_name, m.data_type, p.sort_order "
         "FROM template_column_mappings p "
         "JOIN master_columns m ON p.column_id = m.id "
         "WHERE m.is_active = TRUE "
-        "ORDER BY p.template_id, p.sort_order"
+        "ORDER BY p.template_id, p.sort_order, p.column_id"
     )
-    specimens = execute_query_pg(
+    specimens = [] if shared else query(
         "SELECT document_id, role_name, expected_signatory_name, authority "
         "FROM signature_specimens WHERE client_id = %s AND is_active = TRUE "
         "ORDER BY document_id, role_name, id",
@@ -576,13 +795,18 @@ def compile_verification_rulebook(client_id: int) -> dict:
             "data_type": row.get("data_type"), "sort_order": row["sort_order"]
         })
 
+    form_fields_cache = {}
+
     def build_document(document_id: int, required: bool) -> dict:
         row = document_by_id[document_id]
         template_id = row.get("template_id")
-        form_fields = get_document_form_fields(document_id) \
-            if (row.get("document_type") or "linked_template") == "form" else []
-        if form_fields:
-            row["form_fields"] = form_fields
+        if document_id not in form_fields_cache:
+            form_fields_cache[document_id] = (
+                get_document_form_fields(document_id, query=query) if shared
+                else get_document_form_fields(document_id)
+            ) if (row.get("document_type") or "linked_template") == "form" else []
+        form_fields = form_fields_cache[document_id]
+        row["form_fields"] = form_fields
         if template_id is not None and template_id not in template_ids:
             warnings.append({"code": "inactive_template", "document_id": document_id, "template_id": template_id})
         signature_requirements = []
@@ -616,7 +840,8 @@ def compile_verification_rulebook(client_id: int) -> dict:
                 for specimen in role_specimens
             ],
             "signature_requirements": signature_requirements,
-            "template_mapping_column_ids": [m["column_id"] for m in mappings_by_template.get(template_id, [])]
+            "template_mapping_column_ids": [m["column_id"] for m in mappings_by_template.get(template_id, [])],
+            **({"template_columns": mappings_by_template.get(template_id, [])} if shared else {})
         }
 
     cross_check_by_id = {row["id"]: row for row in cross_checks}
@@ -673,14 +898,61 @@ def compile_verification_rulebook(client_id: int) -> dict:
             "working_paper_gates": {"approval": {}, "supporting_documents": {}, "account_head_classification": {}, "observation": {}}
         })
 
-    category_name_by_id = {row["id"]: row["name"] for row in categories}
-    account_index = load_client_account_category_index(client_id)
+    assertions = []
+    if shared:
+        # Keep coverage metadata out of the evaluator projection; tags never create status gates.
+        assertions = query(
+            "SELECT id, name, description, sort_order FROM audit_rule_assertions "
+            "WHERE is_active = TRUE ORDER BY sort_order, id"
+        )
+        active_assertions = {row["id"] for row in assertions}
+        document_tags = query(
+            "SELECT category_id, document_id, assertion_id FROM audit_rule_category_document_assertions "
+            "ORDER BY category_id, document_id, assertion_id"
+        )
+        cross_check_tags = query(
+            "SELECT category_id, cross_check_id, assertion_id FROM audit_rule_category_cross_check_assertions "
+            "ORDER BY category_id, cross_check_id, assertion_id"
+        )
+        voucher_tags = query(
+            "SELECT voucher_check_id, assertion_id FROM audit_rule_voucher_check_assertions "
+            "ORDER BY voucher_check_id, assertion_id"
+        )
+        def tags_for(rows, **identity):
+            return sorted({row["assertion_id"] for row in rows
+                           if row["assertion_id"] in active_assertions
+                           and all(row[key] == value for key, value in identity.items())})
+
+        for profile in category_profiles:
+            category_id = profile["category_id"]
+            profile["is_active"] = bool(category_by_id[category_id].get("is_active", True))
+            for document in profile["documents"]:
+                document["assertion_ids"] = tags_for(
+                    document_tags, category_id=category_id, document_id=document["document_id"]
+                )
+            for check in profile["cross_checks"]:
+                check["assertion_ids"] = tags_for(
+                    cross_check_tags, category_id=category_id, cross_check_id=check["cross_check_id"]
+                )
+            doc_ids = category_document_ids[category_id]
+            check_ids = set(checks_by_category[category_id])
+            profile["warnings"] = [
+                warning for warning in warnings
+                if warning.get("category_id") == category_id
+                or ("category_id" not in warning and
+                    (warning.get("document_id") in doc_ids or warning.get("cross_check_id") in check_ids))
+            ]
+        for check in voucher_checks:
+            check["assertion_ids"] = tags_for(voucher_tags, voucher_check_id=check["id"])
+
+    account_index = {} if shared else load_client_account_category_index(client_id)
     for account_code, value in account_index.items():
         if value["category_id"] is not None and value["category_id"] not in category_by_id:
             warnings.append({"code": "inactive_account_category", "account_code": account_code, "category_id": value["category_id"]})
 
     return {
-        "global_version": get_audit_rules_config_version(),
+        "global_version": source_version,
+        **({"snapshot_schema_version": SNAPSHOT_SCHEMA_VERSION, "assertions": assertions} if shared else {}),
         "client_id": client_id,
         "account_category_index": account_index,
         "categories": category_profiles,
@@ -717,9 +989,8 @@ def load_client_verification_rulebook(client_id: int) -> dict:
 
     rulebook = compile_verification_rulebook(client_id)
     rulebook["global_version"] = version
-    # The first normal Rulebook load after deployment backfills every active Category without
-    # a separate migration job. Later loads retain the same fingerprint when rules are unchanged.
-    persist_category_compiled_rulebooks(rulebook)
+    # Repair/backfill via the neutral compiler; never publish this client's resolved roles.
+    ensure_category_compiled_rulebooks()
     with _audit_rules_cache_lock:
         _verification_rulebook_cache[key] = (
             time.monotonic() + AUDIT_RULES_CACHE_TTL_SECONDS,
@@ -947,8 +1218,9 @@ def normalize_form_fields(document_type: str, template_id: Optional[int], raw_fi
         field['arithmetic_operands'] = canonical_operands
     return fields
 
-def get_document_form_fields(document_id: int) -> List[dict]:
-    rows = execute_query_pg(
+def get_document_form_fields(document_id: int, *, query=None) -> List[dict]:
+    query = query or execute_query_pg
+    rows = query(
         "SELECT id, field_name, field_type, field_scope, linked_column, arithmetic_operands, sort_order "
         "FROM audit_rule_document_fields WHERE document_id = %s ORDER BY sort_order, id",
         (document_id,)
@@ -4177,7 +4449,7 @@ def update_category_document_assertion_tags(category_id: int, document_id: int, 
         "Admin", "Update", "AuditRules",
         f"Set Assertion tags={payload.assertion_ids} for Document ID {document_id} in Category ID {category_id}"
     )
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Category", "entity_id": category_id, "action": "Assertion tags updated"})
     return {"category_id": category_id, "document_id": document_id, "assertion_ids": payload.assertion_ids}
 
 
@@ -4213,7 +4485,7 @@ def update_category_cross_check_assertion_tags(category_id: int, cross_check_id:
         "Admin", "Update", "AuditRules",
         f"Set Assertion tags={payload.assertion_ids} for Cross-check ID {cross_check_id} in Category ID {category_id}"
     )
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Category", "entity_id": category_id, "action": "Assertion tags updated"})
     return {"category_id": category_id, "cross_check_id": cross_check_id, "assertion_ids": payload.assertion_ids}
 
 
@@ -4243,7 +4515,7 @@ def update_voucher_check_assertion_tags(voucher_check_id: int, payload: VoucherC
         "Admin", "Update", "AuditRules",
         f"Set Assertion tags={payload.assertion_ids} for Voucher check ID {voucher_check_id}"
     )
-    invalidate_audit_rules_cache()
+    invalidate_audit_rules_cache({"entity_type": "Voucher-level Check", "entity_id": voucher_check_id, "action": "Assertion tags updated"})
     return {"voucher_check_id": voucher_check_id, "assertion_ids": payload.assertion_ids}
 
 
