@@ -3337,6 +3337,27 @@ class CompiledSnapshotFoundationTests(unittest.TestCase):
         self.assertIsNone(self.rules.load_persisted_category_status_ruleset(
             9, 71, client_rulebook, expected_version=next_version
         ))
+
+    def test_persisted_status_ruleset_keeps_unchanged_category_after_global_rebuild(self):
+        self.rebuild()
+        client_rulebook = {"categories": [{"category_id": 71, "procedure_evidence": {"checks": []}}]}
+        category_version = self.category()["source_config_version"]
+        next_version = self.advance()
+        self.write("UPDATE audit_rule_voucher_checks SET name = 'Re-approved' WHERE id = 121")
+        self.rebuild({"entity_type": "Voucher-level Check", "entity_id": 121})
+        self.assertEqual(self.category()["source_config_version"], category_version)
+        ruleset = self.rules.load_persisted_category_status_ruleset(
+            9, 71, client_rulebook, expected_version=next_version
+        )
+        self.assertIsNotNone(ruleset)
+        self.assertEqual(ruleset["global_version"], next_version)
+        self.write("UPDATE audit_rule_category_compiled_rulebooks "
+                   "SET source_config_version = ? WHERE category_id = 71", (next_version + 1,))
+        self.assertIsNone(self.rules.load_persisted_category_status_ruleset(
+            9, 71, client_rulebook, expected_version=next_version
+        ))
+        self.write("UPDATE audit_rule_category_compiled_rulebooks "
+                   "SET source_config_version = ? WHERE category_id = 71", (next_version,))
         self.rebuild()
         self.write("DELETE FROM audit_rule_global_compiled_rulebook WHERE id = 1")
         self.assertIsNone(self.rules.load_persisted_category_status_ruleset(

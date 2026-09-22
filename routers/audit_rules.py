@@ -709,7 +709,10 @@ def load_persisted_category_status_ruleset(client_id: int, category_id: int,
     global_snapshot = load_persisted_global_rulebook(expected_version)
     if category is None or global_snapshot is None:
         return None
-    if int(category["source_config_version"]) != int(expected_version):
+    # Category snapshots are rebuilt only when a Category dependency changes. An unrelated
+    # global change therefore leaves a valid Category at an earlier source version; the global
+    # block above still has to match exactly. A future Category packet is never safe to consume.
+    if int(category["source_config_version"]) > int(expected_version):
         return None
     payload = category["payload"]
     if int(payload.get("category_id") or 0) != int(category_id):

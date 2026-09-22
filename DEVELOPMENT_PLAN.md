@@ -11,10 +11,11 @@ Assertions remain coverage metadata. Content revisions and evaluation fingerprin
 | Step | Status / next action |
 |---|---|
 | 4 - Architecture decision | Complete; synthetic database-call baseline recorded in the archive, not a production latency claim. |
-| This phase | Missing existing-PostgreSQL hash-column migration now wired into the fast path and test-covered; user restart and live Save/Verify retest pending. |
+| Postgres migration fix | Complete, committed and pushed (`317337c`); existing-PostgreSQL hash-column migration wired into the fast path, test-covered, user-confirmed live. |
 | 6 - Session protection | Complete: existing mismatch/rebase protection remains; rebase updates only the session version, never saved results or hashes. |
 | 6 - Source consistency | Active Verification blocks all Audit Rules writes; the separate multi-commit authoring boundary remains recorded for future hardening. |
 | 6 - Saved results | Complete: unchanged hashes are current; changed hashes need recheck; legacy null hashes are unknown; no load/rebase recalculation. |
+| This phase | Scoped Category snapshots remain usable after a global-only rebuild. Phase 4 batching was rejected and removed after variable 7-21s server waits; remote Supabase/service latency remains the practical limit. Final normal-save confirmation and separate commit/push approval remain. |
 | 7 - Release validation | Next: prove unchanged-rule equivalence, measure against Step 4, run regression/browser acceptance, then obtain separate commit/push approval. |
 
 Status-log compression remains separate and requires the requested "generate brief" confirmation; File_Map.md needs review before new rows.

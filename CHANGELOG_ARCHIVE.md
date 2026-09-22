@@ -1,5 +1,64 @@
 # Changelog Archive
 
+## Verification Speed Optimization — Phase 4 — 2026-09-22
+
+**Scope:** historical working-tree experiment only; no Phase 4 code is retained.
+
+This working-tree experiment followed a live HAR trace showing `save_and_verify_voucher_bundle` taking 7.6s for a
+2-line voucher (captured right after the Postgres migration fix above got Save/Verify working
+again), `compute_and_persist_cleared_status()` — already named in `PERFORMANCE_INVESTIGATION.md`
+as firing "6-10+ sequential, non-batched" queries per line — still had 5 genuinely independent,
+still-separate `execute_query_pg()` calls reading this specific voucher line's own recorded state
+(linked evidence, signature exceptions, procedure ticks, Form values, voucher-check ticks). Step 6
+(Rulebook snapshots, above) had already eliminated the other 4 round-trips that read rule
+*definitions*; these 5 read this line's own *state*, so they can't be snapshotted the same way.
+
+Combined into one query using CTEs, each wrapped in `COALESCE(json_agg(...), '[]')` so an
+unmatched CTE returns an empty list rather than SQL NULL — the same "skip when the id set is
+empty" behaviour the removed per-query `if ...:` guards gave, now expressed as an empty `ANY(%s)`
+array matching zero rows. Every `WHERE` clause is byte-identical to the query it replaces; only
+the number of round trips changes (5 → 1). `checked_at`/`entry_updated_at` are pulled as
+`EXTRACT(EPOCH FROM ...)` rather than left as `timestamptz`, since `json_agg` serializes
+timestamps to text and `_ts_sort_key()`'s comparisons require real `datetime` objects — a small
+`_epoch_to_ts()` helper converts them straight back (both columns are `TIMESTAMPTZ`, matching
+`_MIN_TS`'s own tz-aware UTC, confirmed against the Postgres schema before writing the query).
+`json_agg`/named dict params are new to this codebase but standard, mature psycopg2/Postgres
+features; `= ANY(%s)` array params were already this file's own established pattern.
+
+Deliberately excluded from this pass (kept small per the user's "safe limits" instruction): the
+category-resolution lookup a few lines above (`upload_rows`/`tb_rows`/`assignment_rows` — a true
+sequential dependency, only runs once per line's lifetime since Category freezes after first
+save), `evaluate_cross_checks_for_line()` and `_get_voucher_line_physical_bills()` (separate,
+independently-reused functions), and `_has_pending_account_head_note()`/
+`_has_voucher_line_correct_confirmation()`.
+
+**Verification:** 6 new tests added — one asserting the combined query's SQL text references all
+5 expected tables and executes as a single round trip, five parametrized scenarios (all
+satisfied; required role not ticked; linked-template doc not linked; signature exception flagged;
+voucher check not ticked) proving the unpacked combined-query result drives the same Cleared/
+Query outcome the five separate queries gave, including the epoch-timestamp round-trip actually
+exercised. Full `tests/` suite: 301 passed, 36 subtests passed, 17 failed, 1 error — identical
+failing/erroring test list to the pre-change baseline (already individually confirmed pre-existing
+against `HEAD` during the Postgres migration fix above); no new failure. Live server restart and a
+real Save/Verify retest (ideally with the endpoint's existing `?perf=true` component timing) to
+confirm the actual round-trip reduction against real Postgres remains the user's to do.
+
+The diagnostic response is deliberately opt-in: only `?perf=true` adds `_perf` (request total,
+database calls/reads/writes/database time) and `_perf_components` (line saves, support-data writes,
+post-support status evaluation, and verification). The ordinary response remains unchanged. Its
+wrapper now preserves an error response even when diagnostics are requested, and focused HTTP
+coverage confirms the unchanged ordinary contract, diagnostic shape, and validation-error path.
+
+Opening the Verification page with `?perf=true` now carries this existing opt-in flag through only
+the normal Save/Verify request, so no DevTools command is needed. `?perf=1` remains supported for
+existing diagnostic bookmarks; ordinary pages issue the unchanged request and expose no timings.
+
+**Outcome:** live Save/Verify captures ranged from about 7 to 21 seconds, with virtually all time
+spent waiting for the server. The first two final captures (7.02s and 7.47s) matched the earlier
+7.6s baseline, while a comparable save still reached 14.25s. The CTE did not produce a repeatable
+benefit, so it and its fixtures were removed. The separate Rulebook snapshot safety design remains
+retained; remote Supabase/service latency is the remaining practical limitation.
+
 ## Verification Observation query scoping — 2026-09-20
 
 Verification Observation badges, expanded cells, and the quick-view popover now filter normal
@@ -6242,3 +6301,14 @@ individually confirmed to already fail identically at `HEAD` (`8fef0b2`) before 
 stale `_ensure_postgres_*` mock patch lists from earlier phases and one Windows temp-dir permission
 error, none touching `applied_ruleset_hash` or the fast-path wiring added here. Local server restart +
 live Save/Verify retest against the real Postgres database remains the user's to confirm.
+
+### Correction: scoped Category snapshots after a global-only rebuild - 2026-09-22
+
+A live Material Purchased save returned `503` because its valid Category snapshot remained at source version 300
+after an unrelated global Voucher-level Check edit advanced the global Rulebook to 301. Targeted rebuilds are
+intended to preserve unaffected Category packets, but the persisted-reader incorrectly required the Category version
+to equal the requested global version. It now accepts an older Category version while retaining exact global
+version/schema validation and rejecting a future Category packet. Focused tests cover the valid older packet and the
+future-packet rejection. The separate Phase 4 query-batching experiment remains uncommitted: its one successful
+two-line live save took 9.97 seconds, so it cannot be considered an improvement; it does not run on voucher loading
+or procedure-modal requests, whose observed latency therefore remains a separate investigation.
