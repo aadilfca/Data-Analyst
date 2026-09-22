@@ -620,6 +620,7 @@ def init_db():
                 status TEXT DEFAULT 'Pending',
                 comments TEXT,
                 observations TEXT,
+                applied_ruleset_hash TEXT,
                 verified_by TEXT,
                 verified_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -645,8 +646,11 @@ def init_db():
             if 'matrix_version_applied' not in columns:
                 conn.execute("ALTER TABLE verification_details ADD COLUMN matrix_version_applied INTEGER")
                 print("✅ Added matrix_version_applied column to verification_details")
+            if 'applied_ruleset_hash' not in columns:
+                conn.execute("ALTER TABLE verification_details ADD COLUMN applied_ruleset_hash TEXT")
+                print("✅ Added applied_ruleset_hash column to verification_details")
         except Exception as e:
-            print("⚠️ Could not add cleared_status/matrix_version_applied to verification_details:", e)
+            print("⚠️ Could not add status-rulebook columns to verification_details:", e)
 
         # category_id_applied/category_name_applied (Freeze Category on Voucher Lines):
         # freezes the Category actually in effect the first time this line is
@@ -3280,6 +3284,34 @@ def _ensure_postgres_form_field_columns(conn):
         cur.close()
 
 
+def _ensure_postgres_applied_ruleset_hash(conn):
+    """Add verification_details.applied_ruleset_hash to an already-bootstrapped Postgres database.
+
+    This column was added to the declarative schema after some databases had already
+    received the bootstrap marker, so the CREATE TABLE/ALTER TABLE in the full-bootstrap
+    branch below never runs for them (see the applied_ruleset_hash comment there).
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'verification_details'
+        """)
+        existing = {row[0] for row in cur.fetchall()}
+        if 'applied_ruleset_hash' in existing:
+            return []
+
+        cur.execute("ALTER TABLE verification_details ADD COLUMN IF NOT EXISTS applied_ruleset_hash TEXT")
+        return ['applied_ruleset_hash']
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
 def _ensure_postgres_form_tables(conn):
     """Create Form evidence tables missing from an already-marked Postgres schema.
 
@@ -3667,6 +3699,7 @@ def init_db_postgres(conn):
         migrated_cat_doc_assertions = _ensure_postgres_category_document_assertions(conn)
         migrated_cat_cc_assertions = _ensure_postgres_category_cross_check_assertions(conn)
         migrated_vc_assertions = _ensure_postgres_voucher_check_assertions(conn)
+        migrated_ruleset_hash = _ensure_postgres_applied_ruleset_hash(conn)
         conn.commit()
         migration_notes = []
         if migrated_document_type:
@@ -3685,6 +3718,8 @@ def init_db_postgres(conn):
             migration_notes.append("audit_rule_category_cross_check_assertions created")
         if migrated_vc_assertions:
             migration_notes.append("audit_rule_voucher_check_assertions created")
+        if migrated_ruleset_hash:
+            migration_notes.append("applied_ruleset_hash column added to verification_details")
         print(
             "[postgres] existing schema verified; skipped bootstrap"
             + (f" ({'; '.join(migration_notes)})" if migration_notes else "")
@@ -3941,6 +3976,7 @@ def init_db_postgres(conn):
             status TEXT DEFAULT 'Pending',
             comments TEXT,
             observations TEXT,
+            applied_ruleset_hash TEXT,
             verified_by TEXT,
             verified_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ DEFAULT now(),
@@ -3963,6 +3999,7 @@ def init_db_postgres(conn):
     # matrix_version_applied (see that column's own comment in the SQLite ALTER block).
     run("ALTER TABLE verification_details ADD COLUMN IF NOT EXISTS category_id_applied INTEGER")
     run("ALTER TABLE verification_details ADD COLUMN IF NOT EXISTS category_name_applied TEXT")
+    run("ALTER TABLE verification_details ADD COLUMN IF NOT EXISTS applied_ruleset_hash TEXT")
 
     # ---------- 14. audit_procedure_library ----------
     run('''

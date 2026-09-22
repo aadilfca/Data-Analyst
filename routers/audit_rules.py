@@ -646,6 +646,123 @@ def ensure_category_compiled_rulebooks() -> dict:
     return {"published": True, "reused": True}
 
 
+def _read_compiled_rulebook_payload(table: str, identity_column: str, identity: int) -> Optional[dict]:
+    """Read one published snapshot, rejecting incomplete or old compiler output."""
+    if not _compiled_rulebook_storage_available():
+        return None
+    rows = _snapshot_source_query(
+        f"SELECT rulebook_json, evaluation_fingerprint, revision, source_config_version, schema_version "
+        f"FROM {table} WHERE {identity_column} = %s",
+        (identity,),
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    if int(row.get("schema_version") or 0) != SNAPSHOT_SCHEMA_VERSION:
+        return None
+    try:
+        payload = row["rulebook_json"]
+        payload = json.loads(payload) if isinstance(payload, str) else payload
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
+        return None
+    return {"payload": payload, "evaluation_fingerprint": row["evaluation_fingerprint"],
+            "revision": row["revision"], "source_config_version": row["source_config_version"]}
+
+
+def load_persisted_global_rulebook(expected_version: Optional[int] = None) -> Optional[dict]:
+    """Return the published global evaluator block; never rebuild or live-compile on a read."""
+    snapshot = _read_compiled_rulebook_payload(
+        "audit_rule_global_compiled_rulebook", "id", 1
+    )
+    if snapshot is None:
+        return None
+    current = get_audit_rules_config_version() if expected_version is None else expected_version
+    if int(snapshot["source_config_version"]) != int(current):
+        return None
+    return snapshot
+
+
+def _procedure_resolution_key(check: dict) -> str:
+    """Stable shared-selector identity; client specimen results are deliberately excluded."""
+    return _canonical_rulebook_json({key: check.get(key) for key in (
+        "document_id", "condition", "role", "signature", "selected_detail",
+        "requires_client_resolution"
+    )})
+
+
+def load_persisted_category_status_ruleset(client_id: int, category_id: int,
+                                           client_rulebook: dict,
+                                           expected_version: Optional[int] = None) -> Optional[dict]:
+    """Merge one stored Category snapshot with only its client's resolved procedure roles.
+
+    The existing client Rulebook remains the cache for modal guidance and specimen-derived role
+    resolution. Status definitions themselves come exclusively from the durable shared snapshots.
+    Missing, malformed, stale, or old-schema snapshots fail closed so a status save cannot quietly
+    fall back to the former live per-line rule assembly.
+    """
+    expected_version = get_audit_rules_config_version() if expected_version is None else expected_version
+    category = _read_compiled_rulebook_payload(
+        "audit_rule_category_compiled_rulebooks", "category_id", int(category_id)
+    )
+    global_snapshot = load_persisted_global_rulebook(expected_version)
+    if category is None or global_snapshot is None:
+        return None
+    if int(category["source_config_version"]) != int(expected_version):
+        return None
+    payload = category["payload"]
+    if int(payload.get("category_id") or 0) != int(category_id):
+        return None
+
+    resolved_profile = next(
+        (profile for profile in (client_rulebook.get("categories") or [])
+         if int(profile.get("category_id") or 0) == int(category_id)),
+        None,
+    )
+    if resolved_profile is None:
+        return None
+    resolved_checks = (resolved_profile.get("procedure_evidence") or {}).get("checks") or []
+    role_queues: Dict[str, List[Optional[str]]] = {}
+    for check in resolved_checks:
+        role_queues.setdefault(_procedure_resolution_key(check), []).append(check.get("role_name"))
+
+    status_category = json.loads(json.dumps(payload))
+    merged_checks = (status_category.get("procedure_evidence") or {}).get("checks") or []
+    role_projection = []
+    for check in merged_checks:
+        roles = role_queues.get(_procedure_resolution_key(check), [])
+        role_name = roles.pop(0) if roles else None
+        if role_name:
+            check["role_name"] = role_name
+        role_projection.append({"document_id": check.get("document_id"),
+                                "selector": _procedure_resolution_key(check),
+                                "role_name": check.get("role_name")})
+
+    applied_hash = _rulebook_fingerprint({
+        "evaluator_version": RULEBOOK_EVALUATOR_VERSION,
+        "category_evaluation_fingerprint": category["evaluation_fingerprint"],
+        "global_evaluation_fingerprint": global_snapshot["evaluation_fingerprint"],
+        "role_resolution": sorted(role_projection, key=_canonical_rulebook_json),
+    })
+    return {
+        "categories": [status_category],
+        "voucher_checks": global_snapshot["payload"].get("voucher_checks") or [],
+        "assertions": global_snapshot["payload"].get("assertions") or [],
+        "global_version": expected_version,
+        "applied_ruleset_hash": applied_hash,
+        "category_snapshot_revision": category["revision"],
+        "global_snapshot_revision": global_snapshot["revision"],
+    }
+
+
+def ruleset_freshness(applied_hash: Optional[str], current_hash: Optional[str]) -> str:
+    """Classify a saved result without recalculating or overwriting historical work."""
+    if not applied_hash:
+        return "legacy_unknown"
+    return "current" if current_hash and applied_hash == current_hash else "needs_recheck"
+
+
 def compile_verification_rulebook(client_id: Optional[int], *, category_ids: Optional[List[int]] = None) -> dict:
     """Compile active Audit Rules into a Verification-facing, read-only rulebook.
 

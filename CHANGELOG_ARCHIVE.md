@@ -6198,3 +6198,47 @@ the three migration failures also reproduce with HEAD functions. Final foundatio
 compilation, metadata/evaluation separation, scope/recovery, restore revisions, concurrency and migrations.
 PostgreSQL checks use mocks; all test connection attempts to live PostgreSQL were blocked. No packages installed.
 Local-server acceptance and real PostgreSQL migration validation remain pending; no commit/push performed.
+
+## Rulebook snapshot status integration - 2026-09-22
+
+**Scope:** approved Step 6 in `database.py`, `routers/audit_rules.py`, `routers/verification.py`, the two
+focused test files, and project notes. No UI files changed.
+
+Verification status now reads one durable Category snapshot plus the durable global voucher-check block.
+The existing session/client Rulebook remains for modal guidance and client-specific procedure-role resolution;
+only that resolved role projection is merged into the stored Category payload. Missing, old-schema, malformed,
+or version-stale snapshots fail closed with a save error instead of live recompilation. Grouped Save/Verify reuses
+one request-scoped Category ruleset cache. Form definitions, templates, document roles, matrix configuration, and
+voucher checks no longer assemble live per status line; voucher evidence values remain live by design.
+
+`verification_details.applied_ruleset_hash` is a nullable SQLite/PostgreSQL migration. It hashes the Category and
+global evaluation fingerprints plus the client role projection. Explicit save/verify recomputes and stores the hash;
+read-only status reason reports `current`, `needs_recheck`, or `legacy_unknown` without writing. Session rebase still
+changes only `verification_sessions.rulebook_version`, preserving historical status and applied hash. Active
+Verification already blocks every Audit Rules write endpoint, preventing an authoring edit from overlapping an active
+consumer; the wider multi-commit authoring boundary remains a separate hardening item.
+
+**Verification:** Python compilation and `git diff --check` passed. Direct new-contract coverage passed 4 tests
+(schema migration, snapshot-only read, stale/missing rejection, bundle request cache); existing session-loader and
+rebase safeguards passed 2 tests. No PostgreSQL connection, browser acceptance, or benchmark was run in this phase.
+
+### Correction: existing-Postgres startup skipped the applied_ruleset_hash migration - 2026-09-22
+
+The `applied_ruleset_hash` column above was only added to `init_db_postgres()`'s full-bootstrap branch
+(new database only). Any already-bootstrapped Postgres database — including the one used for local
+acceptance testing — takes the fast path at the top of that function, which returns before reaching the
+bootstrap branch, so the column was never added and Save/Verify returned a `500`. This is the same
+companion-migration gap documented under the `audit_rule_assertions` incident (2026-09-20 entry).
+
+**Fix (`database.py`):** added `_ensure_postgres_applied_ruleset_hash(conn)`, modeled on the existing
+single-column companion `_ensure_postgres_form_field_columns`, and wired it into the fast-path whitelist
+in `init_db_postgres()` alongside the other `_ensure_postgres_*` calls.
+
+**Verification:** added a Postgres-mocked correctness test (column added when missing, no-op when
+present) plus a wiring test asserting the new call sits before the fast-path `return`, not only in the
+bootstrap-only branch — the specific gap that let this ship — in `tests/test_audit_rulebook.py`. Full
+`tests/` suite: 295 passed, 36 subtests passed, 17 failed, 1 error; every failing/erroring test was
+individually confirmed to already fail identically at `HEAD` (`8fef0b2`) before this session's changes —
+stale `_ensure_postgres_*` mock patch lists from earlier phases and one Windows temp-dir permission
+error, none touching `applied_ruleset_hash` or the fast-path wiring added here. Local server restart +
+live Save/Verify retest against the real Postgres database remains the user's to confirm.

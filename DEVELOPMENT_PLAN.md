@@ -11,11 +11,11 @@ Assertions remain coverage metadata. Content revisions and evaluation fingerprin
 | Step | Status / next action |
 |---|---|
 | 4 - Architecture decision | Complete; synthetic database-call baseline recorded in the archive, not a production latency claim. |
-| This phase | Step 5 foundation implemented and isolated tests completed; local acceptance and real PostgreSQL migration validation remain pending. |
-| 6 - Verification lookup | Separate approval: consume snapshots, combine Category/global/client-role evaluation hashes, retain session mismatch protection, and record the applied hash. |
-| 6 - Source consistency prerequisite | Address the multi-commit authoring/version boundary recorded in KNOWN_ISSUES.md before snapshots become authoritative. |
-| 6 - Saved results | Preserve saved Cleared/Query; mark changed rules Needs recheck, legacy hashes unknown, and require explicit Verify/Recheck rather than recalculation on load/rebase. |
-| 7 - Release validation | Prove unchanged-rule equivalence, measure against Step 4, run regression/browser acceptance, then obtain separate commit/push approval. |
+| This phase | Missing existing-PostgreSQL hash-column migration now wired into the fast path and test-covered; user restart and live Save/Verify retest pending. |
+| 6 - Session protection | Complete: existing mismatch/rebase protection remains; rebase updates only the session version, never saved results or hashes. |
+| 6 - Source consistency | Active Verification blocks all Audit Rules writes; the separate multi-commit authoring boundary remains recorded for future hardening. |
+| 6 - Saved results | Complete: unchanged hashes are current; changed hashes need recheck; legacy null hashes are unknown; no load/rebase recalculation. |
+| 7 - Release validation | Next: prove unchanged-rule equivalence, measure against Step 4, run regression/browser acceptance, then obtain separate commit/push approval. |
 
 Status-log compression remains separate and requires the requested "generate brief" confirmation; File_Map.md needs review before new rows.
 The older roadmaps and closeout sections below are historical context, not authorization to reopen their phases.

@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+import inspect
 import json
 import os
 import sqlite3
@@ -388,6 +389,15 @@ class AuditRulebookCompilerTests(unittest.TestCase):
             conn.close()
         self.assertIn("rulebook_version", columns)
         self.assertEqual(columns["rulebook_version"], 0)
+
+    def test_verification_detail_schema_has_nullable_applied_ruleset_hash(self):
+        conn = sqlite3.connect(database.DB_NAME)
+        try:
+            columns = {row[1]: row[3] for row in conn.execute("PRAGMA table_info(verification_details)")}
+        finally:
+            conn.close()
+        self.assertIn("applied_ruleset_hash", columns)
+        self.assertEqual(columns["applied_ruleset_hash"], 0)
 
     def test_document_schema_has_verification_field_policy(self):
         conn = sqlite3.connect(database.DB_NAME)
@@ -3301,6 +3311,38 @@ class CompiledSnapshotFoundationTests(unittest.TestCase):
         self.assertIsNone(check["role_name"])
         self.assertTrue(check["requires_client_resolution"])
 
+    def test_persisted_status_ruleset_reads_snapshots_without_live_compile(self):
+        self.rebuild()
+        client_rulebook = {"categories": [{"category_id": 71, "procedure_evidence": {"checks": []}}]}
+        current_version = database.get_persisted_audit_rules_config_version()
+        with patch.object(self.rules, "compile_verification_rulebook", side_effect=AssertionError("No live compile")):
+            ruleset = self.rules.load_persisted_category_status_ruleset(
+                9, 71, client_rulebook, expected_version=current_version
+            )
+        self.assertEqual(ruleset["categories"][0]["category_id"], 71)
+        self.assertEqual(ruleset["voucher_checks"][0]["id"], 121)
+        self.assertTrue(ruleset["applied_ruleset_hash"])
+        self.assertEqual(self.rules.ruleset_freshness(None, ruleset["applied_ruleset_hash"]), "legacy_unknown")
+        self.assertEqual(self.rules.ruleset_freshness(ruleset["applied_ruleset_hash"], ruleset["applied_ruleset_hash"]), "current")
+        self.assertEqual(self.rules.ruleset_freshness("previous", ruleset["applied_ruleset_hash"]), "needs_recheck")
+
+    def test_persisted_status_ruleset_rejects_stale_or_missing_snapshot(self):
+        self.rebuild()
+        client_rulebook = {"categories": [{"category_id": 71, "procedure_evidence": {"checks": []}}]}
+        current_version = database.get_persisted_audit_rules_config_version()
+        self.assertIsNotNone(self.rules.load_persisted_category_status_ruleset(
+            9, 71, client_rulebook, expected_version=current_version
+        ))
+        next_version = self.advance()
+        self.assertIsNone(self.rules.load_persisted_category_status_ruleset(
+            9, 71, client_rulebook, expected_version=next_version
+        ))
+        self.rebuild()
+        self.write("DELETE FROM audit_rule_global_compiled_rulebook WHERE id = 1")
+        self.assertIsNone(self.rules.load_persisted_category_status_ruleset(
+            9, 71, client_rulebook, expected_version=next_version
+        ))
+
     def test_metadata_and_assertion_tags_do_not_change_evaluation_hash(self):
         self.rebuild()
         before = self.category()
@@ -3529,6 +3571,38 @@ class CompiledSnapshotFoundationTests(unittest.TestCase):
             self.assertEqual(sum("ADD COLUMN IF NOT EXISTS " + name in sql for sql in sqls), 2)
         self.assertEqual(sum("CREATE TABLE IF NOT EXISTS audit_rule_global_compiled_rulebook" in sql for sql in sqls), 2)
         conn.rollback.assert_not_called()
+
+    def test_postgres_applied_ruleset_hash_migration_adds_missing_column(self):
+        conn = Mock()
+        cursor = conn.cursor.return_value
+        cursor.fetchall.return_value = []
+        result = database._ensure_postgres_applied_ruleset_hash(conn)
+        self.assertEqual(result, ["applied_ruleset_hash"])
+        sqls = [call.args[0] for call in cursor.execute.call_args_list]
+        self.assertTrue(any(
+            "ALTER TABLE verification_details ADD COLUMN IF NOT EXISTS applied_ruleset_hash" in sql
+            for sql in sqls
+        ))
+        conn.rollback.assert_not_called()
+
+    def test_postgres_applied_ruleset_hash_migration_is_idempotent(self):
+        conn = Mock()
+        cursor = conn.cursor.return_value
+        cursor.fetchall.return_value = [("applied_ruleset_hash",)]
+        result = database._ensure_postgres_applied_ruleset_hash(conn)
+        self.assertEqual(result, [])
+        sqls = [call.args[0] for call in cursor.execute.call_args_list]
+        self.assertFalse(any("ALTER TABLE" in sql for sql in sqls))
+        conn.rollback.assert_not_called()
+
+    def test_postgres_applied_ruleset_hash_migration_runs_on_existing_schema_fast_path(self):
+        # Regression test for the gap that shipped the 500: a column added only to the
+        # full-bootstrap branch of init_db_postgres() is unreachable for any database that
+        # already has audit_rules_config_state, since that branch returns before reaching it.
+        # Assert the companion call sits before that early return, not after it.
+        source = inspect.getsource(database.init_db_postgres)
+        fast_path, _, bootstrap_only = source.partition("def run(sql, label=None):")
+        self.assertIn("_ensure_postgres_applied_ruleset_hash(conn)", fast_path)
 
 
 if __name__ == "__main__":

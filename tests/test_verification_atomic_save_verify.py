@@ -386,6 +386,29 @@ def test_voucher_bundle_persists_form_entries_with_string_line_ids(monkeypatch):
     assert calls == ["begin", "save_without_status", "commit"]
 
 
+def test_voucher_bundle_reuses_one_ruleset_cache_for_its_status_pass(monkeypatch):
+    _patch_atomic_dependencies(monkeypatch)
+    monkeypatch.setattr(verification, "execute_query_pg", lambda query, params=None: (
+        [{"id": 7, "status": "Pending"}] if "SELECT id, status" in query else []
+    ))
+    caches = []
+    monkeypatch.setattr(
+        verification,
+        "compute_and_persist_cleared_status",
+        lambda *args, **kwargs: caches.append(kwargs.get("ruleset_cache")) or {
+            "cleared_status": "Cleared", "matrix_version_applied": 1,
+        },
+    )
+
+    verification.save_and_verify_voucher_bundle(
+        session_id=10, current_detail_id=7,
+        lines=[{"detail_id": 7, "line_items": [], "procedure_data": {}}], verify=False,
+    )
+
+    assert len(caches) == 1
+    assert isinstance(caches[0], dict)
+
+
 def test_status_engine_uses_session_rulebook_loader_when_not_preloaded(monkeypatch):
     loaded_sessions = []
 

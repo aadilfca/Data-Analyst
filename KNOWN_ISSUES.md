@@ -98,6 +98,7 @@ Every finding from a review session is recorded here — never fixed silently, n
 | 2026-09-22 | Verification performance metrics | Existing counters omit PostgreSQL batch calls and SQLite audit writes; Step 4 counted these separately. Extend measurement before claiming end-to-end snapshot gains. | Fix |
 | 2026-09-22 | Regression fixtures | Five existing failures: Form bill-group test excludes blank entry rows; modal metrics mock lacks form_entries; three Postgres bootstrap/Form migration tests assume older schemas/query order. Reproduced before this phase or against HEAD; see CHANGELOG_ARCHIVE.md, Rulebook architecture decision and snapshot foundation. | Fix |
 | 2026-09-22 | Audit Rules publication boundary | Rule-authoring writes and durable-version bumps commit separately. Snapshot publication rejects obsolete versioned packets but cannot fence an in-progress, unversioned source edit; transactional authoring or equivalent coordination is required before authoritative snapshot consumption. | Fix |
+| 2026-09-22 | Audit Rules publication boundary | Step 6 mitigation: all Rulebook-affecting writes reject while Verification presence is active, preventing an active status consumer from overlapping an edit. The multi-commit authoring boundary still needs hardening outside active sessions. | Defer |
 
 ---
 

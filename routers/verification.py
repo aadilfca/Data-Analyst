@@ -39,7 +39,7 @@ from routers.import_export import (
 # through the same process-level cache audit_rules.py's own GET endpoints use — guidance
 # content is keyed by Category name/id, not client_id, since Categories aren't client-scoped
 # (see cache_get()/cache_set()'s own docstring in audit_rules.py for why).
-from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_validation_rules, get_category_documents, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key, get_audit_rules_config_version, load_client_account_category_index, load_client_verification_rulebook
+from routers.audit_rules import get_category_guidance_documents, get_category_guidance_cross_checks, get_category_validation_rules, get_category_documents, get_document_auth_roles_batch, cache_get, cache_set, category_for_account_cache_key, get_audit_rules_config_version, load_client_account_category_index, load_client_verification_rulebook, load_persisted_category_status_ruleset, ruleset_freshness
 from database import get_audit_rules_config_changes_since
 from routers.auth import get_current_user
 # Check #1's no-template-Document satisfaction rule (2026-08-08 fix) needs a Document's full
@@ -403,7 +403,8 @@ def _clear_status_gate(key: str, label: str, ok: bool, detail: str = "", not_app
 def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = False,
                                        persist: bool = True,
                                        sibling_ids: Optional[List[int]] = None,
-                                       rulebook: Optional[dict] = None) -> Optional[dict]:
+                                       rulebook: Optional[dict] = None,
+                                       ruleset_cache: Optional[Dict[int, dict]] = None) -> Optional[dict]:
     """
     Validation Rules: compute this line's Cleared/Query status from five blocking conditions:
     required evidence, voucher-level checks, signature exceptions, hard-fail Cross-checks, and
@@ -442,7 +443,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     line = execute_query_pg(
         """
         SELECT vd.id, vd.session_id, vd.transaction_ref, cd.row_data, cd.extract_amount, vs.client_id,
-               vd.category_id_applied, vd.category_name_applied
+               vd.category_id_applied, vd.category_name_applied, vd.applied_ruleset_hash
         FROM verification_details vd
         JOIN client_data cd ON cd.id = vd.client_data_id
         JOIN verification_sessions vs ON vs.id = vd.session_id
@@ -484,16 +485,8 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # re-upload/deletion/reassignment must not retroactively reinterpret already-audited work.
     # Only a not-yet-frozen line resolves live (TB-first, assignments-fallback, unchanged below).
     if row['category_id_applied'] is not None:
-        # matrix_version is still re-checked live for the frozen category - a separate, already-
-        # solved staleness problem via matrix_version_applied, orthogonal to category identity.
-        # A since-deactivated category still resolves here, same "still a real, displayable
-        # match" convention as get_category_for_account()'s own docstring.
         category_id = row['category_id_applied']
         category_name = row['category_name_applied']
-        mv_rows = execute_query_pg(
-            "SELECT matrix_version FROM audit_rule_categories WHERE id = %s", (category_id,)
-        )
-        matrix_version = mv_rows[0]['matrix_version'] if mv_rows else None
     else:
         # Category resolution mirrors get_category_for_account() (2026-07-30 fix): prefer the
         # client's latest parsed Trial Balance's own category_id for this account_code - that's
@@ -547,8 +540,23 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
             return None
 
         category_id = cat_rows[0]['category_id']
-        matrix_version = cat_rows[0]['matrix_version']
         category_name = cat_rows[0]['category_name']
+
+    status_rulebook = (ruleset_cache or {}).get(category_id)
+    if status_rulebook is None:
+        status_rulebook = load_persisted_category_status_ruleset(
+            client_id, category_id, session_rulebook,
+            expected_version=get_audit_rules_config_version(),
+        )
+        if status_rulebook is None:
+            raise HTTPException(
+                503,
+                "The current Audit Rules snapshot is unavailable. Rebuild Audit Rules before saving verification work."
+            )
+        if ruleset_cache is not None:
+            ruleset_cache[category_id] = status_rulebook
+    category_profile = (status_rulebook.get('categories') or [None])[0]
+    matrix_version = category_profile.get('matrix_version') if category_profile else None
 
     if sibling_ids is None:
         sibling_ids = _resolve_sibling_voucher_line_ids(voucher_line_id) or [voucher_line_id]
@@ -564,8 +572,6 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # excluded from selection contexts, Phase 5 of 5: it has already been removed from every
     # selection surface - Audit Rules pickers, Verification's Supporting Documents tab list -
     # so requiring it here would be an unfulfillable requirement, not a real gate).
-    category_profile = next((c for c in (session_rulebook or {}).get('categories', [])
-                             if c.get('category_id') == category_id), None)
     required_docs = [
         {**doc, "document_id": doc.get("document_id", doc.get("id")), "is_active": True}
         for doc in (category_profile or {}).get("documents", [])
@@ -606,14 +612,9 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # static/verification.js's own isProcedureDocumentComplete() already defines for its
     # no-template branch (roles.length > 0 && every role ticked - zero configured roles is
     # deliberately unsatisfiable too, mirroring that same rule, not a new inconsistency).
-    required_template_ids = {}
-    if required_doc_ids:
-        doc_ph = ",".join("%s" for _ in required_doc_ids)
-        template_rows = execute_query_pg(
-            f"SELECT id, template_id FROM audit_rule_documents WHERE id IN ({doc_ph})",
-            tuple(required_doc_ids)
-        )
-        required_template_ids = {r['id']: r['template_id'] for r in template_rows}
+    required_template_ids = {
+        document['document_id']: document.get('template_id') for document in required_docs
+    }
 
     # Form evidence is stored in voucher_line_form_entries, even when the Form has a Linked
     # Template configured as an optional prefill source. It must not be mistaken for ordinary
@@ -625,14 +626,10 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     form_value_rows_by_doc: Dict[int, List[dict]] = {}
     if form_required_ids:
         form_doc_ph = ",".join("%s" for _ in form_required_ids)
-        form_field_rows = execute_query_pg(
-            f"""SELECT id, document_id, field_name, field_type, field_scope
-                FROM audit_rule_document_fields WHERE document_id IN ({form_doc_ph})
-                ORDER BY document_id, sort_order, id""",
-            tuple(form_required_ids)
-        )
-        for field in form_field_rows:
-            form_fields_by_doc.setdefault(field['document_id'], []).append(field)
+        form_fields_by_doc = {
+            document['document_id']: document.get('form_fields') or []
+            for document in required_docs if document['document_id'] in form_required_ids
+        }
         form_value_rows = execute_query_pg(
             f"""SELECT e.voucher_line_id, e.document_id, e.bill_group_index, e.row_scope,
                        e.sort_order, e.updated_at AS entry_updated_at, f.id AS field_id,
@@ -693,7 +690,10 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
         for (did, role_name), r in latest_tick.items():
             role_ticks_by_doc.setdefault(did, {})[role_name] = bool(r['is_checked'])
 
-    no_template_roles_by_doc = get_document_auth_roles_batch(list(no_template_required_ids))
+    no_template_roles_by_doc = {
+        document['document_id']: _document_role_names(document)
+        for document in required_docs if document['document_id'] in no_template_required_ids
+    }
 
     def _no_template_doc_roles(document_id: int) -> List[str]:
         return no_template_roles_by_doc.get(document_id, [])
@@ -828,7 +828,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     if transaction_ref:
         # `name` is selected purely for detail mode's plain-English gate text - the gate logic
         # itself still only ever compares ids, exactly as before.
-        active_checks = (session_rulebook or {}).get("voucher_checks", [])
+        active_checks = status_rulebook.get("voucher_checks", [])
         active_check_ids = {c['id'] for c in active_checks}
         ticked_rows = execute_query_pg(
             "SELECT check_id FROM voucher_check_status WHERE client_id = %s AND transaction_ref = %s AND state = 'done'",
@@ -881,7 +881,7 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
     # a Cross-check is actually configured and activated. Never raises, per Phase 6's contract.
     cross_check_result = evaluate_cross_checks_for_line(
         voucher_line_id, category_id=category_id, sibling_ids=sibling_ids,
-        voucher_amount=voucher_amount, rulebook=session_rulebook
+        voucher_amount=voucher_amount, rulebook=status_rulebook
     )
     cross_checks_ok = not any(r['status'] == 'fail' for r in cross_check_result['results'])
 
@@ -959,17 +959,23 @@ def compute_and_persist_cleared_status(voucher_line_id: int, detail: bool = Fals
             # category_id_applied/category_name_applied untouched (see the else branch).
             execute_write_pg(
                 "UPDATE verification_details SET cleared_status = %s, matrix_version_applied = %s, "
-                "category_id_applied = %s, category_name_applied = %s WHERE id = %s",
-                (cleared_status, matrix_version, category_id, category_name, voucher_line_id)
+                "category_id_applied = %s, category_name_applied = %s, applied_ruleset_hash = %s WHERE id = %s",
+                (cleared_status, matrix_version, category_id, category_name,
+                 status_rulebook['applied_ruleset_hash'], voucher_line_id)
             )
         else:
             execute_write_pg(
-                "UPDATE verification_details SET cleared_status = %s, matrix_version_applied = %s WHERE id = %s",
-                (cleared_status, matrix_version, voucher_line_id)
+                "UPDATE verification_details SET cleared_status = %s, matrix_version_applied = %s, "
+                "applied_ruleset_hash = %s WHERE id = %s",
+                (cleared_status, matrix_version, status_rulebook['applied_ruleset_hash'], voucher_line_id)
             )
 
     result = {"cleared_status": cleared_status, "matrix_version_applied": matrix_version,
-              "category_id_applied": category_id, "category_name_applied": category_name}
+              "category_id_applied": category_id, "category_name_applied": category_name,
+              "applied_ruleset_hash": status_rulebook['applied_ruleset_hash'],
+              "ruleset_freshness": "current" if persist else ruleset_freshness(
+                  row.get('applied_ruleset_hash'), status_rulebook['applied_ruleset_hash']
+              )}
     if detail:
         # Failing gates first, then not_applicable, then passing - a stable sort, so gates stay
         # in their original evaluation order within each band.
@@ -2253,13 +2259,15 @@ def save_and_verify_voucher_bundle(
         # after all supplied support data is persisted; otherwise deselecting a required tick can
         # leave a previously Cleared line visibly Cleared until a later save.
         status_results = {}
+        ruleset_cache: Dict[int, dict] = {}
         status_started = time.perf_counter()
         for line in lines:
             line_id = line.get('detail_id')
             if str(line_id) not in eligible_line_ids:
                 continue
             status_result = compute_and_persist_cleared_status(
-                line_id, sibling_ids=sibling_ids_by_line[line_id], rulebook=session_rulebook
+                line_id, sibling_ids=sibling_ids_by_line[line_id], rulebook=session_rulebook,
+                ruleset_cache=ruleset_cache
             )
             if status_result:
                 status_results[line_id] = status_result
@@ -7106,17 +7114,25 @@ def evaluate_cross_checks_for_line(voucher_line_id: int, category_id: Optional[i
         category_id = cat_rows[0]['category_id']
         category_name = cat_rows[0]['category_name']
     else:
-        name_rows = execute_query_pg(
-            "SELECT name FROM audit_rule_categories WHERE id = %s AND is_active = TRUE", (category_id,)
+        snapshot_category = next(
+            (profile for profile in (rulebook or {}).get("categories", [])
+             if int(profile.get("category_id") or 0) == int(category_id)),
+            None,
         )
-        if not name_rows:
-            return {
-                "voucher_line_id": voucher_line_id,
-                "category_id": category_id, "category_name": None,
-                "evaluated": False, "reason": f"Category ID {category_id} not found or inactive.",
-                "summary": dict(empty_summary), "results": [],
-            }
-        category_name = name_rows[0]['name']
+        if snapshot_category is not None:
+            category_name = snapshot_category.get("name")
+        else:
+            name_rows = execute_query_pg(
+                "SELECT name FROM audit_rule_categories WHERE id = %s AND is_active = TRUE", (category_id,)
+            )
+            if not name_rows:
+                return {
+                    "voucher_line_id": voucher_line_id,
+                    "category_id": category_id, "category_name": None,
+                    "evaluated": False, "reason": f"Category ID {category_id} not found or inactive.",
+                    "summary": dict(empty_summary), "results": [],
+                }
+            category_name = name_rows[0]['name']
 
     configs = _get_category_cross_check_configs(category_id, rulebook=rulebook)
     # Form evidence is stored against voucher-line/session rows, not in the linked-document
@@ -7348,6 +7364,7 @@ def get_line_status_reason(voucher_line_id: int):
         "voucher_line_id": voucher_line_id,
         "cleared_status": result.get("cleared_status"),
         "matrix_version_applied": result.get("matrix_version_applied"),
+        "ruleset_freshness": result.get("ruleset_freshness"),
         "reason": result.get("reason"),
         "gates": result.get("gates") or [],
     }

@@ -17,7 +17,8 @@
       "Bash(curl -s -X PUT \"http://localhost:5050/api/audit-rules/categories/3/cross-checks/31/assertions\" -H \"Content-Type: application/json\" -d '{\"assertion_ids\":[3,4]}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
       "Bash(curl -s -X PUT \"http://localhost:5050/api/audit-rules/categories/3/cross-checks/31/assertions\" -H \"Content-Type: application/json\" -d '{\"assertion_ids\":[999]}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
       "Bash(curl -s -X PUT \"http://localhost:5050/api/audit-rules/categories/3/cross-checks/31/assertions\" -H \"Content-Type: application/json\" -d '{\"assertion_ids\":[]}' -w \"\\\\nHTTP %{http_code}\\\\n\")",
-      "Bash(awk '/^## Status log/,/^## Self-maintenance/' CLAUDE.md)"
+      "Bash(awk '/^## Status log/,/^## Self-maintenance/' CLAUDE.md)",
+      "Bash(./venv/Scripts/python.exe -c ' *)"
     ],
     "deny": [
       "Bash(rm -rf:*)",
