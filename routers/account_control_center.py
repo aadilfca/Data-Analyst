@@ -165,6 +165,36 @@ def _resolve_leaf_accounts(accounts: list[dict[str, Any]], selectors: list[dict[
     return resolved
 
 
+
+def get_published_account_set_leaf_accounts(client_id: int, set_key: str) -> Optional[dict[str, Any]]:
+    """Return one client's published Account Set leaf accounts, or None when absent."""
+    normalised_key = _normalise_key(set_key)
+    rows = execute_query_pg(
+        """
+        SELECT s.id AS account_set_id, s.set_key, v.id AS version_id, v.version_number,
+               v.source_upload_id, v.display_name
+        FROM account_sets s
+        JOIN account_set_versions v ON v.id = s.active_version_id
+        WHERE s.client_id = %s AND s.set_key = %s AND s.is_active = TRUE
+          AND v.status = 'published'
+        """,
+        (client_id, normalised_key),
+    )
+    if not rows:
+        return None
+    published = rows[0]
+    resolved = _resolve_leaf_accounts(
+        _accounts_for_upload(published["source_upload_id"]),
+        _version_selectors(published["version_id"]),
+    )
+    return {
+        "account_set_id": published["account_set_id"],
+        "set_key": published["set_key"],
+        "version_id": published["version_id"],
+        "version_number": published["version_number"],
+        "display_name": published["display_name"],
+        "accounts": resolved,
+    }
 def _accounts_for_upload(upload_id: int) -> list[dict[str, Any]]:
     return execute_query_pg(
         """

@@ -39,7 +39,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
-- routers/verification.py + static/verification.* → Cash/Bank Verification sessions, evidence/Forms, checks, status, saves, navigation, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
+- routers/verification.py + static/verification.* → Cash/Bank Verification sessions, published Account Set routing (including JV treasury legs), ledger-signed Cashbook Preview, zero-safe verification table amounts, prefix fallback, evidence/Forms, checks, status, saves, navigation, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
@@ -278,10 +278,9 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-21/22: Verification uses Category/global snapshots and applied hashes; existing PostgreSQL startup now migrates the hash column. See CHANGELOG_ARCHIVE.md, Rulebook snapshot status integration.
 - 2026-09-22: Existing-Postgres startup wasn't actually running the applied_ruleset_hash migration (line above); added fast-path companion function + regression test.
 - 2026-09-22: Rulebook correction is test-covered; query-batching was rejected after variable remote Save/Verify latency.
-- 2026-09-23: Account Set foundation added with versioned Trial-Balance selectors, resolver APIs, and PostgreSQL migration; Control Centre UI and consumer routing remain deferred.
+- 2026-09-23: Account Sets now drive Cash/Bank Verification, including JV legs; Preview and the verification table show correct Cash movement and non-zero counterpart amounts.
 
 ## Self-maintenance
-- 2026-09-23: Account Control Centre redesigned as guided workstream setup with Trial Balance readiness, selection preview, draft/revision, and cache-safe navigation.
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found
 - If new files were created, add them to the Architecture/file map (this file's own Architecture section) AND to `File_Map.md` (same folder as this file, git-tracked alongside it — a separate, more detailed one-line-per-file reference) if a file was added, removed, or repurposed. This is the only File_Map.md in the project — do not create or update a second copy elsewhere.

@@ -6334,3 +6334,27 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** The Control Centre now opens with Trial Balance readiness, seven workstream starter cards, and a Custom Account Set path. Selecting a card launches a guided identify, account-selection, and leaf-account-review workspace; drafts, immutable publication, and revisions continue to use the Phase 1 API contract. The page remains registered once in `NAV_MANIFEST`; every client-context page requests the same updated script version.
 
 **Verification:** `node --check` passed for both changed scripts; 21 focused backend tests passed; headless browser verification used mocked account APIs to confirm the page shell, navigation entry, and automatic stable-key suggestion.
+
+## Account Set Cash/Bank Routing - Phase 3A - 2026-09-23
+
+**Scope:** Connected only Cash and Bank Verification to published Account Sets. Vendor, customer, payroll, contractor, Reports, and financial-statement routing remain deferred.
+
+**Implementation:** Cash/Bank discovery, session start, Preview, and date-range reconciliation now prefer a published `cash_accounts` or `bank_accounts` set. Matching uses the imported account code exactly; drafts never participate. A JV containing a selected Cash or Bank account is therefore included. A Cash-to-Bank transfer appears in both applicable workstreams. When no published set exists, the existing CPV/CRV/BPV/BRV prefix logic remains unchanged. The Preview request now carries its existing Cash/Bank mode so it follows the same rule.
+
+**Verification:** Python compilation and `git diff --check` passed. Focused Account Set/routing suite: 12 passed, including JV cash, transfer-to-both-workstreams, published-only, and fallback coverage. Full suite ran 318 tests: 316 passed; the two known zero-field Form fixtures failed because their Rulebook snapshot is unavailable (HTTP 503), unrelated to this phase. No packages installed.
+
+## Cashbook Ledger Movement - Phase 3B - 2026-09-23
+
+**Scope:** Corrected Cash/Bank Preview accounting presentation only. Session verification continues to hold individual counterpart lines for evidence and bill checks; no schema or routing contract changed.
+
+**Implementation:** Preview now derives direction from the selected Cash/Bank leg. Payments (Cash/Bank credit) display negative movement; receipts (Cash/Bank debit) positive movement. Each split counterparty line retains its own allocation, so no voucher total is repeated. A Direction column makes the sign explicit; a voucher whose counterpart total differs from the treasury leg shows a Difference warning.
+
+**Verification:** Python compilation, `node --check`, and `git diff --check` passed. Focused Account Set/Cashbook suite: 15 passed, including payment, receipt, split allocation, and imbalance cases. No packages installed.
+
+## Verification Table Counterpart Amount - Phase 3C - 2026-09-23
+
+**Scope:** Corrected only the Verification table's Amount resolver. No routing, Preview movement, database, or evidence-check behaviour changed.
+
+**Implementation:** Imported voucher rows commonly retain both Debit Amount and Credit Amount keys, one containing zero. The shared table resolver now selects the non-zero side before falling back to the original order, so a credit-side Bank/income row is no longer rendered as zero merely because Debit Amount appears first. The existing voucher total uses this same resolver and therefore corrects automatically.
+
+**Verification:** `node --check` and `git diff --check` passed. The focused routing/accounting suite passed 9 tests, including one that executes the actual frontend helper with debit-zero/credit-value, credit-zero/debit-value, and both-zero rows. No packages installed.

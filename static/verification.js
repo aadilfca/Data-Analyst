@@ -1284,7 +1284,8 @@ async function fetchCashbookData() {
         date_start: start,
         date_end: end,
         page: cashbookCurrentPage,
-        limit: cashbookPageSize
+        limit: cashbookPageSize,
+        session_type: currentType
     });
     try {
         const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/preview_cashbook?${params}`);
@@ -1333,20 +1334,28 @@ function getCashbookStatusBadgeHtml(status) {
     return `<span style="display:inline-block; padding:2px 10px; border-radius:12px; font-weight:600; font-size:11px; white-space:nowrap; background:${p.bg}; color:${p.color};">${label}</span>`;
 }
 
-// Cashbook Amount column (Phase 3 of 3, FINAL): collapses Debit/Credit into one signed value —
-// right-aligned, 2-decimal formatted, colour-coded so the sign isn't the only signal. Positive
-// (CPV/BPV, a Payment) uses the table's own default text colour; negative (CRV/BRV, a Receipt)
-// uses a distinct violet accent (#7c3aed, already used elsewhere in this app for .btn-template,
-// carries no existing status meaning) — deliberately not red/green, since those already mean
-// Query/Cleared on the adjacent Status column (Phase 2) and reusing them here would visually
-// collide with that column's own meaning on the same row.
+// Cashbook Amount reflects the Cash/Bank ledger: payments are negative outflows and receipts
+// positive inflows. The Direction column keeps the accounting meaning explicit for every row.
 function getCashbookAmountHtml(amount) {
     const value = typeof amount === 'number' ? amount : 0;
-    const color = value < 0 ? '#7c3aed' : '#1a1a2e';
+    const color = value < 0 ? '#b91c1c' : value > 0 ? '#166534' : '#1a1a2e';
     const formatted = value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return `<span style="font-weight:600; color:${color};">${formatted}</span>`;
 }
 
+function getCashbookDirectionHtml(row) {
+    const isPayment = row.direction === 'Payment';
+    const color = isPayment ? '#b91c1c' : '#166534';
+    let html = `<span style="font-weight:600; color:${color};">${row.direction || '—'}</span>`;
+    if (row.is_balanced === false) {
+        const difference = Math.abs(Number(row.imbalance_amount) || 0).toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        html += `<br><span style="font-size:11px; color:#b45309;">⚠ Difference ${difference}</span>`;
+    }
+    return html;
+}
 // ---------- RENDER CASHBOOK TABLE ----------
 function renderCashbookTable(rows) {
     if (!rows || rows.length === 0) {
@@ -1365,6 +1374,7 @@ function renderCashbookTable(rows) {
     originalKeys.forEach(k => {
         if (dcKeys.has(k)) {
             if (!amountInserted) {
+                headers.push('__DIRECTION__');
                 headers.push('__AMOUNT__');
                 amountInserted = true;
             }
@@ -1372,13 +1382,16 @@ function renderCashbookTable(rows) {
             headers.push(k);
         }
     });
-    if (!amountInserted) headers.push('__AMOUNT__');
+    if (!amountInserted) {
+        headers.push('__DIRECTION__');
+        headers.push('__AMOUNT__');
+    }
 
     let html = `<table style="width:100%; border-collapse:collapse; font-size:13px;">
         <thead style="background:#f8fafc; position:sticky; top:0; z-index:1; border-bottom:2px solid #e2e8f0;">
             <tr>`;
     headers.forEach(h => {
-        const label = h === '__AMOUNT__' ? 'Amount' : h;
+        const label = h === '__AMOUNT__' ? 'Cash Movement' : h === '__DIRECTION__' ? 'Direction' : h;
         const align = h === '__AMOUNT__' ? 'right' : 'left';
         html += `<th style="padding:6px 10px; text-align:${align}; font-weight:600; white-space:nowrap;">${label}</th>`;
     });
@@ -1389,6 +1402,8 @@ function renderCashbookTable(rows) {
         headers.forEach(h => {
             if (h === '__AMOUNT__') {
                 html += `<td style="padding:6px 10px; text-align:right;">${getCashbookAmountHtml(row.amount)}</td>`;
+            } else if (h === '__DIRECTION__') {
+                html += `<td style="padding:6px 10px;">${getCashbookDirectionHtml(row)}</td>`;
             } else {
                 const val = row.row_data[h] !== undefined ? row.row_data[h] : '';
                 html += `<td style="padding:6px 10px;">${val}</td>`;
@@ -2868,13 +2883,17 @@ function applyVoucherColumnWidths() {
     if (container) container.style.setProperty('--voucher-col-widths', voucherColumnWidths.map(w => w + '%').join(' '));
 }
 
-// Returns a single Amount value for a line's row_data — this cashbook only ever populates one
-// side (Debit for CPV vouchers, Credit for CRV vouchers; the other side is always zero at
-// source), so Dr/Cr is not a meaningful distinction here and the row shows one plain number.
+// Returns a single Amount value for a line's row_data. Both source fields are normally present,
+// with one side zero; choose the non-zero side so a credit-side BPV/CRV line is never displayed
+// as a zero debit merely because Debit Amount appears first in the source columns.
 function getVoucherLineAmount(row) {
     const debit = getVoucherLineAlias(row, VOUCHER_LINE_DEBIT_ALIASES);
-    if (debit !== '—') return debit;
     const credit = getVoucherLineAlias(row, VOUCHER_LINE_CREDIT_ALIASES);
+    const debitAmount = debit === '—' ? null : parseVoucherAmount(debit);
+    const creditAmount = credit === '—' ? null : parseVoucherAmount(credit);
+    if (debitAmount !== null && debitAmount !== 0) return debit;
+    if (creditAmount !== null && creditAmount !== 0) return credit;
+    if (debit !== '—') return debit;
     return credit !== '—' ? credit : '';
 }
 

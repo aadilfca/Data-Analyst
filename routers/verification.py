@@ -25,6 +25,7 @@ from rapidfuzz import fuzz, utils as fuzz_utils
 # logic already used by import's compare_transactions, applied at query time.
 from routers.import_export import get_document_group_id
 from routers.templates import get_cached_template_columns
+from routers.account_control_center import get_published_account_set_leaf_accounts
 # Create Vendor Bill from GRN (Phase 1): reused as-is rather than duplicated, since this
 # feature must build a client_data row that behaves identically to a real import - same
 # rationale as the cross-router imports below.
@@ -192,6 +193,78 @@ def get_account_code_value(row_data: dict) -> Optional[str]:
     """
     value = get_column_value(row_data, ACCOUNT_CODE_ALIASES)
     return str(value) if value is not None else None
+
+
+def get_treasury_routing(client_id: int, category_group: Optional[str]) -> dict[str, Any]:
+    """Prefer a published Cash/Bank Account Set; retain prefixes until one exists."""
+    if category_group in ('cash', 'bank'):
+        published = get_published_account_set_leaf_accounts(client_id, f'{category_group}_accounts')
+        if published:
+            accounts = published['accounts']
+            return {
+                'mode': 'account_set',
+                'set_key': published['set_key'],
+                'account_codes': {str(account['account_code']).strip() for account in accounts},
+                'account_names': {str(account['account_code']).strip(): account.get('account_name') for account in accounts},
+                'version_number': published['version_number'],
+            }
+    prefixes = get_client_voucher_prefixes_pg(client_id)
+    if category_group == 'cash':
+        prefixes = {key: value for key, value in prefixes.items() if key in ('Cash Payment', 'Cash Receipt')}
+    elif category_group == 'bank':
+        prefixes = {key: value for key, value in prefixes.items() if key in ('Bank Payment', 'Bank Receipt')}
+    return {'mode': 'voucher_prefix', 'prefixes': prefixes}
+
+
+def row_matches_treasury_account_set(row_data: dict, routing: dict) -> bool:
+    """Match only the imported account code, never a fuzzy account-name approximation."""
+    code = get_account_code_value(row_data)
+    return routing.get('mode') == 'account_set' and code in routing.get('account_codes', set())
+
+
+def account_set_voucher_type(session_type: str, cashbook_row: dict) -> Optional[str]:
+    """Derive cash/bank payment or receipt from the selected treasury account leg."""
+    if cashbook_row.get('credit', 0) > 0:
+        return 'BPV' if session_type == 'bank' else 'CPV'
+    if cashbook_row.get('debit', 0) > 0:
+        return 'BRV' if session_type == 'bank' else 'CRV'
+    return None
+
+
+def account_set_cashbook_name(row_data: dict, routing: dict) -> Optional[str]:
+    """Return the configured treasury account name for one matching imported row."""
+    if not row_matches_treasury_account_set(row_data, routing):
+        return None
+    return get_column_value(
+        row_data,
+        ['Account Name', 'Account', 'Account Detail', 'Ledger', 'Head', 'Account Code'],
+    )
+
+
+def cashbook_preview_presentation(
+    voucher_type: str,
+    treasury_row: dict,
+    counterpart_rows: list[dict],
+) -> dict[str, Any]:
+    """Build line allocations from the Cash/Bank ledger perspective for Preview."""
+    is_payment = voucher_type in ('CPV', 'BPV')
+    counterpart_field = 'debit' if is_payment else 'credit'
+    treasury_field = 'credit' if is_payment else 'debit'
+    treasury_amount = float(treasury_row.get(treasury_field, 0) or 0)
+    counterpart_total = sum(
+        float(row.get(counterpart_field, 0) or 0)
+        for row in counterpart_rows
+    )
+    imbalance_amount = treasury_amount - counterpart_total
+    return {
+        'direction': 'Payment' if is_payment else 'Receipt',
+        'amount_sign': -1 if is_payment else 1,
+        'counterpart_field': counterpart_field,
+        'treasury_amount': treasury_amount,
+        'counterpart_total': counterpart_total,
+        'imbalance_amount': imbalance_amount,
+        'is_balanced': abs(imbalance_amount) <= 0.01,
+    }
 
 # Audit Workbook Phase 1 (backend rollup endpoint): same alias list as verification.js's
 # VOUCHER_LINE_DESCRIPTION_ALIASES, ported here so a voucher row's description can be resolved
@@ -1190,11 +1263,8 @@ def get_cashbooks(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
 
-    client_prefixes = get_client_voucher_prefixes_pg(client_id)
-    if category_group == 'cash':
-        client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Cash Payment', 'Cash Receipt')}
-    elif category_group == 'bank':
-        client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Bank Payment', 'Bank Receipt')}
+    routing = get_treasury_routing(client_id, category_group)
+    client_prefixes = routing.get('prefixes', {})
 
     rows = execute_query_pg(
         """
@@ -1215,7 +1285,11 @@ def get_cashbooks(
             if not isinstance(row_data, dict):
                 continue
             voucher_id = row_data.get('Voucher ID')
-            cb_name = extract_cashbook_name(row_data, client_prefixes)
+            cb_name = (
+                account_set_cashbook_name(row_data, routing)
+                if routing['mode'] == 'account_set'
+                else extract_cashbook_name(row_data, client_prefixes)
+            )
             if debug:
                 debug_info.append({
                     "row_id": row['id'],
@@ -1239,7 +1313,12 @@ def get_cashbooks(
             "count": len(cashbooks),
             "debug": {
                 "total_rows": len(rows),
-                "patterns_used": client_prefixes,
+                "routing": {
+                    "mode": routing['mode'],
+                    "set_key": routing.get('set_key'),
+                    "version_number": routing.get('version_number'),
+                    "patterns_used": client_prefixes,
+                },
                 "rows": debug_info
             }
         }
@@ -1264,11 +1343,8 @@ def get_latest_cashbook_date(
     if not client:
         raise HTTPException(404, "Client not found or inactive")
 
-    client_prefixes = get_client_voucher_prefixes_pg(client_id)
-    if category_group == 'cash':
-        client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Cash Payment', 'Cash Receipt')}
-    elif category_group == 'bank':
-        client_prefixes = {k: v for k, v in client_prefixes.items() if k in ('Bank Payment', 'Bank Receipt')}
+    routing = get_treasury_routing(client_id, category_group)
+    client_prefixes = routing.get('prefixes', {})
 
     # Fetch the small date list first, then retrieve JSON only for one date at a time.
     # The previous query transferred every client_data.row_data value to Python before
@@ -1299,7 +1375,12 @@ def get_latest_cashbook_date(
                 row_data = json.loads(row['row_data']) if isinstance(row['row_data'], str) else row['row_data']
                 if not isinstance(row_data, dict):
                     continue
-                if extract_cashbook_name(row_data, client_prefixes):
+                matched_cashbook = (
+                    account_set_cashbook_name(row_data, routing)
+                    if routing['mode'] == 'account_set'
+                    else extract_cashbook_name(row_data, client_prefixes)
+                )
+                if matched_cashbook:
                     return {"latest_date": candidate_date}
             except Exception:
                 continue
@@ -1404,7 +1485,8 @@ def start_verification_session(
     if period_start > period_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    client_prefixes = get_client_voucher_prefixes_pg(client_id)
+    routing = get_treasury_routing(client_id, session_type)
+    client_prefixes = routing.get('prefixes', {})
     rows = execute_query_pg(
         """
         SELECT id, row_data, extract_date, extract_amount
@@ -1440,7 +1522,7 @@ def start_verification_session(
             if not voucher_id:
                 continue
             category = match_voucher_category(voucher_id, client_prefixes)
-            if category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
+            if routing['mode'] == 'voucher_prefix' and category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
                 continue
             debit_str = get_col_value(rd, debit_aliases)
             credit_str = get_col_value(rd, credit_aliases)
@@ -1460,6 +1542,7 @@ def start_verification_session(
                 'debit': debit,
                 'credit': credit,
                 'account_name': account_name,
+                'account_code': get_account_code_value(rd),
                 'extract_date': row['extract_date'],
                 'extract_amount': row['extract_amount']
             })
@@ -1474,10 +1557,23 @@ def start_verification_session(
         # appears among this voucher's legs - must also be the structurally correct side for
         # this voucher's OWN category (see is_cashbook_leg_row()), not just a name match, or a
         # voucher whose other leg happens to share a name with an unrelated cashbook can leak in.
-        cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])), None)
+        if routing['mode'] == 'account_set':
+            cashbook_row = next((
+                r for r in data['rows']
+                if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
+            ), None)
+        else:
+            cashbook_row = next((
+                r for r in data['rows']
+                if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])
+            ), None)
         if cashbook_row is None:
             continue
-        vtype = voucher_type_label(data['category'])
+        vtype = (
+            account_set_voucher_type(session_type, cashbook_row)
+            if routing['mode'] == 'account_set'
+            else voucher_type_label(data['category'])
+        )
         if vtype is None:
             continue
         for row in data['rows']:
@@ -2439,7 +2535,8 @@ def preview_cashbook(
     date_start: str = Query(..., description="Start date (YYYY-MM-DD)"),
     date_end: str = Query(..., description="End date (YYYY-MM-DD)"),
     page: int = Query(1, ge=1, description="Page number"),
-    limit: int = Query(50, ge=1, le=200, description="Rows per page (max 200)")
+    limit: int = Query(50, ge=1, le=200, description="Rows per page (max 200)"),
+    session_type: str = Query('cash', pattern="^(cash|bank)$", description="'cash' or 'bank'"),
 ):
     """
     Get paginated transactions for a specific cashbook without creating a session.
@@ -2459,7 +2556,8 @@ def preview_cashbook(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     
-    client_prefixes = get_client_voucher_prefixes_pg(client_id)
+    routing = get_treasury_routing(client_id, session_type)
+    client_prefixes = routing.get('prefixes', {})
 
     # Fetch rows
     rows = execute_query_pg(
@@ -2505,7 +2603,7 @@ def preview_cashbook(
             if not voucher_id:
                 continue
             category = match_voucher_category(voucher_id, client_prefixes)
-            if category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
+            if routing['mode'] == 'voucher_prefix' and category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
                 continue
             debit_str = get_col_value(rd, debit_aliases)
             credit_str = get_col_value(rd, credit_aliases)
@@ -2525,6 +2623,7 @@ def preview_cashbook(
                 'debit': debit,
                 'credit': credit,
                 'account_name': account_name,
+                'account_code': get_account_code_value(rd),
                 'extract_date': row['extract_date'],
                 'extract_amount': row['extract_amount']
             })
@@ -2538,36 +2637,52 @@ def preview_cashbook(
         # is looked up only as a sanity check that the named cashbook actually appears among
         # this voucher's legs (on the structurally correct side, see is_cashbook_leg_row()),
         # not to derive vtype anymore.
-        cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])), None)
+        if routing['mode'] == 'account_set':
+            cashbook_row = next((
+                r for r in data['rows']
+                if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
+            ), None)
+        else:
+            cashbook_row = next((
+                r for r in data['rows']
+                if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])
+            ), None)
         if cashbook_row is None:
             continue
-        vtype = voucher_type_label(data['category'])
+        vtype = (
+            account_set_voucher_type(session_type, cashbook_row)
+            if routing['mode'] == 'account_set'
+            else voucher_type_label(data['category'])
+        )
         if vtype is None:
             continue
-        for row in data['rows']:
-            if vtype in ('CPV', 'BPV') and row['debit'] > 0 and row['credit'] == 0:
-                transactions.append({
-                    'client_data_id': row['row_id'],
-                    'row_data': row['row_data'],
-                    'voucher_id': vid,
-                    'extract_date': row['extract_date'],
-                    'extract_amount': row['extract_amount'],
-                    # Signed Amount (Cashbook Phase 3): positive for a Payment (CPV/BPV, debit
-                    # side), negative for a Receipt (CRV/BRV, credit side) - same vtype/side
-                    # condition already gating this branch, just applying a sign to the value.
-                    'amount': row['debit'],
-                    'debit_credit_keys': find_debit_credit_keys(row['row_data'], debit_aliases, credit_aliases)
-                })
-            elif vtype in ('CRV', 'BRV') and row['credit'] > 0 and row['debit'] == 0:
-                transactions.append({
-                    'client_data_id': row['row_id'],
-                    'row_data': row['row_data'],
-                    'voucher_id': vid,
-                    'extract_date': row['extract_date'],
-                    'extract_amount': row['extract_amount'],
-                    'amount': -row['credit'],
-                    'debit_credit_keys': find_debit_credit_keys(row['row_data'], debit_aliases, credit_aliases)
-                })
+        if vtype in ('CPV', 'BPV'):
+            counterpart_rows = [
+                row for row in data['rows'] if row['debit'] > 0 and row['credit'] == 0
+            ]
+        else:
+            counterpart_rows = [
+                row for row in data['rows'] if row['credit'] > 0 and row['debit'] == 0
+            ]
+        presentation = cashbook_preview_presentation(vtype, cashbook_row, counterpart_rows)
+        for row in counterpart_rows:
+            counterpart_amount = row[presentation['counterpart_field']]
+            transactions.append({
+                'client_data_id': row['row_id'],
+                'row_data': row['row_data'],
+                'voucher_id': vid,
+                'extract_date': row['extract_date'],
+                'extract_amount': row['extract_amount'],
+                # The displayed movement follows the selected Cash/Bank leg: receipts are
+                # positive and payments negative, while each line retains its own allocation.
+                'amount': presentation['amount_sign'] * counterpart_amount,
+                'direction': presentation['direction'],
+                'treasury_amount': presentation['treasury_amount'],
+                'counterpart_total': presentation['counterpart_total'],
+                'imbalance_amount': presentation['imbalance_amount'],
+                'is_balanced': presentation['is_balanced'],
+                'debit_credit_keys': find_debit_credit_keys(row['row_data'], debit_aliases, credit_aliases)
+            })
 
     # Status column (Cashbook screen Phase 2 of 3): computed over the FULL (unpaginated)
     # transactions list, not just the current page, so a voucher whose lines straddle two
@@ -2629,6 +2744,11 @@ def preview_cashbook(
             'extract_amount': trans['extract_amount'],
             'status': voucher_status_map.get(trans['voucher_id'], 'Not Started'),
             'amount': trans['amount'],
+            'direction': trans['direction'],
+            'treasury_amount': trans['treasury_amount'],
+            'counterpart_total': trans['counterpart_total'],
+            'imbalance_amount': trans['imbalance_amount'],
+            'is_balanced': trans['is_balanced'],
             'debit_credit_keys': trans['debit_credit_keys']
         })
 
@@ -3507,7 +3627,7 @@ def reconcile_session_range(
     endpoints' own logic further.
     """
     session = execute_query_pg(
-        "SELECT id, client_id, cashbook_name FROM verification_sessions WHERE id = %s AND status != 'Cancelled'",
+        "SELECT id, client_id, cashbook_name, session_type FROM verification_sessions WHERE id = %s AND status != 'Cancelled'",
         (session_id,)
     )
     if not session:
@@ -3515,6 +3635,7 @@ def reconcile_session_range(
     s = session[0]
     client_id = s['client_id']
     cashbook_name = s['cashbook_name']
+    session_type = s.get('session_type') or 'cash'
 
     try:
         datetime.fromisoformat(period_start)
@@ -3527,7 +3648,8 @@ def reconcile_session_range(
     # --- Re-run the same voucher-discovery logic as start_verification_session(), against the
     # session's existing client_id/cashbook_name but the new date range. Deliberately duplicated
     # rather than shared via a helper, to keep this addition purely additive - see the plan note.
-    client_prefixes = get_client_voucher_prefixes_pg(client_id)
+    routing = get_treasury_routing(client_id, session_type)
+    client_prefixes = routing.get('prefixes', {})
     rows = execute_query_pg(
         """
         SELECT id, row_data, extract_date, extract_amount
@@ -3562,7 +3684,7 @@ def reconcile_session_range(
             if not voucher_id:
                 continue
             category = match_voucher_category(voucher_id, client_prefixes)
-            if category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
+            if routing['mode'] == 'voucher_prefix' and category not in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt'):
                 continue
             debit_str = get_col_value(rd, debit_aliases)
             credit_str = get_col_value(rd, credit_aliases)
@@ -3578,16 +3700,30 @@ def reconcile_session_range(
                 'account_name': account_name,
                 'debit': debit,
                 'credit': credit,
+                'account_code': get_account_code_value(rd),
             })
         except:
             continue
 
     target: Dict[int, str] = {}  # client_data_id -> transaction_ref
     for vid, data in vouchers.items():
-        cashbook_row = next((r for r in data['rows'] if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])), None)
+        if routing['mode'] == 'account_set':
+            cashbook_row = next((
+                r for r in data['rows']
+                if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
+            ), None)
+        else:
+            cashbook_row = next((
+                r for r in data['rows']
+                if r['account_name'] == cashbook_name and is_cashbook_leg_row(r, data['category'])
+            ), None)
         if cashbook_row is None:
             continue
-        vtype = voucher_type_label(data['category'])
+        vtype = (
+            account_set_voucher_type(session_type, cashbook_row)
+            if routing['mode'] == 'account_set'
+            else voucher_type_label(data['category'])
+        )
         if vtype is None:
             continue
         for row in data['rows']:
