@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from database import init_db, log_error, get_error_code_for_exception, execute_query
 from fastapi.concurrency import run_in_threadpool
 import os
-from routers import dashboard, verification, import_export, templates, clients, data, error_log, settings, audit_rules, trial_balance, reconciliation, auth, users, storage_cleanup
+from routers import account_control_center, audit_rules, auth, clients, dashboard, data, error_log, import_export, reconciliation, settings, storage_cleanup, templates, trial_balance, users, verification
 from routers.auth import get_current_user
 from datetime import datetime
 import traceback
@@ -59,6 +59,7 @@ app.include_router(error_log.router)
 app.include_router(settings.router)
 app.include_router(audit_rules.router)
 app.include_router(trial_balance.router)
+app.include_router(account_control_center.router)
 app.include_router(reconciliation.router)
 app.include_router(auth.router)
 app.include_router(users.router)

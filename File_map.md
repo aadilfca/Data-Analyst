@@ -1,11 +1,7 @@
 # File Map — Internal Audit App
-
 This document lists all source files in the project, grouped by directory, with a brief description of each file's *current* purpose and role. This is a snapshot of what exists today — it does not track build history or phase status; see `CHANGELOG_ARCHIVE.md` for that.
-
 ## Root Directory
-
 `DEVELOPMENT_PLAN.md` — active roadmap for evidence, phase decisions, discoveries, implementation scope, and next actions.
-
 | File | Purpose |
 |------|---------|
 | `category_control_center_prototype.html` | Standalone, review-only HTML/CSS/JavaScript prototype for the proposed Category Control Center redesign; sample data only, with no backend or database connection. |
@@ -13,9 +9,9 @@ This document lists all source files in the project, grouped by directory, with 
 | `CHANGELOG_ARCHIVE.md` | Detailed forensic write-ups of past phases (verification steps, test output) — only consulted when a phase touches an already-logged file/pattern. |
 | `KNOWN_ISSUES.md` | Findings log for the Code Health Review protocol defined in `CLAUDE.md` — one row per finding (`Date \| Module \| Finding \| Severity`, severity being Fix / Feature / Defer). Append-only; kept out of `CLAUDE.md` because it grows on every review, same reasoning as `CHANGELOG_ARCHIVE.md`. Starts empty. |
 | `CLINE.md` | Rules file for a separate AI tool, Cline (FIND/REPLACE code format, file-access/communication style) — not read by Claude Code. Appears to predate the current CLAUDE.md-driven workflow: it tells the agent to auto-determine affected files without asking, which conflicts with this project's current two-hard-stops rule in CLAUDE.md's Workflow rules. Kept only for whichever sessions still use Cline directly. |
-| `database.py` | Core SQLite/PostgreSQL schema, seed, audit-log, connection, voucher-prefix, and `storage_cleanup_runs` summary table; existing-schema startup also ensures that ledger. PostgreSQL uses an env-driven pooled psycopg2 layer with stale-connection recovery and idempotent upgrades. |
+| `database.py` | SQLite/PostgreSQL schema, migrations, account-set foundation, audit logging, and pooled Postgres helpers. |
 | `.env.example` | Committed template documenting the `DATABASE_URL` (Supabase connection string) and optional `PG_POOL_MIN`/`PG_POOL_MAX` env vars the Postgres connection layer reads (defaults 3 / 15). Copy to `.env` (git-ignored) and fill in real values. |
-| `main.py` | FastAPI application entry point. Mounts `/static`, registers all 13 routers including administrator Storage Cleanup preview, and installs a global exception handler that logs unhandled errors to `error_log`. Runs Uvicorn when executed directly. |
+| `main.py` | FastAPI entry point: static mount, domain-router registration, global error logging, and direct Uvicorn launch. |
 | `storage_cleanup.py` | Command-line entry point for Storage Cleanup preview; apply requires an explicit fresh hash and exact confirmation phrase. VACUUM/compaction remains deferred. |
 | `requirements.txt` | Python dependencies: FastAPI, Uvicorn, Pandas, Pydantic, OpenPyXL, python-multipart, xlrd (legacy `.xls` reads for Trial Balance), bcrypt (password hashing), psycopg2-binary + python-dotenv (Supabase/Render migration, Phase 2 of 8 — Postgres driver + local `.env` loading). |
 | `run.bat` | Windows launcher — activates `venv` and starts Uvicorn on port 5000. |
@@ -40,7 +36,6 @@ This document lists all source files in the project, grouped by directory, with 
 | `services/reconciliation_xlsx.py` | OpenPyXL exporter for professional Bank/Cash monthly summaries, schedules, review controls, cross-checks, and reconciliation proofs. |
 | `services/storage_cleanup.py` | PostgreSQL storage preview plus one-transaction, protected-data cleanup for approved logs, retired unlinked rows, deleted upload metadata, stale presence, and expired sessions. |
 ## Routers (`routers/`)
-
 | File | Purpose |
 |------|---------|
 | `reconciliation.py` | Account groups, report-category sets, standardized balance inputs, report preview/download orchestration, validation, and transactional replacement. |
@@ -55,13 +50,11 @@ This document lists all source files in the project, grouped by directory, with 
 | `auth.py` | Auth module backend (User module, all 7 phases done). `POST/GET /api/auth/login`/`logout` manage `sessions` rows against `users` (bcrypt password, HttpOnly cookie). `get_current_user(request)` validates the session cookie and returns the joined session+user row (now including `role`) — used as a route `Depends()` and called directly to gate pages. `require_admin` (Admin area, Phase 1 of 7) builds on it, 403s unless `role='admin'` — used by `routers/users.py`. `PUT /api/auth/select-client`/`GET /api/auth/current-client` read/write `sessions.selected_client_id`; `current-client` also returns `username` on all three branches (the header greeting's only source). Runs on Postgres (Supabase migration, Phase 4 of 8). |
 | `users.py` | Manage Users backend (Admin area, Phase 2 of 7). CRUD over the `users` table, every endpoint behind `Depends(require_admin)`: list (`GET /api/users`, active-only by default), create (`POST`, bcrypt-hashes the password, rejects a duplicate username), edit username/role (`PUT /api/users/{id}`), soft-deactivate/reactivate (`POST .../deactivate`\|`reactivate`), and admin-set password reset (`PUT .../reset-password`). No self-deactivation/last-admin safeguard yet (deliberately deferred). Runs on Postgres (Supabase migration, Phase 4 of 8). |
 | `audit_rules.py` | Audit Rules module backend: full CRUD (soft-delete/restore) for the three reusable rule-building entities — Documents (with auth roles, cross-check-eligible fields, and a `template_id` link to the Data Bank template their evidence is searched in), Cross-checks (rebuilt as a document×field matrix — label-less positional field rows + per-(row×Document) template-column cells; endpoints `GET .../{id}/matrix`, `POST .../{id}/fields`, `DELETE .../cross-check-fields/{id}`, `PUT .../{id}/field-order`, `PUT .../cross-check-fields/{id}/cells/{doc_id}`, `PUT .../{id}/documents`, `PUT .../{id}/meta`; the legacy flat `compare_field` model + its create/update endpoint stay only until the verification engine is migrated), and Categories (bundling Documents + Cross-checks, with a locked containment rule). Categories are what `verification.py`'s Transaction Type / audit guidance now sources from. Also hosts the Validation Rules module's backend (Phase 2 of 7): per-document `approval_required` toggle within a Category (`PUT /api/audit-rules/categories/{id}/documents/{doc_id}/approval`), automatic `matrix_version` bump (`bump_category_matrix_version()`, fired on document-membership change or an actual approval-flag change), and CRUD for `signature_specimens` (client+document+role → expected signatory name) — now soft-delete/restore like the other three entities (Soft-delete conversion, Phase 1 of 4 done): `is_active` column, `DELETE .../{id}` deactivates, `include_inactive` on the list GET, `POST .../{id}/restore`, plus a separate low-visibility `DELETE .../{id}/hard-delete` for genuine data-entry corrections only. Phase 2 of 4 done: the old DB-level `UNIQUE(client_id, document_id, role_name)` constraint is gone (table rebuild in `database.py`), replaced by app-level `validate_no_duplicate_active_signatory()` — blocks only a duplicate ACTIVE entry for the same person (name-matched); multiple different active people per role are allowed. |
-| `trial_balance.py` | Trial Balance module backend. `POST /api/trial-balance/upload` reads a client's TB Excel file via an explicit column-mapping payload (8 standard fields: Code/Name/Opening Dr/Cr/Period Dr/Cr/Closing Dr/Cr, plus optional Type), classifies every account as parent/leaf from its code hierarchy, supports period-dated uploads with overwrite-conflict detection, and auto-carries forward Category assignments by account code. Also provides mapping suggestions, a downloadable standard template, per-upload account listing/summary/manual leaf-parent override, a list of all uploads for a client (Available Trial Balances), and the Category-assignment endpoints (`latest-accounts`/`assign-category`, smart-fill or force-apply cascade) that back the Assign Categories screen. |
+| `trial_balance.py` | Trial Balance import, hierarchy classification, history, category assignment, and shared latest parsed-upload lookup. |
+| `account_control_center.py` | Client Account Set drafts, versioning, Trial Balance resolution, preview, and publication APIs. |
 ---
-
 ## Static Files (`static/`)
-
 ### HTML Pages
-
 | File | Purpose |
 |------|---------|
 | `login.html` | Login page (Auth module, Phase 4 of 7) — username/password form, no navbar/`client_context.js` (runs before any session exists). On success redirects to `client_select.html`; on 401/403 shows one generic error message. Loads `loading_ui.js` before `login.js` (Shared Loading UI, Phase 2 of 6). |
@@ -133,6 +126,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_app_smoke.py` | Boots the real app via FastAPI's `TestClient` against a temp SQLite DB and proves routers respond (dashboard page + `/api/clients`). |
 | `test_upload_validation_counts.py` | Verifies `count_new_and_existing_rows` correctly distinguishes new vs. already-imported rows for the same client/template. |
 | `test_verification_indexes.py` | Verifies that `init_db()` creates the composite index needed for fast cashbook lookups on `client_data`. |
+| `test_account_control_center.py` | Tests Account Set schema, Postgres upgrade, selector resolution, exclusions, and published-version immutability. |
 | `test_verification_nav_skeleton.py` | Playwright regression tests for Verification's voucher navigation. Forces each `moveToAdjacentVoucher()` failure path (HTTP error, aborted request, empty response) plus the boundary case in headless Chromium, asserting the loading skeleton is always cleared and a working retry action is offered; also covers the Prev/Next processing UI — buttons disabled during a navigation, re-enabled per voucher position afterwards (including after a boundary or an error), and a second overlapping navigation dropped rather than duplicated. Fully hermetic: a local static file server plus stubbed `/api/` routes, so it needs no dev server, database or login. |
 | `test_verification_performance_metrics.py`, `test_verification_dirty_saves.py` | Verify database metrics and Verification's revision-based dirty tracking, save failures, in-flight edits, and duplicate prevention. |
 | `test_templates.py` | Playwright regression tests for Edit Template modal closure and draft-column persistence before explicit Save Template submission. |

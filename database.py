@@ -2594,6 +2594,53 @@ def init_db():
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_groups_client ON account_groups (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_groups_client_label ON account_groups (client_id, group_label)")
+        # ---------- ACCOUNT SET CONTROL CENTRE (Phase 1: shared foundation) ----------
+        # Account Sets are reusable, versioned account selectors. They deliberately
+        # keep only selector rules; Trial Balance remains the authoritative account tree.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_sets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                set_key TEXT NOT NULL,
+                active_version_id INTEGER,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, set_key)
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_set_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_set_id INTEGER NOT NULL,
+                version_number INTEGER NOT NULL,
+                source_upload_id INTEGER NOT NULL,
+                display_name TEXT NOT NULL,
+                description TEXT,
+                status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'superseded')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                published_at TIMESTAMP,
+                FOREIGN KEY (account_set_id) REFERENCES account_sets(id) ON DELETE CASCADE,
+                FOREIGN KEY (source_upload_id) REFERENCES trial_balance_uploads(id) ON DELETE RESTRICT,
+                UNIQUE(account_set_id, version_number)
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_set_selectors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_set_version_id INTEGER NOT NULL,
+                selector_type TEXT NOT NULL CHECK (selector_type IN ('include_subtree', 'include_exact', 'exclude_subtree', 'exclude_exact')),
+                account_code TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (account_set_version_id) REFERENCES account_set_versions(id) ON DELETE CASCADE,
+                UNIQUE(account_set_version_id, selector_type, account_code)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_sets_client ON account_sets (client_id, is_active)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_set_versions_set ON account_set_versions (account_set_id, status)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_set_versions_upload ON account_set_versions (source_upload_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_set_selectors_version ON account_set_selectors (account_set_version_id, sort_order)")
         conn.execute('''
             CREATE TABLE IF NOT EXISTS report_category_sets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3469,6 +3516,56 @@ def _ensure_postgres_report_category_tables(conn):
     finally:
         cur.close()
 
+def _ensure_postgres_account_set_tables(conn):
+    """Create Account Set foundation tables on fresh and existing Postgres schemas."""
+    cur = conn.cursor()
+    try:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_sets (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                set_key TEXT NOT NULL,
+                active_version_id INTEGER,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, set_key)
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_set_versions (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                account_set_id INTEGER NOT NULL REFERENCES account_sets(id) ON DELETE CASCADE,
+                version_number INTEGER NOT NULL,
+                source_upload_id INTEGER NOT NULL REFERENCES trial_balance_uploads(id) ON DELETE RESTRICT,
+                display_name TEXT NOT NULL,
+                description TEXT,
+                status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published', 'superseded')),
+                created_at TIMESTAMPTZ DEFAULT now(),
+                published_at TIMESTAMPTZ,
+                UNIQUE(account_set_id, version_number)
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_set_selectors (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                account_set_version_id INTEGER NOT NULL REFERENCES account_set_versions(id) ON DELETE CASCADE,
+                selector_type TEXT NOT NULL CHECK (selector_type IN ('include_subtree', 'include_exact', 'exclude_subtree', 'exclude_exact')),
+                account_code TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(account_set_version_id, selector_type, account_code)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_sets_client ON account_sets (client_id, is_active)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_set_versions_set ON account_set_versions (account_set_id, status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_set_versions_upload ON account_set_versions (source_upload_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_set_selectors_version ON account_set_selectors (account_set_version_id, sort_order)")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
 def _ensure_postgres_storage_cleanup_runs(conn):
     """Create the cleanup-run ledger on both fresh and existing schemas."""
     with conn.cursor() as cleanup_cur:
@@ -3694,6 +3791,7 @@ def init_db_postgres(conn):
         migrated_form_columns = _ensure_postgres_form_field_columns(conn)
         migrated_form_tables = _ensure_postgres_form_tables(conn)
         _ensure_postgres_report_category_tables(conn)
+        _ensure_postgres_account_set_tables(conn)
         migrated_assertions = _ensure_postgres_audit_rule_assertions(conn)
         migrated_compiled_rulebooks = _ensure_postgres_category_compiled_rulebooks(conn)
         migrated_cat_doc_assertions = _ensure_postgres_category_document_assertions(conn)
@@ -4548,6 +4646,7 @@ def init_db_postgres(conn):
         "ON report_balance_inputs (client_id, group_label, period_month)"
     )
 
+    _ensure_postgres_account_set_tables(conn)
     # ---------- 34. voucher_line_documents ----------
     run('''
         CREATE TABLE IF NOT EXISTS voucher_line_documents (

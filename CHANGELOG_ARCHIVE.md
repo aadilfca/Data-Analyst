@@ -6312,3 +6312,13 @@ version/schema validation and rejecting a future Category packet. Focused tests 
 future-packet rejection. The separate Phase 4 query-batching experiment remains uncommitted: its one successful
 two-line live save took 9.97 seconds, so it cannot be considered an improvement; it does not run on voucher loading
 or procedure-modal requests, whose observed latency therefore remains a separate investigation.
+
+## Account Set Control Centre foundation - Phase 1 - 2026-09-23
+
+**Scope:** Added the central, client-specific Account Set foundation only. No Control Centre screen, Reports migration, Audit Rules mapping change, or Verification routing change was made.
+
+**Implementation:** `account_sets` holds a stable client/key identity; immutable `account_set_versions` hold the Trial Balance source upload and published state; `account_set_selectors` stores include/exclude subtree or exact-leaf rules. SQLite bootstrap and fresh/existing PostgreSQL startup both create the schema and indexes. Published versions are immutable, and their source Trial Balance cannot be deleted through the declared relationship.
+
+`routers/account_control_center.py` provides admin-only latest-account-tree, draft create/edit, preview, publish, revision-draft, history, and listing APIs. Its single resolver uses complete dash-delimited code boundaries, so a `20-15-50` subtree never includes `20-15-500...`; exclusions win. It reuses `trial_balance.find_latest_parsed_upload()` rather than redefining the current Trial Balance selection rule.
+
+**Verification:** 21 focused Account Set/Trial Balance/Report schema tests passed; Python compilation and `git diff --check` passed. `test_app_smoke.py` started the registered app and passed 8 tests, but its two zero-field Form fixtures fail in unchanged Verification Rulebook-snapshot behaviour (HTTP 503); no out-of-scope fix was attempted.

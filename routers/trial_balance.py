@@ -977,7 +977,7 @@ def upsert_account_category_assignment(client_id: int, account_code: str, catego
     )
 
 
-def _find_latest_parsed_upload(client_id: int):
+def find_latest_parsed_upload(client_id: int):
     """
     Shared "latest Trial Balance" lookup - the most recent upload (by
     period_end, falling back to uploaded_at as tiebreaker for uploads made
@@ -1012,7 +1012,7 @@ def get_latest_trial_balance_accounts(client_id: int):
     if not client_rows:
         raise HTTPException(404, "Client not found")
 
-    upload = _find_latest_parsed_upload(client_id)
+    upload = find_latest_parsed_upload(client_id)
     if not upload:
         raise HTTPException(404, "No parsed trial balance found for this client")
 
@@ -1189,14 +1189,14 @@ def reset_trial_balance_categories(client_id: int):
     account's category_id to NULL for the client's CURRENTLY LOADED (latest
     parsed) Trial Balance only - not historical uploads - using the same
     "latest" lookup as get_latest_trial_balance_accounts() (via
-    _find_latest_parsed_upload()), so the two endpoints can never disagree on
+    find_latest_parsed_upload()), so the two endpoints can never disagree on
     which upload "the current one" means.
     """
     client_rows = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client_rows:
         raise HTTPException(404, "Client not found")
 
-    upload = _find_latest_parsed_upload(client_id)
+    upload = find_latest_parsed_upload(client_id)
     if not upload:
         raise HTTPException(404, "No parsed trial balance found for this client")
     upload_id = upload["id"]
