@@ -35,6 +35,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → client Account Set drafts, versioning, Trial Balance resolution, preview, and publication APIs. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
+- static/account_control_center.html, static/account_control_center.js -> guided client Account Set workstream setup, leaf-account previews, publication, and revisions. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
@@ -272,15 +273,15 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-20: Account Head clear control, Form Total-to-voucher reconciliation, Procedure modal Check/status, and Observation badge/query scoping fixes completed. See CHANGELOG_ARCHIVE.md.
 - 2026-09-20: Read-only traceability investigation mapped Category rules to Verification Cleared/Query gates; 15 findings logged. See AUDIT_RULES_TRACEABILITY_INVESTIGATION.md.
 - 2026-09-20/21: Assertions feature completed, 5 phases — master list, Document/Cross-check/Voucher-check tagging, picker UI, and coverage-gap warning. See CHANGELOG_ARCHIVE.md.
-- 2026-09-21: Audit Rules navigation moved to an accordion rail; entity lists now share a two-pane editor shell.
+- 2026-09-21: Audit Rules navigation and Category detail were streamlined into a two-pane editor with live status requirements and rule configuration.
 
-- 2026-09-21: Audit Rules Category detail was decluttered, retaining live status requirements and rule configuration.
 - 2026-09-21/22: Verification uses Category/global snapshots and applied hashes; existing PostgreSQL startup now migrates the hash column. See CHANGELOG_ARCHIVE.md, Rulebook snapshot status integration.
 - 2026-09-22: Existing-Postgres startup wasn't actually running the applied_ruleset_hash migration (line above); added fast-path companion function + regression test.
 - 2026-09-22: Rulebook correction is test-covered; query-batching was rejected after variable remote Save/Verify latency.
 - 2026-09-23: Account Set foundation added with versioned Trial-Balance selectors, resolver APIs, and PostgreSQL migration; Control Centre UI and consumer routing remain deferred.
 
 ## Self-maintenance
+- 2026-09-23: Account Control Centre redesigned as guided workstream setup with Trial Balance readiness, selection preview, draft/revision, and cache-safe navigation.
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)
 - Findings from a Code Health Review session go to `KNOWN_ISSUES.md`, not the Status log — the Status log records changes made, that file records issues found
 - If new files were created, add them to the Architecture/file map (this file's own Architecture section) AND to `File_Map.md` (same folder as this file, git-tracked alongside it — a separate, more detailed one-line-per-file reference) if a file was added, removed, or repurposed. This is the only File_Map.md in the project — do not create or update a second copy elsewhere.

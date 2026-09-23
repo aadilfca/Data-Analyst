@@ -4636,6 +4636,10 @@ assignment — `routers/trial_balance.py`) bound staleness. The docstring's "Rea
 paragraph was updated to state this.
 
 **Not touched:** `get_audit_guidance()` (same file) was reviewed and already consults `cache_get()`
+
+
+
+
 as its first statement — no gap. Every cached GET endpoint in `routers/audit_rules.py`
 (`get_documents`/`get_document`/`get_category`/`get_cross_checks`/`get_cross_check`/
 `get_category_cleared_requirements`) was reviewed and already checks the cache before any DB call —
@@ -6322,3 +6326,11 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 `routers/account_control_center.py` provides admin-only latest-account-tree, draft create/edit, preview, publish, revision-draft, history, and listing APIs. Its single resolver uses complete dash-delimited code boundaries, so a `20-15-50` subtree never includes `20-15-500...`; exclusions win. It reuses `trial_balance.find_latest_parsed_upload()` rather than redefining the current Trial Balance selection rule.
 
 **Verification:** 21 focused Account Set/Trial Balance/Report schema tests passed; Python compilation and `git diff --check` passed. `test_app_smoke.py` started the registered app and passed 8 tests, but its two zero-field Form fixtures fail in unchanged Verification Rulebook-snapshot behaviour (HTTP 503); no out-of-scope fix was attempted.
+
+## Account Set Control Centre UI - Phase 2 - 2026-09-23
+
+**Scope:** Added the client-facing Account Control Centre only. Verification routing, Reports, and financial statements remain unchanged.
+
+**Implementation:** The Control Centre now opens with Trial Balance readiness, seven workstream starter cards, and a Custom Account Set path. Selecting a card launches a guided identify, account-selection, and leaf-account-review workspace; drafts, immutable publication, and revisions continue to use the Phase 1 API contract. The page remains registered once in `NAV_MANIFEST`; every client-context page requests the same updated script version.
+
+**Verification:** `node --check` passed for both changed scripts; 21 focused backend tests passed; headless browser verification used mocked account APIs to confirm the page shell, navigation entry, and automatic stable-key suggestion.

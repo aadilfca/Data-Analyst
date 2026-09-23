@@ -222,6 +222,11 @@ const NAV_MANIFEST = [
                 keywords: ['voucher prefix', 'prefixes', 'cash payment', 'bank receipt', 'client config'],
             },
             {
+                label: 'Account Control Centre', url: '/static/account_control_center.html', state: 'ready',
+                module: 'Account Control Centre',
+                keywords: ['account set', 'chart of accounts', 'cash accounts', 'bank accounts', 'financial statements'],
+            },
+            {
                 label: 'Audit Rules', url: '/static/audit_rules.html', state: 'ready', module: 'Audit Rules',
                 children: [
                     {
