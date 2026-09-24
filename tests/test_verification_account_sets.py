@@ -257,3 +257,25 @@ class VerificationTableAmountTests(unittest.TestCase):
         )
 
         self.assertEqual(json.loads(completed.stdout), [5000000, 8000, 0])
+
+
+class LocalVendorRoutingFoundationTests(unittest.TestCase):
+    def test_local_vendor_requires_a_published_set(self):
+        with patch.object(verification, 'get_published_account_set_leaf_accounts', return_value=None), patch.object(verification, 'get_client_voucher_prefixes_pg') as prefixes:
+            routing = verification.get_local_vendor_routing(7)
+        self.assertEqual(routing['mode'], 'not_configured')
+        prefixes.assert_not_called()
+
+    def test_local_vendor_uses_published_account_codes(self):
+        published = {'set_key': 'local_vendors', 'version_number': 1, 'accounts': [{'account_code': '20-15-50-0001'}]}
+        with patch.object(verification, 'get_published_account_set_leaf_accounts', return_value=published):
+            routing = verification.get_local_vendor_routing(7)
+        self.assertEqual(routing['account_codes'], {'20-15-50-0001'})
+
+    def test_treasury_priority_excludes_vendor_voucher(self):
+        voucher = {'voucher_id': 'JV-1', 'rows': [{'account_code': '20-15-50-0001'}, {'account_code': '10-15-115-10-0001'}]}
+        self.assertFalse(verification.is_local_vendor_voucher(voucher, '20-15-50-0001', {'mode': 'account_set', 'account_codes': {'10-15-115-10-0001'}}, {'mode': 'account_set', 'account_codes': set()}))
+
+    def test_code_label_round_trip_is_not_name_based(self):
+        label = verification.local_vendor_label('20-15-50-0001', 'Duplicate Vendor Name')
+        self.assertEqual(verification.local_vendor_code_from_label(label), '20-15-50-0001')

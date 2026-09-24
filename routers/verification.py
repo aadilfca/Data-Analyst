@@ -195,6 +195,14 @@ def get_account_code_value(row_data: dict) -> Optional[str]:
     return str(value) if value is not None else None
 
 
+def get_published_account_set_routing(client_id: int, set_key: str) -> dict[str, Any]:
+    """Return exact published Account Set codes, or an explicit unconfigured result."""
+    published = get_published_account_set_leaf_accounts(client_id, set_key)
+    if not published:
+        return {'mode': 'not_configured', 'set_key': set_key, 'account_codes': set()}
+    return {'mode': 'account_set', 'set_key': published['set_key'], 'account_codes': {str(account['account_code']).strip() for account in published['accounts']}, 'version_number': published['version_number']}
+
+
 def get_treasury_routing(client_id: int, category_group: Optional[str]) -> dict[str, Any]:
     """Prefer a published Cash/Bank Account Set; retain prefixes until one exists."""
     if category_group in ('cash', 'bank'):
@@ -214,6 +222,37 @@ def get_treasury_routing(client_id: int, category_group: Optional[str]) -> dict[
     elif category_group == 'bank':
         prefixes = {key: value for key, value in prefixes.items() if key in ('Bank Payment', 'Bank Receipt')}
     return {'mode': 'voucher_prefix', 'prefixes': prefixes}
+
+
+def get_local_vendor_routing(client_id: int) -> dict[str, Any]:
+    """Local Vendor requires a published Account Set; it intentionally has no prefix fallback."""
+    return get_published_account_set_routing(client_id, 'local_vendors')
+
+
+def local_vendor_label(account_code: str, account_name: Optional[str]) -> str:
+    """Keep the account code in the selected vendor label, avoiding name-only matching."""
+    return f"{account_code} :: {account_name or account_code}"
+
+
+def local_vendor_code_from_label(value: str) -> Optional[str]:
+    code, separator, _ = (value or '').partition(' :: ')
+    return code.strip() if separator and code.strip() else None
+
+
+def voucher_contains_treasury_leg(voucher: dict, cash_routing: dict, bank_routing: dict) -> bool:
+    """Cash/Bank takes priority, including legacy prefix fallback where no set exists."""
+    account_codes = set(cash_routing.get('account_codes', set())) | set(bank_routing.get('account_codes', set()))
+    if any(row.get('account_code') in account_codes for row in voucher['rows']):
+        return True
+    prefixes = {}
+    for routing in (cash_routing, bank_routing):
+        if routing.get('mode') == 'voucher_prefix':
+            prefixes.update(routing.get('prefixes', {}))
+    return match_voucher_category(voucher.get('voucher_id'), prefixes) in ('Cash Payment', 'Cash Receipt', 'Bank Payment', 'Bank Receipt')
+
+def is_local_vendor_voucher(voucher: dict, vendor_account_code: str, cash_routing: dict, bank_routing: dict) -> bool:
+    """True only when a selected vendor leg is outside Cash/Bank verification."""
+    return bool(vendor_account_code) and any(row.get('account_code') == vendor_account_code for row in voucher.get('rows', [])) and not voucher_contains_treasury_leg(voucher, cash_routing, bank_routing)
 
 
 def row_matches_treasury_account_set(row_data: dict, routing: dict) -> bool:

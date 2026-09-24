@@ -6358,3 +6358,12 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** Imported voucher rows commonly retain both Debit Amount and Credit Amount keys, one containing zero. The shared table resolver now selects the non-zero side before falling back to the original order, so a credit-side Bank/income row is no longer rendered as zero merely because Debit Amount appears first. The existing voucher total uses this same resolver and therefore corrects automatically.
 
 **Verification:** `node --check` and `git diff --check` passed. The focused routing/accounting suite passed 9 tests, including one that executes the actual frontend helper with debit-zero/credit-value, credit-zero/debit-value, and both-zero rows. No packages installed.
+
+
+## Local Vendor routing foundation - Phase 0 - 2026-09-24
+
+**Scope:** Reusable published-Account-Set routing and Local Vendor eligibility only; no UI, discovery endpoint, session, preview, or client-data change.
+
+**Implementation:** Local Vendors require published `local_vendors` and never use prefixes. Cash/Bank preserve their established fallback and take priority, including JVs. Vendor identity retains the account code with its display name.
+
+**Verification:** Python compilation, `git diff --check`, and 13 focused routing tests passed.
