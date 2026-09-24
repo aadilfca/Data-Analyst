@@ -2594,9 +2594,44 @@ def init_db():
         ''')
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_groups_client ON account_groups (client_id)")
         create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_groups_client_label ON account_groups (client_id, group_label)")
-        # ---------- ACCOUNT SET CONTROL CENTRE (Phase 1: shared foundation) ----------
-        # Account Sets are reusable, versioned account selectors. They deliberately
-        # keep only selector rules; Trial Balance remains the authoritative account tree.
+        # ---------- SIMPLIFIED ACCOUNT CONTROL CENTRE FOUNDATION ----------
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                category_type TEXT NOT NULL CHECK (category_type IN ('financial_statement', 'note')),
+                category_key TEXT NOT NULL,
+                label TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                UNIQUE(client_id, category_type, category_key)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_categories_client_type ON account_control_categories (client_id, category_type, is_active)")
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                account_code TEXT NOT NULL,
+                verification_workstream TEXT CHECK (verification_workstream IN ('cash', 'bank', 'local_vendor', 'import_vendor', 'export_customer', 'payroll', 'contractor')),
+                financial_statement_category_id INTEGER,
+                note_category_id INTEGER,
+                updated_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (financial_statement_category_id) REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                FOREIGN KEY (note_category_id) REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                UNIQUE(client_id, account_code)
+            )
+        ''')
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_assignments_client ON account_control_assignments (client_id)")
+        create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_account_control_assignments_workstream ON account_control_assignments (client_id, verification_workstream)")
+        # ---------- ACCOUNT SET CONTROL CENTRE (legacy compatibility) ----------
+        # Account Sets remain untouched while the simplified assignment grid is introduced.
         conn.execute('''
             CREATE TABLE IF NOT EXISTS account_sets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3520,6 +3555,37 @@ def _ensure_postgres_account_set_tables(conn):
     """Create Account Set foundation tables on fresh and existing Postgres schemas."""
     cur = conn.cursor()
     try:
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_categories (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                category_type TEXT NOT NULL CHECK (category_type IN ('financial_statement', 'note')),
+                category_key TEXT NOT NULL,
+                label TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, category_type, category_key)
+            )
+        ''')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS account_control_assignments (
+                id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                account_code TEXT NOT NULL,
+                verification_workstream TEXT CHECK (verification_workstream IN ('cash', 'bank', 'local_vendor', 'import_vendor', 'export_customer', 'payroll', 'contractor')),
+                financial_statement_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                note_category_id INTEGER REFERENCES account_control_categories(id) ON DELETE RESTRICT,
+                updated_by TEXT,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE(client_id, account_code)
+            )
+        ''')
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_categories_client_type ON account_control_categories (client_id, category_type, is_active)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_assignments_client ON account_control_assignments (client_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_account_control_assignments_workstream ON account_control_assignments (client_id, verification_workstream)")
         cur.execute('''
             CREATE TABLE IF NOT EXISTS account_sets (
                 id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

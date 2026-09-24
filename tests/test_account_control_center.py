@@ -1,4 +1,4 @@
-"""Focused coverage for the Account Set Control Centre foundation."""
+"""Focused coverage for the Account Control Centre foundations."""
 
 import os
 import sqlite3
@@ -34,7 +34,13 @@ class AccountSetSchemaTests(unittest.TestCase):
                     }
                 conn.close()
                 self.assertTrue(
-                    {"account_sets", "account_set_versions", "account_set_selectors"}.issubset(tables)
+                    {
+                        "account_sets",
+                        "account_set_versions",
+                        "account_set_selectors",
+                        "account_control_categories",
+                        "account_control_assignments",
+                    }.issubset(tables)
                 )
                 self.assertTrue(
                     {
@@ -42,6 +48,9 @@ class AccountSetSchemaTests(unittest.TestCase):
                         "idx_account_set_versions_set",
                         "idx_account_set_versions_upload",
                         "idx_account_set_selectors_version",
+                        "idx_account_control_categories_client_type",
+                        "idx_account_control_assignments_client",
+                        "idx_account_control_assignments_workstream",
                     }.issubset(indexes)
                 )
             finally:
@@ -76,6 +85,8 @@ class AccountSetPostgresMigrationTests(unittest.TestCase):
         connection = Connection()
         database._ensure_postgres_account_set_tables(connection)
         sql = "\n".join(connection.cursor_instance.statements)
+        self.assertIn("CREATE TABLE IF NOT EXISTS account_control_categories", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS account_control_assignments", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_sets", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_set_versions", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS account_set_selectors", sql)
@@ -146,6 +157,42 @@ class AccountSetResolverTests(unittest.TestCase):
             with self.assertRaises(HTTPException) as raised:
                 control_center.publish_account_set_version(44, session={"username": "Admin"})
         self.assertEqual(raised.exception.status_code, 409)
+
+
+class SimplifiedAccountControlTests(unittest.TestCase):
+    def test_workstream_payload_is_normalised_and_invalid_values_are_rejected(self):
+        payload = control_center.AccountControlAssignmentPayload(
+            client_id=1,
+            account_code=" 20-15-50-0001 ",
+            verification_workstream=" Local_Vendor ",
+        )
+        cleaned = control_center._clean_control_assignment(payload)
+        self.assertEqual(cleaned["account_code"], "20-15-50-0001")
+        self.assertEqual(cleaned["verification_workstream"], "local_vendor")
+
+        invalid = control_center.AccountControlAssignmentPayload(
+            client_id=1, account_code="20-15-50-0001", verification_workstream="sales"
+        )
+        with self.assertRaises(HTTPException) as raised:
+            control_center._clean_control_assignment(invalid)
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_workstream_can_be_cleared_without_creating_a_second_assignment(self):
+        payload = control_center.AccountControlAssignmentPayload(
+            client_id=1, account_code="10-15-115-10-0001", verification_workstream=None
+        )
+        cleaned = control_center._clean_control_assignment(payload)
+        self.assertIsNone(cleaned["verification_workstream"])
+
+    def test_parent_bulk_payload_keeps_parent_code_separate(self):
+        payload = control_center.AccountControlBulkAssignmentPayload(
+            client_id=1,
+            parent_account_code=" 20-15-50 ",
+            verification_workstream="local_vendor",
+        )
+        self.assertEqual(control_center._clean_control_account_code(payload.parent_account_code), "20-15-50")
+        self.assertEqual(payload.verification_workstream, "local_vendor")
+
 
 
 if __name__ == "__main__":

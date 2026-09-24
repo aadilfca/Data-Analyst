@@ -379,6 +379,185 @@ def latest_account_tree(client_id: int = Query(..., ge=1), session=Depends(requi
     }
 
 
+
+_VERIFICATION_WORKSTREAMS = frozenset({
+    "cash", "bank", "local_vendor", "import_vendor", "export_customer", "payroll", "contractor",
+})
+
+
+class AccountControlAssignmentPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    account_code: str
+    verification_workstream: Optional[str] = None
+    financial_statement_category_id: Optional[int] = Field(default=None, ge=1)
+    note_category_id: Optional[int] = Field(default=None, ge=1)
+
+
+class AccountControlBulkAssignmentPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    parent_account_code: str
+    verification_workstream: Optional[str] = None
+    financial_statement_category_id: Optional[int] = Field(default=None, ge=1)
+    note_category_id: Optional[int] = Field(default=None, ge=1)
+
+
+def _clean_control_account_code(value: Any) -> str:
+    code = _normalise_account_code(value)
+    if not code or len(code) > 120:
+        raise HTTPException(400, "Account code is required and must be 120 characters or fewer")
+    return code
+
+
+def _clean_control_assignment(payload: AccountControlAssignmentPayload) -> dict[str, Any]:
+    account_code = _clean_control_account_code(payload.account_code)
+    workstream = _normalise_text(payload.verification_workstream).casefold() or None
+    if workstream and workstream not in _VERIFICATION_WORKSTREAMS:
+        raise HTTPException(400, "Verification workstream is invalid")
+    return {
+        "client_id": payload.client_id,
+        "account_code": account_code,
+        "verification_workstream": workstream,
+        "financial_statement_category_id": payload.financial_statement_category_id,
+        "note_category_id": payload.note_category_id,
+    }
+
+
+def _latest_control_accounts(client_id: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    _require_active_client(client_id)
+    upload = find_latest_parsed_upload(client_id)
+    if not upload:
+        raise HTTPException(404, "No parsed Trial Balance found for this client")
+    return upload, _accounts_for_upload(upload["id"])
+
+
+def _validate_control_categories(client_id: int, assignment: dict[str, Any]) -> None:
+    checks = (
+        (assignment["financial_statement_category_id"], "financial_statement"),
+        (assignment["note_category_id"], "note"),
+    )
+    for category_id, category_type in checks:
+        if category_id is None:
+            continue
+        rows = execute_query_pg(
+            """SELECT id FROM account_control_categories
+               WHERE id = %s AND client_id = %s AND category_type = %s AND is_active = TRUE""",
+            (category_id, client_id, category_type),
+        )
+        if not rows:
+            raise HTTPException(400, f"Invalid active {category_type.replace('_', ' ')} category")
+
+
+def _upsert_control_assignment(assignment: dict[str, Any], updated_by: str) -> None:
+    execute_write_pg(
+        """
+        INSERT INTO account_control_assignments
+            (client_id, account_code, verification_workstream,
+             financial_statement_category_id, note_category_id, updated_by, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (client_id, account_code) DO UPDATE SET
+            verification_workstream = EXCLUDED.verification_workstream,
+            financial_statement_category_id = EXCLUDED.financial_statement_category_id,
+            note_category_id = EXCLUDED.note_category_id,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            assignment["client_id"], assignment["account_code"], assignment["verification_workstream"],
+            assignment["financial_statement_category_id"], assignment["note_category_id"], updated_by,
+        ),
+    )
+
+
+@router.get("/api/account-control-center/mapping")
+def get_account_control_mapping(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
+    """Return the latest Trial Balance tree with one simplified assignment object per account."""
+    upload, accounts = _latest_control_accounts(client_id)
+    rows = execute_query_pg(
+        """SELECT account_code, verification_workstream, financial_statement_category_id, note_category_id
+           FROM account_control_assignments WHERE client_id = %s""",
+        (client_id,),
+    )
+    assignments = {_normalise_account_code(row["account_code"]): row for row in rows}
+    return {
+        "client_id": client_id,
+        "upload": upload,
+        "verification_workstreams": sorted(_VERIFICATION_WORKSTREAMS),
+        "accounts": [
+            {
+                "id": row["id"],
+                "account_code": row["account_code"],
+                "account_name": row["account_name"],
+                "parent_account_code": row["parent_account_code"],
+                "level": row["level"],
+                "is_leaf": row["classification"] == "leaf",
+                "assignment": {
+                    "verification_workstream": assignments.get(_normalise_account_code(row["account_code"]), {}).get("verification_workstream"),
+                    "financial_statement_category_id": assignments.get(_normalise_account_code(row["account_code"]), {}).get("financial_statement_category_id"),
+                    "note_category_id": assignments.get(_normalise_account_code(row["account_code"]), {}).get("note_category_id"),
+                },
+            }
+            for row in accounts
+        ],
+    }
+
+
+@router.put("/api/account-control-center/mapping")
+def save_account_control_mapping(payload: AccountControlAssignmentPayload, session=Depends(require_admin)):
+    """Save one leaf-account assignment; parent-to-child application is a separate bulk operation."""
+    assignment = _clean_control_assignment(payload)
+    _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    account = next(
+        (row for row in accounts if _normalise_account_code(row["account_code"]) == assignment["account_code"]),
+        None,
+    )
+    if not account:
+        raise HTTPException(400, "Account code is not present in the latest Trial Balance")
+    if account["classification"] != "leaf":
+        raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
+    _validate_control_categories(assignment["client_id"], assignment)
+    _upsert_control_assignment(assignment, _actor_name(session))
+    return {"saved": True, "account_code": assignment["account_code"], "assignment": assignment}
+
+
+@router.post("/api/account-control-center/mapping/apply-to-children")
+def apply_account_control_mapping_to_children(payload: AccountControlBulkAssignmentPayload, session=Depends(require_admin)):
+    """Apply one assignment to every latest-Trial-Balance leaf below a selected parent."""
+    parent_code = _clean_control_account_code(payload.parent_account_code)
+    assignment = _clean_control_assignment(
+        AccountControlAssignmentPayload(
+            client_id=payload.client_id,
+            account_code=parent_code,
+            verification_workstream=payload.verification_workstream,
+            financial_statement_category_id=payload.financial_statement_category_id,
+            note_category_id=payload.note_category_id,
+        )
+    )
+    _upload, accounts = _latest_control_accounts(assignment["client_id"])
+    parent = next(
+        (row for row in accounts if _normalise_account_code(row["account_code"]) == parent_code),
+        None,
+    )
+    if not parent:
+        raise HTTPException(400, "Parent account is not present in the latest Trial Balance")
+    leaves = [
+        row for row in accounts
+        if row["classification"] == "leaf"
+        and (
+            _normalise_account_code(row["account_code"]) == parent_code
+            or _normalise_account_code(row["account_code"]).startswith(parent_code + "-")
+        )
+    ]
+    if not leaves:
+        raise HTTPException(400, "No leaf accounts were found below the selected account")
+    _validate_control_categories(assignment["client_id"], assignment)
+    actor = _actor_name(session)
+    with pg_transaction():
+        for row in leaves:
+            child_assignment = {**assignment, "account_code": row["account_code"]}
+            _upsert_control_assignment(child_assignment, actor)
+    return {"saved": True, "parent_account_code": parent_code, "leaf_count": len(leaves)}
+
+
 @router.get("/api/account-control-center/sets")
 def list_account_sets(client_id: int = Query(..., ge=1), session=Depends(require_admin)):
     _require_active_client(client_id)

@@ -33,7 +33,7 @@ One line per file group: what it is now. Full build history for every entry live
 - static/procedure_modal.js → shared Verification/Audit Workbook Procedure modal for grouped Data Table search, evidence/Forms, procedures, and observations. See CHANGELOG_ARCHIVE.md.
 - static/audit_workbook.js, static/audit_workbook.html → Audit Workbook: session rows, filtering, totals, shared Procedure Modal, and cached evidence/Form completion badges. See CHANGELOG_ARCHIVE.md.
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
-- routers/account_control_center.py → client Account Set drafts, versioning, Trial Balance resolution, preview, and publication APIs. See CHANGELOG_ARCHIVE.md.
+- routers/account_control_center.py → simplified client/account mapping foundation for Verification, Financial Statements, and Notes, alongside legacy Account Set APIs. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
 - static/account_control_center.html, static/account_control_center.js -> guided client Account Set workstream setup, leaf-account previews, publication, and revisions. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
@@ -284,6 +284,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-24: Local Vendor discovery now uses indexed vendor candidates, avoiding historical date-by-date scans while preserving Treasury exclusion.
 - 2026-09-24: Local Vendor date selection is now isolated from Cash/Bank, defaulting to its own latest eligible JV period.
 - 2026-09-24: Import Vendor Verification UI, quick navigation, separate date state, and Treasury-safe session entry are now available.
+- 2026-09-24: Simplified Account Control Centre Phase 1 added one client/account assignment foundation for Verification, Financial Statements, and Notes; legacy Account Sets remain compatible.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

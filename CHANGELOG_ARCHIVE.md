@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## Simplified Account Control Centre foundation — Phase 1 — 2026-09-24
+
+**Scope:** Replace the planned Account Set-first configuration path with a single client/account assignment foundation. Existing Account Sets and current routing remain untouched.
+
+**Implementation:** Added SQLite/Postgres tables for account-level Verification workstream, Financial Statement category reference, and Notes category reference, with one unique assignment per client/account. Added admin-protected mapping read/save APIs against the latest parsed Trial Balance, leaf-only direct assignment, and parent-to-leaf bulk assignment. Verification workstreams are constrained to Cash, Bank, Local Vendor, Import Vendor, Export Customer, Payroll, and Contractor; category definitions are reserved for later phases.
+
+**Verification:** Focused Account Control Centre tests pass (10). UI grid, category-definition screens, and live Postgres/browser testing remain subsequent phases.
+
 ## Verification Speed Optimization — Phase 4 — 2026-09-22
 
 **Scope:** historical working-tree experiment only; no Phase 4 code is retained.
