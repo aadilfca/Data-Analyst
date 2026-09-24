@@ -173,7 +173,7 @@ const NAV_MANIFEST = [
                     { label: 'Cash vouchers', url: '/static/verification.html?type=cash', state: 'ready' },
                     { label: 'Bank vouchers', url: '/static/verification.html?type=bank', state: 'ready' },
                     { label: 'Local vendor', url: '/static/verification.html?type=local_vendor', state: 'ready' },
-                    { label: 'Import vendor', url: null, state: 'coming-soon' },
+                    { label: 'Import vendor', url: '/static/verification.html?type=import_vendor', state: 'ready' },
                     { label: 'Export customer', url: null, state: 'coming-soon' },
                     { label: 'Payroll', url: null, state: 'coming-soon' },
                     { label: 'Contractor', url: null, state: 'coming-soon' },

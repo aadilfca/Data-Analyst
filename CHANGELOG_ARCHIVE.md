@@ -6415,3 +6415,11 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** A published `import_vendors` set exposes code-qualified Import Vendor labels for eligible non-Treasury vouchers. Session and Preview accept `import_vendor`, retain only the selected vendor's non-zero account lines, and exclude every voucher containing configured Cash/Bank legs. Credits display as **Import vendor bill / payable**; debits display as negative **Import vendor debit note / adjustment** values.
 
 **Verification:** Python compilation and `git diff --check` passed. Focused Account Set/Verification suite: 28 passed, including Import Vendor discovery, latest-date lookup, JV session capture, Treasury exclusion, and credit/debit Preview presentation. No packages installed.
+
+## Import Vendor verification UI - 2026-09-24
+
+**Scope:** Activated the Import Vendor Verification entry, discovery, Preview, and session UI using the completed backend. Cash/Bank and Local Vendor behaviour remain unchanged.
+
+**Implementation:** The shared Verification page now recognises `type=import_vendor`, adds the live hub tile and global quick-navigation link, calls only Import Vendor discovery/latest-date endpoints, and keeps its selected account and date range separate from Cash, Bank, and Local Vendor. Preview preserves credit bills and negative debit-note signs.
+
+**Verification:** `node --check` passed for `verification.js` and `client_context.js`; `git diff --check` passed; focused Account Set/Verification suite: 30 passed. Coverage includes the Import Vendor tile, quick navigation, separate date/account state, endpoints, session type, signed debit-note display, and retained Local Vendor contracts. No packages installed.

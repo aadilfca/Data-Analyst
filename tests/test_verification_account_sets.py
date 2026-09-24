@@ -507,6 +507,31 @@ class ImportVendorWorkflowTests(unittest.TestCase):
         self.assertEqual(sum('FROM client_data' in sql for sql in queries), 2)
 
 
+class ImportVendorUiContractTests(unittest.TestCase):
+    def test_import_vendor_uses_its_own_live_workstream_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / 'static' / 'verification.js').read_text(encoding='utf-8')
+
+        self.assertIn("import_vendor: { title: 'Import Vendor'", source)
+        self.assertIn("function isImportVendorVerification() { return currentType === 'import_vendor'; }", source)
+        self.assertIn('/api/verification/latest_import_vendor_date?client_id=', source)
+        self.assertIn('/api/verification/import_vendors?', source)
+        self.assertIn("session_type: currentType", source)
+
+    def test_import_vendor_state_tile_navigation_and_signed_debit_note_are_live(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / 'static' / 'verification.js').read_text(encoding='utf-8')
+        html = (root / 'static' / 'verification.html').read_text(encoding='utf-8')
+        navigation = (root / 'static' / 'client_context.js').read_text(encoding='utf-8')
+
+        self.assertIn("VERIFICATION_DATE_RANGE_STORAGE_KEY + ':import_vendor'", source)
+        self.assertIn("VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY + ':import_vendor'", source)
+        self.assertIn("'Import vendor debit note / adjustment'", source)
+        self.assertIn('id="importVendorTile" data-verification-type="import_vendor"', html)
+        self.assertIn('Cash/Bank payments remain in Treasury verification.', html)
+        self.assertIn("{ label: 'Import vendor', url: '/static/verification.html?type=import_vendor', state: 'ready' }", navigation)
+
+
 class LocalVendorUiContractTests(unittest.TestCase):
     def test_local_vendor_type_uses_its_own_discovery_contract_and_safe_range_boundary(self):
         root = Path(__file__).resolve().parents[1]

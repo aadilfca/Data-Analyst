@@ -472,7 +472,7 @@
             </div>
 
             <!-- Verification Hub: two labelled groups replacing the old 4-card Module Grid.
-                 Cash/Bank/Local Vendor voucher tiles are live (they navigate with ?type=, re-entering
+                 Cash/Bank/Local Vendor/Import Vendor voucher tiles are live (they navigate with ?type=, re-entering
                  through the existing window.onload auto-open path in verification.js); every
                  other tile is a display-only "Coming soon" placeholder — no id, no handler.
                  Transaction Report moved down into the Client Data Links section (it's a data
@@ -507,11 +507,12 @@
                         <p>Verify Local Vendor JVs; Cash/Bank payments remain in Treasury verification.</p>
                         <span class="module-status">Ready</span>
                     </div>
-                    <div class="module-card coming-soon">
+                    <!-- Import Vendor is live once its Account Set has been published. -->
+                    <div class="module-card" id="importVendorTile" data-verification-type="import_vendor">
                         <div class="module-icon">🚢</div>
                         <h3>Import vendor</h3>
-                        <p>Verify import vendor vouchers</p>
-                        <span class="module-status coming">Coming soon</span>
+                        <p>Verify Import Vendor JVs; Cash/Bank payments remain in Treasury verification.</p>
+                        <span class="module-status">Ready</span>
                     </div>
                     <div class="module-card coming-soon">
                         <div class="module-icon">🌍</div>
