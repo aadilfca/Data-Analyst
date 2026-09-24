@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from routers import reconciliation
+from services.ledger_group_summary import build_financial_statement_summary
 
 
 def _source():
@@ -136,3 +137,60 @@ def test_reports_view_and_dashboard_entry_are_wired():
     assert 'id="reportsCard"' in dashboard
     assert "reconciliation.html?view=reports" in navigation
     assert 'onclick=' not in html
+
+
+def test_financial_statement_summary_aggregates_central_categories_and_flags_unmapped():
+    journal = pd.DataFrame([
+        {"voucher_id": "V1", "date": "2026-01-10", "account_code": "EXP", "account_name": "Expense", "debit": 100, "credit": 0},
+        {"voucher_id": "V1", "date": "2026-01-10", "account_code": "CASH", "account_name": "Cash", "debit": 0, "credit": 100},
+        {"voucher_id": "V2", "date": "2026-02-05", "account_code": "UNMAPPED", "account_name": "Unmapped", "debit": 25, "credit": 0},
+    ])
+    coa = pd.DataFrame([
+        {"account_code": "EXP", "account_title": "Expense", "account_type": "Expense", "category": "Operating expense"},
+        {"account_code": "CASH", "account_title": "Cash", "account_type": "Cash", "category": "Cash and bank"},
+    ])
+
+    result = build_financial_statement_summary(journal, coa, "2026-01-01", "2026-02-28")
+
+    assert result["months"] == ["2026-01", "2026-02"]
+    totals = result["category_totals"]
+    assert totals.loc["Operating expense", "2026-01"] == 100
+    assert totals.loc["Cash and bank", "2026-01"] == -100
+    assert result["unmapped_account_count"] == 1
+    assert result["unmapped_accounts"].iloc[0]["account_code"] == "UNMAPPED"
+
+
+def test_financial_statement_preview_uses_account_control_mapping_source():
+    summary = {
+        "months": ["2026-01"],
+        "category_totals": pd.DataFrame({"2026-01": [125.0], "Total": [125.0]}, index=["Operating expense"]),
+        "account_counts": pd.Series({"Operating expense": 2}),
+        "unmapped_accounts": pd.DataFrame(columns=["account_code", "account_name", "debit", "credit", "net_movement"]),
+        "selected_voucher_count": 3,
+        "source_line_count": 6,
+        "mapped_account_count": 2,
+        "unmapped_account_count": 0,
+    }
+    with patch.object(reconciliation, "_require_active_client"), \
+         patch.object(reconciliation, "load_ledger_report_source", return_value=_source()) as loader, \
+         patch.object(reconciliation, "build_financial_statement_summary", return_value=summary):
+        response = reconciliation.preview_financial_statements(
+            7, "2026-01-01", "2026-01-31", journal_upload_id=21, journal_template_id=None, session=None
+        )
+
+    assert response["controls"]["financial_statement_mapping"]["status"] == "Ready"
+    assert response["preview"]["category_totals"][0]["category"] == "Operating expense"
+    assert response["preview"]["account_counts"] == [{"category": "Operating expense", "account_count": 2}]
+    loader.assert_called_once()
+    assert loader.call_args.kwargs["account_category_source"] == "financial_statement"
+
+
+def test_reports_ui_exposes_financial_statement_preview():
+    root = Path(__file__).resolve().parents[1]
+    html = root.joinpath("static", "reconciliation.html").read_text(encoding="utf-8")
+    javascript = root.joinpath("static", "reconciliation.js").read_text(encoding="utf-8")
+
+    assert 'id="previewFinancialStatementsButton"' in html
+    assert 'id="financialStatementPreviewPanel"' in html
+    assert "/api/reconciliation/financial-statements/preview?" in javascript
+    assert "account control mappings" in javascript.lower()

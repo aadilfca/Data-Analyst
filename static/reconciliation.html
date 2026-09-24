@@ -68,6 +68,7 @@
                     <div class="reconciliation-source-actions">
                         <button id="previewReportButton" class="reconciliation-btn reconciliation-btn-primary" type="submit">Preview report</button>
                         <button id="downloadReportButton" class="reconciliation-btn reconciliation-btn-secondary" type="button" disabled>Download Excel</button>
+                        <button id="previewFinancialStatementsButton" class="reconciliation-btn reconciliation-btn-secondary" type="button">Preview Financial Statements</button>
                     </div>
                 </form>
                 <div id="reportMessage" class="reconciliation-message" role="status" aria-live="polite" hidden></div>
@@ -108,6 +109,27 @@
                     </table>
                 </div>
             </section>
+        </section>
+
+        <section id="financialStatementPreviewPanel" class="reconciliation-panel reconciliation-report-panel" hidden aria-labelledby="financial-statement-heading">
+            <div class="reconciliation-panel-heading">
+                <div>
+                    <p class="reconciliation-section-kicker">4 Â· Financial Statements</p>
+                    <h2 id="financial-statement-heading">Financial Statement category preview</h2>
+                    <p class="reconciliation-help">This read-only preview uses the Financial Statement mappings maintained in Account Control Centre. Values are transparent net movement (debit minus credit).</p>
+                </div>
+                <span id="financialStatementStatus" class="reconciliation-status-pill is-muted">Not loaded</span>
+            </div>
+            <div id="financialStatementMessage" class="reconciliation-message" role="status" aria-live="polite" hidden></div>
+            <div id="financialStatementMeta" class="reconciliation-setup-summary"></div>
+            <div id="financialStatementUnmapped" class="reconciliation-blocking-reasons" hidden></div>
+            <div id="financialStatementPreviewEmpty" class="reconciliation-empty" hidden></div>
+            <div class="reconciliation-table-wrap">
+                <table class="reconciliation-account-table reconciliation-report-table">
+                    <thead id="financialStatementPreviewHead"></thead>
+                    <tbody id="financialStatementPreviewBody"></tbody>
+                </table>
+            </div>
         </section>
 
         <div id="setupView" hidden>

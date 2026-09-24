@@ -360,6 +360,8 @@ def _load_account_rows(
     client_id: int,
     query_fn: Callable[..., list[dict[str, Any]]],
     diagnostics: list[dict[str, Any]],
+    *,
+    category_source: str = "ledger_summary",
 ) -> list[dict[str, Any]]:
     latest_rows = query_fn(
         """
@@ -377,37 +379,61 @@ def _load_account_rows(
         """,
         (client_id, client_id),
     )
-    category_set_rows = query_fn(
-        """
-        SELECT id
-        FROM report_category_sets
-        WHERE client_id = %s AND purpose_key = 'ledger_summary' AND is_active = TRUE
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (client_id,),
-    )
     assignment_rows = []
-    if category_set_rows:
+    if category_source == "financial_statement":
         assignment_rows = query_fn(
             """
             SELECT a.account_code, c.label AS category_name
-            FROM report_account_category_assignments a
-            JOIN report_category_sets s ON s.id = a.category_set_id
-            JOIN report_categories c ON c.id = a.category_id AND c.is_active = TRUE
-            WHERE a.client_id = %s AND a.category_set_id = %s
-              AND s.purpose_key = 'ledger_summary' AND s.is_active = TRUE
+            FROM account_control_assignments a
+            JOIN account_control_categories c
+              ON c.id = a.financial_statement_category_id
+             AND c.client_id = a.client_id
+             AND c.category_type = 'financial_statement'
+             AND c.is_active = TRUE
+            WHERE a.client_id = %s
+              AND a.financial_statement_category_id IS NOT NULL
             """,
-            (client_id, category_set_rows[0]["id"]),
+            (client_id,),
         )
-    else:
-        diagnostics.append(
-            _diagnostic(
-                "no_ledger_summary_category_set",
-                "warning",
-                "No active Ledger Summary category set is configured; unmapped accounts will require review.",
+        if not assignment_rows:
+            diagnostics.append(
+                _diagnostic(
+                    "no_financial_statement_mappings",
+                    "warning",
+                    "No active Financial Statement account mappings are configured; unmapped accounts will require review.",
+                )
             )
+    else:
+        category_set_rows = query_fn(
+            """
+            SELECT id
+            FROM report_category_sets
+            WHERE client_id = %s AND purpose_key = 'ledger_summary' AND is_active = TRUE
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (client_id,),
         )
+        if category_set_rows:
+            assignment_rows = query_fn(
+                """
+                SELECT a.account_code, c.label AS category_name
+                FROM report_account_category_assignments a
+                JOIN report_category_sets s ON s.id = a.category_set_id
+                JOIN report_categories c ON c.id = a.category_id AND c.is_active = TRUE
+                WHERE a.client_id = %s AND a.category_set_id = %s
+                  AND s.purpose_key = 'ledger_summary' AND s.is_active = TRUE
+                """,
+                (client_id, category_set_rows[0]["id"]),
+            )
+        else:
+            diagnostics.append(
+                _diagnostic(
+                    "no_ledger_summary_category_set",
+                    "warning",
+                    "No active Ledger Summary category set is configured; unmapped accounts will require review.",
+                )
+            )
 
     merged: dict[str, dict[str, Any]] = {}
     for row in latest_rows:
@@ -440,6 +466,7 @@ def load_ledger_report_source(
     period_start: Any = None,
     period_end: Any = None,
     query_fn: Callable[..., list[dict[str, Any]]] = execute_query_pg,
+    account_category_source: str = "ledger_summary",
 ) -> LedgerReportSource:
     """Load one explicit Client Data Bank dataset and its client categories."""
 
@@ -488,7 +515,7 @@ def load_ledger_report_source(
     metadata["source_template_ids"] = sorted(template_ids)
     metadata["source_upload_ids"] = sorted(upload_ids)
     account_diagnostics: list[dict[str, Any]] = []
-    account_rows = _load_account_rows(client_id, query_fn, account_diagnostics)
+    account_rows = _load_account_rows(client_id, query_fn, account_diagnostics, category_source=account_category_source)
     source = build_report_source(
         rows,
         account_rows,

@@ -37,6 +37,9 @@
             'saveButton',
             'reportsView', 'setupView', 'reportsViewButton', 'setupViewButton', 'reportForm', 'reportDataset',
             'reportGroup', 'reportPeriodStart', 'reportPeriodEnd', 'previewReportButton', 'downloadReportButton',
+            'previewFinancialStatementsButton', 'financialStatementPreviewPanel', 'financialStatementStatus',
+            'financialStatementMessage', 'financialStatementMeta', 'financialStatementUnmapped',
+            'financialStatementPreviewEmpty', 'financialStatementPreviewHead', 'financialStatementPreviewBody',
             'reportStatus', 'reportMessage', 'reportControls', 'reportDiagnosticsPanel', 'reportDiagnostics',
             'reportBlockingReasons', 'reportPreviewPanel', 'reportPreviewMeta', 'reportPreviewEmpty',
             'reportPreviewHead', 'reportPreviewBody',
@@ -390,6 +393,71 @@
         );
     }
 
+    function financialStatementQueryString() {
+        const params = new URLSearchParams({
+            client_id: String(state.clientId),
+            period_start: el.reportPeriodStart.value,
+            period_end: el.reportPeriodEnd.value,
+            journal_upload_id: el.reportDataset.value,
+        });
+        return params.toString();
+    }
+
+    function setFinancialStatementStatus(text, kind) {
+        el.financialStatementStatus.textContent = text;
+        el.financialStatementStatus.className = "reconciliation-status-pill is-" + (kind || "muted");
+    }
+
+    function setFinancialStatementMessage(message, kind) {
+        el.financialStatementMessage.hidden = !message;
+        el.financialStatementMessage.className = "reconciliation-message" + (kind ? " is-" + kind : "");
+        el.financialStatementMessage.textContent = message || "";
+    }
+
+    function renderFinancialStatementPreview(payload) {
+        const preview = payload.preview || {};
+        const control = (payload.controls || {}).financial_statement_mapping || {};
+        const months = preview.months || [];
+        const rows = preview.category_totals || [];
+        const accountCounts = new Map((preview.account_counts || []).map((item) => [item.category, item.account_count]));
+        el.financialStatementPreviewPanel.hidden = false;
+        el.financialStatementMeta.textContent = (preview.selected_voucher_count || 0) + " vouchers Â· " + (preview.mapped_account_count || 0) + " mapped account codes Â· " + (preview.unmapped_account_count || 0) + " unmapped";
+        el.financialStatementPreviewHead.innerHTML = "<tr><th>Category</th><th>Accounts</th>" + months.map((month) => "<th>" + escapeHtml(month) + "</th>").join("") + "<th>Total</th></tr>";
+        el.financialStatementPreviewBody.innerHTML = rows.map((row) => "<tr><td><strong>" + escapeHtml(row.category || "") + "</strong></td><td>" + (accountCounts.get(row.category) || 0) + "</td>" + months.map((month) => "<td>" + formatReportNumber(row[month]) + "</td>").join("") + "<td>" + formatReportNumber(row.Total) + "</td></tr>").join("");
+        el.financialStatementPreviewEmpty.hidden = Boolean(rows.length);
+        el.financialStatementPreviewEmpty.textContent = rows.length ? "" : "No Financial Statement category movements were found for the selected period.";
+        const unmapped = preview.unmapped_accounts || [];
+        el.financialStatementUnmapped.hidden = !unmapped.length;
+        el.financialStatementUnmapped.innerHTML = unmapped.length
+            ? "<strong>Review required:</strong> " + escapeHtml(control.message || "Some account codes are not mapped.") + "<ul>" + unmapped.map((item) => "<li><code>" + escapeHtml(item.account_code || "") + "</code> " + escapeHtml(item.account_name || "") + " Â· net " + formatReportNumber(item.net_movement) + "</li>").join("") + "</ul>"
+            : "";
+        const blocked = (payload.blocking_reasons || []).length;
+        setFinancialStatementStatus(blocked ? "Blocked" : (unmapped.length ? "Review required" : "Ready"), blocked ? "error" : (unmapped.length ? "muted" : "ready"));
+        setFinancialStatementMessage(
+            blocked ? "The Financial Statement preview could not be calculated." : (unmapped.length ? "Preview loaded. Assign the listed accounts in Account Control Centre for complete coverage." : "Financial Statement preview loaded from central Account Control mappings."),
+            blocked ? "error" : (unmapped.length ? "info" : "success")
+        );
+    }
+
+    async function previewFinancialStatements() {
+        if (!el.reportDataset.value || !el.reportPeriodStart.value || !el.reportPeriodEnd.value) {
+            setFinancialStatementStatus("Inputs required", "error");
+            setFinancialStatementMessage("Select a dataset and complete period before previewing Financial Statements.", "error");
+            return;
+        }
+        el.previewFinancialStatementsButton.disabled = true;
+        setFinancialStatementStatus("LoadingÂ€¦", "loading");
+        setFinancialStatementMessage("", "");
+        try {
+            const payload = await apiFetch("/api/reconciliation/financial-statements/preview?" + financialStatementQueryString());
+            renderFinancialStatementPreview(payload);
+        } catch (error) {
+            setFinancialStatementStatus("Preview failed", "error");
+            setFinancialStatementMessage(error.message || "The Financial Statement preview could not be generated.", "error");
+        } finally {
+            el.previewFinancialStatementsButton.disabled = false;
+        }
+    }
     async function previewReport(event) {
         if (event) event.preventDefault();
         if (!el.reportDataset.value || !el.reportGroup.value || !el.reportPeriodStart.value || !el.reportPeriodEnd.value) {
@@ -880,6 +948,7 @@
         el.setupBalancesTab.addEventListener('click', () => showSetupTab('balances'));
         el.reportForm.addEventListener('submit', previewReport);
         el.downloadReportButton.addEventListener('click', downloadReport);
+        el.previewFinancialStatementsButton.addEventListener('click', previewFinancialStatements);
         el.createCategorySetButton.addEventListener('click', createCategorySet);
         el.addCategoryButton.addEventListener('click', addCategory);
         el.saveCategoriesButton.addEventListener('click', saveCategories);

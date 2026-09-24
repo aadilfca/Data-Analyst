@@ -314,6 +314,60 @@ def build_cross_group_check(
     return pd.DataFrame(rows, columns=["month", "left_value", "right_equivalent", "variance", "status"])
 
 
+def build_financial_statement_summary(
+    journal_df: pd.DataFrame,
+    coa_df: pd.DataFrame,
+    period_start: Any,
+    period_end: Any,
+) -> dict[str, Any]:
+    """Aggregate all journal lines by central Financial Statement category.
+
+    This preview deliberately reports transparent net movement (debit minus credit).
+    Statement-specific normal-balance presentation is a later reporting concern.
+    """
+
+    start = pd.Timestamp(period_start)
+    end = pd.Timestamp(period_end)
+    if pd.isna(start) or pd.isna(end) or start > end:
+        raise ValueError("period_start and period_end must form a valid inclusive period")
+    months = _period_labels(start, end)
+    journal = _prepare_journal(journal_df, start, end)
+    coa = _prepare_coa(coa_df)
+    category_by_code = (
+        coa.drop_duplicates("account_code", keep="last")
+        .set_index("account_code")["category"]
+        .to_dict()
+    )
+    journal["category"] = journal["account_code"].map(category_by_code).fillna("")
+    journal["signed_movement"] = journal["debit"] - journal["credit"]
+    mapped = journal.loc[journal["category"].ne("")].copy()
+    if mapped.empty:
+        category_totals = pd.DataFrame(index=pd.Index([], name="category"), columns=[*months, "Total"], dtype=float)
+    else:
+        pivot = mapped.pivot_table(index="category", columns="month", values="signed_movement", aggfunc="sum", fill_value=0.0)
+        category_totals = _reindex_months(pivot.sort_index(), months, "category")
+        category_totals["Total"] = category_totals.sum(axis=1)
+    account_counts = (
+        mapped.groupby("category")["account_code"].nunique().sort_index()
+        if not mapped.empty else pd.Series(dtype=int, name="account_count")
+    )
+    unmapped = journal.loc[journal["category"].eq(""), ["account_code", "account_name", "debit", "credit"]].copy()
+    if not unmapped.empty:
+        unmapped = (unmapped.groupby(["account_code", "account_name"], dropna=False, as_index=False)[["debit", "credit"]].sum())
+        unmapped["net_movement"] = unmapped["debit"] - unmapped["credit"]
+        unmapped = unmapped.sort_values(["account_code", "account_name"])
+    return {
+        "months": months,
+        "category_totals": category_totals,
+        "account_counts": account_counts,
+        "unmapped_accounts": unmapped,
+        "selected_voucher_count": int(journal["voucher_id"].nunique()),
+        "source_line_count": int(len(journal)),
+        "mapped_account_count": int(mapped["account_code"].nunique()),
+        "unmapped_account_count": int(unmapped["account_code"].nunique()) if not unmapped.empty else 0,
+    }
+
+
 def build_group_summary(
     journal_df: pd.DataFrame,
     coa_df: pd.DataFrame,

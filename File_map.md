@@ -30,15 +30,15 @@ This document lists all source files in the project, grouped by directory, with 
 ## Services (`services/`)
 | File | Purpose |
 |------|---------|
-| `services/ledger_group_summary.py` | Pure pandas engine that selects complete vouchers by account code, validates balancing, builds category/month pivots, surfaces transfers and unmapped categories, and optionally derives reconciliation proofs. |
-| `services/ledger_report_source.py` | Read-only adapter that normalizes stored Client Data Bank journal rows and report-scoped Ledger Summary category assignments. |
+| `services/ledger_group_summary.py` | Pure pandas engine that selects complete vouchers by account code, validates balancing, builds category/month pivots, aggregates central Financial Statement categories, surfaces transfers and unmapped categories, and optionally derives reconciliation proofs. |
+| `services/ledger_report_source.py` | Read-only adapter that normalizes stored Client Data Bank journal rows and report-scoped Ledger Summary or central Financial Statement category assignments. |
 | `services/reconciliation_balance_source.py` | Normalizes stored opening/month-end balance inputs and reports missing, duplicate, invalid, or out-of-period reconciliation evidence. |
 | `services/reconciliation_xlsx.py` | OpenPyXL exporter for professional Bank/Cash monthly summaries, schedules, review controls, cross-checks, and reconciliation proofs. |
 | `services/storage_cleanup.py` | PostgreSQL storage preview plus one-transaction, protected-data cleanup for approved logs, retired unlinked rows, deleted upload metadata, stale presence, and expired sessions. |
 ## Routers (`routers/`)
 | File | Purpose |
 |------|---------|
-| `reconciliation.py` | Account groups, report-category sets, standardized balance inputs, report preview/download orchestration, validation, and transactional replacement. |
+| `reconciliation.py` | Account groups, report-category sets, standardized balance inputs, Financial Statement preview, report preview/download orchestration, validation, and transactional replacement. |
 | `clients.py` | Client CRUD (create/list/get/update/soft-delete/restore), unique `client_code` enforcement, and GET/PUT for a client's voucher-prefix configuration (5-way: Cash Payment/Cash Receipt/Bank Payment/Bank Receipt/Journal, `client_voucher_prefixes` table) — new clients are auto-seeded with the 5 defaults. Every route except the bare `GET /api/clients` list is behind `require_admin` (Admin area, Phase 5 of 8) — the list stays open for `client_select.js`. Runs on Postgres (Supabase migration, Phase 4 of 8). |
 | `dashboard.py` | Root/health endpoints and the main dashboard's stats (total uploads, pending verifications, total records, last upload). |
 | `data.py` | Client Data Bank backend: dataset listing, paginated row preview (`get_preview_rows` — search/amount/Sunday/data-quality filters, per-row voucher-line assignment flags, document grouping with subtotal rows), per-upload row listing, dataset/template soft-delete + restore, availability checklist, the per-day coverage calendar (`get_availability_calendar` — Sundays + firm-wide holidays), and the row revision history endpoint. Runs on Postgres (Supabase migration, Phase 5 of 8). |
@@ -133,7 +133,7 @@ This document lists all source files in the project, grouped by directory, with 
 | `test_verification_performance_metrics.py`, `test_verification_dirty_saves.py` | Verify database metrics and Verification's revision-based dirty tracking, save failures, in-flight edits, and duplicate prevention. |
 | `test_templates.py` | Playwright regression tests for Edit Template modal closure and draft-column persistence before explicit Save Template submission. |
 | `test_ledger_group_summary.py`, `test_ledger_report_source.py` | Unit tests for canonical voucher/category summaries, transfers, proofs, source normalization, diagnostics, and dataset selection. |
-| `test_reconciliation.py`, `test_reconciliation_balance_source.py`, `test_reconciliation_reports.py` | Test account-group, balance-input, report-control, preview/download, exact-code validation, transactional replacement, normalization, and completeness behavior. |
+| `test_reconciliation.py`, `test_reconciliation_balance_source.py`, `test_reconciliation_reports.py` | Test account-group, balance-input, report-control, Financial Statement preview, preview/download, exact-code validation, transactional replacement, normalization, and completeness behavior. |
 | `test_reconciliation_xlsx.py` | Tests report workbook structure, formatting, typed values, missing-balance handling, and local Bank/Cash golden movement matching. |
 | `test_pg_pool_retry.py` | Unit tests for `database.py`'s stale-pooled-connection recovery — fake pool/connection/cursor (no live Postgres): `_run_pooled_pg` retries once and succeeds, propagates a non-stale error untouched, gives up after one retry; `_is_stale_pg_connection_error` type+message match; `_getconn_pg_checked` skips a closed connection; the recovery log line fires. |
 

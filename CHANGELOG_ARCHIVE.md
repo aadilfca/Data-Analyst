@@ -6497,3 +6497,11 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Remaining work:** The global quick-navigation manifest still labels Export Customer, Payroll, and Contractor as Coming soon even though their Verification tiles are Ready. That is a small code/manifest correction for the next phase. Each workstream also needs final live-client acceptance with real Account Control mappings and representative date ranges. Treasury payments intentionally remain in Cash/Bank; billing/JV lines remain in the relevant category workstream.
 
 **Scope boundary:** No Financial Statement or Notes implementation is required for this verification closeout. No application code was changed in this documentation phase.
+
+## Financial Statement preview groundwork committed for future use - 2026-09-24
+
+**Scope:** Committed the existing read-only Financial Statement preview as future groundwork. It consumes central Account Control Centre mappings and does not activate statement production, exports, closing logic, or Notes.
+
+**Implementation:** The Reports preview loads active Financial Statement account assignments, aggregates journal movement by category and month, counts mapped accounts, and flags unmapped account activity. Existing Ledger Summary reports and Verification workstreams remain separate.
+
+**Verification:** Python compilation, JavaScript syntax, git diff --check, and the expanded reconciliation regression suite passed: 31 tests. Operational Financial Statement development remains deferred until the Verification workstreams are accepted.

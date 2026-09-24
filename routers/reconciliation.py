@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from database import execute_query_pg, execute_write_pg, log_audit, pg_transaction
 from routers.auth import require_admin
-from services.ledger_group_summary import LedgerBalanceError, build_cross_group_check, build_group_summary
+from services.ledger_group_summary import LedgerBalanceError, build_cross_group_check, build_financial_statement_summary, build_group_summary
 from services.ledger_report_source import load_ledger_report_source
 from services.reconciliation_balance_source import (
     load_reconciliation_balance_source,
@@ -969,8 +969,105 @@ def replace_report_category_assignments(
     }
 
 
+def _build_financial_statement_result(
+    client_id: int,
+    period_start: Any,
+    period_end: Any,
+    *,
+    journal_upload_id: int | None = None,
+    journal_template_id: int | None = None,
+) -> dict[str, Any]:
+    """Build a read-only preview from central Account Control mappings."""
+    _require_active_client(client_id)
+    start, end = _parse_report_period(period_start, period_end)
+    diagnostics: list[dict[str, Any]] = []
+    try:
+        source = load_ledger_report_source(
+            client_id,
+            journal_upload_id=journal_upload_id,
+            journal_template_id=journal_template_id,
+            period_start=start,
+            period_end=end,
+            query_fn=execute_query_pg,
+            account_category_source="financial_statement",
+        )
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    diagnostics.extend(source.diagnostics)
+    summary: dict[str, Any] | None = None
+    if source.ready:
+        try:
+            summary = build_financial_statement_summary(source.journal, source.coa, start, end)
+        except ValueError as error:
+            diagnostics.append(_report_diagnostic("financial_statement_input_error", "error", str(error)))
+
+    unmapped_count = int(summary.get("unmapped_account_count", 0)) if summary else 0
+    if not source.ready or any(item.get("severity") == "error" for item in diagnostics):
+        mapping_status = "Blocked"
+        mapping_message = "The financial statement preview cannot be calculated until the source diagnostics are resolved."
+    elif unmapped_count:
+        mapping_status = "Review"
+        mapping_message = f"{unmapped_count} account code(s) have journal activity but no active Financial Statement category."
+    else:
+        mapping_status = "Ready"
+        mapping_message = "All journal account codes with activity have an active Financial Statement category."
+
+    account_counts = []
+    if summary is not None:
+        account_counts = [
+            {"category": str(category), "account_count": int(count)}
+            for category, count in summary["account_counts"].items()
+        ]
+    preview = {
+        "months": summary["months"] if summary else [],
+        "category_totals": _category_total_records(summary["category_totals"]) if summary else [],
+        "account_counts": account_counts,
+        "unmapped_accounts": _frame_records(summary["unmapped_accounts"]) if summary else [],
+        "selected_voucher_count": summary["selected_voucher_count"] if summary else 0,
+        "source_line_count": summary["source_line_count"] if summary else 0,
+        "mapped_account_count": summary["mapped_account_count"] if summary else 0,
+        "unmapped_account_count": unmapped_count,
+    }
+    return {
+        "client_id": client_id,
+        "period_start": start.date().isoformat(),
+        "period_end": end.date().isoformat(),
+        "source": {
+            "metadata": dict(source.metadata),
+            "diagnostics": diagnostics,
+            "ready": source.ready and not any(item.get("severity") == "error" for item in diagnostics),
+        },
+        "controls": {
+            "financial_statement_mapping": {"status": mapping_status, "message": mapping_message, "unmapped_account_count": unmapped_count},
+        },
+        "blocking_reasons": [item["message"] for item in diagnostics if item.get("severity") == "error"],
+        "preview": preview,
+    }
+
+
 def _public_report_result(result: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in result.items() if not key.startswith("_")}
+
+
+@router.get("/api/reconciliation/financial-statements/preview")
+def preview_financial_statements(
+    client_id: int = Query(..., ge=1),
+    period_start: str = Query(...),
+    period_end: str = Query(...),
+    journal_upload_id: Optional[int] = Query(None, ge=1),
+    journal_template_id: Optional[int] = Query(None, ge=1),
+    session=Depends(require_admin),
+):
+    """Return read-only statement-category totals from Account Control mappings."""
+    return _public_report_result(
+        _build_financial_statement_result(
+            client_id,
+            period_start,
+            period_end,
+            journal_upload_id=journal_upload_id,
+            journal_template_id=journal_template_id,
+        )
+    )
 
 
 @router.get("/api/reconciliation/reports/preview")
