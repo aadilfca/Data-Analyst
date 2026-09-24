@@ -1,4 +1,13 @@
 # Changelog Archive
+## JV configuration retirement and ACC-only workstreams — 2026-09-24
+
+**Scope:** Remove active Journal-prefix configuration and the remaining Local/Import Vendor legacy Account Set fallback. Account Control Centre is now the only Verification routing source for Cash, Bank, vendors, customers, Payroll, and Contractor.
+
+**Implementation:** Removed Journal-prefix defaults/seeding and the voucher-prefix API/editor/navigation. The legacy Client Settings URL remains an informational compatibility page; historical prefix rows/schema are preserved without active reads. Vendor routing continues through the existing resolver seam, now ACC-only.
+
+**Verification:** Updated routing tests; `59` focused Verification/Account Control Centre tests pass, along with Python/JavaScript syntax and `git diff --check`.
+
+Files: routers/verification.py, routers/clients.py, database.py, static/client_settings.html, static/client_settings.js, static/client_context.js, static/index.html, tests/test_verification_account_sets.py.
 
 ## Cash/Bank ACC-only routing â€” 2026-09-24
 

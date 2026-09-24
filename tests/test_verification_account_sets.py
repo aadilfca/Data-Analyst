@@ -13,16 +13,12 @@ from routers import verification
 
 class TreasuryRoutingTests(unittest.TestCase):
     def test_cash_and_bank_require_account_control_assignments(self):
-        with patch.object(verification, "get_account_control_routing", return_value=None), patch.object(
-            verification, "get_published_account_set_leaf_accounts"
-        ) as legacy:
+        with patch.object(verification, "get_account_control_routing", return_value=None):
             cash_routing = verification.get_treasury_routing(7, "cash")
             bank_routing = verification.get_treasury_routing(7, "bank")
 
         self.assertEqual(cash_routing, {"mode": "not_configured", "workstream": "cash", "account_codes": set()})
         self.assertEqual(bank_routing, {"mode": "not_configured", "workstream": "bank", "account_codes": set()})
-        legacy.assert_not_called()
-
     def test_cashbook_discovery_reports_setup_required_without_an_assignment(self):
         with patch.object(verification, "execute_query_pg", return_value=[{"id": 7}]), patch.object(
             verification, "get_account_control_routing", return_value=None
@@ -187,23 +183,16 @@ class SimplifiedAccountControlRoutingTests(unittest.TestCase):
 
     def test_simplified_cash_assignments_are_the_only_treasury_source(self):
         assigned = {"mode": "account_control", "account_codes": {"10-15-115-10-0001"}}
-        with patch.object(verification, "get_account_control_routing", return_value=assigned), patch.object(
-            verification, "get_published_account_set_leaf_accounts"
-        ) as legacy:
+        with patch.object(verification, "get_account_control_routing", return_value=assigned):
             routing = verification.get_treasury_routing(7, "cash")
 
         self.assertIs(routing, assigned)
-        legacy.assert_not_called()
     def test_simplified_vendor_assignments_take_priority_over_legacy_sets(self):
         assigned = {"mode": "account_control", "account_codes": {"20-15-50-0001"}}
-        with patch.object(verification, "get_account_control_routing", return_value=assigned), patch.object(
-            verification, "get_published_account_set_leaf_accounts"
-        ) as legacy:
+        with patch.object(verification, "get_account_control_routing", return_value=assigned):
             routing = verification.get_local_vendor_routing(7)
 
         self.assertIs(routing, assigned)
-        legacy.assert_not_called()
-
     def test_account_control_treasury_priority_excludes_vendor_voucher(self):
         voucher = {"voucher_id": "JV-1", "rows": [
             {"account_code": "20-15-50-0001"},
@@ -291,17 +280,16 @@ class VerificationTableAmountTests(unittest.TestCase):
 
 
 class LocalVendorRoutingFoundationTests(unittest.TestCase):
-    def test_local_vendor_requires_a_published_set(self):
-        with patch.object(verification, 'get_published_account_set_leaf_accounts', return_value=None):
+    def test_local_vendor_requires_an_account_control_assignment(self):
+        with patch.object(verification, 'get_account_control_routing', return_value=None):
             routing = verification.get_local_vendor_routing(7)
         self.assertEqual(routing['mode'], 'not_configured')
 
-    def test_local_vendor_uses_published_account_codes(self):
-        published = {'set_key': 'local_vendors', 'version_number': 1, 'accounts': [{'account_code': '20-15-50-0001'}]}
-        with patch.object(verification, 'get_published_account_set_leaf_accounts', return_value=published):
+    def test_local_vendor_uses_account_control_codes(self):
+        assigned = {'mode': 'account_control', 'workstream': 'local_vendor', 'account_codes': {'20-15-50-0001'}}
+        with patch.object(verification, 'get_account_control_routing', return_value=assigned):
             routing = verification.get_local_vendor_routing(7)
-        self.assertEqual(routing['account_codes'], {'20-15-50-0001'})
-
+        self.assertIs(routing, assigned)
     def test_treasury_priority_excludes_vendor_voucher(self):
         voucher = {'voucher_id': 'JV-1', 'rows': [{'account_code': '20-15-50-0001'}, {'account_code': '10-15-115-10-0001'}]}
         self.assertFalse(verification.is_local_vendor_voucher(voucher, '20-15-50-0001', {'mode': 'account_set', 'account_codes': {'10-15-115-10-0001'}}, {'mode': 'account_set', 'account_codes': set()}))
@@ -313,18 +301,17 @@ class LocalVendorRoutingFoundationTests(unittest.TestCase):
 class ImportVendorRoutingFoundationTests(unittest.TestCase):
     import_code = '20-15-45-10-0001'
 
-    def test_import_vendor_requires_a_published_set(self):
-        with patch.object(verification, 'get_published_account_set_leaf_accounts', return_value=None):
+    def test_import_vendor_requires_an_account_control_assignment(self):
+        with patch.object(verification, 'get_account_control_routing', return_value=None):
             routing = verification.get_import_vendor_routing(7)
         self.assertEqual(routing['mode'], 'not_configured')
-        self.assertEqual(routing['set_key'], 'import_vendors')
+        self.assertEqual(routing['workstream'], 'import_vendor')
 
-    def test_import_vendor_uses_its_own_published_account_codes(self):
-        published = {'set_key': 'import_vendors', 'version_number': 1, 'accounts': [{'account_code': self.import_code}]}
-        with patch.object(verification, 'get_published_account_set_leaf_accounts', return_value=published):
+    def test_import_vendor_uses_account_control_codes(self):
+        assigned = {'mode': 'account_control', 'workstream': 'import_vendor', 'account_codes': {self.import_code}}
+        with patch.object(verification, 'get_account_control_routing', return_value=assigned):
             routing = verification.get_import_vendor_routing(7)
-        self.assertEqual(routing['account_codes'], {self.import_code})
-
+        self.assertIs(routing, assigned)
     def test_import_vendor_jv_is_eligible_but_treasury_jv_is_excluded(self):
         cash = {'mode': 'account_set', 'account_codes': {'10-15-115-10-0001'}}
         bank = {'mode': 'account_set', 'account_codes': {'10-15-115-15-0001'}}
@@ -337,13 +324,13 @@ class ImportVendorRoutingFoundationTests(unittest.TestCase):
             self.import_code, cash, bank,
         ))
 
-    def test_local_and_import_vendor_sets_remain_separate(self):
-        def published(_client_id, set_key):
-            return {'set_key': set_key, 'version_number': 1, 'accounts': [{'account_code': '20-15-50-0001' if set_key == 'local_vendors' else self.import_code}]}
-        with patch.object(verification, 'get_published_account_set_leaf_accounts', side_effect=published):
+    def test_local_and_import_vendor_assignments_remain_separate(self):
+        def assigned(_client_id, workstream):
+            code = '20-15-50-0001' if workstream == 'local_vendor' else self.import_code
+            return {'mode': 'account_control', 'workstream': workstream, 'account_codes': {code}}
+        with patch.object(verification, 'get_account_control_routing', side_effect=assigned):
             self.assertEqual(verification.get_local_vendor_routing(7)['account_codes'], {'20-15-50-0001'})
             self.assertEqual(verification.get_import_vendor_routing(7)['account_codes'], {self.import_code})
-
 
 class LocalVendorWorkflowTests(unittest.TestCase):
     vendor_code = '20-15-50-0001'
@@ -601,13 +588,9 @@ class LocalVendorUiContractTests(unittest.TestCase):
 class AdditionalWorkstreamTests(unittest.TestCase):
     def test_new_workstream_routing_uses_account_control_without_legacy_fallback(self):
         assigned = {'mode': 'account_control', 'source': 'account_control', 'workstream': 'payroll', 'account_codes': {'50-75-0001'}, 'account_names': {}}
-        with patch.object(verification, 'get_account_control_routing', return_value=assigned), patch.object(
-            verification, 'get_published_account_set_leaf_accounts'
-        ) as published:
+        with patch.object(verification, 'get_account_control_routing', return_value=assigned):
             routing = verification.get_non_treasury_routing(7, 'payroll')
         self.assertEqual(routing['account_codes'], {'50-75-0001'})
-        published.assert_not_called()
-
     def test_new_workstream_voucher_excludes_treasury_legs(self):
         cash = {'mode': 'account_control', 'account_codes': {'10-15-115-10-0001'}}
         bank = {'mode': 'account_control', 'account_codes': {'10-15-115-15-0001'}}

@@ -178,33 +178,21 @@
                  the values here are only the pre-JS default. -->
             <a href="/static/index.html" class="back-link" data-nav-up-link>← Back to Dashboard</a>
             <h1>⚙️ Client Settings</h1>
-            <p id="clientNameHeading">Journal voucher prefix configuration</p>
+            <p id="clientNameHeading">Account Control Centre configuration</p>
         </header>
 
-        <!-- Journal prefixes -->
+        <!-- Retired configuration notice. Keep this direct-bookmark page informative without
+             exposing a second source of truth for Verification routing. -->
         <div class="settings-group">
-            <h3>📘 Journal</h3>
-            <p class="group-hint">Prefixes used to identify Journal vouchers (e.g. JV).</p>
-            <div id="journalPrefixList" class="prefix-chip-list"></div>
-            <div class="prefix-input-row">
-                <input type="text" id="journalPrefixInput" placeholder="Add a prefix, e.g. JV">
-                <button type="button" id="journalAddBtn" class="prefix-add-btn">Add</button>
-            </div>
-        </div>
-
-        <!-- Read-only guidance keeps Cash/Bank configuration in one central place. -->
-        <div class="settings-group">
-            <h3>📖 Cash and Bank configuration</h3>
+            <h3>Account-driven Verification configuration</h3>
+            <p class="group-hint">Voucher-prefix configuration is retired. Verification workstreams are assigned centrally in Account Control Centre.</p>
             <ul class="explainer-list">
-                <li><strong>Cash and Bank accounts are assigned only in Account Control Centre.</strong> Use its Verification accounts tab to map Trial Balance accounts to Cash vouchers or Bank vouchers.</li>
-                <li>The Account Control Centre contains the voucher-selection notes, including the payment and receipt debit/credit treatment.</li>
-                <li><strong>Journal (JV) has no Payment/Receipt split.</strong> Every journal entry is simply tagged as a Journal Voucher, regardless of debit or credit.</li>
+                <li>Assign Cash vouchers, Bank vouchers, Local vendor, Import vendor, Export customer, Payroll, and Contractor accounts in the Verification accounts tab.</li>
+                <li>Cash and Bank voucher selection uses the account codes assigned there; no CPV, BPV, CRV, BRV, or JV prefix setting is required.</li>
+                <li>Existing voucher-prefix rows are retained only for historical compatibility.</li>
             </ul>
+            <p><a href="/static/account_control_center.html">Open Account Control Centre</a></p>
         </div>
-
-        <div id="prefixValidationMessage"></div>
-
-        <button type="button" id="saveSettingsBtn">Save Settings</button>
 
         <div id="settingsStatus" class="upload-status" style="margin-top:16px; display:none;"></div>
     </div>

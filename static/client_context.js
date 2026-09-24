@@ -212,15 +212,6 @@ const NAV_MANIFEST = [
                     { label: 'Storage Cleanup', url: '/static/storage_cleanup.html', state: 'ready', keywords: ['database size', 'storage', 'cleanup', 'maintenance'] },
                 ]
             },
-            // Client-scoped, not firm-level: this is the selected client's own voucher-prefix
-            // config, so it sits in every user's Administration group alongside Setup rather than
-            // behind the Admin gear. `url` is a function, not a string, because the target needs a
-            // ?client_id= resolved from the session at render time — see resolveNavItemUrl() below.
-            {
-                label: 'Client Settings', url: () => getClientSettingsUrl(), state: 'ready',
-                module: 'Client Settings',
-                keywords: ['voucher prefix', 'prefixes', 'cash payment', 'bank receipt', 'client config'],
-            },
             {
                 label: 'Account Control Centre', url: '/static/account_control_center.html', state: 'ready',
                 module: 'Account Control Centre',

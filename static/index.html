@@ -104,17 +104,6 @@
                     <p>Manage columns and templates</p>
                 </div>
 
-                <!-- Client Settings: a second, contextual entry point into the selected client's
-                     own voucher-prefix config. The clients.html cogwheel (firm-level Admin area)
-                     stays as-is; this one is client-scoped, so it resolves ?client_id= from the
-                     session at click time (see getClientSettingsUrl() in client_context.js) rather
-                     than carrying a static href. Navigation wired in script.js, no inline onclick. -->
-                <div class="module-card admin-card" id="clientSettingsCard">
-                    <div class="module-icon">⚙️</div>
-                    <h3>Client Settings</h3>
-                    <p>Voucher prefixes for the selected client</p>
-                </div>
-
                 <!-- Manage Clients, Settings, and Users cards removed (Admin area, Phase 8 of 8,
                      FINAL) - the Admin area (Settings tabs incl. Manage Clients/Manage Users) is
                      now reached exclusively via the admin-only gear icon on client_select.html,

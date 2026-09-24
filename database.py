@@ -255,15 +255,10 @@ def diff_row_data(old_data, new_data):
 
 
 # Historic Cash/Bank categories remain listed solely so existing database rows are preserved
-# when a Journal prefix is updated. They are not seeded, exposed, or used by verification.
+# because voucher-prefix configuration is retired. Historical rows remain readable for compatibility but are not seeded, exposed, or used by Verification.
 VOUCHER_PREFIX_CATEGORIES = ("Cash Payment", "Cash Receipt", "Bank Payment", "Bank Receipt", "Journal")
 
-# New clients receive only the Journal prefix. Cash and Bank routing is configured exclusively
-# through Account Control Centre.
-DEFAULT_VOUCHER_PREFIXES = {
-    "Journal": ["JV"],
-}
-
+# Voucher-prefix rows are retained for historical compatibility only; Verification is account-driven.
 
 def get_client_voucher_prefixes(client_id):
     """
@@ -1350,25 +1345,7 @@ def init_db():
             create_index_with_retry(conn, "CREATE INDEX IF NOT EXISTS idx_client_voucher_prefixes_client ON client_voucher_prefixes (client_id)")
         print("✅ Created client_voucher_prefixes table")
 
-        # Seed clients with zero voucher-prefix rows using the 5-way defaults (covers clients
-        # created before this migration ran; create_client() in routers/clients.py also seeds
-        # new clients directly at creation time, so this is a defensive backfill, not the
-        # primary seeding path for new clients going forward).
-        existing_clients = conn.execute("SELECT id FROM clients").fetchall()
-        for client_row in existing_clients:
-            cid = client_row[0]
-            has_rows = conn.execute(
-                "SELECT 1 FROM client_voucher_prefixes WHERE client_id = ? LIMIT 1", (cid,)
-            ).fetchone()
-            if not has_rows:
-                for category, prefixes in DEFAULT_VOUCHER_PREFIXES.items():
-                    for prefix in prefixes:
-                        conn.execute(
-                            "INSERT INTO client_voucher_prefixes (client_id, category, prefix) VALUES (?, ?, ?)",
-                            (cid, category, prefix)
-                        )
-        print("✅ Seeded default voucher prefixes for clients with none configured")
-
+        # Do not seed voucher prefixes. Verification discovers every workstream from Account Control Centre assignments.
         # ---------- SAVED COLUMN MAPPINGS (Phase A1 of 3: save column mapping feature) ----------
         # Remembers the Excel-column -> template-column mapping a user confirmed for a given
         # client+template, so the Upload page can auto-apply it next time instead of the user

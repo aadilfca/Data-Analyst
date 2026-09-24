@@ -25,7 +25,7 @@ from rapidfuzz import fuzz, utils as fuzz_utils
 # logic already used by import's compare_transactions, applied at query time.
 from routers.import_export import get_document_group_id
 from routers.templates import get_cached_template_columns
-from routers.account_control_center import get_published_account_set_leaf_accounts
+
 # Create Vendor Bill from GRN (Phase 1): reused as-is rather than duplicated, since this
 # feature must build a client_data row that behaves identically to a real import - same
 # rationale as the cross-router imports below.
@@ -189,16 +189,8 @@ def get_account_control_routing(client_id: int, workstream: str) -> Optional[dic
 
 
 def _routing_uses_account_codes(routing: dict) -> bool:
-    """Account-code matching is shared by simplified assignments and legacy published sets."""
+    """Account-code matching is shared by configured Verification assignments."""
     return routing.get("mode") in ("account_control", "account_set")
-
-
-def get_published_account_set_routing(client_id: int, set_key: str) -> dict[str, Any]:
-    """Return exact published Account Set codes, or an explicit unconfigured result."""
-    published = get_published_account_set_leaf_accounts(client_id, set_key)
-    if not published:
-        return {'mode': 'not_configured', 'set_key': set_key, 'account_codes': set()}
-    return {'mode': 'account_set', 'set_key': published['set_key'], 'account_codes': {str(account['account_code']).strip() for account in published['accounts']}, 'version_number': published['version_number']}
 
 
 def get_treasury_routing(client_id: int, category_group: Optional[str]) -> dict[str, Any]:
@@ -209,14 +201,16 @@ def get_treasury_routing(client_id: int, category_group: Optional[str]) -> dict[
             return assigned
     return {'mode': 'not_configured', 'workstream': category_group, 'account_codes': set()}
 def get_local_vendor_routing(client_id: int) -> dict[str, Any]:
-    """Prefer simplified Local Vendor assignments, with legacy Account Set compatibility."""
-    return get_account_control_routing(client_id, 'local_vendor') or get_published_account_set_routing(client_id, 'local_vendors')
-
+    """Resolve Local Vendor accounts from Account Control Centre only."""
+    return get_account_control_routing(client_id, 'local_vendor') or {
+        'mode': 'not_configured', 'workstream': 'local_vendor', 'account_codes': set()
+    }
 
 def get_import_vendor_routing(client_id: int) -> dict[str, Any]:
-    """Prefer simplified Import Vendor assignments, with legacy Account Set compatibility."""
-    return get_account_control_routing(client_id, 'import_vendor') or get_published_account_set_routing(client_id, 'import_vendors')
-
+    """Resolve Import Vendor accounts from Account Control Centre only."""
+    return get_account_control_routing(client_id, 'import_vendor') or {
+        'mode': 'not_configured', 'workstream': 'import_vendor', 'account_codes': set()
+    }
 
 NON_TREASURY_WORKSTREAMS = ('local_vendor', 'import_vendor', 'export_customer', 'payroll', 'contractor')
 NON_TREASURY_WORKSTREAM_LABELS = {
@@ -253,20 +247,14 @@ NON_TREASURY_PREVIEW_RULES = {
 
 
 def get_non_treasury_routing(client_id: int, workstream: str) -> dict[str, Any]:
-    """Resolve account-control routing for JV/billing workstreams; only legacy vendors have fallback sets."""
+    """Resolve every non-Treasury workstream from Account Control Centre only."""
     if workstream == 'local_vendor':
         return get_local_vendor_routing(client_id)
     if workstream == 'import_vendor':
         return get_import_vendor_routing(client_id)
-    assigned = get_account_control_routing(client_id, workstream)
-    if assigned:
-        return assigned
-    legacy_key = {'local_vendor': 'local_vendors', 'import_vendor': 'import_vendors'}.get(workstream)
-    return get_published_account_set_routing(client_id, legacy_key) if legacy_key else {
-        'mode': 'not_configured', 'set_key': workstream, 'account_codes': set()
+    return get_account_control_routing(client_id, workstream) or {
+        'mode': 'not_configured', 'workstream': workstream, 'account_codes': set()
     }
-
-
 def is_non_treasury_voucher(voucher: dict, account_code: str, cash_routing: dict, bank_routing: dict) -> bool:
     """A configured JV/billing account is eligible only when Treasury does not own the voucher."""
     return bool(account_code) and any(row.get('account_code') == account_code for row in voucher.get('rows', [])) and not voucher_contains_treasury_leg(voucher, cash_routing, bank_routing)
