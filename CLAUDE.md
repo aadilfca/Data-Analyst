@@ -35,7 +35,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → simplified client/account mapping foundation for Verification, Financial Statements, and Notes, alongside legacy Account Set APIs. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
-- static/account_control_center.html, static/account_control_center.js -> guided client Account Set workstream setup, leaf-account previews, publication, and revisions. See CHANGELOG_ARCHIVE.md.
+- static/account_control_center.html, static/account_control_center.js -> simplified Verification Accounts grid with Financial Statement and Notes placeholders; legacy Account Set APIs remain backend-compatible. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
@@ -285,6 +285,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-24: Local Vendor date selection is now isolated from Cash/Bank, defaulting to its own latest eligible JV period.
 - 2026-09-24: Import Vendor Verification UI, quick navigation, separate date state, and Treasury-safe session entry are now available.
 - 2026-09-24: Simplified Account Control Centre Phase 1 added one client/account assignment foundation for Verification, Financial Statements, and Notes; legacy Account Sets remain compatible.
+- 2026-09-24: Account Control Centre Phase 2 added the Verification Accounts grid with leaf saves, parent-to-leaf application, account search, and Financial Statement/Notes placeholders.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

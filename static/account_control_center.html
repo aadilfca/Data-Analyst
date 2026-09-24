@@ -4,135 +4,38 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Account Control Centre</title>
-    <link rel="stylesheet" href="/static/style.css?v=27">
-    <style>
-        .acc-page-header { margin:0 0 18px; }
-        .acc-eyebrow { display:block; color:#2563eb; font-size:11px; font-weight:800; letter-spacing:.09em; text-transform:uppercase; }
-        .acc-page-header h1 { margin:5px 0 7px; color:#172554; font-size:27px; }
-        .acc-page-header p { max-width:850px; margin:0; color:#475569; line-height:1.55; }
-        .acc-status { display:none; margin-bottom:16px; padding:11px 14px; border:1px solid #bfdbfe; border-radius:8px; background:#eff6ff; color:#1e40af; }
-        .acc-status.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
-        .acc-status.success { border-color:#bbf7d0; background:#f0fdf4; color:#166534; }
-        .acc-readiness { display:flex; justify-content:space-between; align-items:center; gap:18px; margin-bottom:18px; padding:17px 20px; border:1px solid #bae6fd; border-radius:12px; background:linear-gradient(120deg,#eff6ff,#f0fdf4); }
-        .acc-readiness.error { border-color:#fde68a; background:#fffbeb; }
-        .acc-readiness-title { display:block; color:#0f172a; font-size:14px; font-weight:800; }
-        .acc-readiness-copy { display:block; margin-top:3px; color:#475569; font-size:13px; }
-        .acc-readiness-stat { flex:0 0 auto; color:#166534; font-size:12px; font-weight:800; text-align:right; }
-        .acc-layout { display:grid; grid-template-columns:minmax(300px,.9fr) minmax(610px,2fr); gap:20px; align-items:start; }
-        .acc-card, .acc-workspace { background:#fff; border:1px solid #e2e8f0; border-radius:14px; box-shadow:0 2px 10px rgba(15,23,42,.05); padding:20px; }
-        .acc-card h2, .acc-workspace h2 { margin:0 0 5px; color:#1e293b; font-size:17px; }
-        .acc-hint { margin:0 0 14px; color:#64748b; font-size:13px; line-height:1.5; }
-        .acc-library-heading { display:flex; justify-content:space-between; gap:12px; align-items:baseline; margin:22px 0 7px; padding-top:17px; border-top:1px solid #e2e8f0; }
-        .acc-library-heading h3 { margin:0; color:#334155; font-size:13px; }
-        .acc-library-heading span { color:#94a3b8; font-size:11px; }
-        .acc-starter-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
-        .acc-starter-card { position:relative; min-height:104px; padding:12px; border:1px solid #dbeafe; border-radius:10px; background:#f8fbff; text-align:left; }
-        .acc-starter-card:hover { border-color:#60a5fa; box-shadow:0 2px 7px rgba(37,99,235,.11); }
-        .acc-starter-card h3 { margin:0 0 4px; color:#1e3a8a; font-size:13px; }
-        .acc-starter-card p { min-height:32px; margin:0 0 9px; color:#64748b; font-size:11px; line-height:1.35; }
-        .acc-starter-status { display:inline-block; margin-bottom:8px; border-radius:999px; padding:3px 7px; background:#e2e8f0; color:#475569; font-size:10px; font-weight:800; text-transform:uppercase; }
-        .acc-starter-status.draft { background:#fef3c7; color:#92400e; }
-        .acc-starter-status.published { background:#dcfce7; color:#166534; }
-        .acc-card-btn, .acc-btn { border:1px solid #93c5fd; border-radius:6px; background:#fff; color:#1d4ed8; cursor:pointer; font-size:12px; font-weight:800; padding:7px 10px; }
-        .acc-card-btn:hover:not(:disabled), .acc-btn:hover:not(:disabled) { background:#eff6ff; }
-        .acc-btn.primary { border-color:#2563eb; background:#2563eb; color:#fff; }
-        .acc-btn.primary:hover:not(:disabled) { background:#1d4ed8; }
-        .acc-btn.publish { border-color:#15803d; background:#15803d; color:#fff; }
-        .acc-btn.publish:hover:not(:disabled) { background:#166534; }
-        .acc-btn:disabled { cursor:not-allowed; opacity:.55; }
-        .acc-set-list { display:flex; flex-direction:column; gap:7px; margin:10px 0 14px; }
-        .acc-set-item { width:100%; text-align:left; border:1px solid #e2e8f0; border-radius:8px; background:#fff; padding:10px 11px; cursor:pointer; }
-        .acc-set-item:hover, .acc-set-item.selected { border-color:#60a5fa; background:#eff6ff; }
-        .acc-set-name { display:block; color:#1e293b; font-weight:800; font-size:12px; }
-        .acc-set-meta { display:block; margin-top:3px; color:#64748b; font-size:11px; }
-        .acc-workspace-empty { display:flex; flex-direction:column; justify-content:center; min-height:610px; padding:0 12%; text-align:center; }
-        .acc-workspace-empty h2 { margin-bottom:8px; font-size:22px; }
-        .acc-workspace-empty p { margin:0; color:#64748b; line-height:1.55; }
-        .acc-workspace-empty strong { color:#1d4ed8; }
-        .acc-create-workspace { max-width:620px; margin:0 auto; padding:22px 5px; }
-        .acc-create-workspace .acc-step-label { margin-bottom:10px; }
-        .acc-step-label { color:#2563eb; font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
-        .acc-editor-head { display:flex; justify-content:space-between; gap:16px; align-items:start; }
-        .acc-version-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:14px 0; }
-        .acc-version-tab { border:1px solid #cbd5e1; border-radius:999px; background:#fff; color:#475569; cursor:pointer; padding:4px 9px; font-size:11px; font-weight:800; }
-        .acc-version-tab.selected { background:#1d4ed8; border-color:#1d4ed8; color:#fff; }
-        .acc-badge { display:inline-block; border-radius:999px; padding:4px 8px; background:#f1f5f9; color:#475569; font-size:11px; font-weight:800; text-transform:capitalize; white-space:nowrap; }
-        .acc-badge.published { background:#dcfce7; color:#166534; }
-        .acc-badge.draft { background:#fef3c7; color:#92400e; }
-        .acc-lifecycle { display:flex; gap:8px; margin:16px 0; }
-        .acc-lifecycle span { flex:1; border-radius:7px; padding:8px; background:#f8fafc; color:#64748b; font-size:11px; font-weight:700; text-align:center; }
-        .acc-lifecycle span.active { background:#dbeafe; color:#1d4ed8; }
-        .acc-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-        .acc-field { display:flex; flex-direction:column; gap:5px; }
-        .acc-field.full { grid-column:1 / -1; }
-        .acc-field label { color:#334155; font-size:12px; font-weight:800; }
-        .acc-field input, .acc-field textarea { box-sizing:border-box; width:100%; border:1px solid #cbd5e1; border-radius:7px; padding:9px; font:inherit; font-size:13px; }
-        .acc-field textarea { min-height:64px; resize:vertical; }
-        .acc-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:15px; }
-        .acc-source, .acc-selection-summary { margin:14px 0; padding:11px 13px; border-left:3px solid #60a5fa; background:#f8fafc; color:#475569; font-size:12px; line-height:1.45; }
-        .acc-selection-summary { border-left-color:#22c55e; background:#f0fdf4; }
-        .acc-section-title { margin:22px 0 6px; color:#1e293b; font-size:14px; }
-        .acc-selector-list { display:flex; flex-wrap:wrap; gap:7px; min-height:28px; }
-        .acc-selector { display:inline-flex; align-items:center; gap:6px; border:1px solid #bfdbfe; border-radius:999px; background:#eff6ff; color:#1e40af; padding:4px 7px 4px 9px; font-size:12px; }
-        .acc-selector.exclude { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
-        .acc-selector button { border:0; background:transparent; color:inherit; cursor:pointer; font-size:15px; line-height:1; padding:0 1px; }
-        .acc-tree-tools { display:flex; justify-content:space-between; gap:12px; align-items:center; margin:14px 0 8px; }
-        .acc-tree-tools input { width:100%; max-width:290px; border:1px solid #cbd5e1; border-radius:7px; padding:8px 9px; font-size:13px; }
-        .acc-tree-wrap, .acc-preview-wrap { overflow:auto; max-height:360px; border:1px solid #e2e8f0; border-radius:8px; }
-        .acc-table { width:100%; border-collapse:collapse; font-size:12px; }
-        .acc-table th, .acc-table td { border-bottom:1px solid #e2e8f0; padding:8px 9px; text-align:left; vertical-align:middle; }
-        .acc-table th { position:sticky; top:0; background:#f8fafc; color:#64748b; font-size:10px; letter-spacing:.04em; text-transform:uppercase; z-index:1; }
-        .acc-table tr:last-child td { border-bottom:0; }
-        .acc-table tr.acc-parent td { background:#f8fafc; font-weight:600; }
-        .acc-tree-code { color:#334155; font-family:Consolas,monospace; white-space:nowrap; }
-        .acc-tree-name { color:#475569; min-width:180px; }
-        .acc-row-actions { display:flex; flex-wrap:wrap; gap:4px; }
-        .acc-mini-btn { border:1px solid #bfdbfe; border-radius:5px; background:#fff; color:#1d4ed8; cursor:pointer; font-size:10px; font-weight:800; padding:4px 6px; white-space:nowrap; }
-        .acc-mini-btn.exclude { border-color:#fecaca; color:#b91c1c; }
-        .acc-empty { color:#64748b; font-size:13px; padding:16px 0; }
-        .acc-preview-count { margin-left:auto; color:#475569; font-size:12px; font-weight:800; }
-        @media (max-width:980px) { .acc-layout { grid-template-columns:1fr; } .acc-workspace-empty { min-height:250px; } }
-        @media (max-width:620px) { .acc-starter-grid, .acc-form-grid { grid-template-columns:1fr; } .acc-field.full { grid-column:auto; } .acc-editor-head, .acc-tree-tools, .acc-readiness { display:block; } .acc-readiness-stat, .acc-preview-count { display:block; margin:8px 0 0; text-align:left; } .acc-lifecycle { display:block; } .acc-lifecycle span { display:block; margin-bottom:5px; } }
-    </style>
+    <link rel="stylesheet" href="/static/style.css?v=28">
 </head>
 <body data-nav-module="Account Control Centre" data-nav-parent="setup.html">
     <nav class="navbar"><div class="nav-container"><div id="navLeft"></div><div class="nav-client" id="clientControl"></div><div class="nav-user"></div></div></nav>
-    <main class="main-container">
-        <header class="acc-page-header"><span class="acc-eyebrow">Client configuration</span><h1>Account Control Centre</h1><p>Define account sets once from the Trial Balance, then reuse them in verification, reporting, financial statements, and notes as those modules are connected.</p></header>
-        <div id="accStatus" class="acc-status" role="status"></div>
-        <div id="accAdminWarning" class="acc-status error" style="display:none;">Only an administrator can manage Account Sets.</div>
-        <section id="accReadiness" class="acc-readiness"><div><span class="acc-readiness-title">Checking Trial Balance readiness...</span><span class="acc-readiness-copy">Account Sets always use the latest classified Trial Balance.</span></div><span class="acc-readiness-stat">Loading</span></section>
-        <div class="acc-layout">
-            <aside class="acc-card">
-                <h2>Set up workstreams</h2><p class="acc-hint">Start with a common audit workstream or create a flexible custom Account Set.</p>
-                <div id="accStarterGrid" class="acc-starter-grid"></div>
-                <div class="acc-library-heading"><h3>Your Account Set library</h3><span>Reusable across future modules</span></div>
-                <div id="accSetList" class="acc-set-list"></div>
-                <button id="accNewSetBtn" type="button" class="acc-btn">+ Create custom Account Set</button>
-            </aside>
-            <section class="acc-workspace">
-                <div id="accEmptyEditor" class="acc-workspace-empty"><h2>Choose a workstream to begin</h2><p>Select <strong>Set up</strong> on the left for Cash, Bank, Vendors, Customers, Payroll or Contractors. You can also create any custom Account Set your client needs.</p></div>
-                <div id="accCreatePanel" class="acc-create-workspace" hidden>
-                    <span class="acc-step-label">Step 1 of 3 ? identify the account set</span><h2 id="accCreateTitle">Create an Account Set</h2><p class="acc-hint">Name the business purpose clearly. The stable key is retained for future module connections.</p>
-                    <form id="accCreateForm"><div class="acc-form-grid"><div class="acc-field full"><label for="accNewName">Account Set name</label><input id="accNewName" maxlength="120" required placeholder="e.g. Cash accounts"></div><div class="acc-field full"><label for="accNewKey">Stable system key</label><input id="accNewKey" maxlength="80" required placeholder="e.g. cash_accounts"></div><div class="acc-field full"><label for="accNewDescription">Business purpose</label><textarea id="accNewDescription" maxlength="500" placeholder="Describe when this Account Set should be used"></textarea></div></div><div class="acc-actions"><button type="submit" class="acc-btn primary">Continue to account selection</button><button id="accCancelCreateBtn" type="button" class="acc-btn">Cancel</button></div></form>
-                </div>
-                <div id="accEditor" hidden>
-                    <div class="acc-editor-head"><div><span class="acc-step-label">Account Set workspace</span><h2 id="accEditorTitle">Account Set</h2><p id="accEditorKey" class="acc-hint"></p></div><span id="accVersionStatus" class="acc-badge"></span></div>
-                    <div class="acc-lifecycle"><span class="active">1 ? Define accounts</span><span>2 ? Preview leaf accounts</span><span>3 ? Publish version</span></div>
-                    <div id="accVersionTabs" class="acc-version-tabs"></div>
-                    <div id="accDraftFields" class="acc-form-grid"><div class="acc-field full"><label for="accName">Account Set name</label><input id="accName" maxlength="120"></div><div class="acc-field full"><label for="accDescription">Business purpose</label><textarea id="accDescription" maxlength="500"></textarea></div></div>
-                    <div id="accSourceInfo" class="acc-source"></div><div id="accSelectionSummary" class="acc-selection-summary"></div><div class="acc-actions" id="accVersionActions"></div>
-                    <h3 class="acc-section-title">Select the accounts that belong here</h3><p class="acc-hint">Use a family for a complete branch, or a single leaf account for an exception. Exclusions always win.</p>
-                    <div id="accSelectorList" class="acc-selector-list"></div>
-                    <div class="acc-tree-tools"><input id="accAccountFilter" type="search" placeholder="Search account code or name"><span id="accTreeCount" class="acc-preview-count"></span></div>
-                    <div class="acc-tree-wrap"><table class="acc-table"><thead><tr><th>Code</th><th>Account</th><th>Add to this set</th></tr></thead><tbody id="accAccountTree"></tbody></table></div>
-                    <div class="acc-tree-tools"><h3 class="acc-section-title">Review resolved leaf accounts</h3><span id="accPreviewCount" class="acc-preview-count"></span></div>
-                    <div class="acc-preview-wrap"><table class="acc-table"><thead><tr><th>Code</th><th>Account</th><th>Selection basis</th></tr></thead><tbody id="accPreviewTable"></tbody></table></div>
-                </div>
-            </section>
-        </div>
+    <main class="main-container acc2-page">
+        <header class="acc2-header">
+            <span class="acc2-eyebrow">Client configuration</span>
+            <h1>Account Control Centre</h1>
+            <p>Assign each Trial Balance account to the verification, financial statement, and notes workstream that will use it.</p>
+        </header>
+        <div id="accStatus" class="acc2-status" role="status" aria-live="polite"></div>
+        <div id="accAdminWarning" class="acc2-status error" hidden>Only an administrator can manage Account Control Centre assignments.</div>
+        <nav class="acc2-tabs" role="tablist" aria-label="Account Control Centre sections">
+            <button type="button" class="acc2-tab active" id="accTabVerification" data-acc-tab="verification" role="tab" aria-selected="true">Verification accounts</button>
+            <button type="button" class="acc2-tab" id="accTabFinancial" data-acc-tab="financial" role="tab" aria-selected="false">Financial Statement accounts <span>Next phase</span></button>
+            <button type="button" class="acc2-tab" id="accTabNotes" data-acc-tab="notes" role="tab" aria-selected="false">Notes to Financial Statements <span>Next phase</span></button>
+        </nav>
+        <section id="accVerificationPanel" class="acc2-panel" role="tabpanel" aria-labelledby="accTabVerification">
+            <div class="acc2-panel-head">
+                <div><h2>Verification accounts</h2><p>Choose the verification sub-module for each account head. Selecting a parent applies the choice to its Trial Balance leaf accounts.</p></div>
+                <div class="acc2-source" id="accSourceInfo">Loading Trial Balance...</div>
+            </div>
+            <div class="acc2-toolbar"><label for="accAccountFilter">Search accounts</label><input id="accAccountFilter" type="search" placeholder="Search code or account name"><span id="accAccountCount" class="acc2-count"></span></div>
+            <div id="accGridState" class="acc2-grid-state">Loading accounts...</div>
+            <div class="acc2-grid-wrap" id="accGridWrap" hidden>
+                <table class="acc2-table"><thead><tr><th scope="col">Account code</th><th scope="col">Account name</th><th scope="col">Type</th><th scope="col">Verification sub-module</th><th scope="col">Result</th></tr></thead><tbody id="accAccountRows"></tbody></table>
+            </div>
+        </section>
+        <section id="accFinancialPanel" class="acc2-panel acc2-placeholder" role="tabpanel" aria-labelledby="accTabFinancial" hidden><div class="acc2-placeholder-icon">📊</div><h2>Financial Statement accounts</h2><p>Define Financial Statement categories first, then assign them to this same Trial Balance grid.</p><span>Planned Phase 4</span></section>
+        <section id="accNotesPanel" class="acc2-panel acc2-placeholder" role="tabpanel" aria-labelledby="accTabNotes" hidden><div class="acc2-placeholder-icon">📝</div><h2>Notes to Financial Statements</h2><p>Define note categories first, then assign them to this same Trial Balance grid.</p><span>Planned Phase 5</span></section>
     </main>
     <script src="/static/client_context.js?v=18"></script>
-    <script src="/static/account_control_center.js?v=2"></script>
+    <script src="/static/account_control_center.js?v=3"></script>
 </body>
 </html>

@@ -8,6 +8,14 @@
 
 **Verification:** Focused Account Control Centre tests pass (10). UI grid, category-definition screens, and live Postgres/browser testing remain subsequent phases.
 
+## Simplified Account Control Centre grid — Phase 2 — 2026-09-24
+
+**Scope:** Replace the legacy Account Set editor screen with the first simplified tab and mapping grid. Legacy Account Set APIs and database tables remain available for compatibility.
+
+**Implementation:** Added Verification Accounts, Financial Statement Accounts, and Notes to Financial Statements tabs. The Verification grid loads the latest Trial Balance, shows account hierarchy and workstream dropdowns, saves leaf accounts immediately, applies parent selections to leaf descendants with confirmation, supports search, and retains admin/client guards. Financial Statement and Notes tabs are intentionally placeholders for later category-definition phases.
+
+**Verification:** Hermetic Playwright coverage and the existing Account Control Centre/Verification suites pass (41 tests total).
+
 ## Verification Speed Optimization — Phase 4 — 2026-09-22
 
 **Scope:** historical working-tree experiment only; no Phase 4 code is retained.
