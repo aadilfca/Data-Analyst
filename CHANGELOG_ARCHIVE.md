@@ -6399,3 +6399,11 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** Cash and Bank retain their existing shared `verificationDateRange` session value. Local Vendor now uses `verificationDateRange:local_vendor`; on its first entry no Local Vendor range exists, so the existing latest-eligible-vendor-date path selects the correct period instead of searching a previous Cash/Bank month.
 
 **Verification:** `node --check`, `git diff --check`, and 20 focused Account Set/Verification tests passed. The new regression contract confirms Local Vendor reads and writes only its own date-state key. No packages installed.
+
+## Import Vendor routing foundation - 2026-09-24
+
+**Scope:** Added reusable Import Vendor Account Set routing only. The Import Vendor Verification tile, discovery, Preview, sessions, database schema, and all existing workstreams remain unchanged.
+
+**Implementation:** `import_vendors` is a separate published-set-only routing key, with no prefix fallback. Its voucher eligibility applies the same Cash/Bank Treasury-first rule as Local Vendor, including JVs; account selections for Local and Import Vendors remain isolated.
+
+**Verification:** Python compilation, `git diff --check`, and 24 focused Account Set/Verification tests passed. Coverage proves setup-required behavior, separate account sets, eligible Import Vendor JVs, and Treasury exclusion. No packages installed.

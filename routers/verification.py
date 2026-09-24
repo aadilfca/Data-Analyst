@@ -229,6 +229,11 @@ def get_local_vendor_routing(client_id: int) -> dict[str, Any]:
     return get_published_account_set_routing(client_id, 'local_vendors')
 
 
+def get_import_vendor_routing(client_id: int) -> dict[str, Any]:
+    """Import Vendor requires a published Account Set; it intentionally has no prefix fallback."""
+    return get_published_account_set_routing(client_id, 'import_vendors')
+
+
 def local_vendor_label(account_code: str, account_name: Optional[str]) -> str:
     """Keep the account code in the selected vendor label, avoiding name-only matching."""
     return f"{account_code} :: {account_name or account_code}"
@@ -265,6 +270,11 @@ def voucher_contains_treasury_leg(voucher: dict, cash_routing: dict, bank_routin
 
 def is_local_vendor_voucher(voucher: dict, vendor_account_code: str, cash_routing: dict, bank_routing: dict) -> bool:
     """True only when a selected vendor leg is outside Cash/Bank verification."""
+    return bool(vendor_account_code) and any(row.get('account_code') == vendor_account_code for row in voucher.get('rows', [])) and not voucher_contains_treasury_leg(voucher, cash_routing, bank_routing)
+
+
+def is_import_vendor_voucher(voucher: dict, vendor_account_code: str, cash_routing: dict, bank_routing: dict) -> bool:
+    """Import Vendor follows the same Treasury-first rule as Local Vendor."""
     return bool(vendor_account_code) and any(row.get('account_code') == vendor_account_code for row in voucher.get('rows', [])) and not voucher_contains_treasury_leg(voucher, cash_routing, bank_routing)
 
 

@@ -280,6 +280,41 @@ class LocalVendorRoutingFoundationTests(unittest.TestCase):
         label = verification.local_vendor_label('20-15-50-0001', 'Duplicate Vendor Name')
         self.assertEqual(verification.local_vendor_code_from_label(label), '20-15-50-0001')
 
+class ImportVendorRoutingFoundationTests(unittest.TestCase):
+    import_code = '20-15-45-10-0001'
+
+    def test_import_vendor_requires_a_published_set(self):
+        with patch.object(verification, 'get_published_account_set_leaf_accounts', return_value=None):
+            routing = verification.get_import_vendor_routing(7)
+        self.assertEqual(routing['mode'], 'not_configured')
+        self.assertEqual(routing['set_key'], 'import_vendors')
+
+    def test_import_vendor_uses_its_own_published_account_codes(self):
+        published = {'set_key': 'import_vendors', 'version_number': 1, 'accounts': [{'account_code': self.import_code}]}
+        with patch.object(verification, 'get_published_account_set_leaf_accounts', return_value=published):
+            routing = verification.get_import_vendor_routing(7)
+        self.assertEqual(routing['account_codes'], {self.import_code})
+
+    def test_import_vendor_jv_is_eligible_but_treasury_jv_is_excluded(self):
+        cash = {'mode': 'account_set', 'account_codes': {'10-15-115-10-0001'}}
+        bank = {'mode': 'account_set', 'account_codes': {'10-15-115-15-0001'}}
+        self.assertTrue(verification.is_import_vendor_voucher(
+            {'voucher_id': 'JV-1', 'rows': [{'account_code': self.import_code}, {'account_code': '50-10-0001'}]},
+            self.import_code, cash, bank,
+        ))
+        self.assertFalse(verification.is_import_vendor_voucher(
+            {'voucher_id': 'JV-2', 'rows': [{'account_code': self.import_code}, {'account_code': '10-15-115-15-0001'}]},
+            self.import_code, cash, bank,
+        ))
+
+    def test_local_and_import_vendor_sets_remain_separate(self):
+        def published(_client_id, set_key):
+            return {'set_key': set_key, 'version_number': 1, 'accounts': [{'account_code': '20-15-50-0001' if set_key == 'local_vendors' else self.import_code}]}
+        with patch.object(verification, 'get_published_account_set_leaf_accounts', side_effect=published):
+            self.assertEqual(verification.get_local_vendor_routing(7)['account_codes'], {'20-15-50-0001'})
+            self.assertEqual(verification.get_import_vendor_routing(7)['account_codes'], {self.import_code})
+
+
 class LocalVendorWorkflowTests(unittest.TestCase):
     vendor_code = '20-15-50-0001'
     vendor_name = 'Local Leather Supplier'
