@@ -195,5 +195,79 @@ class SimplifiedAccountControlTests(unittest.TestCase):
 
 
 
+class FinancialStatementControlTests(unittest.TestCase):
+    def test_tab_payloads_track_only_the_fields_they_supply(self):
+        verification = control_center._clean_control_assignment(
+            control_center.AccountControlAssignmentPayload(
+                client_id=1, account_code="10-15-115-10-0001", verification_workstream="cash"
+            )
+        )
+        financial = control_center._clean_control_assignment(
+            control_center.AccountControlAssignmentPayload(
+                client_id=1, account_code="10-15-115-10-0001", financial_statement_category_id=7
+            )
+        )
+        self.assertEqual(verification["_provided_fields"], {"verification_workstream"})
+        self.assertEqual(financial["_provided_fields"], {"financial_statement_category_id"})
+
+    def test_upsert_for_financial_tab_does_not_update_verification_column(self):
+        assignment = control_center._clean_control_assignment(
+            control_center.AccountControlAssignmentPayload(
+                client_id=1, account_code="10-15-115-10-0001", financial_statement_category_id=7
+            )
+        )
+        with patch.object(control_center, "execute_write_pg") as write:
+            control_center._upsert_control_assignment(assignment, "Admin")
+        sql = write.call_args.args[0]
+        self.assertIn("financial_statement_category_id", sql)
+        self.assertNotIn("verification_workstream = EXCLUDED", sql)
+
+    def test_category_payload_normalises_key_and_label(self):
+        category = control_center._clean_category_payload(
+            control_center.AccountControlCategoryPayload(
+                client_id=1, category_key=" Current Assets ", label="  Current   assets "
+            )
+        )
+        self.assertEqual(category["category_key"], "current_assets")
+        self.assertEqual(category["label"], "Current assets")
+        self.assertEqual(category["category_type"], "financial_statement")
+
+    def test_create_category_rejects_duplicate_key(self):
+        payload = control_center.AccountControlCategoryPayload(
+            client_id=1, category_key="current_assets", label="Current assets"
+        )
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", return_value=[{"id": 5}]
+        ), patch.object(control_center, "execute_write_pg") as write:
+            with self.assertRaises(HTTPException) as raised:
+                control_center.create_account_control_category(payload, session={"username": "Admin"})
+        self.assertEqual(raised.exception.status_code, 409)
+        write.assert_not_called()
+
+    def test_update_category_supports_label_order_and_active_state(self):
+        payload = control_center.AccountControlCategoryUpdatePayload(
+            client_id=1, category_type="financial_statement", label="Current assets", sort_order=3, is_active=False
+        )
+        with patch.object(control_center, "execute_query_pg", return_value=[{"id": 7}]), patch.object(
+            control_center, "execute_write_pg"
+        ) as write:
+            result = control_center.update_account_control_category(7, payload, session={"username": "Admin"})
+        self.assertTrue(result["saved"])
+        self.assertEqual(result["category"]["sort_order"], 3)
+        self.assertFalse(result["category"]["is_active"])
+        self.assertIn("sort_order", write.call_args.args[0])
+
+    def test_list_categories_can_include_inactive_rows(self):
+        with patch.object(control_center, "_require_active_client"), patch.object(
+            control_center, "execute_query_pg", return_value=[
+                {"id": 1, "client_id": 1, "category_type": "financial_statement", "category_key": "assets", "label": "Assets", "sort_order": 0, "is_active": True},
+            ]
+        ):
+            result = control_center.list_account_control_categories(
+                client_id=1, category_type="financial_statement", include_inactive=True, session={"username": "Admin"}
+            )
+        self.assertEqual(result["categories"][0]["category_key"], "assets")
+
+
 if __name__ == "__main__":
     unittest.main()

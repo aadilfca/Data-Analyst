@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Simplified Account Control Centre Financial Statement mapping — Phase 4 — 2026-09-24
+
+**Scope:** Activate the Financial Statement side of the simplified Account Control Centre while keeping Verification assignments and legacy Account Sets compatible.
+
+**Implementation:** Added admin-protected Financial Statement category list/create/update APIs using the existing category table, an editor and account-mapping grid, parent-to-leaf application, and partial assignment writes so each tab changes only its own field. Inactive categories remain visible for safe historical mappings; Notes remains a later placeholder.
+
+**Verification:** Added backend lifecycle/normalization/preservation tests and hermetic Playwright coverage for Financial Statement selection, category creation, tab switching, and account filtering. The focused Account Control Centre and Verification suites pass (51 tests).
+
+Files: routers/account_control_center.py, static/account_control_center.html, static/account_control_center.js, static/style.css, tests/test_account_control_center.py, tests/test_account_control_center_ui.py.
+
 ## Simplified Account Control Centre foundation — Phase 1 — 2026-09-24
 
 **Scope:** Replace the planned Account Set-first configuration path with a single client/account assignment foundation. Existing Account Sets and current routing remain untouched.

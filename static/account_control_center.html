@@ -32,7 +32,13 @@
                 <table class="acc2-table"><thead><tr><th scope="col">Account code</th><th scope="col">Account name</th><th scope="col">Type</th><th scope="col">Verification sub-module</th><th scope="col">Result</th></tr></thead><tbody id="accAccountRows"></tbody></table>
             </div>
         </section>
-        <section id="accFinancialPanel" class="acc2-panel acc2-placeholder" role="tabpanel" aria-labelledby="accTabFinancial" hidden><div class="acc2-placeholder-icon">📊</div><h2>Financial Statement accounts</h2><p>Define Financial Statement categories first, then assign them to this same Trial Balance grid.</p><span>Planned Phase 4</span></section>
+        <section id="accFinancialPanel" class="acc2-panel" role="tabpanel" aria-labelledby="accTabFinancial" hidden>
+            <div class="acc2-panel-head"><div><h2>Financial Statement accounts</h2><p>Define reusable Financial Statement categories, then assign each Trial Balance account to one category.</p></div><div class="acc2-source">Categories are client-specific and reusable.</div></div>
+            <div class="acc2-category-editor"><div><h3>Financial Statement categories</h3><p class="acc2-category-hint">Category keys stay stable; labels, order, and active status can be maintained here.</p></div><form id="accFinancialCategoryForm" class="acc2-category-form"><input id="accFinancialCategoryKey" maxlength="80" required placeholder="Category key, e.g. current_assets"><input id="accFinancialCategoryLabel" maxlength="120" required placeholder="Display label, e.g. Current assets"><button type="submit" class="acc2-action-btn">Add category</button></form><div id="accFinancialCategoryList" class="acc2-category-list"></div></div>
+            <div class="acc2-toolbar"><label for="accFinancialFilter">Search accounts</label><input id="accFinancialFilter" type="search" placeholder="Search code or account name"><span id="accFinancialCount" class="acc2-count"></span></div>
+            <div id="accFinancialGridState" class="acc2-grid-state">Loading Financial Statement categories...</div>
+            <div class="acc2-grid-wrap" id="accFinancialGridWrap" hidden><table class="acc2-table"><thead><tr><th scope="col">Account code</th><th scope="col">Account name</th><th scope="col">Type</th><th scope="col">Financial Statement category</th><th scope="col">Result</th></tr></thead><tbody id="accFinancialRows"></tbody></table></div>
+        </section>
         <section id="accNotesPanel" class="acc2-panel acc2-placeholder" role="tabpanel" aria-labelledby="accTabNotes" hidden><div class="acc2-placeholder-icon">📝</div><h2>Notes to Financial Statements</h2><p>Define note categories first, then assign them to this same Trial Balance grid.</p><span>Planned Phase 5</span></section>
     </main>
     <script src="/static/client_context.js?v=18"></script>

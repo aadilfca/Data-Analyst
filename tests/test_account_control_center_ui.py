@@ -57,6 +57,10 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
             {"id": 4, "account_code": "10-15-115-10-0001", "account_name": "Cash in hand", "parent_account_code": None, "level": 5, "is_leaf": True, "assignment": {"verification_workstream": "cash"}},
         ],
     }
+    mapping["categories"] = [
+        {"id": 10, "client_id": 1, "category_type": "financial_statement", "category_key": "current_assets", "label": "Current assets", "sort_order": 0, "is_active": True},
+        {"id": 11, "client_id": 1, "category_type": "financial_statement", "category_key": "current_liabilities", "label": "Current liabilities", "sort_order": 1, "is_active": True},
+    ]
     calls = []
 
     def handle_api(route, request):
@@ -66,6 +70,19 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
             return
         if "/api/users" in url:
             route.fulfill(status=200, content_type="application/json", body=json.dumps([]))
+            return
+        if "/api/account-control-center/categories" in url:
+            if request.method == "GET":
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"categories": mapping["categories"]}))
+            elif request.method == "POST":
+                body = json.loads(request.post_data or "{}")
+                body["id"] = 12
+                body["is_active"] = True
+                mapping["categories"].append(body)
+                calls.append((request.method, url, body))
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "category": body}))
+            else:
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True}))
             return
         if "/api/account-control-center/mapping/apply-to-children" in url:
             body = json.loads(request.post_data or "{}")
@@ -81,7 +98,8 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
                 calls.append((request.method, url, body))
                 for account in mapping["accounts"]:
                     if account["account_code"] == body["account_code"]:
-                        account["assignment"]["verification_workstream"] = body["verification_workstream"]
+                        if "verification_workstream" in body:
+                            account["assignment"]["verification_workstream"] = body["verification_workstream"]
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True}))
             else:
                 route.fulfill(status=200, content_type="application/json", body=json.dumps(mapping))
@@ -92,10 +110,10 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     page.route("**/api/**", handle_api)
     page.goto("{}/static/account_control_center.html".format(static_server), wait_until="load")
     page.wait_for_selector("#accAccountRows .acc2-workstream")
-    assert page.locator("#accSourceInfo").text_content() == "Source: January Trial Balance.xlsx · 2026-01-31"
+    assert page.locator("#accSourceInfo").text_content() == "Source: January Trial Balance.xlsx - 2026-01-31"
     assert page.locator("#accAccountRows tr").count() == 4
     assert page.locator("select[data-acc-code='10-15-115-10-0001']").input_value() == "cash"
-    assert page.locator("select[data-acc-code='20-15-50'] option:checked").text_content() == "Mixed assignments — choose one"
+    assert page.locator("select[data-acc-code='20-15-50'] option:checked").text_content() == "Mixed assignments - choose one"
 
     page.locator("select[data-acc-code='10-15-115-10-0001']").select_option("local_vendor")
     page.wait_for_timeout(150)
@@ -108,6 +126,17 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert page.locator("select[data-acc-code='20-15-50']").input_value() == "local_vendor"
 
     page.locator("#accTabFinancial").click()
+    page.wait_for_selector("#accFinancialRows .acc2-financial-category")
+    assert page.locator("#accFinancialCategoryList .acc2-category-item").count() == 2
+    assert page.get_by_role("button", name="Rename").count() == 2
+    page.locator("select.acc2-financial-category[data-acc-code='20-15-50-0001']").select_option("10")
+    page.wait_for_timeout(150)
+    assert any(call[0] == "PUT" and call[2].get("financial_statement_category_id") == 10 and "verification_workstream" not in call[2] for call in calls)
+    page.locator("#accFinancialCategoryKey").fill("fixed_assets")
+    page.locator("#accFinancialCategoryLabel").fill("Fixed assets")
+    page.locator("#accFinancialCategoryForm button[type='submit']").click()
+    page.wait_for_timeout(150)
+    assert page.locator("#accFinancialCategoryList .acc2-category-item").count() == 3
     assert page.locator("#accFinancialPanel").is_visible()
     assert page.locator("#accVerificationPanel").is_hidden()
     page.locator("#accTabVerification").click()

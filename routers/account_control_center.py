@@ -401,6 +401,29 @@ class AccountControlBulkAssignmentPayload(BaseModel):
     note_category_id: Optional[int] = Field(default=None, ge=1)
 
 
+class AccountControlCategoryPayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    category_type: str = "financial_statement"
+    category_key: str
+    label: str
+    sort_order: int = Field(default=0, ge=0)
+    is_active: bool = True
+
+
+class AccountControlCategoryUpdatePayload(BaseModel):
+    client_id: int = Field(..., ge=1)
+    category_type: str = "financial_statement"
+    label: str
+    sort_order: int = Field(default=0, ge=0)
+    is_active: bool = True
+
+
+_ACCOUNT_CONTROL_ASSIGNMENT_FIELDS = (
+    "verification_workstream", "financial_statement_category_id", "note_category_id",
+)
+_ACCOUNT_CONTROL_CATEGORY_TYPES = frozenset({"financial_statement", "note"})
+
+
 def _clean_control_account_code(value: Any) -> str:
     code = _normalise_account_code(value)
     if not code or len(code) > 120:
@@ -413,12 +436,14 @@ def _clean_control_assignment(payload: AccountControlAssignmentPayload) -> dict[
     workstream = _normalise_text(payload.verification_workstream).casefold() or None
     if workstream and workstream not in _VERIFICATION_WORKSTREAMS:
         raise HTTPException(400, "Verification workstream is invalid")
+    provided = set(getattr(payload, "model_fields_set", set()))
     return {
         "client_id": payload.client_id,
         "account_code": account_code,
         "verification_workstream": workstream,
         "financial_statement_category_id": payload.financial_statement_category_id,
         "note_category_id": payload.note_category_id,
+        "_provided_fields": provided.intersection(_ACCOUNT_CONTROL_ASSIGNMENT_FIELDS),
     }
 
 
@@ -448,24 +473,124 @@ def _validate_control_categories(client_id: int, assignment: dict[str, Any]) -> 
 
 
 def _upsert_control_assignment(assignment: dict[str, Any], updated_by: str) -> None:
+    """Upsert only fields supplied by the active tab; other tab assignments remain intact."""
+    provided = [field for field in _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS if field in assignment.get("_provided_fields", set())]
+    columns = ["client_id", "account_code"] + provided + ["updated_by", "updated_at"]
+    values = [assignment["client_id"], assignment["account_code"]] + [assignment[field] for field in provided] + [updated_by]
+    placeholders = ["%s"] * (len(values)) + ["CURRENT_TIMESTAMP"]
+    if provided:
+        updates = [f"{field} = EXCLUDED.{field}" for field in provided]
+        updates.extend(["updated_by = EXCLUDED.updated_by", "updated_at = CURRENT_TIMESTAMP"])
+        conflict = "DO UPDATE SET " + ", ".join(updates)
+    else:
+        conflict = "DO NOTHING"
     execute_write_pg(
-        """
-        INSERT INTO account_control_assignments
-            (client_id, account_code, verification_workstream,
-             financial_statement_category_id, note_category_id, updated_by, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (client_id, account_code) DO UPDATE SET
-            verification_workstream = EXCLUDED.verification_workstream,
-            financial_statement_category_id = EXCLUDED.financial_statement_category_id,
-            note_category_id = EXCLUDED.note_category_id,
-            updated_by = EXCLUDED.updated_by,
-            updated_at = CURRENT_TIMESTAMP
-        """,
-        (
-            assignment["client_id"], assignment["account_code"], assignment["verification_workstream"],
-            assignment["financial_statement_category_id"], assignment["note_category_id"], updated_by,
-        ),
+        f"INSERT INTO account_control_assignments ({', '.join(columns)}) VALUES ({', '.join(placeholders)}) ON CONFLICT (client_id, account_code) {conflict}",
+        tuple(values),
     )
+
+
+def _clean_category_type(value: str) -> str:
+    category_type = _normalise_text(value).casefold()
+    if category_type not in _ACCOUNT_CONTROL_CATEGORY_TYPES:
+        raise HTTPException(400, "Category type is invalid")
+    return category_type
+
+
+def _clean_category_payload(payload: AccountControlCategoryPayload) -> dict[str, Any]:
+    category_type = _clean_category_type(payload.category_type)
+    category_key = _normalise_key(payload.category_key)
+    label = _normalise_text(payload.label)
+    if not category_key or len(category_key) > 80:
+        raise HTTPException(400, "Category key is required and must be 80 characters or fewer")
+    if not label or len(label) > 120:
+        raise HTTPException(400, "Category label is required and must be 120 characters or fewer")
+    return {
+        "client_id": payload.client_id,
+        "category_type": category_type,
+        "category_key": category_key,
+        "label": label,
+        "sort_order": payload.sort_order,
+        "is_active": payload.is_active,
+    }
+
+
+def _clean_category_update(payload: AccountControlCategoryUpdatePayload) -> dict[str, Any]:
+    category_type = _clean_category_type(payload.category_type)
+    label = _normalise_text(payload.label)
+    if not label or len(label) > 120:
+        raise HTTPException(400, "Category label is required and must be 120 characters or fewer")
+    return {
+        "client_id": payload.client_id,
+        "category_type": category_type,
+        "label": label,
+        "sort_order": payload.sort_order,
+        "is_active": payload.is_active,
+    }
+
+
+def _public_control_assignment(assignment: dict[str, Any]) -> dict[str, Any]:
+    return {field: assignment[field] for field in (
+        "client_id", "account_code", "verification_workstream",
+        "financial_statement_category_id", "note_category_id",
+    )}
+
+
+@router.get("/api/account-control-center/categories")
+def list_account_control_categories(
+    client_id: int = Query(..., ge=1),
+    category_type: str = Query("financial_statement"),
+    include_inactive: bool = Query(False),
+    session=Depends(require_admin),
+):
+    _require_active_client(client_id)
+    cleaned_type = _clean_category_type(category_type)
+    active_clause = "" if include_inactive else " AND is_active = TRUE"
+    rows = execute_query_pg(
+        f"""SELECT id, client_id, category_type, category_key, label, sort_order, is_active
+            FROM account_control_categories
+            WHERE client_id = %s AND category_type = %s{active_clause}
+            ORDER BY sort_order, LOWER(label), category_key""",
+        (client_id, cleaned_type),
+    )
+    return {"client_id": client_id, "category_type": cleaned_type, "categories": [dict(row) for row in rows]}
+
+
+@router.post("/api/account-control-center/categories")
+def create_account_control_category(payload: AccountControlCategoryPayload, session=Depends(require_admin)):
+    category = _clean_category_payload(payload)
+    _require_active_client(category["client_id"])
+    existing = execute_query_pg(
+        "SELECT id FROM account_control_categories WHERE client_id = %s AND category_type = %s AND category_key = %s",
+        (category["client_id"], category["category_type"], category["category_key"]),
+    )
+    if existing:
+        raise HTTPException(409, "A category with this key already exists")
+    execute_write_pg(
+        """INSERT INTO account_control_categories
+           (client_id, category_type, category_key, label, sort_order, is_active, updated_at)
+           VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)""",
+        (category["client_id"], category["category_type"], category["category_key"], category["label"], category["sort_order"], category["is_active"]),
+    )
+    return {"saved": True, "category": category}
+
+
+@router.put("/api/account-control-center/categories/{category_id}")
+def update_account_control_category(category_id: int, payload: AccountControlCategoryUpdatePayload, session=Depends(require_admin)):
+    category = _clean_category_update(payload)
+    rows = execute_query_pg(
+        "SELECT id FROM account_control_categories WHERE id = %s AND client_id = %s AND category_type = %s",
+        (category_id, category["client_id"], category["category_type"]),
+    )
+    if not rows:
+        raise HTTPException(404, "Category not found")
+    execute_write_pg(
+        """UPDATE account_control_categories
+           SET label = %s, sort_order = %s, is_active = %s, updated_at = CURRENT_TIMESTAMP
+           WHERE id = %s AND client_id = %s AND category_type = %s""",
+        (category["label"], category["sort_order"], category["is_active"], category_id, category["client_id"], category["category_type"]),
+    )
+    return {"saved": True, "category": {"id": category_id, **category}}
 
 
 @router.get("/api/account-control-center/mapping")
@@ -516,22 +641,18 @@ def save_account_control_mapping(payload: AccountControlAssignmentPayload, sessi
         raise HTTPException(400, "Assign the parent through the bulk child operation; direct assignments require a leaf account")
     _validate_control_categories(assignment["client_id"], assignment)
     _upsert_control_assignment(assignment, _actor_name(session))
-    return {"saved": True, "account_code": assignment["account_code"], "assignment": assignment}
+    return {"saved": True, "account_code": assignment["account_code"], "assignment": _public_control_assignment(assignment)}
 
 
 @router.post("/api/account-control-center/mapping/apply-to-children")
 def apply_account_control_mapping_to_children(payload: AccountControlBulkAssignmentPayload, session=Depends(require_admin)):
     """Apply one assignment to every latest-Trial-Balance leaf below a selected parent."""
     parent_code = _clean_control_account_code(payload.parent_account_code)
-    assignment = _clean_control_assignment(
-        AccountControlAssignmentPayload(
-            client_id=payload.client_id,
-            account_code=parent_code,
-            verification_workstream=payload.verification_workstream,
-            financial_statement_category_id=payload.financial_statement_category_id,
-            note_category_id=payload.note_category_id,
-        )
-    )
+    internal_payload = {"client_id": payload.client_id, "account_code": parent_code}
+    for field in _ACCOUNT_CONTROL_ASSIGNMENT_FIELDS:
+        if field in getattr(payload, "model_fields_set", set()):
+            internal_payload[field] = getattr(payload, field)
+    assignment = _clean_control_assignment(AccountControlAssignmentPayload(**internal_payload))
     _upload, accounts = _latest_control_accounts(assignment["client_id"])
     parent = next(
         (row for row in accounts if _normalise_account_code(row["account_code"]) == parent_code),
