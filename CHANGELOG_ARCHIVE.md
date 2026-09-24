@@ -6375,3 +6375,27 @@ or procedure-modal requests, whose observed latency therefore remains a separate
 **Implementation:** A published `local_vendors` set exposes code-qualified vendor labels for eligible non-Treasury vouchers. Session and Preview accept `local_vendor`, retain only the selected vendor's non-zero account lines, and exclude every voucher containing configured Cash/Bank legs (including JVs and prefix fallback). Credits display as **Vendor bill / payable**; debits display as negative **Debit note / adjustment** values.
 
 **Verification:** Python compilation and `git diff --check` passed. Focused Account Set/Verification suite: 16 passed, including discovery, JV session capture, Treasury exclusion, and credit/debit Preview presentation. No packages installed.
+
+## Local Vendor verification UI - Phase 2 - 2026-09-24
+
+**Scope:** Activated the Local Vendor Verification entry, discovery, Preview, and session UI using the Phase 1 backend. Cash/Bank behavior, Account Set routing, database schema, Audit Workbook, and Local Vendor session range reconciliation remain unchanged.
+
+**Implementation:** The shared Verification page now recognises `type=local_vendor`, labels the popup, preview, session header, and movement column for the selected workstream, and exposes the live hub tile and global quick-navigation link. Local Vendor discovery uses only the published-set endpoints and has a clear setup-required message. A Local Vendor session keeps its selected account separately; changing the range while one is active is deliberately deferred rather than invoking Cash/Bank reconciliation.
+
+**Verification:** `node --check` passed for `verification.js` and `client_context.js`; `git diff --check` passed; 18 focused Account Set/Verification tests passed. An isolated Playwright smoke test with mocked APIs confirmed the Local Vendor popup, title, vendor list, and Local Vendor endpoints, without Cash/Bank endpoint calls. No packages installed.
+
+## Local Vendor discovery performance fix - 2026-09-24
+
+**Scope:** Corrected Local Vendor opening/discovery latency only. UI behavior, Account Set authority, Cash/Bank routing, session rules, and Treasury exclusion are unchanged.
+
+**Implementation:** The previous latest-date endpoint scanned every client date and loaded each date's JSON rows until it found an eligible vendor JV. Discovery now starts from published Local Vendor account codes, retrieves only candidate vouchers and their complete lines, then applies the existing Treasury exclusion in Python. Latest-date lookup works in 500-record vendor-account batches. Additive PostgreSQL indexes cover active client/account-code, voucher group, and voucher-id lookups; the existing-schema startup path creates them as well as fresh bootstrap.
+
+**Verification:** Python compilation and `git diff --check` passed. Focused Account Set/Verification suite: 19 passed, including a regression asserting latest-date lookup makes the two selective client-data queries rather than a date-by-date `DISTINCT extract_date` scan. No packages installed. A local server restart is required before live timing confirms the new code and indexes.
+
+## Local Vendor date-state isolation - 2026-09-24
+
+**Scope:** Corrected only the Local Vendor popup's inherited Cash/Bank date range. Account Set routing, discovery rules, Treasury exclusion, Cash/Bank behavior, and schema remain unchanged.
+
+**Implementation:** Cash and Bank retain their existing shared `verificationDateRange` session value. Local Vendor now uses `verificationDateRange:local_vendor`; on its first entry no Local Vendor range exists, so the existing latest-eligible-vendor-date path selects the correct period instead of searching a previous Cash/Bank month.
+
+**Verification:** `node --check`, `git diff --check`, and 20 focused Account Set/Verification tests passed. The new regression contract confirms Local Vendor reads and writes only its own date-state key. No packages installed.

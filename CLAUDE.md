@@ -280,6 +280,9 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-22: Rulebook correction is test-covered; query-batching was rejected after variable remote Save/Verify latency.
 - 2026-09-23: Account Sets now drive Cash/Bank Verification, including JV legs; Preview and the verification table show correct Cash movement and non-zero counterpart amounts.
 - 2026-09-24: Local Vendor backend discovery, session capture, and Preview now route published vendor accounts while Treasury vouchers remain excluded.
+- 2026-09-24: Local Vendor verification UI, quick navigation, and Treasury-safe session entry are now available; Cash/Bank workflow remains unchanged.
+- 2026-09-24: Local Vendor discovery now uses indexed vendor candidates, avoiding historical date-by-date scans while preserving Treasury exclusion.
+- 2026-09-24: Local Vendor date selection is now isolated from Cash/Bank, defaulting to its own latest eligible JV period.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

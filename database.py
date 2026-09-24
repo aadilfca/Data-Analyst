@@ -3773,6 +3773,20 @@ def _ensure_postgres_voucher_check_assertions(conn):
         cur.close()
 
 
+def _ensure_postgres_local_vendor_discovery_indexes(conn):
+    """Create additive indexes for published-account Local Vendor discovery."""
+    account_code = "COALESCE(row_data ->> 'Account Detail', row_data ->> 'Account Details', row_data ->> 'Account Code', row_data ->> 'Account No', row_data ->> 'Account Number', row_data ->> 'Code', row_data ->> 'Ledger Code', row_data ->> 'AccountID', row_data ->> 'Account Head', row_data ->> 'Ledger Detail')"
+    voucher_id = "COALESCE(row_data ->> 'Voucher ID', row_data ->> 'Voucher No', row_data ->> 'Voucher Number', row_data ->> 'Voucher')"
+    predicate = " WHERE is_deleted = FALSE AND change_detection_status != 'deleted'"
+    cur = conn.cursor()
+    try:
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_client_data_vendor_account_active ON client_data (client_id, (" + account_code + "), extract_date DESC, id DESC)" + predicate)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_client_data_vendor_group_active ON client_data (client_id, document_group_id)" + predicate)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_client_data_vendor_voucher_active ON client_data (client_id, (" + voucher_id + "))" + predicate)
+    finally:
+        cur.close()
+
+
 def init_db_postgres(conn):
     global _POSTGRES_SCHEMA_READY
 
@@ -3798,6 +3812,7 @@ def init_db_postgres(conn):
         migrated_cat_cc_assertions = _ensure_postgres_category_cross_check_assertions(conn)
         migrated_vc_assertions = _ensure_postgres_voucher_check_assertions(conn)
         migrated_ruleset_hash = _ensure_postgres_applied_ruleset_hash(conn)
+        _ensure_postgres_local_vendor_discovery_indexes(conn)
         conn.commit()
         migration_notes = []
         if migrated_document_type:
@@ -3975,6 +3990,7 @@ def init_db_postgres(conn):
     run("CREATE INDEX IF NOT EXISTS idx_client_data_date ON client_data (extract_date)")
     run("CREATE INDEX IF NOT EXISTS idx_client_data_deleted ON client_data (is_deleted)")
     run("CREATE INDEX IF NOT EXISTS idx_client_data_client_date ON client_data (client_id, extract_date)")
+    _ensure_postgres_local_vendor_discovery_indexes(conn)
 
     # ---------- 10. error_codes ----------
     run('''

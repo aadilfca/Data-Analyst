@@ -350,3 +350,55 @@ class LocalVendorWorkflowTests(unittest.TestCase):
         self.assertEqual(result['total_rows'], 2)
         self.assertEqual([row['amount'] for row in result['rows']], [150, -25])
         self.assertEqual([row['direction'] for row in result['rows']], ['Vendor bill / payable', 'Debit note / adjustment'])
+
+
+    def test_latest_vendor_date_uses_vendor_candidates_not_a_date_by_date_scan(self):
+        queries = []
+
+        def query(sql, _params):
+            queries.append(sql)
+            if 'FROM clients' in sql:
+                return [{'id': 7}]
+            if 'SELECT id, document_group_id, row_data, extract_date' in sql:
+                return self._rows()
+            if 'SELECT id, row_data, extract_date FROM client_data' in sql:
+                return self._rows()
+            raise AssertionError(f'Unexpected query: {sql}')
+
+        with patch.object(verification, 'execute_query_pg', side_effect=query), patch.object(verification, 'get_local_vendor_routing', return_value={'mode': 'account_set', 'account_codes': {self.vendor_code}}), patch.object(verification, 'get_treasury_routing', side_effect=self._treasury_routing):
+            result = verification.get_latest_local_vendor_date(7)
+
+        self.assertEqual(str(result['latest_date']), '2026-01-12')
+        self.assertFalse(any('SELECT DISTINCT extract_date' in sql for sql in queries))
+        self.assertEqual(sum('FROM client_data' in sql for sql in queries), 2)
+
+
+class LocalVendorUiContractTests(unittest.TestCase):
+    def test_local_vendor_type_uses_its_own_discovery_contract_and_safe_range_boundary(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / 'static' / 'verification.js').read_text(encoding='utf-8')
+
+        self.assertIn("local_vendor: { title: 'Local Vendor'", source)
+        self.assertIn('/api/verification/latest_local_vendor_date', source)
+        self.assertIn('/api/verification/local_vendors?', source)
+        self.assertIn("session_type: currentType", source)
+        self.assertIn("currentSessionId && isLocalVendorVerification()", source)
+        self.assertIn('Date-range changes for an active Local Vendor session', source)
+
+    def test_local_vendor_date_state_isolated_from_cash_and_bank(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / 'static' / 'verification.js').read_text(encoding='utf-8')
+
+        self.assertIn('function verificationDateRangeStorageKey()', source)
+        self.assertIn("VERIFICATION_DATE_RANGE_STORAGE_KEY + ':local_vendor'", source)
+        self.assertIn('sessionStorage.setItem(verificationDateRangeStorageKey()', source)
+        self.assertIn('sessionStorage.getItem(verificationDateRangeStorageKey())', source)
+
+    def test_local_vendor_hub_tile_and_global_navigation_are_live(self):
+        root = Path(__file__).resolve().parents[1]
+        html = (root / 'static' / 'verification.html').read_text(encoding='utf-8')
+        navigation = (root / 'static' / 'client_context.js').read_text(encoding='utf-8')
+
+        self.assertIn('id="localVendorTile" data-verification-type="local_vendor"', html)
+        self.assertIn('Cash/Bank payments remain in Treasury verification.', html)
+        self.assertIn("{ label: 'Local vendor', url: '/static/verification.html?type=local_vendor', state: 'ready' }", navigation)

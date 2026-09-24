@@ -239,6 +239,19 @@ def local_vendor_code_from_label(value: str) -> Optional[str]:
     return code.strip() if separator and code.strip() else None
 
 
+VOUCHER_ID_ALIASES = ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher']
+
+
+def json_text_expression(aliases: list[str], table_alias: str = '') -> str:
+    """PostgreSQL JSONB expression matching the Python alias-order resolver."""
+    prefix = table_alias + '.' if table_alias else ''
+    return 'COALESCE(' + ', '.join(f"{prefix}row_data ->> '{alias}'" for alias in aliases) + ')'
+
+
+LOCAL_VENDOR_ACCOUNT_CODE_SQL = json_text_expression(ACCOUNT_CODE_ALIASES)
+LOCAL_VENDOR_VOUCHER_ID_SQL = json_text_expression(VOUCHER_ID_ALIASES)
+
+
 def voucher_contains_treasury_leg(voucher: dict, cash_routing: dict, bank_routing: dict) -> bool:
     """Cash/Bank takes priority, including legacy prefix fallback where no set exists."""
     account_codes = set(cash_routing.get('account_codes', set())) | set(bank_routing.get('account_codes', set()))
@@ -1289,29 +1302,83 @@ def get_verification_stats():
 # PHASE 2 ENDPOINTS
 # ==============================================
 
-def collect_local_vendor_labels(rows: list[dict], vendor_routing: dict, cash_routing: dict, bank_routing: dict) -> set[str]:
-    """Discover configured vendors occurring in non-Treasury vouchers."""
-    vouchers: dict[str, list[dict]] = {}
+def collect_local_vendor_vouchers(rows: list[dict], vendor_routing: dict, cash_routing: dict, bank_routing: dict) -> dict[str, dict]:
+    """Group complete voucher lines and retain only Local Vendor vouchers outside Treasury."""
+    vouchers: dict[str, dict] = {}
     for source_row in rows:
         try:
             row_data = source_row['row_data']
             row_data = json.loads(row_data) if isinstance(row_data, str) else row_data
             if not isinstance(row_data, dict):
                 continue
-            voucher_id = get_column_value(row_data, ['Voucher ID', 'Voucher No', 'Voucher Number', 'Voucher'])
+            voucher_id = get_column_value(row_data, VOUCHER_ID_ALIASES)
             account_code = get_account_code_value(row_data)
             account_name = get_column_value(row_data, ['Account Name', 'Account', 'Account Detail', 'Ledger', 'Head'])
             if not voucher_id or not account_code or not account_name:
                 continue
-            vouchers.setdefault(voucher_id, []).append({'account_code': account_code, 'account_name': account_name})
+            voucher = vouchers.setdefault(str(voucher_id), {'rows': [], 'date': source_row.get('extract_date')})
+            voucher['rows'].append({'account_code': account_code, 'account_name': account_name})
+            if source_row.get('extract_date') and (not voucher['date'] or source_row['extract_date'] > voucher['date']):
+                voucher['date'] = source_row['extract_date']
         except Exception:
             continue
     return {
-        local_vendor_label(row['account_code'], row['account_name'])
-        for voucher_id, voucher_rows in vouchers.items()
-        if not voucher_contains_treasury_leg({'voucher_id': voucher_id, 'rows': voucher_rows}, cash_routing, bank_routing)
-        for row in voucher_rows if row['account_code'] in vendor_routing['account_codes']
+        voucher_id: voucher for voucher_id, voucher in vouchers.items()
+        if any(row['account_code'] in vendor_routing['account_codes'] for row in voucher['rows'])
+        and not voucher_contains_treasury_leg({'voucher_id': voucher_id, 'rows': voucher['rows']}, cash_routing, bank_routing)
     }
+
+
+def collect_local_vendor_labels(rows: list[dict], vendor_routing: dict, cash_routing: dict, bank_routing: dict) -> set[str]:
+    """Discover configured vendors occurring in non-Treasury vouchers."""
+    return {
+        local_vendor_label(row['account_code'], row['account_name'])
+        for voucher in collect_local_vendor_vouchers(rows, vendor_routing, cash_routing, bank_routing).values()
+        for row in voucher['rows'] if row['account_code'] in vendor_routing['account_codes']
+    }
+
+
+def load_local_vendor_voucher_rows(client_id: int, vendor_codes: set[str], date_start: Optional[str] = None,
+                                   date_end: Optional[str] = None, limit: Optional[int] = None,
+                                   offset: int = 0) -> list[dict]:
+    """Load only vouchers with a selected vendor leg, then their complete lines for Treasury screening."""
+    if not vendor_codes:
+        return []
+    candidate_sql = f"""
+        SELECT id, document_group_id, row_data, extract_date
+        FROM client_data
+        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
+          AND {LOCAL_VENDOR_ACCOUNT_CODE_SQL} = ANY(%s)
+    """
+    params: list[Any] = [client_id, sorted(vendor_codes)]
+    if date_start and date_end:
+        candidate_sql += ' AND extract_date BETWEEN %s AND %s'
+        params.extend([date_start, date_end])
+    candidate_sql += ' ORDER BY extract_date DESC, id DESC'
+    if limit is not None:
+        candidate_sql += ' LIMIT %s OFFSET %s'
+        params.extend([limit, offset])
+    candidates = execute_query_pg(candidate_sql, tuple(params))
+    if not candidates:
+        return []
+    group_ids = sorted({row['document_group_id'] for row in candidates if row.get('document_group_id')})
+    voucher_ids = sorted({str(get_column_value(row['row_data'], VOUCHER_ID_ALIASES)) for row in candidates
+                          if isinstance(row.get('row_data'), dict) and get_column_value(row['row_data'], VOUCHER_ID_ALIASES)})
+    where_parts, row_params = [], [client_id]
+    if group_ids:
+        where_parts.append('document_group_id = ANY(%s)')
+        row_params.append(group_ids)
+    if voucher_ids:
+        where_parts.append(f'{LOCAL_VENDOR_VOUCHER_ID_SQL} = ANY(%s)')
+        row_params.append(voucher_ids)
+    if not where_parts:
+        return []
+    rows_sql = f"""
+        SELECT id, row_data, extract_date FROM client_data
+        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
+          AND ({' OR '.join(where_parts)})
+    """
+    return execute_query_pg(rows_sql, tuple(row_params))
 
 
 @router.get("/api/verification/local_vendors")
@@ -1333,16 +1400,14 @@ def get_local_vendors(
     vendor_routing = get_local_vendor_routing(client_id)
     if vendor_routing['mode'] != 'account_set':
         return {'vendors': [], 'count': 0, 'setup_required': True}
-    rows = execute_query_pg("""SELECT id, row_data FROM client_data
-        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
-          AND extract_date BETWEEN %s AND %s ORDER BY extract_date""", (client_id, date_start, date_end))
+    rows = load_local_vendor_voucher_rows(client_id, vendor_routing['account_codes'], date_start, date_end)
     vendors = collect_local_vendor_labels(rows, vendor_routing, get_treasury_routing(client_id, 'cash'), get_treasury_routing(client_id, 'bank'))
     return {'vendors': sorted(vendors), 'count': len(vendors), 'setup_required': False}
 
 
 @router.get("/api/verification/latest_local_vendor_date")
 def get_latest_local_vendor_date(client_id: int = Query(..., description="Client ID")):
-    """Return the latest date that contains an eligible Local Vendor JV."""
+    """Find the latest eligible Local Vendor voucher in bounded vendor-account batches."""
     client = execute_query_pg("SELECT id FROM clients WHERE id = %s AND is_active = TRUE", (client_id,))
     if not client:
         raise HTTPException(404, "Client not found or inactive")
@@ -1351,21 +1416,17 @@ def get_latest_local_vendor_date(client_id: int = Query(..., description="Client
         return {'latest_date': None, 'setup_required': True}
     cash_routing = get_treasury_routing(client_id, 'cash')
     bank_routing = get_treasury_routing(client_id, 'bank')
-    date_rows = execute_query_pg("""
-        SELECT DISTINCT extract_date FROM client_data
-        WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
-        ORDER BY extract_date DESC
-        """, (client_id,))
-    for date_row in date_rows:
-        candidate_date = date_row['extract_date']
-        rows = execute_query_pg("""
-            SELECT id, row_data FROM client_data
-            WHERE client_id = %s AND is_deleted = FALSE AND change_detection_status != 'deleted'
-              AND extract_date = %s
-            """, (client_id, candidate_date))
-        if collect_local_vendor_labels(rows, vendor_routing, cash_routing, bank_routing):
-            return {'latest_date': candidate_date, 'setup_required': False}
-    return {'latest_date': None, 'setup_required': False}
+    batch_size = 500
+    offset = 0
+    while True:
+        rows = load_local_vendor_voucher_rows(client_id, vendor_routing['account_codes'], limit=batch_size, offset=offset)
+        if not rows:
+            return {'latest_date': None, 'setup_required': False}
+        eligible = collect_local_vendor_vouchers(rows, vendor_routing, cash_routing, bank_routing)
+        dates = [voucher['date'] for voucher in eligible.values() if voucher.get('date')]
+        if dates:
+            return {'latest_date': max(dates), 'setup_required': False}
+        offset += batch_size
 
 
 @router.get("/api/verification/cashbooks")

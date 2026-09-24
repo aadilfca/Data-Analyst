@@ -29,10 +29,19 @@ window.VerificationPerf = {
         });
     }
 };
+const VERIFICATION_WORKSTREAMS = Object.freeze({
+    cash: { title: 'Cash', entity: 'cashbook', entityTitle: 'Cashbook', icon: '📒', movementLabel: 'Cash Movement' },
+    bank: { title: 'Bank', entity: 'bankbook', entityTitle: 'Bankbook', icon: '🏦', movementLabel: 'Bank Movement' },
+    local_vendor: { title: 'Local Vendor', entity: 'local vendor', entityTitle: 'Local Vendor', icon: '🏪', movementLabel: 'Vendor Movement' },
+});
 const viewParam = urlSearchParamsForType.get('view');
+const requestedVerificationType = urlSearchParamsForType.get('type');
 const currentType = (viewParam === 'bankbook') ? 'bank'
     : (viewParam === 'cashbook') ? 'cash'
-    : (urlSearchParamsForType.get('type') === 'bank') ? 'bank' : 'cash';
+    : (requestedVerificationType && VERIFICATION_WORKSTREAMS[requestedVerificationType]) ? requestedVerificationType : 'cash';
+
+function verificationWorkstream() { return VERIFICATION_WORKSTREAMS[currentType]; }
+function isLocalVendorVerification() { return currentType === 'local_vendor'; }
 
 let currentSessionId = null;
 let currentDetailId = null;
@@ -806,9 +815,17 @@ function monthBoundsAround(date) {
 // client_context.js's own STORAGE_KEY (selected client id).
 const VERIFICATION_DATE_RANGE_STORAGE_KEY = 'verificationDateRange';
 
+// Cash and Bank deliberately retain their existing shared range. Local Vendor must not
+// inherit it: its latest eligible JV period can be materially different from Treasury data.
+function verificationDateRangeStorageKey() {
+    return isLocalVendorVerification()
+        ? VERIFICATION_DATE_RANGE_STORAGE_KEY + ':local_vendor'
+        : VERIFICATION_DATE_RANGE_STORAGE_KEY;
+}
+
 function saveVerificationDateRange(start, end) {
     try {
-        sessionStorage.setItem(VERIFICATION_DATE_RANGE_STORAGE_KEY, JSON.stringify({ start, end }));
+        sessionStorage.setItem(verificationDateRangeStorageKey(), JSON.stringify({ start, end }));
     } catch (error) {
         console.warn('⚠️ Could not save verification date range:', error);
     }
@@ -820,7 +837,7 @@ function saveVerificationDateRange(start, end) {
 function getPersistedVerificationDateRange() {
     let raw;
     try {
-        raw = sessionStorage.getItem(VERIFICATION_DATE_RANGE_STORAGE_KEY);
+        raw = sessionStorage.getItem(verificationDateRangeStorageKey());
     } catch (error) {
         console.warn('⚠️ Could not read verification date range:', error);
         return null;
@@ -831,7 +848,7 @@ function getPersistedVerificationDateRange() {
         parsed = JSON.parse(raw);
     } catch (error) {
         console.warn('⚠️ Could not parse verification date range:', error);
-        sessionStorage.removeItem(VERIFICATION_DATE_RANGE_STORAGE_KEY);
+        sessionStorage.removeItem(verificationDateRangeStorageKey());
         return null;
     }
     if (!parsed || !parsed.start || !parsed.end || parsed.start > parsed.end) return null;
@@ -845,23 +862,26 @@ function getPersistedVerificationDateRange() {
 // last-picked cashbook has to survive across reload the same way the date range now does.
 const VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY = 'verificationSelectedCashbook';
 
+function selectedWorkstreamStorageKey() {
+    return isLocalVendorVerification() ? VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY + ':local_vendor' : VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY;
+}
+
 function saveSelectedCashbook(name) {
     try {
-        sessionStorage.setItem(VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY, name);
+        sessionStorage.setItem(selectedWorkstreamStorageKey(), name);
     } catch (error) {
-        console.warn('⚠️ Could not save selected cashbook:', error);
+        console.warn('Could not save selected workstream account:', error);
     }
 }
 
 function getPersistedSelectedCashbook() {
     try {
-        return sessionStorage.getItem(VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY) || null;
+        return sessionStorage.getItem(selectedWorkstreamStorageKey()) || null;
     } catch (error) {
-        console.warn('⚠️ Could not read selected cashbook:', error);
+        console.warn('Could not read selected workstream account:', error);
         return null;
     }
 }
-
 // ---------- POPUP: LOAD CASHBOOKS ----------
 // overrideStart/overrideEnd (confirmed fix): when provided (the user edited the popup's date
 // inputs), search that exact range. When omitted, auto-detect the most recent month that
@@ -870,14 +890,7 @@ function getPersistedSelectedCashbook() {
 // old hardcoded "always search the current calendar month" default, which failed whenever a
 // client's latest data wasn't in the current month.
 async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
-    // Confirmed fix: the two fields are independent — changing the date range (via
-    // handlePopupPeriodChange(), which calls this function on every Place-1 range edit) must not
-    // reset an already-made cashbook selection. Captured before anything below rebuilds the
-    // <select>, then re-applied after the rebuild if it's still a valid option for the new range.
-    // overrideCashbook (confirmed fix): lets a fresh-page-load caller (openSessionPopup()) inject
-    // the sessionStorage-persisted selection here too, since popupCashbookSelect.value is always
-    // empty at that point - same "override wins, else fall back to live state" shape as
-    // overrideStart/overrideEnd above.
+    const workstream = verificationWorkstream();
     const previousSelection = overrideCashbook || popupCashbookSelect.value;
     const clientId = getClientId();
     if (!clientId) {
@@ -886,93 +899,95 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
         setPopupActionButtonsDisabled(true);
         return;
     }
-    // Keep both popup actions locked while the date-range search is rebuilding the list.
     setPopupActionButtonsDisabled(true);
     window.LoadingUI.showFieldLoading(popupCashbookSelect, { prominent: true });
-    // Bank Verification (Phase 8): book-type-specific copy, since this same function serves both
-    // Cash and Bank discovery now (only the category_group filter/wording differs).
-    const bookWord = currentType === 'bank' ? 'bankbook' : 'cashbook';
-    const bookWordCap = currentType === 'bank' ? 'Bankbook' : 'Cashbook';
-    const voucherHint = currentType === 'bank' ? 'BPV/BRV' : 'CPV/CRV';
-
     let start = overrideStart;
     let end = overrideEnd;
     if (!start || !end) {
         let anchorDate = new Date();
         try {
-            const latestParams = new URLSearchParams({ client_id: clientId, category_group: currentType });
-            const latestRes = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/latest_cashbook_date?${latestParams}`);
-            if (latestRes.ok) {
-                const latestData = await latestRes.json();
-                if (latestData.latest_date) {
-                    anchorDate = new Date(latestData.latest_date + 'T00:00:00');
-                }
+            const latestUrl = isLocalVendorVerification()
+                ? API_BASE + '/api/verification/latest_local_vendor_date?client_id=' + encodeURIComponent(clientId)
+                : API_BASE + '/api/verification/latest_cashbook_date?' + new URLSearchParams({ client_id: clientId, category_group: currentType });
+            const latestRes = await window.ApiUtils.apiFetch(latestUrl);
+            if (!latestRes.ok) {
+                const error = await latestRes.json();
+                throw new Error(error.detail || 'Failed to detect the latest ' + workstream.entity + ' date');
             }
-        } catch (e) {
-            console.error(`Error detecting latest ${bookWord} date:`, e);
-            // Fall through to today's month - same behavior as before this fix.
+            const latestData = await latestRes.json();
+            if (latestData.setup_required) {
+                window.LoadingUI.hideFieldLoading(popupCashbookSelect);
+                popupCashbookSelect.innerHTML = '<option value="">Local Vendor setup required</option>';
+                popupCashbookSelect.disabled = true;
+                setPopupActionButtonsDisabled(true);
+                showPopupError('Publish the Local Vendors Account Set in Account Control Centre before starting verification.');
+                return;
+            }
+            if (latestData.latest_date) anchorDate = new Date(latestData.latest_date + 'T00:00:00');
+        } catch (error) {
+            console.error('Error detecting latest ' + workstream.entity + ' date:', error);
+            showPopupError('Failed to detect the latest ' + workstream.entity + ' date: ' + error.message);
         }
         const bounds = monthBoundsAround(anchorDate);
         start = bounds.start;
         end = bounds.end;
     }
     if (popupDateRangePicker) popupDateRangePicker.setRange(start, end);
-
     try {
-        const params = new URLSearchParams({
-            client_id: clientId,
-            date_start: start,
-            date_end: end,
-            category_group: currentType
-        });
-        const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/cashbooks?${params}`);
+        const params = new URLSearchParams({ client_id: clientId, date_start: start, date_end: end });
+        const url = isLocalVendorVerification()
+            ? API_BASE + '/api/verification/local_vendors?' + params
+            : API_BASE + '/api/verification/cashbooks?' + new URLSearchParams({ ...Object.fromEntries(params), category_group: currentType });
+        const res = await window.ApiUtils.apiFetch(url);
         if (!res.ok) {
             const err = await res.json();
-            throw new Error(err.detail || `Failed to fetch ${bookWord}s`);
+            throw new Error(err.detail || 'Failed to fetch ' + workstream.entityTitle + 's');
         }
         const data = await res.json();
         window.LoadingUI.hideFieldLoading(popupCashbookSelect);
-        if (data.cashbooks && data.cashbooks.length > 0) {
-            popupCashbookSelect.innerHTML = `<option value="">-- Select ${bookWordCap} --</option>`;
-            data.cashbooks.forEach(cb => {
-                const opt = document.createElement('option');
-                opt.value = cb;
-                opt.textContent = cb;
-                popupCashbookSelect.appendChild(opt);
+        if (data.setup_required) {
+            popupCashbookSelect.innerHTML = '<option value="">Local Vendor setup required</option>';
+            popupCashbookSelect.disabled = true;
+            setPopupActionButtonsDisabled(true);
+            showPopupError('Publish the Local Vendors Account Set in Account Control Centre before starting verification.');
+            return;
+        }
+        const candidates = isLocalVendorVerification() ? data.vendors : data.cashbooks;
+        if (candidates && candidates.length > 0) {
+            popupCashbookSelect.innerHTML = '<option value="">-- Select ' + workstream.entityTitle + ' --</option>';
+            candidates.forEach(candidate => {
+                const option = document.createElement('option');
+                option.value = candidate;
+                option.textContent = candidate;
+                popupCashbookSelect.appendChild(option);
             });
-            // Re-apply the previous selection if it's still valid for this range — if it's
-            // genuinely not present anymore, the placeholder stays selected, same as before.
-            if (previousSelection && data.cashbooks.includes(previousSelection)) {
-                popupCashbookSelect.value = previousSelection;
-            }
+            if (previousSelection && candidates.includes(previousSelection)) popupCashbookSelect.value = previousSelection;
             popupCashbookSelect.disabled = false;
             setPopupActionButtonsDisabled(false);
         } else {
-            popupCashbookSelect.innerHTML = `<option value="">⚠️ No ${bookWord}s found</option>`;
+            popupCashbookSelect.innerHTML = '<option value="">No ' + workstream.entityTitle + 's found</option>';
             popupCashbookSelect.disabled = true;
             setPopupActionButtonsDisabled(true);
-            showPopupError(
-                `No ${bookWord}s found for this client.\n` +
-                `Make sure you have uploaded data containing ${voucherHint} vouchers.\n` +
-                'The column names must be exactly: "Voucher ID", "Account Name", "Debit", "Credit".'
-            );
+            const guidance = isLocalVendorVerification()
+                ? 'Confirm that the published Local Vendors Account Set contains vendor accounts and that eligible non-Cash/Bank JVs exist in this date range.'
+                : 'Make sure you have uploaded data containing ' + (currentType === 'bank' ? 'BPV/BRV' : 'CPV/CRV') + ' vouchers.\nThe column names must be exactly: "Voucher ID", "Account Name", "Debit", "Credit".';
+            showPopupError('No ' + workstream.entity + 's found for this client.\n' + guidance);
         }
-    } catch (e) {
-        console.error(`Error loading ${bookWord}s:`, e);
+    } catch (error) {
+        console.error('Error loading ' + workstream.entity + 's:', error);
         window.LoadingUI.hideFieldLoading(popupCashbookSelect);
-        popupCashbookSelect.innerHTML = '<option value="">⚠️ Error loading</option>';
+        popupCashbookSelect.innerHTML = '<option value="">Error loading</option>';
         popupCashbookSelect.disabled = true;
         setPopupActionButtonsDisabled(true);
-        showPopupError(`Failed to load ${bookWord}s: ` + e.message);
+        showPopupError('Failed to load ' + workstream.entity + 's: ' + error.message);
     }
 }
-
 // ---------- POPUP: OPEN CASHBOOK ----------
 async function openCashbook() {
     if (!popupCashbookSelect) return;
     const cashbook = popupCashbookSelect.value;
     if (!cashbook) {
-        showPopupError('Please select a cashbook.');
+        showPopupError('Please select a ' + verificationWorkstream().entity + '.');
         return;
     }
     hidePopupError();
@@ -1001,14 +1016,15 @@ async function activateCashbookView(cashbook) {
     // now the Back icon's job (chronological), not Up's. See exitCashbookView()'s setUpOverride(null).
     if (typeof setUpOverride === 'function') setUpOverride(exitCashbookView);
     // Bank Verification (Phase 8): relabel the page header to match currentType.
+    const workstream = verificationWorkstream();
     const headerLabel = document.getElementById('cashbookHeaderLabel');
-    if (headerLabel) headerLabel.textContent = currentType === 'bank' ? '🏦 Bankbook:' : '📒 Cashbook:';
+    if (headerLabel) headerLabel.textContent = workstream.icon + ' ' + workstream.entityTitle + ':';
     cashbookNameDisplay.textContent = cashbook;
     // Cashbook Preview selector (Phase 1 of 3): relabel to match currentType, and populate the
     // dropdown from the same account list already fetched into popupCashbookSelect for the
     // Start-Verification popup (openCashbook()) or by restoreCashbookView()'s own loadCashbooks()
     // call - both callers guarantee that list is already loaded before this function runs.
-    if (cashbookSelectorLabel) cashbookSelectorLabel.textContent = currentType === 'bank' ? '🏦 Bankbook' : '📒 Cashbook';
+    if (cashbookSelectorLabel) cashbookSelectorLabel.textContent = workstream.icon + ' ' + workstream.entityTitle;
     // Audit Workbook is session-scoped (navigateToAuditWorkbook() no-ops with no currentSessionId) -
     // this screen can be reached with or without an active session, so reflect that here each time
     // it's (re)entered rather than leaving the button silently inert with no visual feedback.
@@ -1055,7 +1071,7 @@ async function activateCashbookView(cashbook) {
     // fresh entry (openCashbook()) and a hard-refresh restore (restoreCashbookView()), the latter
     // a no-op via pushInPageNavEntry()'s own dedup since the page's own load-time push already
     // recorded this exact URL.
-    if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, 'Cashbook Preview');
+    if (typeof window.pushInPageNavEntry === 'function') window.pushInPageNavEntry(null, workstream.entityTitle + ' Preview');
     await fetchCashbookData();
 }
 
@@ -1111,6 +1127,11 @@ function exitCashbookView() {
 // dropdown itself is no longer force-disabled while a session is active - confirmed fix - but
 // picking a different value here still has no effect until a new session is started for it).
 async function applyCashbookPreview() {
+    if (currentSessionId && isLocalVendorVerification()) {
+        cashbookStatus.textContent = 'Date-range changes for an active Local Vendor session will be added in a later phase.';
+        cashbookStatus.style.color = '#b45309';
+        return;
+    }
     if (!cashbookSelector) {
         if (currentSessionId) {
             await reconcileActiveSessionRange();
@@ -1291,7 +1312,7 @@ async function fetchCashbookData() {
         const res = await window.ApiUtils.apiFetch(`${API_BASE}/api/verification/preview_cashbook?${params}`);
         if (!res.ok) {
             const err = await res.json();
-            throw new Error(err.detail || 'Failed to fetch cashbook data');
+            throw new Error(err.detail || 'Failed to fetch ' + verificationWorkstream().entity + ' data');
         }
         const data = await res.json();
         cashbookTotalRows = data.total_rows || 0;
@@ -1299,7 +1320,7 @@ async function fetchCashbookData() {
         renderCashbookTable(rows);
         updateCashbookPagination();
         if (rows.length === 0 && cashbookTotalRows === 0) {
-            cashbookTableWrapper.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:20px;">No transactions found for this cashbook and date range.</div>';
+            cashbookTableWrapper.innerHTML = '<div style="text-align:center; color:#94a3b8; padding:20px;">No transactions found for this ' + verificationWorkstream().entity + ' and date range.</div>';
             cashbookRowCount.textContent = '0 rows';
         } else {
             cashbookRowCount.textContent = `${cashbookTotalRows} rows`;
@@ -1344,7 +1365,7 @@ function getCashbookAmountHtml(amount) {
 }
 
 function getCashbookDirectionHtml(row) {
-    const isPayment = row.direction === 'Payment';
+    const isPayment = row.direction === 'Payment' || row.direction === 'Debit note / adjustment';
     const color = isPayment ? '#b91c1c' : '#166534';
     let html = `<span style="font-weight:600; color:${color};">${row.direction || '—'}</span>`;
     if (row.is_balanced === false) {
@@ -1391,7 +1412,7 @@ function renderCashbookTable(rows) {
         <thead style="background:#f8fafc; position:sticky; top:0; z-index:1; border-bottom:2px solid #e2e8f0;">
             <tr>`;
     headers.forEach(h => {
-        const label = h === '__AMOUNT__' ? 'Cash Movement' : h === '__DIRECTION__' ? 'Direction' : h;
+        const label = h === '__AMOUNT__' ? verificationWorkstream().movementLabel : h === '__DIRECTION__' ? 'Direction' : h;
         const align = h === '__AMOUNT__' ? 'right' : 'left';
         html += `<th style="padding:6px 10px; text-align:${align}; font-weight:600; white-space:nowrap;">${label}</th>`;
     });
@@ -1504,7 +1525,7 @@ async function startSessionFromCashbook() {
         return;
     }
     if (!selectedCashbook) {
-        showStatus('⚠️ No cashbook selected.', 'error');
+        showStatus('No ' + verificationWorkstream().entity + ' selected.', 'error');
         return;
     }
     const sessionRange = cashbookDateRangePicker ? cashbookDateRangePicker.getRange() : { start: null, end: null };
@@ -1540,7 +1561,7 @@ async function startSessionFromPopup() {
         return;
     }
     if (!cashbook) {
-        showPopupError('Please select a cashbook.');
+        showPopupError('Please select a ' + verificationWorkstream().entity + '.');
         return;
     }
     if (!start || !end) {
@@ -1930,8 +1951,9 @@ function renderVoucherHeader(voucherId, voucherDate, lines) {
         const statsQuery = voucherStatsCache ? voucherStatsCache.query : 0;
         const statsPending = voucherStatsCache ? voucherStatsCache.pending : 0;
         // Bank Verification (Phase 8): "Cashbook"/📒 vs "Bankbook"/🏦 label, driven by currentType.
-        const bookLabel = currentType === 'bank' ? 'Bankbook' : 'Cashbook';
-        const bookIcon = currentType === 'bank' ? '🏦' : '📒';
+        const workstream = verificationWorkstream();
+        const bookLabel = workstream.entityTitle;
+        const bookIcon = workstream.icon;
         cashbookBar.innerHTML = `
             <div class="cashbook-stats">
                 <span class="cashbook-stat"><span class="cashbook-stat-label">${bookLabel}</span><span class="cashbook-stat-value">${cashbookName}</span></span>
@@ -4958,34 +4980,21 @@ async function searchSupportingDocuments() {
 // (static/index.html) and this page's own hub tiles (#cashVoucherTile/#bankVoucherTile)
 // navigate here with ?type= already chosen, so the hub grid is skipped on those loads.
 function openSessionPopup() {
+    const workstream = verificationWorkstream();
     const title = document.getElementById('sessionPopupTitle');
     const subtitle = document.getElementById('sessionPopupSubtitle');
     const label = document.getElementById('popupCashbookLabel');
-    if (currentType === 'bank') {
-        if (title) title.textContent = '📋 Start Bank Verification';
-        if (subtitle) subtitle.textContent = 'Select a bankbook to begin verification.';
-        if (label) label.textContent = '🏦 Bankbook';
-        if (popupStartBtn) popupStartBtn.textContent = '🚀 Open Bankbook';
-    } else {
-        if (title) title.textContent = '📋 Start Cash Verification';
-        if (subtitle) subtitle.textContent = 'Select a cashbook to begin verification.';
-        if (label) label.textContent = '📒 Cashbook';
-        if (popupStartBtn) popupStartBtn.textContent = '🚀 Open Cashbook';
-    }
+    if (title) title.textContent = 'Start ' + workstream.title + ' Verification';
+    if (subtitle) subtitle.textContent = 'Select a ' + workstream.entity + ' to begin verification.';
+    if (label) label.textContent = workstream.icon + ' ' + workstream.entityTitle;
+    if (popupStartBtn) popupStartBtn.textContent = 'Open ' + workstream.entityTitle;
     popupOverlay.style.display = 'flex';
-    // Confirmed fix: reopening the popup is always a fresh page load (this is the only caller of
-    // openSessionPopup(), and it only ever fires from window.onload), so there is no in-memory
-    // range left to fall back on - use the persisted range as an explicit override (same mechanism
-    // handlePopupPeriodChange()/returnToCashbookFromSession() already use) when one exists, falling back to
-    // A fresh Vouchers entry starts with today's date only, so the common case avoids the
-    // latest-date lookup and a full-month query. Users can widen the range manually.
-    // Confirmed fix: same reasoning applies to the cashbook selection itself (previously missed) -
-    // read the persisted pick and pass it through as loadCashbooks()'s overrideCashbook so its
-    // existing "reapply if still valid" logic picks it back up.
     const persisted = getPersistedVerificationDateRange();
     const persistedCashbook = getPersistedSelectedCashbook();
     if (persisted) {
         loadCashbooks(persisted.start, persisted.end, persistedCashbook);
+    } else if (isLocalVendorVerification()) {
+        loadCashbooks(undefined, undefined, persistedCashbook);
     } else {
         const today = formatDateInput(new Date());
         loadCashbooks(today, today, persistedCashbook);
@@ -5012,7 +5021,8 @@ let lockedHubTile = null;
 // click happens before the reload and the arrival lock after it, so using the same message on
 // both sides makes the reload read as one continuous wait instead of two different ones.
 function hubTileOpeningMessage(tileType) {
-    return tileType === 'bank' ? 'Opening bankbook…' : 'Opening cashbook…';
+    const workstream = VERIFICATION_WORKSTREAMS[tileType] || VERIFICATION_WORKSTREAMS.cash;
+    return 'Opening ' + workstream.entity + '…';
 }
 
 // Locks one hub tile: spinner in place of its contents (hideSpinner restores them) plus the
