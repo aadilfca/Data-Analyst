@@ -207,8 +207,14 @@ class FinancialStatementControlTests(unittest.TestCase):
                 client_id=1, account_code="10-15-115-10-0001", financial_statement_category_id=7
             )
         )
+        note = control_center._clean_control_assignment(
+            control_center.AccountControlAssignmentPayload(
+                client_id=1, account_code="10-15-115-10-0001", note_category_id=9
+            )
+        )
         self.assertEqual(verification["_provided_fields"], {"verification_workstream"})
         self.assertEqual(financial["_provided_fields"], {"financial_statement_category_id"})
+        self.assertEqual(note["_provided_fields"], {"note_category_id"})
 
     def test_upsert_for_financial_tab_does_not_update_verification_column(self):
         assignment = control_center._clean_control_assignment(

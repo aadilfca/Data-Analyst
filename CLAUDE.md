@@ -35,7 +35,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/trial_balance.py → Trial Balance upload, hierarchy, categories, deletion, and shared latest parsed-upload lookup. See CHANGELOG_ARCHIVE.md.
 - routers/account_control_center.py → simplified client/account mapping, Financial Statement/Notes category CRUD, field-scoped assignments, and legacy Account Set APIs. See CHANGELOG_ARCHIVE.md.
 - static/trial_balance.html, static/trial_balance.js → Trial Balance upload/review UI with scoped loading feedback; Period End supplies backend `as_of_date` (no separate input). See CHANGELOG_ARCHIVE.md and the period-input Convention below.
-- static/account_control_center.html, static/account_control_center.js → simplified Verification Accounts grid plus active Financial Statement category editor/mapping; Notes remains a placeholder. See CHANGELOG_ARCHIVE.md.
+- static/account_control_center.html, static/account_control_center.js → simplified Verification Accounts grid plus active Financial Statement and Notes category editors/mappings. See CHANGELOG_ARCHIVE.md.
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
@@ -288,6 +288,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-24: Account Control Centre Phase 2 added the Verification Accounts grid with leaf saves, parent-to-leaf application, account search, and Financial Statement/Notes placeholders.
 - 2026-09-24: Verification routing now prefers simplified account assignments for Cash, Bank, Local Vendor, and Import Vendor, with legacy fallback preserved.
 - 2026-09-24: Account Control Centre Phase 4 activated Financial Statement categories and field-scoped mapping, preserving Verification assignments; Notes remains a later placeholder.
+- 2026-09-24: Account Control Centre Phase 5 activated Notes to Financial Statements categories and field-scoped account mapping; Verification and Financial Statement assignments remain preserved.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Simplified Account Control Centre Notes mapping — Phase 5 — 2026-09-24
+
+**Scope:** Activate Notes to Financial Statements in the simplified Account Control Centre using the same Trial Balance mapping model as Verification and Financial Statements.
+
+**Implementation:** Added a Notes category editor with stable keys, create/rename/reorder/activate controls, a searchable account hierarchy, leaf assignment, and parent-to-leaf application. Note saves send only note_category_id, so Verification and Financial Statement assignments remain unchanged. Existing category APIs and schema were reused; no migration was needed.
+
+**Verification:** Added backend field-preservation coverage and hermetic Playwright checks for Notes loading, assignment, category creation, and cross-tab behavior. The focused Account Control Centre and Verification suites pass (51 tests).
+
+Files: static/account_control_center.html, static/account_control_center.js, static/style.css, tests/test_account_control_center.py, tests/test_account_control_center_ui.py.
+
 ## Simplified Account Control Centre Financial Statement mapping — Phase 4 — 2026-09-24
 
 **Scope:** Activate the Financial Statement side of the simplified Account Control Centre while keeping Verification assignments and legacy Account Sets compatible.

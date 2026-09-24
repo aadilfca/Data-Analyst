@@ -61,6 +61,9 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
         {"id": 10, "client_id": 1, "category_type": "financial_statement", "category_key": "current_assets", "label": "Current assets", "sort_order": 0, "is_active": True},
         {"id": 11, "client_id": 1, "category_type": "financial_statement", "category_key": "current_liabilities", "label": "Current liabilities", "sort_order": 1, "is_active": True},
     ]
+    mapping["note_categories"] = [
+        {"id": 20, "client_id": 1, "category_type": "note", "category_key": "accounting_policies", "label": "Accounting policies", "sort_order": 0, "is_active": True},
+    ]
     calls = []
 
     def handle_api(route, request):
@@ -72,13 +75,17 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
             route.fulfill(status=200, content_type="application/json", body=json.dumps([]))
             return
         if "/api/account-control-center/categories" in url:
+            is_note = "category_type=note" in url
             if request.method == "GET":
-                route.fulfill(status=200, content_type="application/json", body=json.dumps({"categories": mapping["categories"]}))
+                category_list = mapping["note_categories"] if is_note else mapping["categories"]
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"categories": category_list}))
             elif request.method == "POST":
                 body = json.loads(request.post_data or "{}")
-                body["id"] = 12
+                is_note = body.get("category_type") == "note"
+                category_list = mapping["note_categories"] if is_note else mapping["categories"]
+                body["id"] = 21 if is_note else 12
                 body["is_active"] = True
-                mapping["categories"].append(body)
+                category_list.append(body)
                 calls.append((request.method, url, body))
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "category": body}))
             else:
@@ -89,7 +96,9 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
             calls.append((request.method, url, body))
             for account in mapping["accounts"]:
                 if account["is_leaf"] and account["account_code"].startswith(body["parent_account_code"] + "-"):
-                    account["assignment"]["verification_workstream"] = body["verification_workstream"]
+                    for field in ("verification_workstream", "financial_statement_category_id", "note_category_id"):
+                        if field in body:
+                            account["assignment"][field] = body[field]
             route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True, "leaf_count": 2}))
             return
         if url.split("?")[0].endswith("/api/account-control-center/mapping"):
@@ -98,8 +107,9 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
                 calls.append((request.method, url, body))
                 for account in mapping["accounts"]:
                     if account["account_code"] == body["account_code"]:
-                        if "verification_workstream" in body:
-                            account["assignment"]["verification_workstream"] = body["verification_workstream"]
+                        for field in ("verification_workstream", "financial_statement_category_id", "note_category_id"):
+                            if field in body:
+                                account["assignment"][field] = body[field]
                 route.fulfill(status=200, content_type="application/json", body=json.dumps({"saved": True}))
             else:
                 route.fulfill(status=200, content_type="application/json", body=json.dumps(mapping))
@@ -139,6 +149,18 @@ def test_verification_grid_loads_saves_and_applies_parent_assignment(browser, st
     assert page.locator("#accFinancialCategoryList .acc2-category-item").count() == 3
     assert page.locator("#accFinancialPanel").is_visible()
     assert page.locator("#accVerificationPanel").is_hidden()
+    page.locator("#accTabNotes").click()
+    page.wait_for_selector("#accNotesRows .acc2-note-category")
+    assert page.locator("#accNotesCategoryList .acc2-category-item").count() == 1
+    page.locator("select.acc2-note-category[data-acc-code='20-15-50-0001']").select_option("20")
+    page.wait_for_timeout(150)
+    assert any(call[0] == "PUT" and call[2].get("note_category_id") == 20 and "verification_workstream" not in call[2] and "financial_statement_category_id" not in call[2] for call in calls)
+    page.locator("#accNotesCategoryKey").fill("estimates")
+    page.locator("#accNotesCategoryLabel").fill("Key estimates")
+    page.locator("#accNotesCategoryForm button[type='submit']").click()
+    page.wait_for_timeout(150)
+    assert page.locator("#accNotesCategoryList .acc2-category-item").count() == 2
+    assert page.locator("#accNotesPanel").is_visible()
     page.locator("#accTabVerification").click()
     page.locator("#accAccountFilter").fill("Supplier A")
     assert page.locator("#accAccountRows tr").count() == 1
