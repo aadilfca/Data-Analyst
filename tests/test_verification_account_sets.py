@@ -561,8 +561,8 @@ class ImportVendorUiContractTests(unittest.TestCase):
 
         self.assertIn("import_vendor: { title: 'Import Vendor'", source)
         self.assertIn("function isImportVendorVerification() { return currentType === 'import_vendor'; }", source)
-        self.assertIn('/api/verification/latest_import_vendor_date?client_id=', source)
-        self.assertIn('/api/verification/import_vendors?', source)
+        self.assertIn("import_vendor: 'latest_import_vendor_date'", source)
+        self.assertIn("import_vendor: 'import_vendors'", source)
         self.assertIn("session_type: currentType", source)
 
     def test_import_vendor_state_tile_navigation_and_signed_debit_note_are_live(self):
@@ -585,8 +585,8 @@ class LocalVendorUiContractTests(unittest.TestCase):
         source = (root / 'static' / 'verification.js').read_text(encoding='utf-8')
 
         self.assertIn("local_vendor: { title: 'Local Vendor'", source)
-        self.assertIn('/api/verification/latest_local_vendor_date', source)
-        self.assertIn('/api/verification/local_vendors?', source)
+        self.assertIn("local_vendor: 'latest_local_vendor_date'", source)
+        self.assertIn("local_vendor: 'local_vendors'", source)
         self.assertIn("session_type: currentType", source)
         self.assertIn("currentSessionId && isLocalVendorVerification()", source)
         self.assertIn('Date-range changes for an active Local Vendor session', source)
@@ -608,3 +608,56 @@ class LocalVendorUiContractTests(unittest.TestCase):
         self.assertIn('id="localVendorTile" data-verification-type="local_vendor"', html)
         self.assertIn('Cash/Bank payments remain in Treasury verification.', html)
         self.assertIn("{ label: 'Local vendor', url: '/static/verification.html?type=local_vendor', state: 'ready' }", navigation)
+
+
+class AdditionalWorkstreamTests(unittest.TestCase):
+    def test_new_workstream_routing_uses_account_control_without_legacy_fallback(self):
+        assigned = {'mode': 'account_control', 'source': 'account_control', 'workstream': 'payroll', 'account_codes': {'50-75-0001'}, 'account_names': {}}
+        with patch.object(verification, 'get_account_control_routing', return_value=assigned), patch.object(
+            verification, 'get_published_account_set_leaf_accounts'
+        ) as published:
+            routing = verification.get_non_treasury_routing(7, 'payroll')
+        self.assertEqual(routing['account_codes'], {'50-75-0001'})
+        published.assert_not_called()
+
+    def test_new_workstream_voucher_excludes_treasury_legs(self):
+        cash = {'mode': 'account_control', 'account_codes': {'10-15-115-10-0001'}}
+        bank = {'mode': 'account_control', 'account_codes': {'10-15-115-15-0001'}}
+        self.assertTrue(verification.is_non_treasury_voucher(
+            {'rows': [{'account_code': '50-75-0001'}, {'account_code': '60-10-15-0001'}]},
+            '50-75-0001', cash, bank
+        ))
+        self.assertFalse(verification.is_non_treasury_voucher(
+            {'rows': [{'account_code': '50-75-0001'}, {'account_code': '10-15-115-15-0001'}]},
+            '50-75-0001', cash, bank
+        ))
+
+    def test_new_workstream_preview_uses_debit_positive_credit_negative(self):
+        self.assertEqual(verification.non_treasury_preview_presentation({'debit': 125, 'credit': 0}, 'export_customer'), {'direction': 'Export Customer invoice / receivable', 'amount': 125})
+        self.assertEqual(verification.non_treasury_preview_presentation({'debit': 0, 'credit': 25}, 'payroll'), {'direction': 'Payroll reversal / adjustment', 'amount': -25})
+
+    def test_new_workstream_endpoint_uses_shared_discovery_helper(self):
+        with patch.object(verification, '_validate_workstream_dates'), patch.object(
+            verification, '_discover_non_treasury_accounts', return_value={'accounts': [], 'count': 0, 'setup_required': False}
+        ) as discover:
+            result = verification.get_contractor_accounts(7, '2026-01-01', '2026-01-31')
+        self.assertEqual(result['accounts'], [])
+        discover.assert_called_once_with(7, 'contractor', '2026-01-01', '2026-01-31')
+
+
+class AdditionalWorkstreamUiContractTests(unittest.TestCase):
+    def test_export_customer_payroll_contractor_are_live_and_treasury_safe(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / 'static' / 'verification.js').read_text(encoding='utf-8')
+        html = (root / 'static' / 'verification.html').read_text(encoding='utf-8')
+        for workstream, latest, discovery, tile in (
+            ('export_customer', 'latest_export_customer_date', 'export_customers', 'exportCustomerTile'),
+            ('payroll', 'latest_payroll_date', 'payroll_accounts', 'payrollTile'),
+            ('contractor', 'latest_contractor_date', 'contractor_accounts', 'contractorTile'),
+        ):
+            self.assertIn(workstream + ': { title:', source)
+            self.assertIn(latest, source)
+            self.assertIn(discovery, source)
+            self.assertIn('id="' + tile + '" data-verification-type="' + workstream + '"', html)
+        self.assertIn('function isNonTreasuryVerification()', source)
+        self.assertIn('Cash/Bank payments remain in Treasury verification.', html)

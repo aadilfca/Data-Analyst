@@ -34,6 +34,9 @@ const VERIFICATION_WORKSTREAMS = Object.freeze({
     bank: { title: 'Bank', entity: 'bankbook', entityTitle: 'Bankbook', icon: '🏦', movementLabel: 'Bank Movement' },
     local_vendor: { title: 'Local Vendor', entity: 'local vendor', entityTitle: 'Local Vendor', icon: '🏪', movementLabel: 'Vendor Movement' },
     import_vendor: { title: 'Import Vendor', entity: 'import vendor', entityTitle: 'Import Vendor', icon: '🚢', movementLabel: 'Import Vendor Movement' },
+    export_customer: { title: 'Export Customer', entity: 'export customer', entityTitle: 'Export Customer', icon: '🌍', movementLabel: 'Export Customer Movement' },
+    payroll: { title: 'Payroll', entity: 'payroll account', entityTitle: 'Payroll Account', icon: '👥', movementLabel: 'Payroll Movement' },
+    contractor: { title: 'Contractor', entity: 'contractor account', entityTitle: 'Contractor Account', icon: '🔧', movementLabel: 'Contractor Movement' },
 });
 const viewParam = urlSearchParamsForType.get('view');
 const requestedVerificationType = urlSearchParamsForType.get('type');
@@ -44,7 +47,8 @@ const currentType = (viewParam === 'bankbook') ? 'bank'
 function verificationWorkstream() { return VERIFICATION_WORKSTREAMS[currentType]; }
 function isLocalVendorVerification() { return currentType === 'local_vendor'; }
 function isImportVendorVerification() { return currentType === 'import_vendor'; }
-function isVendorVerification() { return isLocalVendorVerification() || isImportVendorVerification(); }
+function isNonTreasuryVerification() { return ['local_vendor', 'import_vendor', 'export_customer', 'payroll', 'contractor'].includes(currentType); }
+function isVendorVerification() { return isNonTreasuryVerification(); }
 
 let currentSessionId = null;
 let currentDetailId = null;
@@ -823,6 +827,7 @@ const VERIFICATION_DATE_RANGE_STORAGE_KEY = 'verificationDateRange';
 function verificationDateRangeStorageKey() {
     if (isLocalVendorVerification()) return VERIFICATION_DATE_RANGE_STORAGE_KEY + ':local_vendor';
     if (isImportVendorVerification()) return VERIFICATION_DATE_RANGE_STORAGE_KEY + ':import_vendor';
+    if (isNonTreasuryVerification()) return VERIFICATION_DATE_RANGE_STORAGE_KEY + ':' + currentType;
     return VERIFICATION_DATE_RANGE_STORAGE_KEY;
 }
 
@@ -868,6 +873,7 @@ const VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY = 'verificationSelectedCashbook
 function selectedWorkstreamStorageKey() {
     if (isLocalVendorVerification()) return VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY + ':local_vendor';
     if (isImportVendorVerification()) return VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY + ':import_vendor';
+    if (isNonTreasuryVerification()) return VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY + ':' + currentType;
     return VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY;
 }
 
@@ -894,6 +900,27 @@ function getPersistedSelectedCashbook() {
 // (falls back to today's calendar month if the client has no matching data at all) - replaces the
 // old hardcoded "always search the current calendar month" default, which failed whenever a
 // client's latest data wasn't in the current month.
+function nonTreasuryLatestDateUrl(clientId) {
+    const endpoints = {
+        local_vendor: 'latest_local_vendor_date',
+        import_vendor: 'latest_import_vendor_date',
+        export_customer: 'latest_export_customer_date',
+        payroll: 'latest_payroll_date',
+        contractor: 'latest_contractor_date',
+    };
+    return API_BASE + '/api/verification/' + endpoints[currentType] + '?client_id=' + encodeURIComponent(clientId);
+}
+function nonTreasuryDiscoveryUrl(clientId, start, end) {
+    const endpoints = {
+        local_vendor: 'local_vendors',
+        import_vendor: 'import_vendors',
+        export_customer: 'export_customers',
+        payroll: 'payroll_accounts',
+        contractor: 'contractor_accounts',
+    };
+    return API_BASE + '/api/verification/' + endpoints[currentType] + '?' + new URLSearchParams({ client_id: clientId, date_start: start, date_end: end });
+}
+
 async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
     const workstream = verificationWorkstream();
     const previousSelection = overrideCashbook || popupCashbookSelect.value;
@@ -911,11 +938,9 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
     if (!start || !end) {
         let anchorDate = new Date();
         try {
-            const latestUrl = isLocalVendorVerification()
-                ? API_BASE + '/api/verification/latest_local_vendor_date?client_id=' + encodeURIComponent(clientId)
-                : isImportVendorVerification()
-                    ? API_BASE + '/api/verification/latest_import_vendor_date?client_id=' + encodeURIComponent(clientId)
-                    : API_BASE + '/api/verification/latest_cashbook_date?' + new URLSearchParams({ client_id: clientId, category_group: currentType });
+            const latestUrl = isNonTreasuryVerification()
+                ? nonTreasuryLatestDateUrl(clientId)
+                : API_BASE + '/api/verification/latest_cashbook_date?' + new URLSearchParams({ client_id: clientId, category_group: currentType });
             const latestRes = await window.ApiUtils.apiFetch(latestUrl);
             if (!latestRes.ok) {
                 const error = await latestRes.json();
@@ -927,7 +952,7 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
                 popupCashbookSelect.innerHTML = '<option value="">' + workstream.title + ' setup required</option>';
                 popupCashbookSelect.disabled = true;
                 setPopupActionButtonsDisabled(true);
-                showPopupError('Publish the ' + workstream.title + 's Account Set in Account Control Centre before starting verification.');
+                showPopupError('Configure ' + workstream.title + ' accounts in Account Control Centre before starting verification.');
                 return;
             }
             if (latestData.latest_date) anchorDate = new Date(latestData.latest_date + 'T00:00:00');
@@ -942,11 +967,9 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
     if (popupDateRangePicker) popupDateRangePicker.setRange(start, end);
     try {
         const params = new URLSearchParams({ client_id: clientId, date_start: start, date_end: end });
-        const url = isLocalVendorVerification()
-            ? API_BASE + '/api/verification/local_vendors?' + params
-            : isImportVendorVerification()
-                ? API_BASE + '/api/verification/import_vendors?' + params
-                : API_BASE + '/api/verification/cashbooks?' + new URLSearchParams({ ...Object.fromEntries(params), category_group: currentType });
+        const url = isNonTreasuryVerification()
+            ? nonTreasuryDiscoveryUrl(clientId, start, end)
+            : API_BASE + '/api/verification/cashbooks?' + new URLSearchParams({ ...Object.fromEntries(params), category_group: currentType });
         const res = await window.ApiUtils.apiFetch(url);
         if (!res.ok) {
             const err = await res.json();
@@ -961,7 +984,7 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
             showPopupError('Publish the ' + workstream.title + 's Account Set in Account Control Centre before starting verification.');
             return;
         }
-        const candidates = isVendorVerification() ? data.vendors : data.cashbooks;
+        const candidates = isNonTreasuryVerification() ? (data.vendors || data.accounts || []) : data.cashbooks;
         if (candidates && candidates.length > 0) {
             popupCashbookSelect.innerHTML = '<option value="">-- Select ' + workstream.entityTitle + ' --</option>';
             candidates.forEach(candidate => {
@@ -977,8 +1000,8 @@ async function loadCashbooks(overrideStart, overrideEnd, overrideCashbook) {
             popupCashbookSelect.innerHTML = '<option value="">No ' + workstream.entityTitle + 's found</option>';
             popupCashbookSelect.disabled = true;
             setPopupActionButtonsDisabled(true);
-            const guidance = isVendorVerification()
-                ? 'Confirm that the published ' + workstream.title + 's Account Set contains vendor accounts and that eligible non-Cash/Bank JVs exist in this date range.'
+            const guidance = isNonTreasuryVerification()
+                ? 'Confirm that Account Control Centre contains ' + workstream.title + ' accounts and that eligible non-Cash/Bank JVs exist in this date range.'
                 : 'Make sure you have uploaded data containing ' + (currentType === 'bank' ? 'BPV/BRV' : 'CPV/CRV') + ' vouchers.\nThe column names must be exactly: "Voucher ID", "Account Name", "Debit", "Credit".';
             showPopupError('No ' + workstream.entity + 's found for this client.\n' + guidance);
         }

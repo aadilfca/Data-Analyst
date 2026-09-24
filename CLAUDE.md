@@ -39,7 +39,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
-- routers/verification.py + static/verification.* → Cash/Bank Verification sessions, simplified account-assignment routing with legacy Account Set/prefix fallback, JV Treasury priority, vendor eligibility, ledger-signed previews, evidence/Forms, checks, status, saves, navigation, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
+- routers/verification.py + static/verification.* → Cash/Bank Verification plus Local/Import Vendor, Export Customer, Payroll, and Contractor JV workstreams; simplified account-assignment routing, Treasury priority, sessions, previews, evidence, checks, statuses, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
@@ -202,6 +202,7 @@ One line per file group: what it is now. Full build history for every entry live
 ## Status log
 
 Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; performance findings also reference the investigation documents.
+- 2026-09-24: Verification Phase 6 activated Export Customer, Payroll, and Contractor JV workstreams with Treasury-safe routing and independent discovery/session dates.
 
 - 2026-07-09: main.py NameError fixed; clients module reviewed, no issues found.
 - 2026-07-12: Upload page redesign, 3 phases, plus flush-layout and navbar-gap fixes.

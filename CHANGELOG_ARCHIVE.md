@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Verification workstreams — Phase 6 — 2026-09-24
+
+**Scope:** Activate Export Customer, Payroll, and Contractor Verification while retaining the existing Cash, Bank, Local Vendor, and Import Vendor flows.
+
+**Implementation:** Added Account Control Centre routing, account discovery/latest-date endpoints, independent date and account selection state, Treasury-first voucher eligibility, debit-positive/credit-negative JV presentation for the new workstreams, and live Verification cards. Cash/Bank payments remain in Treasury workstreams.
+
+**Verification:** Added backend and UI contract coverage; the focused Account Control Centre and Verification regression suite passes (56 tests).
+
+Files: routers/verification.py, static/verification.html, static/verification.js, tests/test_verification_account_sets.py.
+
 ## Simplified Account Control Centre Notes mapping — Phase 5 — 2026-09-24
 
 **Scope:** Activate Notes to Financial Statements in the simplified Account Control Centre using the same Trial Balance mapping model as Verification and Financial Statements.
