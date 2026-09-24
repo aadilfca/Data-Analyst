@@ -277,6 +277,30 @@ NON_TREASURY_WORKSTREAM_LABELS = {
 }
 
 
+NON_TREASURY_PREVIEW_RULES = {
+    'local_vendor': {
+        'debit': {'direction': 'Debit note / adjustment', 'sign': -1},
+        'credit': {'direction': 'Vendor bill / payable', 'sign': 1},
+    },
+    'import_vendor': {
+        'debit': {'direction': 'Import vendor debit note / adjustment', 'sign': -1},
+        'credit': {'direction': 'Import vendor bill / payable', 'sign': 1},
+    },
+    'export_customer': {
+        'debit': {'direction': 'Export Customer invoice / receivable', 'sign': 1},
+        'credit': {'direction': 'Export Customer credit note / adjustment', 'sign': -1},
+    },
+    'payroll': {
+        'debit': {'direction': 'Payroll charge / salary expense', 'sign': 1},
+        'credit': {'direction': 'Payroll reversal / adjustment', 'sign': -1},
+    },
+    'contractor': {
+        'debit': {'direction': 'Contractor cost / payable', 'sign': 1},
+        'credit': {'direction': 'Contractor credit note / adjustment', 'sign': -1},
+    },
+}
+
+
 def get_non_treasury_routing(client_id: int, workstream: str) -> dict[str, Any]:
     """Resolve account-control routing for JV/billing workstreams; only legacy vendors have fallback sets."""
     if workstream == 'local_vendor':
@@ -299,25 +323,15 @@ def is_non_treasury_voucher(voucher: dict, account_code: str, cash_routing: dict
 
 def non_treasury_preview_presentation(row: dict, workstream: str) -> Optional[dict[str, Any]]:
     """Present non-Treasury JV legs while preserving vendor bill sign conventions."""
-    if workstream == 'local_vendor':
-        return local_vendor_preview_presentation(row)
-    if workstream == 'import_vendor':
-        return import_vendor_preview_presentation(row)
-    label = NON_TREASURY_WORKSTREAM_LABELS.get(workstream, workstream.replace('_', ' ').title())
+    rule = NON_TREASURY_PREVIEW_RULES.get(workstream)
+    if not rule:
+        return None
     if row.get('debit', 0) > 0:
-        direction = {
-            'export_customer': f'{label} invoice / receivable',
-            'payroll': 'Payroll charge / salary expense',
-            'contractor': 'Contractor cost / payable',
-        }.get(workstream, f'{label} bill / payable')
-        return {'direction': direction, 'amount': row['debit']}
+        side = rule['debit']
+        return {'direction': side['direction'], 'amount': side['sign'] * row['debit']}
     if row.get('credit', 0) > 0:
-        direction = {
-            'export_customer': f'{label} credit note / adjustment',
-            'payroll': 'Payroll reversal / adjustment',
-            'contractor': 'Contractor credit note / adjustment',
-        }.get(workstream, f'{label} credit note / adjustment')
-        return {'direction': direction, 'amount': -row['credit']}
+        side = rule['credit']
+        return {'direction': side['direction'], 'amount': side['sign'] * row['credit']}
     return None
 
 

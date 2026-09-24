@@ -573,7 +573,8 @@ class ImportVendorUiContractTests(unittest.TestCase):
 
         self.assertIn("VERIFICATION_DATE_RANGE_STORAGE_KEY + ':import_vendor'", source)
         self.assertIn("VERIFICATION_SELECTED_CASHBOOK_STORAGE_KEY + ':import_vendor'", source)
-        self.assertIn("'Import vendor debit note / adjustment'", source)
+        self.assertIn('function getVerificationLineAmount(row)', source)
+        self.assertIn("const isPayment = Number(row.amount) < 0 || row.direction === 'Payment';", source)
         self.assertIn('id="importVendorTile" data-verification-type="import_vendor"', html)
         self.assertIn('Cash/Bank payments remain in Treasury verification.', html)
         self.assertIn("{ label: 'Import vendor', url: '/static/verification.html?type=import_vendor', state: 'ready' }", navigation)
@@ -636,6 +637,18 @@ class AdditionalWorkstreamTests(unittest.TestCase):
         self.assertEqual(verification.non_treasury_preview_presentation({'debit': 125, 'credit': 0}, 'export_customer'), {'direction': 'Export Customer invoice / receivable', 'amount': 125})
         self.assertEqual(verification.non_treasury_preview_presentation({'debit': 0, 'credit': 25}, 'payroll'), {'direction': 'Payroll reversal / adjustment', 'amount': -25})
 
+    def test_all_non_treasury_workstreams_use_explicit_accounting_side_rules(self):
+        expected = {
+            'local_vendor': ('Debit note / adjustment', 'Vendor bill / payable', -150, 25),
+            'import_vendor': ('Import vendor debit note / adjustment', 'Import vendor bill / payable', -150, 25),
+            'export_customer': ('Export Customer invoice / receivable', 'Export Customer credit note / adjustment', 150, -25),
+            'payroll': ('Payroll charge / salary expense', 'Payroll reversal / adjustment', 150, -25),
+            'contractor': ('Contractor cost / payable', 'Contractor credit note / adjustment', 150, -25),
+        }
+        for workstream, (debit_label, credit_label, debit_amount, credit_amount) in expected.items():
+            self.assertEqual(verification.non_treasury_preview_presentation({'debit': 150, 'credit': 0}, workstream), {'direction': debit_label, 'amount': debit_amount})
+            self.assertEqual(verification.non_treasury_preview_presentation({'debit': 0, 'credit': 25}, workstream), {'direction': credit_label, 'amount': credit_amount})
+
     def test_new_workstream_endpoint_uses_shared_discovery_helper(self):
         with patch.object(verification, '_validate_workstream_dates'), patch.object(
             verification, '_discover_non_treasury_accounts', return_value={'accounts': [], 'count': 0, 'setup_required': False}
@@ -661,3 +674,10 @@ class AdditionalWorkstreamUiContractTests(unittest.TestCase):
             self.assertIn('id="' + tile + '" data-verification-type="' + workstream + '"', html)
         self.assertIn('function isNonTreasuryVerification()', source)
         self.assertIn('Cash/Bank payments remain in Treasury verification.', html)
+        self.assertIn("movementLabel: 'Export Receivable Movement'", source)
+        self.assertIn("movementLabel: 'Payroll Expense Movement'", source)
+        self.assertIn("movementLabel: 'Contractor Cost Movement'", source)
+        self.assertIn('function getVerificationLineAmount(row)', source)
+        self.assertIn('total += parseVoucherAmount(getVerificationLineAmount(line.row_data || {}));', source)
+        self.assertIn('const amount = getVerificationLineAmount(row);', source)
+        self.assertIn("const isPayment = Number(row.amount) < 0 || row.direction === 'Payment';", source)

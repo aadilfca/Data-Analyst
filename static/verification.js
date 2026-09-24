@@ -34,9 +34,9 @@ const VERIFICATION_WORKSTREAMS = Object.freeze({
     bank: { title: 'Bank', entity: 'bankbook', entityTitle: 'Bankbook', icon: '🏦', movementLabel: 'Bank Movement' },
     local_vendor: { title: 'Local Vendor', entity: 'local vendor', entityTitle: 'Local Vendor', icon: '🏪', movementLabel: 'Vendor Movement' },
     import_vendor: { title: 'Import Vendor', entity: 'import vendor', entityTitle: 'Import Vendor', icon: '🚢', movementLabel: 'Import Vendor Movement' },
-    export_customer: { title: 'Export Customer', entity: 'export customer', entityTitle: 'Export Customer', icon: '🌍', movementLabel: 'Export Customer Movement' },
-    payroll: { title: 'Payroll', entity: 'payroll account', entityTitle: 'Payroll Account', icon: '👥', movementLabel: 'Payroll Movement' },
-    contractor: { title: 'Contractor', entity: 'contractor account', entityTitle: 'Contractor Account', icon: '🔧', movementLabel: 'Contractor Movement' },
+    export_customer: { title: 'Export Customer', entity: 'export customer', entityTitle: 'Export Customer', icon: '🌍', movementLabel: 'Export Receivable Movement' },
+    payroll: { title: 'Payroll', entity: 'payroll account', entityTitle: 'Payroll Account', icon: '👥', movementLabel: 'Payroll Expense Movement' },
+    contractor: { title: 'Contractor', entity: 'contractor account', entityTitle: 'Contractor Account', icon: '🔧', movementLabel: 'Contractor Cost Movement' },
 });
 const viewParam = urlSearchParamsForType.get('view');
 const requestedVerificationType = urlSearchParamsForType.get('type');
@@ -1402,7 +1402,7 @@ function getCashbookAmountHtml(amount) {
 }
 
 function getCashbookDirectionHtml(row) {
-    const isPayment = row.direction === 'Payment' || row.direction === 'Debit note / adjustment' || row.direction === 'Import vendor debit note / adjustment';
+    const isPayment = Number(row.amount) < 0 || row.direction === 'Payment';
     const color = isPayment ? '#b91c1c' : '#166534';
     let html = `<span style="font-weight:600; color:${color};">${row.direction || '—'}</span>`;
     if (row.is_balanced === false) {
@@ -2963,11 +2963,27 @@ function parseVoucherAmount(value) {
     return isNaN(n) ? 0 : n;
 }
 
+// Non-Treasury workstreams show debit-side costs/invoices as positive and credit-side
+// reversals/adjustments as negative. Treasury and legacy preview behavior remains unchanged.
+function getVerificationLineAmount(row) {
+    const raw = getVoucherLineAmount(row);
+    if (!isNonTreasuryVerification()) return raw;
+    const debit = getVoucherLineAlias(row, VOUCHER_LINE_DEBIT_ALIASES);
+    const credit = getVoucherLineAlias(row, VOUCHER_LINE_CREDIT_ALIASES);
+    const debitAmount = debit === '—' ? null : parseVoucherAmount(debit);
+    const creditAmount = credit === '—' ? null : parseVoucherAmount(credit);
+    if (debitAmount !== null && debitAmount !== 0) return debit;
+    if (creditAmount !== null && creditAmount !== 0) {
+        return String(credit).trim().startsWith('-') ? String(credit).trim() : '-' + String(credit).trim();
+    }
+    return raw;
+}
+
 // Sums Amount across all of a voucher's lines, for the header subtitle and the total line.
 function computeVoucherTotal(lines) {
     let total = 0;
     (lines || []).forEach(line => {
-        total += parseVoucherAmount(getVoucherLineAmount(line.row_data || {}));
+        total += parseVoucherAmount(getVerificationLineAmount(line.row_data || {}));
     });
     return total;
 }
@@ -3330,7 +3346,7 @@ async function renderVoucherLines(lines, voucherDate) {
         });
         const accountName = getVoucherLineAlias(row, VOUCHER_LINE_ACCOUNT_NAME_ALIASES);
         const description = getVoucherLineAlias(row, VOUCHER_LINE_DESCRIPTION_ALIASES);
-        const amount = getVoucherLineAmount(row);
+        const amount = getVerificationLineAmount(row);
         // Phase 4: validation-status color, moved here from the removed .amount-row (same
         // status-pending/failed/passed convention as before), now driving the status cell's color.
         const validationStatus = (line.validation_status || 'Pending').toLowerCase();

@@ -1,5 +1,15 @@
 # Changelog Archive
 
+## Verification workstream accounting rules — Phase 7 — 2026-09-24
+
+**Scope:** Make Export Customer, Payroll, Contractor, Local Vendor, and Import Vendor presentation rules explicit and consistent across Preview and the live verification table.
+
+**Implementation:** Centralized each workstream's debit/credit direction and sign rule in the Verification backend. Non-Treasury session rows now preserve debit-positive/credit-reversal-negative presentation, movement headers use workstream-specific labels, and direction colors follow the signed amount. Cash/Bank behavior is unchanged.
+
+**Verification:** Added rule-matrix and frontend contract coverage; the focused Account Control Centre and Verification regression suite passes (57 tests).
+
+Files: routers/verification.py, static/verification.js, tests/test_verification_account_sets.py.
+
 ## Verification workstreams — Phase 6 — 2026-09-24
 
 **Scope:** Activate Export Customer, Payroll, and Contractor Verification while retaining the existing Cash, Bank, Local Vendor, and Import Vendor flows.
