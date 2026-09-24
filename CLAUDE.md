@@ -39,7 +39,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/audit_rules.py → Audit Rules APIs, client caches, and neutral snapshots with targeted rebuilding, evaluation fingerprints, and guarded publication. See CHANGELOG_ARCHIVE.md.
 - static/audit_rules.html, static/audit_rules.js → Two-pane Audit Rules editor for Documents, Cross-checks, Categories, Voucher Checks and Assertions, plus Assign Categories. See CHANGELOG_ARCHIVE.md.
 - category_control_center_prototype.html → standalone review-only prototype for the Category Control Center redesign; sample data only, no backend connection.
-- routers/verification.py + static/verification.* → Cash/Bank Verification sessions, published Account Set routing (including JV treasury legs) and reusable Local Vendor eligibility foundation, ledger-signed Cashbook Preview, zero-safe verification table amounts, prefix fallback, evidence/Forms, checks, status, saves, navigation, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
+- routers/verification.py + static/verification.* → Cash/Bank Verification sessions, simplified account-assignment routing with legacy Account Set/prefix fallback, JV Treasury priority, vendor eligibility, ledger-signed previews, evidence/Forms, checks, status, saves, navigation, and workflow loading feedback. See CHANGELOG_ARCHIVE.md.
 - static/template-viewer.html, static/template-viewer.js → reusable `?template=N` Data Bank viewer reached from Verification's Client Data Links. See CHANGELOG_ARCHIVE.md.
 - static/search_index.js → deleted; feature registry merged into `NAV_MANIFEST` in `client_context.js` — do not recreate. See CHANGELOG_ARCHIVE.md.
 - static/loading_ui.js → shared `window.LoadingUI` primitives, including token-based target-aware global progress-cursor ownership. See CHANGELOG_ARCHIVE.md.
@@ -286,6 +286,7 @@ Detailed history: `CHANGELOG_ARCHIVE.md`, under the matching project heading; pe
 - 2026-09-24: Import Vendor Verification UI, quick navigation, separate date state, and Treasury-safe session entry are now available.
 - 2026-09-24: Simplified Account Control Centre Phase 1 added one client/account assignment foundation for Verification, Financial Statements, and Notes; legacy Account Sets remain compatible.
 - 2026-09-24: Account Control Centre Phase 2 added the Verification Accounts grid with leaf saves, parent-to-leaf application, account search, and Financial Statement/Notes placeholders.
+- 2026-09-24: Verification routing now prefers simplified account assignments for Cash, Bank, Local Vendor, and Import Vendor, with legacy fallback preserved.
 
 ## Self-maintenance
 - Add a one-line entry to the Status log with date + what changed — obey the Status log budget/self-check rules in Workflow rules above (~25 words max, no verification detail, full writeup goes to `CHANGELOG_ARCHIVE.md`)

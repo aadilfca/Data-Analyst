@@ -8,6 +8,14 @@
 
 **Verification:** Focused Account Control Centre tests pass (10). UI grid, category-definition screens, and live Postgres/browser testing remain subsequent phases.
 
+## Simplified Verification routing integration — Phase 3 — 2026-09-24
+
+**Scope:** Connect Cash, Bank, Local Vendor, and Import Vendor Verification discovery/session/preview paths to simplified account assignments without removing legacy routing.
+
+**Implementation:** Added account-control routing lookup by client/workstream. Simplified assignments are preferred whenever configured; otherwise published Account Sets and Cash/Bank voucher-prefix fallback continue to operate. All account-code branches accept both routing sources, preserving Treasury priority over vendor vouchers and existing frontend response contracts.
+
+**Verification:** Existing Verification routing tests plus new simplified-assignment tests pass (34 tests).
+
 ## Simplified Account Control Centre grid — Phase 2 — 2026-09-24
 
 **Scope:** Replace the legacy Account Set editor screen with the first simplified tab and mapping grid. Legacy Account Set APIs and database tables remain available for compatibility.

@@ -195,6 +195,36 @@ def get_account_code_value(row_data: dict) -> Optional[str]:
     return str(value) if value is not None else None
 
 
+def get_account_control_routing(client_id: int, workstream: str) -> Optional[dict[str, Any]]:
+    """Return simplified account assignments for one Verification workstream, if configured."""
+    try:
+        rows = execute_query_pg(
+            """SELECT account_code FROM account_control_assignments
+               WHERE client_id = %s AND verification_workstream = %s
+               ORDER BY account_code""",
+            (client_id, workstream),
+        )
+    except RuntimeError:
+        # Unit tools and an unconfigured local environment may not have Postgres available;
+        # the legacy Account Set/prefix fallback remains the safe compatibility path there.
+        return None
+    account_codes = {str(row.get("account_code")).strip() for row in rows if row.get("account_code") is not None}
+    if not account_codes:
+        return None
+    return {
+        "mode": "account_control",
+        "source": "account_control",
+        "workstream": workstream,
+        "account_codes": account_codes,
+        "account_names": {},
+    }
+
+
+def _routing_uses_account_codes(routing: dict) -> bool:
+    """Account-code matching is shared by simplified assignments and legacy published sets."""
+    return routing.get("mode") in ("account_control", "account_set")
+
+
 def get_published_account_set_routing(client_id: int, set_key: str) -> dict[str, Any]:
     """Return exact published Account Set codes, or an explicit unconfigured result."""
     published = get_published_account_set_leaf_accounts(client_id, set_key)
@@ -204,8 +234,11 @@ def get_published_account_set_routing(client_id: int, set_key: str) -> dict[str,
 
 
 def get_treasury_routing(client_id: int, category_group: Optional[str]) -> dict[str, Any]:
-    """Prefer a published Cash/Bank Account Set; retain prefixes until one exists."""
+    """Prefer simplified Cash/Bank assignments, then legacy Account Sets, then prefixes."""
     if category_group in ('cash', 'bank'):
+        assigned = get_account_control_routing(client_id, category_group)
+        if assigned:
+            return assigned
         published = get_published_account_set_leaf_accounts(client_id, f'{category_group}_accounts')
         if published:
             accounts = published['accounts']
@@ -225,13 +258,13 @@ def get_treasury_routing(client_id: int, category_group: Optional[str]) -> dict[
 
 
 def get_local_vendor_routing(client_id: int) -> dict[str, Any]:
-    """Local Vendor requires a published Account Set; it intentionally has no prefix fallback."""
-    return get_published_account_set_routing(client_id, 'local_vendors')
+    """Prefer simplified Local Vendor assignments, with legacy Account Set compatibility."""
+    return get_account_control_routing(client_id, 'local_vendor') or get_published_account_set_routing(client_id, 'local_vendors')
 
 
 def get_import_vendor_routing(client_id: int) -> dict[str, Any]:
-    """Import Vendor requires a published Account Set; it intentionally has no prefix fallback."""
-    return get_published_account_set_routing(client_id, 'import_vendors')
+    """Prefer simplified Import Vendor assignments, with legacy Account Set compatibility."""
+    return get_account_control_routing(client_id, 'import_vendor') or get_published_account_set_routing(client_id, 'import_vendors')
 
 
 def local_vendor_label(account_code: str, account_name: Optional[str]) -> str:
@@ -281,7 +314,7 @@ def is_import_vendor_voucher(voucher: dict, vendor_account_code: str, cash_routi
 def row_matches_treasury_account_set(row_data: dict, routing: dict) -> bool:
     """Match only the imported account code, never a fuzzy account-name approximation."""
     code = get_account_code_value(row_data)
-    return routing.get('mode') == 'account_set' and code in routing.get('account_codes', set())
+    return _routing_uses_account_codes(routing) and code in routing.get('account_codes', set())
 
 
 def account_set_voucher_type(session_type: str, cashbook_row: dict) -> Optional[str]:
@@ -1417,7 +1450,7 @@ def get_local_vendors(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     vendor_routing = get_local_vendor_routing(client_id)
-    if vendor_routing['mode'] != 'account_set':
+    if not _routing_uses_account_codes(vendor_routing):
         return {'vendors': [], 'count': 0, 'setup_required': True}
     rows = load_local_vendor_voucher_rows(client_id, vendor_routing['account_codes'], date_start, date_end)
     vendors = collect_local_vendor_labels(rows, vendor_routing, get_treasury_routing(client_id, 'cash'), get_treasury_routing(client_id, 'bank'))
@@ -1431,7 +1464,7 @@ def get_latest_local_vendor_date(client_id: int = Query(..., description="Client
     if not client:
         raise HTTPException(404, "Client not found or inactive")
     vendor_routing = get_local_vendor_routing(client_id)
-    if vendor_routing['mode'] != 'account_set':
+    if not _routing_uses_account_codes(vendor_routing):
         return {'latest_date': None, 'setup_required': True}
     cash_routing = get_treasury_routing(client_id, 'cash')
     bank_routing = get_treasury_routing(client_id, 'bank')
@@ -1466,7 +1499,7 @@ def get_import_vendors(
     if date_start > date_end:
         raise HTTPException(400, "Start date must be before or equal to end date.")
     vendor_routing = get_import_vendor_routing(client_id)
-    if vendor_routing['mode'] != 'account_set':
+    if not _routing_uses_account_codes(vendor_routing):
         return {'vendors': [], 'count': 0, 'setup_required': True}
     rows = load_local_vendor_voucher_rows(client_id, vendor_routing['account_codes'], date_start, date_end)
     vendors = collect_local_vendor_labels(rows, vendor_routing, get_treasury_routing(client_id, 'cash'), get_treasury_routing(client_id, 'bank'))
@@ -1480,7 +1513,7 @@ def get_latest_import_vendor_date(client_id: int = Query(..., description="Clien
     if not client:
         raise HTTPException(404, "Client not found or inactive")
     vendor_routing = get_import_vendor_routing(client_id)
-    if vendor_routing['mode'] != 'account_set':
+    if not _routing_uses_account_codes(vendor_routing):
         return {'latest_date': None, 'setup_required': True}
     cash_routing = get_treasury_routing(client_id, 'cash')
     bank_routing = get_treasury_routing(client_id, 'bank')
@@ -1543,7 +1576,7 @@ def get_cashbooks(
             voucher_id = row_data.get('Voucher ID')
             cb_name = (
                 account_set_cashbook_name(row_data, routing)
-                if routing['mode'] == 'account_set'
+                if _routing_uses_account_codes(routing)
                 else extract_cashbook_name(row_data, client_prefixes)
             )
             if debug:
@@ -1633,7 +1666,7 @@ def get_latest_cashbook_date(
                     continue
                 matched_cashbook = (
                     account_set_cashbook_name(row_data, routing)
-                    if routing['mode'] == 'account_set'
+                    if _routing_uses_account_codes(routing)
                     else extract_cashbook_name(row_data, client_prefixes)
                 )
                 if matched_cashbook:
@@ -1746,8 +1779,8 @@ def start_verification_session(
         else get_treasury_routing(client_id, session_type)
     )
     vendor_workstream = 'Local Vendor' if session_type == 'local_vendor' else 'Import Vendor'
-    if is_vendor_session and routing['mode'] != 'account_set':
-        raise HTTPException(400, f"Publish the {vendor_workstream}s Account Set before starting verification.")
+    if is_vendor_session and not _routing_uses_account_codes(routing):
+        raise HTTPException(400, f"Configure {vendor_workstream} accounts in Account Control Centre before starting verification.")
     selected_vendor_code = local_vendor_code_from_label(cashbook_name) if is_vendor_session else None
     if is_vendor_session and not selected_vendor_code:
         raise HTTPException(400, f"Select an {vendor_workstream} account from the configured list.")
@@ -1840,7 +1873,7 @@ def start_verification_session(
         # appears among this voucher's legs - must also be the structurally correct side for
         # this voucher's OWN category (see is_cashbook_leg_row()), not just a name match, or a
         # voucher whose other leg happens to share a name with an unrelated cashbook can leak in.
-        if routing['mode'] == 'account_set':
+        if _routing_uses_account_codes(routing):
             cashbook_row = next((
                 r for r in data['rows']
                 if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
@@ -1854,7 +1887,7 @@ def start_verification_session(
             continue
         vtype = (
             account_set_voucher_type(session_type, cashbook_row)
-            if routing['mode'] == 'account_set'
+            if _routing_uses_account_codes(routing)
             else voucher_type_label(data['category'])
         )
         if vtype is None:
@@ -2847,8 +2880,8 @@ def preview_cashbook(
         else get_treasury_routing(client_id, session_type)
     )
     vendor_workstream = 'Local Vendor' if session_type == 'local_vendor' else 'Import Vendor'
-    if is_vendor_session and routing['mode'] != 'account_set':
-        raise HTTPException(400, f"Publish the {vendor_workstream}s Account Set before previewing verification.")
+    if is_vendor_session and not _routing_uses_account_codes(routing):
+        raise HTTPException(400, f"Configure {vendor_workstream} accounts in Account Control Centre before previewing verification.")
     selected_vendor_code = local_vendor_code_from_label(cashbook_name) if is_vendor_session else None
     if is_vendor_session and not selected_vendor_code:
         raise HTTPException(400, f"Select an {vendor_workstream} account from the configured list.")
@@ -2960,7 +2993,7 @@ def preview_cashbook(
         # is looked up only as a sanity check that the named cashbook actually appears among
         # this voucher's legs (on the structurally correct side, see is_cashbook_leg_row()),
         # not to derive vtype anymore.
-        if routing['mode'] == 'account_set':
+        if _routing_uses_account_codes(routing):
             cashbook_row = next((
                 r for r in data['rows']
                 if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
@@ -2974,7 +3007,7 @@ def preview_cashbook(
             continue
         vtype = (
             account_set_voucher_type(session_type, cashbook_row)
-            if routing['mode'] == 'account_set'
+            if _routing_uses_account_codes(routing)
             else voucher_type_label(data['category'])
         )
         if vtype is None:
@@ -4030,7 +4063,7 @@ def reconcile_session_range(
 
     target: Dict[int, str] = {}  # client_data_id -> transaction_ref
     for vid, data in vouchers.items():
-        if routing['mode'] == 'account_set':
+        if _routing_uses_account_codes(routing):
             cashbook_row = next((
                 r for r in data['rows']
                 if r['account_name'] == cashbook_name and r['account_code'] in routing['account_codes']
@@ -4044,7 +4077,7 @@ def reconcile_session_range(
             continue
         vtype = (
             account_set_voucher_type(session_type, cashbook_row)
-            if routing['mode'] == 'account_set'
+            if _routing_uses_account_codes(routing)
             else voucher_type_label(data['category'])
         )
         if vtype is None:

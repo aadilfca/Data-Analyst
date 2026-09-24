@@ -187,6 +187,53 @@ class AccountSetSessionTests(unittest.TestCase):
         self.assertEqual(bank_details, [(91, 201, "JV-0126-10")])
 
 
+class SimplifiedAccountControlRoutingTests(unittest.TestCase):
+    def test_assignment_lookup_returns_account_control_codes(self):
+        with patch.object(verification, "execute_query_pg", return_value=[
+            {"account_code": " 10-15-115-10-0001 "},
+            {"account_code": "10-15-115-10-0003"},
+        ]) as query:
+            routing = verification.get_account_control_routing(7, "cash")
+
+        self.assertEqual(routing["mode"], "account_control")
+        self.assertEqual(routing["account_codes"], {"10-15-115-10-0001", "10-15-115-10-0003"})
+        query.assert_called_once()
+
+    def test_simplified_cash_assignments_take_priority_over_legacy_sets_and_prefixes(self):
+        assigned = {"mode": "account_control", "account_codes": {"10-15-115-10-0001"}}
+        with patch.object(verification, "get_account_control_routing", return_value=assigned), patch.object(
+            verification, "get_published_account_set_leaf_accounts"
+        ) as legacy, patch.object(verification, "get_client_voucher_prefixes_pg") as prefixes:
+            routing = verification.get_treasury_routing(7, "cash")
+
+        self.assertIs(routing, assigned)
+        legacy.assert_not_called()
+        prefixes.assert_not_called()
+
+    def test_simplified_vendor_assignments_take_priority_over_legacy_sets(self):
+        assigned = {"mode": "account_control", "account_codes": {"20-15-50-0001"}}
+        with patch.object(verification, "get_account_control_routing", return_value=assigned), patch.object(
+            verification, "get_published_account_set_leaf_accounts"
+        ) as legacy:
+            routing = verification.get_local_vendor_routing(7)
+
+        self.assertIs(routing, assigned)
+        legacy.assert_not_called()
+
+    def test_account_control_treasury_priority_excludes_vendor_voucher(self):
+        voucher = {"voucher_id": "JV-1", "rows": [
+            {"account_code": "20-15-50-0001"},
+            {"account_code": "10-15-115-10-0001"},
+        ]}
+        cash = {"mode": "account_control", "account_codes": {"10-15-115-10-0001"}}
+        bank = {"mode": "account_control", "account_codes": set()}
+
+        self.assertFalse(verification.is_local_vendor_voucher(voucher, "20-15-50-0001", cash, bank))
+        self.assertTrue(verification.row_matches_treasury_account_set(
+            {"Account Code": "10-15-115-10-0001"}, cash
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()
 class CashbookPreviewPresentationTests(unittest.TestCase):
